@@ -5,10 +5,12 @@
  * colliding `agent` alias is never assigned from its basename alone.
  */
 
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { accessSync, constants, readlinkSync, realpathSync, statSync } from 'node:fs'
+import { access, readlink, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, delimiter, isAbsolute, join, normalize, sep } from 'node:path'
+import { promisify } from 'node:util'
 import { env } from '../config/env.js'
 import { ENGINES, PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
 
@@ -86,6 +88,8 @@ export const ENGINE_CLI_ALIASES: Readonly<Record<AgentEngine, readonly string[]>
 }
 
 let interactivePathCache: { shell: string; daemonPath: string; value: string[] } | null = null
+let interactivePathAsyncCache: { shell: string; daemonPath: string; value: Promise<string[]> } | null = null
+const execFileAsync = promisify(execFile)
 
 /**
  * Resolve commands from the same shell startup context used by New Agent.
@@ -133,6 +137,39 @@ function pathEntries(): string[] {
   ])]
 }
 
+async function interactivePathEntriesAsync(): Promise<string[]> {
+  if (process.env.NODE_ENV === 'test') return []
+  const shell = process.env.SHELL
+  if (!shell || !isAbsolute(shell)) return []
+  const daemonPath = process.env.PATH ?? ''
+  if (interactivePathAsyncCache?.shell === shell && interactivePathAsyncCache.daemonPath === daemonPath) {
+    return interactivePathAsyncCache.value
+  }
+  const value = (async (): Promise<string[]> => {
+    try {
+      const flag = basename(shell).toLowerCase() === 'zsh' ? '-lic' : '-ic'
+      const marker = '__HARNESS_ENGINE_PATH__='
+      const { stdout } = await execFileAsync(shell, [flag, `printf '\n${marker}%s\n' "$PATH"`], {
+        encoding: 'utf8',
+        timeout: 5_000,
+      })
+      const path = stdout.split('\n').reverse().find((line) => line.startsWith(marker))?.slice(marker.length) ?? ''
+      return path.split(delimiter).filter(Boolean)
+    } catch {
+      return []
+    }
+  })()
+  interactivePathAsyncCache = { shell, daemonPath, value }
+  return value
+}
+
+async function pathEntriesAsync(): Promise<string[]> {
+  return [...new Set([
+    ...processPathEntries(),
+    ...await interactivePathEntriesAsync(),
+  ])]
+}
+
 function looksLikePath(command: string): boolean {
   return isAbsolute(command) || command.includes('/') || command.includes('\\')
 }
@@ -154,6 +191,23 @@ function commandCandidates(command: string): ExecutableFileIdentity[] {
   return result
 }
 
+/** Resolve PATH candidates without blocking the daemon event loop on slow filesystems such as WSL /mnt. */
+async function commandCandidatesAsync(command: string): Promise<ExecutableFileIdentity[]> {
+  const paths = looksLikePath(command)
+    ? [command]
+    : (await pathEntriesAsync()).map((entry) => join(entry, command))
+  const seen = new Set<string>()
+  const result: ExecutableFileIdentity[] = []
+  for (const path of paths) {
+    try { await access(path, constants.X_OK) } catch { continue }
+    const identity = await executableFileIdentityAsync(path)
+    if (!identity || seen.has(identity.path)) continue
+    seen.add(identity.path)
+    result.push(identity)
+  }
+  return result
+}
+
 /** Stable while a file exists; deliberately local-only and never sent over the wire. */
 export function executableFileIdentity(path: string): ExecutableFileIdentity | null {
   try {
@@ -167,6 +221,20 @@ export function executableFileIdentity(path: string): ExecutableFileIdentity | n
       try { realPath = readlinkSync(path) } catch { realPath = normalize(path) }
     }
     return { path: normalize(path), realPath, fileKey: `${String(stat.dev)}:${String(stat.ino)}` }
+  } catch {
+    return null
+  }
+}
+
+async function executableFileIdentityAsync(path: string): Promise<ExecutableFileIdentity | null> {
+  try {
+    const fileStat = await stat(path)
+    if (!fileStat.isFile()) return null
+    let realPath: string
+    try { realPath = await realpath(path) } catch {
+      try { realPath = await readlink(path) } catch { realPath = normalize(path) }
+    }
+    return { path: normalize(path), realPath, fileKey: `${String(fileStat.dev)}:${String(fileStat.ino)}` }
   } catch {
     return null
   }
@@ -210,8 +278,9 @@ function uniqueIdentities(identities: readonly ExecutableFileIdentity[]): Execut
   })
 }
 
-/** Build once per process-table pass; callers pass the snapshot through every row comparison. */
-export function engineBinaryOwnershipSnapshot(): AgentCommandOwnershipSnapshot {
+type CommandCandidates = (command: string) => ExecutableFileIdentity[]
+
+function buildEngineBinaryOwnershipSnapshot(resolveCandidates: CommandCandidates): AgentCommandOwnershipSnapshot {
   const engineCandidates = new Map<AgentEngine, ExecutableFileIdentity[]>()
   const engineFileKeys = new Map<AgentEngine, Set<string>>()
   for (const engine of PROCESS_ENGINES) {
@@ -221,14 +290,14 @@ export function engineBinaryOwnershipSnapshot(): AgentCommandOwnershipSnapshot {
       ...ENGINE_CLI_ALIASES[engine],
       ...vendorFallbackCommands(engine),
     ]
-    const candidates = uniqueIdentities(commands.flatMap(commandCandidates))
+    const candidates = uniqueIdentities(commands.flatMap(resolveCandidates))
     engineCandidates.set(engine, candidates)
     engineFileKeys.set(engine, new Set(candidates.map((candidate) => candidate.fileKey)))
   }
 
-  const agentCandidates = commandCandidates('agent')
-  const cursorAgentCandidates = commandCandidates('cursor-agent')
-  const grokCandidates = [...commandCandidates('grok')]
+  const agentCandidates = resolveCandidates('agent')
+  const cursorAgentCandidates = resolveCandidates('cursor-agent')
+  const grokCandidates = [...resolveCandidates('grok')]
 
   const cursorFileKeys = new Set<string>()
   const grokFileKeys = new Set<string>()
@@ -237,12 +306,12 @@ export function engineBinaryOwnershipSnapshot(): AgentCommandOwnershipSnapshot {
 
   // Existing explicit overrides are ownership declarations, but a declaration that resolves to the
   // other vendor's canonical binary becomes a conflict below instead of silently winning by basename.
-  if (env.CURSOR_PATH) addAll(cursorFileKeys, commandCandidates(env.CURSOR_PATH))
-  if (env.GROK_PATH) addAll(grokFileKeys, commandCandidates(env.GROK_PATH))
+  if (env.CURSOR_PATH) addAll(cursorFileKeys, resolveCandidates(env.CURSOR_PATH))
+  if (env.GROK_PATH) addAll(grokFileKeys, resolveCandidates(env.GROK_PATH))
 
   // Grok's own state-root override already describes its standard installer root. This seed keeps
   // discovery correct when the daemon PATH differs from an interactive tmux shell's PATH.
-  const grokHomeBin = commandCandidates(join(env.GROK_HOME, 'bin', 'grok'))[0]
+  const grokHomeBin = resolveCandidates(join(env.GROK_HOME, 'bin', 'grok'))[0]
   if (grokHomeBin) {
     grokFileKeys.add(grokHomeBin.fileKey)
     if (!grokCandidates.some((candidate) => candidate.path === grokHomeBin.path)) grokCandidates.push(grokHomeBin)
@@ -277,9 +346,33 @@ export function engineBinaryOwnershipSnapshot(): AgentCommandOwnershipSnapshot {
   }
 }
 
+function ownershipCommands(): string[] {
+  const commands = PROCESS_ENGINES.flatMap((engine) => {
+    const configured = enginePathOverride(engine)
+    return [
+      ...(configured ? [configured] : []),
+      ...ENGINE_CLI_ALIASES[engine],
+      ...vendorFallbackCommands(engine),
+    ]
+  })
+  commands.push('agent', 'cursor-agent', 'grok', join(env.GROK_HOME, 'bin', 'grok'))
+  if (env.CURSOR_PATH) commands.push(env.CURSOR_PATH)
+  if (env.GROK_PATH) commands.push(env.GROK_PATH)
+  return [...new Set(commands)]
+}
+
+/** Build once per live process-table pass without blocking request handling on filesystem probes. */
+export async function engineBinaryOwnershipSnapshot(): Promise<AgentCommandOwnershipSnapshot> {
+  const candidates = new Map<string, ExecutableFileIdentity[]>()
+  await Promise.all(ownershipCommands().map(async (command) => {
+    candidates.set(command, await commandCandidatesAsync(command))
+  }))
+  return buildEngineBinaryOwnershipSnapshot((command) => candidates.get(command) ?? [])
+}
+
 /** Historical name retained while callers migrate; the snapshot now covers every engine. */
 export function agentCommandOwnershipSnapshot(): AgentCommandOwnershipSnapshot {
-  return engineBinaryOwnershipSnapshot()
+  return buildEngineBinaryOwnershipSnapshot(commandCandidates)
 }
 
 /** Engines owning the observed executable image. Multiple results mean the install itself is ambiguous. */

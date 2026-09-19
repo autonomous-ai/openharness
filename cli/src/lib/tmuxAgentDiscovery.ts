@@ -10,6 +10,7 @@ import { execFile } from 'node:child_process'
 import {
   agentAliasOwner,
   agentCommandOwnershipSnapshot,
+  engineBinaryOwnershipSnapshot,
   PROCESS_ENGINES,
   type AgentCommandOwnershipSnapshot,
 } from './engineBin.js'
@@ -260,11 +261,12 @@ export async function probeTmuxAgents(
   daemonPid = process.pid,
   hints: ReadonlyMap<string, AgentEngine> = new Map(),
 ): Promise<TmuxAgentProbe> {
-  const [tmux, ps] = await Promise.all([
+  const [tmux, ps, ownership] = await Promise.all([
     listTmuxPanes(),
     // parseProcessRow below anchors on the `lstart` column, which only has its documented shape
     // under LC_TIME=C — see psEnv (lib/childLocale.ts).
     execText('ps', ['-axo', 'pid=,ppid=,comm=,lstart=,args='], 3_000, psEnv()),
+    engineBinaryOwnershipSnapshot(),
   ])
   if (!tmux.ok) return { ok: false, error: `tmux list-panes failed: ${tmux.error}` }
   if (!ps.ok) return { ok: false, error: `process table failed: ${ps.error}` }
@@ -277,7 +279,7 @@ export async function probeTmuxAgents(
     tmux.panes,
     rows,
     daemonPid,
-    agentCommandOwnershipSnapshot(),
+    ownership,
     hints,
   )
   // Which endpoint each agent is pointed at, and which grid. Both read the same process environment

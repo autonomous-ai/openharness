@@ -8,6 +8,7 @@ import { registry, type ProcessIdentity, type RegisteredSession } from './regist
 import {
   agentAliasOwner,
   agentCommandOwnershipSnapshot,
+  engineBinaryOwnershipSnapshot,
   engineFileOwners,
   enginePathOverride,
   executableFileIdentity,
@@ -753,8 +754,8 @@ function selectEngineProcess(
   rows: ProcessRow[],
   rootPid: number,
   engine: RegisteredSession['engine'],
+  ownership: AgentCommandOwnershipSnapshot,
 ): ProcessRow | null {
-  const ownership = agentCommandOwnershipSnapshot()
   const byPid = new Map(rows.map((row) => [row.pid, row]))
   const children = new Map<number, ProcessRow[]>()
   for (const row of rows) {
@@ -906,7 +907,7 @@ async function lookupPaneEngineProcess(
   const rows = await processRows()
   if (!rows) return { ok: false, unknown: true, reason: 'the process table could not be read' }
   const enrichedRows = await enrichProcessRows(rows, processTreePids(rows, [rootPid]))
-  const process = selectEngineProcess(enrichedRows, rootPid, engine)
+  const process = selectEngineProcess(enrichedRows, rootPid, engine, await engineBinaryOwnershipSnapshot())
   if (!process) return { ok: false, unknown: false, reason: `no ${engine} process under pane ${pane}` }
   return {
     ok: true,

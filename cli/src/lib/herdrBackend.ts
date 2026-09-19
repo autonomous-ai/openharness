@@ -17,6 +17,7 @@ import {
   type TerminalReadResult,
 } from './terminalTypes.js'
 import { engineProcessMatchScore, enrichProcessRows, processRows } from './tmux.js'
+import { engineBinaryOwnershipSnapshot } from './engineBin.js'
 import { terminalRouteKey } from './terminalRuntime.js'
 
 interface HerdrPaneInfo {
@@ -234,9 +235,10 @@ export class HerdrBackend implements TerminalBackend<HerdrRuntimeRef> {
       return { state: 'gone', reason: 'Herdr terminal identity changed under pane route' }
     }
     if (!_expected.processIdentity) return { state: 'alive' }
-    const [info, rows] = await Promise.all([
+    const [info, rows, ownership] = await Promise.all([
       this.client.request<HerdrPaneProcessInfoResult>('pane.process_info', { pane_id: runtime.paneId }),
       processRows(),
+      engineBinaryOwnershipSnapshot(),
     ])
     if (!info.ok || !rows || info.result.type !== 'pane_process_info'
       || !Number.isSafeInteger(info.result.process_info?.shell_pid)) {
@@ -247,7 +249,7 @@ export class HerdrBackend implements TerminalBackend<HerdrRuntimeRef> {
     if (!expected || expected.startMarker !== _expected.processIdentity.startMarker) {
       return { state: 'gone', reason: 'Herdr engine process identity changed' }
     }
-    if (engineProcessMatchScore(expected, _expected.engine) <= 0) {
+    if (engineProcessMatchScore(expected, _expected.engine, ownership) <= 0) {
       return { state: 'gone', reason: 'Herdr process no longer matches the registered engine' }
     }
     const byPid = new Map(enrichedRows.map((row) => [row.pid, row]))
