@@ -1,0 +1,15 @@
+config_version=5
+
+[application]
+config/name="Lumen — a light garden"
+run/main_scene="res://scenes/Main.tscn"
+
+[display]
+window/size/viewport_width=1200
+window/size/viewport_height=700
+window/stretch/mode="canvas_items"
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.026, 0.062, 0.083, 1)

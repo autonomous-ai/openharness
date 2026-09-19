@@ -1,0 +1,37 @@
+{
+  "title": "Quarterly revenue, in focus",
+  "subtitle": "Regional revenue review | Q2:26 | Demonstration report",
+  "paragraphs": [
+    "The comparison describes revenue, not cash collected, profit, or a forecast. The inputs alone do not establish what caused the change. Review the regional detail before drawing conclusions about pricing, mix or demand."
+  ],
+  "source": "Synthetic demonstration data created for this starter. Calendar quarters Q1:26 and Q2:26; nominal USD, unscaled. No real company, audited results or external data source is represented.",
+  "comparison": {
+    "currency": "USD",
+    "periods": [
+      "Q1:26",
+      "Q2:26"
+    ],
+    "rows": [
+      {
+        "region": "North",
+        "prior": 12400,
+        "current": 13200
+      },
+      {
+        "region": "South",
+        "prior": 8100,
+        "current": 9400
+      },
+      {
+        "region": "East",
+        "prior": 15200,
+        "current": 16100
+      },
+      {
+        "region": "West",
+        "prior": 9800,
+        "current": 10500
+      }
+    ]
+  }
+}

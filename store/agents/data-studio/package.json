@@ -1,0 +1,12 @@
+{
+  "name": "@autonomous/data-studio-harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "perf": "node skills/data/scripts/perf.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

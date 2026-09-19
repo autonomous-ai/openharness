@@ -1,0 +1,16 @@
+{
+  "homepage": "https://godotengine.org",
+  "upstream": "https://github.com/godotengine/godot",
+  "license": "MIT",
+  "tagline": "A free and open-source game engine",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/godot-studio/starter.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Build Lumen, run its gameplay assertions, and export the six-seed garden game for the browser.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/godot-studio/starter.jpg",
+      "caption": "Lumen · real Godot game with tested win and restart"
+    }
+  ]
+}

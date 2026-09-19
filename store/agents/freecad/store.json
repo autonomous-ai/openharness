@@ -1,0 +1,16 @@
+{
+  "homepage": "https://freecad.org",
+  "upstream": "https://github.com/FreeCAD/FreeCAD",
+  "license": "MIT",
+  "tagline": "Parametric 3D modeling with verified STEP exports",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/freecad/starter.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Build the Pocket enclosure with its vented lid and export validated STEP solids.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/freecad/starter.jpg",
+      "caption": "Pocket · editable enclosure and two closed STEP solids"
+    }
+  ]
+}

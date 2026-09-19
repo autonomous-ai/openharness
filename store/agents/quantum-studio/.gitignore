@@ -1,0 +1,4 @@
+# Generated pane — never source. Rebuild from circuit.json with build-quantum.sh.
+index.html
+.harness/
+.harness-initialized
