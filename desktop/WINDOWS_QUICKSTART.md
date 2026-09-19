@@ -45,8 +45,9 @@ while the app or its agents are running.
 ## Replacing an older preview
 
 The source includes repairs for terminal typing, Claude installation when WSL
-inherits Windows npm without Linux Node, and broken Copilot npm launchers.
-Use a bundle built from the corresponding source revision to receive those fixes.
+inherits Windows npm without Linux Node, broken Copilot npm launchers, and an
+**Open in browser** action for viewer panes. Use a bundle built from the
+corresponding source revision to receive those fixes.
 
 Close the old Harness window. If a previous Harness daemon is running, stop that
 daemon from its WSL distribution (`harness stop`) before opening the new preview.
@@ -57,6 +58,13 @@ executable under a build scratch directory.
 
 The September 15 prototype loses WSL command arguments and can show **Bad state:
 Sign-in did not complete**. Retrying sign-in in that old executable cannot fix it.
+
+## Store viewers
+
+Some Store harnesses open a viewer beside their agent terminal. On Windows,
+choose **Open in browser** in the viewer pane. Keep Harness and the workspace
+running while using the viewer. Its address can change after a restart, so use
+the pane's button again instead of a saved browser bookmark.
 
 ## Preview limitations and recovery
 

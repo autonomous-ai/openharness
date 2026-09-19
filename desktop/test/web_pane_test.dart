@@ -2,6 +2,8 @@
 // agent's frame names a viewer, navigated when that URL changes, left closed
 // once the person closes it, and taken down with the agent.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -65,7 +67,166 @@ Future<void> _synced(
 List<TerminalPane> _viewers(AppNotifier app) =>
     app.panes.where((pane) => pane.isWeb).toList();
 
+Future<void> _mountBrowserViewer(
+  WidgetTester tester,
+  AppNotifier app,
+  TerminalPane pane,
+  Future<bool> Function(Uri) openBrowser,
+) => tester.pumpWidget(
+  MaterialApp(
+    home: Scaffold(
+      body: WebPanePanel(
+        notifier: app,
+        pane: pane,
+        ownerName: 'Test harness',
+        ownerEngine: 'claude',
+        openBrowser: openBrowser,
+      ),
+    ),
+  ),
+);
+
 void main() {
+  testWidgets(
+    'browser viewer opens on request and retries sanitized failures',
+    (tester) async {
+      final app = createApp();
+      addTearDown(app.dispose);
+      final pane = TerminalPane(
+        id: 1,
+        machineId: 'm',
+        kind: PaneKind.web,
+        ownerAgentId: 'a0',
+        url: 'http://127.0.0.1:4179/?token=fixture',
+      );
+      final opened = <Uri>[];
+      Future<bool> launch(Uri uri) async {
+        opened.add(uri);
+        if (opened.length == 1) return false;
+        if (opened.length == 2) throw StateError('private platform diagnostic');
+        return true;
+      }
+
+      await _mountBrowserViewer(tester, app, pane, launch);
+      expect(opened, isEmpty);
+      final button = find.byKey(const ValueKey('web-pane-open-browser'));
+      for (var attempt = 0; attempt < 2; attempt++) {
+        await tester.tap(button);
+        await tester.pumpAndSettle();
+        expect(
+          find.textContaining('Check your default browser'),
+          findsOneWidget,
+        );
+        expect(
+          find.textContaining('private platform diagnostic'),
+          findsNothing,
+        );
+      }
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(opened, List.filled(3, Uri.parse(pane.url!)));
+      expect(find.textContaining('Could not open your browser'), findsNothing);
+
+      pane.url = 'https://example.test/viewer?file=model.step#preview';
+      await _mountBrowserViewer(tester, app, pane, launch);
+      expect(
+        opened,
+        hasLength(3),
+        reason: 'a URL update never opens a browser',
+      );
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(opened.last, Uri.parse(pane.url!));
+    },
+  );
+
+  testWidgets(
+    'browser results cannot overwrite a new URL or a disposed viewer',
+    (tester) async {
+      final app = createApp();
+      addTearDown(app.dispose);
+      final pane = TerminalPane(
+        id: 1,
+        machineId: 'm',
+        kind: PaneKind.web,
+        ownerAgentId: 'a0',
+        url: 'http://127.0.0.1:4179/',
+      );
+      final launches = <Completer<bool>>[];
+      Future<bool> launch(Uri uri) {
+        final result = Completer<bool>();
+        launches.add(result);
+        return result.future;
+      }
+
+      await _mountBrowserViewer(tester, app, pane, launch);
+      final button = find.byKey(const ValueKey('web-pane-open-browser'));
+      await tester.tap(button);
+      await tester.pump();
+      expect(tester.widget<TextButton>(button).onPressed, isNull);
+      pane.url = 'http://127.0.0.1:4180/';
+      await _mountBrowserViewer(tester, app, pane, launch);
+      await tester.tap(button);
+      await tester.pump();
+      launches.first.complete(false);
+      await tester.pump();
+      expect(find.textContaining('Could not open your browser'), findsNothing);
+      expect(tester.widget<TextButton>(button).onPressed, isNull);
+      launches[1].complete(true);
+      await tester.pump();
+      await tester.tap(button);
+      await tester.pumpWidget(const SizedBox.shrink());
+      launches.last.completeError(StateError('private platform diagnostic'));
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('browser action is disabled without a valid absolute HTTP URL', (
+    tester,
+  ) async {
+    final app = createApp();
+    addTearDown(app.dispose);
+    final pane = TerminalPane(
+      id: 1,
+      machineId: 'm',
+      kind: PaneKind.web,
+      ownerAgentId: 'a0',
+    );
+    var launches = 0;
+    Future<bool> launch(Uri _) async {
+      launches++;
+      return true;
+    }
+
+    for (final url in <String?>[
+      null,
+      '/viewer',
+      'file:///tmp/viewer.html',
+      'javascript:alert(1)',
+      'https://',
+      'http:///viewer',
+      'http://localhost:99999/',
+      'http://localhost:999999999999999999999999999999/',
+      'http://localhost/%oops',
+      'http://localhost/\nviewer',
+      'http://localhost/\x00viewer',
+    ]) {
+      pane.url = url;
+      await _mountBrowserViewer(tester, app, pane, launch);
+      expect(
+        tester
+            .widget<TextButton>(
+              find.byKey(const ValueKey('web-pane-open-browser')),
+            )
+            .onPressed,
+        isNull,
+        reason: '$url',
+      );
+    }
+    expect(launches, 0);
+  });
+
   test('a transient terminal-unavailable sync retains the terminal pane until deletion', () async {
     final app = createApp();
     addTearDown(app.dispose);
