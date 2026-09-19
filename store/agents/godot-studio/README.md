@@ -16,7 +16,9 @@ Try: “Turn this into a constellation puzzle. Connect blooms in a particular or
 
 The helper snapshots project source into fresh staging, imports it, runs `scripts/proof.gd`, requires a fresh passing receipt, and exports the Web preset. A failed proof/export clears ready without replacing the prior game. Logs live in `.harness/export.log`.
 
-Lumen's native proof checks spawn, movement, dash speed, pause, bounds, collecting all blooms, and restart. Headless assertions are distinct from browser proof: the repository's real-browser test plays through all six blooms, pauses, restarts, uses keyboard movement, and repeats a pickup at mobile width. Update both tests when mechanics change.
+Lumen's nine native checks cover spawn, movement, artwork following gameplay, bounded visual nodes, dash speed, pause, bounds, collecting all blooms, and restart. Headless assertions are distinct from browser proof: the repository's real-browser test plays through all six blooms, pauses, restarts, uses keyboard movement, and repeats a pickup at mobile width. Update both tests when mechanics change.
+
+`scripts/garden.gd` caches its procedural drawing commands once, then animates transforms and color. Keep this retained-art pattern when extending the game: rebuilding every primitive each physics tick can stall WebGL drivers. The release preview measured 60 fps with zero long tasks on the tested Chrome/AMD Metal device; this is a measurement, not a guarantee for every device.
 
 The export uses the Compatibility renderer, single-threaded WASM and no PWA. The shared viewer keeps the game in an opaque-origin sandbox: no persistent browser storage or service workers. Godot 4.4's known optional PWA callback probe is reported as an offline-installation warning there; all other engine errors remain errors.
 

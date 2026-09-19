@@ -5,10 +5,10 @@ They cover data loading, user interactions, downloads, errors, and responsive la
 
 Install Playwright and Chromium in your development environment. If Playwright is not available
 through normal module resolution, set `PLAYWRIGHT_MODULE` to its absolute `index.mjs` path.
-Run from the repository root:
+For the release benchmark, also install Chrome and run from the repository root:
 
 ```sh
-node --test --test-concurrency=1 store/tools/browser/*.test.mjs
+PLAYWRIGHT_CHANNEL=chrome node --test --test-concurrency=1 store/tools/browser/*.test.mjs
 ```
 
 Set `HARNESS_QA_DIR` to a directory outside the workspace to retain screenshots. Tests create

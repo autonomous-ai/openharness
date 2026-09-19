@@ -16,6 +16,11 @@ func run() -> void:
     require(game.pos == game.START, "player spawn")
     game.advance(0.1, Vector2.RIGHT)
     require(game.pos.x > game.START.x, "movement changes player position")
+    game.update_art()
+    require(game.garden.player.position == game.pos, "retained artwork follows actual game state")
+    var visual_count: int = game.garden.get_child_count()
+    for i in range(120): game.update_art()
+    require(game.garden.get_child_count() == visual_count, "animation reuses a bounded set of visual nodes")
     game.dash()
     var before: float = game.pos.x
     game.advance(0.05, Vector2.RIGHT)
@@ -37,8 +42,8 @@ func run() -> void:
     if output.is_empty(): output = "user://"
     var file := FileAccess.open(output.path_join("proof.json"), FileAccess.WRITE)
     require(file != null, "proof receipt is writable")
-    file.store_string(JSON.stringify({"passed":true,"checks":["spawn","movement","dash","pause","bounds","pickups and win","restart"]}))
+    file.store_string(JSON.stringify({"passed":true,"checks":["spawn","movement","artwork follows gameplay","bounded visual nodes","dash","pause","bounds","pickups and win","restart"]}))
     file.close()
-    print("Lumen: all 7 gameplay assertions passed")
+    print("Lumen: all 9 gameplay and rendering assertions passed")
     game.free()
     quit(0)

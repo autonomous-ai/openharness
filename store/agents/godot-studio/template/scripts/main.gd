@@ -1,5 +1,5 @@
 extends Node2D
-## A small, complete game. All art is drawn here; no external assets or network.
+## A small, complete game. Procedural art is cached in garden.gd; no external assets.
 const SEEDS := [Vector2(450,350), Vector2(700,200), Vector2(930,350), Vector2(750,525), Vector2(430,530), Vector2(230,190)]
 const START := Vector2(270,350)
 var pos := START
@@ -17,8 +17,12 @@ var moving_to_target := false
 var bridge_tick := 0.0
 var input_bridge: JavaScriptObject
 var command_callback: JavaScriptObject
+var garden: Node2D
 
 func _ready() -> void:
+    garden = preload("res://scripts/garden.gd").new()
+    add_child(garden)
+    garden.create(SEEDS)
     reset_game()
     if OS.has_feature("web"):
         input_bridge = JavaScriptBridge.get_interface("lumen")
@@ -44,7 +48,7 @@ func reset_game() -> void:
     won = false
     paused = false
     moving_to_target = false
-    queue_redraw()
+    update_art()
 
 func dash() -> void:
     if cooldown <= 0 and not paused and not won:
@@ -94,50 +98,12 @@ func _physics_process(delta: float) -> void:
     if bridge_tick > 0.1:
         publish()
         bridge_tick = 0
-    queue_redraw()
+    update_art()
+
+func update_art() -> void:
+    garden.animate(pos, direction, elapsed, collected, trail, bursts, target, moving_to_target, paused, won)
 
 func publish() -> void:
     if not OS.has_feature("web"): return
     var state := {"collected":collected.size(),"total":SEEDS.size(),"won":won,"paused":paused,"seconds":snappedf(elapsed,0.1),"cooldown":snappedf(cooldown,0.1),"x":snappedf(pos.x,0.1),"y":snappedf(pos.y,0.1)}
     JavaScriptBridge.eval("window.lumen.update(" + JSON.stringify(state) + ")", true)
-
-func _draw() -> void:
-    var mint := Color("bcf2ce")
-    var amber := Color("eaca8e")
-    var ink := Color("133239")
-    draw_rect(Rect2(0,0,1200,700), Color("071218"))
-    for i in range(150):
-        var star := Vector2(fmod(i * 137.508,1200), fmod(i * 211.37,700))
-        draw_circle(star, 0.6 + float(i % 3) * 0.35, Color(0.5,0.8,0.75,0.08+float(i%4)*0.025))
-    for radius in range(100,580,80): draw_arc(Vector2(600,350),radius,0,TAU,120,Color("102930"),1,true)
-    draw_line(Vector2(45,350),Vector2(1155,350),ink,1,true)
-    draw_line(Vector2(600,65),Vector2(600,635),ink,1,true)
-    draw_arc(Vector2(600,350),285,0,TAU,100,Color("295047"),1,true)
-    for i in SEEDS.size():
-        var seed: Vector2 = SEEDS[i]
-        var lit := i in collected
-        var color: Color = mint if lit else amber
-        var sway := sin(elapsed * 1.2 + i) * 0.07
-        for petal in range(7):
-            var angle := TAU * petal / 7.0 + sway
-            var center := seed + Vector2.from_angle(angle) * 21
-            draw_arc(center,21,angle-1.9,angle+1.9,24,Color(color,color.a * (0.45 if lit else 0.18)),1.3,true)
-        draw_circle(seed,7 if lit else 5,color)
-        draw_arc(seed,15 + sin(elapsed*2+i)*2,0,TAU,36,Color(color,0.3),1,true)
-        draw_string(ThemeDB.fallback_font,seed+Vector2(-5,70),str(i+1).pad_zeros(2),HORIZONTAL_ALIGNMENT_LEFT,-1,12,Color(color,0.6))
-    for i in range(trail.size()-1,0,-1):
-        draw_circle(trail[i],maxf(1,7-i*0.19),Color(mint,(1-float(i)/30)*0.22))
-    for burst in bursts:
-        draw_arc(burst.pos,15+burst.age*80,0,TAU,60,Color(mint,1-burst.age),1.5,true)
-    for radius in range(28,7,-4): draw_circle(pos,radius,Color(mint,0.025))
-    draw_circle(pos,8,mint)
-    draw_arc(pos,13,0,TAU,40,Color(mint,0.55),1.2,true)
-    draw_line(pos+direction*16,pos+direction*24,amber,2,true)
-    if moving_to_target and not won:
-        draw_arc(target,9,0,TAU,30,Color(mint,0.35),1,true)
-    draw_string(ThemeDB.fallback_font,Vector2(40,40),"THE QUIET GARDEN   /   01",HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("6a938e"))
-    draw_string(ThemeDB.fallback_font,Vector2(40,675),"GATHER LIGHT. LEAVE A TRAIL.",HORIZONTAL_ALIGNMENT_LEFT,-1,12,Color("6a938e"))
-    if won or paused:
-        draw_rect(Rect2(360,280,480,140),Color(0.02,0.06,0.08,0.94))
-        draw_string(ThemeDB.fallback_font,Vector2(390,336),"The garden is awake." if won else "A moment of stillness.",HORIZONTAL_ALIGNMENT_LEFT,-1,29,mint)
-        draw_string(ThemeDB.fallback_font,Vector2(390,378),"Press R to begin again" if won else "Press P to return",HORIZONTAL_ALIGNMENT_LEFT,-1,17,Color("90ada6"))
