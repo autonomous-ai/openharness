@@ -1,0 +1,10 @@
+{
+  "actions": [
+    { "selector": "[data-preset=bloom]", "click": true },
+    { "selector": "#scene-name", "text": "Bloom" },
+    { "selector": "#spread", "fill": "72" },
+    { "selector": "#spread-value", "text": "72%" },
+    { "selector": "[data-preset=orbit]", "click": true },
+    { "selector": "#scene-name", "text": "Orbit" }
+  ]
+}

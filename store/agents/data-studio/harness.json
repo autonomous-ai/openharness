@@ -1,0 +1,35 @@
+{
+  "spec": 1,
+  "id": "autonomous/data-studio",
+  "name": "Data Studio",
+  "category": "Data",
+  "author": "OpenHarness contributors",
+  "description": "Turn CSV into a local interactive dashboard with dynamic metrics, filtering, exact-value inspection, safe imports and selection export.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "index.html",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "DATA_TOOLCHAIN": "${dsh}/toolchain",
+      "DATA_SKILLS": "${dsh}/skills"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/isolated-web-viewer",
+    "artifactExtensions": [
+      ".html"
+    ]
+  },
+  "verdict": ".harness/verdict.json"
+}

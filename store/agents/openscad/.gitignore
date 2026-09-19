@@ -1,0 +1,11 @@
+# Render output — never source.
+part.stl
+part.step
+*.stl
+*.step
+*.3mf
+*.off
+# Harness bookkeeping.
+.harness/
+.harness-initialized
+toolchain/openscad-cli

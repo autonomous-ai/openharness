@@ -1,0 +1,4 @@
+# Rendering-by-hand never shipped to source.
+# (The dashboard is static self-contained HTML; no generated build output.)
+.harness/
+.harness-initialized

@@ -1,0 +1,31 @@
+{
+  "spec": 1,
+  "id": "autonomous/home-assistant",
+  "name": "Home Assistant",
+  "category": "Automation",
+  "author": "OpenHarness contributors",
+  "description": "Describe an automation; get real, well-formed YAML for Home Assistant \u2014 automations you can paste or load, a dashboard that shows every rule, and a verdict that proves the YAML is valid.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "automations.yaml",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": ["skills"],
+    "env": {
+      "HA_TOOLCHAIN": "${dsh}/toolchain",
+      "HA_SKILLS": "${dsh}/skills"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/isolated-web-viewer",
+    "artifactExtensions": [".html"]
+  },
+  "verdict": ".harness/verdict.json"
+}

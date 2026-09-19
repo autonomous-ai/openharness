@@ -1,0 +1,17 @@
+{
+  "spec": 1,
+  "kind": "viewer",
+  "id": "autonomous/isolated-web-viewer",
+  "name": "Isolated Web Viewer",
+  "category": "Code",
+  "author": "OpenHarness contributors",
+  "description": "An opaque-origin HTML preview with capability-scoped assets, responsive controls and interaction-based verification.",
+  "toolchain": {
+    "doctor": "./doctor.sh"
+  },
+  "viewer": {
+    "command": "./viewer.sh",
+    "url": "http://127.0.0.1:${port}/?file=${artifact}",
+    "artifactExtensions": [".html"]
+  }
+}

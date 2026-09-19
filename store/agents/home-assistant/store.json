@@ -1,0 +1,16 @@
+{
+  "homepage": "https://www.home-assistant.io",
+  "upstream": "https://github.com/home-assistant/core",
+  "license": "MIT",
+  "tagline": "Open-source home automation that puts local control first",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/home-assistant/starter.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Preview the demo arrival automation at night and in daylight without connecting to a home.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/home-assistant/starter.jpg",
+      "caption": "Habitat · local YAML scenario simulation"
+    }
+  ]
+}

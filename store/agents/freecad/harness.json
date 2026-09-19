@@ -1,0 +1,37 @@
+{
+  "spec": 1,
+  "id": "autonomous/freecad",
+  "name": "FreeCAD",
+  "category": "CAD",
+  "author": "OpenHarness contributors",
+  "description": "Build parametric FreeCAD macros, inspect real STEP assemblies, and verify freshly reimported solids. Includes an editable enclosure and vented lid.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "part.FCMacro",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "FREECAD_TOOLCHAIN": "${dsh}/toolchain",
+      "FREECAD_SKILLS": "${dsh}/skills"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/cad-viewer",
+    "artifactExtensions": [
+      ".step",
+      ".stp",
+      ".stl"
+    ]
+  },
+  "verdict": ".harness/verdict.json"
+}

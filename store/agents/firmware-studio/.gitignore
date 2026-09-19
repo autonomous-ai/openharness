@@ -1,0 +1,11 @@
+# Build output — never source.
+build/
+*.bin
+*.hex
+*.elf
+# Harness bookkeeping.
+.harness/
+.harness-initialized
+.pio/
+.venv/
+out/

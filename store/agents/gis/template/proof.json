@@ -1,0 +1,1 @@
+{"actions":[{"selector":"#search","fill":"Hanoi"},{"selector":"#count","text":"1"},{"selector":".feature","click":true},{"selector":"#details h2","text":"Hanoi"},{"selector":"#search","fill":""},{"selector":"#count","text":"4"}]}
