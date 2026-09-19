@@ -1,0 +1,12 @@
+{
+  "name": "@autonomous/quantum-studio-harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "perf": "node skills/quantum/scripts/perf.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

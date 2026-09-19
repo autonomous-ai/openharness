@@ -1,0 +1,31 @@
+{
+  "spec": 1,
+  "id": "autonomous/score",
+  "name": "Score",
+  "category": "Music",
+  "author": "OpenHarness contributors",
+  "description": "Compose editable LilyPond music, engrave a real PDF, and explore its MIDI notes with a local playback and score viewer.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "score.ly",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": ["skills"],
+    "env": {
+      "SCORE_TOOLCHAIN": "${dsh}/toolchain",
+      "SCORE_SKILLS": "${dsh}/skills"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/isolated-web-viewer",
+    "artifactExtensions": [".html"]
+  },
+  "verdict": ".harness/verdict.json"
+}

@@ -1,0 +1,57 @@
+# Demo entities below are placeholders, not discovered devices. Replace before deployment.
+- id: welcome_lights
+  alias: A warmer welcome
+  description: Arrive home after dark and bring the living room gently to life.
+  triggers:
+    - trigger: state
+      entity_id: person.demo
+      from: not_home
+      to: home
+  conditions:
+    - condition: state
+      entity_id: sun.sun
+      state: below_horizon
+  actions:
+    - action: light.turn_on
+      target:
+        entity_id: light.demo_living_room
+      data:
+        brightness_pct: 45
+        transition: 3
+  mode: single
+
+- id: quiet_evening
+  alias: Let the evening settle
+  description: At eleven, dim the lights if someone is home.
+  triggers:
+    - trigger: time
+      at: "23:00:00"
+  conditions:
+    - condition: state
+      entity_id: person.demo
+      state: home
+  actions:
+    - action: light.turn_on
+      target:
+        entity_id: light.demo_living_room
+      data:
+        brightness_pct: 15
+        transition: 10
+  mode: single
+
+- id: fresh_air
+  alias: A little fresh air
+  description: When CO₂ crosses 1000 ppm, request the fan while someone is home.
+  triggers:
+    - trigger: numeric_state
+      entity_id: sensor.demo_co2
+      above: 1000
+  conditions:
+    - condition: state
+      entity_id: person.demo
+      state: home
+  actions:
+    - action: fan.turn_on
+      target:
+        entity_id: fan.demo_study
+  mode: single

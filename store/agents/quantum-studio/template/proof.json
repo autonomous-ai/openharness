@@ -1,0 +1,9 @@
+{
+  "actions": [
+    { "selector": "[data-preset=phase]", "click": true },
+    { "selector": "#theta", "fill": "180" },
+    { "selector": "[data-basis='1'] .value", "text": "100.0%" },
+    { "selector": "#theta", "fill": "90" },
+    { "selector": "[data-basis='1'] .value", "text": "50.0%" }
+  ]
+}

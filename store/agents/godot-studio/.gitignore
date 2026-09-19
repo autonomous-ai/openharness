@@ -1,0 +1,6 @@
+# Godot import cache + web export — never source.
+.godot/
+build/
+# Harness bookkeeping.
+.harness/
+.harness-initialized
