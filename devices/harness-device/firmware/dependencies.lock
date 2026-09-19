@@ -33,6 +33,20 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 2.2.0
+  espressif/esp_lcd_ili9341:
+    component_hash: 840387ee0c90a473e43fdc75570f77c52f06423aa331d95479bde8b418c43547
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.*
+    - name: idf
+      require: private
+      version: '>=5.2'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.1.0
   espressif/esp_lcd_touch:
     component_hash: 3f85a7d95af876f1a6ecca8eb90a81614890d0f03a038390804e5a77e2caf862
     dependencies:
@@ -57,6 +71,20 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.1.2
+  espressif/esp_lcd_touch_ft5x06:
+    component_hash: d49f3dec3ae89617c31d96ac6f31bbc3212a0f049354eabd55c9457e454c56ae
+    dependencies:
+    - name: espressif/esp_lcd_touch
+      registry_url: https://components.espressif.com
+      require: public
+      version: ^1.2.0
+    - name: idf
+      require: private
+      version: '>=5.2'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.1
   espressif/esp_websocket_client:
     component_hash: ae561d39222a399ddda5e470913c3d54a3c0f53dce15b8d21a3aaa4226dd74b1
     dependencies:
@@ -80,7 +108,7 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.5.0
+    version: 5.5.1
   lvgl/lvgl:
     component_hash: 184e532558c1c45fefed631f3e235423d22582aafb4630f3e8885c35281a49ae
     dependencies: []
@@ -105,12 +133,14 @@ dependencies:
 direct_dependencies:
 - espressif/esp_codec_dev
 - espressif/esp_lcd_co5300
+- espressif/esp_lcd_ili9341
 - espressif/esp_lcd_touch_cst816s
+- espressif/esp_lcd_touch_ft5x06
 - espressif/esp_websocket_client
 - espressif/libsodium
 - idf
 - lvgl/lvgl
 - waveshare/esp_lcd_touch_cst9217
-manifest_hash: ca9f548ea419ce355930a24f0f9efc14504d0a0f4ac0669b266c207edb51fde2
+manifest_hash: 7b5a0eaf7a4530c68552d69cd7b4ea7a4200d80cc3d5c7a4418b943b55775c71
 target: esp32s3
 version: 2.0.0

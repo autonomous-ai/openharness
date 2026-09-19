@@ -11,6 +11,10 @@ dependencies:
   lvgl/lvgl: "~9.5.0"
   # Official CO5300 AMOLED panel driver (the controller on this board).
   espressif/esp_lcd_co5300: "*"
+  # M5Stack CoreS3 port (DEVICE_BOARD_M5CORES3): ILI9342C/E panel + FT6336U touch. Unused (and
+  # link-pruned) on the round-dial build; kept here so one project serves both boards.
+  espressif/esp_lcd_ili9341: "*"
+  espressif/esp_lcd_touch_ft5x06: "*"
   # Capacitive touch → LVGL pointer indev for swipe. BOTH controllers are linked in: the two dials
   # that ship differ here (CST9217 on one, CST816S on the other) and one image serves both — the
   # board is detected at boot (board/board.c) and the matching driver is opened. Pulls esp_lcd_touch.

@@ -8,8 +8,13 @@
 #include "ui_screens.h"   // ui_swipe_begin/end for the circular edge-swipe
 #include "driver/i2c_master.h"
 #include "esp_lcd_panel_io.h"
+#if defined(DEVICE_BOARD_M5CORES3)
+#include "esp_lcd_touch_ft5x06.h"   // CoreS3: FT6336U, FT5x06-register-compatible
+#include "display_cores3.h"         // panel_to_virtual: 320×240 panel → 466 virtual
+#else
 #include "esp_lcd_touch_cst816s.h"
 #include "esp_lcd_touch_cst9217.h"
+#endif
 #include "esp_log.h"
 #include "lvgl.h"
 #include <stdlib.h>
@@ -365,6 +370,16 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
             touch_reinit();
         }
     }
+#if defined(DEVICE_BOARD_M5CORES3)
+    // The driver reports PANEL coordinates (320×240); everything below — LVGL, the gesture
+    // recognizers, the hit tests — lives in the 466×466 virtual round-screen space. Scale once,
+    // here, so every consumer sees the same geometry the flush callback drew.
+    if (pressed) {
+        int vx, vy;
+        panel_to_virtual(x, y, &vx, &vy);
+        x = (uint16_t)vx; y = (uint16_t)vy;
+    }
+#endif
     if (pressed && !activity_prev) {
         s_activity_gen++;
         s_presses++;
@@ -536,6 +551,36 @@ static bool touch_open(void)
         return false;
     }
 
+#if defined(DEVICE_BOARD_M5CORES3)
+    (void)b;
+    // FT6336U behind the AW9523B (which board power bring-up already enabled and took out of
+    // reset). Driver-level range is the PANEL (320×240); touch_read scales into the 466 virtual
+    // space, so every gesture band below keeps its round-screen pixel values.
+    esp_lcd_panel_io_i2c_config_t io_cfg = (esp_lcd_panel_io_i2c_config_t)ESP_LCD_TOUCH_IO_I2C_FT5x06_CONFIG();
+    io_cfg.scl_speed_hz = BSP_I2C_FREQ_HZ;
+    if (esp_lcd_new_panel_io_i2c(bus, &io_cfg, &s_tp_io) != ESP_OK) {
+        ESP_LOGW(TAG, "touch panel io failed — touch disabled");
+        s_tp_io = NULL;
+        return false;
+    }
+
+    esp_lcd_touch_config_t tp_cfg = {
+        .x_max = BSP_PANEL_H_RES,
+        .y_max = BSP_PANEL_V_RES,
+        .rst_gpio_num = -1,                  // reset handled by the board bring-up (AW9523B)
+        .int_gpio_num = -1,                  // INT reaches the ESP via the expander; poll instead
+        .flags = { .swap_xy = 0, .mirror_x = 0, .mirror_y = 0 },
+    };
+    esp_err_t err = esp_lcd_touch_new_i2c_ft5x06(s_tp_io, &tp_cfg, &s_tp);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "FT5x06 init failed (%s) — touch disabled", esp_err_to_name(err));
+        s_tp = NULL;
+        esp_lcd_panel_io_del(s_tp_io);
+        s_tp_io = NULL;
+        return false;
+    }
+    return true;
+#else
     esp_lcd_panel_io_i2c_config_t io_cfg = b->touch == TOUCH_CST816S
         ? (esp_lcd_panel_io_i2c_config_t)ESP_LCD_TOUCH_IO_I2C_CST816S_CONFIG()
         : (esp_lcd_panel_io_i2c_config_t)ESP_LCD_TOUCH_IO_I2C_CST9217_CONFIG();
@@ -567,6 +612,7 @@ static bool touch_open(void)
         return false;
     }
     return true;
+#endif  // DEVICE_BOARD_M5CORES3
 }
 
 // Tear the controller down and bring it back. Runs on the LVGL task (the indev read), where the driver's

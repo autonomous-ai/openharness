@@ -1,5 +1,11 @@
 # Single "main" component holding all app sources. Board drivers live under board/
 # and the LVGL UI under ui/.
+# CoreS3 port (DEVICE_BOARD_M5CORES3) additionally links the ILI9341 panel + FT5x06 touch
+# drivers (managed components; declared in idf_component.yml, unused/link-pruned on the dial).
+set(CORES3_PRIV_REQUIRES "")
+if(DEVICE_BOARD_M5CORES3)
+    set(CORES3_PRIV_REQUIRES espressif__esp_lcd_ili9341 espressif__esp_lcd_touch_ft5x06)
+endif()
 idf_component_register(
     SRCS
         "app_main.c"
@@ -65,7 +71,20 @@ idf_component_register(
         driver
         json
         lvgl
+    PRIV_REQUIRES
+        ${CORES3_PRIV_REQUIRES}
 )
+
+# CoreS3 port (DEVICE_BOARD_M5CORES3): swap the panel driver in, add the board bring-up and
+# the virtual-screen compositor, and pull the ILI9341/FT5x06 drivers the round dial doesn't use.
+# Build:  . ~/esp/esp-idf/export.sh && scripts/build-cores3.sh
+if(DEVICE_BOARD_M5CORES3)
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC DEVICE_BOARD_M5CORES3=1)
+    target_sources(${COMPONENT_LIB} PRIVATE
+        "board/cores3_board.c"
+        "ui/display_cores3.c"
+    )
+endif()
 
 # snprintf() is bounded (it truncates, never overflows), but -O2 enables a noisy
 # format-truncation analysis that errors on safe same-size copies. Keep it as a warning, not error.

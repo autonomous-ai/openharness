@@ -1,6 +1,7 @@
 #include "audio_capture.h"
 #include "board_pins.h"
 #include "board/board_i2c.h"
+#include "board/cores3_board.h"
 #include "driver/i2s_std.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
@@ -19,10 +20,11 @@ static const audio_codec_if_t *s_es7210;
 static esp_codec_dev_handle_t s_mic;
 static bool s_open;
 
-// ES8311 speaker (OUT) path for the notification beep — shares the I2S + I2C with the mic.
+// Speaker codec: ES8311 on the round dial, AW88298 smart amp on CoreS3 — both OUT paths for
+// the notification beep, sharing the I2C control bus and the full-duplex I2S port with the mic.
 static const audio_codec_ctrl_if_t *s_spk_ctrl;
 static const audio_codec_gpio_if_t *s_gpio_if;
-static const audio_codec_if_t *s_es8311;
+static const audio_codec_if_t *s_spk_codec;
 static esp_codec_dev_handle_t s_spk;
 static TaskHandle_t s_beep_task;
 
@@ -72,13 +74,28 @@ void audio_notify_init(void)
 
     audio_codec_i2c_cfg_t i2c_cfg = {
         .port = I2C_NUM_0,
+#if defined(DEVICE_BOARD_M5CORES3)
+        .addr = AW88298_CODEC_DEFAULT_ADDR,
+#else
         .addr = ES8311_CODEC_DEFAULT_ADDR,
+#endif
         .bus_handle = board_i2c_get(),
     };
     s_spk_ctrl = audio_codec_new_i2c_ctrl(&i2c_cfg);
     s_gpio_if = audio_codec_new_gpio();
-    if (!s_spk_ctrl || !s_gpio_if) { ESP_LOGW(TAG, "es8311 ctrl/gpio if failed"); return; }
+    if (!s_spk_ctrl || !s_gpio_if) { ESP_LOGW(TAG, "spk ctrl/gpio if failed"); return; }
 
+#if defined(DEVICE_BOARD_M5CORES3)
+    // AW88298 smart amp: no PA GPIO (the enable is the board rail, up since boot); the
+    // driver's open() powers the amp over I2C. pa_gain 15 per esp-bsp on this board.
+    aw88298_codec_cfg_t aw_cfg = {
+        .ctrl_if = s_spk_ctrl,
+        .gpio_if = s_gpio_if,
+        .hw_gain = { .pa_gain = 15 },
+    };
+    s_spk_codec = aw88298_codec_new(&aw_cfg);
+    if (!s_spk_codec) { ESP_LOGW(TAG, "aw88298 new — no speaker"); return; }
+#else
     es8311_codec_cfg_t es_cfg = {
         .ctrl_if = s_spk_ctrl,
         .gpio_if = s_gpio_if,
@@ -86,12 +103,13 @@ void audio_notify_init(void)
         .pa_pin = BSP_PA_IO,            // speaker power-amp enable — codec toggles it on open/close
         .use_mclk = true,
     };
-    s_es8311 = es8311_codec_new(&es_cfg);
-    if (!s_es8311) { ESP_LOGW(TAG, "es8311 new — no speaker?"); return; }
+    s_spk_codec = es8311_codec_new(&es_cfg);
+    if (!s_spk_codec) { ESP_LOGW(TAG, "es8311 new — no speaker?"); return; }
+#endif
 
     esp_codec_dev_cfg_t dev_cfg = {
         .dev_type = ESP_CODEC_DEV_TYPE_OUT,
-        .codec_if = s_es8311,
+        .codec_if = s_spk_codec,
         .data_if = s_data_if,
     };
     s_spk = esp_codec_dev_new(&dev_cfg);
@@ -99,9 +117,13 @@ void audio_notify_init(void)
 
     render_tone();
     // The full codec-open path retained only 688 B on a 3 KiB stack during
-    // event stress. Four KiB restores the 25% and 1 KiB safety margins.
+    // event stress. Four KiB restores the 25% and 1 KiB margins.
     xTaskCreate(beep_task, "beep", 4096, NULL, 5, &s_beep_task);
+#if defined(DEVICE_BOARD_M5CORES3)
+    ESP_LOGI(TAG, "speaker (AW88298) ready");
+#else
     ESP_LOGI(TAG, "speaker (ES8311) ready");
+#endif
 }
 
 void audio_notify_done(void)
@@ -118,7 +140,12 @@ bool audio_capture_init(void)
 {
     if (s_mic) return true;
 
-    // Full-duplex I2S (BSP-exact): ES7210(ADC)+ES8311(codec) share BCLK/WS, so create both
+#if defined(DEVICE_BOARD_M5CORES3)
+    // The mic path's rails (ALDO2 → ES7210, P0_2 analog front-end) come up with the board.
+    cores3_board_power_init();
+#endif
+
+    // Full-duplex I2S (BSP-exact): ES7210(ADC)+ES8311/AW88298 share BCLK/WS, so create both
     // tx+rx and enable them — RX-only setups leave the shared clocks misconfigured → silence.
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     if (i2s_new_channel(&chan_cfg, &s_tx, &s_rx) != ESP_OK) { ESP_LOGE(TAG, "i2s_new_channel"); return false; }
@@ -182,6 +209,12 @@ bool audio_capture_start(void)
         .bits_per_sample = 16,
     };
     if (esp_codec_dev_open(s_mic, &fs) != ESP_OK) { ESP_LOGE(TAG, "codec open"); return false; }
+#if defined(DEVICE_BOARD_M5CORES3)
+    // The CoreS3 mics sit behind an ES7210 routing M5Unified tunes with a fixed register
+    // sequence (mic bias, HPF, channel power-down). The driver's own defaults are written at
+    // open; this re-pins the board-specific parts last so its known-good values win.
+    cores3_es7210_apply_sequence();
+#endif
     // Make sure the I2S RX clock is running (esp_codec_dev_open may leave it disabled).
     esp_err_t en = i2s_channel_enable(s_rx);
     if (en != ESP_OK && en != ESP_ERR_INVALID_STATE) ESP_LOGW(TAG, "i2s enable: %s", esp_err_to_name(en));

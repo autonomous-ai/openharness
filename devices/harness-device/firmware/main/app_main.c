@@ -47,8 +47,12 @@ static const char *TAG = "app";
 
 // BOOT (GPIO0) held at power-on = factory reset. All that is left to clear is the screen brightness and
 // the voice language — the credentials this used to wipe do not exist any more.
+// CoreS3 has no exposed BOOT key (GPIO0 is the ES7210 MCLK), so the gesture is dial-only.
 static bool boot_button_held(void)
 {
+#if !BSP_HAS_BOOT_BUTTON
+    return false;
+#else
     gpio_config_t io = {
         .pin_bit_mask = 1ULL << BSP_BOOT_BUTTON,
         .mode = GPIO_MODE_INPUT,
@@ -59,6 +63,7 @@ static bool boot_button_held(void)
     if (gpio_get_level(BSP_BOOT_BUTTON) != 0) return false;
     vTaskDelay(pdMS_TO_TICKS(50));
     return gpio_get_level(BSP_BOOT_BUTTON) == 0;
+#endif  // BSP_HAS_BOOT_BUTTON
 }
 
 // ── the agent list ──────────────────────────────────────────────────────────────────────────────────
