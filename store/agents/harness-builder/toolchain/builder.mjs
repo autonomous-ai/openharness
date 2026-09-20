@@ -28,7 +28,9 @@ const HELP = `builder — build a domain-specific harness in package/
   check [--json]     the quality bar over package/ (and harness dsh check); writes .builder/check.json
   fresh [--keep]     setup, doctor and init on a simulated new machine; writes .builder/fresh.json
   proof open <id>    a workspace for the harness with its viewer running (shown live in the Studio)
-  proof run <id> --prompt "…" [--engine claude|codex] [--every 15] [--timeout 45]
+  proof run <id> --prompt "…" [--from <proof-id>] [--engine claude|codex] [--every 15] [--timeout 45]
+                     --from continues in a copy of that finished proof's workspace: the revision run,
+                     where the agent meets the work already in progress
                      (--engine defaults to $BUILDER_PROOF_ENGINE, else the harness's engine: run proofs on
                      the engine you are, so they test the harness where you know it runs)
                      a fresh agent that knows only the harness turns the prompt into a result,
@@ -197,6 +199,7 @@ async function main() {
           every: Number(a.every ?? 15),
           timeoutMinutes: Number(a.timeout ?? 45),
           builderScript: SCRIPT,
+          from: typeof a.from === 'string' ? a.from : null,
         })
         console.log(`proof ${id} started: a fresh agent is working in ${started.workspace}`)
         console.log(started.viewer.error ? `viewer: ${started.viewer.error}` : 'viewer running, frames every change')

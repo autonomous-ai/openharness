@@ -6,7 +6,7 @@
 // call does not — and `proof wait` follows it. The runner owns the agent and the frames; the viewer is
 // left running afterwards so Builder Studio can keep showing it live.
 import { spawn } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { launchEnv, materialize, readManifest, skillsDirFor } from './materialize.mjs'
 import { log, paths, readBuild, readJson, saveBuild, writeJsonAtomic } from './state.mjs'
@@ -56,7 +56,7 @@ export function fingerprint(workspace) {
 }
 
 /** Lay out the workspace and start the viewer. Reuses a running viewer for the same workspace. */
-export async function openProof(workspace, id, { engine, reset = false } = {}) {
+export async function openProof(workspace, id, { engine, reset = false, from = null } = {}) {
   const p = paths(workspace)
   const dir = proofDir(workspace, id)
   const ws = join(dir, 'workspace')
@@ -69,6 +69,18 @@ export async function openProof(workspace, id, { engine, reset = false } = {}) {
   mkdirSync(dir, { recursive: true })
   const manifest = readManifest(p.package)
   const base = engine ?? manifest.engine ?? 'claude'
+  // `--from`: a revision meets the work already in progress, as the person's second turn does. The
+  // finished workspace is copied first (without the engine's own folders, which materialize rewrites
+  // for this run), so the agent opens what the last proof left rather than an empty template.
+  if (from) {
+    const source = build.proofs[from]?.workspace ? join(workspace, build.proofs[from].workspace) : null
+    if (!source || !existsSync(source)) throw new Error(`no finished workspace for proof "${from}"`)
+    if (from === id) throw new Error('a proof cannot continue from itself')
+    cpSync(source, ws, {
+      recursive: true,
+      filter: (src) => !/(^|\/)(\.claude|\.agents|node_modules|\.git)(\/|$)/.test(src.slice(source.length)),
+    })
+  }
   const materialized = materialize(p.package, ws, { engine: base })
   writeJsonAtomic(join(dir, 'materialize.json'), materialized)
 
@@ -108,9 +120,9 @@ export function packageFingerprint(pkg) {
   return `${count}:${sum}`
 }
 
-export async function startProof(workspace, id, prompt, { engine, every = 15, timeoutMinutes = 45, builderScript }) {
+export async function startProof(workspace, id, prompt, { engine, every = 15, timeoutMinutes = 45, builderScript, from = null }) {
   if (!prompt?.trim()) throw new Error('a proof needs --prompt "…"')
-  const opened = await openProof(workspace, id, { engine, reset: true })
+  const opened = await openProof(workspace, id, { engine, reset: true, from })
   const build = readBuild(workspace)
   const base = build.proofs[id].engine
   if (!ENGINE_COMMANDS[base]) throw new Error(`no proof runner for engine "${base}" yet; use claude or codex`)
@@ -121,9 +133,10 @@ export async function startProof(workspace, id, prompt, { engine, every = 15, ti
     startedAt: new Date().toISOString(),
     every,
     timeoutMinutes,
+    from,
     packageAt: packageFingerprint(paths(workspace).package),
   }
-  log(build, `Proof ${id}: a fresh ${base} agent started`)
+  log(build, `Proof ${id}: a fresh ${base} agent started${from ? ` on ${from}'s finished workspace` : ''}`)
   saveBuild(workspace, build)
   const runner = spawn(process.execPath, [builderScript, 'proof', '_runner', id], {
     cwd: workspace,

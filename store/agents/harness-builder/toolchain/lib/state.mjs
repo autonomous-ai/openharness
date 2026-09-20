@@ -17,7 +17,9 @@ export const STAGES = [
   { id: 'store', name: 'Store' },
 ]
 export const STATES = new Set(['pending', 'active', 'done', 'failed'])
-export const PROOF_IDS = ['easy', 'medium', 'hard']
+// Three materially different briefs, then the revision: a harness that cannot continue the work
+// makes one-shot output, and nobody finishes real work in one shot.
+export const PROOF_IDS = ['easy', 'medium', 'hard', 'revision']
 
 export function paths(workspace) {
   const builder = join(workspace, '.builder')
@@ -136,7 +138,7 @@ export function verdictFor(workspace, build) {
     { method: 'tool', by: 'builder check', passed: check ? errors === 0 : null, gate: true },
     { method: 'tool', by: 'fresh-machine install', passed: fresh ? fresh.passed === true : null, gate: true },
     // Passed when all three passed review, failed when one failed; until then, not yet known.
-    { method: 'review', by: 'three proofs, reviewed frame by frame', passed: passedProofs === PROOF_IDS.length ? true : proofs.some((proof) => proof.state === 'failed') ? false : null, gate: true },
+    { method: 'review', by: 'three briefs and a revision, reviewed frame by frame', passed: passedProofs === PROOF_IDS.length ? true : proofs.some((proof) => proof.state === 'failed') ? false : null, gate: true },
   ]
   const allDone = build.stages.every((s) => s.state === 'done')
   const ready = allDone && evaluation.every((e) => e.passed === true) && errors === 0

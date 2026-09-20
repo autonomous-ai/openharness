@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process'
 import { accessSync, constants, existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { extname, join, relative } from 'node:path'
 import { ENGINES, skillDirsIn } from './materialize.mjs'
+import { PROOF_IDS } from './state.mjs'
 
 const SKIP_DIRS = new Set(['node_modules', '.venv', '.conda', '.playwright', 'vendor', 'upstream', 'reference', '.git', 'dist', '__pycache__', '.pytest_cache', 'build'])
 const TEXT_EXT = new Set(['', '.md', '.json', '.sh', '.mjs', '.js', '.cjs', '.ts', '.py', '.html', '.css', '.txt', '.toml', '.yaml', '.yml', '.in', '.lock'])
@@ -239,6 +240,37 @@ export function checkPackage(pkg, { reference, build, fresh, proofVerdicts = [] 
         findings.push(finding('warning', 'store_example_image', `showcase/ has ${shots.length} picture${shots.length === 1 ? '' : 's'} no example points at; the page shows none until they have a public URL`, 'store.json'))
       }
       findings.push(...evaluationFindings(store.evaluation, proofVerdicts))
+      // The line under the name in the picker: what a person can now finish, in their words.
+      if (!store.tagline) findings.push(finding('warning', 'store_tagline', 'store.json has no tagline: one line, what a person can now finish', 'store.json'))
+      else if (String(store.tagline).length > 80) findings.push(finding('error', 'store_tagline', `the tagline is ${String(store.tagline).length} characters; the Store takes 80`, 'store.json'))
+      if (store.listed === false) findings.push(finding('info', 'store_unlisted', 'listed: false — the package stays out of the Store until the proofs meet the bar', 'store.json'))
+    }
+  }
+
+  // The tile's face. A project's own logo or nothing: a mark invented for someone else's project is
+  // worse than the initial the app draws.
+  const brand = ['brand/logo.svg', 'brand/logo.png', 'brand/icon.png', 'brand/icon.svg'].filter((f) => existsSync(join(pkg, f)))
+  if (!brand.length) findings.push(finding('warning', 'brand_missing', 'no brand/logo.svg or brand/icon.png: the tile draws an initial (right when the project publishes no logo, a gap otherwise)', 'brand/'))
+
+  // The pane must open something real before the first prompt: a person sees the craft the moment
+  // the tab appears, and the agent's first save changes something rather than filling a void.
+  const templateDir = manifest.workspace?.template ? join(pkg, manifest.workspace.template) : null
+  if (templateDir && existsSync(templateDir)) {
+    // Every file, not only the text ones: a craft's example is as often a mesh, a WAV or a PDF.
+    let bytes = 0
+    const weigh = (dir, depth) => {
+      let entries = []
+      try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
+      for (const e of entries) {
+        if (e.name === '.harness' || e.name === '.builder' || e.name === '.gitkeep') continue
+        const f = join(dir, e.name)
+        if (e.isDirectory()) { if (depth < 6) weigh(f, depth + 1); continue }
+        try { bytes += statSync(f).size } catch { /* raced */ }
+      }
+    }
+    weigh(templateDir, 0)
+    if (bytes < 400) {
+      findings.push(finding('warning', 'template_empty', 'the template opens nothing before the first prompt: ship a small, complete, authored example of the craft', manifest.workspace.template))
     }
   }
 
@@ -263,8 +295,24 @@ export function checkPackage(pkg, { reference, build, fresh, proofVerdicts = [] 
     if (!existsSync(join(pkg, 'toolchain', 'check')) && !build.evaluation?.length) {
       findings.push(finding('warning', 'evaluation_undeclared', 'no toolchain/check and no evaluation declared', 'toolchain/check'))
     }
-    const passed = ['easy', 'medium', 'hard'].filter((id) => build.proofs?.[id]?.state === 'passed')
-    if (passed.length < 3) findings.push(finding('warning', 'proofs', `${passed.length} of 3 proofs passed`, '.builder/proofs'))
+    const passed = PROOF_IDS.filter((id) => build.proofs?.[id]?.state === 'passed')
+    if (passed.length < PROOF_IDS.length) findings.push(finding('warning', 'proofs', `${passed.length} of ${PROOF_IDS.length} proofs passed (${PROOF_IDS.filter((id) => !passed.includes(id)).join(', ')} outstanding)`, '.builder/proofs'))
+    // Three briefs that read as one brief three times is the withdrawn kind: one answer, retyped.
+    // Materially different jobs share little vocabulary; a swapped noun shares nearly all of it.
+    const briefs = ['easy', 'medium', 'hard'].map((id) => build.proofs?.[id]?.prompt).filter(Boolean)
+    if (briefs.length === 3) {
+      const words = briefs.map((b) => new Set(b.toLowerCase().match(/[a-z0-9']{3,}/g) ?? []))
+      const overlap = (a, b) => {
+        const shared = [...a].filter((w) => b.has(w)).length
+        const union = new Set([...a, ...b]).size
+        return union ? shared / union : 1
+      }
+      const pairs = [overlap(words[0], words[1]), overlap(words[0], words[2]), overlap(words[1], words[2])]
+      const alike = pairs.reduce((s, v) => s + v, 0) / pairs.length
+      if (alike >= 0.5) {
+        findings.push(finding('warning', 'proof_briefs_alike', `the three briefs share ${Math.round(alike * 100)}% of their words; they must be materially different jobs, not one brief with a noun swapped`, '.builder/proofs'))
+      }
+    }
   }
   if (fresh === null || fresh === undefined) findings.push(finding('warning', 'fresh_not_run', 'the fresh-machine install has not been run ("$BUILDER" fresh)', '.builder/fresh.json'))
   else if (!fresh.passed) findings.push(finding('error', 'fresh_failed', `the fresh-machine install failed at ${fresh.failedAt ?? 'a step'}`, '.builder/fresh.json'))

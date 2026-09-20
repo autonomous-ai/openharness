@@ -74,7 +74,7 @@ describe('the build record', () => {
     assert.throws(() => setStage(build, 'research', 'started'), /unknown state/)
   })
 
-  it('is ready only when every stage is done, the check is clean, the install passed and three proofs passed', () => {
+  it('is ready only when every stage is done, the check is clean, the install passed and every proof passed', () => {
     const ws = tmp()
     const build = ensureWorkspace(ws)
     for (const s of build.stages) setStage(build, s.id, 'done')
@@ -82,9 +82,9 @@ describe('the build record', () => {
     assert.equal(verdictFor(ws, build).ready, false)
     writeFileSync(join(ws, '.builder', 'check.json'), JSON.stringify({ findings: [], counts: { errors: 0, warnings: 0 } }))
     writeFileSync(join(ws, '.builder', 'fresh.json'), JSON.stringify({ passed: true }))
-    build.proofs = { easy: { state: 'passed' }, medium: { state: 'passed' } }
-    assert.equal(verdictFor(ws, build).ready, false)
-    build.proofs.hard = { state: 'passed' }
+    build.proofs = { easy: { state: 'passed' }, medium: { state: 'passed' }, hard: { state: 'passed' } }
+    assert.equal(verdictFor(ws, build).ready, false, 'the revision is a proof too')
+    build.proofs.revision = { state: 'passed' }
     const verdict = verdictFor(ws, build)
     assert.equal(verdict.ready, true)
     assert.match(verdict.summary, /ready for the Store/)
@@ -185,6 +185,46 @@ describe('the quality bar', () => {
     assert.throws(() => markProof(ws, 'easy', 'passed', 'looked fine'), /void/)
     markProof(ws, 'easy', 'failed', 'run again')
     assert.equal(readBuild(ws).proofs.easy.state, 'failed')
+  })
+
+  it('holds a package to the 2026-09-20 bar: a face, a tagline, and a pane that opens before the first prompt', () => {
+    const pkg = join(tmp(), 'package')
+    scaffold(pkg, { id: 'example/tool', tool: 'Tool', reference: join(REPO_STORE, '..') })
+    const kinds = new Set(checkPackage(pkg, {}).findings.map((f) => f.kind))
+    for (const kind of ['store_tagline', 'brand_missing', 'template_empty']) {
+      assert.ok(kinds.has(kind), `expected ${kind}`)
+    }
+
+    // Met: a logo, a tagline, and a template that already opens something real.
+    mkdirSync(join(pkg, 'brand'), { recursive: true })
+    writeFileSync(join(pkg, 'brand', 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>\n')
+    writeFileSync(join(pkg, 'store.json'), JSON.stringify({ tagline: 'Turn a recording into a printed score', examples: [] }))
+    writeFileSync(join(pkg, 'template', 'example.tool'), 'an authored example of the craft\n'.repeat(30))
+    const met = new Set(checkPackage(pkg, {}).findings.map((f) => f.kind))
+    for (const kind of ['store_tagline', 'brand_missing', 'template_empty']) {
+      assert.ok(!met.has(kind), `${kind} should be met`)
+    }
+
+    writeFileSync(join(pkg, 'store.json'), JSON.stringify({ tagline: 't'.repeat(81), examples: [] }))
+    assert.equal(checkPackage(pkg, {}).findings.find((f) => f.kind === 'store_tagline')?.severity, 'error')
+  })
+
+  it('counts the revision among the proofs, and hears three briefs that are one brief', () => {
+    const pkg = join(tmp(), 'package')
+    scaffold(pkg, { id: 'example/tool', tool: 'Tool', reference: join(REPO_STORE, '..') })
+    const proofs = (prompts) => ({
+      proofs: {
+        easy: { state: 'passed', prompt: prompts[0] },
+        medium: { state: 'passed', prompt: prompts[1] },
+        hard: { state: 'passed', prompt: prompts[2] },
+      },
+    })
+    const outstanding = checkPackage(pkg, { build: proofs(['Make a lead sheet for a waltz.', 'Engrave my recording of the fiddle tune.', 'Set a string quartet with parts.']) })
+      .findings.find((f) => f.kind === 'proofs')
+    assert.match(outstanding.message, /3 of 4 proofs passed \(revision outstanding\)/)
+
+    const alike = ['Make a chart of rainfall.', 'Make a chart of sunshine.', 'Make a chart of wind.']
+    assert.ok(checkPackage(pkg, { build: proofs(alike) }).findings.some((f) => f.kind === 'proof_briefs_alike'))
   })
 
   it('refuses a store picture the Store cannot show', () => {
