@@ -61,8 +61,17 @@ someone invented for it. Note in the README where the logo came from.
 
 ## Credit and licences
 
-- The folder and the harness `name` are the upstream project's own name; `author` in `harness.json` is
-  the upstream author or organization, as the project credits itself.
+Two kinds of package, named differently:
+
+- **A wrapper** brings one upstream project into Harness (Marp, MuJoCo, Typst). The folder and the
+  harness `name` are **the project's own name**, and `author` is its author or organization, as the
+  project credits itself. The person is choosing that project by name.
+- **An original workflow** uses several tools to do a job that is the harness's own (Creative
+  Direction, Data Studio, Voxel Worlds). Name it **for the work**, `author` is Autonomous, and the
+  tools it stands on are credited in the README and `THIRD_PARTY_NOTICES.md` rather than on the tile.
+  A workflow named after its loudest dependency tells the person the wrong thing about what they get.
+
+Then, either way:
 - `LICENSE` for the harness itself (MIT unless the upstream licence requires otherwise).
 - The upstream licence beside anything of theirs the package vendors (`LICENSE-<project>`), and a
   `THIRD_PARTY_NOTICES.md` listing every vendored component with its licence and version.

@@ -25,7 +25,7 @@ const HELP = `builder — build a domain-specific harness in package/
   stage <id> <active|done|failed|pending> [--note "…"]
                      mark a stage; stages: ${STAGES.map((s) => s.id).join(', ')}
   status             the stages, the proofs, the latest check
-  scaffold <owner/name> --tool "<Tool>" [--engine claude]
+  scaffold <owner/name> --tool "<Tool or the work>" [--engine claude]
                      lay out package/ so the build shows from the first minute
   check [--json]     the quality bar over package/ (and harness dsh check); writes .builder/check.json
   fresh [--keep]     setup, doctor and init on a simulated new machine; writes .builder/fresh.json

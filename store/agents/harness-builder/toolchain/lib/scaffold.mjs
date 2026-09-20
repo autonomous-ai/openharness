@@ -16,7 +16,7 @@ function write(file, content, { mode, created }) {
 }
 
 export function scaffold(pkg, { id, tool, engine = 'claude', reference }) {
-  if (!/^[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9._-]*$/.test(id ?? '')) throw new Error('scaffold needs an id: owner/name in lower case (the name is the tool\'s own name)')
+  if (!/^[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9._-]*$/.test(id ?? '')) throw new Error('scaffold needs an id: owner/name in lower case (a wrapper takes the project\'s name; an original workflow is named for the work)')
   const name = tool?.trim() || id.split('/')[1]
   const skill = slug(name)
   const envName = `${skill.replace(/-/g, '_').toUpperCase()}_TOOLCHAIN`
