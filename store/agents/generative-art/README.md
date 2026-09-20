@@ -1,60 +1,50 @@
 # Generative Art — Fieldwork
 
-> Withdrawn from Store discovery on 2026-09-20: the current starter does not meet our
-> standard for an open-ended tool that completes real user work. Existing projects and
-> source remain available. See [the product review](../../../work/SUPERPOWERS.md).
+> Unlisted while the authoring rebuild is validated. Code and existing projects remain available.
+> See [the product review](../../../work/SUPERPOWERS.md).
 
 ![Generative Art logo](brand/logo.svg)
 
-Design reproducible generative editions. Explore contour fields, dunes and orbital studies, tune their geometry and palettes, and export prints up to 3200 × 4000.
+Describe original visual work in the Harness chat. The agent creates its drawing system, controls
+and delivery formats. The studio lets you revise the result and export real files. You are not
+limited to a menu of drawing styles.
 
-## Try it
+For example: “Create packaging illustrations for my coffee roastery using my logo. I need a
+portrait bag label, a square announcement and a wide shop banner. Make it feel like a woodcut.”
 
-> Create an edition of 12 tidal contour prints in indigo and burnt orange. Keep the paper quiet and make each seed feel related but distinct.
+## Workflow
 
-The starter already works before the first prompt. Change it with the agent, interact with the
-result in the pane, and keep the output. Everything needed at runtime is in `sketch/index.html`.
-It works offline and can be opened outside Harness.
+The agent writes `sketch/project.json` and `sketch/artwork.js`, then builds `sketch/index.html`.
+You can change the controls created for your project, import your own images, undo/redo, change
+artboards and explore seeds. Browser drafts survive reload and are kept separate from new agent
+revisions. Save a `.fieldwork.json` to move your edits between sessions or attach them to the agent.
 
-## What you can do
+Export SVG for vector editors, PNG for publishing, all named formats as a ZIP, a seeded vector
+edition, or a complete studio you can open without Harness. The editable project includes the
+program and embedded images. There is no remote generation service or additional AI subscription.
+The agent uses the coding-engine account already configured in Harness.
 
-Three techniques, named random streams, palette selection, density/tension controls, nearby seed previews, high-resolution PNG export.
+## Authoring and verification
 
-## Build on the starter
+```sh
+node tools/build.mjs
+node tools/check.mjs
+node tools/export.mjs --seeds 3
+node tools/import-project.mjs path/to/saved.fieldwork.json
+```
 
-The model functions `artModel` and `artPaths` are the starting points for substantive changes. Preserve seed
-reproducibility and user controls while changing the domain behavior. A different brief can replace
-this starter's entire visual language. Keep the artifact self-contained and test the actual result.
+Setup installs pinned Playwright in the package for the agent's production exports. It uses local
+Chrome when available; otherwise it installs Chromium locally. Node.js 20+ and npm are required.
+The resulting HTML studio itself works offline without those tools.
 
-The source checkout builds these starters with `node store/tools/build-experiences.mjs`. Installed
-workspaces are editable HTML; no build tool, network dependency or paid service is required.
-
-## Verification
-
-Model census: `node --test store/tools/experience-tests/models.test.mjs` from the source checkout.
-Browser interactions, exports, same-origin APIs and manifest routing: see
-[`store/tools/experience-tests`](../../tools/experience-tests/README.md).
-
-`seed-verdict.sh` establishes only artifact presence and keeps `ready:false`. The agent must run
-and record real domain and browser checks before writing a ready verdict. No cross-device pixel or
-audio equality is promised. The research is inspiration; this is original code, not a wrapper of
-any cited third-party engine.
-
-## Check your actual edited model
-
-Run `node tools/check.mjs --seeds 100` in the workspace. It reads the pure model from
-`<script id="harness-model">` in the artifact, checks domain invariants, repeats each seed, and
-writes `.harness/model-check.json`. Preserve that script boundary when editing. Model checks are
-followed by browser interaction, exported-output inspection, and visual or listening review.
-
-## Logo and icon
-
-The original identity ships in `brand/`: [vector icon](brand/icon.svg),
-[256px PNG](brand/icon.png), [light logo](brand/logo.svg) and
-[dark logo](brand/logo-dark.svg). The same mark appears in the starter header,
-its offline favicon and the desktop Store/picker/tabs. MIT, by OpenHarness contributors.
+The exporter repeats the actual drawing program, checks PNG dimensions and preserves source and
+verification reports. Visual review and matching the brief remain required; a build never marks
+an artifact ready. SVG uses editable system-font text, whose appearance may differ on another
+machine. Output is RGB, not certified press-ready CMYK. This is a static vector authoring tool,
+not photo or video generation.
 
 ## Credit and stewardship
 
-Original implementation and visual identity by OpenHarness contributors, maintained by
-Autonomous under the [MIT license](LICENSE). Report issues in the OpenHarness repository.
+Original implementation and identity by OpenHarness contributors, maintained by Autonomous under
+the [MIT license](LICENSE). Playwright is a separate Apache-2.0 dependency by Microsoft. Branding
+sources remain in `brand/`. Report issues in the OpenHarness repository.

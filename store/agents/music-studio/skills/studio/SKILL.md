@@ -1,75 +1,86 @@
 ---
 name: studio
-description: Build a deterministic, seedable piece of music in one HTML file from a plain-English description. Use whenever the user asks for a track, a beat, a generative song, a seedable sound series, or prompt-to-music.
+description: Compose and revise complete original music from a brief or the user's MIDI and recordings, with editable notes, arrangements and real WAV/stem/MIDI/project delivery.
 ---
 
-# studio
+# Make the composition, not another loop demo
 
-Take the user's description and produce a **single self-contained `piece/index.html`**
-that plays a **deterministic, seedable** track, loading the seed from a `?seed=`
-query param so the web-viewer can preview the current seed and re-seed live.
+Read the current `piece/session.json` and the person's brief. Blue Hour is an example of one
+48-second cue, not a template genre. Write a different score and structure for a different task.
+The agent does the programming and musical construction; the person speaks in Harness chat and
+uses a normal piano roll and mixer.
 
-## The floor (in order)
+## Score format
 
-1. **Seeded PRNG.** A small seeded PRNG derived from the hash of the seed string.
-   Nothing may call a non-seeded random — the piece must be reproducible.
-2. **Score + synthesis.** A seeded score (chord progression, rhythm grid, melody)
-   driving Web Audio synthesis (oscillators + envelopes, a clock-based scheduler).
-3. **`?seed=` plumbing.** Reading the param, plus a tiny UI (input + "re-seed"
-   button, play/stop) so the person can browse seeds in the pane.
-4. **Named sub-streams.** One PRNG sub-stream per concern (harmony, rhythm, melody)
-   so tuning one doesn't reshuffle the other.
+`spec: "afterhours/1"`, stable lowercase `id`, `title`, `brief`, `seed`, `tempo` (30–240),
+`meter: [numerator, denominator]`, `beats` (quarter-note units), `tail` (0–6 seconds), `master` (0–1).
+Optional `tempos` is an ordered array of `{beat,bpm}` beginning at zero. With no map, `tempo` is
+constant. The timeline must fit four minutes; `tail: 0` gives an exact cut when the brief requires it.
 
-## The gold checklist
-
-- **Trait tables that survive an edition**: seed → traits (key, tempo, arrangement),
-  and a census that shows no silent/clipping/degenerate seed in the range you claim.
-- **Level discipline**: a ceiling (soft clipper or gain architecture) so nothing
-  blows out; a visible meter or waveform.
-- **Style range**: generative techno, lo-fi chords, arpeggiated ambient, drum-grid
-  patterns — matched to the brief, not all at once.
-- **Export route**: `?seed=X&size=…` style render is audio, so offer a "render
-  once, loop forever" mode and a visible step grid.
-
-## Verify like a listener, not a compiler
-
-Play a grid of seeds — actually play them — and listen.
-Two hard checks before "ready":
-- **Re-play same-seed** — it must be identical on this machine.
-- **Census the seed range you promise** (e.g. 0–99); reject any silent, clipped,
-  or stuck-forever frame.
-
-Be explicit in the verdict about the reproducibility guarantee: same-machine yes;
-cross-machine audio you cannot prove bit-identical — say so.
-
-## Verdict feed
-
-Write `.harness/verdict.json` at every change:
+Each of at most 16 tracks has `id`, `name`, `instrument`, `notes` and optional `clips`. Notes are:
 
 ```json
-{ "spec": 1, "ready": false, "summary": "seeded lo-fi loop · re-seed live · census 0–99 clean",
-  "findings": [{ "severity": "info", "kind": "reproducibility", "message": "same-machine verification pending; cross-machine audio not provable bit-identical" }],
-  "artifact": "piece/index.html",
-  "phases": [{ "id": "seed", "name": "Seeded core", "state": "done" },
-             { "id": "piece", "name": "The piece", "state": "active" },
-             { "id": "edition", "name": "Edition", "state": "pending" }],
-  "updatedAt": "2026-09-18T00:00:00Z" }
+{"beat": 4, "duration": 1.5, "midi": 66, "velocity": 0.72}
 ```
 
-## Starting from Afterhours
+A MIDI pitch of 60 is C4. Import `noteNumber`, `secondsAt` and `beatAt` from `studio/session.mjs`
+when writing a generator. These are scheduling utilities, not a restricted style vocabulary.
+Use arbitrary voicings, motifs, rhythms, tempo changes and forms. Separate the roles of melody,
+harmony, bass and rhythm. Use negative space and deliberate dynamics instead of filling every cell.
 
-The template is functional: Five editable tracks, finite arrangement, tempo/swing, per-track mute and level, waveform transport, reproducible PCM, WAV export.
+Note velocity must be 1/127–1 so MIDI can represent it as a note-on. For silence, remove the note
+or mute its track. Section markers and the intended end are included in MIDI, preserving a quiet
+ending after the last note.
 
-Keep its useful controls and exports when making a user's creation. Test the behavioral core
-(musicScore, scoreEvents, renderMusic, wavFile) as well as the visible result. A self-contained HTML file can still have well-separated
-model, rendering, input and export functions. Do not turn a finished starter into a waiting screen.
+Instruments: `felt`, `pluck`, `pad`, `bass`, `bell`, `lead`, `drums`, `sampler`, `audio`.
+They are synthesized voices or supplied recordings, not claims of sampled acoustic instruments.
+A track's `gain`, `pan`, `attack`, `release`, `tone` (filter Hz), `space` and `delay` shape its sound.
+The drum voice uses GM pitches (36 kick, 38 snare, 42 closed hat, 46 open hat). A sampler adds
+`sampleId` and `sampleRoot` (original MIDI pitch). A standard MIDI program number can be retained
+as `midiProgram` for the DAW handoff; a plugin's sound is not encoded in the MIDI file.
 
-Presence-only helpers do not prove correctness or reproducibility. Record actual evidence before
-marking the result ready. Export and reopen the result as part of the handoff to the user.
+Sections are `{name, beat, length}` and describe actual spans in the score. They are not a fixed
+verse/chorus template. The UI can repeat a selected eight-bar window, edit note start/pitch/length/
+velocity, move notes, transpose tracks, add instruments and edit the mix.
 
-## Check your actual edited model
+## The user's own material
 
-Run `node tools/check.mjs --seeds 100` in the workspace. It reads the pure model from
-`<script id="harness-model">` in the artifact, checks domain invariants, repeats each seed, and
-writes `.harness/model-check.json`. Preserve that script boundary when editing. Model checks are
-followed by browser interaction, exported-output inspection, and visual or listening review.
+Audio assets: `{id, name, file}` with `file` relative to `piece/`, or an embedded `data` audio URL.
+The build embeds WAV, MP3, M4A or OGG. Use WAV/MP3 for broad decoder support. A track's clips are
+`{assetId, beat, offset, duration, gain, fadeIn, fadeOut}`; offsets and durations are in seconds,
+position is in beats. Recording import in the pane creates a real audio track, not a visual proxy.
+
+`node tools/import-project.mjs FILE` opens an editable project or MIDI and backs up the source.
+MIDI import handles notes, tempo changes, one time signature and initial volume/pan. It reports
+unsupported controllers and pitch bends. A performance that depends on sustain, expression or
+pitch bends needs its original audio or further tool integration; do not discard that silently.
+Keep the supplied originals. Never invent that you heard, extracted or transcribed a melody.
+
+## Build and handoff
+
+```sh
+node tools/build.mjs
+node tools/check.mjs
+node tools/export.mjs
+```
+
+`MUSIC_DSH_DIR` locates the installed tools. Setup pins Playwright and MIDI libraries locally and
+uses Chrome or installs local Chromium. The emitted studio works offline; it has no CDN or paid
+music-generation dependency. The engine account already configured in Harness does the authoring.
+
+The production ZIP contains aligned WAV stems, the mix, MIDI and project. The stems use one common
+gain and include each audible track's effects, so align them all at time zero. MIDI does not carry
+recordings or effects, and preview patches are not the same as every DAW's instruments. Deliver
+both forms. Preserve the project so revision is possible without reverse engineering a WAV.
+
+## Review the actual music
+
+The export command opens the browser, exercises playback and writes the real deliverables. It
+measures duration, peak, RMS and repeatability, and deliberately leaves `ready:false`.
+
+Inspect exported WAV with an independent decoder and exported MIDI with an independent reader.
+Verify the requested duration, notes, meter, tempo changes, audible tracks, recording positions
+and stem alignment. Then listen from start to finish: transitions, timing, voicing, loudness,
+tails, intended space, clicks and the ending. Revise and listen again when a change affects sound.
+Do not substitute a waveform screenshot or a green test for this judgment. Record exact evidence
+and limitations in `piece/DESIGN.md` and the verdict. Never invent listening evidence.

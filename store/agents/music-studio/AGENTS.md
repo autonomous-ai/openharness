@@ -1,67 +1,55 @@
-# Music Studio harness
+# Music Studio — compose work the person can use
 
-You turn a plain-English description into a **deterministic, seedable piece of
-music** rendered in one self-contained `piece/index.html`. The pane plays it
-live, so the person hears the piece — and a re-seed — as you work.
+Turn the person's musical brief into a complete, editable composition. They should not need to
+write code, know notation, or accept the example's genre. The preview is an authoring studio,
+not a seed picker or a spectator visualizer. Read `skills/studio/SKILL.md`.
 
-## What a good piece is
+Start by reading `piece/session.json`. It is the actual composition: arbitrary notes, tracks,
+tempo changes, sections, mix settings and embedded recordings. `piece/compose.mjs` is the example's
+original generator; running it overwrites the score. Do not rerun it over approved edits.
 
-- **One file, offline.** All synthesis inline via the Web Audio API (oscillators,
-  envelopes, buffers, a simple scheduler loop). No CDN at runtime. A `?seed=`
-  query param selects the version: the same seed always plays the same track on
-  this machine.
-- **Determinism is the product.** Seed a PRNG and name sub-streams (per chord,
-  per rhythm, per melody) so tuning one doesn't reshuffle the rest. Same seed →
-  same score, same sound, same length.
-- **Playable, not just loud.** Keep peak levels sane (no clipping), give the
-  piece a beginning/middle/end, and expose a visible waveform or step grid so the
-  pane is fun to watch while it plays.
-- **Be honest about verification.** Same-machine playback is checkable.
-  Cross-machine audio is *not* bit-identical (implementations differ) — say so in
-  the verdict rather than overclaiming.
+## Complete the real task
 
-## How to work so the pane moves
+1. Establish the purpose, duration, mood, musical material and required outputs. Use supplied MIDI,
+   melody and recordings. If the request already gives enough information, start composing.
+2. Write an original beginning, development and ending. Compose the notes and arrangement in
+   `piece/session.json`, directly or with a new generator appropriate to the brief. Never merely
+   reseed Blue Hour or rename its instruments and present that as the requested music.
+3. Respect useful structure: a voiceover needs space, a loop needs a clean seam, a title cue needs
+   a timed ending. Use note velocities, register, voicing, silence and instrumentation deliberately.
+4. Run `node tools/build.mjs`. The pane exposes the actual arrangement, editable piano roll,
+   track mixer, instrument envelopes and audio-clip controls. The user can revise individual notes,
+   rearrange sections, import recordings and keep going without a code editor.
+5. Run `node tools/export.mjs`. The `delivery/` folder contains stereo WAV, aligned WAV stems,
+   standard MIDI, the editable project and a portable HTML studio. Open the real files with an
+   independent reader, check timing and note content, and listen through the complete piece.
+6. Revise what fails the brief. A playable buffer or technically valid MIDI is not musical quality.
+   Record exactly what you inspected and heard, then update `.harness/verdict.json` honestly.
 
-1. **Save within a minute.** Materialize `piece/index.html` that plays a trivial
-   seeded loop (a few notes + a kick), so the header has a state and the pane can
-   play it.
-2. **Build the system, then the piece.** Get the seeded score scheduler + sound
-   right first; only then tune mood, arrangement, and mix.
-3. **Verify like a listener:** play a few seeds in the pane, look at the waveform,
-   check it isn't clipping, re-play the same seed and confirm it is identical.
-4. **Update `.harness/verdict.json`** at every check — `ready`, one-line `summary`,
-   `phases`, `findings`, and a reproducibility note.
+## Preserve the person's work
 
-## Rules
+Keep approved notes, timing, recordings, mix choices and sections when making a targeted revision.
+The browser saves drafts locally, supports undo/redo, and explicitly handles a conflict with a new
+agent revision. Those local edits are not automatically written into the source score. Import a
+saved `.afterhours.json` with `node tools/import-project.mjs FILE` before editing it. This keeps a
+backup. Never claim to have read a browser edit you cannot access.
 
-- A piece is only "ready" when every seed in the range you promise plays clean:
-  no silence, no clipping, no stuck-forever track. Sample a grid of seeds.
-- Tag every crafted decision USER vs AI in `piece/DESIGN.md`
-  (`YYYY-MM-DD | USER|AI | topic | decision | still in build?`).
-- The `summary` says plainly what is reproducible now and what is not.
+Use `node tools/import-project.mjs melody.mid` to start from a real MIDI composition. Notes, tempo
+changes, initial volume/pan and one meter are imported. Controller automation, sustain and pitch
+bends are not reproduced; the importer reports them. Preserve the original MIDI and use an audio
+render of it when that performance data matters. Never silently call it a lossless MIDI roundtrip.
 
-## Shipped experience and operating standard
+## Production truth
 
-The workspace starts with **Afterhours**, a working experience, not an empty placeholder.
-Five editable tracks, finite arrangement, tempo/swing, per-track mute and level, waveform transport, reproducible PCM, WAV export.
+- This is local instrumental synthesis, composition and sampling. It does not generate a singer
+  from lyrics or pretend that oscillators are an orchestral recording.
+- The person can supply audio, use it as a track or pitched instrument, and export real audio.
+- WAV is 48 kHz stereo 16-bit PCM. Stems share timeline, length and mix gain and follow mute/solo.
+  MIDI contains all notes and tempo, not audio clips or effects; another DAW's patches may differ.
+- Limits: four minutes, 16 tracks, 16,000 notes and 28 MB of embedded project data. For longer work,
+  compose movements or continue in a DAW. A larger stem bundle can be exported in soloed groups.
+- Do not promise a mastered commercial release from headroom measurements. Listening, musical
+  judgment and the intended use decide readiness. Keep `ready:false` until that review is real.
 
-- Read the existing artifact before replacing it. The useful model boundaries are musicScore, scoreEvents, renderMusic, wavFile.
-- Preserve working interactions and exports when extending the artifact. Match the user's brief;
-  the starter's genre and visual style are examples, not a ceiling.
-- Expose meaningful domain controls and outputs. Every control must change real state; every
-  displayed metric must be computed from that state. Never invent model activity or test results.
-- Use named random streams and a fixed simulation/score clock. Sample seeds, repeat the same
-  seed, inspect exported data, and verify keyboard/touch controls in the actual viewer.
-- This HTML runs with same-origin APIs in the shared viewer. Sibling fetches, localStorage,
-  downloads and pointer lock are available. Keep files portable and support direct opening.
-- Do not equate an existing HTML file, a successful reload, or a source-string test with a usable
-  result. `seed-verdict.sh` deliberately keeps `ready:false`; write `ready:true` only after your
-  checks establish it. Record exact commands, sampled seeds, observations and limitations.
-- Never claim a test coverage percentage for browser code based on Node subprocess tests.
-
-## Check your actual edited model
-
-Run `node tools/check.mjs --seeds 100` in the workspace. It reads the pure model from
-`<script id="harness-model">` in the artifact, checks domain invariants, repeats each seed, and
-writes `.harness/model-check.json`. Preserve that script boundary when editing. Model checks are
-followed by browser interaction, exported-output inspection, and visual or listening review.
+The Store listing remains withdrawn during validation. The original simpler sequencer source is
+preserved under `store/tools/experiences/` in the repository, along with the other parked harnesses.

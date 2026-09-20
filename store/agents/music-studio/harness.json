@@ -4,7 +4,7 @@
   "name": "Music Studio",
   "category": "Audio",
   "author": "Autonomous",
-  "description": "Compose a seeded eight-bar track, edit five instrument patterns, shape swing and the mix, listen locally, and export the result as a WAV file.",
+  "description": "Compose and revise original music from your brief. Edit notes and arrangements, import MIDI and recordings, shape each instrument, and deliver stereo WAV, aligned stems, MIDI and an editable project.",
   "engine": "claude",
   "workspace": {
     "template": "template",
@@ -15,7 +15,10 @@
     "instructions": "AGENTS.md",
     "skills": [
       "skills"
-    ]
+    ],
+    "env": {
+      "MUSIC_DSH_DIR": "${dsh}"
+    }
   },
   "toolchain": {
     "setup": "toolchain/setup.sh",

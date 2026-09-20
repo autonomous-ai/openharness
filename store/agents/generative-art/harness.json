@@ -4,7 +4,7 @@
   "name": "Generative Art",
   "category": "Original art",
   "author": "Autonomous",
-  "description": "Design reproducible generative editions. Explore contour fields, dunes and orbital studies, tune their geometry and palettes, and export prints up to 3200 \u00d7 4000.",
+  "description": "Turn your brief into original vector artwork with its own drawing program and controls. Use your text, images and data; revise multiple layouts; export SVG, PNG, editions and complete editable projects.",
   "engine": "claude",
   "workspace": {
     "template": "template",

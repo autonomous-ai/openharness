@@ -1,0 +1,25 @@
+{
+  "spec": "fieldwork/1",
+  "id": "night-garden",
+  "title": "Night Garden",
+  "brief": "A nocturnal botanical identity for an independent music festival. Build a poster, square announcement and wide banner with oversized typography and original cut-paper flowers.",
+  "notes": "Example project. Ask the agent for your own visual system; none of these shapes or controls are requirements. The three formats are composed separately from the same design language.",
+  "seed": "42",
+  "formats": [
+    { "name": "Poster", "width": 1200, "height": 1600 },
+    { "name": "Social", "width": 1080, "height": 1080 },
+    { "name": "Banner", "width": 1920, "height": 800 }
+  ],
+  "controls": [
+    { "key": "headline", "type": "text", "label": "Festival name", "value": "NIGHT GARDEN" },
+    { "key": "details", "type": "text", "label": "Date and place", "value": "SEPTEMBER 26—28 · BOTANICAL GROUNDS" },
+    { "key": "lineup", "type": "text", "label": "Lineup", "value": "MIRA / SOFT SIGNAL / LUNAR ASSEMBLY" },
+    { "key": "paper", "type": "color", "label": "Paper", "value": "#f4ead9" },
+    { "key": "ink", "type": "color", "label": "Ink", "value": "#142a24" },
+    { "key": "flower", "type": "color", "label": "Petals", "value": "#f26842" },
+    { "key": "accent", "type": "color", "label": "Center", "value": "#dcf476" },
+    { "key": "petals", "type": "range", "label": "Flower geometry", "min": 5, "max": 14, "step": 1, "value": 8 },
+    { "key": "wildness", "type": "range", "label": "Organic variation", "min": 0, "max": 100, "step": 1, "value": 55 }
+  ],
+  "assets": [{ "key": "logo", "label": "Your logo (optional)" }]
+}

@@ -5,6 +5,10 @@ could not previously do. A polished simulation, a collection of presets, or a sp
 does not pass. Our previous release verified its controls, but chose the wrong acceptance criteria.
 The prior verification reports remain technical evidence, not evidence that these are good products.
 
+**Rebuild progress:** [AUTHORING-REBUILD.md](AUTHORING-REBUILD.md) records the new Art/Music tools,
+six distinct authored fixtures, revisions and real export checks. Both remain unlisted. Music
+listening and installed-engine trials with real user briefs are still outstanding.
+
 ## Review of our seven
 
 | Harness | What it actually enables today | Why it falls short | Decision |

@@ -10,6 +10,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHtmlViewer } from "../../viewers/web-viewer/viewer.mjs";
 import { experiences } from "../build-experiences.mjs";
+import { musicBrowser } from "./music-browser.mjs";
 const { chromium } = await import(
   process.env.PLAYWRIGHT_MODULE || "playwright-core"
 );
@@ -127,6 +128,7 @@ async function one(exp) {
       acceptDownloads: true,
     }),
     page = await context.newPage();
+  page.setDefaultTimeout(30000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const checks = [];
@@ -161,45 +163,61 @@ async function one(exp) {
 
     assert.equal(await page.locator("#empty").isHidden(), true);
     if (exp.id === "generative-art") {
-      const original = createHash("sha256")
-        .update(await f.locator("#art").evaluate((c) => c.toDataURL()))
-        .digest("hex");
+      const original = await f.evaluate(() => fieldwork.getSVG());
       await f.locator("#next-seed").click();
-      assert.notEqual(
-        createHash("sha256")
-          .update(await f.locator("#art").evaluate((c) => c.toDataURL()))
-          .digest("hex"),
-        original,
-      );
+      await f.waitForFunction(before => fieldwork.getSVG() !== before, original);
       await f.locator("#seed").fill("42");
       await f.locator("#seed-form button[type=submit]").click();
-      assert.equal(
-        createHash("sha256")
-          .update(await f.locator("#art").evaluate((c) => c.toDataURL()))
-          .digest("hex"),
-        original,
-      );
-      await f.locator("#mode").selectOption("orbits");
-      assert.notEqual(
-        createHash("sha256")
-          .update(await f.locator("#art").evaluate((c) => c.toDataURL()))
-          .digest("hex"),
-        original,
-      );
-      await f.locator("#mode").selectOption("contours");
-      const bytes = await download(
-        page,
-        () => f.locator("#export").click(),
-        "fieldwork-print.png",
-      );
-      assert.equal(bytes.readUInt32BE(16), 1600);
-      assert.equal(bytes.readUInt32BE(20), 2000);
-      checks.push(
-        "pixel deterministic",
-        "different seeds",
-        "technique control",
-        "1600×2000 PNG",
-      );
+      await f.waitForFunction(before => fieldwork.getSVG() === before, original);
+      await f.locator("#control-headline").fill("USER & STUDIO");
+      await f.waitForFunction(() => fieldwork.getSVG().includes('USER &amp;'));
+      await f.locator("#undo").click();
+      await f.waitForFunction(before => fieldwork.getSVG() === before, original);
+      await f.locator("#redo").click();
+      await f.waitForFunction(() => fieldwork.getSVG().includes('USER &amp;'));
+      await f.locator('#formats button').nth(2).click();
+      await f.waitForFunction(() => fieldwork.getSVG().includes('width="1920" height="800"'));
+      const bytes = await download(page, () => f.locator("#export-png").click(), "fieldwork-banner.png");
+      assert.equal(bytes.readUInt32BE(16), 1920); assert.equal(bytes.readUInt32BE(20), 800);
+      await f.locator('input[type=file][aria-label="Your logo (optional)"]').setInputFiles(join(root, 'brand/icon.png'));
+      await f.waitForFunction(() => fieldwork.getSVG().includes('data:image/png;base64,'));
+      const saved = JSON.parse((await download(page, () => f.locator('#save-project').click(), 'fieldwork-project.json')).toString());
+      assert.equal(saved.controls.find(c => c.key === 'headline').value, 'USER & STUDIO');
+      assert.ok(saved.assets[0].data.startsWith('data:image/png;base64,'));
+      await download(page, () => f.locator('#export-kit').click(), 'fieldwork-kit.zip');
+      const kit = JSON.parse(execFileSync('python3', ['-c', `import sys,json,zipfile,struct
+with zipfile.ZipFile(sys.argv[1]) as z:
+ assert z.testzip() is None
+ assert len([n for n in z.namelist() if n.endswith('.svg')])==3
+ assert len([n for n in z.namelist() if n.endswith('.png')])==3
+ assert b'USER &amp;' in z.read('03-Banner.svg')
+ assert struct.unpack('>II',z.read('03-Banner.png')[16:24])==(1920,800)
+ print(json.dumps(z.namelist()))`, join(output, 'fieldwork-kit.zip')], {encoding:'utf8'}));
+      assert.ok(kit.includes('source/artwork.js'));
+      await download(page, () => f.locator('#export-html').click(), 'fieldwork-portable.html');
+      const portable = await context.newPage();
+      await portable.goto(new URL('file://' + join(output, 'fieldwork-portable.html')).href);
+      await portable.locator('body[data-ready=true]').waitFor();
+      assert.equal(await portable.locator('#control-headline').inputValue(), 'USER & STUDIO');
+      await portable.close();
+      await f.locator('#reset-project').click();
+      await f.waitForFunction(before => fieldwork.getSVG() === before, original);
+      await f.locator('#project-file').setInputFiles(join(output, 'fieldwork-project.json'));
+      await f.waitForFunction(() => fieldwork.getSVG().includes('USER &amp;'));
+      assert.equal(await f.locator('#width').inputValue(), '1920');
+      // A user-approved draft and a new agent revision must both remain recoverable.
+      const projectPath = join(ws, 'sketch/project.json');
+      const revision = JSON.parse(await readFile(projectPath, 'utf8'));
+      revision.controls.find(c => c.key === 'headline').value = 'AGENT REVISION';
+      await writeFile(projectPath, JSON.stringify(revision));
+      execFileSync(process.execPath, [join(ws, 'tools/build.mjs')]);
+      await page.frameLocator('#preview').locator('#revision-notice:not([hidden])').waitFor();
+      f = frameOf(page);
+      await f.locator('#keep-draft').click();
+      await f.waitForFunction(() => fieldwork.getSVG().includes('USER &amp;'));
+      await f.locator('#reset-project').click();
+      await f.waitForFunction(() => fieldwork.getSVG().includes('AGENT'));
+      checks.push('same-seed geometry', 'original editable text', 'undo/redo', 'adaptive formats', 'own image import', 'editable SVG/PNG kit reopened by Python', 'portable HTML reopened', 'project roundtrip', 'agent revision preserves user draft');
     } else if (exp.id === "creative-direction") {
       await f.locator("#brand-name").fill("COVE STUDIO");
       await f.locator("#directions button").nth(2).click();
@@ -259,43 +277,7 @@ async function one(exp) {
         "filtered CSV",
       );
     } else if (exp.id === "music-studio") {
-      const original = await f.evaluate(() =>
-        Array.from(rendered.samples.slice(0, 8000)),
-      );
-      await f.locator("#play").click();
-      await f.waitForFunction(
-        () => playing && audioContext.state === "running",
-      );
-      await f.locator("#stop").click();
-      await f.locator("#play").click();
-      assert.deepEqual(
-        await f.evaluate(() => Array.from(rendered.samples.slice(0, 8000))),
-        original,
-      );
-      await f.locator("#stop").click();
-      const old = await f
-        .getByRole("button", { name: "Kick step 2", exact: true })
-        .getAttribute("aria-pressed");
-      await f.getByRole("button", { name: "Kick step 2", exact: true }).click();
-      assert.notEqual(
-        await f
-          .getByRole("button", { name: "Kick step 2", exact: true })
-          .getAttribute("aria-pressed"),
-        old,
-      );
-      const wav = await download(
-        page,
-        () => f.locator("#export-wav").click(),
-        "afterhours.wav",
-      );
-      assert.equal(wav.toString("ascii", 0, 4), "RIFF");
-      assert.ok(wav.length > 500000);
-      checks.push(
-        "audio running",
-        "replay same PCM",
-        "step editing",
-        "WAV export",
-      );
+      f = await musicBrowser({ page, context, f, ws, output, download, frameOf, checks });
     } else if (exp.id === "game-master") {
       await f.locator("#step").click();
       assert.match(await f.locator("#turn").textContent(), /01/);
@@ -404,6 +386,7 @@ async function one(exp) {
       );
     }
     await visibleScreenshot(page, exp.id + "-desktop");
+    if (exp.id !== "music-studio") {
     // Seed changes propagate to the shell and survive a real reload.
     await f.locator("#seed").fill("73");
     await f.locator("#seed-form button[type=submit]").click();
@@ -419,6 +402,12 @@ async function one(exp) {
     f = await waitReady(page);
     assert.equal(await f.locator("#seed").inputValue(), "73");
     checks.push("seed survives reload");
+    } else {
+      await page.locator("#reload").click();
+      f = await waitReady(page);
+      assert.equal(await f.locator("#title").textContent(), "NEW AGENT SCORE");
+      checks.push("edited score survives shell reload");
+    }
     // Watcher integration: pause holds the active document, resume applies the saved change.
     await page.locator("#auto").click();
     const held = await page.locator("#preview").getAttribute("src");
