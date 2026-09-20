@@ -1,10 +1,18 @@
 # OpenHarness
 
-**An open-source workshop for technical founders who build across disciplines.**
+**Follow your curiosity. Build across disciplines.**
 
-Use Claude Code, Codex, and other coding agents to build software, design parts and circuit boards,
-explore data, and make videos. OpenHarness brings your agents, domain tools, and live viewers into one
-workspace, with persistent agent sessions across your machines.
+OpenHarness is an open-source workshop for building with coding agents. Use Claude Code, Codex, and
+others to make software, design parts and circuit boards, explore data, and create videos, with your
+agents, domain tools, and live viewers in one place and sessions that persist across every machine
+you own.
+
+The old rule said ten thousand hours to a craft. That was the tax on curiosity, and most of us could
+only afford to pay it once, so we specialized and called the rest hobbies.
+
+Coding agents become the specialists, given the tools of a craft and a way to see what they made:
+the geometry that becomes a part, the netlist that becomes a circuit board, the script that becomes
+a film. You bring the idea, the taste, and the judgment about what is worth making.
 
 Use the desktop app on its own, or add the optional open-hardware **Harness device** to follow your
 agents, answer their questions, and speak new tasks from your desk.
@@ -18,28 +26,35 @@ agents, answer their questions, and speak new tasks from your desk.
 
 ## Who it's for
 
-The ideal user is a **technical founder who is also a polymath**: someone with an engineering or
-coding background whose curiosity and responsibilities span product, design, analysis, and marketing.
-You already know how to build with code. Harness brings that way of working to CAD, circuit boards,
-games, videos, and documents, with agents and tools for each craft.
+**For polymaths in the making.**
 
-You might prototype a feature, explore customer data, design an enclosure, and make a launch video.
-Give each job an agent with the right tools, inspect what it makes, and steer the next iteration.
-The code and project files are there to read, change, version, and build on.
+Built for technical founders who want their hands on more of what they are making, from the software
+and the physical product to the analysis and the launch video. Engineers, makers, and creators with
+the same curiosity are welcome. You get there by directing a specialist in each craft and judging
+what comes back, not by mastering them all first.
+
+Monday, a feature. Tuesday, the customer data. Wednesday, an enclosure for the prototype. Thursday,
+the launch video. You already know how to build with code, and Harness brings that way of working to
+CAD, circuit boards, games, videos, and documents, with agents and tools for each craft.
+
+Your ideas can take you into unfamiliar crafts: an app, a physical product, a game, a film. This is
+a place to follow them. Give each job an agent with the right tools, inspect what it makes, and steer
+the next iteration. The code and project files are there to read, change, version, and build on.
 
 **From handoff to hands-on.** You bring intent and judgment; your agents write and run code. Each
 harness supplies the tools and feedback for a different craft. You can get your hands on more of
 the product and the work of bringing it to customers.
 
-Engineers, makers, and creators who share that approach are welcome too. The
+Start with what you know and learn the next craft through the things you build. The
 [ideal-user guide](docs/ideal-users.md) records who we're building for and how the app, community,
 and device serve them.
 
 ## Domain-specific harnesses (DSH)
 
 **Coding agents can build far more than software.** Code is the common medium: geometry scripts make
-parts, animation code makes videos, and analysis code turns data into charts and findings. A harness
-gives the agent the tools and feedback to work in that domain.
+parts, animation code makes videos, and analysis code turns data into charts and findings. That is
+what connects the dots between crafts, and a harness gives the agent the tools and feedback to work
+in each one.
 
 <img width="1000" height="563" alt="harness" src="https://github.com/user-attachments/assets/25c63335-279a-4f9a-b702-2ffaec2b096f" />
 
@@ -52,7 +67,9 @@ game takes shape on the other, and stays interactive after the agent is done.
 A DSH is a folder with a `harness.json`. The agent does the reasoning; the harness brings the tools
 and the view. Adding a domain never needs a change to the app or the daemon.
 
-### 18 harnesses today
+### 19 harnesses today
+
+Start with one. The rest are waiting for the week your curiosity goes somewhere new.
 
 
 | Domain | Harnesses |
@@ -64,6 +81,7 @@ and the view. Adding a domain never needs a change to the app or the daemon.
 | Documents and diagrams | [Marp](store/agents/marp/), [Typst](store/agents/typst/), [Excalidraw](store/agents/excalidraw/) |
 | Video and music | [OpenMontage](store/agents/openmontage/), [Remotion](store/agents/remotion/), [Manim](store/agents/manim/), [Strudel](store/agents/strudel/) |
 | Simulation and analysis | [MuJoCo](store/agents/mujoco/), [RDKit](store/agents/rdkit/), [marimo](store/agents/marimo/) |
+| Decisions | [Roundtable](store/agents/roundtable/) |
 
 Each one wraps an open-source project under its own name, credits it, pins its toolchain, and installs
 on a fresh machine from the Harness Store. Eight [shared viewers](store/viewers/) (CAD, 3D models,

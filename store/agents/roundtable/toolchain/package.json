@@ -1,0 +1,9 @@
+{
+  "name": "roundtable-toolchain",
+  "private": true,
+  "type": "module",
+  "description": "The room engine and the pane. No dependencies: the panel is the vendor CLIs the user already has.",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

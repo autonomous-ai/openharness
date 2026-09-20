@@ -3,14 +3,14 @@
 Product and marketing direction, September 20, 2026. Validate this working audience through real
 projects, repeat use, contributions, and device purchases.
 
-**The ideal user is a technical founder who is also a polymath.** They have an engineering or coding
-background, remain hands-on, and work across product, design, analysis, and marketing. They appreciate
-code as a medium for making things: something expressive that they can inspect, change, reuse, and
-apply across disciplines.
+**We build for people who build across disciplines.** They have an engineering or coding background,
+remain hands-on, and work across product, design, analysis, and marketing. They appreciate code as a
+medium for making things: something expressive that they can inspect, change, reuse, and apply across
+disciplines.
 
-**Harness is an open-source workshop for technical founders who build across disciplines.** It gives
-them a place to direct their agents, use domain tools, and turn ideas into work they can inspect,
-change, and use.
+**Follow your curiosity. Build across disciplines.** Harness is an open-source workshop for people who
+build in more than one craft. It gives them a place to direct their agents, use domain tools, and turn
+ideas into work they can inspect, change, and use.
 
 ## The ideal user
 
@@ -37,7 +37,7 @@ The strongest early fit is someone who:
 Multiple agents, multiple machines, and a desk device can become valuable as their work expands.
 They should be able to start with one agent, one project, and the desktop app.
 
-## The identity: a technical polymath
+## The identity: how we use the word polymath
 
 The primary audience combines three traits: technical grounding, curiosity across disciplines, and
 ownership of a business outcome. A founder or CEO with an engineering background is the clearest
@@ -48,8 +48,45 @@ Engineers, independent makers, studio owners, and technical creators who share t
 adjacent users. The founder's combination of technical ability and work across business functions
 should guide the first examples and product decisions.
 
-Use **technical polymath** as the identity and **technical founders who build across disciplines** as
-the plain-language explanation. Make the invitation accessible to someone learning another craft.
+### The rule: describe the work, never grade the person
+
+Naming research on 2026-09-20 found a clean split in how the word behaves in public. In the third
+person it reads as praise and travels well. Applied to oneself it invites scrutiny instead. The posts
+with the most reach are all invitations toward the identity rather than assertions of it, and that is
+the grammar we borrow. See `reports/Polymath identity market and naming.md`.
+
+Words that describe the work are safe. Words that grade the person are not.
+
+| Use | Avoid as a label for the reader |
+|---|---|
+| builds across disciplines | polymath |
+| works in more than one craft | renaissance man |
+| multidisciplinary, cross-discipline | generalist |
+| connects the dots between crafts | 10x, wizard, genius |
+
+So:
+
+- **Public promise:** "Follow your curiosity. Build across disciplines."
+- **Audience line:** "For polymaths in the making." The trajectory cannot be falsified; the
+  credential can, so never drop the second half.
+- **Third person only:** the brand may call users polymaths. Copy must never ask a user to claim it,
+  and no interface string, tagline or product name should require them to.
+- **Essays, not interface:** the word carries enormous pull in long-form writing people opt into
+  reading. It carries risk on a button someone has to press.
+
+### The voice
+
+Curious, inviting, and grounded in making things.
+
+Pair every abstract sentence with something concrete, and give every concrete list a human reason.
+The examples supply substance; the sentences supply a reason to care. "Monday, a feature. Tuesday,
+the customer data" is the substance. "Your ideas can take you into unfamiliar crafts" is the reason.
+Neither works alone.
+
+Keep the skepticism in the analysis, where it belongs. User-facing copy is optimistic, specific, and
+unhedged. Claims should be ones a reader nods at rather than ones they stop to argue with, so prefer
+"the old rule said" to asserting a contested number, and describe what became accessible rather than
+what happened for the first time.
 
 **Polyengineer** is a possible community term for people building across technical disciplines.
 **Polycoder** is another exploratory term, though it may suggest using many programming languages.
