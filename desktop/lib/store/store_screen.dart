@@ -534,6 +534,7 @@ IconData _categoryIcon(String category) => switch (category) {
   'Engineering' => LucideIcons.cpu300,
   'Media' => LucideIcons.film300,
   'Science' => LucideIcons.flaskConical300,
+  'Local AI' => LucideIcons.brainCircuit300,
   'Code' => LucideIcons.terminal300,
   'Games' => LucideIcons.gamepad2300,
   _ => LucideIcons.shapes300,

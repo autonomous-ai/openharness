@@ -1,0 +1,29 @@
+{
+  "spec": 1,
+  "id": "autonomous/vllm",
+  "name": "vLLM",
+  "category": "Local AI",
+  "author": "OpenHarness contributors",
+  "description": "Serve language models on this Mac with vLLM Metal. Ask the agent to configure context, parallel sequences and prefix caching, then measure concurrent request throughput in the live viewer.",
+  "engine": "codex",
+  "workspace": {
+    "template": "template",
+    "marker": "local-ai.json"
+  },
+  "agent": {
+    "instructions": "agent/AGENTS.md",
+    "env": {
+      "LOCAL_AI": "${dsh}/toolchain/local-ai",
+      "VLLM": "${dsh}/toolchain/vllm"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "command": "./viewer.sh",
+    "url": "http://127.0.0.1:${port}/?view=grid"
+  },
+  "verdict": ".harness/verdict.json"
+}

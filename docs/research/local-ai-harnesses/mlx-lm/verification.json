@@ -1,0 +1,238 @@
+{
+  "at": "2026-09-20T04:38:50.327Z",
+  "health": {
+    "application": "local-ai-harnesses",
+    "protocol": 1,
+    "workspace": "<pilot-checkout>/mlx-lm",
+    "runtime": "mlx-lm",
+    "pid": 43539
+  },
+  "runtime": {
+    "id": "mlx-lm",
+    "name": "MLX-LM",
+    "online": true,
+    "installed": true,
+    "version": "0.31.3",
+    "mlxVersion": "0.32.2",
+    "endpoint": "Private local worker",
+    "cacheRoot": "<home>/.cache/huggingface/hub",
+    "memoryScope": "MLX active allocations; one model per workspace",
+    "models": [
+      {
+        "id": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+        "name": "Qwen2.5-0.5B-Instruct-4bit",
+        "size": 289598797,
+        "digest": "a5339a4131f135d0fdc6a5c8b5bbed2753bbe0f3",
+        "family": "qwen2",
+        "parameters": null,
+        "quantization": "4-bit",
+        "running": false
+      },
+      {
+        "id": "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
+        "name": "Qwen2.5-1.5B-Instruct-4bit",
+        "size": 880169797,
+        "digest": "8b403126fc14f14cfc99bb4cfa72ecbc129ea677",
+        "family": "qwen2",
+        "parameters": null,
+        "quantization": "4-bit",
+        "running": false
+      },
+      {
+        "id": "mlx-community/Qwen2.5-7B-Instruct-4bit",
+        "name": "Qwen2.5-7B-Instruct-4bit",
+        "size": 4295887610,
+        "digest": "c26a38f6a37d0a51b4e9a1eb3026530fa35d9fed",
+        "family": "qwen2",
+        "parameters": null,
+        "quantization": "4-bit",
+        "running": false
+      },
+      {
+        "id": "mlx-community/Qwen3-0.6B-4bit",
+        "name": "Qwen3-0.6B-4bit",
+        "size": 351383618,
+        "digest": "73e3e38d981303bc594367cd910ea6eb48349da8",
+        "family": "qwen3",
+        "parameters": null,
+        "quantization": "4-bit",
+        "running": true
+      },
+      {
+        "id": "mlx-community/SmolLM2-135M-Instruct",
+        "name": "SmolLM2-135M-Instruct",
+        "size": 273874876,
+        "digest": "422de227b90002f443a21a58b1087f6ee7632731",
+        "family": "llama",
+        "parameters": null,
+        "quantization": "bfloat16",
+        "running": false
+      }
+    ]
+  },
+  "system": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "chip": "Apple M2 Max",
+    "totalMemory": 68719476736,
+    "cores": 12,
+    "freeMemory": 4732207104
+  },
+  "checks": [
+    "asset routes",
+    "deploy",
+    "real streamed chat",
+    "native metrics",
+    "3-sample benchmarks",
+    "single-model switching",
+    "unload",
+    "active cancellation releases model",
+    "worker recovery and reload"
+  ],
+  "jobs": [
+    {
+      "id": "7629e096-8d6e-48bb-9df5-39a54008be9e",
+      "type": "deploy",
+      "model": "mlx-community/Qwen3-0.6B-4bit",
+      "models": [],
+      "status": "succeeded",
+      "progress": 100,
+      "message": "mlx-community/Qwen3-0.6B-4bit is ready on this Mac. Ask a question, or say “benchmark it”. MLX-LM keeps one model loaded per workspace. Switching models releases the previous model; idle models unload after 15 minutes.",
+      "createdAt": "2026-09-20T04:38:43.919Z",
+      "output": "",
+      "result": {
+        "model": "mlx-community/Qwen3-0.6B-4bit",
+        "message": "mlx-community/Qwen3-0.6B-4bit is ready on this Mac. Ask a question, or say “benchmark it”. MLX-LM keeps one model loaded per workspace. Switching models releases the previous model; idle models unload after 15 minutes."
+      },
+      "startedAt": "2026-09-20T04:38:43.920Z",
+      "activeModel": "mlx-community/Qwen3-0.6B-4bit",
+      "completedAt": "2026-09-20T04:38:44.385Z"
+    },
+    {
+      "id": "5ff5f363-0000-418f-9bbf-5aaae0e51586",
+      "type": "chat",
+      "model": "mlx-community/Qwen3-0.6B-4bit",
+      "models": [],
+      "status": "succeeded",
+      "progress": 100,
+      "message": "Response from mlx-community/Qwen3-0.6B-4bit.",
+      "createdAt": "2026-09-20T04:38:44.400Z",
+      "output": "Apple Silicon Unified Memory is a memory structure where each core can access it independently, allowing for parallel processing in the same memory space.",
+      "result": {
+        "model": "mlx-community/Qwen3-0.6B-4bit",
+        "metrics": {
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 238,
+          "promptTokens": 19,
+          "tokensPerSecond": 398.5474512479057,
+          "promptTokensPerSecond": 294.026995000332,
+          "nativeFirstTokenMs": 132.54183297976851,
+          "nativeFirstOutputMs": 662.7784579759464,
+          "peakMemoryBytes": 445546784,
+          "thinking": true,
+          "doneReason": "stop",
+          "wallMs": 736.6918330080807,
+          "measurement": "MLX-LM native generation_tps; TTFT includes local IPC; fresh prompt cache",
+          "firstTokenMs": 142.81645800000115,
+          "firstOutputMs": 673.0794160000005
+        },
+        "message": "Response from mlx-community/Qwen3-0.6B-4bit."
+      },
+      "startedAt": "2026-09-20T04:38:44.401Z",
+      "activeModel": "mlx-community/Qwen3-0.6B-4bit",
+      "completedAt": "2026-09-20T04:38:45.169Z"
+    },
+    {
+      "id": "368f5338-14b8-4afd-91fa-9566ad05da61",
+      "type": "benchmark",
+      "model": null,
+      "models": [
+        "mlx-community/Qwen3-0.6B-4bit",
+        "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
+      ],
+      "status": "succeeded",
+      "progress": 100,
+      "message": "mlx-community/Qwen3-0.6B-4bit: 411.9 tokens/s · 89 ms to first token (median of 3 warm runs).\nmlx-community/Qwen2.5-0.5B-Instruct-4bit: 425.5 tokens/s · 96 ms to first token (median of 3 warm runs).",
+      "createdAt": "2026-09-20T04:38:45.182Z",
+      "output": "",
+      "result": {
+        "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+        "benchmarkIds": [
+          "d0b3884b-aeb7-415d-8751-d8debc189886",
+          "3c5bc697-2bbc-4009-975a-cc4da6257e88"
+        ],
+        "message": "mlx-community/Qwen3-0.6B-4bit: 411.9 tokens/s · 89 ms to first token (median of 3 warm runs).\nmlx-community/Qwen2.5-0.5B-Instruct-4bit: 425.5 tokens/s · 96 ms to first token (median of 3 warm runs)."
+      },
+      "startedAt": "2026-09-20T04:38:45.183Z",
+      "activeModel": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+      "completedAt": "2026-09-20T04:38:48.597Z"
+    },
+    {
+      "id": "482e8956-c158-49c8-bba7-699f7e560b62",
+      "type": "unload_all",
+      "model": null,
+      "models": [],
+      "status": "succeeded",
+      "progress": 100,
+      "message": "mlx-community/Qwen2.5-0.5B-Instruct-4bit unloaded. Downloaded files are still on disk.",
+      "createdAt": "2026-09-20T04:38:48.623Z",
+      "output": "",
+      "result": {
+        "message": "mlx-community/Qwen2.5-0.5B-Instruct-4bit unloaded. Downloaded files are still on disk."
+      },
+      "startedAt": "2026-09-20T04:38:48.624Z",
+      "completedAt": "2026-09-20T04:38:48.661Z"
+    },
+    {
+      "id": "017f5134-08ad-4360-ae4b-f3cdfe50ebf6",
+      "type": "deploy",
+      "model": "mlx-community/Qwen3-0.6B-4bit",
+      "models": [],
+      "status": "succeeded",
+      "progress": 100,
+      "message": "mlx-community/Qwen3-0.6B-4bit is ready on this Mac. Ask a question, or say “benchmark it”. MLX-LM keeps one model loaded per workspace. Switching models releases the previous model; idle models unload after 15 minutes.",
+      "createdAt": "2026-09-20T04:38:48.690Z",
+      "output": "",
+      "result": {
+        "model": "mlx-community/Qwen3-0.6B-4bit",
+        "message": "mlx-community/Qwen3-0.6B-4bit is ready on this Mac. Ask a question, or say “benchmark it”. MLX-LM keeps one model loaded per workspace. Switching models releases the previous model; idle models unload after 15 minutes."
+      },
+      "startedAt": "2026-09-20T04:38:48.690Z",
+      "activeModel": "mlx-community/Qwen3-0.6B-4bit",
+      "completedAt": "2026-09-20T04:38:49.077Z"
+    },
+    {
+      "id": "9e50e9ce-fbed-4a0c-a40e-9478f2622c11",
+      "type": "chat",
+      "model": "mlx-community/Qwen3-0.6B-4bit",
+      "models": [],
+      "status": "cancelled",
+      "progress": 90,
+      "message": "Cancelled. Any downloaded files stay cached; retrying can resume the download.",
+      "createdAt": "2026-09-20T04:38:49.081Z",
+      "output": "",
+      "result": null,
+      "startedAt": "2026-09-20T04:38:49.082Z",
+      "activeModel": "mlx-community/Qwen3-0.6B-4bit",
+      "completedAt": "2026-09-20T04:38:49.114Z"
+    },
+    {
+      "id": "5d644f1a-fa03-4894-975e-2ef8413d2b51",
+      "type": "deploy",
+      "model": "mlx-community/Qwen3-0.6B-4bit",
+      "models": [],
+      "status": "succeeded",
+      "progress": 100,
+      "message": "mlx-community/Qwen3-0.6B-4bit is ready on this Mac. Ask a question, or say “benchmark it”. MLX-LM keeps one model loaded per workspace. Switching models releases the previous model; idle models unload after 15 minutes.",
+      "createdAt": "2026-09-20T04:38:49.930Z",
+      "output": "",
+      "result": {
+        "model": "mlx-community/Qwen3-0.6B-4bit",
+        "message": "mlx-community/Qwen3-0.6B-4bit is ready on this Mac. Ask a question, or say “benchmark it”. MLX-LM keeps one model loaded per workspace. Switching models releases the previous model; idle models unload after 15 minutes."
+      },
+      "startedAt": "2026-09-20T04:38:49.931Z",
+      "activeModel": "mlx-community/Qwen3-0.6B-4bit",
+      "completedAt": "2026-09-20T04:38:50.314Z"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+package_dir="$(cd "$(dirname "$0")/.." && pwd)"
+export HARNESS_WORKSPACE="${HARNESS_WORKSPACE:-$PWD}"
+export LOCAL_AI_RUNTIME=mlx-lm
+export LOCAL_AI_NAME=MLX-LM
+. "$package_dir/toolchain/node.sh"
+exec "$LOCAL_AI_NODE" "$package_dir/bin/harness.mjs" "$@"

@@ -7,11 +7,16 @@ const storeCategoryDomains = <String, Set<String>>{
   'Media': {'Documents', 'Slides', 'Video', 'Math animation', 'Music'},
   'Science': {'Chemistry', 'Notebooks', 'Simulation'},
   'Games': {'Games'},
+  'Local AI': {'Local AI'},
   'Code': {'Code', 'Compute'},
 };
 
 String storeCategoryFor(DshEntry entry) {
   if (entry.isEngine) return 'Code';
+  // Legacy Grid/Ollama packages used Compute before Local AI existed.
+  if (const {'autonomous/autonomous-grid', 'local/ollama'}.contains(entry.id)) {
+    return 'Local AI';
+  }
   final domain = entry.category?.trim().toLowerCase();
   for (final category in storeCategoryDomains.entries) {
     if (category.key.toLowerCase() == domain ||

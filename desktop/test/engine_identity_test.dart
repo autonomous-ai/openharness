@@ -23,6 +23,47 @@ class _NoPictures extends CachingAssetBundle {
 }
 
 void main() {
+  testWidgets('Local AI frameworks load their real logos without initials', (
+    tester,
+  ) async {
+    const ids = [
+      'autonomous/ollama',
+      'autonomous/mlx-lm',
+      'autonomous/vllm',
+      'local/ollama',
+      'local/mlx-lm',
+      'local/vllm',
+    ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Row(
+          children: [for (final id in ids) EngineMark(engine: id, size: 32)],
+        ),
+      ),
+    );
+    final context = tester.element(find.byType(Row));
+    await tester.runAsync(() async {
+      for (final id in ids) {
+        final identity = engineIdentity(id);
+        expect(identity.asset, isNotNull, reason: '$id must have a logo');
+        await precacheImage(AssetImage(identity.asset!), context);
+      }
+    });
+    await tester.pump();
+    for (final id in ids) {
+      expect(find.byKey(ValueKey('engine-icon-$id')), findsOneWidget);
+      expect(find.byKey(ValueKey('engine-fallback-$id')), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byKey(ValueKey('engine-icon-$id')),
+          matching: find.byType(RawImage),
+        ),
+        findsOneWidget,
+      );
+    }
+    expect(tester.takeException(), isNull);
+  });
+
   test(
     'every first-party harness has a face and a base engine this build knows',
     () {
@@ -121,7 +162,11 @@ void main() {
       expect(identity.category, package['category'], reason: '$id category');
       checked++;
     }
-    expect(checked, knownHarnesses.length);
+    // Linked local harnesses are intentionally outside store/agents.
+    expect(
+      checked,
+      knownHarnesses.where((h) => !h.id.startsWith('local/')).length,
+    );
     for (final engine in allEngines) {
       expect(engine.tagline, isNotEmpty, reason: engine.id);
       expect(engine.tagline!.length, lessThanOrEqualTo(80), reason: engine.id);
