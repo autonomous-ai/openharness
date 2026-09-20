@@ -1,4 +1,5 @@
 {
+  "listed": false,
   "homepage": "https://platformio.org",
   "upstream": "https://github.com/platformio/platformio-core",
   "license": "MIT",

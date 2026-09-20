@@ -1,4 +1,5 @@
 {
+  "listed": false,
   "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/game-master",
   "license": "MIT",
   "tagline": "Design and compare strategies in a seeded arena",

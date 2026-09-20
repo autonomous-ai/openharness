@@ -1,4 +1,5 @@
 {
+  "listed": false,
   "homepage": "https://freecad.org",
   "upstream": "https://github.com/FreeCAD/FreeCAD",
   "license": "MIT",
