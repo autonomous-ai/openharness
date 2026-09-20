@@ -2,6 +2,7 @@
   "homepage": "https://excalidraw.com",
   "upstream": "https://github.com/excalidraw/excalidraw",
   "license": "MIT",
+  "tagline": "Collaborative whiteboarding made easy",
   "examples": [
     {
       "prompt": "Map an online store's checkout as a flowchart: cart, sign-in or guest checkout, shipping, payment with a declined-card retry loop, a fraud check that can send orders to manual review, then order confirmed and the email receipt. Diamonds for decisions, one frame per stage.",

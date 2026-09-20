@@ -1,0 +1,17 @@
+{
+  "listed": false,
+  "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/data-studio",
+  "upstream": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/data-studio",
+  "license": "MIT",
+  "tagline": "Explore CSV data with live charts, filters and exact values",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/data-studio/starter.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Explore the included sample data, filter a region, compare metrics, and export the selected rows.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/data-studio/starter.jpg",
+      "caption": "Synthetic data · working filters, charts and CSV export"
+    }
+  ]
+}

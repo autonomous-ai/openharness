@@ -1,0 +1,62 @@
+[
+  {
+    "id": "autonomous/web-studio",
+    "sourceSha256": "52af77619d9b09d7604c678bd50df5eec57f7d58adf04a61a0a65742b0667363",
+    "pngSha256": "cdfacf7e71ff884ae9e2f5b64ad9d6f0f786597a35af4dfdb84c89d3f4ddb739"
+  },
+  {
+    "id": "autonomous/data-studio",
+    "sourceSha256": "8a69d6a14db21ee43c839d183a0607a7d314117f03c314de043ab077c3376ef4",
+    "pngSha256": "511b15eae998786bc8319fb81c1b1f928b8cc0eaeabaf53691e2c20220d89cf9"
+  },
+  {
+    "id": "autonomous/quantum-studio",
+    "sourceSha256": "d3652e1f4fec885301ccb6bb47a5554ade781d3bd2778a8142369d3feddf24c2",
+    "pngSha256": "cf9b482241eba9d11b2c07725352de9c5fb29f8d0df9fc66348e3e31b20dc743"
+  },
+  {
+    "id": "autonomous/gis",
+    "sourceSha256": "c517f589349d83b34c33ffdb82c4b6b458f6edd12ce469dfd9512d3fcae699e9",
+    "pngSha256": "3d185992dd80d6a8aa4c9285705fa7832b5f1e9a4e9dccf5bebefc0de5606cfc"
+  },
+  {
+    "id": "autonomous/openscad",
+    "sourceSha256": "d8e32d1988d289e493e8f7b6bf08257051f0cb357e36e0b74c440db84bc4b6dc",
+    "pngSha256": "d8e32d1988d289e493e8f7b6bf08257051f0cb357e36e0b74c440db84bc4b6dc"
+  },
+  {
+    "id": "autonomous/freecad",
+    "sourceSha256": "10a70c5cec0f5456c995f269fc2b73978f9b4b7eb193c5fab765ea97254682ba",
+    "pngSha256": "3531eee296856360603d73af3b27754745940840b32cb9f1ab5b716247cd9f8c"
+  },
+  {
+    "id": "autonomous/orca-slicer",
+    "sourceSha256": "c93399fb20d7c08dad4d7062b4bf4f6adfe1fed6fd4b2e840bc4c2ed6a49848a",
+    "pngSha256": "09cfaf341dfb3cef21356f8b53322a8cbeedf32329e7cb3e945c6e60c1b9c39d"
+  },
+  {
+    "id": "autonomous/firmware-studio",
+    "sourceSha256": "c8884c54a8abb4c96f92282dbb06b4b46a60efca2c40b335d9aded8a7a07974e",
+    "pngSha256": "45c4c35df05637ad329488398b2110673ee3efe51640e093f2f062a20d581c10"
+  },
+  {
+    "id": "autonomous/godot-studio",
+    "sourceSha256": "94f907f52f124c331615f32a79cff1921c352f0c3b9f3652b115f01aa5d2fffb",
+    "pngSha256": "cbddf2a277c50a94c721c7fda6c1e439df5c418ce4f0605b0ca22377963c6ece"
+  },
+  {
+    "id": "autonomous/home-assistant",
+    "sourceSha256": "488bde836247dc241b48cc990a46073532f1945de748c260d34651a12a60d65a",
+    "pngSha256": "28b72b71251117bf3a5cccf1a7d61143355db8344d7e11e0e25ba3277a98f518"
+  },
+  {
+    "id": "autonomous/score",
+    "sourceSha256": "7ed374a6d75b756e837f459b5bde6afe08f5f1e1e6f1b24cb274ae4ba62101be",
+    "pngSha256": "cecb33e1cbdc26996b688c945b03fce31b322c8e75dc44872f7efbfecae3fd81"
+  },
+  {
+    "id": "autonomous/sheet-docs",
+    "sourceSha256": "524c5ab52d59ebd034ff85b584a35c6c48b94fc5c495cd0fd60a4f20d26b68e5",
+    "pngSha256": "acfa469526b155815f8bf802bc5cc167a4e1e1810264f43e9d3fc5fe0c6c9a24"
+  }
+]

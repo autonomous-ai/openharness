@@ -2,6 +2,7 @@
   "homepage": "https://www.rdkit.org",
   "upstream": "https://github.com/rdkit/rdkit",
   "license": "MIT",
+  "tagline": "Open-source cheminformatics software",
   "examples": [
     {
       "prompt": "Take capsaicin, the molecule behind chili heat, and design three analogues: a saturated tail (nonivamide), a shorter tail, and the ester capsiate. Give each a 3D conformer and compare their properties side by side.",

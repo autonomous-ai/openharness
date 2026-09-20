@@ -2,6 +2,7 @@
   "homepage": "https://www.blender.org",
   "upstream": "https://projects.blender.org/blender/blender",
   "license": "MIT",
+  "tagline": "Free and open source 3D creation software",
   "examples": [
     {
       "prompt": "Make a cozy isometric reading nook: a cut-away corner of a room with an armchair, a floor lamp glowing warm, a bookshelf full of colourful books, a round rug and a monstera, with evening sun through the window and a cat asleep on the rug.",

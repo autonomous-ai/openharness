@@ -1,0 +1,17 @@
+{
+  "listed": false,
+  "homepage": "https://openscad.org",
+  "upstream": "https://github.com/openscad/openscad",
+  "license": "MIT",
+  "tagline": "The Programmers Solid 3D CAD Modeller",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/openscad/starter.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Render the included Ripple vessel and check its mesh closure, volume and dimensions.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/openscad/starter.jpg",
+      "caption": "Ripple · real OpenSCAD STL, inspected closed mesh"
+    }
+  ]
+}

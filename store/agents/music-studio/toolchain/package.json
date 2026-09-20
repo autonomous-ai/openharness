@@ -1,0 +1,9 @@
+{
+  "name": "afterhours-authoring",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@tonejs/midi": "2.0.28",
+    "playwright-core": "1.63.0"
+  }
+}

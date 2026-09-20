@@ -2,6 +2,7 @@
   "homepage": "https://www.falstad.com/circuit/",
   "upstream": "https://github.com/pfalstad/circuitjs1",
   "license": "MIT",
+  "tagline": "Electronic circuit simulator in the browser",
   "examples": [
     {
       "prompt": "Build a two-transistor flasher that alternates three red and three blue LEDs like a police light, about twice a second, with a scope on each side and a knob for each side's on-time.",

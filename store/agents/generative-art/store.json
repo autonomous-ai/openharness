@@ -1,0 +1,26 @@
+{
+  "listed": false,
+  "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/generative-art",
+  "license": "MIT",
+  "tagline": "Turn a visual brief into editable artwork and complete asset sets",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/generative-art/starter.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Create a botanical festival identity: a poster, square announcement and wide banner. Use bold cut-paper flowers and editable event details.",
+      "caption": "Night Garden \u00b7 original festival artwork",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/generative-art/night-garden.png"
+    },
+    {
+      "prompt": "Create woodcut-inspired coffee packaging using my logo. Deliver a bag label, launch card and shop banner with editable product details.",
+      "caption": "Canopy Coffee \u00b7 original packaging artwork",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/generative-art/canopy.png"
+    },
+    {
+      "prompt": "Turn my monthly rainfall CSV into an editable data-art print, square card and landscape graphic. Retain the actual observations.",
+      "caption": "A Year of Rain \u00b7 data-art fixture with editable CSV",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/generative-art/rain-atlas.png"
+    }
+  ]
+}

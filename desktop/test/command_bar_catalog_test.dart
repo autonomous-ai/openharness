@@ -9,6 +9,41 @@ import 'swarm_state_test.dart' show createApp;
 
 void main() {
   test(
+    'plain terminals and shared sessions can open but cannot receive tasks',
+    () {
+      for (final (engine, shared) in [('terminal', false), ('codex', true)]) {
+        final app = createApp();
+        addTearDown(app.dispose);
+        final machine = app.machineStates['m']!;
+        machine.machine = Machine(
+          machineId: 'm',
+          authMode: MachineAuthMode.remote,
+          isShared: shared,
+        );
+        app.machines = [machine.machine];
+        machine
+          ..nodeOnline = true
+        ..agents = [
+          Agent(
+            id: 'a0',
+            name: 'Test session',
+            engine: engine,
+            terminalAvailable: true,
+          ),
+        ];
+        final catalog = buildCommandBarCatalog(
+          app,
+          commands: [],
+          runCommand: (_) {},
+          create: (_, _, _) async {},
+        );
+        expect(catalog.where((a) => a.isSession), hasLength(1));
+        expect(catalog.where((a) => a.kind == CommandKind.send), isEmpty);
+      }
+    },
+  );
+
+  test(
     'offline agents and live permission questions are never send targets',
     () {
       final app = createApp();

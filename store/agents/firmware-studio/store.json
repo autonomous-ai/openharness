@@ -1,0 +1,17 @@
+{
+  "listed": false,
+  "homepage": "https://platformio.org",
+  "upstream": "https://github.com/platformio/platformio-core",
+  "license": "MIT",
+  "tagline": "Compile firmware and inspect memory, artifacts and build logs",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/firmware-studio/starter.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Compile the ESP32 starter and show memory use, pin intent and build logs. Do not flash hardware.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/firmware-studio/starter.jpg",
+      "caption": "Signal · actual ESP32 compile, not hardware-tested"
+    }
+  ]
+}

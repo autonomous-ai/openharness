@@ -1,0 +1,7 @@
+{
+  "name": "@autonomous/openscad-harness",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "engines": { "node": ">=20" }
+}

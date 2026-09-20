@@ -1,0 +1,9 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    { "type": "Feature", "properties": { "name": "Ho Chi Minh City", "pop": 9.3, "type": "hub" }, "geometry": { "type": "Point", "coordinates": [106.6297, 10.8231] } },
+    { "type": "Feature", "properties": { "name": "Hanoi", "pop": 8.4, "type": "hub" }, "geometry": { "type": "Point", "coordinates": [105.8342, 21.0278] } },
+    { "type": "Feature", "properties": { "name": "Da Nang", "pop": 1.2, "type": "site" }, "geometry": { "type": "Point", "coordinates": [108.2022, 16.0544] } },
+    { "type": "Feature", "properties": { "name": "Nha Trang", "pop": 0.4, "type": "site" }, "geometry": { "type": "Point", "coordinates": [109.1967, 12.2388] } }
+  ]
+}

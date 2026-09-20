@@ -2,6 +2,7 @@
   "homepage": "https://github.com/earthtojake/text-to-cad",
   "upstream": "https://github.com/earthtojake/text-to-cad",
   "license": "MIT",
+  "tagline": "Library of agent skills for CAD, CAE and CAM",
   "examples": [
     {
       "prompt": "Design a 3D-printable planetary gear set: a 12-tooth sun, three 18-tooth planets and a 48-tooth ring gear with mounting lugs, module 1.5 and 8 mm thick, plus a carrier on steel pins. Give each part its own colour.",

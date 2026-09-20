@@ -1,0 +1,36 @@
+{
+  "spec": 1,
+  "id": "autonomous/openscad",
+  "name": "OpenSCAD",
+  "category": "CAD",
+  "author": "OpenSCAD",
+  "description": "Parametric OpenSCAD geometry with a live CAD preview, fresh STL exports, and mesh topology, volume and bounds checks.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "model.scad",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "OPENSCAD_TOOLCHAIN": "${dsh}/toolchain",
+      "OPENSCAD_SKILLS": "${dsh}/skills"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/cad-viewer",
+    "artifactExtensions": [
+      ".stl",
+      ".3mf"
+    ]
+  },
+  "verdict": ".harness/verdict.json"
+}

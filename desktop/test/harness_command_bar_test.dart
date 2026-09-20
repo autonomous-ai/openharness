@@ -289,6 +289,7 @@ void main() {
       addTearDown(tester.view.reset);
       final app = createApp();
       app.renameSwarm(app.activeSwarmId, 'Working tab');
+      final boundary = GlobalKey();
       addTearDown(() async {
         await tester.pumpWidget(const SizedBox());
         app.dispose();
@@ -296,19 +297,24 @@ void main() {
       var calls = 0;
       var automaticNavigation = false;
       await tester.pumpWidget(
-        MaterialApp(
-          theme: grid.buildAppTheme(brightness: Brightness.dark),
-          home: SwarmScreen(
-            notifier: app,
-            nativeTabs: false,
-            projectStore: SwarmProjectStore(),
-            commandResolver: (_, _) async {
-              calls++;
-              return {
-                'selectedId': automaticNavigation ? 'command:swarm.new' : null,
-                'autoExecute': automaticNavigation,
-              };
-            },
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: SwarmScreen(
+              notifier: app,
+              nativeTabs: false,
+              projectStore: SwarmProjectStore(),
+              commandResolver: (_, _) async {
+                calls++;
+                return {
+                  'selectedId': automaticNavigation
+                      ? 'command:swarm.new'
+                      : null,
+                  'autoExecute': automaticNavigation,
+                };
+              },
+            ),
           ),
         ),
       );
@@ -319,9 +325,13 @@ void main() {
         find.byKey(const ValueKey('harness-start-search')),
         findsOneWidget,
       );
+      await capture(tester, boundary, 'hidden-workspace');
       await chord(tester, LogicalKeyboardKey.keyJ, shift: true);
       await tester.pump();
       expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
+      await tester.enterText(input, 'Show me the layout options');
+      await tester.pumpAndSettle();
+      await capture(tester, boundary, 'hidden-palette');
       await tester.enterText(input, 'something unsupported');
       await tester.testTextInput.receiveAction(TextInputAction.done);
       await tester.pumpAndSettle();

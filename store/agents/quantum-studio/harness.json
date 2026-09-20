@@ -1,0 +1,35 @@
+{
+  "spec": 1,
+  "id": "autonomous/quantum-studio",
+  "name": "Quantum Studio",
+  "category": "Science",
+  "author": "OpenHarness contributors",
+  "description": "A local statevector workbench with editable circuits, timeline stepping, reduced Bloch views, joint probabilities, phase experiments and shot sampling.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "circuit.json",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "QUANTUM_TOOLCHAIN": "${dsh}/toolchain",
+      "QUANTUM_SKILLS": "${dsh}/skills"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/isolated-web-viewer",
+    "artifactExtensions": [
+      ".html"
+    ]
+  },
+  "verdict": ".harness/verdict.json"
+}

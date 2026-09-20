@@ -2,6 +2,7 @@
   "homepage": "https://www.remotion.dev",
   "upstream": "https://github.com/remotion-dev/remotion",
   "license": "MIT",
+  "tagline": "Make videos programmatically",
   "examples": [
     {
       "prompt": "Make a 12-second \"my year in running\" recap video: total kilometres counting up, a glowing route line drawing itself across a city map, and monthly distance bars rising one by one with the best month lit up. Bold type, sunset colours.",

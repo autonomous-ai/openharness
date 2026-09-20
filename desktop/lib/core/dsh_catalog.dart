@@ -62,9 +62,13 @@ class DshEntry {
     this.homepage,
     this.upstream,
     this.license,
+    this.tagline,
     this.screenshots = const [],
     this.examples = const [],
     this.linked = false,
+    this.installedCommit,
+    this.availableCommit,
+    this.updateAvailable = false,
   });
 
   /// `owner/name` — the install directory on the machine and the wire id.
@@ -107,6 +111,10 @@ class DshEntry {
   final String? homepage;
   final String? upstream;
   final String? license;
+
+  /// One line in the project's own words, from its website or repository —
+  /// "Advanced physics simulation" — under the name wherever it is chosen.
+  final String? tagline;
   final List<String> screenshots;
 
   /// What a person types and what comes out — the product page is built around these.
@@ -115,6 +123,10 @@ class DshEntry {
   /// Installed as a link to a checkout (`--link`) rather than a clone: a
   /// developer's own working copy, which Remove would only unlink.
   final bool linked;
+  final String? installedCommit;
+  final String? availableCommit;
+  final bool updateAvailable;
+  bool get hasUpdate => installed && !linked && updateAvailable;
 
   static DshEntry? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -138,6 +150,7 @@ class DshEntry {
       homepage: _httpUrl(raw['homepage']),
       upstream: _httpUrl(raw['upstream']),
       license: _short(raw['license'], 40),
+      tagline: _short(raw['tagline'], 80),
       screenshots: screenshots is List
           ? screenshots
                 .map(_httpUrl)
@@ -153,6 +166,9 @@ class DshEntry {
                 .toList(growable: false)
           : const [],
       linked: raw['linked'] == true,
+      installedCommit: _commit(raw['installedCommit']),
+      availableCommit: _commit(raw['availableCommit']),
+      updateAvailable: raw['updateAvailable'] == true,
       name: name is String && name.trim().isNotEmpty
           ? name.trim().substring(0, name.trim().length.clamp(0, 40))
           : id.substring(id.indexOf('/') + 1),
@@ -197,6 +213,9 @@ class DshEntry {
       raw is String && raw.trim().isNotEmpty
       ? raw.trim().substring(0, raw.trim().length.clamp(0, max))
       : null;
+
+  static String? _commit(Object? raw) =>
+      raw is String && RegExp(r'^[a-fA-F0-9]{40}$').hasMatch(raw) ? raw : null;
 
   static bool _validId(String id) =>
       id.length <= 129 &&

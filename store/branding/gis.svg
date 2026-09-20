@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">GIS — an atlas to explore</title>
+  <path d="M5 17L23 10L41 17L59 10V49L41 56L23 49L5 56Z" fill="#4e947a"/>
+  <path d="M23 10L41 17V56L23 49Z" fill="#77b49a"/>
+  <path d="M6 37L23 31L40 37L58 30" fill="none" stroke="#e4f2e8" stroke-width="4"/>
+  <path d="M50 17C50 25 40 34 40 34S30 25 30 17A10 10 0 0 1 50 17Z" fill="#d39342"/>
+  <circle cx="40" cy="17" r="4" fill="#fff5db"/>
+</svg>

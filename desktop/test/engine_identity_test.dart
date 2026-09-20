@@ -1,6 +1,7 @@
 // What an engine or a harness is drawn as: the harnesses this build ships a
 // face for, the engine each first-party harness runs on, the fallback for an
 // id nobody here has heard of, and the mark when its picture will not load.
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -67,31 +68,63 @@ void main() {
     },
   );
 
-  test('every agent package in the store has its face in this build', () {
-    // A package without one draws an initial in its tab, pane header and store
-    // card while every package beside it wears its logo.
-    final agents = Directory('../store/agents')
-        .listSync()
-        .whereType<Directory>()
-        .where((dir) => File('${dir.path}/harness.json').existsSync())
-        .map(
-          (dir) =>
-              'autonomous/${dir.uri.pathSegments.where((s) => s.isNotEmpty).last}',
-        )
-        .toList();
-    expect(agents, isNotEmpty);
-    final faces = {for (final harness in knownHarnesses) harness.id};
-    // Projects that publish no logo draw their initial rather than a mark made
-    // up for them. Godogen's repository has no image of its own.
-    const noLogo = {'autonomous/godogen'};
-    for (final id in agents.where((id) => !noLogo.contains(id))) {
-      expect(faces, contains(id), reason: '$id has no EngineIdentity');
-      final asset = engineIdentity(id).asset!;
+  test('shipped brands have a desktop face and every face has an asset', () {
+    // The live Store can add packages between desktop releases. Unknown IDs
+    // intentionally use the initial fallback below; every registered face in
+    // this binary must point to an asset that it actually bundles.
+    expect(knownHarnesses, isNotEmpty);
+    for (final dir in Directory(
+      '../store/agents',
+    ).listSync().whereType<Directory>()) {
+      if (!File('${dir.path}/brand/icon.svg').existsSync()) continue;
+      final manifest = jsonDecode(
+        File('${dir.path}/harness.json').readAsStringSync(),
+      );
+      final id = manifest['id'] as String;
+      expect(
+        engineIdentity(id).asset,
+        isNotNull,
+        reason: '$id ships an original mark but still draws a fallback initial',
+      );
+    }
+    for (final identity in knownHarnesses) {
+      final asset = identity.asset!;
       expect(
         File(asset).existsSync(),
         isTrue,
-        reason: '$id: $asset is missing',
+        reason: '${identity.id}: $asset is missing',
       );
+    }
+  });
+
+  test("this build's words for a harness are the store's own", () {
+    // Before a machine answers, or when its CLI predates taglines, the agent
+    // search reads these: "MuJoCo by Google DeepMind", "Advanced physics
+    // simulation". They must say what the Store says once it does answer.
+    var checked = 0;
+    for (final dir in Directory(
+      '../store/agents',
+    ).listSync().whereType<Directory>()) {
+      final manifest = File('${dir.path}/harness.json');
+      if (!manifest.existsSync()) continue;
+      final id = jsonDecode(manifest.readAsStringSync())['id'] as String;
+      if (!knownHarnesses.any((harness) => harness.id == id)) continue;
+      final facts = File('${dir.path}/store.json');
+      final Map<String, dynamic> store = facts.existsSync()
+          ? jsonDecode(facts.readAsStringSync()) as Map<String, dynamic>
+          : const {};
+      final Map<String, dynamic> package =
+          jsonDecode(manifest.readAsStringSync()) as Map<String, dynamic>;
+      final identity = engineIdentity(id);
+      expect(identity.tagline, store['tagline'], reason: '$id tagline');
+      expect(identity.creator, package['author'], reason: '$id author');
+      expect(identity.category, package['category'], reason: '$id category');
+      checked++;
+    }
+    expect(checked, knownHarnesses.length);
+    for (final engine in allEngines) {
+      expect(engine.tagline, isNotEmpty, reason: engine.id);
+      expect(engine.tagline!.length, lessThanOrEqualTo(80), reason: engine.id);
     }
   });
 

@@ -2,6 +2,7 @@
   "homepage": "https://www.manim.community",
   "upstream": "https://github.com/ManimCommunity/manim",
   "license": "MIT",
+  "tagline": "Python library for creating mathematical animations",
   "examples": [
     {
       "prompt": "Draw a chess knight using nothing but spinning circles: a Fourier series of 120 epicycles, tip to tail, tracing its silhouette in gold.",

@@ -1,0 +1,17 @@
+{
+  "listed": false,
+  "homepage": "https://lilypond.org",
+  "upstream": "https://github.com/lilypond/lilypond",
+  "license": "MIT",
+  "tagline": "Music notation for everyone",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/score/starter.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Engrave Lighthouse at Dusk and give me a printable score plus a MIDI playback sketch.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/score/starter.jpg",
+      "caption": "Folio · original piano study, PDF and MIDI"
+    }
+  ]
+}

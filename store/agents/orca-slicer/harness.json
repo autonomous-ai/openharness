@@ -1,0 +1,31 @@
+{
+  "spec": 1,
+  "id": "autonomous/orca-slicer",
+  "name": "Orca Slicer",
+  "category": "Fabrication",
+  "author": "OpenHarness contributors",
+  "description": "Describe a part to print; get G-code \u2014 a printable mesh sliced to your printer's profile, with a print summary (time, filament, layers) live in the pane.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "model.stl",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": ["skills"],
+    "env": {
+      "ORCA_TOOLCHAIN": "${dsh}/toolchain",
+      "ORCA_SKILLS": "${dsh}/skills"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/isolated-web-viewer",
+    "artifactExtensions": [".html", ".gcode"]
+  },
+  "verdict": ".harness/verdict.json"
+}

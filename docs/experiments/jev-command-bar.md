@@ -86,7 +86,7 @@ flutter test --no-pub --concurrency=2 \
 
 Before merging into main, the full CLI suite passed **2,949 tests** (52 skipped), along with TypeScript type checking and the CLI build. The full desktop suite passed **1,955 tests** (2 skipped), with one failure in the unchanged `terminal_session_test.dart` recovery test: its 45 ms wall-clock wait expired before the final timer fired under load. Running that complete 57-test file separately passed, including the recovery case. The focused Flutter analyzer reported no issues, and the normal macOS debug build passed without experimental Dart defines.
 
-The desktop run covers the default hidden shortcut, the disabled-feature path, unchanged pane navigation, cancellation, and typing through terminal refreshes. The native shortcut snapshot excludes the command bar binding when the feature is disabled. The terminal focus fix is a separate commit so the JEV feature can be reverted independently.
+The desktop run covers the default hidden shortcut, the disabled-feature path, unchanged pane navigation, cancellation, and typing through terminal refreshes. The native shortcut snapshot excludes the command bar binding when the feature is disabled. Plain terminal panes and read-only shared sessions remain navigation targets but are excluded from task delivery.
 
 Set `HARNESS_COMMAND_CAPTURE_DIR` while running the widget tests to render screenshots. Tests cover cancellation, stale session identities, exact prompt delivery, duplicate submission, bounded context, watch scope, offline and blocked agents, keyboard entry, narrow layouts and large text.
 

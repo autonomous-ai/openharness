@@ -1,0 +1,17 @@
+{
+  "spec": "fieldwork/1", "id": "rain-atlas", "title": "A Year of Rain",
+  "brief": "Turn my monthly observations into a restrained data-art print: twelve concentric calendar rings, with rainfall controlling each arc. Include the actual values and the place. Deliver a wall print, a square card and a landscape legend, using my pasted CSV rather than synthetic numbers.",
+  "notes": "The example CSV is an explicitly invented acceptance fixture. Replace it with your observations. The artwork shows the supplied values without claiming these are historical measurements.",
+  "seed": "atlas-1", "variations": false,
+  "formats": [{ "name": "Wall print", "width": 1400, "height": 1800 }, { "name": "Square card", "width": 1200, "height": 1200 }, { "name": "Landscape", "width": 2000, "height": 1000 }],
+  "controls": [
+    { "key": "place", "type": "text", "label": "Place and year", "value": "FIELD STATION / 2026" },
+    { "key": "csv", "type": "text", "label": "Your observations (month, mm)", "multiline": true, "value": "Jan,42\nFeb,65\nMar,81\nApr,124\nMay,201\nJun,175\nJul,142\nAug,98\nSep,131\nOct,192\nNov,86\nDec,51" },
+    { "key": "paper", "type": "color", "label": "Background", "value": "#102333" },
+    { "key": "ink", "type": "color", "label": "Ink", "value": "#e8e4d6" },
+    { "key": "accent", "type": "color", "label": "Water", "value": "#7ad2d0" },
+    { "key": "ring", "type": "range", "label": "Ring thickness", "min": 20, "max": 85, "value": 55 },
+    { "key": "numbers", "type": "toggle", "label": "Show observations", "value": true }
+  ],
+  "assets": []
+}

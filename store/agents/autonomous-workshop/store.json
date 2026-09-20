@@ -1,6 +1,7 @@
 {
   "upstream": "https://github.com/autonomous-ai/autonomous-workshop",
   "license": "MIT",
+  "tagline": "AI inventors that make new toys and games",
   "examples": [
     {
       "prompt": "Design a cable clip that holds three 6 mm cables to the edge of a 20 mm thick desk, printable without supports.",

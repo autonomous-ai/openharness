@@ -1,0 +1,1 @@
+{"pins":[{"pin":"GPIO 2","role":"Status LED","direction":"Output","note":"Example assignment. Confirm the LED and boot-strapping requirements on your exact ESP32 board."}],"note":"This is a project pin plan, not a hardware connection or a verified board pinout."}

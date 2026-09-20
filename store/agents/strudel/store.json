@@ -2,6 +2,7 @@
   "homepage": "https://strudel.cc",
   "upstream": "https://github.com/tidalcycles/strudel",
   "license": "MIT",
+  "tagline": "Music live coding environment for the browser",
   "examples": [
     {
       "prompt": "Make an 80s synthwave track at 100 bpm: gated drums, a driving octave bassline, a pulsing 16th-note arpeggio, a wide supersaw pad, and a soaring lead that takes over after 8 bars.",

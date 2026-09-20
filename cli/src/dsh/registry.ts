@@ -51,6 +51,8 @@ export const DshRegistryEntrySchema = z.strictObject({
   author: z.string().min(1).max(80).optional(),
   repo: z.string().min(1).max(2048),
   ref: z.string().min(1).max(200).optional(),
+  /** Git tree of this package at ref; avoids updates caused by other monorepo folders. */
+  revision: z.string().regex(/^[a-f0-9]{40}$/i).optional(),
   /**
    * The folder inside `repo` that is the package, when the package is not the whole repo — every
    * built-in package lives at `store/agents/<name>` or `store/viewers/<name>` of the Harness monorepo.
@@ -68,6 +70,11 @@ export const DshRegistryEntrySchema = z.strictObject({
   upstream: z.string().url().max(2048).optional(),
   /** SPDX id of the wrapper's licence — "MIT", "Apache-2.0"; the upstream's is in its repo. */
   license: z.string().min(1).max(40).optional(),
+  /**
+   * One line in the project's own words, from its website or repository — MuJoCo's "Advanced physics
+   * simulation". Shown under the name wherever a harness is chosen, beside its Store shelf.
+   */
+  tagline: z.string().min(1).max(80).optional(),
   /** Pictures for the product page, in order; absent while a package has none yet. */
   screenshots: z.array(z.string().url().max(2048)).max(8).optional(),
   /** What a person types and what comes out, for the product page — see StoreExampleSchema. */
@@ -81,8 +88,14 @@ export const StoreFactsSchema = z.strictObject({
   homepage: z.string().url().max(2048).optional(),
   upstream: z.string().url().max(2048).optional(),
   license: z.string().min(1).max(40).optional(),
+  tagline: z.string().min(1).max(80).optional(),
   screenshots: z.array(z.string().url().max(2048)).max(8).optional(),
   examples: z.array(StoreExampleSchema.strict()).max(8).optional(),
+  /**
+   * `false` unlists the package: the folder and its code stay in the repo and keep passing every
+   * check, and the package is left out of the registry and the published catalog. Absent means listed.
+   */
+  listed: z.boolean().optional(),
 })
 
 export type StoreFacts = z.infer<typeof StoreFactsSchema>
@@ -102,7 +115,7 @@ export function storeEntry(path: string, manifest: Record<string, unknown>, fact
   if (manifest.kind !== undefined) entry.kind = manifest.kind
   for (const key of ['name', 'category', 'author', 'description']) if (manifest[key] !== undefined) entry[key] = manifest[key]
   Object.assign(entry, { repo: HARNESS_MONOREPO, ref: 'main', path })
-  for (const key of ['homepage', 'upstream', 'license', 'screenshots', 'examples']) if (facts[key] !== undefined) entry[key] = facts[key]
+  for (const key of ['homepage', 'upstream', 'license', 'tagline', 'screenshots', 'examples']) if (facts[key] !== undefined) entry[key] = facts[key]
   if (manifest.engine !== undefined) entry.engine = manifest.engine
   const viewer = manifest.viewer as { use?: unknown } | undefined
   if (typeof viewer?.use === 'string') entry.viewerUse = viewer.use
@@ -111,7 +124,7 @@ export function storeEntry(path: string, manifest: Record<string, unknown>, fact
   return entry
 }
 
-/** Every `store/<agents|viewers>/<name>` folder with a manifest, as registry entries. */
+/** Every listed `store/<agents|viewers>/<name>` folder with a manifest, as registry entries. */
 export function readStoreDir(storeDir: string): unknown[] {
   const out: unknown[] = []
   for (const [plural] of STORE_KINDS) {
@@ -123,6 +136,9 @@ export function readStoreDir(storeDir: string): unknown[] {
       try { manifest = JSON.parse(readFileSync(join(dir, 'harness.json'), 'utf8')) as Record<string, unknown> } catch { continue }
       let facts: Record<string, unknown> = {}
       try { facts = JSON.parse(readFileSync(join(dir, 'store.json'), 'utf8')) as Record<string, unknown> } catch { facts = {} }
+      // `"listed": false` unlists a package: its code stays in the repo, checked like any other, and it
+      // is left out of the registry and the published catalog. Delete the flag to list it again.
+      if (facts.listed === false) continue
       out.push(storeEntry(`store/${plural}/${name}`, manifest, facts))
     }
   }

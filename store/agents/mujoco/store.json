@@ -2,6 +2,7 @@
   "homepage": "https://mujoco.org",
   "upstream": "https://github.com/google-deepmind/mujoco",
   "license": "MIT",
+  "tagline": "Advanced physics simulation",
   "examples": [
     {
       "prompt": "Make the Unitree G1 humanoid say hello: stand, raise its right hand and wave three times, then lower it and take a small bow. Record it.",

@@ -1,0 +1,17 @@
+{
+  "listed": false,
+  "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/web-studio",
+  "upstream": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/web-studio",
+  "license": "MIT",
+  "tagline": "Interactive web experiences, live in the pane",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/web-studio/starter.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Open the Field starter, explore its three shapes, and export a still I can keep.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/web-studio/starter.jpg",
+      "caption": "Field · live WebGL instrument and PNG export"
+    }
+  ]
+}

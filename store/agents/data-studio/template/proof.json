@@ -1,0 +1,8 @@
+{
+  "actions": [
+    { "selector": "#bars", "click": true },
+    { "selector": "#bars", "attribute": { "name": "aria-pressed", "value": "true" } },
+    { "selector": "#trend", "click": true },
+    { "selector": "#trend", "attribute": { "name": "aria-pressed", "value": "true" } }
+  ]
+}

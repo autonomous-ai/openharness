@@ -1,0 +1,8 @@
+{
+  "name": "@autonomous/home-assistant-harness",
+  "private": true,
+  "type": "module",
+  "dependencies": { "yaml": "2.8.1" },
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "engines": { "node": ">=20" }
+}

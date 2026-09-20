@@ -14,7 +14,7 @@ export function storeEntry(path, manifest, facts) {
   if (manifest.kind !== undefined) entry.kind = manifest.kind
   for (const key of ['name', 'category', 'author', 'description']) if (manifest[key] !== undefined) entry[key] = manifest[key]
   Object.assign(entry, { repo: HARNESS_MONOREPO, ref: 'main', path })
-  for (const key of ['homepage', 'upstream', 'license', 'screenshots', 'examples']) if (facts[key] !== undefined) entry[key] = facts[key]
+  for (const key of ['homepage', 'upstream', 'license', 'tagline', 'screenshots', 'examples']) if (facts[key] !== undefined) entry[key] = facts[key]
   if (manifest.engine !== undefined) entry.engine = manifest.engine
   if (typeof manifest.viewer?.use === 'string') entry.viewerUse = manifest.viewer.use
   entry.tier = manifest.viewer ? 2 : manifest.verdict ? 1 : 0
@@ -35,6 +35,9 @@ function readStoreDir(storeDir, strict) {
       if (strict && (manifest.spec !== 1 || manifest.id !== `autonomous/${name}` || (manifest.kind ?? 'agent') !== (plural === 'agents' ? 'agent' : 'viewer'))) throw new Error(`Invalid package identity: ${dir}`)
       let facts = {}
       try { facts = JSON.parse(readFileSync(join(dir, 'store.json'), 'utf8')) } catch (error) { if (strict) throw error; facts = {} }
+      // `"listed": false` unlists a package: its code stays in the repo, checked like any other, and it
+      // is left out of the registry and the published catalog. Delete the flag to list it again.
+      if (facts.listed === false) continue
       out.push(storeEntry(`store/${plural}/${name}`, manifest, facts))
     }
   }

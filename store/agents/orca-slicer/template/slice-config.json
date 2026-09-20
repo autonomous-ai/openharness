@@ -1,0 +1,7 @@
+{
+  "mode": "demo",
+  "model": "model.stl",
+  "printer": "Prusa/machine/Prusa MK3S 0.4 nozzle.json",
+  "process": "Prusa/process/0.20mm Standard @MK3S 0.4.json",
+  "filament": "Prusa/filament/Prusa Generic PLA.json"
+}

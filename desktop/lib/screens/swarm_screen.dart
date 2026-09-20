@@ -30,6 +30,7 @@ import '../state/swarm_attention.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
 import '../state/swarm.dart';
+import '../state/terminal_pane.dart';
 import '../widgets/transient_menus.dart';
 import '../widgets/layout_palette.dart';
 import '../widgets/engine_identity.dart';
@@ -53,6 +54,8 @@ import '../widgets/task_palette.dart';
 import '../state/command_bar.dart';
 import '../state/command_bar_catalog.dart';
 import '../widgets/harness_command_bar.dart';
+import '../orchestrator/orchestrator_launcher.dart';
+import '../orchestrator/orchestrator_workspace.dart';
 
 class SwarmScreen extends StatefulWidget {
   const SwarmScreen({
@@ -464,6 +467,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         (
           machine.machine.machineId,
           machine.machine.displayName,
+          machine.machine.isShared,
+          machine.machine.ownerName,
           machine.isLocalMachine,
           machine.nodeOnline,
           machine.needsLink,
@@ -492,6 +497,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
               'id': machine.machine.machineId,
               'name': machine.machine.displayName,
               'local': machine.isLocalMachine,
+              'shared': machine.machine.isShared,
+              'ownerName': machine.machine.ownerName,
               'agentCount':
                   machine.agents.isNotEmpty ||
                       machine.agentLoadStatus == AgentLoadStatus.loaded
@@ -544,11 +551,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
   void _syncModels() {
     final payload = {
       'subscriptions': _modelsMenu?.rows ?? [],
-      // The Local section used to be two hardcoded names. A menu that names a model nobody is
-      // serving is worse than one admitting it has none, so this carries what the account's own
-      // grid actually answers with — refreshed below, and empty until the first read lands.
+      // Back-compat: the own grid's models, as the native menu understood them before sections.
       'local': [
-        for (final m in _localModels) {'id': m.id, 'node': m.node},
+        for (final s in _localSections)
+          if (s.own)
+            for (final m in s.models) {'id': m.id, 'node': m.node},
+      ],
+      // The picker's sections, own grid first then each shared grid — what the native menu draws.
+      'sections': [
+        for (final s in _localSections)
+          {
+            'name': s.name,
+            'own': s.own,
+            'models': [
+              for (final m in s.models) {'id': m.id, 'node': m.node},
+            ],
+          },
       ],
     };
     final encoded = jsonEncode(payload);
@@ -557,17 +575,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
     unawaited(_channel.invokeMethod<void>('modelsState', payload));
   }
 
-  /// What the account's private grid is serving, for the native Models menu.
+  /// What the picker's sections answer for the native Models menu.
   ///
   /// Read from a machine this window is connected to — the grid is per ACCOUNT, so any of them
   /// answers the same, and the local one is asked first because its daemon is a loopback away.
   /// Never throws and never blocks the menu: a machine that cannot answer leaves the list as it was.
-  List<GridModel> _localModels = const [];
+  List<GridSection> _localSections = const [];
 
   DateTime? _localModelsAt;
 
   Future<void> _refreshLocalModels() async {
-    final machines = app.machines;
+    final machines = app.machines
+        .where((machine) => !machine.isShared)
+        .toList();
     if (machines.isEmpty) return;
     // The daemon memoises its answer, so a repeat is nearly free — but this is called on every app
     // change, and an RPC per keystroke-sized notification is not free. One read per window is
@@ -584,15 +604,40 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
     final answer = await app.gridModels(preferred.machineId);
     if (!mounted) return;
-    final same =
-        answer.models.length == _localModels.length &&
-        [
-          for (var i = 0; i < answer.models.length; i++)
-            answer.models[i].id == _localModels[i].id,
-        ].every((x) => x);
-    if (same) return;
-    _localModels = answer.models;
+    final sections = _sectionsForModelMenu(answer);
+    if (_sameSections(sections, _localSections)) return;
+    _localSections = sections;
     _syncModels();
+  }
+
+  /// The sections the Models menu draws, matching the pane picker's own: the account's own grid
+  /// first as "Local", then each shared grid that serves something. A shared grid with nothing
+  /// running is not a menu a person can pick from, so it is not drawn.
+  List<GridSection> _sectionsForModelMenu(GridModels answer) {
+    final sections = answer.sections
+        .where((s) => s.own || s.models.isNotEmpty)
+        .toList();
+    if (sections.any((s) => s.own)) return sections;
+    return [
+      GridSection(
+        name: answer.gridName ?? '',
+        own: true,
+        models: answer.models,
+      ),
+      ...sections,
+    ];
+  }
+
+  static bool _sameSections(List<GridSection> a, List<GridSection> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].name != b[i].name || a[i].own != b[i].own) return false;
+      if (a[i].models.length != b[i].models.length) return false;
+      for (var j = 0; j < a[i].models.length; j++) {
+        if (a[i].models[j].id != b[i].models[j].id) return false;
+      }
+    }
+    return true;
   }
 
   Future<void> _onNative(MethodCall call) async {
@@ -624,6 +669,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         args['command'] is String ? args['command'] as String : null,
       'commands' => 'navigation.commands',
       'newAgent' => 'agent.new',
+      'newTerminal' => 'terminal.new',
       _ => null,
     };
     if (nativeCommand != null) {
@@ -722,12 +768,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
         await _addAgent();
       case 'newAgent':
         unawaited(_newAgent(swarmId: app.activeSwarmId));
+      case 'newTerminal':
+        unawaited(_newTerminal());
       case 'runLocalModel':
-        // The native Models menu's one command. Wrapped like Link Machine…
-        // because the notifier may open its dialog here, and the pane it then
-        // creates takes focus the same way a New Agent does. With more than one
-        // machine linked the menu lists them and names the chosen one here;
-        // with one, or none, the notifier picks.
+        // The native Models menu's one command: open Grid. Wrapped like Link
+        // Machine… because the notifier opens New Agent here, and the tab it
+        // then creates takes focus. With more than one machine linked the menu
+        // lists them and names the chosen one here; with one, or none, the
+        // notifier picks.
         await _dialog(
           () => app.runLocalModel(
             context,
@@ -833,6 +881,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           'notifications',
           'addAgent',
           'newAgent',
+          'newTerminal',
           'manageMachines',
           'deleteMachine',
           'splitRight',
@@ -935,6 +984,50 @@ class _SwarmScreenState extends State<SwarmScreen> {
       );
     }, restoreEntry: false);
     await _ensureEmptyEntry();
+  }
+
+  /// ⌘⇧T: a shell in a new tile, no dialog — the way a terminal app opens a
+  /// tab. It lands on the machine the focused tile is on (this computer when
+  /// nothing is focused), in the folder that tile's harness works in, else
+  /// the first project any tile in this tab has, else the machine's home —
+  /// which is what the daemon opens when no folder is named.
+  Future<void> _newTerminal() async {
+    if (app.activeSwarm.isStore) app.newSwarm();
+    final target = app.activeSwarmId;
+    final focused = app.focusedPane;
+    final machine = focused == null
+        ? app.machineStates.values
+                  .where((machine) => machine.isLocalMachine)
+                  .firstOrNull ??
+              app.machineStates.values.firstOrNull
+        : app.stateOf(focused.machineId);
+    if (machine == null) {
+      await _dialog(() => showSwarmLinkDialog(context, app));
+      return;
+    }
+    final machineId = machine.machine.machineId;
+    String? folderOf(TerminalPane pane) {
+      if (pane.machineId != machineId) return null;
+      final agent = machine.agents
+          .where((agent) => agent.id == pane.agentId)
+          .firstOrNull;
+      return agent == null ? null : machine.projectOf(agent)?.cwd;
+    }
+
+    final folder =
+        (focused == null ? null : folderOf(focused)) ??
+        app.panes.map(folderOf).whereType<String>().firstOrNull;
+    final error = await app.createAgent(
+      machineId,
+      engine: kTerminalEngine,
+      folder: folder,
+      bypassPermission: false,
+      swarmId: target,
+    );
+    if (error != null && mounted) {
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(SnackBar(content: Text(error)));
+    }
   }
 
   Future<void> _splitAgent(
@@ -1362,8 +1455,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       }
     },
     ShortcutAction.newAgent: _newAgent,
+    ShortcutAction.newTerminal: _newTerminal,
     ShortcutAction.routeTask: () =>
         _dialog(() => showTaskPalette(context, app)),
+    ShortcutAction.orchestrate: () =>
+        _dialog(() => showOrchestratorLauncher(context, app)),
     ShortcutAction.reload: app.retryMachines,
     ShortcutAction.showLayout: () =>
         _dialog(() => showLayoutPalette(context, app)),
@@ -1424,6 +1520,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     if (id == 'navigation.back') return _navigation.canGoBack(app);
     if (id == 'navigation.forward') return _navigation.canGoForward(app);
+    // Opening a terminal needs no terminal to already be there; the other
+    // `terminal.*` commands are find, which does.
+    if (id == 'terminal.new') return true;
     if (id.startsWith('terminal.')) return _canFindTerminal;
     if (id == 'pane.resize') {
       return app.panes.length > 1 && app.zoomedPaneId == null;
@@ -1665,7 +1764,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             key: ValueKey('harness-start-background'),
                             child: SwarmWallpaper(),
                           ),
-                        if (app.activeSwarm.isStore)
+                        if (app.activeSwarm.isOrchestrator)
+                          OrchestratorWorkspace(
+                            key: ValueKey(
+                              'orchestrator:${app.activeSwarm.orchestratorId}',
+                            ),
+                            notifier: app,
+                            machineId: app.activeSwarm.orchestratorMachineId!,
+                            projectId: app.activeSwarm.orchestratorId!,
+                          )
+                        else if (app.activeSwarm.isStore)
                           StoreTab(
                             key: ValueKey('store-tab:${app.activeSwarmId}'),
                             notifier: app,

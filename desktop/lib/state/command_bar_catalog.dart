@@ -1,6 +1,7 @@
 import 'app_state.dart';
 import 'command_bar.dart';
 import 'swarm_navigation.dart';
+import '../widgets/engine_identity.dart' show isTerminalEngine;
 
 /// Curated effects the natural-language surface can actually perform. Closing sessions,
 /// approvals, arbitrary shell commands and viewer controls are intentionally absent.
@@ -172,6 +173,8 @@ List<CommandBarAction> buildCommandBarCatalog(
       ),
     );
     if (machine.nodeOnline != false &&
+        !machine.machine.isShared &&
+        !isTerminalEngine(agent.engine) &&
         agent.terminalAvailable &&
         agent.launchState == 'ready' &&
         question == null) {
