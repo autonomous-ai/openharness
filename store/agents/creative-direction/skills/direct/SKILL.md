@@ -1,73 +1,56 @@
 ---
 name: direct
-description: Build a deterministic, seedable creative direction / moodboard in one HTML file from a look-and-feel brief. Use whenever the user asks for a moodboard, a brand look, a palette, a film grade, a style direction, or prompt-to-design.
+description: Create and revise a usable brand identity and coordinated launch materials from a business brief, using the Forme project and the person's own artwork, text and production requirements.
 ---
 
-# direct
+# Direct an original identity
 
-Take the brief and produce a **single self-contained `board/index.html`** that renders
-a **deterministic, seedable** living moodboard, loading the seed from a `?seed=`
-query param so the web-viewer can preview the current seed and re-seed live.
+Read the current `board/project.json` and `board/DESIGN.md`. Understand the actual business,
+audience, approved material and delivery requirements. The starter is a fictional bakery example,
+not a default visual direction. Produce a system suited to the person's brief.
 
-## The floor (in order)
+For structure, read [the project format](references/project.md). The model and validator in
+`studio/project.mjs` are the executable contract. Layouts and symbols are arbitrary design data;
+there is no supported list of styles. Reuse an existing direction only when it fits the request.
 
-1. **Seeded PRNG.** A small seeded PRNG derived from the hash of the seed string.
-   Nothing may call a non-seeded random — the board must be reproducible.
-2. **Moodboard anatomy.** A palette ramp, a type pairing, a layout grid, and a
-   one-line rationale per direction, all derived deterministically from the seed.
-3. **`?seed=` plumbing.** Reading the param, plus a tiny UI (input + "re-seed"
-   button) so the person can browse directions in the pane.
-4. **Named sub-streams.** One PRNG sub-stream per concern (palette, type, layout).
+## Make decisions visible in usable work
 
-## The gold checklist
+Show how the identity works on the actual materials: packaging, signage, a pitch, social assets,
+stationery or another requested medium. A palette and moodboard by themselves are incomplete.
+If alternatives help the decision, author materially different geometry and hierarchy. If the
+person already approved a direction, extend it instead of asking them to select again.
 
-- **Trait + rarity tables that survive an edition**: seed → traits (palette, type,
-  mood), and a census proving no hidden degenerate seed.
-- **Palette discipline**: OKLCH/OKLab ramps or a seeded palette-from-image; note
-  contrast on every pairing.
-- **Style range**: editorial, brutalist, soft-brand, film-noir, kitschy — matched
-  to the brief, not all at once.
-- **Export route**: `?seed=X&size=...` render for print, plus a board summary block.
+Use shared copy bindings for facts that should stay consistent. Use named color roles and embedded
+fonts for the visual system. Author each format's composition, keeping important text editable.
+Separate source artwork from staged applications through logo lockups and asset slots.
+Keep licensed input fonts and their redistribution licenses; do not bundle arbitrary system fonts.
 
-## Verify like a designer, not a compiler
+Put supplied image files under `board/assets/` and refer to them with `file`. The build embeds
+them. The supplied font files are in `board/fonts/`; additional fonts need explicit license text.
+A custom static website can live in `board/site.html` and bind to the same brand copy and tokens.
 
-Render a grid of seeds, screenshot the actual output, and look.
-Two hard checks before "ready":
-- **Re-render same-seed** and diff — it must be perceptually stable on this machine.
-- **Census the seed range you promise** (e.g. 0-99); reject any blank, low-contrast,
-  or clipped frame.
+## Build, revise, hand off
 
-Be explicit in the verdict about the reproducibility guarantee: same-machine yes;
-cross-machine color you cannot prove — say so.
-
-## Verdict feed
-
-Write `.harness/verdict.json` at every change:
-
-```json
-{ "spec": 1, "ready": false, "summary": "editorial moodboard · re-seed live · census 0-99 clean",
-  "findings": [{ "severity": "info", "kind": "reproducibility", "message": "same-machine verification pending; cross-machine color not provable" }],
-  "artifact": "board/index.html",
-  "phases": [{ "id": "seed", "name": "Seeded core", "state": "done" },
-             { "id": "board", "name": "The board", "state": "active" },
-             { "id": "edition", "name": "Edition", "state": "pending" }],
-  "updatedAt": "2026-09-18T00:00:00Z" }
+```sh
+node tools/build.mjs
+node tools/check.mjs
+node tools/export.mjs --scale 2
+node tools/import-project.mjs saved.forme.json
 ```
 
-## Starting from Forme
+The tools are workspace-local. Browser export dependencies live in the installed package referenced
+by `FORME_DSH_DIR`. Setup installs pinned Playwright and finds local Chrome or downloads Chromium.
 
-The template is functional: Three complete art directions, live brand name, palette lock, computed text contrast, SVG poster export, JSON design tokens.
+Read `board/project.json` again before revising: the person's **Save to workspace** writes their
+canvas edits there. Unsaved browser drafts remain local; do not pretend to have read them. A stale
+browser save is refused, with a source-versus-draft choice. Save/import keeps history.
 
-Keep its useful controls and exports when making a user's creation. Test the behavioral core
-(directionModel, contrast, brandSVG; keep all user text escaped) as well as the visible result. A self-contained HTML file can still have well-separated
-model, rendering, input and export functions. Do not turn a finished starter into a waiting screen.
+Inspect the actual files in `delivery/`, not only the editor. Check clipped text, line breaks,
+color pairings, clear space, the brief's content, intended print dimensions and mobile website.
+Open SVG/PNG/PDF independently; retain the editable project and its source assets. Fix what the
+review reveals. A successful export leaves `ready:false` until that review is real.
 
-Presence-only helpers do not prove correctness or reproducibility. Record actual evidence before
-marking the result ready. Export and reopen the result as part of the handoff to the user.
-
-## Check your actual edited model
-
-Run `node tools/check.mjs --seeds 100` in the workspace. It reads the pure model from
-`<script id="harness-model">` in the artifact, checks domain invariants, repeats each seed, and
-writes `.harness/model-check.json`. Preserve that script boundary when editing. Model checks are
-followed by browser interaction, exported-output inspection, and visual or listening review.
+The project is bounded to 24 applications per direction, 6 directions and 36 MB of embedded data.
+For larger campaigns, separate related projects. The included site is static; its contact action
+must be the user's real intended destination. Work that needs a production backend or a printer's
+specific color/bleed workflow requires those actual tools and checks.

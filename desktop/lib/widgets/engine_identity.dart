@@ -324,7 +324,7 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/creative-direction',
     label: 'Creative Direction',
     category: 'Design',
-    tagline: 'Build a coherent visual identity with coordinated posters, typography and palett',
+    tagline: 'Turn your business brief into an editable brand and complete launch kit',
     creator: 'Autonomous',
     color: Color(0xffd89478),
     asset: 'assets/engine-icons/creative-direction.png',

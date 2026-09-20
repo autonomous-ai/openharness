@@ -3,6 +3,13 @@
 Work in `/private/tmp/harness-store-voxel`, branch `codex/harness-store-voxel`.
 The main checkout is shared with other sessions; leave it alone.
 
+**Current sequential rebuild:** the user asked to improve the remaining five one by one.
+See [FIVE-REBUILDS.md](work/FIVE-REBUILDS.md). Creative Direction now has an editable brand
+studio, source save bridge and complete launch exports; [FORME-REBUILD.md](work/FORME-REBUILD.md)
+records the actual tests and limits. It is relisted for Store testing. Voxel Worlds is next;
+Drone Pilot, Game Master and Lab Bench remain unlisted. The older “focus only on Art/Music”
+instruction below is historical and has been superseded by this user request.
+
 **Current authoring rebuild:** read [AUTHORING-REBUILD.md](work/AUTHORING-REBUILD.md). Art and Music
 now use source under their own `template/studio/` directories, with real editable projects and
 production exports. `build-experiences.mjs` delegates to their builders. Their original preset

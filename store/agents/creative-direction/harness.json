@@ -4,7 +4,7 @@
   "name": "Creative Direction",
   "category": "Design",
   "author": "Autonomous",
-  "description": "Build a coherent visual identity with coordinated posters, typography and palettes. Compare art directions, lock colors, customize a name, and export SVG posters and design tokens.",
+  "description": "Turn a business brief into an editable brand and a complete launch kit. Art-direct original identities, revise linked layouts, keep approved versions, and deliver vector artwork, print PDFs, a brand guide and a responsive website.",
   "engine": "claude",
   "workspace": {
     "template": "template",
@@ -15,18 +15,21 @@
     "instructions": "AGENTS.md",
     "skills": [
       "skills"
-    ]
+    ],
+    "env": {
+      "FORME_DSH_DIR": "${dsh}"
+    }
   },
   "toolchain": {
     "setup": "toolchain/setup.sh",
     "doctor": "toolchain/doctor.sh"
   },
   "viewer": {
-    "use": "autonomous/web-viewer",
+    "command": "toolchain/viewer.sh",
     "artifactExtensions": [
       ".html"
     ],
-    "url": "http://127.0.0.1:${port}/?file=${artifact}"
+    "url": "http://127.0.0.1:${port}/"
   },
   "verdict": ".harness/verdict.json"
 }

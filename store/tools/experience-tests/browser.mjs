@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { createHtmlViewer } from "../../viewers/web-viewer/viewer.mjs";
 import { experiences } from "../build-experiences.mjs";
 import { musicBrowser } from "./music-browser.mjs";
+import { brandBrowser } from "../../agents/creative-direction/test/browser.mjs";
 const { chromium } = await import(
   process.env.PLAYWRIGHT_MODULE || "playwright-core"
 );
@@ -108,6 +109,10 @@ async function shellRegression() {
 }
 
 async function one(exp) {
+  if (exp.id === 'creative-direction') {
+    results.push(await brandBrowser({ browser, output }));
+    return;
+  }
   const root = join(repo, "store/agents", exp.id),
     manifest = JSON.parse(await readFile(join(root, "harness.json"), "utf8"));
   const ws = await mkdtemp(join(tmpdir(), "experience-" + exp.id + "-"));
@@ -218,36 +223,6 @@ with zipfile.ZipFile(sys.argv[1]) as z:
       await f.locator('#reset-project').click();
       await f.waitForFunction(() => fieldwork.getSVG().includes('AGENT'));
       checks.push('same-seed geometry', 'original editable text', 'undo/redo', 'adaptive formats', 'own image import', 'editable SVG/PNG kit reopened by Python', 'portable HTML reopened', 'project roundtrip', 'agent revision preserves user draft');
-    } else if (exp.id === "creative-direction") {
-      await f.locator("#brand-name").fill("COVE STUDIO");
-      await f.locator("#directions button").nth(2).click();
-      assert.equal(await f.locator("#card-name").textContent(), "COVE STUDIO");
-      const colors = await f.locator("#swatches").textContent();
-      await f.locator("#lock-palette").click();
-      await f.locator("#directions button").nth(1).click();
-      assert.equal(await f.locator("#swatches").textContent(), colors);
-      const bytes = await download(
-        page,
-        () => f.locator("#poster-export").click(),
-        "forme-poster.svg",
-      );
-      assert.match(bytes.toString(), /COVE STUDIO/);
-      const tokens = JSON.parse(
-        (
-          await download(
-            page,
-            () => f.locator("#tokens").click(),
-            "forme-tokens.json",
-          )
-        ).toString(),
-      );
-      assert.equal(tokens.brand, "COVE STUDIO");
-      checks.push(
-        "direction change",
-        "custom brand",
-        "palette lock",
-        "SVG and tokens",
-      );
     } else if (exp.id === "lab-bench") {
       assert.equal(await f.locator("#sample-count").textContent(), "120");
       await f.locator("#control").click();
