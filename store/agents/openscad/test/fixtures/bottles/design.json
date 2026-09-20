@@ -1,0 +1,322 @@
+{
+  "spec": 1,
+  "title": "Bottle Bench",
+  "brief": "Keep six craft-paint bottles upright, with a matching fit-test ring. Compare snug, everyday and easy-lift clearances before printing the full rack.",
+  "assumptions": [
+    "Example bottle diameter is 26 mm. Measure the largest part that must enter the pocket; do not assume the printed diameter matches CAD exactly.",
+    "Clearance is radial: 0.30 mm per side adds 0.60 mm to the bore diameter.",
+    "Dry indoor craft storage. No food contact, pressure, chemical compatibility or spill-containment claim."
+  ],
+  "assembly": [
+    "Print only the fit-test rings first, label each clearance and try the real bottle.",
+    "Choose the smallest clearance that seats and removes comfortably; print that matching rack.",
+    "Place the rack flat on a stable surface; it is not a transport restraint."
+  ],
+  "sourceFiles": [
+    "model.scad",
+    "design.json"
+  ],
+  "parameters": {
+    "bottle_diameter": {
+      "value": 26,
+      "min": 10,
+      "max": 50,
+      "unit": "mm",
+      "label": "Measured bottle Ø"
+    },
+    "clearance": {
+      "value": 0.3,
+      "min": 0.05,
+      "max": 1,
+      "unit": "mm",
+      "label": "Radial clearance"
+    },
+    "wall": {
+      "value": 2,
+      "min": 1.6,
+      "max": 4,
+      "unit": "mm",
+      "label": "Material between bores"
+    },
+    "floor": {
+      "value": 2.4,
+      "min": 1.6,
+      "max": 4,
+      "unit": "mm",
+      "label": "Rack floor"
+    },
+    "height": {
+      "value": 18,
+      "min": 8,
+      "max": 40,
+      "unit": "mm",
+      "label": "Rack height"
+    },
+    "columns": {
+      "value": 3,
+      "min": 2,
+      "max": 4,
+      "unit": "count",
+      "label": "Columns"
+    },
+    "rows": {
+      "value": 2,
+      "min": 1,
+      "max": 4,
+      "unit": "count",
+      "label": "Rows"
+    },
+    "gauge_height": {
+      "value": 4,
+      "min": 2,
+      "max": 8,
+      "unit": "mm",
+      "label": "Fit-ring height"
+    }
+  },
+  "variants": [
+    {
+      "id": "snug",
+      "label": "Snug",
+      "values": {
+        "clearance": 0.15
+      },
+      "notes": [
+        "0.30 mm diametral clearance; validate with the small ring first."
+      ]
+    },
+    {
+      "id": "everyday",
+      "label": "Everyday",
+      "values": {
+        "clearance": 0.3
+      },
+      "notes": [
+        "0.60 mm diametral clearance."
+      ]
+    },
+    {
+      "id": "easy-lift",
+      "label": "Easy lift",
+      "values": {
+        "clearance": 0.45
+      },
+      "notes": [
+        "0.90 mm diametral clearance."
+      ]
+    }
+  ],
+  "parts": [
+    {
+      "id": "rack",
+      "label": "Six-bottle rack",
+      "quantity": 1,
+      "printRotation": [
+        0,
+        0,
+        0
+      ],
+      "shells": 1,
+      "views": {
+        "top": {
+          "at": "height/2"
+        },
+        "front": {
+          "at": "wall+(bottle_diameter+2*clearance)/2"
+        },
+        "side": {
+          "at": "wall+(bottle_diameter+2*clearance)/2"
+        }
+      },
+      "notes": [
+        "Six through-clear pockets above a continuous floor. The front and side sections cut through bore centers.",
+        "Rack and ring are separate prints; no packed-plate capacity is implied."
+      ]
+    },
+    {
+      "id": "gauge",
+      "label": "Fit-test ring",
+      "quantity": 1,
+      "printRotation": [
+        180,
+        0,
+        0
+      ],
+      "shells": 1,
+      "views": {
+        "top": {
+          "at": "gauge_height/2"
+        },
+        "front": {
+          "at": 0
+        },
+        "side": {
+          "at": 0
+        }
+      },
+      "notes": [
+        "Print this inexpensive ring first. Its bore uses the exact same diameter and polygon resolution as the rack.",
+        "The design is centered on X/Y; the exported STL is rotated and translated into nonnegative bed coordinates."
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "rack-envelope",
+      "kind": "bounds",
+      "label": "Rack envelope matches the declared layout",
+      "part": "rack",
+      "size": [
+        "columns*(bottle_diameter+2*clearance)+(columns+1)*wall",
+        "rows*(bottle_diameter+2*clearance)+(rows+1)*wall",
+        "height"
+      ],
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "tolerance": 0.02
+    },
+    {
+      "id": "rack-bores",
+      "kind": "empty",
+      "label": "Every bottle pocket has the required clear bore",
+      "part": "rack",
+      "region": {
+        "shape": "cylinder",
+        "origin": [
+          "wall+(bottle_diameter+2*clearance)/2",
+          "wall+(bottle_diameter+2*clearance)/2",
+          "floor+0.04"
+        ],
+        "radius": "(bottle_diameter+2*clearance)/2-0.04",
+        "height": "height-floor",
+        "repeat": [
+          {
+            "count": "columns",
+            "step": [
+              "bottle_diameter+2*clearance+wall",
+              0,
+              0
+            ]
+          },
+          {
+            "count": "rows",
+            "step": [
+              0,
+              "bottle_diameter+2*clearance+wall",
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "rack-floor",
+      "kind": "contains",
+      "label": "Continuous rack floor is present",
+      "part": "rack",
+      "region": {
+        "shape": "box",
+        "origin": [
+          0.04,
+          0.04,
+          0.04
+        ],
+        "size": [
+          "columns*(bottle_diameter+2*clearance)+(columns+1)*wall-0.08",
+          "rows*(bottle_diameter+2*clearance)+(rows+1)*wall-0.08",
+          "floor-0.08"
+        ]
+      }
+    },
+    {
+      "id": "gauge-envelope",
+      "kind": "bounds",
+      "label": "Ring dimensions match the chosen fit",
+      "part": "gauge",
+      "size": [
+        "2*((bottle_diameter+2*clearance)/2+wall)",
+        "2*((bottle_diameter+2*clearance)/2+wall)",
+        "gauge_height"
+      ],
+      "origin": [
+        "-((bottle_diameter+2*clearance)/2+wall)",
+        "-((bottle_diameter+2*clearance)/2+wall)",
+        0
+      ],
+      "tolerance": 0.02
+    },
+    {
+      "id": "gauge-bore",
+      "kind": "empty",
+      "label": "The fit ring has an unobstructed bore",
+      "part": "gauge",
+      "region": {
+        "shape": "cylinder",
+        "origin": [
+          0,
+          0,
+          -0.1
+        ],
+        "radius": "(bottle_diameter+2*clearance)/2-0.04",
+        "height": "gauge_height+0.2"
+      }
+    },
+    {
+      "id": "gauge-wall",
+      "kind": "contains",
+      "label": "A radial wall sample retains the specified material",
+      "part": "gauge",
+      "region": {
+        "shape": "box",
+        "origin": [
+          "(bottle_diameter+2*clearance)/2+0.1",
+          -0.1,
+          0.04
+        ],
+        "size": [
+          "wall-0.2",
+          0.2,
+          "gauge_height-0.08"
+        ]
+      }
+    },
+    {
+      "id": "separate-layout",
+      "kind": "separated",
+      "label": "Ring placed beside the rack does not collide",
+      "part": "rack",
+      "other": "gauge",
+      "translation": [
+        "columns*(bottle_diameter+2*clearance)+(columns+1)*wall+(bottle_diameter+2*clearance)/2+wall+5",
+        "(bottle_diameter+2*clearance)/2+wall",
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "process": {
+    "material": "PLA",
+    "bedMM": [
+      220,
+      220,
+      250
+    ],
+    "edgeMarginMM": 5,
+    "nozzleMM": 0.4,
+    "notes": [
+      "Example 220 × 220 × 250 mm printer with 0.4 mm nozzle; confirm your actual machine and material.",
+      "Use the same slicing settings and material for the fit ring and final rack. Neither has been physically printed in this validation."
+    ]
+  },
+  "preview": {
+    "variant": "everyday",
+    "part": "rack"
+  }
+}

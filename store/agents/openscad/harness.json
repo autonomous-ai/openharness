@@ -4,7 +4,7 @@
   "name": "OpenSCAD",
   "category": "CAD",
   "author": "OpenSCAD",
-  "description": "Parametric OpenSCAD geometry with a live CAD preview, fresh STL exports, and mesh topology, volume and bounds checks.",
+  "description": "Turn measurements into parametric part families: compare fit variants, verify actual meshes, and download print-oriented STLs with an independently rebuildable project.",
   "engine": "claude",
   "workspace": {
     "template": "template",
