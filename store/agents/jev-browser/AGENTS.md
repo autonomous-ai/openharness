@@ -1,75 +1,170 @@
 # Jev Browser in OpenHarness
 
-On the left is a small made-up travel site inside a browser window, and **Jev operates it by
-itself**. Jev is TypeSafe's System One model. It never sees the screen. Each step the page is written
-out as text and Jev picks ONE element out of the list, a new list every step. A booking takes a few
-seconds. Every booking is checked against its task.
+**This tool turns a person who cannot write a scraper into someone who can read the web into a
+spreadsheet.** They point it at a page. It opens a real Chrome, walks the real site, and for every
+thing on it writes a row: title, price, date, whoever, whatever they asked for. They leave with
+`results.csv` and a job file they can run again next month.
 
-On the right, you edit `site.json`. This is the ONLY file you edit. The viewer watches it and starts
-again from the first task the moment you save.
+**Jev never writes a value.** For each field it is shown the numbered pieces of text that are really
+on the page, and it picks one. So a cell holds the page's own words, or nothing. Nothing is invented.
 
-## The site file
+On the left is the pane: the live browser, Jev's yes-or-no on every link of the page it is on, and
+the rows as they land. On the right, you. You edit `browse.json`. That one file is the job and the
+recipe. The viewer watches it and reloads on every save.
+
+`$JEV_DSH` below is the harness's own folder. The workspace sets it for you; `echo $JEV_DSH` shows
+it. If it is empty, you are not in a Jev Browser workspace: say so rather than guessing a path.
+
+## Your job, in this order
+
+1. **Find out what they want, and from where.** A start address, what one "thing" is, and the
+   columns they want. If they paste a page, open it yourself first (see "Look before you write the
+   job") so the field asks match the words really on it.
+2. **Write `browse.json`.** Validate with `node "$JEV_DSH/toolchain/check.mjs"`.
+3. **Ask them to press Start.** The pane owns the browser and you do not have its address, so you
+   cannot press it. Then watch `.harness/verdict.json` (see "While it runs").
+4. **Read `results.csv`.** Its columns are `item`, `page title`, `address`, then each of your
+   fields with a confidence column beside it. The address is the page each row came off, so every
+   number can be checked: say that when you report. Derive whatever you like with a script (a sort
+   key out of a sentence, a total, a ranking). Never edit the file, and never retype a value from a
+   page into the chat as if it had been collected.
+5. **Fix what came back thin.** A field found on few pages is usually asked in the wrong words, or
+   it is on the list page and not on the thing's own page. Reword, save, run again.
+6. **Tell them what they have**, in plain words: how many things, what is missing, what to do next.
+   Offer the file. If they want the same thing next month, tell them the job file is the recipe.
+
+## The job file
 
 ```jsonc
 {
-  "title": "Jev Browser",
-  "description": "One line about this run.",
-  "site": "SkyHop",              // the made-up site's name, shown in the tab and the URL
-  "stepMs": 170,                 // one Jev decision per step. 40 to 2000.
-  "distraction": 0.25,           // 0 to 1. Cookie walls, pop-ups, decoys, layout shifts. THE DIAL.
-  "flights": 7,                  // result rows per search. 4 to 9.
-  "maxSteps": 45,                // a task fails if it takes more steps. 12 to 200.
-  "seed": 11,
-  "style": "How Jev should work, in plain words. It is the first line of the text Jev reads.",
-  "tasks": [                     // 1 to 40 bookings, run in order, then again with new flights
-    { "from": "SFO", "to": "JFK", "day": "Friday", "pick": "cheapest", "nonstop": true,
-      "name": "Ada Park", "email": "ada@example.com", "bags": 1 }
-  ]
+  "task": "Every flat for rent in the search results, with rent and address",
+  "start": "https://example.com/search?area=leeds",   // the page to begin on. "demo" is the made-up job board this harness serves itself
+  "item": "a flat for rent",                          // one of the things. Used in every question, so make it concrete
+  "fields": [
+    { "id": "address", "name": "Address", "ask": "the street address" },
+    { "id": "rent",    "name": "Rent",    "ask": "the monthly rent" },
+    { "id": "beds",    "name": "Bedrooms", "ask": "how many bedrooms" },
+    { "id": "garden",  "name": "Garden?", "ask": "Does it have a garden?", "type": "yesno" },
+    { "id": "state",   "name": "Condition", "ask": "what condition it is in", "type": "score",
+      "levels": ["needs work", "liveable", "newly done"] }
+  ],
+  "keep": "only flats that allow pets",   // optional. A yes/no on every thing, written to the file
+  "maxItems": 60,                          // how many things to collect
+  "maxPages": 25,                          // how far down the list to walk (page 2, page 3…)
+  "sameSiteOnly": true,                    // stay on the site the start address is on
+  "alsoVisit": [],                         // other hosts it may reach, if the things live elsewhere
+  "show": true                             // a window the person can watch and take over
 }
 ```
 
-`pick` is `cheapest`, `earliest` or `latest`. `bags` is 0 to 3. Airport codes are up to 4 letters.
-Names and emails are made up. Use `example.com` addresses.
+- **`fields`**: up to 12. `pick` (the default) takes the exact text off the page. `yesno` is Jev's
+  judgement about the thing. `score` puts it on your named scale. Every field gets a confidence
+  column in the spreadsheet.
+- **`item`** goes into the question asked about every link, so "a flat for rent" works and "an item"
+  does not.
 
-## Your job
+## How it walks a site
 
-Write bookings that are fun to watch, then find out where Jev breaks.
+One Jev call per page, and that call holds everything worth asking about it.
 
-- **Write the tasks.** Mix the three `pick` rules, nonstop and not, and different bag counts, so
-  the right flight is a different row each time and the passenger page needs different clicks.
-- **Set the dial.** At `distraction` 0 every booking should come out exactly right in about ten
-  steps. Raise it and clicks start landing in the wrong place because the page moved between
-  reading and clicking. The person can also move the slider in the pane.
-- **Set the pace.** `stepMs` near 170 looks like a fast agent. 800 or more lets a person read each
-  step.
-- **Write the style line.** With a real key, Jev reads it on every step.
-- **Report what you see.** Read `.harness/verdict.json`: bookings done, the share that were exactly
-  right, steps each, and clicks lost to layout shifts. It also lists the most recent wrong bookings
-  and why they were wrong. Say at which distraction the share that is right drops below 9 in 10.
+- **A list page**: what kind of page it is, plus **one yes-or-no for every link on it** ("is
+  *Senior Python Engineer* the title of a job posting, rather than part of the site's menu?"), plus
+  which link is the next page. A page with 120 links is 122 questions in one call, because many
+  questions about one page cost about the same as one.
+- **One thing's page**: what kind of page it is, plus **every field at once**, each a choice over
+  the page's own numbered text. Six fields cost one call.
 
-Do NOT just ship the template. Every run should have its own tasks and a dial you chose on purpose.
+It opens the things it found, then asks for the next list page, until `maxItems` or `maxPages`.
 
-Validate with `node "$JEV_DSH/toolchain/check.mjs"`.
+## Look before you write the job
+
+Open the page yourself and see what the reader sees, so your asks match the page's words:
+
+```sh
+node --input-type=module -e "
+import { openChrome } from '$JEV_DSH/toolchain/chrome.mjs'
+import { readPage } from '$JEV_DSH/viewer/page.mjs'
+const c = await openChrome({ profileDir: '/tmp/jev-look', show: false, allowedHosts: ['example.com'] })
+await c.go('https://example.com/search')
+const p = await readPage(c)
+console.log(p.title); for (const b of p.blocks.slice(0, 30)) console.log('  block', JSON.stringify(b.text))
+for (const l of p.links.slice(0, 30)) console.log('  link ', l.label, '->', l.path)
+await c.close()"
+```
+
+Reading that list:
+
+- **Each distinct piece of text is offered once.** A value that also appears higher up the page is
+  listed at its first appearance, not twice. Search the whole list before you tell anyone a value
+  is missing.
+- **A label and its value are one block**, as `Availability: In stock (19 available)`, with the
+  value on its own as the first part.
+- **`parts` is what a column can take instead of the whole line.** A line splits on ` · `, ` | `,
+  a dash or a bullet, and any number inside it is offered on its own: `In stock (19 available)` has
+  the part `19`, so "how many are in stock" can come back as a number you can sort.
+- If a value really is not in that list, Jev cannot return it: it only picks. Say so, and ask for
+  something that is on the page. Text drawn as a picture, loaded after a click, or shown on hover
+  is not on the page as far as the reader is concerned.
+
+## While it runs
+
+`.harness/verdict.json` is the truth. Read it; do not edit it.
+
+```jsonc
+{ "ready": false,
+  "summary": "24 collected from 26 pages, 34 links judged, 26 calls, $0.0023",
+  "run": { "client": "openrouter",       // "mock" means no key: see "Without a key"
+           "rows": 24, "pages": 26, "linksJudged": 34, "calls": 26, "costUsd": 0.0023,
+           "fields": [ { "name": "Salary", "found": 24, "of": 24, "avgConfidence": 1, "thin": false } ] },
+  "findings": [ { "severity": "warning", "kind": "field", "message": "…" } ] }
+```
+
+- `run.rows` climbing means it is working. Expect about two seconds a thing: the page load, not Jev.
+- `fields[].thin` is the one to act on: it means the column came back on under 60% of the things.
+- A run that ends with no next-page link is a clean finish, not a failure: `ready` goes true.
+- Trouble on a page is a finding, and the run carries on.
+
+## What it will not do, however it is asked
+
+The refusals live in `toolchain/chrome.mjs`, next to the only code that touches the page.
+
+- **It only reads.** It never submits a form and never presses anything that reads like pay, buy,
+  checkout, delete, send, apply or book.
+- **It never types a password, card number or one-time code.** If a site needs a login, the person
+  signs in themselves in the window; the profile is kept in the workspace, so next time it is
+  already signed in.
+- **It stays on the sites the job names**, and only on http and https. Downloads are refused.
+
+Never tell a person you can work around these, and never ask them for a password.
+
+## Being straight about it
+
+- A site may say in its terms that it does not want to be read this way, and some sites charge for
+  an API that gives the same data. Say so once, and let the person decide. Do not go around a
+  block, a login wall, a rate limit or a robots rule.
+- Take what is asked for and no more. `maxItems` is a page load each, so it costs the site more
+  than it costs you: set it to what the person actually needs, not to the maximum.
+- The rows are what the page said on the day it was read. If that matters, say when it was read.
+- `results.csv` holds the person's data. Do not copy it anywhere.
+
+## Without a key
+
+`"client": "mock"` in the verdict means there is no Jev key, and an offline stand-in is answering by
+word-matching. It shows the plumbing; its rows are not worth acting on. Tell them to paste a key
+into the **Jev · live mind** panel in the pane (an OpenRouter key from `openrouter.ai/keys` takes
+about a minute). Never ask them to paste a key into the chat.
 
 ## Rules
 
-- Edit only `site.json`. Keep it valid JSON. A bad edit does not crash the demo. The pane shows the
-  error and keeps running on the last good settings.
-- Never edit `.harness/verdict.json`. The viewer writes it.
-- The viewer is already running in the left pane. Never propose opening a browser, changing ports
-  or running a second server. The "browser" in this harness is a drawing inside the pane. It never
-  loads a real website.
-- You can ask Jev yourself through `toolchain/jev.mjs` (`evaluate`, and the `jev.choice`,
-  `jev.noul`, `jev.score` builders), for example to see which element it picks on one page.
-- Without `TYPESAFE_API_KEY` the harness runs on a deterministic offline stand-in, and the pane
-  says `MOCK`. It is there so the demo runs anywhere. It is not Jev's judgement, so do not describe
-  its results as Jev's.
-- This is a demo. The site, flights, prices and people are made up. Nothing is really booked. Do not
-  present the times as a benchmark of any product.
+- Keep `browse.json` valid JSON. A bad edit keeps the last good job and shows the error.
+- Do not edit `.harness/verdict.json` or `results.csv`. The viewer writes them.
+- Never propose opening a browser yourself, changing ports, or running a second server. The pane
+  owns the browser, and Start, Stop and the address bar are the person's buttons, not yours. The
+  one browser you may open is a read-only look with `openChrome` (below), which touches nothing.
+- Chrome must be on the machine. `toolchain/doctor.sh` says whether it is.
 
 ## Definition of done
 
-- `site.json` parses and passes `toolchain/check.mjs`.
-- The pane runs your tasks without an error banner.
-- You told the person what dial you chose, how many bookings come out exactly right, how many steps
-  they take, and where it starts to fail.
+- `browse.json` passes `toolchain/check.mjs` and names a real start address.
+- The verdict shows a live `client`, rows collected, and no field marked `thin`.
+- You read `results.csv` and told the person what is in it, what is missing, and what it cost.
