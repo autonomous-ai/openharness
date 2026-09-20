@@ -48,5 +48,9 @@ node --test --test-concurrency=1 store/viewers/isolated-web-viewer/test/*.test.m
 node --test --test-concurrency=1 store/tools/browser/*.test.mjs
 ```
 
+## Credit and stewardship
+
 Built for OpenHarness by its contributors, MIT. No third-party packages are required to serve a
-preview; Playwright is separate optional verification tooling.
+preview; Playwright is separate optional verification tooling. See [LICENSE](LICENSE)
+for the wrapper's terms. Wrapper issues belong in OpenHarness; upstream maintainers
+are welcome to discuss stewardship. No upstream endorsement is implied.

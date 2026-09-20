@@ -23,6 +23,11 @@ function tempDir() {
 
 function run(script, { cwd = here, env = {} } = {}) {
   const merged = { ...process.env }
+  delete merged.FREECAD_BIN
+  delete merged.FREECAD_TOOLCHAIN
+  const isolatedPackage = tempDir()
+  mkdirSync(join(isolatedPackage, 'toolchain'))
+  merged.HARNESS_DSH_DIR = isolatedPackage
   for (const [key, value] of Object.entries(env)) if (value === null) delete merged[key]; else merged[key] = value
   const result = spawnSync(join(here, script), { cwd, env: merged, encoding: 'utf8' })
   return { code: result.status, stdout: result.stdout, stderr: result.stderr }
@@ -74,7 +79,7 @@ test('init seeds the first verdict and the initialized marker', () => {
   assert.match(readFileSync(join(workspace, '.harness-initialized'), 'utf8'), new RegExp(manifest.id.replace('/', '/')))
 })
 
-test('build-part.sh exports an artifact and flips the verdict, exactly as SKILL.md writes it', () => {
+test('build-part.sh supports legacy geometry without claiming the design is checked', () => {
   const skill = readFileSync(join(here, 'skills/freecad/SKILL.md'), 'utf8')
   const command = 'sh "$FREECAD_SKILLS/freecad/scripts/build-part.sh"'
   assert.ok(skill.includes(command), 'SKILL.md should document the one-stop build command')
@@ -86,12 +91,13 @@ test('build-part.sh exports an artifact and flips the verdict, exactly as SKILL.
   writeFileSync(join(workspace, 'part.FCMacro'), 'import FreeCAD as App\nimport Part\n')
   const result = spawnSync('/bin/sh', ['-c', command], {
     cwd: workspace,
-    env: { ...process.env, FREECAD_SKILLS: join(here, 'skills'), PATH: `${dir}:${dirname(process.execPath)}:/usr/bin:/bin`, HARNESS_WORKSPACE: workspace },
+    env: { ...process.env, FREECAD_BIN: bin, FREECAD_SKILLS: join(here, 'skills'), PATH: `${dir}:${dirname(process.execPath)}:/usr/bin:/bin`, HARNESS_WORKSPACE: workspace },
     encoding: 'utf8',
   })
   assert.equal(result.status, 0, result.stderr)
   assert.equal(existsSync(join(workspace, 'part.step')), true)
   const verdict = JSON.parse(readFileSync(join(workspace, '.harness/verdict.json'), 'utf8'))
-  assert.equal(verdict.ready, true)
+  assert.equal(verdict.ready, false)
+  assert.match(verdict.summary, /design.json/)
   assert.equal(verdict.artifact, 'part.step')
 })

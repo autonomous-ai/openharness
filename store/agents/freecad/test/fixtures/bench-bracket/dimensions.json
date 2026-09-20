@@ -1,0 +1,10 @@
+{
+  "width": 80,
+  "depth": 40,
+  "height": 45,
+  "thickness": 5,
+  "hole_spacing": 50,
+  "base_bore": 6.4,
+  "back_bore": 4.5,
+  "back_hole_z": 30
+}
