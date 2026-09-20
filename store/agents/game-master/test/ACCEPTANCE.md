@@ -18,7 +18,7 @@ briefs, not customer feedback, installed-agent prompt completions, or proof of f
 - Invalid and nonterminating rules produce a recoverable error. The editor remains usable; a
   repaired module starts a working game again. No hostile-code sandbox claim is made.
 - Setup and doctor use managed Node and pinned local build/browser tools, with no manual runtime
-  installation step. Package/source-conformance and the 416 CLI Store/check tests pass locally.
+  installation step. Package/source-conformance and the 421 CLI Store/check tests pass locally.
 
 ## Three original briefs, six delivered editions
 
@@ -46,6 +46,8 @@ Browser test evidence: `/private/tmp/relay-browser-final/report.json`. Final six
 is under `/private/tmp/relay-acceptance-release/`; final print pages are under `/private/tmp/relay-print-release/`. All 36 pages were reviewed;
 34 stayed pixel-identical after clipping, and the two changed tile sheets were reviewed again. CI repeats package/browser/six-delivery/independent-reader tests.
 Store screenshots are captured from actual games, not mockups.
+The shared browser-runner integration was corrected after CI caught an illegal `continue`;
+its Game Master dispatch and sibling-fetch/storage/module viewer regression then passed.
 
 ## Reproduce
 
