@@ -13,7 +13,7 @@ trials with real user briefs are still outstanding; listing does not claim those
 **Next user direction:** improve the other five sequentially. Creative Direction has now been
 rebuilt and relisted; see [FORME-REBUILD.md](FORME-REBUILD.md) and the
 [sequential plan](FIVE-REBUILDS.md). Voxel Worlds is also rebuilt and published (#146);
-Drone Pilot is published (#151), and Game Master is in progress. The original withdrawal table below
+Drone Pilot is published (#151), and Game Master is published (#153). Lab Bench is in final acceptance. The original withdrawal table below
 is retained as history, not a description of the rebuilt Forme product.
 
 ## Original review of our seven
@@ -29,7 +29,7 @@ is retained as history, not a description of the rebuilt Forme product.
 | Lab Bench | Inspect one synthetic experiment | Cannot do useful analysis on the person's own observations | Withdraw; stop parallel development |
 
 All seven initially received `listed:false`. Art and Music have since been rebuilt and relisted
-for user testing, followed by Creative Direction, Voxel Worlds and Drone Pilot. Game Master and Lab Bench remain unlisted. Source, logos,
+for user testing, followed by Creative Direction, Voxel Worlds, Drone Pilot and Game Master. Lab Bench is a listing candidate pending its tested publication. Source, logos,
 tests and workspaces stay intact.
 The shared web viewer remains available: it is infrastructure used by other harnesses.
 Other sessions' harnesses are outside this withdrawal.

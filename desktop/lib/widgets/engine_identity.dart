@@ -351,7 +351,7 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/lab-bench',
     label: 'Lab Bench',
     category: 'Science',
-    tagline: 'Explore an experiment with reproducible synthetic data',
+    tagline: 'Turn a question into evidence you can act on',
     creator: 'Autonomous',
     color: Color(0xfff2ca7d),
     asset: 'assets/engine-icons/lab-bench.png',
