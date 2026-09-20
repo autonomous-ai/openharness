@@ -1,8 +1,9 @@
 # Store presentation assets
 
 `workshop-overview.svg` presents Coding first, with all fourteen supported agents. The remaining
-cards follow the shared taxonomy in `store/browse-categories.json` and show a selection of the
-listed harnesses. Visible text is limited to category names and logo labels; the README carries
+cards use three columns with larger logos and labels for readability at README width. They follow
+the shared taxonomy in `store/browse-categories.json` and show a selection of the listed harnesses.
+Visible text is limited to category names and logo labels; the README carries
 the explanation and catalog counts. Packages whose `store.json` sets `listed: false` are excluded.
 
 Run `node store/tools/presentation.mjs` from the repository root to regenerate the overview,
