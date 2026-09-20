@@ -29,7 +29,8 @@ const HELP = `builder — build a domain-specific harness in package/
                      lay out package/ so the build shows from the first minute
   check [--json]     the quality bar over package/ (and harness dsh check); writes .builder/check.json
   fresh [--keep]     setup, doctor and init on a simulated new machine; writes .builder/fresh.json
-  proof open <id>    a workspace for the harness with its viewer running (shown live in the Studio)
+  proof open <id> [--from <proof-id>]
+                     a workspace for the harness with its viewer running (shown live in the Studio)
   proof run <id> --prompt "…" [--from <proof-id>] [--engine claude|codex] [--every 15] [--timeout 45]
                      --from continues in a copy of that finished proof's workspace: the revision run,
                      where the agent meets the work already in progress
@@ -198,7 +199,11 @@ async function main() {
       if (!existsSync(join(p.package, 'harness.json'))) fail('no package/harness.json yet')
       if (sub === 'open') {
         // The same engine a run would use, so a workspace opened by hand has its skills where that engine reads them.
-        const opened = await openProof(WORKSPACE, id, { engine: typeof a.engine === 'string' ? a.engine : process.env.BUILDER_PROOF_ENGINE || undefined, reset: Boolean(a.reset) })
+        const opened = await openProof(WORKSPACE, id, {
+          engine: typeof a.engine === 'string' ? a.engine : process.env.BUILDER_PROOF_ENGINE || undefined,
+          reset: Boolean(a.reset) || typeof a.from === 'string',
+          from: typeof a.from === 'string' ? a.from : null,
+        })
         console.log(`workspace: ${opened.workspace}`)
         console.log(opened.viewer.error ? `viewer: ${opened.viewer.error}` : `viewer running (shown in Builder Studio); snapshot with: "$BUILDER" snapshot ${id}`)
         for (const w of opened.materialized.warnings) console.log(`warn ${w}`)
