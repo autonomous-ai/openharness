@@ -62,9 +62,25 @@ test('the verdict counts the fleet and names what needs doing', () => {
     ],
   });
   assert.equal(verdict.summary, '3 machines · 2 online · 12 harnesses');
-  assert.equal(verdict.ready, false);
   assert.equal(verdict.findings.find(f => f.ref === 'b').kind, 'needs_link');
   assert.equal(verdict.findings.find(f => f.ref === 'c').kind, 'offline', 'an offline machine is not a linking job');
+  // A fleet you have not finished linking is not a fleet in trouble: the header stays quiet.
+  assert.ok(verdict.findings.every(finding => finding.severity === 'info'));
+  assert.equal(verdict.ready, true);
+});
+
+test('a machine that should have answered and did not is the one warning', () => {
+  const verdict = verdictFor({
+    status: 'partial', observedAt: '2026-09-20T10:00:00.000Z',
+    summary: { machines: 2, online: 2, harnesses: 4 },
+    machines: [
+      { id: 'a', name: 'Studio', status: 'online', needsLink: false },
+      { id: 'b', name: 'Rack', status: 'online', needsLink: false, error: 'This machine did not answer in time.' },
+    ],
+  });
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.findings.filter(f => f.severity === 'warning').length, 1);
+  assert.match(verdict.findings[0].message, /Rack did not answer/);
 });
 
 test('a fleet with nothing to do is ready', () => {

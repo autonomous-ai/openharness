@@ -103,3 +103,7 @@ mean "this computer is not mine / not in use any more".
 
 Every operation you run is recorded in this workspace and appears in the pane's Recent list, so the
 person can see what changed without asking you to repeat it.
+
+The header above the pane answers one question — is what you are looking at true? A machine that is
+offline or not yet linked is a state it reports quietly; only a machine that should have answered
+and did not is a warning there. Do not read "ready" as "the fleet is perfect".

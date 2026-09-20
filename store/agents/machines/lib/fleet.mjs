@@ -96,9 +96,12 @@ export async function operations(workspace) {
 /**
  * The pane header's line, written from the same snapshot the map draws.
  *
- * `ready` is one machine fact and not a mood: every machine on the account is online and reachable
- * from here. A machine that needs linking, or one that is offline, is a finding with the machine's
- * name in it, because that is the thing a person can act on.
+ * The header answers ONE question: is what you are looking at true? So `ready` means the fleet was
+ * read, and a severity is about the READING, not about the fleet's shape. A machine that is offline,
+ * or that you have never linked, is a state the map already draws plainly — making it a warning put
+ * a yellow triangle on a healthy fleet and left it there forever, which is how a header stops being
+ * read at all. Those are `info`. A warning is a machine that should have answered and did not; an
+ * error is a fleet that could not be read at all.
  */
 export function verdictFor(snapshot) {
   const machines = snapshot?.machines ?? [];
@@ -113,8 +116,8 @@ export function verdictFor(snapshot) {
     // Offline first: a machine that is not on cannot be linked either, and saying "link required"
     // about a computer that is switched off points the person at the wrong problem.
     if (machine.status === 'offline') findings.push({ severity: 'info', kind: 'offline', message: `${machine.name} is offline.`, ref: machine.id });
-    else if (machine.needsLink) findings.push({ severity: 'warning', kind: 'needs_link', message: `${machine.name} is not linked from this computer, so its harnesses cannot be read.`, ref: machine.id });
-    else if (machine.error) findings.push({ severity: 'warning', kind: 'unreadable', message: `${machine.name}: ${machine.error}`, ref: machine.id });
+    else if (machine.needsLink) findings.push({ severity: 'info', kind: 'needs_link', message: `${machine.name} is not linked from this computer yet, so its harnesses cannot be read.`, ref: machine.id });
+    else if (machine.error) findings.push({ severity: 'warning', kind: 'unreadable', message: `${machine.name} did not answer: ${machine.error}`, ref: machine.id });
   }
   const counted = [
     `${summary.machines ?? machines.length} ${(summary.machines ?? machines.length) === 1 ? 'machine' : 'machines'}`,
