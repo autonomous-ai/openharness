@@ -8,7 +8,7 @@ import { connect } from 'node:net'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { normalizeJob, listQuestions, itemQuestions, rowFrom, pickLinks, LIMITS } from '../viewer/crawl.mjs'
-import { readPage, blockOptions, blockText, canonical, pageState } from '../viewer/page.mjs'
+import { readPage, blockOptions, blockText, canonical, pageState, wallReason, findSearchBox } from '../viewer/page.mjs'
 import { openChrome, findChrome, checkUrl, Refused } from '../toolchain/chrome.mjs'
 import { startDemoSite } from '../viewer/demosite.mjs'
 import { startBrowserViewer } from '../viewer/viewer.mjs'
@@ -268,4 +268,100 @@ test('a label keeps its value, and a number in a sentence is offered on its own'
     // A choice takes at most 255 options, and parts push the count up.
     assert.ok(Object.keys(blockOptions(again)).length <= 250)
   } finally { await chrome.close(); await site.close() }
+})
+
+test('the pane takes the job itself, writes browse.json, and starts', { skip: noChrome }, async () => {
+  // Dee's screenshot: the pane said "Press Start" and showed nothing while something else thought.
+  // A job set in the pane, or written by the agent, now runs without anyone pressing anything.
+  process.env.JEV_OFFLINE = '1'
+  const site = await startDemoSite()
+  const ws = mkdtempSync(join(tmpdir(), 'jev-browser-front-'))
+  writeFileSync(join(ws, 'browse.json'), '{}\n')
+  const v = await startBrowserViewer({ workspace: ws, port: 0 })
+  const ctl = async (cmd, body = {}) => (await fetch(`${v.url}/control`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cmd, ...body }) })).json()
+  const state = async () => (await fetch(`${v.url}/state`)).json()
+  const until = async (pred, ms = 40000) => { const end = Date.now() + ms; for (;;) { const s = await state(); if (pred(s)) return s; if (Date.now() > end) assert.fail(`timed out: ${s.phase} ${s.rows.length} rows`); await new Promise((r) => setTimeout(r, 120)) } }
+  try {
+    assert.equal((await state()).fields.length, 0, 'it opens with no job')
+    const set = await ctl('setJob', { start: site.url, item: 'a job posting', columns: 'the job title\nthe pay or salary range\nCan it be done remotely?', maxItems: 3 })
+    assert.equal(set.ok, true)
+    assert.equal(set.fields, 3)
+    // the form's words become the job file, and a question becomes a yes/no column
+    const written = JSON.parse(readFileSync(join(ws, 'browse.json'), 'utf8'))
+    assert.equal(written.start, site.url)
+    assert.deepEqual(written.fields.map((x) => x.type ?? 'pick'), ['pick', 'pick', 'yesno'])
+    // nobody pressed Start
+    await until((s) => s.phase === 'running' || s.rows.length > 0)
+    const done = await until((s) => s.phase === 'done')
+    assert.equal(done.rows.length, 3)
+    assert.equal(readFileSync(join(ws, 'results.csv'), 'utf8').trim().split('\n').length, 4)
+    // a job that only changes its budget does not start all over again
+    const calls = done.progress.calls
+    await ctl('setJob', { start: site.url, item: 'a job posting', columns: 'the job title\nthe pay or salary range\nCan it be done remotely?', maxItems: 3 })
+    await new Promise((r) => setTimeout(r, 1200))
+    assert.equal((await state()).progress.calls, calls, 'the same job is not run twice')
+    // "autoStart": false gives the button back
+    writeFileSync(join(ws, 'browse.json'), JSON.stringify({ ...written, item: 'a role', autoStart: false }))
+    await new Promise((r) => setTimeout(r, 1200))
+    assert.equal((await state()).phase, 'done', 'it waits to be told')
+  } finally { await v.close(); await site.close(); delete process.env.JEV_OFFLINE }
+})
+
+test('a search box is the one control it may work, and only a search box', { skip: noChrome }, async () => {
+  const site = await startDemoSite()
+  const chrome = await browser()
+  try {
+    await chrome.go(new URL('/login', site.url).toString())
+    const page = await readPage(chrome)
+    // The site keeps a search box in its header, so it is found even here. What matters is that it
+    // is the search box that is found, and never the email or the password beside it.
+    const onLogin = findSearchBox(page)
+    assert.equal(onLogin?.type, 'search')
+    assert.notEqual(onLogin.name, 'email')
+    const email = page.controls.find((c) => (c.label || '').toLowerCase().includes('email'))
+    await assert.rejects(() => chrome.search(email.css, 'anything'), /does not look like a search box/)
+    const password = page.controls.find((c) => c.type === 'password')
+    await assert.rejects(() => chrome.search(password.css, 'anything'), Refused)
+    const button = page.controls.find((c) => c.tag === 'button')
+    await assert.rejects(() => chrome.search(button.css, 'anything'), /only ever types into a search box/)
+    // and typing in it really searches the site
+    await chrome.go(site.url)
+    const list = await readPage(chrome)
+    const box = findSearchBox(list)
+    assert.ok(box, 'the search box is found on the list page')
+    const after = await chrome.search(box.css, 'python')
+    assert.match(after.url, /q=python/, 'the words were searched for')
+    const results = await readPage(chrome)
+    assert.match(results.title + results.text, /python/i)
+    assert.ok(results.links.some((l) => /\/job\/\d+/.test(l.path)), 'the results are still a list of things')
+  } finally { await chrome.close(); await site.close() }
+})
+
+test('a site that serves a wall is named, not silently collected from', { skip: noChrome }, async () => {
+  const walls = [
+    { title: 'Sorry! Something went wrong!', text: 'Sorry! Something went wrong on our end.', links: [], blocks: [] },
+    { title: 'Robot Check', text: 'Enter the characters you see below. Are you a robot?', links: [1, 2], blocks: [1] },
+    { title: 'Just a moment', text: 'Checking your browser before accessing the site.', links: [], blocks: [] },
+  ]
+  for (const w of walls) assert.ok(wallReason(w), w.title)
+  assert.equal(wallReason({ title: 'Open roles', text: 'x'.repeat(400), links: [1, 2, 3, 4], blocks: [1, 2, 3, 4, 5] }), null, 'a real page is not a wall')
+
+  // end to end: a site that answers every address with a block page
+  process.env.JEV_OFFLINE = '1'
+  const { createServer } = await import('node:http')
+  const blocker = createServer((_req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html><head><title>Sorry! Something went wrong!</title></head><body><h1>Sorry! Something went wrong!</h1></body></html>') })
+  await new Promise((r) => blocker.listen(0, '127.0.0.1', r))
+  const ws = mkdtempSync(join(tmpdir(), 'jev-browser-wall-'))
+  writeFileSync(join(ws, 'browse.json'), JSON.stringify({ start: `http://127.0.0.1:${blocker.address().port}/list`, item: 'a product', fields: ['the name'], autoStart: false }))
+  const v = await startBrowserViewer({ workspace: ws, port: 0 })
+  try {
+    await (await fetch(`${v.url}/control`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"cmd":"run"}' })).json()
+    const s = await (await fetch(`${v.url}/state`)).json()
+    assert.equal(s.rows.length, 0)
+    assert.match(s.walled, /block page/)
+    const verdict = JSON.parse(readFileSync(join(ws, '.harness/verdict.json'), 'utf8'))
+    assert.equal(verdict.ready, false)
+    assert.ok(verdict.findings.some((f) => f.kind === 'walled' && /refusing an automated browser|block page/.test(f.message)))
+    assert.match(verdict.run.walled, /block page/)
+  } finally { await v.close(); blocker.close(); delete process.env.JEV_OFFLINE }
 })
