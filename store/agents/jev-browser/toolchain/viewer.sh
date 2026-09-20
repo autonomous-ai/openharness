@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the Jev Browser viewer (Jev operates a made-up travel site, one picked element per step).
+# Launch the Jev Browser viewer (a real Chrome, driven by Jev, reading pages into results.csv).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 HARNESS_DSH_DIR="${HARNESS_DSH_DIR:-$PWD}"

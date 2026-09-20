@@ -1,175 +1,197 @@
-// Jev Browser pane. The server sends one frame per step: the action Jev just chose (with the full
-// probability over the elements it could have chosen) and the page as it is now. This file plays
-// that as: rings on the old page showing Jev's mind -> the cursor flies to the chosen spot -> a click
-// ripple (red when a layout shift made it land somewhere else) -> the new page.
-'use strict'
-
+// studio.js — the Jev Browser pane: the live browser, what Jev decided about every link on the
+// page, and the rows as they land. Everything comes from the viewer over SSE; the pane asks for
+// nothing the desktop web view cannot give it.
 const $ = (id) => document.getElementById(id)
-const page = $('page'), viewport = $('viewport'), cursor = $('cursor'), stamp = $('stamp')
-const PAGE_W = 1000, PAGE_H = 620
-let scale = 1, showMind = true, paused = false
-let cur = { x: 500, y: 320 }, anim = null, pending = null
-let lastTaskKey = '', costAtTaskStart = 0, costNow = 0, lastFeedLen = -1
-const nodes = new Map() // element id -> DOM node
+const h = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n }
+const fmtN = (n) => Number(n || 0).toLocaleString('en-US')
+const fmtCost = (v) => (v <= 0 ? '$0' : v < 0.01 ? `$${v.toFixed(5)}` : `$${v.toFixed(4)}`)
+const pct = (p) => `${Math.round(p * 100)}%`
 
-function fit() {
-  const r = viewport.getBoundingClientRect()
-  scale = Math.min(r.width / PAGE_W, r.height / PAGE_H)
-  page.style.transform = `scale(${scale})`
-  page.style.left = Math.max(0, (r.width - PAGE_W * scale) / 2) + 'px'
-  placeCursor()
+let S = null, shownRows = 0, toastTimer = null
+const tw = { rows: { v: 0, t: 0 }, pages: { v: 0, t: 0 }, links: { v: 0, t: 0 }, rate: { v: 0, t: 0 }, cost: { v: 0, t: 0 } }
+
+async function post(cmd, body = {}) {
+  try {
+    const r = await fetch('/control', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cmd, ...body }) })
+    return await r.json()
+  } catch { return { ok: false, error: 'the viewer is restarting' } }
 }
-new ResizeObserver(fit).observe(viewport)
-const placeCursor = () => { const off = parseFloat(page.style.left) || 0; cursor.style.transform = `translate(${off + cur.x * scale - 3}px, ${cur.y * scale - 2}px)` }
+function toast(msg, bad) {
+  const t = $('toast')
+  t.textContent = msg; t.className = 'toast' + (bad ? ' bad' : '')
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), bad ? 7000 : 4000)
+}
 
-// ---------------------------------------------------------------- the page
-function renderPage(f) {
-  const seen = new Set()
-  for (const e of f.els) {
-    seen.add(e.id)
-    let n = nodes.get(e.id)
-    if (!n) {
-      n = document.createElement('div'); n.dataset.id = e.id; nodes.set(e.id, n); page.appendChild(n)
-      n.classList.add('pop')
-      n.addEventListener('click', () => { if (n.classList.contains('act')) post({ cmd: 'click', id: e.id }) })
-    }
-    const isOn = e.value === 'on'
-    n.className = ['el', e.role, e.act ? 'act' : '', e.tone ? 't-' + e.tone : '', e.disabled ? 'disabled' : '', e.blocked ? 'blocked' : '', e.overlay ? 'overlay-el' : '', isOn ? 'is-on' : '', e.role === 'input' && e.value ? 'filled' : '', f.shake === e.id ? 'shake' : '', n.classList.contains('pop') ? 'pop' : ''].filter(Boolean).join(' ')
-    const [x, y, w, h] = e.rect
-    n.style.left = x + 'px'; n.style.top = y + 'px'; n.style.width = w + 'px'; n.style.height = h + 'px'
-    if (e.role === 'input') { n.dataset.label = e.label; if (n.dataset.typing !== '1') n.textContent = e.value || '' }
-    else if (e.role === 'toggle') n.textContent = (isOn ? '☑ ' : '☐ ') + e.label
-    else n.textContent = e.label
-    n.title = e.act ? `${e.id} — click it yourself` : ''
+// ---- the job -------------------------------------------------------------------------------------
+function renderJob() {
+  const box = $('jobBody')
+  box.textContent = ''
+  box.append(h('div', 'job-task', S.task))
+  const start = h('div', 'job-line')
+  start.append(h('b', '', 'starts at '), h('span', 'mono', S.demoUrl && S.start === S.demoUrl ? 'a made-up job board on this machine' : S.start || 'nowhere yet'))
+  box.append(start)
+  const item = h('div', 'job-line')
+  item.append(h('b', '', 'collects '), h('span', '', S.item))
+  box.append(item)
+  const fields = h('div', 'job-fields')
+  for (const f of S.fields) {
+    const chip = h('span', 'job-field')
+    chip.append(h('b', '', f.name), h('i', '', f.type === 'yesno' ? 'yes / no' : f.type === 'score' ? 'scale' : 'off the page'))
+    chip.title = f.ask
+    fields.append(chip)
   }
-  for (const [id, n] of nodes) if (!seen.has(id)) { n.remove(); nodes.delete(id) }
-  setTimeout(() => { for (const n of nodes.values()) n.classList.remove('pop') }, 240)
+  box.append(fields)
+  if (S.keep) box.append(h('div', 'job-line keep', `keeps only: ${S.keep}`))
+  box.append(h('div', 'job-line dim', `at most ${fmtN(S.maxItems)} things from ${fmtN(S.maxPages)} pages`))
 }
 
-function clearRings() { for (const r of page.querySelectorAll('.ring')) r.remove() }
-function drawRings(f) {
-  clearRings()
-  if (!showMind || !f.last?.probs) return
-  const top = Object.entries(f.last.probs).sort((a, b) => b[1] - a[1]).slice(0, 4)
-  top.forEach(([id, p], i) => {
-    const n = nodes.get(id); if (!n || p < 0.03) return
-    const r = document.createElement('div'); r.className = 'ring' + (i === 0 ? ' top' : '')
-    r.style.left = parseFloat(n.style.left) - 4 + 'px'; r.style.top = parseFloat(n.style.top) - 4 + 'px'
-    r.style.width = parseFloat(n.style.width) + 8 + 'px'; r.style.height = parseFloat(n.style.height) + 8 + 'px'
-    r.style.opacity = String(0.35 + 0.65 * Math.min(1, p * 1.4))
-    const b = document.createElement('b'); b.textContent = p >= 0.995 ? '1.00' : p.toFixed(2).replace(/^0/, ''); r.appendChild(b)
-    page.appendChild(r)
-  })
+// ---- the results table -----------------------------------------------------------------------------
+function renderHead() {
+  const tr = $('resultsHead')
+  tr.textContent = ''
+  tr.append(h('th', 'n', '#'))
+  for (const f of S.fields) tr.append(h('th', '', f.name))
+  if (S.keep) tr.append(h('th', '', 'matches'))
+  tr.append(h('th', 'addr', 'page'))
 }
-
-function ripple(x, y, miss, note) {
-  const r = document.createElement('div'); r.className = 'ripple' + (miss ? ' miss' : ''); r.style.left = x + 'px'; r.style.top = y + 'px'
-  page.appendChild(r); setTimeout(() => r.remove(), 480)
-  if (note) { const s = document.createElement('div'); s.className = 'shiftnote'; s.textContent = note; s.style.left = Math.min(PAGE_W - 220, x + 14) + 'px'; s.style.top = Math.max(8, y - 30) + 'px'; page.appendChild(s); setTimeout(() => s.remove(), 920) }
+function cellFor(row, f) {
+  const td = h('td')
+  const v = row.fields[f.id] ?? ''
+  const c = row.confidence[f.id] ?? 0
+  if (!v) { td.append(h('span', 'missing', 'not on the page')); return td }
+  td.append(h('span', 'val', v))
+  const bar = h('i', 'conf')
+  bar.style.setProperty('--p', `${Math.round(c * 100)}%`)
+  bar.title = `Jev's confidence: ${pct(c)}`
+  if (c < 0.65) td.classList.add('unsure')
+  td.append(bar)
+  return td
 }
-
-function typeInto(id, text, ms) {
-  const n = nodes.get(id); if (!n || !text) return
-  n.dataset.typing = '1'; n.textContent = ''
-  const t0 = performance.now()
-  const tick = () => { const k = Math.min(text.length, Math.ceil(((performance.now() - t0) / ms) * text.length)); n.textContent = text.slice(0, k); if (k < text.length) requestAnimationFrame(tick); else n.dataset.typing = '0' }
-  tick()
-}
-
-// ---------------------------------------------------------------- one frame = one played step
-function play(f) {
-  const a = f.lastAction
-  const isNewStep = a && (!play.lastStep || a.step !== play.lastStep || f.task.goal !== play.lastGoal)
-  play.lastStep = a?.step; play.lastGoal = f.task.goal
-  if (!isNewStep) { if (!anim) { clearRings(); renderPage(f) } return }
-  // 1. rings on the page Jev read, 2. fly, 3. click, 4. show the page as it is now
-  drawRings(f)
-  const dwell = paused ? 900 : 0 // stepping by hand: time to read Jev's mind on the page it read
-  const from = { ...cur }, to = { x: a.x, y: a.y }, dur = Math.max(50, Math.min(150, f.stepMs * 0.55)), t0 = performance.now() + dwell
-  if (anim) cancelAnimationFrame(anim)
-  const stepAnim = (now) => {
-    if (now < t0) { anim = requestAnimationFrame(stepAnim); return }
-    const k = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - k, 3)
-    cur = { x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e - Math.sin(k * Math.PI) * Math.min(40, Math.hypot(to.x - from.x, to.y - from.y) * 0.12) }
-    placeCursor()
-    if (k < 1) { anim = requestAnimationFrame(stepAnim); return }
-    anim = null
-    const miss = !!a.shift && a.landed !== a.id
-    ripple(a.x, a.y, miss || /disabled|blocked|no such/.test(a.note || ''), a.shift ? (miss ? `layout shifted: ${a.shift}` : a.shift) : '')
-    clearRings()
-    renderPage(f)
-    if (a.typed) typeInto(a.landed, a.typed, Math.max(40, f.stepMs * 0.35))
+function renderRows() {
+  const body = $('resultsBody')
+  if (shownRows > S.rows.length) { body.textContent = ''; shownRows = 0 }
+  for (let i = shownRows; i < S.rows.length; i++) {
+    const row = S.rows[i]
+    const tr = h('tr', 'land')
+    tr.append(h('td', 'n', String(row.n)))
+    for (const f of S.fields) tr.append(cellFor(row, f))
+    if (S.keep) { const td = h('td'); td.append(h('span', row.keep ? 'yes' : 'no', row.keep ? 'yes' : 'no')); tr.append(td) }
+    const a = h('a', '', row.title || row.url)
+    a.href = row.url; a.target = '_blank'; a.rel = 'noreferrer'; a.title = row.url
+    const td = h('td', 'addr'); td.append(a); tr.append(td)
+    body.append(tr)
+    setTimeout(() => tr.classList.remove('land'), 40)
   }
-  anim = requestAnimationFrame(stepAnim)
+  shownRows = S.rows.length
+  $('resultsNote').textContent = S.rows.length ? `${fmtN(S.rows.length)} so far · saved to ${S.resultsFile} as they land` : 'nothing yet'
 }
 
-// ---------------------------------------------------------------- everything around the page
-const fmtMoney = (v) => v <= 0 ? '$0' : v < 0.0001 ? '<$.0001' : v < 1 ? '$' + v.toFixed(4).replace(/^0/, '') : '$' + v.toFixed(2)
-const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
-
-function paintGoal(f) {
-  const g = esc(f.task.goal).replace(/\b(cheapest|earliest|latest|nonstop)\b/g, '<b>$1</b>').replace(/from (\S+) to (\S+) on (\S+)/, 'from <b>$1</b> to <b>$2</b> on <b>$3</b>')
-  $('goal').innerHTML = g
-  $('taskNo').textContent = `TASK ${f.task.index + 1}/${f.task.count}`
-}
-function paintStateText(f) {
-  const pick = f.last?.choice
-  $('stateText').innerHTML = (f.stateText || '').split('\n').slice(1).map((l) => {
-    const e = esc(l)
-    if (/^(TASK|PAGE|OVERLAY|PAGE TEXT|ELEMENTS|RECENT)/.test(l)) return e.replace(/^([A-Z ]+)/, '<span class="k">$1</span>').replace(/(a (cookie banner|pop-up) covers.*)/, '<span class="warn">$1</span>')
-    if (pick && l.startsWith(`  ${pick}  `)) return `<span class="pick">${e}</span>`
-    return e
-  }).join('\n')
-}
-function paintFeed(f) {
-  const rs = f.session.results
-  if (f.session.tasks === lastFeedLen) return
-  lastFeedLen = f.session.tasks
-  $('feed').innerHTML = rs.slice().reverse().map((r) => `<li class="${r.ok ? 'ok' : 'bad'}"><i>${r.ok ? '✓' : '✗'}</i><span><b>${(r.wallMs / 1000).toFixed(1)} s · ${r.steps} steps</b> · ${esc(r.ok ? r.goal.replace(/^Book the /, '').replace(/ for .*/, '') : r.why)}</span></li>`).join('') || '<li><i></i><span>The first booking is under way.</span></li>'
+// ---- Jev on the links --------------------------------------------------------------------------------
+function renderLinks() {
+  const box = $('linkList')
+  box.textContent = ''
+  if (!S.links.length) { box.append(h('div', 'dim small', 'Nothing judged yet.')); return }
+  const yes = S.links.filter((l) => l.p >= 0.5).length
+  $('linkNote').textContent = `${fmtN(S.links.length)} shown · ${fmtN(yes)} are items`
+  for (const l of S.links) {
+    const row = h('div', 'link-row' + (l.p >= 0.5 ? ' on' : ''))
+    const bar = h('i', 'link-bar')
+    bar.style.width = `${Math.max(2, Math.round(l.p * 100))}%`
+    row.append(bar, h('span', 'link-label', l.label), h('span', 'link-p', pct(l.p)))
+    row.title = l.label
+    box.append(row)
+  }
 }
 
-function onFrame(f) {
-  paused = !f.running
-  const key = `${f.task.round}:${f.task.index}:${f.task.goal}`
-  if (key !== lastTaskKey) { lastTaskKey = key; costAtTaskStart = costNow; stamp.classList.add('hidden'); play.lastStep = null }
-  play(f)
-  paintGoal(f); paintStateText(f); paintFeed(f)
-  $('title').textContent = f.title
-  $('tabTitle').textContent = `${f.site} · ${f.page}`
-  $('url').textContent = f.url
-  $('m-time').textContent = (f.wallMs / 1000).toFixed(1); $('m-steps').textContent = f.steps; $('m-cost').textContent = fmtMoney(Math.max(0, costNow - costAtTaskStart))
-  $('m-note').textContent = f.lastAction?.note && !/you clicked$/.test(f.lastAction.note) ? f.lastAction.note : ''
-  const s = f.session
-  $('s-tasks').textContent = s.tasks; $('s-ok').textContent = s.tasks ? Math.round((s.ok / s.tasks) * 100) + '%' : '—'
-  $('s-steps').textContent = s.tasks ? (s.steps / s.tasks).toFixed(1) : '—'; $('s-secs').textContent = s.tasks ? (s.wallMs / s.tasks / 1000).toFixed(1) : '—'
-  $('s-mis').textContent = s.misclicks + f.misclicks
-  $('pause').textContent = f.running ? 'Pause' : 'Resume'
-  if (document.activeElement !== $('distraction')) { $('distraction').value = f.distraction; $('distractionVal').textContent = Number(f.distraction).toFixed(2) }
-  if (document.activeElement !== $('stepMs')) { $('stepMs').value = f.stepMs; $('stepMsVal').textContent = f.stepMs }
-  const problem = f.cfgError || f.error
-  $('cfgError').classList.toggle('hidden', !problem); $('cfgError').textContent = problem ? `site.json: ${problem} — still running on the last good settings.` : ''
-  if (f.status === 'done' && f.result) {
-    stamp.className = 'stamp ' + (f.result.ok ? 'ok' : 'bad')
-    stamp.innerHTML = `<h2>${f.result.ok ? 'Booked. Exactly right.' : 'Wrong booking'}</h2><div class="nums">${(f.wallMs / 1000).toFixed(1)} s · ${f.steps} steps · ${fmtMoney(Math.max(0, costNow - costAtTaskStart))}</div><p>${esc(f.result.why)}</p>`
-  } else stamp.classList.add('hidden')
+// ---- the feed ----------------------------------------------------------------------------------------
+function renderFeed() {
+  const box = $('feed')
+  box.textContent = ''
+  for (const e of S.feed.slice(0, 18)) {
+    const row = h('div', `feed-row ${e.kind}`)
+    row.append(h('span', 'feed-dot'), h('span', 'feed-text', e.text))
+    box.append(row)
+  }
+  if (!S.feed.length) box.append(h('div', 'dim small', 'Press Start.'))
 }
 
-const post = (body) => fetch('/control', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {})
-$('pause').onclick = () => post({ cmd: paused ? 'start' : 'pause' })
-$('step').onclick = () => post({ cmd: 'tick' })
-$('reset').onclick = () => post({ cmd: 'reset' })
-$('popup').onclick = () => post({ cmd: 'popup' })
-$('nextTask').onclick = () => { const m = /(\d+)\/(\d+)/.exec($('taskNo').textContent); post({ cmd: 'task', index: m ? Number(m[1]) % Number(m[2]) : 0 }) }
-$('heat').onclick = () => { showMind = !showMind; $('heat').classList.toggle('on', showMind); if (!showMind) clearRings() }
-$('distraction').oninput = (e) => { $('distractionVal').textContent = Number(e.target.value).toFixed(2); post({ cmd: 'set', key: 'distraction', value: Number(e.target.value) }) }
-$('stepMs').oninput = (e) => { $('stepMsVal').textContent = e.target.value; post({ cmd: 'set', key: 'stepMs', value: Number(e.target.value) }) }
-
-async function pollJev() {
-  try { const s = await (await fetch('/jev', { cache: 'no-store' })).json(); costNow = s.costUsd; $('s-rate').textContent = s.callsPerSec.toFixed(1); $('s-cost').textContent = fmtMoney(s.costUsd) } catch { /* restarting */ }
-  setTimeout(pollJev, 400)
+// ---- the top bar and the state -------------------------------------------------------------------------
+function renderTop() {
+  const p = S.progress
+  tw.rows.t = p.rows; tw.pages.t = p.pages; tw.links.t = p.links; tw.rate.t = p.perSec; tw.cost.t = p.costUsd
+  $('phasePill').textContent = S.phase === 'running' ? 'browsing' : S.phase
+  $('phasePill').className = 'pill ' + (S.phase === 'running' ? 'ok' : S.phase === 'done' ? 'ok' : S.phase === 'stopped' ? 'warn' : '')
+  $('startBtn').classList.toggle('hidden', S.phase === 'running')
+  $('stopBtn').classList.toggle('hidden', S.phase !== 'running')
+  $('rateStat').classList.toggle('hot', S.phase === 'running')
+}
+function applyState(s) {
+  const first = !S
+  const sameFields = S && S.fields.length === s.fields.length && S.fields.every((f, i) => f.id === s.fields[i].id && f.name === s.fields[i].name)
+  S = s
+  $('taskLine').textContent = s.task
+  $('cfgError').classList.toggle('hidden', !(s.error || s.jevError))
+  $('cfgError').textContent = s.error || (s.jevError ? `Jev: ${s.jevError}` : '')
+  if (!sameFields) { renderHead(); shownRows = 0; $('resultsBody').textContent = '' }
+  renderJob(); renderRows(); renderLinks(); renderFeed(); renderTop()
+  const idle = !s.here.url && !s.rows.length
+  $('screenIdle').classList.toggle('hidden', !idle)
+  $('chromeNote').textContent = !s.chrome.found
+    ? 'Google Chrome was not found on this machine. Install it, or set CHROME_PATH to where it is.'
+    : s.client === 'mock' ? 'No Jev key yet, so an offline stand-in will answer. It only matches words: good enough to watch, not good enough to act on. Paste a key in the panel on the right.' : ''
+  $('chromeNote').className = 'screen-note' + (!s.chrome.found ? ' bad' : s.client === 'mock' ? ' warn' : '')
+  if (document.activeElement !== $('urlInput')) $('urlInput').value = s.here.url || ''
+  $('urlInput').placeholder = s.chrome.open ? 'where the browser is' : 'the browser is not open yet'
+  if (first) $('screen').classList.toggle('hidden', true)
 }
 
-fit()
+// ---- tweened numbers and the frame loop -------------------------------------------------------------------
+function step() {
+  for (const [id, t] of Object.entries(tw)) {
+    if (Math.abs(t.t - t.v) < 0.001) { t.v = t.t } else t.v += (t.t - t.v) * 0.18
+  }
+  $('sRows').textContent = fmtN(Math.round(tw.rows.v))
+  $('sPages').textContent = fmtN(Math.round(tw.pages.v))
+  $('sLinks').textContent = fmtN(Math.round(tw.links.v))
+  $('sRate').textContent = tw.rate.v >= 10 ? Math.round(tw.rate.v) : tw.rate.v.toFixed(1)
+  $('sCost').textContent = fmtCost(tw.cost.v)
+  requestAnimationFrame(step)
+}
+
+// ---- controls ---------------------------------------------------------------------------------------------
+$('startBtn').addEventListener('click', async () => {
+  $('startBtn').disabled = true
+  const r = await post('start')
+  $('startBtn').disabled = false
+  if (r.ok === false) toast(r.error || 'it could not start', true)
+})
+$('stopBtn').addEventListener('click', () => post('stop'))
+$('resetBtn').addEventListener('click', () => post('reset'))
+$('downloadBtn').addEventListener('click', async () => {
+  await post('export')
+  const a = document.createElement('a'); a.href = '/download/results.csv'; a.download = 'results.csv'
+  document.body.append(a); a.click(); a.remove()
+  toast('results.csv is also in this project folder.')
+})
+async function go() {
+  const url = $('urlInput').value.trim()
+  if (!url) return
+  const r = await post('openHere', { url })
+  if (r.ok === false) toast(r.error, true)
+}
+$('goBtn').addEventListener('click', go)
+$('urlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go() } })
+
+// ---- the stream ----------------------------------------------------------------------------------------------
 const es = new EventSource('/events')
-es.addEventListener('state', (e) => onFrame(JSON.parse(e.data)))
-pollJev()
+es.addEventListener('state', (e) => applyState(JSON.parse(e.data)))
+es.addEventListener('view', (e) => applyState(JSON.parse(e.data)))
+es.addEventListener('shot', (e) => {
+  const s = JSON.parse(e.data)
+  const img = $('screen')
+  img.src = `data:image/jpeg;base64,${s.jpegBase64}`
+  img.classList.remove('hidden')
+  $('screenIdle').classList.add('hidden')
+})
+window.addEventListener('jev-connected', () => toast('Connected. The next page is read by the real model.'))
+requestAnimationFrame(step)

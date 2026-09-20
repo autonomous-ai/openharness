@@ -1,198 +1,276 @@
-// Jev Browser viewer — a loopback server where Jev operates a web browser, live.
-// The site is a small made-up travel shop. At every step the page is written out as text (the task,
-// the page, every element that can be acted on) and Jev (TypeSafe's System One model) picks ONE
-// element out of the list, a new action space every step, plus two yes/no reads, all in one call.
-// A booking takes a few seconds. The honest dial is `distraction`: cookie walls, pop-ups, decoys and
-// layout shifts that land between reading the page and clicking it.
+// viewer.mjs — the Jev Browser viewer server.
 //
-// The chat agent edits site.json (the tasks, the distraction, the pace). The pane lets a person
-// click the page themselves, throw a pop-up at Jev, and move the dials.
-//
-// Harness env: HARNESS_VIEWER_PORT, HARNESS_WORKSPACE. Workspace holds site.json (watched live).
-
-import { join, resolve, dirname } from 'node:path'
+// It owns a real Chrome, reads `browse.json`, and walks real web pages: one Jev call per page,
+// which judges every link on it and pulls every field at once. Rows land in `results.csv`.
+// `browse.json` is also the recipe: run it again tomorrow and you get today's answer again.
+import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { evaluate, jev } from '../toolchain/jev.mjs'
-import { serveViewer, watchConfig, writeVerdict, clean } from './kit.mjs'
-import { DEFAULT, createWorld, observe, act, elements, pageUrl, cleanTask } from './sim.mjs'
+import { writeFileSync, renameSync, mkdirSync } from 'node:fs'
+import { evaluate, PRICE_PER_MTOK, resolveCredentials, describeCredentials } from '../toolchain/jev.mjs'
+import { serveViewer, writeVerdict, watchConfig, clean } from './kit.mjs'
+import { openChrome, findChrome, Refused } from '../toolchain/chrome.mjs'
+import { normalizeJob, runJob, LIMITS } from './crawl.mjs'
 import { browserMock } from './mock.mjs'
+import { startDemoSite } from './demosite.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const clampN = (v, lo, hi, d) => { const n = Number(v); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d }
+const MARKER = 'browse.json'
+const RESULTS = 'results.csv'
+const FEED = 40
 
-/** Keep a wild config from breaking the demo. check.mjs reports the same ranges to the agent. */
-export function sanitize(raw) {
-  return {
-    ...DEFAULT, ...raw,
-    title: String(raw.title ?? DEFAULT.title).slice(0, 80),
-    description: String(raw.description ?? DEFAULT.description).slice(0, 300),
-    site: String(raw.site ?? DEFAULT.site).replace(/[^\w .-]/g, '').slice(0, 24) || DEFAULT.site,
-    style: String(raw.style ?? DEFAULT.style).slice(0, 600),
-    stepMs: clampN(raw.stepMs, 40, 2000, DEFAULT.stepMs),
-    distraction: clampN(raw.distraction, 0, 1, DEFAULT.distraction),
-    flights: Math.round(clampN(raw.flights, 4, 9, DEFAULT.flights)),
-    maxSteps: Math.round(clampN(raw.maxSteps, 12, 200, DEFAULT.maxSteps)),
-    seed: Math.round(clampN(raw.seed, 0, 1e9, DEFAULT.seed)),
-    tasks: (Array.isArray(raw.tasks) && raw.tasks.length ? raw.tasks : DEFAULT.tasks).slice(0, 40).map(cleanTask),
-  }
-}
+export async function startBrowserViewer({ workspace, port = 0, show = null } = {}) {
+  let server = null, watcher = null, chrome = null, demo = null, running = null, stopFlag = false
+  let job = normalizeJob({}).job, configError = null, jevError = null
+  let rows = [], feed = [], links = [], here = { url: '', title: '' }
+  let counters = { pages: 0, calls: 0, questions: 0, tokens: 0, costUsd: 0, links: 0, errors: 0 }
+  let phase = 'idle', startedAt = 0, finishedAt = 0, lastRun = null
+  let shotTimer = null, shotBusy = false
+  let expecting = { expecting: 'list', item: '' }
+  const mock = browserMock(() => expecting)
+  const liveRoute = () => resolveCredentials()?.provider ?? null
+  const chromePath = findChrome()
 
-export async function startBrowserViewer({ workspace, port = 0 } = {}) {
-  workspace = resolve(workspace)
+  // ---- what the pane sees ---------------------------------------------------------------------
+  const view = () => ({
+    task: job.task, item: job.item, start: job.start, fields: job.fields.map((f) => ({ id: f.id, name: f.name, ask: f.ask, type: f.type })),
+    keep: job.keep, maxItems: job.maxItems, maxPages: job.maxPages, limits: LIMITS,
+    error: configError, jevError, client: liveRoute() ?? 'mock', jevSays: describeCredentials(),
+    chrome: { found: !!chromePath, open: !!chrome?.alive },
+    demoUrl: demo?.url ?? null, phase, here,
+    progress: {
+      ...counters,
+      rows: rows.length,
+      elapsedMs: startedAt ? (finishedAt || Date.now()) - startedAt : 0,
+      perSec: counters.questions / Math.max(0.5, ((finishedAt || Date.now()) - startedAt) / 1000 || 1),
+    },
+    links, feed, rows, resultsFile: RESULTS,
+  })
+  const push = (event = 'state') => server?.broadcast(view(), event)
+  const say = (text, kind = 'info') => { feed = [{ at: Date.now(), kind, text: clean(text).slice(0, 220) }, ...feed].slice(0, FEED) }
 
-  // Every binding is declared before anything can call into the closures below.
-  let world = null
-  let stopped = false, running = false, busy = false
-  let timer = null, salt = 1, taskIndex = 0, round = 0, lastVerdictAt = 0, taskWallStart = 0, doneAt = 0
-  let overrides = {}
-  let last = { probs: {}, choice: null, confidence: 0, pDone: 0, pObstacle: 0 }
-  let stateText = ''
-  let error = null
-  let server = null
-  const session = { tasks: 0, ok: 0, steps: 0, wasted: 0, misclicks: 0, wallMs: 0, results: [] }
-
-  const cfgWatch = watchConfig(join(workspace, 'site.json'), DEFAULT, () => { overrides = {}; taskIndex = 0; round = 0; newTask(); push(true) })
-  const cfg = () => sanitize({ ...cfgWatch.get(), ...overrides })
-
-  function newTask() {
-    world = createWorld(cfg(), taskIndex, round)
-    taskWallStart = 0; doneAt = 0
-    stateText = observe(world, cfg()).text
-    last = { probs: {}, choice: null, confidence: 0, pDone: 0, pObstacle: 0 }
-  }
-
-  function frame() {
-    const c = cfg()
-    return {
-      t: world.steps, stepMs: c.stepMs, title: c.title, site: c.site, description: c.description,
-      task: { goal: world.goal, index: world.taskIndex % world.taskCount, count: world.taskCount, round },
-      page: world.page, url: pageUrl(world, c), els: elements(world, c), overlay: world.overlay?.kind ?? null, shake: world.shake,
-      lastAction: world.lastAction, last,
-      status: world.status, result: world.result, steps: world.steps, wasted: world.wasted, misclicks: world.misclicks,
-      wallMs: taskWallStart ? (doneAt || Date.now()) - taskWallStart : 0,
-      session: { ...session, results: session.results.slice(-12) },
-      distraction: c.distraction, maxSteps: c.maxSteps, stateText,
-      running, error, cfgError: cfgWatch.error(), overrides,
+  // ---- results.csv ------------------------------------------------------------------------------
+  // A value that starts with = + - @ would run as a formula in a spreadsheet: quote it.
+  const cell = (v) => { let s = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(s) && !/^[+-]?\d+(\.\d+)?$/.test(s)) s = "'" + s; return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
+  function resultsCsv() {
+    const head = ['item', 'page title', 'address', ...job.fields.flatMap((f) => [f.name, `${f.name} confidence`])]
+    if (job.keep) head.push('matches what you asked', 'matches confidence')
+    const lines = [head.map(cell).join(',')]
+    for (const r of rows) {
+      const line = [r.n, r.title, r.url, ...job.fields.flatMap((f) => [r.fields[f.id] ?? '', (r.confidence[f.id] ?? 0).toFixed(2)])]
+      if (job.keep) line.push(r.keep ? 'yes' : 'no', (r.keepConfidence ?? 0).toFixed(2))
+      lines.push(line.map(cell).join(','))
     }
+    return lines.join('\n') + '\n'
+  }
+  function saveResults() {
+    try { const f = join(workspace, RESULTS); writeFileSync(f + '.tmp', resultsCsv()); renameSync(f + '.tmp', f) } catch { /* workspace gone */ }
   }
 
+  // ---- the verdict -------------------------------------------------------------------------------
   function verdict() {
-    const c = cfg()
-    const problem = cfgWatch.error() || error
-    const rate = session.tasks ? Math.round((session.ok / session.tasks) * 100) : 0
-    const avgSteps = session.tasks ? (session.steps / session.tasks).toFixed(1) : '—'
-    writeVerdict(workspace, {
-      ready: session.tasks > 0 || world.steps > 0,
-      summary: problem
-        ? `Jev Browser needs a fix: ${problem}`
-        : `${c.title} · ${session.tasks} bookings · ${rate}% exactly right · ${avgSteps} steps each · ${session.misclicks} clicks lost to layout shifts`,
-      findings: [
-        ...(problem ? [{ severity: 'error', kind: 'site', message: problem }] : []),
-        ...session.results.filter((r) => !r.ok).slice(-5).map((r) => ({ severity: 'warning', kind: 'booking', message: `${r.goal} → ${r.why}` })),
-        { severity: 'info', kind: 'run', message: `distraction ${c.distraction.toFixed(2)}, ${c.stepMs} ms per step, ${session.wasted} wasted steps in ${session.steps}` },
-      ],
-      artifact: 'site.json',
-      phases: [
-        { id: 'site', name: 'Site up', state: 'done' },
-        { id: 'book', name: 'Booking', state: world.steps > 0 || session.tasks > 0 ? 'active' : 'pending' },
-        { id: 'score', name: 'Bookings checked', state: session.tasks > 0 ? 'done' : 'pending' },
-      ],
+    const filled = job.fields.map((f) => {
+      const got = rows.filter((r) => String(r.fields[f.id] ?? '') !== '')
+      const conf = got.length ? got.reduce((s, r) => s + (r.confidence[f.id] ?? 0), 0) / got.length : 0
+      return { id: f.id, name: f.name, ask: f.ask, type: f.type, found: got.length, of: rows.length, avgConfidence: Math.round(conf * 1000) / 1000, thin: rows.length > 2 && got.length / rows.length < 0.6 }
     })
+    const findings = []
+    if (configError) findings.push({ severity: 'error', kind: 'job', ref: MARKER, message: configError })
+    if (jevError) findings.push({ severity: 'warning', kind: 'jev', message: jevError })
+    if (!chromePath) findings.push({ severity: 'error', kind: 'chrome', message: 'Google Chrome was not found on this machine. Install it, or set CHROME_PATH.' })
+    if (liveRoute() === null && rows.length) findings.push({ severity: 'warning', kind: 'jev', message: 'These rows came from the offline stand-in, not from Jev. They are not good enough to act on.' })
+    for (const f of filled) if (f.thin) findings.push({ severity: 'warning', kind: 'field', ref: f.id, message: `"${f.name}" was found on only ${f.found} of ${f.of} pages. Reword what it asks for, or the value may not be on those pages.` })
+    for (const e of (lastRun?.errors ?? []).slice(0, 3)) findings.push({ severity: 'warning', kind: 'page', ref: e.url, message: clean(e.message) })
+    return {
+      ready: phase === 'done' && rows.length > 0 && !configError,
+      summary: clean(configError ? `${MARKER} needs a fix: ${configError}`
+        : phase === 'idle' ? `Ready: ${job.task}. Press Start.`
+        : `${rows.length} collected from ${counters.pages} pages, ${counters.links} links judged, ${counters.calls} calls, $${counters.costUsd.toFixed(4)}${phase === 'running' ? ' (still going)' : ''}`).slice(0, 200),
+      findings, artifact: MARKER, resultsFile: RESULTS,
+      phases: [
+        { id: 'job', name: 'Job', state: configError ? 'failed' : 'done' },
+        { id: 'browse', name: 'Browsing', state: phase === 'running' ? 'active' : rows.length ? 'done' : 'pending' },
+        { id: 'review', name: 'Review', state: phase === 'done' ? (filled.some((f) => f.thin) ? 'active' : 'done') : 'pending' },
+      ],
+      run: {
+        client: liveRoute() ?? 'mock', task: job.task, start: job.start, item: job.item,
+        rows: rows.length, pages: counters.pages, linksJudged: counters.links, calls: counters.calls,
+        questions: counters.questions, costUsd: Math.round(counters.costUsd * 1e6) / 1e6,
+        elapsedMs: startedAt ? (finishedAt || Date.now()) - startedAt : 0, fields: filled,
+        kept: job.keep ? rows.filter((r) => r.keep).length : null,
+      },
+    }
   }
+  let verdictTimer = null
+  const saveVerdict = () => { clearTimeout(verdictTimer); verdictTimer = null; try { writeVerdict(workspace, verdict()) } catch { /* gone */ } }
+  const verdictSoon = () => { if (!verdictTimer) verdictTimer = setTimeout(saveVerdict, 400) }
 
-  function push(force = false) {
-    const now = Date.now()
-    if (force || now - lastVerdictAt > 1000) { lastVerdictAt = now; try { verdict() } catch (e) { error = clean(e.message) } }
-    server?.broadcast(frame())
-  }
-
-  function settle() {
-    if (world.status !== 'done' || doneAt) return
-    doneAt = Date.now()
-    session.tasks++; if (world.result?.ok) session.ok++
-    session.steps += world.steps; session.wasted += world.wasted; session.misclicks += world.misclicks
-    session.wallMs += taskWallStart ? doneAt - taskWallStart : 0
-    session.results.push({ goal: world.goal, ok: !!world.result?.ok, why: world.result?.why ?? '', steps: world.steps, wallMs: taskWallStart ? doneAt - taskWallStart : 0 })
-    if (session.results.length > 60) session.results.shift()
-  }
-
-  async function decide(humanId = null) {
-    if (busy || stopped) return
-    busy = true
+  // ---- asking Jev --------------------------------------------------------------------------------
+  async function ask({ state, questions }) {
     try {
-      const c = cfg()
-      if (world.status === 'done') {
-        // Show the result for about 2.6 seconds of steps, then take the next task.
-        world.rest = (world.rest ?? 0) + 1
-        if (world.rest * c.stepMs >= 2600) { taskIndex++; if (taskIndex % world.taskCount === 0) round++; newTask() }
-        return
-      }
-      if (!taskWallStart) taskWallStart = Date.now()
-      const o = observe(world, c)
-      stateText = o.text
-      let choice = humanId
-      if (!humanId) {
-        const res = await evaluate({
-          state: o.text,
-          questions: {
-            action: jev.choice(o.options, 'Which ONE element do you act on next to finish the task?'),
-            done: jev.noul('Is the task already complete?'),
-            obstacle: jev.noul('Is something covering the page that must be closed first?'),
-          },
-          salt: salt++, model: process.env.JEV_MODEL || 'jev-latest', mock: browserMock,
-        })
-        const a = res.answers.action ?? {}
-        choice = a.choice && o.options[a.choice] !== undefined ? a.choice : Object.keys(o.options)[0]
-        last = { probs: a.probabilities ?? {}, choice, confidence: Number(a.confidence ?? 0), pDone: Number(res.answers.done?.noul ?? 0), pObstacle: Number(res.answers.obstacle?.noul ?? 0) }
-      } else last = { ...last, choice: humanId, human: true }
-      const rec = act(world, c, choice)
-      if (rec && humanId) rec.note = rec.note ? `you clicked · ${rec.note}` : 'you clicked'
-      stateText = observe(world, c).text
-      settle()
-      error = null
+      const res = await evaluate({ state, questions, salt: 3, mock, model: process.env.JEV_MODEL || 'jev-latest' })
+      const n = Object.keys(questions).length
+      const real = Number(res.usage?.input_tokens)
+      counters.calls++
+      counters.questions += n
+      counters.tokens += Number.isFinite(real) && real > 0 ? real : Math.ceil((JSON.stringify(state).length + JSON.stringify(questions).length) / 4)
+      counters.costUsd = (counters.tokens * PRICE_PER_MTOK) / 1e6
+      jevError = null
+      return res
     } catch (e) {
-      error = clean(e?.message ?? String(e))
-    } finally {
-      busy = false
+      counters.errors++
+      jevError = clean(e?.message ?? e)
+      throw e
     }
   }
 
-  function schedule() { clearTimeout(timer); if (running && !stopped) timer = setTimeout(run, cfg().stepMs) }
-  async function run() { const t0 = Date.now(); await decide(); push(); if (running && !stopped) timer = setTimeout(run, Math.max(0, cfg().stepMs - (Date.now() - t0))) }
+  // ---- the browser --------------------------------------------------------------------------------
+  async function openBrowser() {
+    if (chrome?.alive) return { open: true }
+    if (!chromePath) return { ok: false, error: 'Google Chrome was not found on this machine. Install it, or set CHROME_PATH to where it is.' }
+    const hosts = [...job.hosts]
+    if (demo) hosts.push('127.0.0.1', 'localhost')
+    chrome = await openChrome({
+      profileDir: join(workspace, '.harness', 'chrome-profile'),
+      show: show ?? (process.env.JEV_BROWSER_HEADLESS === '1' ? false : job.show),
+      allowedHosts: job.sameSiteOnly ? hosts : [],
+    })
+    say('The browser is open. Sign in to a site here if the pages you want need it.', 'browser')
+    startShots()
+    return { open: true }
+  }
+  async function closeBrowser() {
+    stopShots()
+    const c = chrome
+    chrome = null
+    await c?.close()
+    return { open: false }
+  }
+  function startShots() {
+    stopShots()
+    shotTimer = setInterval(async () => {
+      if (shotBusy || !chrome?.alive || !(server?.clients.size)) return
+      shotBusy = true
+      try { const s = await chrome.shot(); server?.broadcast({ ...s, url: here.url, at: Date.now() }, 'shot') } catch { /* between pages */ } finally { shotBusy = false }
+    }, 900)
+  }
+  function stopShots() { clearInterval(shotTimer); shotTimer = null }
 
+  // ---- the run --------------------------------------------------------------------------------------
+  async function start() {
+    if (running) return { ok: false, error: 'it is already running' }
+    if (configError) return { ok: false, error: configError }
+    // "demo" means the little made-up job board this harness serves itself.
+    if (/^demo$/i.test(job.start)) {
+      demo ??= await startDemoSite()
+      job = { ...job, start: demo.url, hosts: [...new Set([...job.hosts, '127.0.0.1', 'localhost'])] }
+    }
+    const opened = await openBrowser()
+    if (opened.ok === false) return opened
+    rows = []; links = []; feed = []
+    counters = { pages: 0, calls: 0, questions: 0, tokens: 0, costUsd: 0, links: 0, errors: 0 }
+    stopFlag = false; phase = 'running'; startedAt = Date.now(); finishedAt = 0
+    say(`Starting: ${job.task}`, 'start')
+    push(); saveVerdict()
+
+    running = (async () => {
+      try {
+        lastRun = await runJob({
+          chrome, job, ask, stopped: () => stopFlag,
+          onEvent: (e) => {
+            if (e.type === 'going') { here = { url: e.url, title: '' }; expecting = { expecting: e.what?.startsWith('list page') || e.url === job.start ? 'list' : 'item', item: job.item }; say(`Opening ${e.what || e.url}`, 'go') }
+            else if (e.type === 'read') { here = { url: e.url, title: e.title }; counters.pages++ }
+            else if (e.type === 'judged') { links = e.links ?? []; counters.links += e.judged; say(`${e.judged} links judged in one call: ${e.found} are ${job.item}${e.next ? `, next page "${e.next}"` : ''}`, 'judge') }
+            else if (e.type === 'row') { rows = [...rows, e.row]; say(`Collected #${e.row.n}: ${Object.values(e.row.fields).find(Boolean) ?? e.row.title}`, 'row'); saveResults() }
+            else if (e.type === 'skipped') say(`Nothing of the job on ${e.url}`, 'skip')
+            else if (e.type === 'trouble') { counters.errors++; say(`Trouble on ${e.url}: ${e.message}`, 'bad') }
+            else if (e.type === 'done') say(`Finished: ${e.rows} collected from ${e.pages} pages`, 'done')
+            push('view'); verdictSoon()
+          },
+        })
+      } catch (e) {
+        counters.errors++
+        say(e instanceof Refused ? `Refused: ${e.message}` : `Stopped: ${String(e.message ?? e)}`, 'bad')
+      } finally {
+        phase = stopFlag ? 'stopped' : 'done'
+        finishedAt = Date.now()
+        running = null
+        saveResults(); saveVerdict(); push()
+      }
+    })()
+    return { started: true }
+  }
+
+  async function stop() { stopFlag = true; say('Stopping after this page…', 'stop'); await running; return { phase } }
+
+  // ---- controls ---------------------------------------------------------------------------------
   async function control(cmd, body) {
-    if (cmd === 'pause') { running = false; clearTimeout(timer) }
-    else if (cmd === 'start') { if (!running) { running = true; schedule() } }
-    else if (cmd === 'reset') { Object.assign(session, { tasks: 0, ok: 0, steps: 0, wasted: 0, misclicks: 0, wallMs: 0, results: [] }); overrides = {}; taskIndex = 0; round = 0; salt = 1; newTask() }
-    else if (cmd === 'tick') { const n = Math.round(clampN(body.n, 1, 20000, 1)); for (let i = 0; i < n; i++) await decide() }
-    else if (cmd === 'click') { if (typeof body.id === 'string' && body.id.length < 40) await decide(body.id) }
-    else if (cmd === 'popup') { if (!world.overlay && world.status === 'running') world.overlay = { kind: 'popup', at: [260, 150] }; stateText = observe(world, cfg()).text }
-    else if (cmd === 'task') { taskIndex = Math.round(clampN(body.index, 0, 1000, 0)); newTask() }
-    else if (cmd === 'set') {
-      const allowed = { distraction: [0, 1], stepMs: [40, 2000] }
-      if (allowed[body.key]) overrides = { ...overrides, [body.key]: clampN(body.value, allowed[body.key][0], allowed[body.key][1], cfg()[body.key]) }
+    switch (cmd) {
+      case 'start': return start()
+      case 'stop': return stop()
+      case 'run': { const r = await start(); await running; return { ...r, rows: rows.length, phase } }   // used by tests: runs to the end
+      case 'openBrowser': return openBrowser()
+      case 'closeBrowser': return closeBrowser()
+      case 'reset': {
+        await stop()
+        rows = []; links = []; feed = []; phase = 'idle'; startedAt = 0; finishedAt = 0; lastRun = null
+        counters = { pages: 0, calls: 0, questions: 0, tokens: 0, costUsd: 0, links: 0, errors: 0 }
+        applyJob(watcher.get(), true); saveResults(); saveVerdict(); push()
+        return { phase }
+      }
+      case 'export': { saveResults(); return { file: RESULTS, rows: rows.length } }
+      case 'openHere': {
+        // The person asks the browser to go somewhere, from the pane. Same rules as everything else.
+        if (!chrome?.alive) { const o = await openBrowser(); if (o.ok === false) return o }
+        try { const r = await chrome.go(String(body.url ?? '')); here = { url: r.url, title: await chrome.title() }; push(); return { url: r.url } }
+        catch (e) { return { ok: false, error: e instanceof Refused ? e.message : String(e.message ?? e) } }
+      }
+      default: return { ok: false, error: `unknown command "${cmd}"` }
     }
-    push(true)
-    return { steps: world.steps }
   }
 
-  newTask()
-  server = await serveViewer({ here: HERE, port, state: frame, control })
-  push(true)
-  running = true
-  schedule()
+  // ---- the job file --------------------------------------------------------------------------------
+  function applyJob(raw, fresh = false) {
+    const { job: next, errors } = normalizeJob(raw)
+    configError = errors.length ? `${MARKER}: ${errors.join('; ')}` : null
+    if (!configError || fresh || !job.fields.length) job = next
+    if (demo && /^demo$/i.test(job.start)) job = { ...job, start: demo.url, hosts: [...new Set([...job.hosts, '127.0.0.1', 'localhost'])] }
+    if (chrome) chrome.allowedHosts = job.sameSiteOnly ? [...job.hosts, ...(demo ? ['127.0.0.1', 'localhost'] : [])] : []
+    push(); verdictSoon()
+  }
+
+  mkdirSync(join(workspace, '.harness'), { recursive: true })
+  watcher = watchConfig(join(workspace, MARKER), {}, (cfg, err) => {
+    if (err) { configError = `${err}. Keeping the last good job`; push(); verdictSoon(); return }
+    applyJob(cfg)
+  })
+  server = await serveViewer({
+    here: HERE, port,
+    files: ['index.html', 'base.css', 'studio.css', 'studio.js', 'jev-hud.js'],
+    state: view, control,
+    downloads: () => { saveResults(); return { [RESULTS]: join(workspace, RESULTS) } },
+    onConnect: () => { jevError = null; push() },
+  })
+  applyJob(watcher.get(), true)
+  saveResults(); saveVerdict()
 
   return {
     url: server.url,
-    async close() { stopped = true; running = false; clearTimeout(timer); cfgWatch.close(); await server.close() },
+    async close() {
+      stopFlag = true
+      await running
+      stopShots(); clearTimeout(verdictTimer)
+      watcher.close()
+      await closeBrowser()
+      await demo?.close()
+      await server.close()
+    },
   }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const workspace = process.env.HARNESS_WORKSPACE
   const port = Number(process.env.HARNESS_VIEWER_PORT)
-  if (!workspace || !Number.isInteger(port) || port < 1 || port > 65535)
-    throw new Error('HARNESS_WORKSPACE and HARNESS_VIEWER_PORT are required')
+  if (!workspace || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('HARNESS_WORKSPACE and HARNESS_VIEWER_PORT are required')
   const viewer = await startBrowserViewer({ workspace, port })
   console.log(`Jev Browser listening on ${viewer.url}`)
   for (const s of ['SIGTERM', 'SIGINT']) process.once(s, () => viewer.close().then(() => process.exit(0)))
