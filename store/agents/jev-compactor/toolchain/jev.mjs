@@ -343,8 +343,12 @@ export async function connectKey(value, { probe = true } = {}) {
     return { ok: true, provider: cred.provider, stored: true, probed: true }
   } catch (e) {
     const msg = String(e?.message ?? e)
-    if (/\b(401|403)\b|unauthor|invalid.*key|forbidden/i.test(msg)) { removeCredential(name); return { ok: false, error: 'The service refused that key. Nothing was saved.' } }
-    return { ok: true, provider: cred.provider, stored: true, probed: false, warning: `The key is saved, but the test call failed: ${msg.slice(0, 160)}` }
+    // A refused key is not worth keeping. A good key on an account with no credit left is: the
+    // person only has to top it up, and throwing the key away would make that harder.
+    const refused = e?.status === 401 || e?.status === 403 ||
+      (!e?.status && /\b(401|403)\b|unauthor|invalid.*key|forbidden/i.test(msg))
+    if (refused) { removeCredential(name); return { ok: false, error: 'The service refused that key. Nothing was saved.' } }
+    return { ok: true, provider: cred.provider, stored: true, probed: false, warning: e?.provider ? msg : `The key is saved, but the test call failed: ${msg.slice(0, 160)}` }
   }
 }
 
@@ -379,10 +383,25 @@ async function liveEvaluate(body, cred) {
         return data?.result?.answers ? data.result : data
       }
       const detail = await res.text().catch(() => '')
-      lastErr = new JevError(`Jev API ${res.status}: ${detail.slice(0, 200)}`)
+      // A person reading the pane needs to know what to do, not what the server's JSON looked like.
+      const plain = {
+        401: 'That Jev key was refused. Paste a working one in the pane\'s "Jev · live mind" panel.',
+        402: 'The account behind that Jev key is out of credit. Top it up with your provider and press Go again.',
+        403: 'That Jev key is not allowed to use this model.',
+        429: 'Your Jev provider is rate limiting these calls. Wait a moment and try again.',
+        529: 'Jev is overloaded right now. Try again in a moment.',
+      }[res.status]
+      lastErr = new JevError(plain ? `${plain} (HTTP ${res.status})` : `Jev API ${res.status}: ${detail.slice(0, 200)}`)
+      // The caller shows this one to a person as-is: it already says what to do, so nothing should
+      // bury it under "nothing could be worked out".
+      lastErr.provider = Boolean(plain)
+      lastErr.status = res.status
       if (res.status !== 429 && res.status !== 529 && res.status < 500) throw lastErr // 401/422: retrying cannot help
     } catch (e) {
-      if (e instanceof JevError && !/ (429|529|5\d\d):/.test(e.message)) throw e
+      // Which ones are worth trying again is a fact about the status, not about how the message
+      // happens to read: the messages above are written for a person and no longer carry the code.
+      const worthRetrying = e.status === 429 || e.status === 529 || e.status >= 500
+      if (e instanceof JevError && !worthRetrying) throw e
       lastErr = e instanceof JevError ? e : new JevError(`Jev API unreachable: ${e?.message ?? e}`)
     }
   }

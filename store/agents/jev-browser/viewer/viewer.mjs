@@ -197,15 +197,17 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
           if (found.url !== job.start) { job = { ...job, start: found.url }; counters.pages = found.steps }
           got = await proposeJob({ chrome, ask, start: found.url, page: found.page, want: job.want, search: job.search, onEvent: watch })
         }
-      } catch (e) { got = { columns: [], error: String(e.message ?? e) } }
+      } catch (e) { got = { columns: [], error: String(e.message ?? e), provider: e?.provider === true } }
       proposing = false
       if (got.walled) { lastRun = { walled: got.walled, errors: [] }; say(got.walled, 'bad'); phase = 'done'; finishedAt = Date.now(); push(); saveVerdict(); return { ok: false, error: got.walled } }
       if (!got.columns.length) {
         phase = 'idle'; finishedAt = Date.now()
         const why = got.error || got.none || 'nothing on that page looked like a value worth a column'
-        say(`No columns could be worked out: ${why}`, 'bad')
+        // A key that is refused or out of credit is not a "the page was no good" problem, and
+        // saying so sends the person off reading the page instead of fixing the key.
+        say(got.provider ? why : `No columns could be worked out: ${why}`, 'bad')
         push(); saveVerdict()
-        return { ok: false, error: `${why}. Write the columns yourself, one per line.` }
+        return { ok: false, error: got.provider ? why : `${why}. Write the columns yourself, one per line.` }
       }
       const saidItem = String(watcher.get()?.item ?? '').trim()
       // Write back the page it walked to, not the address that was typed: otherwise the job resets
