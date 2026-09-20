@@ -25,6 +25,7 @@ import 'core/startup.dart';
 import 'logging/app_log.dart';
 import 'logging/install.dart';
 import 'shortcuts/app_keymap.dart';
+import 'shortcuts/keyboard_practice.dart';
 import 'widgets/shortcuts_sheet.dart';
 import 'widgets/update_notice.dart';
 import 'widgets/window_chrome.dart';
@@ -45,6 +46,7 @@ typedef AuthenticatedScreenBuilder = Widget Function(AppNotifier app);
 /// trees are otherwise byte-identical outside `lib/phone/` and `lib/p2p/`.
 Future<void> startHarness({
   required AuthenticatedScreenBuilder authenticatedScreen,
+
   /// A viewer build's second wire to each machine (see
   /// [TerminalTransportPlugin]); the desktop passes none.
   TerminalTransportPluginFactory? transportPlugins,
@@ -64,17 +66,16 @@ Future<void> startHarness({
   await configureDesktopWindow(palette: appearancePrefsStore.value.palette);
   runApp(
     ProviderScope(
-      child: HarnessApp(keymap: keymap, authenticatedScreen: authenticatedScreen),
+      child: HarnessApp(
+        keymap: keymap,
+        authenticatedScreen: authenticatedScreen,
+      ),
     ),
   );
 }
 
 class HarnessApp extends StatelessWidget {
-  const HarnessApp({
-    super.key,
-    this.keymap,
-    required this.authenticatedScreen,
-  });
+  const HarnessApp({super.key, this.keymap, required this.authenticatedScreen});
   final AppKeymap? keymap;
   final AuthenticatedScreenBuilder authenticatedScreen;
 
@@ -238,11 +239,7 @@ class _RootShellState extends ConsumerState<RootShell>
     switch (call.method) {
       case 'checkForUpdates':
         final app = ref.read(appStateProvider);
-        await _menuDialog(() async {
-          final result = await app.checkForUpdates();
-          if (!mounted) return;
-          await showUpdateCheckDialog(context, app, result);
-        });
+        await _menuDialog(() => checkForUpdatesAndShowResult(context, app));
       case 'flashFirmware':
         await _menuDialog(() => showFlashFirmwareDialog(context));
       case 'exportLogs':
@@ -254,6 +251,8 @@ class _RootShellState extends ConsumerState<RootShell>
         );
       case 'showShortcuts':
         await _menuDialog(() => showShortcutsSheet(context));
+      case 'keyboardPractice':
+        await _menuDialog(() => showKeyboardPractice(context));
       case 'increaseTerminalFontSize':
         await terminalFontStore.increaseSize();
       case 'decreaseTerminalFontSize':

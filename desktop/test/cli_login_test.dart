@@ -24,10 +24,10 @@ class _Process implements Process {
   var kills = 0;
   void emit(Map<String, dynamic> event) =>
       output.add(utf8.encode('${jsonEncode(event)}\n'));
-  void finish() {
+  void finish([int exitCode = 0]) {
     unawaited(output.close());
     unawaited(errors.close());
-    if (!ended.isCompleted) ended.complete(0);
+    if (!ended.isCompleted) ended.complete(exitCode);
   }
 
   @override
@@ -50,7 +50,72 @@ class _Process implements Process {
   IOSink get stdin => throw UnimplementedError();
 }
 
+class _LogoutRunner extends HarnessCliRunner {
+  _LogoutRunner(this.process)
+    : super(runTimeout: const Duration(milliseconds: 30));
+  final _Process process;
+  final arguments = <List<String>>[];
+  @override
+  Future<Process> start(List<String> command) async {
+    arguments.add(command);
+    return process;
+  }
+
+  @override
+  Future<ProcessResult> run(List<String> command) async {
+    // The original fire-and-forget run path reports this as success.
+    return ProcessResult(1, 1, '', 'Fixture failure');
+  }
+}
+
+class _TimeoutProcess extends _Process {
+  @override
+  bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
+    final killed = super.kill(signal);
+    finish(1);
+    return killed;
+  }
+}
+
 void main() {
+  test('logout reports a nonzero CLI exit as a failure', () async {
+    final process = _Process()..finish(1);
+    final runner = _LogoutRunner(process);
+    await expectLater(CliLogin(runner: runner).logout(), throwsStateError);
+  });
+
+  test(
+    'logout drains output and finishes before permitting another command',
+    () async {
+      final process = _Process();
+      final runner = _LogoutRunner(process);
+      var finished = false;
+      final pending = CliLogin(runner: runner)
+          .logout()
+          .then((_) => finished = true);
+      await Future<void>.delayed(Duration.zero);
+      expect(finished, isFalse);
+      process.emit({'fixture': 'output'});
+      process.errors.add(utf8.encode('fixture diagnostic'));
+      process.finish();
+      await pending;
+      expect(runner.arguments, [
+        ['logout'],
+      ]);
+    },
+  );
+
+  test(
+    'a timed-out logout stops its process before returning failure',
+    () async {
+      final process = _TimeoutProcess();
+      final runner = _LogoutRunner(process);
+      await expectLater(CliLogin(runner: runner).logout(), throwsStateError);
+      expect(process.kills, 1);
+      expect(process.ended.isCompleted, isTrue);
+    },
+  );
+
   test(
     'cancel while the CLI starts ignores its late URL and stops that process',
     () async {

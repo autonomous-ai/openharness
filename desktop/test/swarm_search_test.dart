@@ -27,7 +27,7 @@ void main() {
       await mount(tester, app);
       final input = find.byKey(const ValueKey('swarm-search-input'));
       expect(input, findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.pump();
       final originalController = tester.widget<TextField>(input).controller;
       await tester.enterText(input, 'a query only');
@@ -74,12 +74,21 @@ void main() {
       ),
     ];
     final entries = SwarmSearchCatalog().read(app, const []);
-    expect(rankSwarmDestinations(entries, 'Board fab check').first.agentId, 'a6');
+    expect(
+      rankSwarmDestinations(entries, 'Board fab check').first.agentId,
+      'a6',
+    );
     expect(rankSwarmDestinations(entries, 'parts review').first.agentId, 'a6');
     // a bare word that names a project outranks a title that merely contains it
     expect(rankSwarmDestinations(entries, 'fab').first.isProject, isTrue);
     // the whole title, exactly, is the strongest match there is
-    expect(rankSwarmDestinations(entries, 'board fab check and parts review').first.agentId, 'a6');
+    expect(
+      rankSwarmDestinations(
+        entries,
+        'board fab check and parts review',
+      ).first.agentId,
+      'a6',
+    );
   });
 
   test('one cached catalog searches all four objects and explicit remote project members', () {
@@ -295,28 +304,29 @@ void main() {
     },
   );
 
-  testWidgets('Add imports all agents from a machine into this swarm', (
-    tester,
-  ) async {
-    final app = createApp();
-    app.machineStates['m']!.agents = app.machineStates['m']!.agents
-        .take(3)
-        .toList();
-    await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
-    await tester.pump();
-    await tester.enterText(jumpField, 'Test host');
-    await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('machine:m')));
-    await tester.pump();
-    expect(app.activeSwarm.name, 'Test host');
-    expect(app.panes.map((pane) => pane.agentId), ['a0', 'a1', 'a2']);
-    expect(app.swarms.length, 1);
-    expect(find.byKey(const ValueKey('swarm-search-results')), findsNothing);
-    expect(find.text('Browse agents'), findsNothing);
-    await tester.pumpWidget(const SizedBox());
-    app.dispose();
-  });
+  testWidgets(
+    'machine names filter harnesses without adding the whole machine',
+    (tester) async {
+      final app = createApp();
+      app.machineStates['m']!.agents = app.machineStates['m']!.agents
+          .take(3)
+          .toList();
+      await mount(tester, app);
+      await chord(tester, LogicalKeyboardKey.keyP);
+      await tester.pump();
+      await tester.enterText(jumpField, 'Test host');
+      await tester.pump();
+      expect(find.byKey(const ValueKey('machine:m')), findsNothing);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(app.panes.map((pane) => pane.agentId), ['a0']);
+      expect(app.swarms.length, 1);
+      expect(find.byKey(const ValueKey('swarm-search-results')), findsNothing);
+      expect(find.text('Browse agents'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
 
   testWidgets('Add keeps a shared view here and the first key reaches it', (
     tester,
@@ -332,16 +342,13 @@ void main() {
     app.adoptSessionForTest(terminal('a1', secondInputs));
     final target = app.activeSwarm;
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     await tester.pump();
     await tester.enterText(jumpField, 'Agent 0');
     await tester.pump();
     expect(find.byKey(const ValueKey('swarm-row-action')), findsOneWidget);
     expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('swarm-row-action')),
-        matching: find.text('Open Harness'),
-      ),
+      find.textContaining('enter  open', findRichText: true),
       findsOneWidget,
     );
     await chord(tester, LogicalKeyboardKey.enter);
@@ -378,7 +385,7 @@ void main() {
           ValueKey(adding ? 'swarm-search-input' : 'harness-start-search'),
         );
         if (adding) {
-          await chord(tester, LogicalKeyboardKey.keyO);
+          await chord(tester, LogicalKeyboardKey.keyP);
           await tester.pump();
         } else {
           await tester.tap(field);

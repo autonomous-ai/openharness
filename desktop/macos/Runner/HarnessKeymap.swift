@@ -126,13 +126,14 @@ private final class HarnessKeyNode {
 /// Reject a malformed snapshot as a whole, leaving the caller's last good map.
 /// Defaults and overrides are already resolved in Dart, including unbinding.
 final class HarnessNativeKeymap {
+  static let contexts: Set<String> = ["workspace", "terminal", "picker", "project"]
   private var roots: [String: HarnessKeyNode] = [:]
   private(set) var bindings: [String: [HarnessNativeBinding]] = [:]
 
   init?(_ payload: [String: Any]) {
     guard payload["version"] as? Int == 1,
           let contexts = payload["contexts"] as? [String: Any],
-          Set(contexts.keys) == Set(["workspace", "terminal", "picker"]) else { return nil }
+          Set(contexts.keys) == Self.contexts else { return nil }
     for (context, raw) in contexts {
       guard let rows = raw as? [[String: Any]], rows.count <= 640 else { return nil }
       let root = HarnessKeyNode()

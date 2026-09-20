@@ -34,7 +34,7 @@ void main() {
       config: AppConfig.dev,
       authSession: AuthSession(),
       configStore: null,
-      desktopUpdater: DesktopUpdater(enabled: true),
+      desktopUpdater: DesktopUpdater(enabled: true, releaseMode: true),
     );
     addTearDown(notifier.dispose);
     tester.view.physicalSize = const Size(900 * 2, 700 * 2);
@@ -65,28 +65,30 @@ void main() {
     size: 48600000,
   );
 
-  testWidgets('names the app, its version, and says nothing is waiting', (
-    tester,
-  ) async {
-    await pumpAbout(tester);
+  testWidgets(
+    'names the app and version without claiming an untested update status',
+    (tester) async {
+      await pumpAbout(tester);
 
-    expect(find.text('OpenHarness'), findsOneWidget);
-    expect(find.text('1.0.0'), findsOneWidget);
-    expect(find.text('Up to date'), findsOneWidget);
-    // Secondary actions, never a filled one — the pane is read, not operated.
-    // Two of them since the merge with main: the update check, and the dial
-    // flash, which on Linux and Windows has no native menu item to live in.
-    expect(
-      find.byKey(const Key('settings-check-updates-button')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const Key('settings-flash-firmware-button')),
-      findsOneWidget,
-    );
-    expect(find.byType(OutlinedButton), findsNWidgets(2));
-    expect(find.byType(FilledButton), findsNothing);
-  });
+      expect(find.text('OpenHarness'), findsOneWidget);
+      expect(find.text('1.0.0'), findsOneWidget);
+      expect(find.text('Not checked'), findsOneWidget);
+      expect(find.text('Up to date'), findsNothing);
+      // Secondary actions, never a filled one — the pane is read, not operated.
+      // Two of them since the merge with main: the update check, and the dial
+      // flash, which on Linux and Windows has no native menu item to live in.
+      expect(
+        find.byKey(const Key('settings-check-updates-button')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('settings-flash-firmware-button')),
+        findsOneWidget,
+      );
+      expect(find.byType(OutlinedButton), findsNWidgets(2));
+      expect(find.byType(FilledButton), findsNothing);
+    },
+  );
 
   testWidgets('the pill names the waiting version', (tester) async {
     final notifier = await pumpAbout(tester);

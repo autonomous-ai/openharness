@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/swarm_search.dart';
+import 'box_chrome.dart';
 
 /// The shared input for the start page, Open Agent and split searches.
 /// Flutter owns the caret and result navigation; native chrome only opens it.
@@ -27,6 +28,8 @@ class SwarmSearchInput extends StatelessWidget {
     this.trailing,
     this.height,
     this.fontSize = 16,
+    this.prompt,
+    this.terminal = false,
   });
 
   final Key inputKey;
@@ -52,6 +55,11 @@ class SwarmSearchInput extends StatelessWidget {
 
   /// The typed text and the hint; the search glyph grows with it.
   final double fontSize;
+  final String? prompt;
+
+  /// Plain monospace input in a TerminalBox, without a decorative search glyph.
+  /// Mode prefixes belong to the editable buffer.
+  final bool terminal;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -63,6 +71,7 @@ class SwarmSearchInput extends StatelessWidget {
 
   Widget _buildInput(BuildContext context) {
     final open = search != null;
+    final terminalStyle = terminal || prompt != null;
     final border = OutlineInputBorder(
       borderRadius: BorderRadius.vertical(
         top: Radius.circular(rounded ? (prominent ? 32 : 28) : 12),
@@ -88,22 +97,46 @@ class SwarmSearchInput extends StatelessWidget {
       onTapAlwaysCalled: true,
       onTapOutside: onTapOutside == null ? null : (_) => onTapOutside!(),
       onChanged: onChanged,
-      style: TextStyle(fontSize: fontSize, color: Colors.white),
+      style: terminalStyle
+          ? boxMonoStyle(size: fontSize)
+          : TextStyle(fontSize: fontSize, color: Colors.white),
       cursorColor: grid.AppPalette.swarmAccent,
       textAlignVertical: TextAlignVertical.center,
       decoration: InputDecoration(
-        hintText: search?.isCommandMode == true
+        hintText:
+            search?.isCommandMode == true ||
+                search?.isHelpMode == true ||
+                search?.isGroupMode == true
             ? search!.hint
-            : hintText ?? search?.hint ?? 'Find a harness',
-        hintStyle: TextStyle(fontSize: fontSize, color: Colors.white60),
+            : hintText ?? search?.hint ?? kSwarmSearchHint,
+        hintStyle: terminalStyle
+            ? boxMonoStyle(size: fontSize, color: kBoxFaint)
+            : TextStyle(fontSize: fontSize, color: Colors.white60),
         hintMaxLines: 1,
-        prefixIcon: Icon(
-          Icons.search,
-          size: fontSize + 4,
-          color: Colors.white60,
-        ),
+        prefixIcon: prompt != null
+            ? Padding(
+                padding: const EdgeInsets.only(left: 14, right: 10),
+                child: Center(
+                  widthFactor: 1,
+                  heightFactor: 1,
+                  child: Text(
+                    prompt!,
+                    style: boxMonoStyle(
+                      size: fontSize,
+                      color: grid.AppPalette.swarmAccent,
+                    ),
+                  ),
+                ),
+              )
+            : terminal
+            ? null
+            : Icon(Icons.search, size: fontSize + 4, color: Colors.white60),
         prefixIconConstraints: BoxConstraints(
-          minWidth: fontSize >= 20 ? 64 : 52,
+          minWidth: prompt != null
+              ? 36
+              : fontSize >= 20
+              ? 64
+              : 52,
           minHeight: height ?? (prominent ? 64 : 56),
         ),
         suffixIcon: showClose || trailing != null
@@ -129,8 +162,14 @@ class SwarmSearchInput extends StatelessWidget {
                 ),
               )
             : null,
-        filled: true,
-        fillColor: fillColor ?? grid.AppPalette.swarmSearchSurface,
+        // TerminalBox owns the dock surface. An unfilled field also avoids
+        // Material's extra inset, keeping the input aligned with result text.
+        filled: !terminal,
+        fillColor:
+            fillColor ??
+            (terminalStyle
+                ? grid.AppPalette.swarmField
+                : grid.AppPalette.swarmSearchSurface),
         hoverColor: Colors.transparent,
         contentPadding: EdgeInsets.symmetric(
           horizontal: 18,
@@ -139,9 +178,9 @@ class SwarmSearchInput extends StatelessWidget {
               : ((height! - fontSize * 1.2) / 2).clamp(0, double.infinity),
         ),
         isDense: true,
-        border: border,
-        enabledBorder: border,
-        focusedBorder: border,
+        border: terminalStyle ? InputBorder.none : border,
+        enabledBorder: terminalStyle ? InputBorder.none : border,
+        focusedBorder: terminalStyle ? InputBorder.none : border,
       ),
     );
   }

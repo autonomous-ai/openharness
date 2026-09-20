@@ -83,6 +83,8 @@ class AppSelectField<T> extends StatefulWidget {
     this.emptyLabel,
     this.filterable = false,
     this.filterThreshold = 8,
+    this.textStyle,
+    this.radius,
   });
 
   final T value;
@@ -113,6 +115,8 @@ class AppSelectField<T> extends StatefulWidget {
 
   /// A choice-tile selection. Null retains the ordinary field focus border.
   final bool? selected;
+  final TextStyle? textStyle;
+  final double? radius;
   final String? emptyLabel;
 
   /// Whether a long list may put a search field at the head of its menu.
@@ -469,7 +473,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
           key: const Key('app-select-filter'),
           controller: _filterController,
           focusNode: _filterFocus,
-          style: kFieldTextStyle,
+          style: widget.textStyle ?? kFieldTextStyle,
           decoration: InputDecoration(
             hintText: 'Search',
             prefixIcon: Icon(
@@ -569,6 +573,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
             SizedBox(
               width: _rowWidth(panelWidth),
               child: AppMenuItem(
+                textStyle: widget.textStyle,
                 // No glyph of its own: the leading slot belongs to the tick,
                 // and stays empty (not a blank checkbox) on rows without it.
                 // `selected` also carries the wash and the heavier label, so the
@@ -607,7 +612,9 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
               splashFactory: NoSplash.splashFactory,
               hoverColor: Colors.transparent,
               focusColor: Colors.transparent,
-              borderRadius: BorderRadius.circular(AppControl.radius),
+              borderRadius: BorderRadius.circular(
+                widget.radius ?? AppControl.radius,
+              ),
               child: SizedBox(
                 width: widget.width,
                 height: widget.height,
@@ -624,7 +631,9 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                                   widget.fillColor!,
                                 )
                         : widget.fillColor ?? AppSurface.recess,
-                    borderRadius: BorderRadius.circular(AppControl.radius),
+                    borderRadius: BorderRadius.circular(
+                      widget.radius ?? AppControl.radius,
+                    ),
                     border: Border.all(
                       color:
                           widget.selected == true ||
@@ -649,16 +658,19 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                                     current?.label ?? '—',
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontFamily: AppFont.sans,
-                                      fontFamilyFallback: AppFont.sansFallback,
-                                      fontSize: AppControl.fontSize,
-                                      fontWeight: AppControl.fontWeight,
-                                      letterSpacing: AppFont.trackingFor(
-                                        AppControl.fontSize,
-                                      ),
-                                      color: AppPalette.textPrimary,
-                                    ),
+                                    style:
+                                        widget.textStyle ??
+                                        TextStyle(
+                                          fontFamily: AppFont.sans,
+                                          fontFamilyFallback:
+                                              AppFont.sansFallback,
+                                          fontSize: AppControl.fontSize,
+                                          fontWeight: AppControl.fontWeight,
+                                          letterSpacing: AppFont.trackingFor(
+                                            AppControl.fontSize,
+                                          ),
+                                          color: AppPalette.textPrimary,
+                                        ),
                                   ),
                                 ),
                                 if (current?.note != null) ...[

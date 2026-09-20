@@ -52,14 +52,14 @@ void main() {
     );
     await tester.tap(find.text('rename'));
     await tester.pumpAndSettle();
-    expect(find.text('Rename Harness'), findsOneWidget);
+    expect(find.text('Rename Agent'), findsOneWidget);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     // Pumped through the WHOLE exit transition, which is the window the bug
     // lived in: one pump would settle before the rebuild that threw.
     await tester.pumpAndSettle();
 
-    expect(find.text('Rename Harness'), findsNothing);
+    expect(find.text('Rename Agent'), findsNothing);
     expect(
       tester.takeException(),
       isNull,

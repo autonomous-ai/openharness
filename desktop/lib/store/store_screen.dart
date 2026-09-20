@@ -15,6 +15,7 @@ import '../shared/widgets/app_icon_button.dart';
 import '../state/app_state.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/new_agent_dialog.dart';
+import '../widgets/open_harness_intent.dart';
 import 'store_controller.dart';
 import 'store_discover.dart';
 import 'store_editorial.dart';
@@ -534,6 +535,7 @@ IconData _categoryIcon(String category) => switch (category) {
   'Engineering' => LucideIcons.cpu300,
   'Media' => LucideIcons.film300,
   'Science' => LucideIcons.flaskConical300,
+  'Local AI' => LucideIcons.brainCircuit300,
   'Code' => LucideIcons.terminal300,
   'Games' => LucideIcons.gamepad2300,
   _ => LucideIcons.shapes300,
@@ -688,8 +690,8 @@ bool _canGetOnMachine(MachineState machine, DshEntry entry) {
       machine.dsh.runs[entry.id]?.inProgress != true;
 }
 
-/// Open a Store harness on [machineId] the way the Store's Open button does: a
-/// draft tab of its own, then New Agent with the harness already chosen.
+/// Open the workspace's New Harness dock with this product and machine chosen.
+/// A successful start opens a new tab; reviewing or cancelling allocates none.
 ///
 /// Public because it is the ONE way a harness is opened from anywhere — the
 /// Store page, and the model picker's "Open Grid" — so the two cannot drift
@@ -701,6 +703,12 @@ Future<void> openStoreAgent(
   String machineId, {
   String? prompt,
 }) async {
+  final intent = OpenHarnessIntent(harnessId, machineId, task: prompt);
+  if (Actions.maybeFind<OpenHarnessIntent>(context) != null) {
+    final opening = Actions.maybeInvoke(context, intent);
+    if (opening is Future) await opening;
+    return;
+  }
   final origin = notifier.activeSwarmId;
   notifier.newSwarm(draft: true);
   final target = notifier.activeSwarmId;
@@ -824,10 +832,8 @@ class _ProductPageState extends State<_ProductPage> {
     if (failure != null) _say(failure);
   }
 
-  /// Open (or Get) from the store: the harness needs a tab of its own, since
-  /// a pane never lands in the store tab. A draft tab is opened for it and
-  /// abandoned — back to the store — if the dialog is dismissed. [prompt] is
-  /// an example's, and becomes the new harness's first message.
+  /// Open from the Store with this product and machine. An example's [prompt]
+  /// becomes the editable task in the same dock before the person presses Start.
   Future<void> _open(String machineId, {String? prompt}) async {
     if (widget.notifier.localMachineState?.machine.machineId != machineId) {
       return;

@@ -6,6 +6,8 @@
 /// handed, so the pane can be driven from a fixture.
 library;
 
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_theme.dart';
@@ -16,6 +18,8 @@ import '../../usage/ledger/usage_report.dart';
 /// How many days the bar chart shows. Ten, as Orca uses — enough to see a shape,
 /// few enough that each bar keeps a readable label under it.
 const _kChartDays = 10;
+const _kChartLabelStyle = TextStyle(fontSize: 9.5, height: 1.3);
+const _kBarHeight = 118.0;
 
 /// The colours the four token buckets keep, everywhere they are drawn.
 ///
@@ -62,28 +66,60 @@ class UsageDailyChart extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            height: 170,
-            child: shown.isEmpty
-                ? Center(
-                    child: Text(
-                      'Nothing in this range.',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppPalette.textFaint,
-                      ),
+          if (shown.isEmpty)
+            SizedBox(
+              height: 170,
+              child: Center(
+                child: Text(
+                  'Nothing in this range.',
+                  style: TextStyle(fontSize: 12, color: AppPalette.textFaint),
+                ),
+              ),
+            )
+          else
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final painter = TextPainter(
+                  textDirection: Directionality.of(context),
+                  textScaler: MediaQuery.textScalerOf(context),
+                  maxLines: 1,
+                );
+                final style = DefaultTextStyle.of(context).style
+                    .merge(_kChartLabelStyle);
+                var width = 30.0;
+                var labelHeight = 0.0;
+                for (final day in shown) {
+                  for (final label in [
+                    formatTokens(day.totals.total),
+                    _shortDay(day.day),
+                  ]) {
+                    painter.text = TextSpan(text: label, style: style);
+                    painter.layout();
+                    width = math.max(width, painter.width + 12);
+                    labelHeight = math.max(labelHeight, painter.height);
+                  }
+                }
+                painter.dispose();
+                // Keep every label readable at larger text; scroll horizontally
+                // if ten days no longer fit, instead of wrapping under the bars.
+                return SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: SizedBox(
+                    width: math.max(constraints.maxWidth, width * shown.length),
+                    height: math.max(170, _kBarHeight + 9 + labelHeight * 2),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        for (final day in shown)
+                          Expanded(
+                            child: _Bar(day: day, peak: peak, colours: colours),
+                          ),
+                      ],
                     ),
-                  )
-                : Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      for (final day in shown)
-                        Expanded(
-                          child: _Bar(day: day, peak: peak, colours: colours),
-                        ),
-                    ],
                   ),
-          ),
+                );
+              },
+            ),
           const SizedBox(height: 12),
           Wrap(
             spacing: 14,
@@ -131,14 +167,20 @@ class _Bar extends StatelessWidget {
           children: [
             Text(
               total == 0 ? '' : formatTokens(total),
-              style: TextStyle(fontSize: 9.5, color: AppPalette.textFaint),
+              maxLines: 1,
+              softWrap: false,
+              style: _kChartLabelStyle.copyWith(color: AppPalette.textFaint),
             ),
             const SizedBox(height: 4),
             SizedBox(
-              height: 118,
+              height: _kBarHeight,
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
+                  // Empty space belongs above shorter bars so every day has
+                  // the same baseline, just above its date label.
+                  if (peak > total)
+                    Flexible(flex: peak - total, child: const SizedBox()),
                   // `Flexible` per segment rather than a fixed height: the
                   // column is already bounded, so flex shares it in proportion
                   // and nothing has to be measured against the peak by hand.
@@ -148,17 +190,15 @@ class _Bar extends StatelessWidget {
                         flex: segment.tokens,
                         child: Container(color: segment.colour),
                       ),
-                  // The unused remainder of the tallest bar, so short days sit
-                  // at the bottom instead of being stretched to full height.
-                  if (peak > total)
-                    Flexible(flex: peak - total, child: const SizedBox()),
                 ],
               ),
             ),
             const SizedBox(height: 5),
             Text(
               _shortDay(day.day),
-              style: TextStyle(fontSize: 9.5, color: AppPalette.textFaint),
+              maxLines: 1,
+              softWrap: false,
+              style: _kChartLabelStyle.copyWith(color: AppPalette.textFaint),
             ),
           ],
         ),

@@ -97,3 +97,25 @@ describe('agent creation receipts', () => {
     expect(statSync(file).mode & 0o777).toBe(0o600)
   })
 })
+
+
+it('retains a fork handoff level through a daemon restart', async () => {
+  const { directory, receipts } = fixture()
+  await receipts.run(id, fingerprint, async () => ({ state: 'created', agentId: 'forked', level: 'handoff' }))
+  const restarted = new AgentCreationReceipts(directory)
+  expect(restarted.status(id)).toEqual({ state: 'created', agentId: 'forked', level: 'handoff' })
+  const launch = vi.fn()
+  expect(await restarted.run(id, fingerprint, launch)).toEqual({ state: 'created', agentId: 'forked', level: 'handoff' })
+  expect(launch).not.toHaveBeenCalled()
+})
+
+it('retains a fresh restart outcome through a daemon restart', async () => {
+  const { directory, receipts } = fixture()
+  const restart = vi.fn(async () => ({ state: 'created' as const, agentId: 'agent-1', resumed: false }))
+  const intent = creationFingerprint({ operation: 'restart', agentId: 'agent-1' })
+  await receipts.run(id, intent, restart)
+  const recovered = new AgentCreationReceipts(directory)
+  expect(recovered.status(id)).toEqual({ state: 'created', agentId: 'agent-1', resumed: false })
+  expect(await recovered.run(id, intent, restart)).toEqual(recovered.status(id))
+  expect(restart).toHaveBeenCalledTimes(1)
+})

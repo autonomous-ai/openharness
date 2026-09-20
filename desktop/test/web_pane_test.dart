@@ -3,6 +3,7 @@
 // once the person closes it, and taken down with the agent.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/app_state.dart';
@@ -327,11 +328,18 @@ void main() {
     expect(find.text('http://127.0.0.1:4179/'), findsOneWidget);
     // Its own close control, and no way to end an agent from it.
     expect(find.byTooltip('Close viewer'), findsOneWidget);
-    expect(
-      find.byTooltip('Stop Harness'),
-      findsOneWidget,
-      reason: 'the terminal keeps its own',
+    // This split is narrow: the terminal keeps its actions in the menu.
+    final actions = tester.widget<IconButton>(
+      find.widgetWithIcon(IconButton, Icons.more_horiz),
     );
+    actions.focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.text('Stop Agent'), findsOneWidget);
+    expect(find.text('Hide viewer'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
     // The verdict is the viewer's to show — chip and strip in its header,
     // nothing on the terminal's — and the terminal's header carries the
     // control that hides and shows the viewer.
@@ -368,7 +376,6 @@ void main() {
     expect(find.text('Build'), findsNothing);
     expect(find.text('1 warning'), findsNothing, reason: 'the phase wins');
     expect(find.textContaining('·  Viewer'), findsNothing);
-    expect(find.byTooltip('Hide viewer'), findsOneWidget);
     await tester.tap(find.byTooltip('Close viewer'));
     await tester.pump();
     expect(_viewers(app), isEmpty);

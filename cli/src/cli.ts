@@ -77,7 +77,7 @@ import { writeGridConfigDir } from './lib/gridConfigDir.js'
 import { tmuxSupportsSessionEnv, TMUX_SESSION_ENV_MIN } from './lib/tmuxVersion.js'
 import { clearDeleted, isRecentlyDeleted, markDeleted } from './lib/deletedSessions.js'
 import { terminateDeletedAgent, checkPidRuntime } from './lib/deleteAgentFallback.js'
-import { restartAgent, type RestartAgentDeps } from './lib/restartAgent.js'
+import { AgentRestartCoordinator, restartAgent, type RestartAgentDeps } from './lib/restartAgent.js'
 import { claudeContinuation, findLiveSession } from './lib/sessionRepair.js'
 import { TmuxBackend } from './lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from './lib/hostTheme.js'
@@ -121,6 +121,8 @@ import { terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js
 import { TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
 import { processRows, type DiscoveredTerminalAgent } from './lib/terminalAgentDiscovery.js'
 import { remoteCommand } from './remoteCommand.js'
+import { newCommand } from './lib/newCommand.js'
+import { WebSocket as NewCommandSocket } from 'ws'
 import {
   terminalActionNotStarted,
   type HookTerminalHint,
@@ -334,6 +336,8 @@ Machine:
   harness reset                stop the adapter and clear local CLI state
   harness status               show whether it's running (+ version)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
+  harness new [agent] [@machine] [folder|name] [-- task]
+                               make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
   harness machines             list the machines on this account (this computer's is marked)
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
   harness remote               from a Harness terminal tile: open a terminal on another of your machines and move this tile to it
@@ -4478,6 +4482,13 @@ async function runForeground(session: AuthSession): Promise<void> {
    * is the only thing this takes. Written once because two copies of a kill sequence drift, and the
    * half that drifts is the half nobody ran today.
    */
+  const restartJobs = new AgentRestartCoordinator()
+  const sameRestartTarget = (session: RegisteredSession): boolean => {
+    const current = registry.byAgent(session.agentId)
+    return !!current && current.registeredAt === session.registeredAt
+      && current.tmuxPane === session.tmuxPane && current.engine === session.engine
+  }
+
   const paneSwapDeps = (
     session: RegisteredSession,
     runtime: TmuxRuntimeRef,
@@ -4759,6 +4770,7 @@ async function runForeground(session: AuthSession): Promise<void> {
    * `registry.remove` + `mirror.forget` keep the recap AND the agent-name override for a later resume.
    */
   backend.onDeleteAgent = (sessionId) => {
+    restartJobs.cancel(registry.resolve(sessionId)?.agentId ?? sessionId)
     const s = registry.resolve(sessionId) // BEFORE forgetSession — that removes it from the registry
     // The engine outlives this call by a second or two now, and its catch hook fires on every turn
     // boundary. Without the tombstone that hook re-registers the session and the tile comes straight back.
@@ -4817,10 +4829,14 @@ async function runForeground(session: AuthSession): Promise<void> {
    * registry's live-synced field, not from the original launch argv (the user may have resumed/switched
    * sessions from inside the engine's own terminal since launch).
    */
-  backend.onRestartAgent = async (agentId) => {
+  backend.onRestartAgent = (agentId) => restartJobs.run(registry.resolve(agentId)?.agentId ?? agentId, async (operationCurrent) => {
     const session = registry.resolve(agentId)
     if (!session) return { ok: false, error: 'AGENT_NOT_FOUND' }
     if (!session.tmuxPane || !tmuxBackend) return { ok: false, error: 'RESTART_UNSUPPORTED_BACKEND' }
+    const target = { ...session }
+    const current = () => operationCurrent() && sameRestartTarget(target)
+    const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The agent changed or stopped during restart.' } as const
+    if (!current()) return changed
     const pane = session.tmuxPane
     const engine = session.engine
     const runtime: TmuxRuntimeRef = { backend: 'tmux', paneId: pane }
@@ -4836,8 +4852,10 @@ async function runForeground(session: AuthSession): Promise<void> {
           command: buildEngineLaunchArgv(engine, session.cwd ? { cwd: session.cwd } : {}),
           cwd: homedir(),
         })
+        if (!current()) return changed
         if (respawned.state !== 'succeeded') return { ok: false, error: 'RESTART_FAILED', detail: respawned.reason }
         await clearPaneRemainOnExit(pane)
+        if (!current()) return changed
         registry.setActive(session.agentId, true)
         const refreshed = registry.byAgent(session.agentId)
         if (!refreshed) return { ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' }
@@ -4856,6 +4874,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     // Codex profile. Refused before anything is killed, so a restart that cannot honour the grid
     // leaves the running process alone.
     const built = await relaunchOverrides(session)
+    if (!current()) return changed
     if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
 
     agentReconciler.holdRoute(routeKey)
@@ -4864,9 +4883,10 @@ async function runForeground(session: AuthSession): Promise<void> {
       const outcome = await restartAgent(
         { engine, sessionId: session.sessionId },
         bypassPermission,
-        paneSwapDeps(session, runtime, built.overrides),
+        { ...paneSwapDeps(session, runtime, built.overrides), isCurrent: current },
       )
 
+      if (!current()) return changed
       if (!outcome.ok) return { ok: false, error: 'RESTART_FAILED', detail: outcome.detail }
       refreshGridWebSearch(session.agentId, built.overrides)
 
@@ -4878,9 +4898,11 @@ async function runForeground(session: AuthSession): Promise<void> {
         probeGatewayRuntime(outcome.processIdentity),
         probeGridAssignment(outcome.processIdentity, engine, outcome.processIdentity.executable),
       ])
+      if (!current()) return changed
       registry.updateProcessIdentity(session.agentId, outcome.processIdentity, gateway.kind, assignment)
       registry.setActive(session.agentId, true)
       await clearPaneRemainOnExit(pane)
+      if (!current()) return changed
       const refreshed = registry.byAgent(session.agentId)
       if (!refreshed) return { ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' }
       announceSession(refreshed)
@@ -4890,7 +4912,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     } finally {
       agentReconciler.releaseRoute(routeKey)
     }
-  }
+  })
 
   const submitAgent = (id: string, content: string, deliveryId?: string): void => {
     const record = registry.resolve(id)
@@ -6317,6 +6339,29 @@ switch (cmd) {
     dshCommand(args[0], args[0] === undefined ? rest : withoutFirst(rest, args[0]))
       .then((code) => { process.exitCode = code })
       .catch(onError)
+    break
+  case 'new':
+    // `rest`, not args/flags: a first message and a folder are words in the order they were typed.
+    newCommand({
+      argv: rest,
+      cwd: process.cwd(),
+      home: homedir(),
+      port: daemonPort(),
+      localMachineId: readAuthSession()?.machineId ?? null,
+      daemonRunning: isDaemonRunning,
+      listMachines: async () => {
+        const { session, headers } = await controlPlaneAuth()
+        return (await fetchMachines(headers)).map((machine) => ({
+          machineId: machine.machineId,
+          label: machineLabel(machine),
+          status: machine.status || 'unknown',
+          current: machine.machineId === session.machineId,
+        }))
+      },
+      connect: (url) => new NewCommandSocket(url),
+      output: (line) => console.log(line),
+      error: (line) => console.error(line),
+    }).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'remote':
     remoteCommand({

@@ -197,4 +197,56 @@ void main() {
       }
     }
   }, skip: Platform.isWindows);
+
+  test(
+    'reads repair directory and lock permissions changed between calls',
+    () async {
+      final store = HarnessFileStore(directory: dataDirectory);
+      await store.write('preference', 'kept');
+      final lock = File(
+        '${dataDirectory.path}/${HarnessFileStore.lockFileName}',
+      );
+
+      for (final reader in [
+        store,
+        HarnessFileStore(directory: dataDirectory),
+      ]) {
+        expect(
+          (await Process.run('/bin/chmod', [
+            '755',
+            dataDirectory.path,
+          ])).exitCode,
+          0,
+        );
+        expect(
+          (await Process.run('/bin/chmod', ['664', lock.path])).exitCode,
+          0,
+        );
+        expect(await reader.readMany(['preference']), {'preference': 'kept'});
+        expect((await dataDirectory.stat()).mode & 0xfff, 0x1c0);
+        expect((await lock.stat()).mode & 0xfff, 0x180);
+        expect((await store.stateFile.stat()).mode & 0xfff, 0x180);
+      }
+    },
+    skip: Platform.isWindows,
+  );
+
+  test(
+    'a replacement directory at the same path is made private again',
+    () async {
+      final store = HarnessFileStore(directory: dataDirectory);
+      await store.write('preference', 'old');
+      await dataDirectory.delete(recursive: true);
+      await dataDirectory.create();
+      expect(
+        (await Process.run('/bin/chmod', ['755', dataDirectory.path])).exitCode,
+        0,
+      );
+      await store.write('preference', 'new');
+      expect(await store.read('preference'), 'new');
+      expect((await dataDirectory.stat()).mode & 0xfff, 0x1c0);
+      expect((await store.stateFile.stat()).mode & 0xfff, 0x180);
+    },
+    skip: Platform.isWindows,
+  );
 }

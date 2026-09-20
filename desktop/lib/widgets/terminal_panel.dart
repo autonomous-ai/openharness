@@ -1,3 +1,5 @@
+import '../shared/theme/prompt_style.dart';
+import 'prompt_context.dart';
 import '../sharing/share_harness_dialog.dart';
 
 import 'dart:async';
@@ -33,6 +35,7 @@ import '../terminal/terminal_viewport.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
+import 'box_chrome.dart';
 import 'grid_model_picker.dart';
 import 'pane_header_actions.dart';
 
@@ -959,54 +962,82 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// reserved for a genuinely REMOTE pane, whose engine reads a DIFFERENT
   /// clipboard than this one — see `MachineState.isLocalMachine`.
   Future<void> _paste() async {
-    if (widget.readOnly || !widget.session.acceptsInput) return;
-    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-    if (text != null && text.isNotEmpty) {
-      // A binary TerminalBinaryKind.paste frame rides the same AEAD channel as every other terminal
-      // byte, so this works identically for a local or a relayed machine — see pasteText's doc. Only
-      // the CLI's own version gates it: an older daemon never advertises the capability.
-      final machine = widget.notifier.stateOf(widget.session.machineId);
-      if (machine != null && machine.terminalPasteRawAvailable) {
-        await widget.session.pasteText(text);
-      } else {
-        widget.session.terminal.paste(text);
+    final target = widget.session;
+    final streamId = target.streamId;
+    bool stillOwnsPaste() =>
+        mounted &&
+        identical(widget.session, target) &&
+        !widget.readOnly &&
+        target.acceptsInput &&
+        target.streamId == streamId;
+    if (!stillOwnsPaste()) return;
+
+    ClipboardData? data;
+    try {
+      data = await Clipboard.getData(Clipboard.kTextPlain);
+    } on PlatformException {
+      if (mounted && stillOwnsPaste()) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(
+            content: Text('Could not read the clipboard. Try Paste again.'),
+          ),
+        );
       }
       return;
     }
-    final machine = widget.notifier.stateOf(widget.session.machineId);
+    // Reading the clipboard crosses a platform boundary. The pane may have
+    // changed agents, become read only, closed, or reconnected in that time.
+    if (!stillOwnsPaste()) return;
+    final text = data?.text;
+    if (text != null && text.isNotEmpty) {
+      final machine = widget.notifier.stateOf(target.machineId);
+      _controller.clearSelection();
+      if (machine != null && machine.terminalPasteRawAvailable) {
+        await target.pasteText(text);
+      } else {
+        target.terminal.paste(text);
+      }
+      return;
+    }
+    // An empty clipboard has no input for a shell. Ctrl-V there means
+    // quoted-insert, so the agent image-paste fallback would change its mode.
+    if (isTerminalEngine(target.engineId)) return;
+    final machine = widget.notifier.stateOf(target.machineId);
     if (machine != null &&
         !machine.isLocalMachine &&
         machine.terminalImagePasteAvailable) {
       final imageBytes = await NativeClipboard.readImagePng();
+      if (!stillOwnsPaste()) return;
       if (imageBytes != null &&
           imageBytes.isNotEmpty &&
           imageBytes.length <= terminalLocalImagePasteMaxPayloadBytes) {
-        await widget.session.pasteImage(imageBytes);
+        await target.pasteImage(imageBytes);
         return;
       }
     }
-    widget.session.terminal.keyInput(TerminalKey.keyV, ctrl: true);
+    target.terminal.keyInput(TerminalKey.keyV, ctrl: true);
   }
 
-  /// ⌘V (Ctrl+V off Apple) — taken from xterm so the fallthrough above applies.
-  ///
-  /// xterm binds paste itself, but only ever to its text-only action. `onKeyEvent`
-  /// is the one hook that runs BEFORE its shortcut map (terminal_view.dart), so
-  /// this is where the binding has to be replaced rather than added.
+  /// Take the platform's exact paste chord before xterm's text-only action,
+  /// so agent image paste follows the same path. Linux reserves Ctrl-V for
+  /// the terminal program and uses Ctrl-Shift-V for its clipboard.
   KeyEventResult _onTerminalKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
-    if (event.logicalKey != LogicalKeyboardKey.keyV) {
+    if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.keyV) {
       return KeyEventResult.ignored;
     }
     final keyboard = HardwareKeyboard.instance;
-    if (keyboard.isShiftPressed) {
-      return KeyEventResult.ignored; // ⇧⌘V is a different verb
-    }
-
+    if (keyboard.isAltPressed) return KeyEventResult.ignored;
     final apple =
         defaultTargetPlatform == TargetPlatform.macOS ||
         defaultTargetPlatform == TargetPlatform.iOS;
-    final pasting = apple ? keyboard.isMetaPressed : keyboard.isControlPressed;
+    final pasting = apple
+        ? keyboard.isMetaPressed &&
+              !keyboard.isControlPressed &&
+              !keyboard.isShiftPressed
+        : keyboard.isControlPressed &&
+              !keyboard.isMetaPressed &&
+              keyboard.isShiftPressed ==
+                  (defaultTargetPlatform == TargetPlatform.linux);
     if (!pasting) return KeyEventResult.ignored;
     unawaited(_paste());
     return KeyEventResult.handled;
@@ -1214,8 +1245,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                                       session.agentName,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        fontSize: 13,
+                                      style: boxMonoStyle(
                                         color: Colors.white70,
                                       ),
                                     ),
@@ -1388,6 +1418,7 @@ class _TerminalPanelState extends State<TerminalPanel>
       theme: Theme.of(context),
       brightness: grid.AppTheme.brightness.value,
       fontFamily: AppFonts.sans,
+      terminalFont: terminalFontStore.value,
       notifier: widget.notifier,
       session: session,
       name: session.agentName,
@@ -1571,7 +1602,11 @@ class _TerminalHeader extends StatelessWidget {
     final showModelPicker =
         status == null && !readOnly && modelPickerSupports(session.engineId);
     final pickerWidth = showModelPicker ? 72.0 : 0.0;
-    final actionsWidth = (remoteComposer == null ? 118.0 : 148.0) + pickerWidth;
+    final actionsWidth =
+        (remoteComposer == null ? 148.0 : 178.0) +
+        pickerWidth +
+        (onFork == null ? 0 : 30) +
+        (agent?.viewerUrl == null && agent?.viewerError == null ? 0 : 30);
     final folder =
         project?.cwd
             .split(RegExp(r'[/\\]'))
@@ -1581,285 +1616,265 @@ class _TerminalHeader extends StatelessWidget {
     // A fork says so first: "forked from X" is the one fact about this pane
     // that the folder and the branch — shared with its source — cannot tell.
     final forkedFrom = agent?.forkedFrom;
-    final details = [
-      if (forkedFrom != null) 'forked from ${forkedFrom.name}',
-      if (folder?.isNotEmpty == true) folder!,
-      if (project?.branch?.trim().isNotEmpty == true) project!.branch!,
-      machineName,
-    ];
-    final forkIndex = forkedFrom != null ? 0 : null;
-    final branchIndex = project?.branch?.trim().isNotEmpty == true
-        ? (forkedFrom != null ? 1 : 0) + (folder?.isNotEmpty == true ? 1 : 0)
-        : null;
     final strip = PaneHeaderHover(
       child: SizedBox(
         height: compact ? 38 : 46,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: _stripPadding),
           child: LayoutBuilder(
-            builder: (context, constraints) => Row(
-              children: [
-                if (agent != null)
-                  EngineMark.forAgent(agent, size: 17)
-                else
-                  EngineMark(engine: session.engineId, size: 17),
-                // Icon and name, the same as every other pane (owner,
-                // 2026-09-15): a harness agent is its harness here, and the
-                // engine it runs on is the dialog's and the tooltip's to say.
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Row(
-                    children: [
-                      Flexible(
-                        child: Tooltip(
-                          message: identityDetail,
-                          waitDuration: const Duration(milliseconds: 700),
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onDoubleTap: () => unawaited(
-                              showAgentRenameDialog(
-                                context,
-                                notifier,
-                                session.machineId,
-                                session.agentId,
+            builder: (context, constraints) {
+              final scale = MediaQuery.textScalerOf(context).scale(13) / 13;
+              final narrow = constraints.maxWidth < 560 * math.max(1, scale);
+              final rightWidth = narrow
+                  ? math.max(
+                      showModelPicker ? 60.0 : 28.0,
+                      constraints.maxWidth * .36,
+                    )
+                  : math.max(actionsWidth, constraints.maxWidth * .55);
+              return Row(
+                children: [
+                  if (agent != null)
+                    EngineMark.forAgent(agent, size: 17)
+                  else
+                    EngineMark(engine: session.engineId, size: 17),
+                  // Icon and name, the same as every other pane (owner,
+                  // 2026-09-15): a harness agent is its harness here, and the
+                  // engine it runs on is the dialog's and the tooltip's to say.
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Flexible(
+                          child: Tooltip(
+                            message: identityDetail,
+                            waitDuration: const Duration(milliseconds: 700),
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onDoubleTap: () => unawaited(
+                                showAgentRenameDialog(
+                                  context,
+                                  notifier,
+                                  session.machineId,
+                                  session.agentId,
+                                  session.agentName,
+                                ),
+                              ),
+                              child: Text(
                                 session.agentName,
-                              ),
-                            ),
-                            child: Text(
-                              session.agentName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: AppColors.text,
-                                fontFamily: AppFonts.sans,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      if (status != null)
-                        ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxWidth: math.max(
-                              0,
-                              math.min(
-                                constraints.maxWidth * .22,
-                                constraints.maxWidth - actionsWidth - 110,
-                              ),
-                            ),
-                          ),
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Tooltip(
-                              message: status.detail,
-                              child: TextButton(
-                                onPressed: canReconnect
-                                    ? () => notifier.selectAgent(
-                                        session.machineId,
-                                        session.agentId,
-                                      )
-                                    : null,
-                                style: TextButton.styleFrom(
-                                  foregroundColor: color,
-                                  disabledForegroundColor: AppColors.textSoft,
-                                  minimumSize: Size.zero,
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                    vertical: 4,
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(status.icon, size: 14),
-                                    const SizedBox(width: 6),
-                                    Flexible(
-                                      child: Text(
-                                        status.label,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(fontSize: 11),
-                                      ),
-                                    ),
-                                  ],
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: boxMonoStyle(
+                                  color: AppColors.text,
+                                  size: 12,
+                                  weight: FontWeight.w600,
                                 ),
                               ),
                             ),
                           ),
-                        )
-                      else if (!compact)
-                        Padding(
-                          padding: const EdgeInsets.all(4),
-                          child: Icon(Icons.circle, size: 8, color: color),
                         ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // Which of the three paths carries this pane's bytes. Absent for a local machine's own
-                // terminal, which has no such distinction and so gets no badge.
-                //
-                // The wire word and the word a person reads differ for the middle state, deliberately:
-                // the CLI sends 'turn' (it is a TURN allocation) but both middle and last are relays to
-                // a reader, so they read as "relay" and "ws". 'relay' on the wire kept its original
-                // meaning — the backend WebSocket — so an older CLI is never mislabelled.
-                if (!compact && session.linkMode != null)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    child: _LinkModeMark(mode: session.linkMode!),
-                  ),
-                ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxWidth: math.max(
-                      actionsWidth,
-                      constraints.maxWidth * .55,
-                    ),
-                  ),
-                  child: PaneHeaderActions(
-                    // Where this agent runs, with the controls rather than beside the name — the
-                    // header has room for one of the two, and this is the half you only read while
-                    // reaching for it. Absent while a notice is showing: a header asking to
-                    // reconnect is not the moment to offer a menu.
-                    modelPicker: showModelPicker
-                        ? GridModelPicker(
-                            notifier: notifier,
-                            machineId: session.machineId,
-                            currentModel: agent?.gridModel,
-                            webSearch: agent?.gridWebSearch,
-                            engineLabel: session.engineId,
-                            onSelected: (model) => unawaited(
-                              notifier.retargetAgentToGridModel(
-                                session.machineId,
-                                session.agentId,
-                                model.id,
-                                gridName: model.grid,
-                              ),
-                            ),
-                            onUseOwnLogin: () => unawaited(
-                              notifier.clearAgentGrid(
-                                session.machineId,
-                                session.agentId,
-                              ),
-                            ),
-                            // The pane's own context, because the door opens New Agent — and
-                            // the pane's own MACHINE, because a picker on a remote agent's pane
-                            // is asking about the models that computer can serve, not this one's.
-                            onRunLocalModel: () => unawaited(
-                              notifier.runLocalModel(
-                                context,
-                                machineId: session.machineId,
+                        if (status != null || !compact)
+                          const SizedBox(width: 8),
+                        if (status != null && narrow)
+                          Tooltip(
+                            message: '${status.label}: ${status.detail}',
+                            child: IconButton(
+                              tooltip: status.label,
+                              onPressed: canReconnect
+                                  ? () => notifier.selectAgent(
+                                      session.machineId,
+                                      session.agentId,
+                                    )
+                                  : null,
+                              icon: Icon(status.icon, size: 14),
+                              style: IconButton.styleFrom(
+                                foregroundColor: color,
+                                disabledForegroundColor: color,
+                                fixedSize: const Size(28, 28),
+                                minimumSize: const Size(28, 28),
+                                padding: EdgeInsets.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               ),
                             ),
                           )
-                        : null,
-                    onShare:
-                        readOnly ||
-                            notifier
-                                    .stateOf(session.machineId)
-                                    ?.machine
-                                    .isShared ==
-                                true
-                        ? null
-                        : () => showShareHarnessDialog(
-                            context,
-                            notifier,
-                            session.machineId,
-                            session.agentId,
-                            session.agentName,
-                          ),
-                    zoomed: zoomed,
-                    onZoom: onToggleZoom,
-                    onRestart: onRestart,
-                    onFork: onFork,
-                    onDelete: onDelete,
-                    onClose: onClose,
-                    terminal: isTerminalEngine(session.engineId),
-                    onToggleComposer: remoteComposer,
-                    composerVisible: composerVisible,
-                    // A harness agent's viewer, shown or hidden from the
-                    // pane it belongs to.
-                    onToggleViewer:
-                        agent?.viewerUrl == null && agent?.viewerError == null
-                        ? null
-                        : () => notifier.toggleViewerPane(
-                            session.machineId,
-                            agent!.id,
-                          ),
-                    viewerVisible:
-                        agent != null &&
-                        notifier.viewerPaneShown(session.machineId, agent.id),
-                    viewerColor: agent == null
-                        ? null
-                        : agentIdentity(agent).color,
-                    details: Tooltip(
-                      message: [
-                        if (forkedFrom != null)
-                          'Forked from ${forkedFrom.name}',
-                        if (project != null) project.cwd,
-                        if (project?.branch?.isNotEmpty == true)
-                          'Branch: ${project!.branch}',
-                        machineName,
-                      ].join('\n'),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          for (var i = 0; i < details.length; i++) ...[
-                            if (i > 0)
-                              Text(
-                                '  •  ',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  color: AppColors.mutedStrong,
+                        else if (status != null)
+                          ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth: math.max(
+                                0,
+                                math.min(
+                                  constraints.maxWidth * .22,
+                                  constraints.maxWidth - actionsWidth - 110,
                                 ),
                               ),
-                            Flexible(
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  if (i == branchIndex) ...[
-                                    Icon(
-                                      LucideIcons.gitBranch300,
-                                      size: 12,
-                                      color: AppColors.mutedStrong,
-                                    ),
-                                    const SizedBox(width: 4),
-                                  ],
-                                  if (i == forkIndex) ...[
-                                    Icon(
-                                      LucideIcons.gitFork300,
-                                      size: 12,
-                                      color: AppColors.mutedStrong,
-                                    ),
-                                    const SizedBox(width: 4),
-                                  ],
-                                  Flexible(
-                                    child: Text(
-                                      details[i],
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontFamily: AppFonts.sans,
-                                        fontSize: 12,
-                                        color: AppColors.mutedStrong,
-                                      ),
+                            ),
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: Tooltip(
+                                message: status.detail,
+                                child: TextButton(
+                                  onPressed: canReconnect
+                                      ? () => notifier.selectAgent(
+                                          session.machineId,
+                                          session.agentId,
+                                        )
+                                      : null,
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: color,
+                                    disabledForegroundColor: AppColors.textSoft,
+                                    minimumSize: Size.zero,
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 4,
                                     ),
                                   ),
-                                ],
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(status.icon, size: 14),
+                                      const SizedBox(width: 6),
+                                      Flexible(
+                                        child: Text(
+                                          status.label,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(fontSize: 11),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               ),
                             ),
-                          ],
-                        ],
+                          )
+                        else if (!compact)
+                          Padding(
+                            padding: const EdgeInsets.all(4),
+                            child: Icon(Icons.circle, size: 8, color: color),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // Which of the three paths carries this pane's bytes. Absent for a local machine's own
+                  // terminal, which has no such distinction and so gets no badge.
+                  //
+                  // The wire word and the word a person reads differ for the middle state, deliberately:
+                  // the CLI sends 'turn' (it is a TURN allocation) but both middle and last are relays to
+                  // a reader, so they read as "relay" and "ws". 'relay' on the wire kept its original
+                  // meaning — the backend WebSocket — so an older CLI is never mislabelled.
+                  if (!compact && !narrow && session.linkMode != null)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      child: _LinkModeMark(mode: session.linkMode!),
+                    ),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: rightWidth),
+                    child: PaneHeaderActions(
+                      compact: narrow,
+                      // Where this agent runs, with the controls rather than beside the name — the
+                      // header has room for one of the two, and this is the half you only read while
+                      // reaching for it. Absent while a notice is showing: a header asking to
+                      // reconnect is not the moment to offer a menu.
+                      modelPicker: showModelPicker
+                          ? GridModelPicker(
+                              compact: narrow,
+                              notifier: notifier,
+                              machineId: session.machineId,
+                              currentModel: agent?.gridModel,
+                              webSearch: agent?.gridWebSearch,
+                              engineLabel: session.engineId,
+                              onSelected: (model) => unawaited(
+                                notifier.retargetAgentToGridModel(
+                                  session.machineId,
+                                  session.agentId,
+                                  model.id,
+                                  gridName: model.grid,
+                                ),
+                              ),
+                              onUseOwnLogin: () => unawaited(
+                                notifier.clearAgentGrid(
+                                  session.machineId,
+                                  session.agentId,
+                                ),
+                              ),
+                              // The pane's own context, because the door opens New Agent — and
+                              // the pane's own MACHINE, because a picker on a remote agent's pane
+                              // is asking about the models that computer can serve, not this one's.
+                              onRunLocalModel: () => unawaited(
+                                notifier.runLocalModel(
+                                  context,
+                                  machineId: session.machineId,
+                                ),
+                              ),
+                            )
+                          : null,
+                      onShare:
+                          readOnly ||
+                              notifier
+                                      .stateOf(session.machineId)
+                                      ?.machine
+                                      .isShared ==
+                                  true
+                          ? null
+                          : () => showShareHarnessDialog(
+                              context,
+                              notifier,
+                              session.machineId,
+                              session.agentId,
+                              session.agentName,
+                            ),
+                      zoomed: zoomed,
+                      onZoom: onToggleZoom,
+                      onRestart: onRestart,
+                      onFork: onFork,
+                      onDelete: onDelete,
+                      onClose: onClose,
+                      terminal: isTerminalEngine(session.engineId),
+                      onToggleComposer: remoteComposer,
+                      composerVisible: composerVisible,
+                      // A harness agent's viewer, shown or hidden from the
+                      // pane it belongs to.
+                      onToggleViewer:
+                          agent?.viewerUrl == null && agent?.viewerError == null
+                          ? null
+                          : () => notifier.toggleViewerPane(
+                              session.machineId,
+                              agent!.id,
+                            ),
+                      viewerVisible:
+                          agent != null &&
+                          notifier.viewerPaneShown(session.machineId, agent.id),
+                      viewerColor: agent == null
+                          ? null
+                          : agentIdentity(agent).color,
+                      details: Tooltip(
+                        message: [
+                          if (forkedFrom != null)
+                            'Forked from ${forkedFrom.name}',
+                          if (project != null) project.cwd,
+                          if (project?.branch?.isNotEmpty == true)
+                            'Branch: ${project!.branch}',
+                          machineName,
+                        ].join('\n'),
+                        child: PromptContextView(
+                          size: narrow ? 11 : 12,
+                          contextData: PromptContext(
+                            machine: machineName,
+                            project: narrow ? null : folder,
+                            branch: narrow ? null : project?.branch,
+                            leading: !narrow && forkedFrom != null
+                                ? 'forked from ${forkedFrom.name}'
+                                : null,
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              );
+            },
           ),
         ),
       ),

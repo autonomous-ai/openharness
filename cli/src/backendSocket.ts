@@ -2273,6 +2273,26 @@ export class BackendSocket {
           const target = payload.agentId as string | undefined
           if (!target) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
           if (!this.onRestartAgent) { reply(type, requestId, { error: 'UNSUPPORTED_ON_REMOTE' }); return }
+          const creationId = payload.creationId
+          if (creationId !== undefined) {
+            if (!validCreationId(creationId)) { reply(type, requestId, { error: 'INVALID_CREATION_ID' }); return }
+            const restart = this.onRestartAgent
+            try {
+              void this.agentCreations.run(creationId, creationFingerprint({ operation: 'restart', agentId: target }), async () => {
+                const result = await restart(target)
+                if (result.ok) return { state: 'created', agentId: result.session.agentId, resumed: result.resumed }
+                // RESTART_FAILED can follow an unobserved relaunch. Never silently
+                // replace that process again when a caller checks this intent.
+                if (result.error === 'RESTART_FAILED') return { state: 'unconfirmed' }
+                return { state: 'failed', error: result.error, ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
+              }).then(async (status) => {
+                reply(type, requestId, { creationId, ...await this.creationStatusPayload(status) })
+              }).catch(() => reply(type, requestId, { error: 'INTERNAL' }))
+            } catch (error) {
+              reply(type, requestId, { error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
+            }
+            return
+          }
           const result = await this.onRestartAgent(target)
           if (!result.ok) {
             reply(type, requestId, result.detail ? { error: result.error, detail: result.detail } : { error: result.error })
@@ -2293,6 +2313,26 @@ export class BackendSocket {
           if (rawPrompt !== undefined && rawPrompt !== null && typeof rawPrompt !== 'string') { reply(type, requestId, { error: 'INVALID_PROMPT' }); return }
           const prompt = typeof rawPrompt === 'string' && rawPrompt.trim() ? rawPrompt : null
           if (prompt && prompt.length > MAX_FIRST_PROMPT_CHARS) { reply(type, requestId, { error: 'PROMPT_TOO_LONG' }); return }
+          const creationId = payload.creationId
+          if (creationId !== undefined) {
+            if (!validCreationId(creationId)) { reply(type, requestId, { error: 'INVALID_CREATION_ID' }); return }
+            // Forking starts a new process too. Reserve the same durable intent used
+            // by agent_create so a lost receipt can be checked without another fork.
+            const fork = this.onForkAgent
+            try {
+              void this.agentCreations.run(creationId, creationFingerprint({ operation: 'fork', agentId: target, name, prompt }), async () => {
+                const result = await fork({ agentId: target, name, prompt })
+                if (result.ok) return { state: 'created', agentId: result.session.agentId, level: result.level }
+                if (result.error === 'SPAWN_FAILED' || result.error === 'REGISTRATION_FAILED') return { state: 'unconfirmed' }
+                return { state: 'failed', error: result.error, ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
+              }).then(async (status) => {
+                reply(type, requestId, { creationId, ...await this.creationStatusPayload(status) })
+              }).catch(() => reply(type, requestId, { error: 'INTERNAL' }))
+            } catch (error) {
+              reply(type, requestId, { error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
+            }
+            return
+          }
           const result = await this.onForkAgent({ agentId: target, name, prompt })
           if (!result.ok) {
             reply(type, requestId, result.detail ? { error: result.error, detail: result.detail } : { error: result.error })
@@ -2472,7 +2512,7 @@ export class BackendSocket {
     if (status.state === 'created') {
       const session = registry.byAgent(status.agentId)
       return session
-        ? { state: 'created', agent: await this.toProject(session) }
+        ? { state: 'created', agent: await this.toProject(session), ...(status.level ? { level: status.level } : {}), ...(status.resumed !== undefined ? { resumed: status.resumed } : {}) }
         : { state: 'unavailable' }
     }
     // A recorded refusal is a completed outcome. Keep it separate from transport/dispatch errors

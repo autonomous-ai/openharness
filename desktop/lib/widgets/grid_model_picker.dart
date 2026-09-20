@@ -74,6 +74,7 @@ class GridModelPicker extends StatefulWidget {
 
   /// The agent's engine, for the subscription row's icon and label.
   final String? engineLabel;
+  final bool compact;
 
   const GridModelPicker({
     super.key,
@@ -85,6 +86,7 @@ class GridModelPicker extends StatefulWidget {
     this.currentModel,
     this.webSearch,
     this.engineLabel,
+    this.compact = false,
   });
 
   @override
@@ -401,6 +403,28 @@ class _GridModelPickerState extends State<GridModelPicker> {
   @override
   Widget build(BuildContext context) {
     final sentence = _webSearchSentence;
+    if (widget.compact) {
+      return IconButton(
+        tooltip: sentence == null
+            ? 'Where this agent runs'
+            : 'Where this agent runs\n$sentence',
+        onPressed: _open,
+        icon: _loading
+            ? const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(strokeWidth: 1.5),
+              )
+            : const Icon(Icons.tune, size: 16),
+        style: IconButton.styleFrom(
+          foregroundColor: AppColors.mutedStrong,
+          fixedSize: const Size(28, 28),
+          minimumSize: const Size(28, 28),
+          padding: EdgeInsets.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+      );
+    }
     return Tooltip(
       // The same sentence the menu shows, one line under the control's own — so a person can learn
       // the agent has no web search without opening the menu at all.
@@ -483,7 +507,6 @@ class _ManagerInvitationState extends State<_ManagerInvitation> {
 
   @override
   Widget build(BuildContext context) {
-    final rule = Expanded(child: Container(height: 1, color: AppColors.border));
     return Padding(
       // Wider than a row's inset on purpose: this block is not one of them.
       padding: const EdgeInsets.fromLTRB(
@@ -496,20 +519,22 @@ class _ManagerInvitationState extends State<_ManagerInvitation> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              rule,
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
+              Container(width: 12, height: 1, color: AppColors.border),
+              const SizedBox(width: 8),
+              Flexible(
                 child: Text(
                   'Manage the models on your machines',
+                  textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 10.5,
-                    letterSpacing: .2,
                     color: AppColors.mutedStrong,
                   ),
                 ),
               ),
-              rule,
+              const SizedBox(width: 8),
+              Container(width: 12, height: 1, color: AppColors.border),
             ],
           ),
           const SizedBox(height: 9),
@@ -517,7 +542,7 @@ class _ManagerInvitationState extends State<_ManagerInvitation> {
             cursor: SystemMouseCursors.click,
             onEnter: (_) => setState(() => _hovered = true),
             onExit: (_) => setState(() => _hovered = false),
-            child: GestureDetector(
+            child: InkWell(
               onTap: widget.onPressed,
               child: Container(
                 // Full width, so it reads as the section's one action rather than as a wider row.

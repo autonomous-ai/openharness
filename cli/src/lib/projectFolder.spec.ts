@@ -30,6 +30,19 @@ describe('project folder preparation', () => {
     expect(await prepareProjectFolder({ source: 'new' }, { root, label: '!!', now })).toBe(join(root, 'harness-2026-09-03-09-05-07'))
   })
 
+  it('gives a named new project that folder, slugged again here, and never a changed name', async () => {
+    expect(parseProjectFolder({ projectSource: 'new', projectName: 'My Game! v2' })).toEqual({ source: 'new', name: 'My-Game-v2' })
+    // A name is a path segment: nothing that climbs or hides survives, and nothing usable is no name.
+    expect(parseProjectFolder({ projectSource: 'new', projectName: '../../etc' })).toEqual({ source: 'new', name: 'etc' })
+    expect(parseProjectFolder({ projectSource: 'new', projectName: ' .. ' })).toEqual({ source: 'new' })
+    expect(parseProjectFolder({ projectSource: 'new', projectName: 7 })).toEqual({ source: 'new' })
+    expect(await prepareProjectFolder({ source: 'new', name: 'My-Game-v2' }, { root, label: 'Codex', now })).toBe(join(root, 'My-Game-v2'))
+    // Asking again is refused rather than answered with "My-Game-v2-2": the folder is theirs to pick.
+    await expect(prepareProjectFolder({ source: 'new', name: 'My-Game-v2' }, { root, label: 'Codex', now }))
+      .rejects.toMatchObject({ code: 'PROJECT_EXISTS' })
+    expect(await readdir(root)).toEqual(['My-Game-v2'])
+  })
+
   it('gives two projects in the same minute the seconds, then a suffix, and never takes a file’s name', async () => {
     await writeFile(join(root, 'codex-2026-09-03-09-05'), 'keep')
     const folders = await Promise.all([1, 2, 3].map(() => prepareProjectFolder({ source: 'new' }, { root, label: 'Codex', now })))

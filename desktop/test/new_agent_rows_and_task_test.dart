@@ -16,6 +16,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/shared/widgets/app_icon_button.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/widgets/new_agent_dialog.dart';
 import 'package:harness/widgets/search_result_text.dart';
@@ -127,6 +128,7 @@ class _App extends AppNotifier {
     String? swarmId,
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
+    HarnessPlacement? placement,
   }) async {
     prompts.add(prompt);
     return pendingCreate?.future ?? 'Test launch refused.';
@@ -309,7 +311,16 @@ void main() {
       await _search(tester, 'deepmind');
       expect(agentRows(tester), ['autonomous/mujoco']);
       final preview = find.byKey(const ValueKey('new-agent-agent-preview'));
+      expect(preview, findsNothing);
+      final input = tester.widget<TextField>(agentSearch);
+      final value = input.controller!.value;
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.slash);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pumpAndSettle();
       expect(preview, findsOneWidget);
+      expect(input.controller!.value, value);
+      expect(input.focusNode!.hasPrimaryFocus, isTrue);
       expect(
         find.descendant(
           of: preview,

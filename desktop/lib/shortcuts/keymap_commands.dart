@@ -11,6 +11,7 @@ class HarnessCommand {
     this.label,
     this.group, {
     this.extraKeys = const [],
+    this.keywords = const [],
     this.action,
     this.nativeAction,
     this.context = KeymapContext.workspace,
@@ -19,6 +20,7 @@ class HarnessCommand {
   final String id, label;
   final ShortcutGroup group;
   final List<String> extraKeys;
+  final List<String> keywords;
 
   /// Workspace defaults come from the live shortcut table. A command cannot
   /// quietly propose different keys from the ones the user already uses.
@@ -79,14 +81,14 @@ final harnessCommands = <HarnessCommand>[
   // key of their own in keybindings.jsonc.
   const HarnessCommand(
     'swarm.reopen',
-    'Reopen last closed harness',
+    'Reopen closed tab or pane',
     ShortcutGroup.navigate,
     action: ShortcutAction.reopenClosedSwarm,
     nativeAction: 'reopen',
   ),
   const HarnessCommand(
     'swarm.next',
-    'Next Harness',
+    'Next Tab',
     ShortcutGroup.navigate,
     action: ShortcutAction.nextSwarm,
     nativeAction: 'next',
@@ -94,7 +96,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'swarm.previous',
-    'Previous Harness',
+    'Previous Tab',
     ShortcutGroup.navigate,
     action: ShortcutAction.previousSwarm,
     nativeAction: 'previous',
@@ -140,7 +142,7 @@ final harnessCommands = <HarnessCommand>[
   for (var i = 1; i <= 9; i++)
     HarnessCommand(
       'swarm.select_$i',
-      'Select harness $i',
+      'Select tab $i',
       ShortcutGroup.navigate,
       extraKeys: ['cmd+$i'],
     ),
@@ -241,14 +243,12 @@ final harnessCommands = <HarnessCommand>[
     'pane.split_right',
     'Split right…',
     ShortcutGroup.panes,
-    extraKeys: ['cmd+r'],
     nativeAction: 'splitRight',
   ),
   const HarnessCommand(
     'pane.split_down',
     'Split down…',
     ShortcutGroup.panes,
-    extraKeys: ['cmd+d'],
     nativeAction: 'splitDown',
   ),
   const HarnessCommand(
@@ -281,7 +281,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'agent.add',
-    'Open Harness',
+    'New Pane',
     ShortcutGroup.actions,
     action: ShortcutAction.addAgent,
     nativeAction: 'addAgent',
@@ -293,6 +293,10 @@ final harnessCommands = <HarnessCommand>[
     action: ShortcutAction.newAgent,
     nativeAction: 'newAgent',
   ),
+  const HarnessCommand('agent.rename', 'Rename Agent', ShortcutGroup.actions),
+  const HarnessCommand('agent.stop', 'Stop Agent', ShortcutGroup.actions),
+  const HarnessCommand('agent.fork', 'Fork Agent', ShortcutGroup.actions),
+  const HarnessCommand('agent.restart', 'Restart Agent', ShortcutGroup.actions),
   const HarnessCommand(
     'terminal.new',
     'New Terminal',
@@ -338,6 +342,19 @@ final harnessCommands = <HarnessCommand>[
     action: ShortcutAction.orchestrate,
   ),
   const HarnessCommand(
+    'app.customize',
+    'Customize OpenHarness',
+    ShortcutGroup.actions,
+  ),
+  const HarnessCommand(
+    'app.store',
+    'Harness Store',
+    ShortcutGroup.actions,
+    extraKeys: ['cmd+s'],
+    keywords: ['install', 'browse harnesses', 'packages', 'extensions'],
+    nativeAction: 'store',
+  ),
+  const HarnessCommand(
     'app.settings',
     'Open Settings',
     ShortcutGroup.actions,
@@ -356,6 +373,26 @@ final harnessCommands = <HarnessCommand>[
     'Open keyboard config',
     ShortcutGroup.actions,
     nativeAction: 'openKeymap',
+  ),
+  const HarnessCommand(
+    'keyboard.quick_start',
+    'Quick start',
+    ShortcutGroup.actions,
+    keywords: ['onboarding', 'learn', 'guide', 'getting started'],
+    nativeAction: 'quickStart',
+  ),
+  const HarnessCommand(
+    'keyboard.practice',
+    'Keyboard practice',
+    ShortcutGroup.actions,
+    keywords: ['tutorial', 'learn', 'shortcuts', 'training', 'keys'],
+    nativeAction: 'keyboardPractice',
+  ),
+  const HarnessCommand(
+    'keyboard.pause_guide',
+    'Pause quick start',
+    ShortcutGroup.actions,
+    keywords: ['hide guide', 'dismiss tutorial'],
   ),
   if (kDebugSurfaceEnabled)
     const HarnessCommand(
@@ -382,7 +419,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'picker.preview_page_up',
-    'Scroll preview up',
+    'Page up in the preview or results',
     ShortcutGroup.navigate,
     extraKeys: ['pageup'],
     context: KeymapContext.picker,
@@ -390,7 +427,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'picker.preview_page_down',
-    'Scroll preview down',
+    'Page down in the preview or results',
     ShortcutGroup.navigate,
     extraKeys: ['pagedown'],
     context: KeymapContext.picker,
@@ -400,7 +437,14 @@ final harnessCommands = <HarnessCommand>[
     'picker.accept',
     'Open the selected result',
     ShortcutGroup.navigate,
-    extraKeys: ['enter'],
+    extraKeys: ['enter', 'ctrl+m'],
+    context: KeymapContext.picker,
+  ),
+  const HarnessCommand(
+    'picker.refresh',
+    'Refresh the machine list',
+    ShortcutGroup.actions,
+    extraKeys: ['cmd+r', 'ctrl+r'],
     context: KeymapContext.picker,
   ),
   const HarnessCommand(
@@ -410,11 +454,89 @@ final harnessCommands = <HarnessCommand>[
     extraKeys: ['cmd+enter'],
     context: KeymapContext.picker,
   ),
+  // The box's own keys. They were hardcoded activators: absent from ⌘/ and the
+  // config template, and impossible to move — the one corner where "every key
+  // can be remapped" was not true.
+  const HarnessCommand(
+    'picker.complete',
+    'Complete the path, or go to the next field',
+    ShortcutGroup.navigate,
+    // ⌃I is Tab to a terminal, as ⌃M is Return and ⌃[ is Escape.
+    extraKeys: ['tab', 'ctrl+i'],
+    context: KeymapContext.picker,
+    repeatable: true,
+  ),
+  const HarnessCommand(
+    'picker.complete_back',
+    'The previous candidate, or the previous field',
+    ShortcutGroup.navigate,
+    extraKeys: ['shift+tab'],
+    context: KeymapContext.picker,
+    repeatable: true,
+  ),
+  const HarnessCommand(
+    'picker.more_options',
+    'Open the full New Harness form',
+    ShortcutGroup.navigate,
+    extraKeys: ['cmd+period'],
+    context: KeymapContext.picker,
+  ),
+  // Launch and Project use arrows/Enter. Keep stable command identities for
+  // explicit user bindings without reserving plain letters in these prompts.
+  for (final (name, key, label) in [
+    ('agent', null, 'Choose the new agent'),
+    ('project', null, 'Choose the new agent’s project'),
+    ('task', null, 'Edit the new agent’s first task'),
+    ('options', null, 'Edit the new agent’s advanced options'),
+    // Project is a text filter. Keep these command identities available for
+    // explicit user remaps, without taking ordinary letters from the editor.
+    ('project_new', null, 'Name a new project'),
+    ('project_existing', null, 'Open an existing project'),
+    ('project_repository', null, 'Clone a GitHub repository'),
+    ('project_machine', null, 'Choose the new agent’s machine'),
+    ('project_browse', 'ctrl+o', 'Browse folders on the selected machine'),
+  ])
+    HarnessCommand(
+      'creation.$name',
+      label,
+      ShortcutGroup.actions,
+      extraKeys: [?key],
+      context:
+          const {
+            'project_new',
+            'project_existing',
+            'project_repository',
+          }.contains(name)
+          ? KeymapContext.project
+          : KeymapContext.picker,
+    ),
+  for (var recent = 1; recent <= 9; recent++)
+    HarnessCommand(
+      'creation.project_recent_$recent',
+      'Use recent project $recent',
+      ShortcutGroup.actions,
+      context: KeymapContext.project,
+    ),
+  const HarnessCommand(
+    'picker.toggle_preview',
+    'Show or hide the result preview',
+    ShortcutGroup.navigate,
+    extraKeys: ['ctrl+slash'],
+    context: KeymapContext.picker,
+  ),
+  for (var row = 1; row <= 9; row++)
+    HarnessCommand(
+      'picker.pick_$row',
+      'Take row $row',
+      ShortcutGroup.navigate,
+      extraKeys: ['alt+$row'],
+      context: KeymapContext.picker,
+    ),
   const HarnessCommand(
     'picker.cancel',
     'Close search',
     ShortcutGroup.navigate,
-    extraKeys: ['escape', 'ctrl+g'],
+    extraKeys: ['escape', 'ctrl+c', 'ctrl+g', 'ctrl+bracketleft'],
     context: KeymapContext.picker,
   ),
 ];

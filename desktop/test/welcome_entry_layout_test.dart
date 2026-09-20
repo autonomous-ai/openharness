@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/screens/swarm_screen.dart';
+import 'package:harness/state/swarm_search.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 
 import 'support/real_fonts.dart';
@@ -94,14 +95,14 @@ void main() {
           await tester.pump();
         }
         final field = find.byKey(const ValueKey('harness-start-search'));
-        final create = find.byKey(const ValueKey('harness-start-new'));
-        final open = find.byKey(const ValueKey('harness-start-open'));
+        final create = find.byKey(const ValueKey('harness-start-new-pane'));
+        final open = find.byKey(const ValueKey('harness-start-new-tab'));
         final device = find.byKey(const ValueKey('harness-device-link'));
         final store = find.byKey(const ValueKey('harness-store-link'));
         expect(find.text('OpenHarness'), findsNothing);
         expect(
           tester.widget<TextField>(field).decoration!.hintText,
-          'Find a harness',
+          kHarnessPickerHint,
         );
         expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
         expect(find.byType(ListTile), findsNothing);
@@ -169,6 +170,8 @@ void main() {
         await tester.ensureVisible(create);
         expect(create.hitTestable(), findsOneWidget);
         await tester.tap(create);
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pumpAndSettle();
         expect(find.byType(AlertDialog), findsOneWidget);
         expect(results, findsNothing);

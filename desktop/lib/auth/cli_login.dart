@@ -152,10 +152,33 @@ class CliLogin implements SignInClient {
 
   @override
   Future<void> logout() async {
+    // Own a process handle: a timed-out logout must not remain alive and erase
+    // the credentials saved by the user's next sign-in.
+    final Process process;
     try {
-      await _run(['logout']);
-    } catch (_) {
-      // Best-effort: local app state is cleared regardless by the caller.
+      process = await _runner.start(['logout']);
+    } catch (error) {
+      throw CliNotAvailableException('Could not run the harness CLI: $error');
+    }
+    try {
+      int? exitCode;
+      await Future.wait<void>([
+        process.stdout.drain<void>(),
+        process.stderr.drain<void>(),
+        process.exitCode.then((value) => exitCode = value),
+      ]).timeout(_runner.runTimeout);
+      if (exitCode != 0) {
+        throw StateError('Could not finish signing out. Try again.');
+      }
+    } on TimeoutException {
+      process.kill();
+      try {
+        await process.exitCode.timeout(const Duration(seconds: 1));
+      } on TimeoutException {
+        process.kill(ProcessSignal.sigkill);
+        await process.exitCode;
+      }
+      throw StateError('Sign-out took too long. Try again.');
     }
   }
 

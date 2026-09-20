@@ -44,13 +44,13 @@ void main() {
           (w) => w is ListTile && w.selected,
         );
         final first = tester.widget<ListTile>(selected).key;
-        await key(tester, LogicalKeyboardKey.arrowDown);
-        expect(tester.widget<ListTile>(selected).key, isNot(first));
         await key(tester, LogicalKeyboardKey.arrowUp);
+        expect(tester.widget<ListTile>(selected).key, isNot(first));
+        await key(tester, LogicalKeyboardKey.arrowDown);
         expect(tester.widget<ListTile>(selected).key, first);
-        await tester.enterText(field, 'new');
+        await tester.enterText(field, '> new');
         await key(tester, LogicalKeyboardKey.keyA, cmd: true);
-        expect(controller.selection.textInside(controller.text), 'new');
+        expect(controller.selection.textInside(controller.text), '> new');
         await key(tester, LogicalKeyboardKey.backspace);
         expect(controller.text, isEmpty);
         expect(
@@ -58,7 +58,7 @@ void main() {
               .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
               .search
               .rows
-              .every((row) => row.isCommand),
+              .every((row) => row.isCreate || row.agentId != null),
           isTrue,
         );
         expect(focus.hasFocus, isTrue);
@@ -68,7 +68,7 @@ void main() {
         );
         await key(tester, LogicalKeyboardKey.escape);
         expect(field, findsNothing);
-        await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
         await tester.enterText(field, 'Agent 0');
         await tester.pump();
         expect(

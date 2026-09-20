@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../analytics/analytics.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -78,6 +79,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late SettingsSection _section =
       widget.initialSection ?? kDefaultSettingsSection;
 
+  KeyEventResult _key(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.escape ||
+        HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isAltPressed ||
+        HardwareKeyboard.instance.isMetaPressed ||
+        HardwareKeyboard.instance.isShiftPressed ||
+        ModalRoute.of(context)?.isCurrent == false) {
+      return KeyEventResult.ignored;
+    }
+    final editing = FocusManager.instance.primaryFocus?.context
+        ?.findAncestorStateOfType<EditableTextState>()
+        ?.widget
+        .controller
+        .value;
+    if (editing != null &&
+        editing.composing.isValid &&
+        !editing.composing.isCollapsed) {
+      return KeyEventResult.skipRemainingHandlers;
+    }
+    Navigator.of(context).maybePop();
+    return KeyEventResult.handled;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -109,31 +134,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // runs from y=0 — under the macOS traffic lights included. A header across
     // the top would have to carry the rail's fill over the pane as well, which
     // is what leaves the top of a window reading as a separate, lighter band.
-    return Scaffold(
-      backgroundColor: grid.AppPalette.windowBg,
-      body: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SettingsNav(section: _section, onSelect: _show),
-          VerticalDivider(width: 1, color: grid.AppPalette.divider),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // The pane needs the traffic lights' clearance and somewhere to
-                // grab the window, but no fill of its own — it sits on the
-                // window. The rail draws its own.
-                const WindowDragStrip(),
-                Expanded(
-                  child: _SettingsBody(
-                    section: _section,
-                    notifier: widget.notifier,
+    return Focus(
+      onKeyEvent: _key,
+      child: Scaffold(
+        backgroundColor: grid.AppPalette.windowBg,
+        body: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SettingsNav(section: _section, onSelect: _show),
+            VerticalDivider(width: 1, color: grid.AppPalette.divider),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // The pane needs the traffic lights' clearance and somewhere to
+                  // grab the window, but no fill of its own — it sits on the
+                  // window. The rail draws its own.
+                  const WindowDragStrip(),
+                  Expanded(
+                    child: _SettingsBody(
+                      section: _section,
+                      notifier: widget.notifier,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

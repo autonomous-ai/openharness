@@ -193,7 +193,7 @@ List<ShortcutRow> effectiveShortcutRows(
   }
   final bindings = (map ?? harnessDefaultKeymap).bindingsFor(contextKind);
   final defaultDigits =
-      contextKind != KeymapContext.picker &&
+      !contextKind.isPicker &&
       List.generate(kTabDigitCount, (i) {
         final matches = bindings
             .where((b) => b.command == 'swarm.select_${i + 1}')
@@ -206,6 +206,8 @@ List<ShortcutRow> effectiveShortcutRows(
   return [
     for (final command in harnessCommands)
       if ((command.context == KeymapContext.workspace ||
+              (contextKind == KeymapContext.project &&
+                  command.context == KeymapContext.picker) ||
               command.context == contextKind) &&
           (!defaultDigits ||
               !RegExp(r'^swarm\.select_[1-9]$').hasMatch(command.id)))
@@ -234,7 +236,7 @@ List<ShortcutRow> effectiveShortcutRows(
           ),
     if (defaultDigits)
       const ShortcutRow(
-        label: 'Select harnesses 1–9',
+        label: 'Select tabs 1–9',
         chords: [
           ['⌘', '1 – 9'],
         ],

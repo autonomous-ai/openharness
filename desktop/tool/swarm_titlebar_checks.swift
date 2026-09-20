@@ -499,12 +499,12 @@ private extension SwarmTitlebar {
     // The inherited default is still first; a sequence is not falsely shown
     // as a second one-stroke accelerator in AppKit's shortcut column.
     let onlySequence = HarnessNativeKeymap(["version": 1, "contexts": Dictionary(uniqueKeysWithValues:
-      ["workspace", "terminal", "picker"].map { ($0, [["keys": ["cmd+k", "n"], "command": "swarm.new",
+      HarnessNativeKeymap.contexts.map { ($0, [["keys": ["cmd+k", "n"], "command": "swarm.new",
         "hint": "⌘K N", "repeatable": false, "menuAction": "new"]]) })])!
     setKeymap(onlySequence)
     try checkTitlebar(newSwarm.keyEquivalent.isEmpty && newSwarm.toolTip == nil,
       "Sequences add no hover hints or misleading first-key menu shortcut")
-    setKeymap(HarnessNativeKeymap(["version": 1, "contexts": ["workspace": [], "terminal": [], "picker": []]])!)
+    setKeymap(HarnessNativeKeymap(["version": 1, "contexts": ["workspace": [], "terminal": [], "picker": [], "project": []]])!)
     try checkTitlebar(newSwarm.keyEquivalent.isEmpty && newSwarm.toolTip == nil,
       "Unbinding clears the old native shortcut and hint")
     rebuildHistoryMenu()
@@ -585,14 +585,14 @@ private extension SwarmTitlebar {
     actionsEnabled = true
     let remapped = HarnessNativeKeymap(["version": 1, "contexts": [
       "workspace": [["keys": ["cmd+x"], "command": "project.orchestrate", "hint": "⌘X", "repeatable": false]],
-      "terminal": [], "picker": [],
+      "terminal": [], "picker": [], "project": [],
     ]])!
     setKeymap(remapped)
     _ = main.performKeyEquivalent(with: event("p", 35, .command))
     try checkTitlebar(messenger.calls.count == beforeViewer + 1, "The old viewer shortcut stays unbound after remapping")
     try checkTitlebar(main.performKeyEquivalent(with: event("x", 7, .command)) && messenger.calls.count == beforeViewer + 2,
       "The viewer bridge follows the actual remapped two-key shortcut")
-    setKeymap(HarnessNativeKeymap(["version": 1, "contexts": ["workspace": [], "terminal": [], "picker": []]])!)
+    setKeymap(HarnessNativeKeymap(["version": 1, "contexts": ["workspace": [], "terminal": [], "picker": [], "project": []]])!)
     _ = main.performKeyEquivalent(with: event("x", 7, .command))
     try checkTitlebar(messenger.calls.count == beforeViewer + 2, "Unbinding disables viewer launch dispatch")
     setKeymap(defaults)

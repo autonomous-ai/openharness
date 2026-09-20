@@ -203,6 +203,13 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
   /// sandbox is already private to it — nor can spawn `/bin/chmod` at all.
   Future<void> _chmod(String path, String mode) async {
     if (Platform.isWindows || isMobileHost) return;
+    // Reads must still repair permissions changed outside this instance, but
+    // launching chmod for every already-private directory and lock dominates
+    // startup. Check the live mode each time; do not cache it across operations.
+    // Include special bits as well as rwx when deciding that no repair is needed.
+    final expected = int.parse(mode, radix: 8);
+    final actual = (await FileStat.stat(path)).mode;
+    if ((actual & 0xfff) == expected) return;
     final result = await Process.run('/bin/chmod', [mode, path]);
     if (result.exitCode != 0) {
       throw FileSystemException('Could not set mode $mode', path);

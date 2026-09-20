@@ -222,6 +222,38 @@ const _engines = <String, EngineIdentity>{
 /// own. It is only a face. A harness absent here still draws — the daemon
 /// sends its name, and [engineIdentity] falls back to an initial.
 const _harnesses = <String, EngineIdentity>{
+  'local/vllm': EngineIdentity(
+    id: 'local/vllm',
+    label: 'vLLM',
+    category: 'Local AI',
+    creator: 'Local',
+    color: Color(0xffffc743),
+    asset: 'assets/engine-icons/vllm.png',
+    homepage: 'https://github.com/vllm-project/vllm-metal',
+    blurb: 'Serve models with vLLM Metal and measure concurrent request performance.',
+  ),
+  'local/mlx-lm': EngineIdentity(
+    id: 'local/mlx-lm',
+    label: 'MLX-LM',
+    category: 'Local AI',
+    creator: 'Local',
+    color: Color(0xffa9caff),
+    asset: 'assets/engine-icons/mlx.png',
+    homepage: 'https://github.com/ml-explore/mlx-lm',
+    blurb:
+        'Run and compare language models directly on Apple Silicon with MLX.',
+  ),
+  'local/ollama': EngineIdentity(
+    id: 'local/ollama',
+    label: 'Ollama',
+    category: 'Local AI',
+    creator: 'Local',
+    color: Color(0xfff4f6ef),
+    asset: 'assets/engine-icons/ollama.png',
+    homepage: 'https://ollama.com',
+    blurb:
+        'Run and benchmark Ollama models on your Mac through natural language.',
+  ),
   // Original creative identities; source vectors ship in each package under brand/.
   'autonomous/voxel-worlds': EngineIdentity(
     id: 'autonomous/voxel-worlds',
@@ -236,7 +268,8 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/generative-art',
     label: 'Generative Art',
     category: 'Original art',
-    tagline: 'Turn a visual brief into editable artwork and complete asset sets',
+    tagline:
+        'Turn a visual brief into editable artwork and complete asset sets',
     creator: 'Autonomous',
     color: Color(0xffce7645),
     asset: 'assets/engine-icons/generative-art.png',
@@ -565,7 +598,7 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/freecad',
     label: "FreeCAD",
     category: "CAD",
-    tagline: "Parametric 3D modeling with verified STEP exports",
+    tagline: "From your measurements to checked, editable custom parts",
     creator: "OpenHarness contributors",
     color: Color(0xff418fde),
     asset: 'assets/engine-icons/freecad.png',
@@ -610,7 +643,7 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/score',
     label: "Score",
     category: "Music",
-    tagline: "Music notation for everyone",
+    tagline: "Your musical idea, ready to hear and share",
     creator: "OpenHarness contributors",
     color: Color(0xffbd965f),
     asset: 'assets/engine-icons/score.png',
@@ -630,6 +663,9 @@ const _harnesses = <String, EngineIdentity>{
 /// say "Runs on Claude Code" — and send the right `engine` — before the machine
 /// has answered `dsh_list`. The daemon's catalog is authoritative when present.
 const knownHarnessBase = <String, String>{
+  'local/vllm': 'codex',
+  'local/mlx-lm': 'codex',
+  'local/ollama': 'codex',
   'autonomous/voxel-worlds': 'claude',
   'autonomous/generative-art': 'claude',
   'autonomous/music-studio': 'claude',

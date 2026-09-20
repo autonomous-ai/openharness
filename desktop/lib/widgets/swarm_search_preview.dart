@@ -5,9 +5,11 @@ import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../core/models.dart';
+import '../shared/theme/prompt_style.dart';
 import '../state/app_state.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
+import 'box_chrome.dart';
 import 'engine_identity.dart';
 
 typedef _PreviewAgent = ({MachineState machine, Agent agent});
@@ -46,9 +48,11 @@ class SwarmSearchPreview extends StatefulWidget {
     super.key,
     required this.search,
     this.compactHeader = false,
+    this.terminal = false,
   });
   final SwarmSearchController search;
   final bool compactHeader;
+  final bool terminal;
 
   @override
   State<SwarmSearchPreview> createState() => _SwarmSearchPreviewState();
@@ -172,7 +176,13 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
               ? ListView.builder(
                   key: ValueKey('preview-content:${row.id}'),
                   controller: _scroll,
-                  padding: EdgeInsets.all(widget.compactHeader ? 16 : 24),
+                  padding: EdgeInsets.all(
+                    widget.terminal
+                        ? 12
+                        : widget.compactHeader
+                        ? 16
+                        : 24,
+                  ),
                   scrollCacheExtent: const ScrollCacheExtent.pixels(120),
                   itemCount: agents.length + 1,
                   itemBuilder: (context, index) => index == 0
@@ -183,14 +193,17 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
                             children: [
                               Text(
                                 row.title,
+                                // The list leads the eye; this confirms it.
                                 style: const TextStyle(
-                                  fontSize: 20,
+                                  fontSize: 15,
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
                               const SizedBox(height: 6),
                               Text(row.detail, style: _muted),
-                              if (agents.isEmpty)
+                              // Nothing exists yet behind the create row, so
+                              // there is no session to be missing text from.
+                              if (agents.isEmpty && !row.isCreate)
                                 const Padding(
                                   padding: EdgeInsets.only(top: 24),
                                   child: Text(
@@ -210,6 +223,7 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
                                 app: app,
                                 item: agents[index - 1],
                                 compact: true,
+                                terminal: widget.terminal,
                               ),
                               if (index < agents.length)
                                 const SizedBox(height: 20),
@@ -220,11 +234,18 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
               : SingleChildScrollView(
                   key: ValueKey('preview-content:${row.id}'),
                   controller: _scroll,
-                  padding: EdgeInsets.all(widget.compactHeader ? 16 : 24),
+                  padding: EdgeInsets.all(
+                    widget.terminal
+                        ? 12
+                        : widget.compactHeader
+                        ? 16
+                        : 24,
+                  ),
                   child: _AgentPreview(
                     app: app,
                     item: agents.single,
                     dense: widget.compactHeader,
+                    terminal: widget.terminal,
                   ),
                 ),
         ),
@@ -242,14 +263,22 @@ class _AgentPreview extends StatelessWidget {
     required this.item,
     this.compact = false,
     this.dense = false,
+    this.terminal = false,
   });
   final AppNotifier app;
   final _PreviewAgent item;
   final bool compact;
   final bool dense;
+  final bool terminal;
 
   @override
   Widget build(BuildContext context) {
+    final muted = terminal ? boxMonoStyle(size: 11, color: kBoxFaint) : _muted;
+    final body = terminal
+        ? boxMonoStyle(size: 12, color: const Color(0xffe1e1e4))
+        : _body;
+    Widget section(String label, String text, {int? maxLines}) =>
+        _Section(label, text, maxLines: maxLines, terminal: terminal);
     final (:machine, :agent) = item;
     final record = app.sessionPreviews.read(
       app.previewKey(machine.machine.machineId, agent),
@@ -268,7 +297,7 @@ class _AgentPreview extends StatelessWidget {
         ? 'Working'
         : 'Idle';
     final color = offline
-        ? Colors.white38
+        ? Colors.white54
         : waiting != null
         ? const Color(0xffe9bf79)
         : working
@@ -294,35 +323,55 @@ class _AgentPreview extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: EngineMark(
-                engine: agent.identityEngine,
-                displayName: agent.identityDisplayName,
-                size: compact ? 18 : 22,
-              ),
+        if (terminal) ...[
+          Text(agent.displayName, style: boxMonoStyle(weight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: '$state  ',
+                  style: TextStyle(color: color),
+                ),
+                TextSpan(
+                  text:
+                      '$kHarnessPromptMarker ${agentIdentity(agent).label} · ${machine.machine.name}',
+                ),
+              ],
             ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                agent.name,
-                style: TextStyle(
-                  fontSize: compact || dense ? 15 : 20,
-                  fontWeight: FontWeight.w600,
-                  height: 1.25,
+            style: muted,
+          ),
+        ] else
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: EngineMark(
+                  engine: agent.identityEngine,
+                  displayName: agent.identityDisplayName,
+                  size: compact ? 18 : 22,
                 ),
               ),
-            ),
-            if (dense) ...[
               const SizedBox(width: 10),
-              Text(state, style: TextStyle(fontSize: 11, color: color)),
+              Expanded(
+                child: Text(
+                  agent.displayName,
+                  style: TextStyle(
+                    // The list leads the eye; the preview confirms it.
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    height: 1.25,
+                  ),
+                ),
+              ),
+              if (dense) ...[
+                const SizedBox(width: 10),
+                Text(state, style: TextStyle(fontSize: 11, color: color)),
+              ],
             ],
-          ],
-        ),
-        if (!dense) ...[
+          ),
+        if (!dense && !terminal) ...[
           const SizedBox(height: 10),
           Wrap(
             spacing: 8,
@@ -357,7 +406,7 @@ class _AgentPreview extends StatelessWidget {
                   agentIdentity(agent).label,
                   machine.machine.name,
                 ].join(' · '),
-                style: _muted,
+                style: muted,
               ),
             ],
           ),
@@ -368,26 +417,32 @@ class _AgentPreview extends StatelessWidget {
             _displayText(excerpt ?? 'No recent session text available.'),
             maxLines: 4,
             overflow: TextOverflow.ellipsis,
-            style: excerpt == null ? _muted : _body,
+            style: excerpt == null ? muted : body,
           ),
           if (project?.name != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
                 [project!.name, project.branch].whereType<String>().join(' · '),
-                style: _muted,
+                style: muted,
               ),
             ),
         ] else ...[
-          SizedBox(height: dense ? 16 : 26),
+          SizedBox(
+            height: terminal
+                ? 8
+                : dense
+                ? 16
+                : 26,
+          ),
           if (waiting != null) ...[
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.all(terminal ? 8 : 16),
               decoration: BoxDecoration(
                 color: color.withValues(alpha: .06),
                 border: Border.all(color: color.withValues(alpha: .24)),
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(terminal ? 0 : 12),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -401,27 +456,27 @@ class _AgentPreview extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Text(_displayText(waiting.prompt), style: _body),
+                  Text(_displayText(waiting.prompt), style: body),
                   if (waiting.options.isNotEmpty) ...[
                     const SizedBox(height: 12),
-                    Text(waiting.options.take(6).join('  ·  '), style: _muted),
+                    Text(waiting.options.take(6).join('  ·  '), style: muted),
                   ],
                 ],
               ),
             ),
-            const SizedBox(height: 24),
+            SizedBox(height: terminal ? 14 : 24),
           ],
           if (working) ...[
-            if (request != null) _Section(requestLabel, request),
+            if (request != null) section(requestLabel, request),
             if (record?.earlierRequest case final earlier?)
-              _Section('Earlier request', earlier),
-            if (activity != null) _Section('Latest activity', activity),
-            if (record?.activity case final tool?) _Section('Using tool', tool),
+              section('Earlier request', earlier),
+            if (activity != null) section('Latest activity', activity),
+            if (record?.activity case final tool?) section('Using tool', tool),
             if (activity == null && response != null)
-              _Section('Previous response', response),
+              section('Previous response', response),
           ] else ...[
             if (response != null)
-              _Section(
+              section(
                 record?.interrupted == true
                     ? 'Last response · interrupted'
                     : 'Latest response',
@@ -438,32 +493,32 @@ class _AgentPreview extends StatelessWidget {
                   children: [
                     Text(
                       'Earlier in this session',
-                      style: _muted.copyWith(fontWeight: FontWeight.w500),
+                      style: muted.copyWith(fontWeight: FontWeight.w500),
                     ),
                     for (final text in record!.earlierResponses)
                       Padding(
-                        padding: const EdgeInsets.only(top: 10),
+                        padding: EdgeInsets.only(top: terminal ? 6 : 10),
                         child: Text(
                           _displayText(text),
                           maxLines: 4,
                           overflow: TextOverflow.ellipsis,
-                          style: _body,
+                          style: body,
                         ),
                       ),
                   ],
                 ),
               ),
-            if (request != null) _Section('Recent request', request),
+            if (request != null) section('Recent request', request),
             if (record?.earlierRequest case final earlier?)
-              _Section('Earlier request', earlier),
+              section('Earlier request', earlier),
           ],
           if (record?.hasContent != true && waiting == null)
-            const Padding(
-              padding: EdgeInsets.only(bottom: 24),
-              child: Text('No recent session text available.', style: _muted),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 24),
+              child: Text('No recent session text available.', style: muted),
             ),
           const SizedBox(height: 8),
-          if (project?.cwd case final cwd?) Text(cwd, style: _muted),
+          if (project?.cwd case final cwd?) Text(cwd, style: muted),
           if (project?.branch case final branch?)
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -475,7 +530,7 @@ class _AgentPreview extends StatelessWidget {
                     color: Colors.white54,
                   ),
                   const SizedBox(width: 6),
-                  Expanded(child: Text(branch, style: _muted)),
+                  Expanded(child: Text(branch, style: muted)),
                 ],
               ),
             ),
@@ -484,7 +539,7 @@ class _AgentPreview extends StatelessWidget {
               padding: const EdgeInsets.only(top: 8),
               child: Text(
                 '${offline || record?.unavailable == true ? 'Saved text · ' : ''}Received ${TimeOfDay.fromDateTime(at).format(context)}',
-                style: _muted,
+                style: muted,
               ),
             ),
         ],
@@ -494,20 +549,26 @@ class _AgentPreview extends StatelessWidget {
 }
 
 class _Section extends StatelessWidget {
-  const _Section(this.label, this.text, {this.maxLines});
+  const _Section(this.label, this.text, {this.maxLines, this.terminal = false});
   final String label, text;
   final int? maxLines;
+  final bool terminal;
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 24),
+    padding: EdgeInsets.only(bottom: terminal ? 8 : 24),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: _muted.copyWith(fontWeight: FontWeight.w500)),
-        const SizedBox(height: 7),
+        Text(
+          label,
+          style: terminal
+              ? boxMonoStyle(size: 11, color: kBoxFaint)
+              : _muted.copyWith(fontWeight: FontWeight.w500),
+        ),
+        SizedBox(height: terminal ? 4 : 7),
         Text(
           _displayText(text),
-          style: _body,
+          style: terminal ? boxMonoStyle(size: 12) : _body,
           maxLines: maxLines,
           overflow: maxLines == null ? null : TextOverflow.ellipsis,
         ),

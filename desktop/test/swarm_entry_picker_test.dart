@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/state/swarm_search.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:xterm/xterm.dart';
 
@@ -27,15 +28,18 @@ void main() {
         }
         await tester.pump();
         await chord(tester, LogicalKeyboardKey.keyP, shift: true);
-        expect(tester.widget<TextField>(_startInput).controller!.text, '> ');
-        expect(find.text('Run command'), findsOneWidget);
+        expect(tester.widget<TextField>(_input).controller!.text, '> ');
+        expect(
+          find.textContaining('run command', findRichText: true),
+          findsOneWidget,
+        );
         expect(find.widgetWithText(ListTile, 'Agent 0'), findsNothing);
         expect(
-          tester.widget<TextField>(_startInput).decoration!.hintText,
+          tester.widget<TextField>(_input).decoration!.hintText,
           'Search commands…',
         );
-        expect(_results, findsNothing);
-        await tester.enterText(_startInput, '> rename');
+        expect(_results, findsOneWidget);
+        await tester.enterText(_input, '> rename');
         await tester.pump();
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
@@ -70,7 +74,7 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.descendant(of: selected, matching: find.text('Open Harness')),
+      find.descendant(of: selected, matching: find.text('Add to this tab')),
       findsOneWidget,
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -105,12 +109,14 @@ void main() {
       expect(
         tester.getRect(_startInput).bottom,
         lessThan(
-          tester.getRect(find.byKey(const ValueKey('harness-start-open'))).top,
+          tester
+              .getRect(find.byKey(const ValueKey('harness-start-new-pane')))
+              .top,
         ),
       );
       expect(
         tester.widget<TextField>(_startInput).decoration!.hintText,
-        'Find a harness',
+        kHarnessPickerHint,
       );
       expect(tester.widget<TextField>(_startInput).focusNode!.hasFocus, isTrue);
       expect(find.byKey(const ValueKey('harness-device-link')), findsOneWidget);
@@ -149,7 +155,9 @@ void main() {
       app.renameSwarm(original, 'Background update');
       await tester.pump();
       expect(_results, findsNothing);
-      await tester.tap(find.byKey(const ValueKey('harness-start-new')));
+      await tester.tap(find.byKey(const ValueKey('harness-start-new-pane')));
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump(const Duration(milliseconds: 200));
       expect(find.byType(AlertDialog), findsOneWidget);
       expect(
@@ -183,12 +191,9 @@ void main() {
           await mount(tester, app, nativeTabs: native);
           await chord(tester, LogicalKeyboardKey.keyT);
           await tester.pump();
-          final page = app.activeSwarmId;
-          expect(page, isNot(original));
-          expect(_results, findsNothing);
-          expect(_startInput, findsOneWidget);
-          await chord(tester, LogicalKeyboardKey.keyO);
+          expect(app.activeSwarmId, original);
           expect(_results, findsOneWidget);
+          expect(_startInput, findsNothing);
           if (dismissal == 'outside') {
             await tester.tapAt(const Offset(20, 200));
           } else {
@@ -196,11 +201,8 @@ void main() {
           }
           await tester.pump();
           expect(_results, findsNothing);
-          expect(_startInput, findsOneWidget);
-          expect(app.activeSwarmId, page);
-          await app.closeSwarm(page);
-          await tester.pump();
           expect(app.activeSwarmId, original);
+          expect(app.swarms, hasLength(1));
           expect(app.closedHistory, isEmpty);
           expect(app.focusedPane, same(pane));
           await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
@@ -218,7 +220,7 @@ void main() {
     (tester) async {
       final app = createApp();
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.enterText(_input, 'Agent 12');
       await tester.pump();
       final text = tester.widget<TextField>(_input).controller!;
@@ -240,9 +242,9 @@ void main() {
       expect(_startInput, findsOneWidget);
       expect(tester.widget<TextField>(_startInput).focusNode!.hasFocus, isTrue);
       await chord(tester, LogicalKeyboardKey.keyP, shift: true);
-      expect(tester.widget<TextField>(_startInput).controller!.text, '> ');
+      expect(tester.widget<TextField>(_input).controller!.text, '> ');
       expect(
-        tester.widget<TextField>(_startInput).decoration!.hintText,
+        tester.widget<TextField>(_input).decoration!.hintText,
         'Search commands…',
       );
       await tester.pumpWidget(const SizedBox());
@@ -261,7 +263,7 @@ void main() {
     app.newSwarm();
     final destination = app.activeSwarmId;
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     await tester.enterText(_input, 'Agent 0');
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);

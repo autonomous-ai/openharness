@@ -37,10 +37,10 @@ void main() {
     ({'resumed': true}, null),
     (
       {'resumed': false},
-      'Restarted with a new session — the previous one could not be resumed.',
+      'Started a new conversation. The previous session could not be resumed.',
     ),
     (
-      {'error': 'RESTART_FAILED', 'detail': 'The engine could not restart.'},
+      {'error': 'AGENT_BUSY', 'detail': 'The engine could not restart.'},
       'The engine could not restart.',
     ),
   ]) {
@@ -62,10 +62,10 @@ void main() {
       await tester.tap(
         find.descendant(
           of: controls,
-          matching: find.byTooltip('Restart Harness'),
+          matching: find.byTooltip('Restart Agent'),
         ),
       );
-      await tester.pump();
+      await tester.pumpAndSettle();
       // Each pane header's model picker also asks for grid_models_list as it mounts; the restart is
       // the one request that is not that.
       final sent = connection.calls
@@ -73,7 +73,7 @@ void main() {
           .toList();
       expect(sent, hasLength(1));
       expect(sent.single.$1, 'agent_restart');
-      expect(sent.single.$2, {'agentId': 'a0'});
+      expect(sent.single.$2, {'agentId': 'a0', 'creationId': isA<String>()});
       expect(app.panes, [first, second]);
       expect(first.session, same(session));
       expect(find.byType(AlertDialog), findsNothing);
@@ -90,7 +90,7 @@ void main() {
           of: controls,
           matching: find.byWidgetPredicate(
             (widget) =>
-                widget is IconButton && widget.tooltip == 'Restart Harness',
+                widget is IconButton && widget.tooltip == 'Restart Agent',
           ),
         ),
       );

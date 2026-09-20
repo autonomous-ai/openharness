@@ -12,13 +12,17 @@ import 'package:harness/core/config.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_placement.dart';
+import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/usage/models_menu_controller.dart';
 import 'package:harness/usage/usage_accounts.dart';
 import 'package:harness/usage/usage_controller.dart';
 import 'package:harness/usage/usage_source.dart';
 import 'package:harness/usage/usage_window.dart';
+import 'package:harness/widgets/new_harness_box.dart';
 
+import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
 
 /// Stands in for the machine behind the Open Grid door: the probes New Agent
@@ -374,6 +378,38 @@ void main() {
       (_) => reply.complete(),
     );
     await tester.pumpAndSettle();
+  }
+
+  for (final machineId in [null, 'other']) {
+    testWidgets('native Models opens the product dock on $machineId', (
+      tester,
+    ) async {
+      newHarnessOpensInBox = true;
+      addTearDown(() => newHarnessOpensInBox = false);
+      final app = _gridApp(
+        grid: {'m': true, 'other': true},
+        secondMachine: true,
+      );
+      addTearDown(app.dispose);
+      app.adoptSessionForTest(terminal('source', []));
+      final source = app.activeSwarm;
+      await openGridDoor(tester, app, machineId: machineId);
+      final box = tester
+          .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+          .controller;
+      expect(box.engine, AppNotifier.gridHarness);
+      expect(box.machineId, machineId ?? 'm');
+      expect(box.projectLabel, startsWith('~/harnesses/grid-'));
+      expect(box.placement, HarnessPlacement.newTab);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(app.swarms, [source]);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(find.byType(NewHarnessBox), findsNothing);
+      expect(app.swarms, [source]);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(milliseconds: 60));
+    });
   }
 
   testWidgets('native runLocalModel opens New Agent with Grid chosen', (

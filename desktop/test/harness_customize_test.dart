@@ -1,3 +1,5 @@
+import 'package:harness/terminal/terminal_binary.dart';
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -15,6 +17,12 @@ import 'package:harness/shared/theme/harness_background.dart';
 import 'package:harness/widgets/harness_customize_pane.dart';
 
 import 'support/real_fonts.dart';
+
+import 'package:harness/shared/theme/prompt_style.dart';
+import 'package:harness/widgets/prompt_context.dart';
+
+import 'swarm_interactions_test.dart' show chord;
+import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 
 class _Storage implements LocalKeyValueStore {
@@ -59,6 +67,128 @@ void main() {
         ))
         .load();
   });
+
+  test('rapid prompt edits persist together and malformed prompt leaves appearance intact', () async {
+    final storage = _Storage()..gate = Completer<void>();
+    final store = AppearancePrefsStore(storage: storage);
+    addTearDown(store.dispose);
+    final saving = store.setPrompt(const PromptPrefs(style: PromptStyle.plain));
+    store.setPrompt(store.value.prompt.copyWith(branch: false));
+    store.setPrompt(
+      store.value.prompt.copyWith(style: PromptStyle.powerline, color: false),
+    );
+    storage.gate!.complete();
+    await saving;
+    final reopened = AppearancePrefsStore(storage: storage);
+    addTearDown(reopened.dispose);
+    await reopened.load();
+    expect(
+      reopened.value.prompt,
+      const PromptPrefs(
+        style: PromptStyle.powerline,
+        branch: false,
+        color: false,
+      ),
+    );
+    await store.setPalette(HarnessPalette.forest);
+    storage.values['workspace_prompt_v1'] = '{broken';
+    await reopened.load();
+    expect(reopened.value.prompt, const PromptPrefs());
+    expect(reopened.value.palette, HarnessPalette.forest);
+    await store.reset();
+    await reopened.load();
+    expect(reopened.value, const AppearancePrefs());
+  });
+
+  testWidgets(
+    'prompt choices preview, accept keyboard input and survive reopening',
+    (tester) async {
+      final storage = _Storage();
+      final store = AppearancePrefsStore(storage: storage);
+      addTearDown(store.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SizedBox(
+              width: 440,
+              child: HarnessCustomizePane(store: store, onClose: () {}),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      Future<void> focus(String key) async {
+        final label = find
+            .descendant(
+              of: find.byKey(ValueKey(key)),
+              matching: find.byType(Text),
+            )
+            .first;
+        for (
+          var i = 0;
+          i < 20 && !Focus.of(tester.element(label)).hasFocus;
+          i++
+        ) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+          await tester.pump();
+        }
+        expect(Focus.of(tester.element(label)).hasFocus, isTrue);
+      }
+
+      await focus('prompt-style-powerline');
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(store.value.prompt.style, PromptStyle.powerline);
+      await focus('prompt-branch');
+      await tester.sendKeyEvent(LogicalKeyboardKey.space);
+      await tester.pumpAndSettle();
+      expect(store.value.prompt.branch, isFalse);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('prompt-preview')),
+          matching: find.text('main'),
+        ),
+        findsNothing,
+      );
+      final reopened = AppearancePrefsStore(storage: storage);
+      addTearDown(reopened.dispose);
+      await reopened.load();
+      expect(reopened.value.prompt, store.value.prompt);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'command search opens customization and Escape returns typing to the terminal',
+    (tester) async {
+      final app = createApp();
+      addTearDown(app.dispose);
+      final input = <TerminalBinaryFrame>[];
+      final pane = app.adoptSessionForTest(terminal('a0', input));
+      await mount(tester, app);
+      final before = tester.getRect(find.byKey(pane.cellKey));
+      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+      await tester.enterText(
+        find.byKey(const ValueKey('swarm-search-input')),
+        '> customize',
+      );
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.byType(HarnessCustomizePane), findsOneWidget);
+      expect(find.byType(PromptContextView), findsWidgets);
+      expect(tester.getRect(find.byKey(pane.cellKey)), before);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byType(HarnessCustomizePane), findsNothing);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expect(input.single.bytes, [27, 91, 68]);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   test(
     'background persists without replacing palette or type choices',
@@ -108,6 +238,8 @@ void main() {
           ),
         ),
       );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('customize-background')));
       await tester.pumpAndSettle();
       final choice = find.byKey(const ValueKey('background-lake'));
       await tester.ensureVisible(choice);
@@ -192,6 +324,20 @@ void main() {
       expect(find.byKey(const ValueKey('harness-start-results')), findsNothing);
       expect(tester.widget<TextField>(start).controller!.text, 'Keep my query');
       expect(tester.takeException(), isNull);
+      for (final style in PromptStyle.values) {
+        appearancePrefsStore.value = appearancePrefsStore.value.copyWith(
+          prompt: PromptPrefs(style: style),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        await _capture(
+          tester,
+          boundary,
+          '${width.toInt()}-prompt-${style.name}',
+        );
+      }
+      await tester.tap(find.byKey(const ValueKey('customize-background')));
+      await tester.pumpAndSettle();
       await _capture(tester, boundary, '${width.toInt()}-background');
 
       await tester.tap(find.byKey(const ValueKey('customize-appearance')));

@@ -57,11 +57,15 @@ class UsageLedgerController extends ChangeNotifier {
   final List<UsageLedgerStore> stores;
 
   bool _loaded = false;
+  bool _disposed = false;
+  Future<void>? _loading;
+  final _overviews = <UsageRange, ({DateTime? cutoff, UsageOverview value})>{};
 
   /// Whether [load] has finished. Before it has, the panel knows nothing — not
   /// even which providers are switched on — and draws its skeleton rather than
   /// an empty state that would be a claim.
   bool get loaded => _loaded;
+  bool get loading => _loading != null && !_loaded;
 
   UsageLedgerStore storeFor(LedgerProvider provider) =>
       stores.firstWhere((store) => store.provider == provider);
@@ -71,16 +75,22 @@ class UsageLedgerController extends ChangeNotifier {
   /// The reads run together because one store's disk has nothing to say about
   /// another's, and three sequential `~/.harness` reads is three chances to make
   /// the panel wait.
-  Future<void> load() async {
+  Future<void> load() => _loading ??= _load();
+
+  Future<void> _load() async {
+    if (_disposed) return;
     await Future.wait([for (final store in stores) store.load()]);
+    if (_disposed) return;
     _loaded = true;
-    notifyListeners();
-    await refresh();
+    final rescanning = refresh();
+    if (!_disposed) notifyListeners();
+    await rescanning;
   }
 
   /// Rescan every enabled provider. A disabled one returns immediately.
-  Future<void> refresh({bool force = false}) =>
-      Future.wait([for (final store in stores) store.refresh(force: force)]);
+  Future<void> refresh({bool force = false}) => _disposed
+      ? Future.value()
+      : Future.wait([for (final store in stores) store.refresh(force: force)]);
 
   /// True while any provider is mid-scan — what the refresh button spins on.
   bool get isScanning =>
@@ -95,13 +105,23 @@ class UsageLedgerController extends ChangeNotifier {
   /// The range is applied here rather than at scan time, so changing it redraws
   /// from what is already in memory instead of re-walking the disk — the scan is
   /// the expensive half and it does not depend on the window being looked at.
-  UsageOverview overviewFor(UsageRange range, {DateTime? now}) => buildOverview(
-    ledgers: [
-      for (final store in stores) clipLedger(store.ledger, range, now: now),
-    ],
-    enabledCount: stores.where((store) => store.state.enabled).length,
-    lastScanAt: _lastScanAt,
-  );
+  UsageOverview overviewFor(UsageRange range, {DateTime? now}) {
+    final at = now ?? DateTime.now();
+    final cutoff = range.cutoff(now: at);
+    final cached = _overviews[range];
+    if (cached != null && cached.cutoff == cutoff) return cached.value;
+    final value = buildOverview(
+      ledgers: [
+        for (final store in stores) clipLedger(store.ledger, range, now: at),
+      ],
+      enabledCount: stores.where((store) => store.state.enabled).length,
+      lastScanAt: _lastScanAt,
+    );
+    // At most one result per range; midnight changes the cutoff even when no
+    // provider has emitted new data. Stats/UI rebuilds can reuse these totals.
+    _overviews[range] = (cutoff: cutoff, value: value);
+    return value;
+  }
 
   /// The most recent scan across the providers.
   ///
@@ -119,10 +139,14 @@ class UsageLedgerController extends ChangeNotifier {
     return latest;
   }
 
-  void _onStoreChanged() => notifyListeners();
+  void _onStoreChanged() {
+    _overviews.clear();
+    if (!_disposed) notifyListeners();
+  }
 
   @override
   void dispose() {
+    _disposed = true;
     for (final store in stores) {
       store.removeListener(_onStoreChanged);
       store.dispose();

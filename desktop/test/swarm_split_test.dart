@@ -48,7 +48,7 @@ void main() {
   for (final axis in PaneResizeAxis.values) {
     final direction = axis == PaneResizeAxis.x ? 'right' : 'down';
     testWidgets(
-      'Command-${direction == 'right' ? 'R' : 'D'} splits the focused pane $direction',
+      'the secondary palette command splits the focused pane $direction',
       (tester) async {
         final app = createApp();
         final machine = app.machineStates['m']!;
@@ -68,12 +68,13 @@ void main() {
         app.selectSwarm(original);
         app.focusPane(first.id);
         await mountWide(tester, app);
-        await chord(
-          tester,
-          axis == PaneResizeAxis.x
-              ? LogicalKeyboardKey.keyR
-              : LogicalKeyboardKey.keyD,
+        await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+        await tester.enterText(
+          find.byKey(const ValueKey('swarm-search-input')),
+          '> split $direction',
         );
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
         final search = find.byKey(const ValueKey('swarm-search-input'));
         expect(search, findsOneWidget);
@@ -97,191 +98,23 @@ void main() {
       },
     );
 
-    testWidgets(
-      'edge Open $direction targets that pane without disturbing its neighbor',
-      (tester) async {
-        final app = createApp();
-        final machine = app.machineStates['m']!;
-        machine.nodeOnline = true;
-        machine.localOnly = true;
-        machine.agents[2] = const Agent(
-          id: 'a2',
-          name: 'Existing helper',
-          engine: 'codex',
-          terminalAvailable: true,
-        );
-        final frames = <TerminalBinaryFrame>[];
-        final first = app.adoptSessionForTest(terminal('a0', frames));
-        final neighbor = app.adoptSessionForTest(terminal('a1', frames));
-        final original = app.activeSwarmId;
-        app.newSwarm();
-        final helper = app.adoptSessionForTest(terminal('a2', frames));
-        app.selectSwarm(original);
-        app.focusPane(neighbor.id);
-        await mountWide(tester, app);
-        tester.view.physicalSize = const Size(3000, 1800);
-        await tester.pump();
-        final target = find.byKey(first.cellKey);
-        final rect = tester.getRect(target);
-        final neighborRect = tester.getRect(find.byKey(neighbor.cellKey));
-        final view = find.descendant(
-          of: target,
-          matching: find.byType(TerminalView),
-        );
-        final retained = tester.element(view);
-        final previousFocus = FocusManager.instance.primaryFocus;
-        final button = find.descendant(
-          of: target,
-          matching: find.byKey(ValueKey('pane-open-$direction')),
-        );
-        final newButton = find.descendant(
-          of: target,
-          matching: find.byKey(ValueKey('pane-new-$direction')),
-        );
-        expect(button.hitTestable(), findsNothing);
-        expect(newButton.hitTestable(), findsNothing);
-        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-        await mouse.addPointer(location: rect.center);
-        await mouse.moveTo(
-          axis == PaneResizeAxis.x
-              ? Offset(rect.right - 2, rect.center.dy)
-              : Offset(rect.center.dx, rect.bottom - 2),
-        );
-        await tester.pump(const Duration(milliseconds: 120));
-        expect(button.hitTestable(), findsOneWidget);
-        expect(newButton.hitTestable(), findsOneWidget);
-        expect(
-          tester.getRect(button).overlaps(tester.getRect(newButton)),
-          isFalse,
-        );
-        expect(app.focusedPaneId, neighbor.id);
-        expect(FocusManager.instance.primaryFocus, same(previousFocus));
-        expect(tester.element(view), same(retained));
-        expect(tester.getRect(target), rect);
-        expect(frames, isEmpty);
-
-        // Moving from the border onto the inset button must keep it visible.
-        await mouse.moveTo(tester.getCenter(newButton));
-        await tester.pump();
-        expect(newButton.hitTestable(), findsOneWidget);
-        await mouse.moveTo(tester.getCenter(button));
-        await tester.pump();
-        expect(button.hitTestable(), findsOneWidget);
-        await mouse.down(tester.getCenter(button));
-        await mouse.up();
-        await tester.pump();
-        final search = find.byKey(const ValueKey('swarm-search-input'));
-        expect(search, findsOneWidget);
-        expect(
-          find.byKey(const ValueKey('swarm-search-new-agent')),
-          findsNothing,
-        );
-        expect(app.focusedPaneId, first.id);
-        await tester.enterText(search, 'Existing helper');
-        await tester.pump();
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-        await tester.pump();
-        expect(search, findsNothing);
-        expect(app.panes, [first, helper, neighbor]);
-        expect(tester.element(view), same(retained));
-        expect(tester.getRect(find.byKey(neighbor.cellKey)), neighborRect);
-        final splitRect = tester.getRect(target);
-        final addedRect = tester.getRect(find.byKey(helper.cellKey));
-        if (axis == PaneResizeAxis.x) {
-          expect(addedRect.left, greaterThan(splitRect.right));
-          expect(addedRect.top, splitRect.top);
-          expect(addedRect.height, splitRect.height);
-        } else {
-          expect(addedRect.top, greaterThan(splitRect.bottom));
-          expect(addedRect.left, splitRect.left);
-          expect(addedRect.width, splitRect.width);
-        }
-        expect(frames, isEmpty);
-        await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-        await tester.pump(const Duration(milliseconds: 10));
-        expect(frames.single.streamId, helper.session!.streamId);
-        expect(frames.single.bytes, [27, 91, 67]);
-        await mouse.removePointer();
-        await tester.pumpWidget(const SizedBox());
-        app.dispose();
-      },
-    );
-    testWidgets('edge New $direction opens creation with the hovered project', (
+    testWidgets('pane edges no longer offer New/Open $direction', (
       tester,
     ) async {
-      final connection = _Creation();
-      final app = createApp(connectionForTest: (_) => connection);
-      final machine = app.machineStates['m']!;
-      machine.nodeOnline = true;
-      machine.agents[0] = const Agent(
-        id: 'a0',
-        name: 'First project',
-        engine: 'claude',
-        project: AgentProject(name: 'first', cwd: '/work/first'),
-      );
-      machine.agents[1] = const Agent(
-        id: 'a1',
-        name: 'Neighbor',
-        engine: 'claude',
-        project: AgentProject(name: 'neighbor', cwd: '/work/neighbor'),
-      );
-      final frames = <TerminalBinaryFrame>[];
-      final first = app.adoptSessionForTest(terminal('a0', frames));
-      final neighbor = app.adoptSessionForTest(terminal('a1', frames));
-      app.focusPane(neighbor.id);
+      final app = createApp();
+      app.adoptSessionForTest(terminal('a0', []));
       await mountWide(tester, app);
-      tester.view.physicalSize = const Size(3000, 1800);
-      await tester.pump();
-      final target = find.byKey(first.cellKey);
-      final before = tester.getRect(target);
-      final neighborBefore = tester.getRect(find.byKey(neighbor.cellKey));
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      await mouse.addPointer(location: before.center);
+      final rect = tester.getRect(find.byKey(app.panes.single.cellKey));
+      await mouse.addPointer(location: rect.center);
       await mouse.moveTo(
         axis == PaneResizeAxis.x
-            ? Offset(before.right - 2, before.center.dy)
-            : Offset(before.center.dx, before.bottom - 2),
+            ? Offset(rect.right - 2, rect.center.dy)
+            : Offset(rect.center.dx, rect.bottom - 2),
       );
       await tester.pump(const Duration(milliseconds: 120));
-      final create = find.descendant(
-        of: target,
-        matching: find.byKey(ValueKey('pane-new-$direction')),
-      );
-      await mouse.moveTo(tester.getCenter(create));
-      await mouse.down(tester.getCenter(create));
-      await mouse.up();
-      await tester.pump();
-      expect(find.byType(AlertDialog), findsOneWidget);
-      expect(
-        find.text(
-          axis == PaneResizeAxis.x
-              ? 'New Harness to the right'
-              : 'New Harness below',
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(
-          of: find.byKey(const Key('new-agent-project-browse')),
-          matching: find.text('first'),
-        ),
-        findsOneWidget,
-      );
-      expect(find.text('/work/neighbor'), findsNothing);
-      expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
-      expect(app.focusedPaneId, first.id);
-      expect(tester.getRect(target), before);
-      expect(tester.getRect(find.byKey(neighbor.cellKey)), neighborBefore);
-      expect(connection.calls, isNot(contains('agent_create')));
-      expect(frames, isEmpty);
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pump();
-      await tester.pump();
-      expect(find.byType(AlertDialog), findsNothing);
-      expect(app.panes, [first, neighbor]);
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-      await tester.pump(const Duration(milliseconds: 10));
-      expect(frames.single.streamId, first.session!.streamId);
+      expect(find.byKey(ValueKey('pane-open-$direction')), findsNothing);
+      expect(find.byKey(ValueKey('pane-new-$direction')), findsNothing);
       await mouse.removePointer();
       await tester.pumpWidget(const SizedBox());
       app.dispose();
@@ -434,7 +267,7 @@ void main() {
           isTrue,
         );
         if (change != 'switch') {
-          expect(app.lastError, contains('harness was created'));
+          expect(app.lastError, contains('harness started'));
         }
         expect(connection.calls, isNot(contains('agent_delete')));
         await tester.pumpWidget(const SizedBox());
