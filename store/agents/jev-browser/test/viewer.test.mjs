@@ -465,3 +465,33 @@ test('a whole site is enough: Jev walks to the page the person meant', { skip: n
     assert.equal(walled.steps, 1, 'it stops at the wall rather than trying more pages')
   } finally { await chrome.close(); await site.close(); delete process.env.JEV_OFFLINE }
 })
+
+test('a browser left open on the profile is reported, and does not take the viewer down', { skip: noChrome }, async () => {
+  // Chrome will not open a second window on a profile another Chrome holds: it hands the request
+  // over and quits. That rejection used to be unheard, which killed the viewer process, so the
+  // pane went silent and no browser appeared.
+  const profileDir = mkdtempSync(join(tmpdir(), 'jev-browser-clash-'))
+  const first = await openChrome({ profileDir, show: false, allowedHosts: ['127.0.0.1'] })
+  try {
+    await assert.rejects(() => openChrome({ profileDir, show: false, allowedHosts: ['127.0.0.1'] }),
+      /still open on this harness's profile|would not start/)
+    assert.equal(first.alive, true, 'the first one is untouched')
+  } finally { await first.close() }
+
+  // And a job that starts itself says so rather than going quiet.
+  process.env.JEV_OFFLINE = '1'
+  const ws = mkdtempSync(join(tmpdir(), 'jev-browser-quiet-'))
+  writeFileSync(join(ws, 'browse.json'), '{}')
+  const v = await startBrowserViewer({ workspace: ws, port: 0, show: false })
+  try {
+    const r = await (await fetch(`${v.url}/control`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cmd: 'setJob', start: 'not a web address at all', columns: '', want: 'anything' }) })).json()
+    const end = Date.now() + 15000
+    for (;;) {
+      const s = await (await fetch(`${v.url}/state`)).json()
+      if (s.feed.some((e) => e.kind === 'bad')) { assert.equal(s.phase, 'idle', 'it goes back to idle rather than sitting on "running"'); break }
+      if (Date.now() > end) assert.fail(`nothing was ever said: phase ${s.phase}, feed ${JSON.stringify(s.feed.slice(0, 3))}`)
+      await new Promise((r2) => setTimeout(r2, 200))
+    }
+    assert.ok(r.ok !== false || r.error)
+  } finally { await v.close(); delete process.env.JEV_OFFLINE }
+})
