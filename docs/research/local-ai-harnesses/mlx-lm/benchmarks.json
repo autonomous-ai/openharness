@@ -1,0 +1,333 @@
+{
+  "at": "2026-09-20T04:38:50.328Z",
+  "benchmarks": [
+    {
+      "id": "3c5bc697-2bbc-4009-975a-cc4da6257e88",
+      "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+      "digest": "a5339a4131f135d0fdc6a5c8b5bbed2753bbe0f3",
+      "at": "2026-09-20T04:38:48.596Z",
+      "runtime": {
+        "name": "MLX-LM",
+        "version": "0.31.3",
+        "mlxVersion": "0.32.2"
+      },
+      "hardware": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "chip": "Apple M2 Max",
+        "totalMemory": 68719476736,
+        "cores": 12
+      },
+      "settings": {
+        "context": 2048,
+        "maxTokens": 128,
+        "seed": 42,
+        "temperature": 0,
+        "thinking": false
+      },
+      "prompt": "Explain how a bicycle works to a curious beginner. Discuss the pedals, chain, gears, wheels, brakes, and balance. Write a clear explanation of at least 250 words without a heading.",
+      "promptHash": "e3aff106a75867995dfbb42b73d60cb031d6d1d9511c155329d29033854e829a",
+      "mode": "warm model; fresh prompt cache for each sample",
+      "samples": [
+        {
+          "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+          "tokens": 128,
+          "promptTokens": 71,
+          "tokensPerSecond": 309.064244643694,
+          "promptTokensPerSecond": 1619.0993148969428,
+          "nativeFirstTokenMs": 126.28733401652426,
+          "nativeFirstOutputMs": 126.28733401652426,
+          "peakMemoryBytes": 364835054,
+          "thinking": false,
+          "doneReason": "length",
+          "wallMs": 547.7812089957297,
+          "measurement": "MLX-LM native generation_tps; TTFT includes local IPC; fresh prompt cache",
+          "firstTokenMs": 127.83279100000073,
+          "firstOutputMs": 127.83866599999601
+        },
+        {
+          "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+          "tokens": 128,
+          "promptTokens": 71,
+          "tokensPerSecond": 425.51576417741893,
+          "promptTokensPerSecond": 3517.899168105599,
+          "nativeFirstTokenMs": 96.07566590420902,
+          "nativeFirstOutputMs": 96.07566590420902,
+          "peakMemoryBytes": 339931318,
+          "thinking": false,
+          "doneReason": "length",
+          "wallMs": 403.96612498443574,
+          "measurement": "MLX-LM native generation_tps; TTFT includes local IPC; fresh prompt cache",
+          "firstTokenMs": 96.49270799999795,
+          "firstOutputMs": 96.49812499999825
+        },
+        {
+          "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+          "tokens": 128,
+          "promptTokens": 71,
+          "tokensPerSecond": 425.9770567293837,
+          "promptTokensPerSecond": 3476.486737135455,
+          "nativeFirstTokenMs": 83.1738340202719,
+          "nativeFirstOutputMs": 83.1738340202719,
+          "peakMemoryBytes": 339931318,
+          "thinking": false,
+          "doneReason": "length",
+          "wallMs": 390.4475839808583,
+          "measurement": "MLX-LM native generation_tps; TTFT includes local IPC; fresh prompt cache",
+          "firstTokenMs": 83.62958300000173,
+          "firstOutputMs": 83.66079199999513
+        }
+      ],
+      "medianTokensPerSecond": 425.51576417741893,
+      "medianFirstTokenMs": 96.49270799999795,
+      "medianFirstOutputMs": 96.49812499999825,
+      "residentBytes": 281161510
+    },
+    {
+      "id": "d0b3884b-aeb7-415d-8751-d8debc189886",
+      "model": "mlx-community/Qwen3-0.6B-4bit",
+      "digest": "73e3e38d981303bc594367cd910ea6eb48349da8",
+      "at": "2026-09-20T04:38:46.622Z",
+      "runtime": {
+        "name": "MLX-LM",
+        "version": "0.31.3",
+        "mlxVersion": "0.32.2"
+      },
+      "hardware": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "chip": "Apple M2 Max",
+        "totalMemory": 68719476736,
+        "cores": 12
+      },
+      "settings": {
+        "context": 2048,
+        "maxTokens": 128,
+        "seed": 42,
+        "temperature": 0,
+        "thinking": false
+      },
+      "prompt": "Explain how a bicycle works to a curious beginner. Discuss the pedals, chain, gears, wheels, brakes, and balance. Write a clear explanation of at least 250 words without a heading.",
+      "promptHash": "e3aff106a75867995dfbb42b73d60cb031d6d1d9511c155329d29033854e829a",
+      "mode": "warm model; fresh prompt cache for each sample",
+      "samples": [
+        {
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 54,
+          "tokensPerSecond": 413.0146398735052,
+          "promptTokensPerSecond": 1623.9828344274504,
+          "nativeFirstTokenMs": 102.54729096777737,
+          "nativeFirstOutputMs": 102.54729096777737,
+          "peakMemoryBytes": 500007338,
+          "thinking": false,
+          "doneReason": "length",
+          "wallMs": 419.22220797277987,
+          "measurement": "MLX-LM native generation_tps; TTFT includes local IPC; fresh prompt cache",
+          "firstTokenMs": 103.16879200000403,
+          "firstOutputMs": 103.18395800000144
+        },
+        {
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 54,
+          "tokensPerSecond": 411.88033434660207,
+          "promptTokensPerSecond": 1928.7408127582573,
+          "nativeFirstTokenMs": 88.01449998281896,
+          "nativeFirstOutputMs": 88.01449998281896,
+          "peakMemoryBytes": 471810454,
+          "thinking": false,
+          "doneReason": "length",
+          "wallMs": 405.6305829435587,
+          "measurement": "MLX-LM native generation_tps; TTFT includes local IPC; fresh prompt cache",
+          "firstTokenMs": 88.4462910000002,
+          "firstOutputMs": 88.45141600000352
+        },
+        {
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 54,
+          "tokensPerSecond": 411.30251863784935,
+          "promptTokensPerSecond": 2098.52032094187,
+          "nativeFirstTokenMs": 89.04995792545378,
+          "nativeFirstOutputMs": 89.04995792545378,
+          "peakMemoryBytes": 460374402,
+          "thinking": false,
+          "doneReason": "length",
+          "wallMs": 407.01795800123364,
+          "measurement": "MLX-LM native generation_tps; TTFT includes local IPC; fresh prompt cache",
+          "firstTokenMs": 89.4753750000018,
+          "firstOutputMs": 89.48500000000058
+        }
+      ],
+      "medianTokensPerSecond": 411.88033434660207,
+      "medianFirstTokenMs": 89.4753750000018,
+      "medianFirstOutputMs": 89.48500000000058,
+      "residentBytes": 335380518
+    },
+    {
+      "id": "158a1c87-c420-418f-a212-16c43b3f0c07",
+      "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+      "digest": "a5339a4131f135d0fdc6a5c8b5bbed2753bbe0f3",
+      "at": "2026-09-20T04:34:16.940Z",
+      "runtime": {
+        "name": "MLX-LM",
+        "version": "0.31.3",
+        "mlxVersion": "0.32.2"
+      },
+      "hardware": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "chip": "Apple M2 Max",
+        "totalMemory": 68719476736,
+        "cores": 12
+      },
+      "settings": {
+        "context": 2048,
+        "maxTokens": 128,
+        "seed": 42,
+        "temperature": 0,
+        "thinking": false
+      },
+      "prompt": "Explain how a bicycle works to a curious beginner. Discuss the pedals, chain, gears, wheels, brakes, and balance. Write a clear explanation of at least 250 words without a heading.",
+      "promptHash": "e3aff106a75867995dfbb42b73d60cb031d6d1d9511c155329d29033854e829a",
+      "mode": "warm model; fresh prompt cache for each sample",
+      "samples": [
+        {
+          "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+          "tokens": 128,
+          "promptTokens": 71,
+          "tokensPerSecond": 428.8513067082037,
+          "promptTokensPerSecond": 2620.478144601585,
+          "nativeFirstTokenMs": 91.2971660727635,
+          "nativeFirstOutputMs": 91.2971660727635,
+          "peakMemoryBytes": 364966126,
+          "thinking": false,
+          "doneReason": "length",
+          "wallMs": 396.4953750837594,
+          "measurement": "MLX-LM native generation_tps; TTFT includes local IPC; fresh prompt cache",
+          "firstTokenMs": 91.68441699999676,
+          "firstOutputMs": 91.6875
+        },
+        {
+          "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+          "tokens": 128,
+          "promptTokens": 71,
+          "tokensPerSecond": 425.0283594713211,
+          "promptTokensPerSecond": 3067.738741595023,
+          "nativeFirstTokenMs": 85.24666703306139,
+          "nativeFirstOutputMs": 85.24666703306139,
+          "peakMemoryBytes": 355954910,
+          "thinking": false,
+          "doneReason": "length",
+          "wallMs": 393.28362501692027,
+          "measurement": "MLX-LM native generation_tps; TTFT includes local IPC; fresh prompt cache",
+          "firstTokenMs": 85.60129200000665,
+          "firstOutputMs": 85.60370800000965
+        },
+        {
+          "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+          "tokens": 128,
+          "promptTokens": 71,
+          "tokensPerSecond": 423.8341013732513,
+          "promptTokensPerSecond": 3441.16590669372,
+          "nativeFirstTokenMs": 82.10400003008544,
+          "nativeFirstOutputMs": 82.10400003008544,
+          "peakMemoryBytes": 339931318,
+          "thinking": false,
+          "doneReason": "length",
+          "wallMs": 390.81266697030514,
+          "measurement": "MLX-LM native generation_tps; TTFT includes local IPC; fresh prompt cache",
+          "firstTokenMs": 82.58695900000748,
+          "firstOutputMs": 82.59008399999584
+        }
+      ],
+      "medianTokensPerSecond": 425.0283594713211,
+      "medianFirstTokenMs": 85.60129200000665,
+      "medianFirstOutputMs": 85.60370800000965,
+      "residentBytes": 281161510
+    },
+    {
+      "id": "faed2a4b-beb8-4f83-8c62-7ba8713fc901",
+      "model": "mlx-community/Qwen3-0.6B-4bit",
+      "digest": "73e3e38d981303bc594367cd910ea6eb48349da8",
+      "at": "2026-09-20T04:34:15.203Z",
+      "runtime": {
+        "name": "MLX-LM",
+        "version": "0.31.3",
+        "mlxVersion": "0.32.2"
+      },
+      "hardware": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "chip": "Apple M2 Max",
+        "totalMemory": 68719476736,
+        "cores": 12
+      },
+      "settings": {
+        "context": 2048,
+        "maxTokens": 128,
+        "seed": 42,
+        "temperature": 0,
+        "thinking": false
+      },
+      "prompt": "Explain how a bicycle works to a curious beginner. Discuss the pedals, chain, gears, wheels, brakes, and balance. Write a clear explanation of at least 250 words without a heading.",
+      "promptHash": "e3aff106a75867995dfbb42b73d60cb031d6d1d9511c155329d29033854e829a",
+      "mode": "warm model; fresh prompt cache for each sample",
+      "samples": [
+        {
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 54,
+          "tokensPerSecond": 414.26054115189083,
+          "promptTokensPerSecond": 1697.1658923725854,
+          "nativeFirstTokenMs": 96.4624589541927,
+          "nativeFirstOutputMs": 96.4624589541927,
+          "peakMemoryBytes": 500007338,
+          "thinking": false,
+          "doneReason": "length",
+          "wallMs": 412.626166944392,
+          "measurement": "MLX-LM native generation_tps; TTFT includes local IPC; fresh prompt cache",
+          "firstTokenMs": 97.11204100000032,
+          "firstOutputMs": 97.1181249999936
+        },
+        {
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 54,
+          "tokensPerSecond": 414.8126472336596,
+          "promptTokensPerSecond": 1749.1743603673244,
+          "nativeFirstTokenMs": 98.89866597950459,
+          "nativeFirstOutputMs": 98.89866597950459,
+          "peakMemoryBytes": 484753814,
+          "thinking": false,
+          "doneReason": "length",
+          "wallMs": 414.61766604334116,
+          "measurement": "MLX-LM native generation_tps; TTFT includes local IPC; fresh prompt cache",
+          "firstTokenMs": 99.36183299998811,
+          "firstOutputMs": 99.36516599998868
+        },
+        {
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 54,
+          "tokensPerSecond": 410.56548576829806,
+          "promptTokensPerSecond": 1537.6309974077894,
+          "nativeFirstTokenMs": 103.7760830949992,
+          "nativeFirstOutputMs": 103.7760830949992,
+          "peakMemoryBytes": 509837746,
+          "thinking": false,
+          "doneReason": "length",
+          "wallMs": 422.4835420027375,
+          "measurement": "MLX-LM native generation_tps; TTFT includes local IPC; fresh prompt cache",
+          "firstTokenMs": 104.33358299999963,
+          "firstOutputMs": 104.33679099999426
+        }
+      ],
+      "medianTokensPerSecond": 414.26054115189083,
+      "medianFirstTokenMs": 99.36183299998811,
+      "medianFirstOutputMs": 99.36516599998868,
+      "residentBytes": 335380518
+    }
+  ]
+}

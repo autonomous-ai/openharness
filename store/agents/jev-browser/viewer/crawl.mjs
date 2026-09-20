@@ -8,7 +8,7 @@
 // On an item page the same single call pulls every field: each field is a choice over the numbered
 // text blocks the reader found, so the answer IS a piece of text from the page.
 import { jev } from '../toolchain/jev.mjs'
-import { readPage, pageState, blockOptions, blockText, canonical } from './page.mjs'
+import { readPage, pageState, blockOptions, blockText, canonical, wallReason, findSearchBox } from './page.mjs'
 
 export const LIMITS = { fields: 12, maxPages: 500, maxItems: 2000, linksPerCall: 120 }
 
@@ -44,11 +44,14 @@ export function normalizeJob(raw) {
     job: {
       task: short(j.task, 200) || `Collect ${item}`,
       start, item, fields,
+      search: short(j.search, 120),
       keep: short(j.keep, 300),
       maxPages: clamp(j.maxPages, 1, LIMITS.maxPages, 25),
       maxItems: clamp(j.maxItems, 1, LIMITS.maxItems, 60),
       sameSiteOnly: j.sameSiteOnly !== false,
       show: j.show !== false,
+      // A job that changes starts itself. Nobody should watch an idle screen waiting to press a button.
+      autoStart: j.autoStart !== false,
       hosts: [...new Set(hosts)],
     },
     errors,
@@ -141,7 +144,24 @@ export async function runJob({ chrome, job, ask, onEvent, stopped = () => false 
     try {
       await chrome.go(listUrl)
       page = await readPage(chrome)
+      // "amazon.com" plus "fencing gloves" is how a person says it. Type it into the site's own box.
+      if (listPages === 1 && job.search) {
+        const box = findSearchBox(page)
+        if (!box) say('trouble', { url: page.url, message: `no search box was found on this page, so "${job.search}" was not searched for. Put the site's own search address in "start" instead.` })
+        else {
+          say('searching', { words: job.search })
+          await chrome.search(box.css, job.search)
+          page = await readPage(chrome)
+        }
+      }
     } catch (e) { out.errors.push({ url: listUrl, message: String(e.message ?? e) }); say('trouble', { url: listUrl, message: String(e.message ?? e) }); break }
+    const wall = wallReason(page)
+    if (wall) {
+      out.walled = `${new URL(page.url).hostname}: ${wall}`
+      out.errors.push({ url: page.url, message: out.walled })
+      say('walled', { url: page.url, message: out.walled })
+      break
+    }
     out.pagesRead++
     visited.add(canonical(listUrl))
     say('read', { url: page.url, title: page.title, links: page.links.length, blocks: page.blocks.length })

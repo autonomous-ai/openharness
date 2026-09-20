@@ -1,0 +1,1 @@
+{ "spec": 1, "runtime": "ollama", "scope": "local-language-models", "notes": "Model weights stay in Ollama's existing cache. Benchmark results belong to this workspace." }

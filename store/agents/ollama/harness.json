@@ -1,0 +1,28 @@
+{
+  "spec": 1,
+  "id": "autonomous/ollama",
+  "name": "Ollama",
+  "category": "Local AI",
+  "author": "OpenHarness contributors",
+  "description": "Run local language models by talking to Codex. A live viewer shows Ollama models, memory, deployment progress and measured performance on your Mac.",
+  "engine": "codex",
+  "workspace": {
+    "template": "template",
+    "marker": "local-ai.json"
+  },
+  "agent": {
+    "instructions": "agent/AGENTS.md",
+    "env": {
+      "LOCAL_AI": "${dsh}/toolchain/local-ai"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "command": "./viewer.sh",
+    "url": "http://127.0.0.1:${port}/?view=grid"
+  },
+  "verdict": ".harness/verdict.json"
+}

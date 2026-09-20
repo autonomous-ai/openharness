@@ -32,7 +32,8 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
 
   // ---- what the pane sees ---------------------------------------------------------------------
   const view = () => ({
-    task: job.task, item: job.item, start: job.start, fields: job.fields.map((f) => ({ id: f.id, name: f.name, ask: f.ask, type: f.type })),
+    task: job.task, item: job.item, start: job.start, search: job.search, fields: job.fields.map((f) => ({ id: f.id, name: f.name, ask: f.ask, type: f.type })),
+    walled: lastRun?.walled ?? null,
     keep: job.keep, maxItems: job.maxItems, maxPages: job.maxPages, limits: LIMITS,
     error: configError, jevError, client: liveRoute() ?? 'mock', jevSays: describeCredentials(),
     chrome: { found: !!chromePath, open: !!chrome?.alive },
@@ -77,6 +78,7 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
     if (configError) findings.push({ severity: 'error', kind: 'job', ref: MARKER, message: configError })
     if (jevError) findings.push({ severity: 'warning', kind: 'jev', message: jevError })
     if (!chromePath) findings.push({ severity: 'error', kind: 'chrome', message: 'Google Chrome was not found on this machine. Install it, or set CHROME_PATH.' })
+    if (lastRun?.walled) findings.push({ severity: 'error', kind: 'walled', message: `${lastRun.walled}. This is the site refusing an automated browser, not a fault here. Do not retry it: pick a site that allows reading.` })
     if (liveRoute() === null && rows.length) findings.push({ severity: 'warning', kind: 'jev', message: 'These rows came from the offline stand-in, not from Jev. They are not good enough to act on.' })
     for (const f of filled) if (f.thin) findings.push({ severity: 'warning', kind: 'field', ref: f.id, message: `"${f.name}" was found on only ${f.found} of ${f.of} pages. Reword what it asks for, or the value may not be on those pages.` })
     for (const e of (lastRun?.errors ?? []).slice(0, 3)) findings.push({ severity: 'warning', kind: 'page', ref: e.url, message: clean(e.message) })
@@ -93,6 +95,7 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
       ],
       run: {
         client: liveRoute() ?? 'mock', task: job.task, start: job.start, item: job.item,
+        walled: lastRun?.walled ?? null,
         rows: rows.length, pages: counters.pages, linksJudged: counters.links, calls: counters.calls,
         questions: counters.questions, costUsd: Math.round(counters.costUsd * 1e6) / 1e6,
         elapsedMs: startedAt ? (finishedAt || Date.now()) - startedAt : 0, fields: filled,
@@ -218,6 +221,33 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
         return { phase }
       }
       case 'export': { saveResults(); return { file: RESULTS, rows: rows.length } }
+      // The pane's own form. It writes browse.json exactly as the agent would, so the file stays
+      // the one place a job lives, and the recipe is the same however it was made.
+      case 'setJob': {
+        const columns = String(body.columns ?? '').split('\n').map((l) => l.trim()).filter(Boolean).slice(0, LIMITS.fields)
+        if (!columns.length) return { ok: false, error: 'Say what you want for each one, one per line.' }
+        const start = String(body.start ?? '').trim()
+        if (!start) return { ok: false, error: 'Put in the address of the page to start on.' }
+        const next = {
+          task: String(body.task ?? '').trim() || `${columns[0]} for every ${String(body.item ?? 'thing').trim()}`,
+          start: /^[a-z]+:\/\//i.test(start) || /^demo$/i.test(start) ? start : `https://${start}`,
+          search: String(body.search ?? '').trim(),
+          item: String(body.item ?? '').trim() || 'one of the things on this page',
+          fields: columns.map((ask) => (/^(is|are|does|do|can|has|have|will|should|was|were)\b/i.test(ask) || ask.endsWith('?')
+            ? { ask, type: 'yesno', name: ask.replace(/\?$/, '').slice(0, 40) }
+            : { ask, name: ask.slice(0, 40) })),
+          keep: String(body.keep ?? '').trim(),
+          maxItems: Math.max(1, Math.min(LIMITS.maxItems, Math.floor(Number(body.maxItems) || 25))),
+          maxPages: Math.max(1, Math.min(LIMITS.maxPages, Math.floor(Number(body.maxPages) || 5))),
+          sameSiteOnly: true, show: true,
+        }
+        const { errors } = normalizeJob(next)
+        if (errors.length) return { ok: false, error: errors.join('; ') }
+        const f = join(workspace, MARKER)
+        writeFileSync(f + '.tmp', JSON.stringify(next, null, 2) + '\n'); renameSync(f + '.tmp', f)
+        applyJob(next)          // this starts it
+        return { ok: true, start: next.start, fields: next.fields.length }
+      }
       case 'openHere': {
         // The person asks the browser to go somewhere, from the pane. Same rules as everything else.
         if (!chrome?.alive) { const o = await openBrowser(); if (o.ok === false) return o }
@@ -229,13 +259,26 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
   }
 
   // ---- the job file --------------------------------------------------------------------------------
+  // What makes a job a different job. A changed title or budget is not worth a new run.
+  const jobPrint = (j) => JSON.stringify([j.start, j.search, j.item, j.keep, j.fields.map((f) => [f.id, f.ask, f.type, f.levels])])
+  let lastPrint = null, autoTimer = null
+
   function applyJob(raw, fresh = false) {
     const { job: next, errors } = normalizeJob(raw)
     configError = errors.length ? `${MARKER}: ${errors.join('; ')}` : null
     if (!configError || fresh || !job.fields.length) job = next
     if (demo && /^demo$/i.test(job.start)) job = { ...job, start: demo.url, hosts: [...new Set([...job.hosts, '127.0.0.1', 'localhost'])] }
     if (chrome) chrome.allowedHosts = job.sameSiteOnly ? [...job.hosts, ...(demo ? ['127.0.0.1', 'localhost'] : [])] : []
+    const print = jobPrint(job)
+    const changed = lastPrint !== null && print !== lastPrint
+    lastPrint = print
     push(); verdictSoon()
+    // Somebody just asked for something different. Go and get it, rather than waiting to be told
+    // twice: the person who typed it, or the agent that wrote the file for them, has already said so.
+    if (changed && !configError && job.autoStart && !running) {
+      clearTimeout(autoTimer)
+      autoTimer = setTimeout(() => { if (!running && !configError) start().catch(() => {}) }, 400)
+    }
   }
 
   mkdirSync(join(workspace, '.harness'), { recursive: true })
@@ -258,7 +301,7 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
     async close() {
       stopFlag = true
       await running
-      stopShots(); clearTimeout(verdictTimer)
+      stopShots(); clearTimeout(verdictTimer); clearTimeout(autoTimer)
       watcher.close()
       await closeBrowser()
       await demo?.close()

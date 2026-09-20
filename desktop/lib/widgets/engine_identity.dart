@@ -222,6 +222,75 @@ const _engines = <String, EngineIdentity>{
 /// own. It is only a face. A harness absent here still draws — the daemon
 /// sends its name, and [engineIdentity] falls back to an initial.
 const _harnesses = <String, EngineIdentity>{
+  'autonomous/vllm': EngineIdentity(
+    id: 'autonomous/vllm',
+    tagline:
+        'High-performance LLM inference on Apple Silicon using MLX and vLLM',
+    label: 'vLLM',
+    category: 'Local AI',
+    creator: 'OpenHarness contributors',
+    color: Color(0xffffc743),
+    asset: 'assets/engine-icons/vllm.png',
+    homepage: 'https://github.com/vllm-project/vllm-metal',
+    blurb: 'Serve models with vLLM Metal and measure concurrent request performance.',
+  ),
+  'autonomous/mlx-lm': EngineIdentity(
+    id: 'autonomous/mlx-lm',
+    tagline:
+        'Generating text with large language models on Apple silicon with MLX',
+    label: 'MLX-LM',
+    category: 'Local AI',
+    creator: 'OpenHarness contributors',
+    color: Color(0xffa9caff),
+    asset: 'assets/engine-icons/mlx.png',
+    homepage: 'https://github.com/ml-explore/mlx-lm',
+    blurb:
+        'Run and compare language models directly on Apple Silicon with MLX.',
+  ),
+  'autonomous/ollama': EngineIdentity(
+    id: 'autonomous/ollama',
+    tagline: 'Start building with open models.',
+    label: 'Ollama',
+    category: 'Local AI',
+    creator: 'OpenHarness contributors',
+    color: Color(0xfff4f6ef),
+    asset: 'assets/engine-icons/ollama.png',
+    homepage: 'https://ollama.com',
+    blurb:
+        'Run and benchmark Ollama models on your Mac through natural language.',
+  ),
+  'local/vllm': EngineIdentity(
+    id: 'local/vllm',
+    label: 'vLLM',
+    category: 'Local AI',
+    creator: 'Local',
+    color: Color(0xffffc743),
+    asset: 'assets/engine-icons/vllm.png',
+    homepage: 'https://github.com/vllm-project/vllm-metal',
+    blurb: 'Serve models with vLLM Metal and measure concurrent request performance.',
+  ),
+  'local/mlx-lm': EngineIdentity(
+    id: 'local/mlx-lm',
+    label: 'MLX-LM',
+    category: 'Local AI',
+    creator: 'Local',
+    color: Color(0xffa9caff),
+    asset: 'assets/engine-icons/mlx.png',
+    homepage: 'https://github.com/ml-explore/mlx-lm',
+    blurb:
+        'Run and compare language models directly on Apple Silicon with MLX.',
+  ),
+  'local/ollama': EngineIdentity(
+    id: 'local/ollama',
+    label: 'Ollama',
+    category: 'Local AI',
+    creator: 'Local',
+    color: Color(0xfff4f6ef),
+    asset: 'assets/engine-icons/ollama.png',
+    homepage: 'https://ollama.com',
+    blurb:
+        'Run and benchmark Ollama models on your Mac through natural language.',
+  ),
   // Original creative identities; source vectors ship in each package under brand/.
   'autonomous/voxel-worlds': EngineIdentity(
     id: 'autonomous/voxel-worlds',
@@ -236,7 +305,8 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/generative-art',
     label: 'Generative Art',
     category: 'Original art',
-    tagline: 'Turn a visual brief into editable artwork and complete asset sets',
+    tagline:
+        'Turn a visual brief into editable artwork and complete asset sets',
     creator: 'Autonomous',
     color: Color(0xffce7645),
     asset: 'assets/engine-icons/generative-art.png',
@@ -325,7 +395,7 @@ const _harnesses = <String, EngineIdentity>{
   'autonomous/autonomous-grid': EngineIdentity(
     id: 'autonomous/autonomous-grid',
     label: 'Grid',
-    category: 'Compute',
+    category: 'Local AI',
     tagline: 'Deploy open-weight models across your machines and watch the fleet live',
     creator: 'Autonomous',
     color: Color(0xfff5a623),
@@ -556,7 +626,7 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/openscad',
     label: "OpenSCAD",
     category: "CAD",
-    tagline: "The Programmers Solid 3D CAD Modeller",
+    tagline: "Your measurements. A family of usable parts.",
     creator: "OpenSCAD",
     color: Color(0xffe2c63d),
     asset: 'assets/engine-icons/openscad.png',
@@ -565,7 +635,7 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/freecad',
     label: "FreeCAD",
     category: "CAD",
-    tagline: "Parametric 3D modeling with verified STEP exports",
+    tagline: "From your measurements to checked, editable custom parts",
     creator: "OpenHarness contributors",
     color: Color(0xff418fde),
     asset: 'assets/engine-icons/freecad.png',
@@ -574,7 +644,7 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/orca-slicer',
     label: "Orca Slicer",
     category: "Fabrication",
-    tagline: "An open-source slicer for FFF 3D printers",
+    tagline: "Your mesh. Compared plans. Editable native projects.",
     creator: "OpenHarness contributors",
     color: Color(0xff009789),
     asset: 'assets/engine-icons/orca-slicer.png',
@@ -610,7 +680,7 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/score',
     label: "Score",
     category: "Music",
-    tagline: "Music notation for everyone",
+    tagline: "Your musical idea, ready to hear and share",
     creator: "OpenHarness contributors",
     color: Color(0xffbd965f),
     asset: 'assets/engine-icons/score.png',
@@ -630,6 +700,12 @@ const _harnesses = <String, EngineIdentity>{
 /// say "Runs on Claude Code" — and send the right `engine` — before the machine
 /// has answered `dsh_list`. The daemon's catalog is authoritative when present.
 const knownHarnessBase = <String, String>{
+  'autonomous/ollama': 'codex',
+  'autonomous/mlx-lm': 'codex',
+  'autonomous/vllm': 'codex',
+  'local/ollama': 'codex',
+  'local/mlx-lm': 'codex',
+  'local/vllm': 'codex',
   'autonomous/voxel-worlds': 'claude',
   'autonomous/generative-art': 'claude',
   'autonomous/music-studio': 'claude',

@@ -1,8 +1,27 @@
 # Jev Browser
 
-**Point it at a web page. Get a spreadsheet.** Say what one "thing" is on that page and which
-columns you want, and a real Chrome walks the site: it opens every thing, pulls out your columns,
-and writes `results.csv` while you watch. No code, no selectors, no copy and paste.
+**Point it at a web page. Get a spreadsheet.** Type an address, say what one "thing" on it is, and
+list the columns you want. A real Chrome opens, walks the site, and writes `results.csv` while you
+watch. No code, no selectors, no copy and paste.
+
+## How you use it
+
+The pane asks you three questions and then goes. There is nothing to press afterwards.
+
+| | |
+|---|---|
+| **Start on** | `books.toscrape.com/catalogue/category/books/travel_2/index.html` |
+| **Search for** | leave it empty, or put words to type into the site's own search box |
+| **Each one is** | `a book for sale` |
+| **Columns** | `the title` · `the price` · `how many copies are available` · `Is it in stock?` |
+
+Press **Go**. The browser opens, the rows land, and `results.csv` is in your project folder. A line
+that reads like a question ("Is it in stock?") becomes a yes-or-no column; everything else is taken
+off the page word for word.
+
+The agent on the right is for the rest: a site that fights back, a column that comes back empty,
+and reading what you collected. You do not need it to run a job. Ask it in plain words and it
+writes the same job file the form does, and that starts on its own too.
 
 **Every value is text taken off the page.** Jev, TypeSafe's System One model, never writes words. It
 is shown the numbered pieces of text that really are on the page and it picks one. So a cell holds
@@ -34,17 +53,17 @@ The refusals sit next to the only code that can touch a page, so nothing above t
   in yourself in the window. The profile is kept in your project folder, so the next run is already
   signed in.
 - **It stays on the sites your job names**, on http and https only, and downloads are refused.
+- **A search box is the one control it will ever use**, because searching asks a site a question
+  rather than buying, sending or deleting anything.
 
 Some sites say in their terms that they do not want to be read this way, and some sell an API for
 the same data. That is your call to make, and the harness will not go around a block or a login.
 
 ## Try it in ten seconds
 
-The harness serves its own small job board on your machine, so there is something honest to walk
-before you point it anywhere real. Press **Start**. Only the content of that site is made up: the
-HTTP, the links, the pagination and the browser are all real.
-
-Then change `start` in `browse.json` to a real address.
+Press **Try the practice site**. The harness serves its own small job board on your machine, with
+real HTTP, real links, real pagination and a real browser. Only the content of that site is made
+up. It even has a search box, so you can try the "search for" line on it.
 
 ## The job, which is also the recipe
 
@@ -63,7 +82,9 @@ Then change `start` in `browse.json` to a real address.
 }
 ```
 
-Run it again next month and you get next month's answer. That file is the whole recipe.
+Run it again next month and you get next month's answer. That file is the whole recipe. Saving it
+starts a run, so the agent writing it for you has the same effect as pressing Go. Set
+`"autoStart": false` if you would rather press the button yourself.
 
 ## What you get
 
@@ -90,6 +111,15 @@ The pane runs on an offline stand-in that matches words. It shows the plumbing a
 about being a stand-in, but its rows are not worth acting on. Paste an OpenRouter or TypeSafe key
 into the **Jev · live mind** panel in the pane. It is saved on your machine in
 `~/.config/typesafe/credentials` and checked with one tiny call.
+
+## When a site says no
+
+Big shops, marketplaces and social sites mostly block an automated browser. What comes back is a
+wall: "Sorry, something went wrong", a captcha, or a near-empty page. The harness recognises that,
+says which site did it, and stops. It will not work around a block, and neither should the agent.
+
+A specialist shop, a maker's own site or a public dataset usually reads perfectly, and its pages
+often print the fields a marketplace hides.
 
 ## The honest limit
 

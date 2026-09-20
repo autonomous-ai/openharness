@@ -1,0 +1,7 @@
+{
+  "homepage": "https://ollama.com",
+  "upstream": "https://github.com/ollama/ollama",
+  "license": "MIT",
+  "tagline": "Start building with open models.",
+  "screenshots": []
+}

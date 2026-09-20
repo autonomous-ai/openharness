@@ -1,0 +1,1 @@
+{ "spec": 1, "runtime": "vllm", "backend": "metal", "scope": "local-language-models", "notes": "One vLLM harness, with Metal as its Mac backend. This workspace owns one private server. Model weights use the Hugging Face cache; measurements belong to this workspace." }

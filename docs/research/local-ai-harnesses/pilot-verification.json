@@ -1,0 +1,168 @@
+{
+  "checkedAt": "2026-09-20T02:39:27.424Z",
+  "runtime": "0.34.0",
+  "hardware": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "chip": "Apple M2 Max",
+    "totalMemory": 68719476736,
+    "cores": 12,
+    "freeMemory": 2098790400
+  },
+  "model": {
+    "id": "qwen3:0.6b",
+    "name": "qwen3:0.6b",
+    "size": 522653767,
+    "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+    "modifiedAt": "2026-09-19T22:24:53.944608106-04:00",
+    "family": "qwen3",
+    "parameters": "751.63M",
+    "quantization": "Q4_K_M",
+    "running": true,
+    "resident": {
+      "name": "qwen3:0.6b",
+      "model": "qwen3:0.6b",
+      "size": 1039086387,
+      "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "qwen3",
+        "families": [
+          "qwen3"
+        ],
+        "parameter_size": "751.63M",
+        "quantization_level": "Q4_K_M"
+      },
+      "expires_at": "2026-09-19T22:54:27.286847-04:00",
+      "size_vram": 1039086387,
+      "context_length": 4096
+    }
+  },
+  "checks": [
+    "unload verified in runtime inventory",
+    "cached deployment verified resident",
+    "chat arithmetic sanity check",
+    "generation metrics present",
+    "three-run measured benchmark persisted"
+  ],
+  "chat": {
+    "prompt": "What is 2 + 2? Reply with just the number.",
+    "output": "4",
+    "metrics": {
+      "model": "qwen3:0.6b",
+      "tokens": 90,
+      "promptTokens": 24,
+      "tokensPerSecond": 272.4292516368457,
+      "promptTokensPerSecond": 1213.4695115785216,
+      "loadMs": 0.636167,
+      "evalMs": 330.361,
+      "doneReason": "stop",
+      "firstTokenMs": 33.03279199999997,
+      "firstOutputMs": 350.1375420000004,
+      "elapsedMs": 354.0685420000009,
+      "context": 4096,
+      "maxTokens": 512,
+      "temperature": 0.3,
+      "seed": 42,
+      "thinking": true
+    }
+  },
+  "benchmark": {
+    "id": "5fecc978-ca9a-42b0-9134-dd146aaec770",
+    "model": "qwen3:0.6b",
+    "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+    "at": "2026-09-20T02:39:19.316Z",
+    "runtime": {
+      "name": "Ollama",
+      "version": "0.34.0"
+    },
+    "hardware": {
+      "platform": "darwin",
+      "arch": "arm64",
+      "chip": "Apple M2 Max",
+      "totalMemory": 68719476736,
+      "cores": 12
+    },
+    "settings": {
+      "context": 2048,
+      "maxTokens": 128,
+      "seed": 42,
+      "temperature": 0,
+      "thinking": false
+    },
+    "prompt": "Explain how a bicycle works to a curious beginner. Discuss the pedals, chain, gears, wheels, brakes, and balance. Write a clear explanation of at least 250 words without a heading.",
+    "promptHash": "e3aff106a75867995dfbb42b73d60cb031d6d1d9511c155329d29033854e829a",
+    "mode": "warm; repeated prompt may use prefix cache",
+    "samples": [
+      {
+        "model": "qwen3:0.6b",
+        "tokens": 128,
+        "promptTokens": 58,
+        "tokensPerSecond": 277.06887109587234,
+        "promptTokensPerSecond": 11924.342105263157,
+        "loadMs": 0.907042,
+        "evalMs": 461.979,
+        "doneReason": "length",
+        "firstTokenMs": 9.088958999999704,
+        "firstOutputMs": 9.089334000000235,
+        "elapsedMs": 471.1010839999999,
+        "context": 2048,
+        "maxTokens": 128,
+        "temperature": 0,
+        "seed": 42,
+        "thinking": false
+      },
+      {
+        "model": "qwen3:0.6b",
+        "tokens": 128,
+        "promptTokens": 58,
+        "tokensPerSecond": 290.56041840700254,
+        "promptTokensPerSecond": 13116.236996834012,
+        "loadMs": 0.752667,
+        "evalMs": 440.528,
+        "doneReason": "length",
+        "firstTokenMs": 10.607291999999688,
+        "firstOutputMs": 10.607417000000169,
+        "elapsedMs": 451.0408749999997,
+        "context": 2048,
+        "maxTokens": 128,
+        "temperature": 0,
+        "seed": 42,
+        "thinking": false
+      },
+      {
+        "model": "qwen3:0.6b",
+        "tokens": 128,
+        "promptTokens": 58,
+        "tokensPerSecond": 290.91305790533505,
+        "promptTokensPerSecond": 15705.3885729759,
+        "loadMs": 0.723917,
+        "evalMs": 439.994,
+        "doneReason": "length",
+        "firstTokenMs": 7.3243750000001455,
+        "firstOutputMs": 7.324542000000292,
+        "elapsedMs": 448.0642090000001,
+        "context": 2048,
+        "maxTokens": 128,
+        "temperature": 0,
+        "seed": 42,
+        "thinking": false
+      }
+    ],
+    "medianTokensPerSecond": 290.56041840700254,
+    "medianFirstTokenMs": 9.088958999999704,
+    "medianFirstOutputMs": 9.089334000000235,
+    "residentBytes": 793719603
+  },
+  "packageValidation": {
+    "installedId": "local/ollama",
+    "spec1Conformance": "passed",
+    "doctor": "passed",
+    "automatedTestsPassed": 14,
+    "nativePicker": "Ollama entry observed as installed on M2",
+    "nativeViewerRelay": "HTTP page, shared controller token, same benchmarks and export verified",
+    "nativePaneRendering": "not verified; app UI changed during workspace selection",
+    "webMCP": "implemented with feature detection; no supported validation context available"
+  }
+}

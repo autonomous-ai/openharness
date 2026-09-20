@@ -1,0 +1,23 @@
+{
+  "name": "local-ai-harnesses",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A local control room for running AI models in natural language.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build:mlx": "node scripts/build-mlx.mjs",
+    "start:mlx": "node ../../agents/mlx-lm/main.mjs",
+    "test:mlx-live": "node test/mlx-live.mjs",
+    "start": "node ../../agents/ollama/src/server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check src/server.mjs && node --check src/controller.mjs && node --check src/intents.mjs && node --check src/ollama.mjs && node --check dist/app.js && node --check bin/harness.mjs",
+    "test:live": "node test/live.mjs",
+    "build:vllm": "node scripts/build-vllm.mjs",
+    "start:vllm": "node ../../agents/vllm/main.mjs",
+    "test:vllm-live": "node test/vllm-live.mjs",
+    "build": "node scripts/build-ollama.mjs && node scripts/build-mlx.mjs && node scripts/build-vllm.mjs"
+  }
+}
