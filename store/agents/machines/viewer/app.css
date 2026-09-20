@@ -1,0 +1,252 @@
+/* The Machines pane.
+   Light is the default palette; the two blocks under it redefine the same tokens for dark — the
+   contract every DSH viewer in this store keeps (store/agents/autonomous-grid/viewer/app.css), so
+   the page follows the appearance the app is in (data-theme on the root) or the system's when the
+   app has not said. Every colour below this block is one of these tokens. */
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel: #f8f8f7;        /* menus, the segmented track */
+  --card: #f3f3f1;         /* filled chips */
+  --overlay-hover: rgba(0, 0, 0, .05);
+  --overlay-selected: rgba(0, 0, 0, .08);
+  --overlay-border: rgba(0, 0, 0, .10);
+  --line: rgba(0, 0, 0, .08);
+  --ink: #17181a;
+  --ink-2: #585b61;
+  --ink-3: #8a8d93;
+  --accent: #2b5fd9;       /* this computer, its links, the thing you picked */
+  --accent-soft: rgba(43, 95, 217, .12);
+  --live: #1f8a5f;         /* a machine that is up, a harness that is working */
+  --warn: #a8730f;         /* a machine that needs linking before it can be read */
+  --off: #b8402f;
+  /* Engines, by hue. Length and glow say "working"; hue says who is doing it. */
+  --engine-claude: #c2703d;
+  --engine-codex: #4a72b8;
+  --engine-third: #7a5ba6;
+  --engine-other: #8a8d93;
+  --node-bg-1: #fdfdfc; --node-bg-2: #f2f2f0; --node-border: #e3e2de; --node-border-hover: #c9cdd6;
+  --selected-ring: rgba(0, 0, 0, .34); --selected-glow: rgba(0, 0, 0, .07);
+  --local-border: #b9c8ef; --local-glow: rgba(43, 95, 217, .10);
+  --sky-1: rgba(43, 95, 217, .05); --sky-2: rgba(31, 138, 95, .04);
+  --shadow-card: 0 6px 16px rgba(0, 0, 0, .07);
+  --shadow-menu: 0 14px 34px rgba(0, 0, 0, .14), 0 2px 6px rgba(0, 0, 0, .06);
+  --toast-bg: #1d1f22; --toast-border: #3a3d42; --toast-ink: #eceef1;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--ink);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0a0c0f; --panel: #151a20; --card: #171d24;
+    --overlay-hover: #ffffff0d; --overlay-selected: #ffffff14; --overlay-border: #ffffff12; --line: #ffffff0d;
+    --ink: #e8eaed; --ink-2: #8b939e; --ink-3: #6c7580;
+    --accent: #82aaff; --accent-soft: rgba(130, 170, 255, .14);
+    --live: #78bb98; --warn: #d9ab5c; --off: #e98576;
+    --engine-claude: #e0955f; --engine-codex: #8fb1e8; --engine-third: #b193d6; --engine-other: #7f8893;
+    --node-bg-1: #191f26; --node-bg-2: #11161c; --node-border: #2f353d; --node-border-hover: #454d58;
+  --selected-ring: rgba(255, 255, 255, .38); --selected-glow: rgba(255, 255, 255, .08);
+    --local-border: #3c5580; --local-glow: rgba(130, 170, 255, .12);
+    --sky-1: rgba(130, 170, 255, .06); --sky-2: rgba(120, 187, 152, .04);
+    --shadow-card: 0 8px 24px rgba(0, 0, 0, .35);
+    --shadow-menu: 0 10px 30px #0009, 0 2px 6px #0006;
+    --toast-bg: #1b2026; --toast-border: #333a43; --toast-ink: #e2e6ea;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0a0c0f; --panel: #151a20; --card: #171d24;
+  --overlay-hover: #ffffff0d; --overlay-selected: #ffffff14; --overlay-border: #ffffff12; --line: #ffffff0d;
+  --ink: #e8eaed; --ink-2: #8b939e; --ink-3: #6c7580;
+  --accent: #82aaff; --accent-soft: rgba(130, 170, 255, .14);
+  --live: #78bb98; --warn: #d9ab5c; --off: #e98576;
+  --engine-claude: #e0955f; --engine-codex: #8fb1e8; --engine-third: #b193d6; --engine-other: #7f8893;
+  --node-bg-1: #191f26; --node-bg-2: #11161c; --node-border: #2f353d; --node-border-hover: #454d58;
+  --selected-ring: rgba(255, 255, 255, .38); --selected-glow: rgba(255, 255, 255, .08);
+  --local-border: #3c5580; --local-glow: rgba(130, 170, 255, .12);
+  --sky-1: rgba(130, 170, 255, .06); --sky-2: rgba(120, 187, 152, .04);
+  --shadow-card: 0 8px 24px rgba(0, 0, 0, .35);
+  --shadow-menu: 0 10px 30px #0009, 0 2px 6px #0006;
+  --toast-bg: #1b2026; --toast-border: #333a43; --toast-ink: #e2e6ea;
+}
+
+* { box-sizing: border-box }
+html, body { height: 100%; margin: 0; overflow: hidden }
+button, select, input { font: inherit }
+button { cursor: pointer; color: inherit; background: transparent; border: 0 }
+button:disabled { cursor: default; opacity: .5 }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px }
+[hidden] { display: none !important }
+h1, h2, h3, p { margin: 0 }
+#app { height: 100%; display: flex; flex-direction: column; overflow: hidden; min-width: 320px }
+.workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 306px }
+.main-column { min-width: 0; min-height: 0; display: flex; flex-direction: column }
+.scrolls { overflow-y: auto; scrollbar-width: none }
+.scrolls::-webkit-scrollbar { display: none }
+.quiet { color: var(--ink-3); font-size: 12px; padding: 6px 0 }
+
+/* ── toolbar ─────────────────────────────────────────────────────────────── */
+.view-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 24px 2px }
+.segmented { display: flex; gap: 4px; background: var(--panel); padding: 3px; border-radius: 7px }
+.segmented button { border-radius: 5px; padding: 6px 13px; font-size: 12px; color: var(--ink-2) }
+.segmented button[aria-pressed=true] { background: var(--overlay-selected); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.08) }
+.toolbar-selects { display: flex; align-items: center; gap: 8px }
+.ghost { border: 1px solid transparent; border-radius: 6px; padding: 5px 9px; font-size: 12px; color: var(--ink-2) }
+.ghost:hover { background: var(--overlay-hover); border-color: var(--overlay-border) }
+.menu { position: relative }
+.menu-button { display: flex; align-items: center; gap: 7px; border: 1px solid transparent; border-radius: 6px; padding: 5px 9px; font-size: 12px; color: var(--ink-2) }
+.menu-button:hover, .menu-button[aria-expanded=true] { background: var(--overlay-hover); border-color: var(--overlay-border) }
+.menu-kicker { font-size: 11px; color: var(--ink-2) }
+.menu-value { color: var(--ink) }
+.menu-chevron { font-size: 9px; color: var(--ink-2) }
+.menu-list { position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; min-width: 170px; padding: 6px 0; background: var(--panel);
+  border: 1px solid var(--overlay-border); border-radius: 8px; box-shadow: var(--shadow-menu) }
+.menu-row { display: flex; width: calc(100% - 12px); margin: 0 6px; padding: 5px 8px; border-radius: 5px; text-align: left; font-size: 12.5px; color: var(--ink) }
+.menu-row:hover { background: var(--overlay-hover) }
+.menu-row[aria-selected=true] { background: var(--overlay-selected) }
+
+/* ── the stage ───────────────────────────────────────────────────────────── */
+.stage { flex: 1; min-height: 0; position: relative; isolation: isolate; overflow: hidden;
+  background: radial-gradient(ellipse at 50% 46%, var(--sky-1), transparent 52%), radial-gradient(ellipse at 96% 60%, var(--sky-2), transparent 55%) }
+#links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none }
+.stage-heading { position: absolute; left: 24px; top: 12px; display: flex; flex-direction: column; gap: 4px; pointer-events: none }
+.eyebrow { font-size: 10px; letter-spacing: 1.7px; font-weight: 500; color: var(--ink-2) }
+.stage-subtitle { font-size: 12px; color: var(--ink-3) }
+.node-layer { position: absolute; inset: 0; pointer-events: none }
+.stage-foot { position: absolute; left: 24px; bottom: 10px; font-size: 11px; color: var(--ink-3); pointer-events: none }
+.stage-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px }
+.stage-empty h1 { font-size: 19px; font-weight: 600 }
+.stage-empty p { font-size: 13px; color: var(--ink-2); max-width: 32ch }
+.empty-mark { font-size: 30px; color: var(--ink-3) }
+
+/* a machine */
+.node { position: absolute; pointer-events: auto; display: flex; flex-direction: column; align-items: center; gap: 7px;
+  padding: 6px; border-radius: 14px; transform: translate(-50%, -50%); width: 168px; text-align: center }
+.node:hover { background: var(--overlay-hover) }
+/* Picked is a ring, not a filled tile: the fills on this stage all mean something about the
+   machine, and a click should not repaint one of them. */
+.node[aria-pressed=true] { background: transparent }
+.node[aria-pressed=true] .orb::before { border-color: var(--selected-ring); box-shadow: 0 0 0 4px var(--selected-glow) }
+.orb { position: relative; width: 132px; height: 132px; display: grid; place-items: center }
+.orb::before { content: ""; position: absolute; inset: 22px; border-radius: 50%;
+  background: linear-gradient(160deg, var(--node-bg-1), var(--node-bg-2)); border: 1px solid var(--node-border) }
+.node:hover .orb::before { border-color: var(--node-border-hover) }
+.node.local .orb::before { border-color: var(--local-border); box-shadow: 0 0 0 5px var(--local-glow) }
+.node.offline .orb::before { border-style: dashed }
+.node.offline .corona, .node.offline .core { opacity: .45 }
+.corona { position: absolute; inset: 0; width: 132px; height: 132px; overflow: visible }
+.corona line { stroke-linecap: round; transform-origin: center }
+.corona line.dormant { opacity: .38 }
+.corona line.open { opacity: .95; animation: breathe 3.4s ease-in-out infinite }
+.paused .corona line.open { animation: none }
+@keyframes breathe { 0%, 100% { opacity: .55 } 50% { opacity: 1 } }
+@media (prefers-reduced-motion: reduce) { .corona line.open { animation: none } }
+.corona circle.dashed { fill: none; stroke: var(--node-border); stroke-dasharray: 3 5 }
+.core { position: relative; display: flex; flex-direction: column; align-items: center; line-height: 1.05 }
+.core strong { font-size: 25px; font-weight: 600; font-variant-numeric: tabular-nums }
+.core small { font-size: 9.5px; letter-spacing: .9px; text-transform: uppercase; color: var(--ink-3); margin-top: 3px }
+.core.blank strong { font-size: 15px; font-weight: 500; color: var(--ink-3) }
+.node-name { font-size: 13px; font-weight: 550; display: flex; align-items: center; gap: 6px; max-width: 100% }
+.node-name .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.node-sub { font-size: 11px; color: var(--ink-3); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--live); box-shadow: 0 0 8px var(--live); flex: none }
+.dot.offline { background: var(--off); box-shadow: none }
+.dot.warn { background: var(--warn); box-shadow: none }
+.dot.unknown { background: var(--ink-3); box-shadow: none }
+
+/* ── the boards (projects, activity) ─────────────────────────────────────── */
+.board { flex: 1; min-height: 0; padding: 8px 24px 16px }
+.board-note { font-size: 11.5px; color: var(--ink-3); padding: 2px 0 10px }
+.loom { width: 100%; display: block }
+.loom .thread { fill: none; stroke: var(--line); stroke-width: 1.5 }
+.loom .thread.open { stroke: var(--accent); opacity: .55 }
+.loom .thread.dim { opacity: .12 }
+.loom text { font-size: 11.5px; fill: var(--ink-2) }
+.loom text.title { font-size: 12.5px; fill: var(--ink) }
+.loom text.faint { fill: var(--ink-3); font-size: 10.5px }
+.loom .row:hover text.title { fill: var(--accent) }
+.loom .knot { fill: var(--ink-3) }
+.loom .knot.open { fill: var(--live) }
+
+.lane { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 12px; align-items: end; padding: 9px 0; border-top: 1px solid var(--line) }
+.lane:first-of-type { border-top: 0 }
+.lane-label { min-width: 0 }
+.lane-label b { display: block; font-size: 12.5px; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.lane-label span { font-size: 10.5px; color: var(--ink-3) }
+.track { position: relative; min-height: 18px }
+.track .grid-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line) }
+.track .block { position: absolute; height: 5px; border-radius: 1.5px; opacity: .42 }
+.track .block.open { opacity: 1 }
+.track .more { position: absolute; font-size: 9px; line-height: 6px; color: var(--ink-3) }
+.axis { position: relative; height: 16px; font-size: 10px; color: var(--ink-3); margin-left: 144px }
+.axis span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap }
+.axis .now-label { left: auto; right: 0; transform: none }
+
+/* ── totals + log ────────────────────────────────────────────────────────── */
+.totals { display: flex; gap: 26px; padding: 12px 24px; border-top: 1px solid var(--line) }
+.totals div { display: flex; flex-direction: column; gap: 2px }
+.totals strong { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums }
+.totals .total-label { font-size: 9.5px; letter-spacing: 1.1px; color: var(--ink-3) }
+.totals small { font-size: 11px; color: var(--ink-3) }
+.log { border-top: 1px solid var(--line); padding: 10px 24px 14px; max-height: 148px; overflow-y: auto; scrollbar-width: none }
+.log::-webkit-scrollbar { display: none }
+.section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 6px }
+.section-heading h2 { font-size: 12px; font-weight: 600 }
+.section-heading span { font-size: 11px; color: var(--ink-3) }
+.entry { display: flex; gap: 10px; align-items: baseline; padding: 3px 0; font-size: 12px }
+.entry time { color: var(--ink-3); font-size: 11px; font-variant-numeric: tabular-nums; flex: none }
+.entry.failed { color: var(--off) }
+
+/* ── inspector ───────────────────────────────────────────────────────────── */
+.inspector { border-left: 1px solid var(--line); padding: 16px 18px 24px; background: var(--bg) }
+.inspector-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding-bottom: 12px }
+.inspector-head h2 { font-size: 17px; font-weight: 600; line-height: 1.25 }
+.subline { font-size: 12px; color: var(--ink-2); margin-top: 4px }
+.close { font-size: 17px; color: var(--ink-3); line-height: 1; padding: 2px 6px; border-radius: 5px }
+.close:hover { background: var(--overlay-hover) }
+.detail-status { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); padding-bottom: 10px }
+.section { border-top: 1px solid var(--line); padding: 12px 0 }
+.section h3 { font-size: 10px; letter-spacing: 1.1px; text-transform: uppercase; color: var(--ink-3); font-weight: 600; padding-bottom: 8px }
+.pair { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; padding: 3px 0 }
+.pair span { color: var(--ink-3) }
+.pair strong { font-weight: 500; text-align: right; word-break: break-word }
+.project-block { padding: 6px 0 }
+.project-block b { font-size: 12.5px; font-weight: 550 }
+.project-block .branch { font-size: 11px; color: var(--ink-3); margin-left: 6px }
+.harness-row { display: flex; gap: 8px; align-items: baseline; font-size: 12px; padding: 3px 0 3px 2px; color: var(--ink-2) }
+.harness-row .mark { font-size: 9px; flex: none }
+.harness-row .mark.open { color: var(--live) }
+.harness-row .mark.dormant { color: var(--ink-3) }
+.harness-row .what { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.harness-row .when { margin-left: auto; color: var(--ink-3); font-size: 11px; flex: none }
+.chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--ink-2); background: var(--card);
+  border-radius: 999px; padding: 3px 9px; margin: 0 5px 5px 0 }
+.swatch { width: 7px; height: 7px; border-radius: 2px; flex: none }
+.ask { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px }
+.ask span { font-size: 9.5px; letter-spacing: 1.1px; color: var(--ink-3) }
+.ask p { font-size: 12.5px; color: var(--ink); padding: 6px 0 8px; line-height: 1.4 }
+.ask button { font-size: 11.5px; color: var(--accent); border: 1px solid var(--overlay-border); border-radius: 6px; padding: 4px 9px }
+.ask button:hover { background: var(--accent-soft) }
+.link-form { display: flex; flex-direction: column; gap: 8px; padding-top: 4px }
+.link-form input { background: var(--card); border: 1px solid var(--overlay-border); border-radius: 6px; padding: 7px 9px; font-size: 12.5px; color: var(--ink) }
+.link-form .row { display: flex; gap: 8px; align-items: center }
+.link-form button { background: var(--accent); color: #fff; border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: 500 }
+:root[data-theme="dark"] .link-form button, :root:not([data-theme="light"]) .link-form button { color: #0a0c0f }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .link-form button { color: #fff } }
+.link-form .why { font-size: 11px; color: var(--ink-3); line-height: 1.45 }
+.link-form .error { font-size: 11.5px; color: var(--off) }
+
+.toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); background: var(--toast-bg); color: var(--toast-ink);
+  border: 1px solid var(--toast-border); border-radius: 8px; padding: 8px 14px; font-size: 12px; box-shadow: var(--shadow-menu); z-index: 40 }
+
+/* A narrow pane: the inspector becomes a drawer over the stage. */
+@media (max-width: 860px) {
+  .workspace { grid-template-columns: minmax(0, 1fr) }
+  .inspector { position: absolute; top: 0; right: 0; bottom: 0; width: min(320px, 86vw); transform: translateX(100%);
+    transition: transform .18s ease; box-shadow: var(--shadow-menu); z-index: 30 }
+  .inspector.open { transform: none }
+  .lane { grid-template-columns: 96px minmax(0, 1fr) }
+  .axis { margin-left: 108px }
+}

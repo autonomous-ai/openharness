@@ -1,0 +1,10 @@
+{
+  "name": "@autonomous/machines-harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "start": "./viewer.sh"
+  },
+  "engines": { "node": ">=22" }
+}

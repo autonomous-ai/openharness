@@ -134,8 +134,8 @@ private extension SwarmTabStrip {
     let closeFrame = close.convert(close.bounds, to: nil)
     let zoomFrame = zoom.convert(zoom.bounds, to: nil)
     let newFrame = newButton.convert(newButton.bounds, to: nil)
-    try checkTitlebar(bounds.height >= 48, "Native title bar leaves room around the pill actions")
-    for button in [openButton] {
+    try checkTitlebar(bounds.height >= 40, "Native title bar leaves room around the pill actions")
+    for button in [storeButton] {
       let labelWidth = (button.title as NSString).size(withAttributes: [.font: button.font!]).width
       try checkTitlebar(button.frame.minY >= 6 && bounds.height - button.frame.maxY >= 6 && button.frame.width - labelWidth >= 32,
         "\(button.title) has vertical breathing room and readable horizontal padding")
@@ -237,22 +237,21 @@ private extension SwarmTabStrip {
     try checkTitlebar(newButton.isEnabled,
       "The retired canOpenNewTab capacity flag no longer disables New Tab")
     update(state([["id": "swarm-0", "name": "Renamed tab"]], active: "swarm-0"))
-    try checkTitlebar(newButton.toolTip == nil && openButton.toolTip == nil,
-      "Titlebar actions add no hover hints")
+    try checkTitlebar(newButton.toolTip == "New Tab ⌘T" && storeButton.toolTip == "Harness Store ⌘S",
+      "Titlebar actions expose their keyboard alternatives")
     try checkTitlebar(notificationButton.frame.maxX <= scroll.frame.minX,
       "The bell is before the tabs beside the traffic lights")
-    try checkTitlebar((newButton.isHidden || newButton.frame.maxX <= createButton.frame.minX) && scroll.frame.maxX <= createButton.frame.minX && createButton.frame.maxX <= openButton.frame.minX,
-      "New and Open Harness have distinct targets on the right")
-    try checkTitlebar(openButton.title == "Open Harness" && createButton.title == "New Harness",
-      "The titlebar separates New and Open Harness")
+    try checkTitlebar(scroll.frame.maxX <= newButton.frame.minX && newButton.frame.maxX <= storeButton.frame.minX,
+      "New Tab follows the tabs while the Store stays on the right")
+    try checkTitlebar(storeButton.title == "Harness Store" && storeButton.accessibilityLabel() == "Harness Store",
+      "The Store action has a visible and accessible name")
     try checkTitlebar(!subviews.contains(where: { $0 is NSTextField }), "The titlebar has no competing text editor")
     events.removeAll()
     newButton.performClick(nil)
     notificationButton.performClick(nil)
-    createButton.performClick(nil)
-    openButton.performClick(nil)
-    try checkTitlebar(events == ["new", "notifications", "newAgent", "addAgent"],
-      "The tab, notification, New and Open buttons dispatch once")
+    storeButton.performClick(nil)
+    try checkTitlebar(events == ["new", "notifications", "store"],
+      "The tab, notification and Store buttons dispatch once")
     try checkTitlebar(notificationButton.hasAttention, "The bell represents pending agent attention")
     let oldButton = newButton
     var themedState = state([["id": "swarm-0", "name": "Renamed tab"]], active: "swarm-0")
@@ -267,18 +266,17 @@ private extension SwarmTabStrip {
     original.clickBothActions()
     try checkTitlebar(events == ["select", "close"], "Native selection and close dispatch once each")
 
-    let actionPixels = [createButton.renderedPixels(), openButton.renderedPixels()]
+    let actionPixels = storeButton.renderedPixels()
     events.removeAll()
     update(state([["id": "swarm-0", "name": "Renamed tab"]], active: "swarm-0", enabled: false))
     try original.checkEnabled(false)
-    try checkTitlebar(!newButton.isEnabled && !notificationButton.isEnabled && !openButton.isEnabled && !createButton.isEnabled, "Titlebar actions disable with a modal")
-    try checkTitlebar(actionPixels == [createButton.renderedPixels(), openButton.renderedPixels()],
-      "New and Open Harness retain their colors behind a workspace modal")
+    try checkTitlebar(!newButton.isEnabled && !notificationButton.isEnabled && !storeButton.isEnabled, "Titlebar actions disable with a modal")
+    try checkTitlebar(actionPixels != storeButton.renderedPixels(),
+      "The Store visibly dims when a workspace modal disables it")
     original.clickBothActions()
     newButton.performClick(nil)
     notificationButton.performClick(nil)
-    createButton.performClick(nil)
-    openButton.performClick(nil)
+    storeButton.performClick(nil)
     try checkTitlebar(events.isEmpty, "Disabled controls emit no actions")
     try checkDragOperations()
   }
@@ -489,8 +487,8 @@ private extension SwarmTitlebar {
       "The main-menu dispatcher retains the actual Edit submenu and its targets")
     try checkTitlebar(newSwarm.keyEquivalent == "t" && newSwarm.toolTip == nil,
       "Native shortcuts display in the menu without duplicate hover hints")
-    try checkTitlebar(addHarness.keyEquivalent == "o" && addHarness.keyEquivalentModifierMask == [.command],
-      "The exported keymap keeps Open Harness on Command-O")
+    try checkTitlebar(addHarness.keyEquivalent == "p" && addHarness.keyEquivalentModifierMask == [.command],
+      "The exported keymap keeps New Pane on Command-P")
     setKeymap(changed)
     try checkTitlebar(NSApp.mainMenu === main && newSwarm.keyEquivalent == "o",
       "Hot reload updates the existing menu to the remapped key")
@@ -523,11 +521,11 @@ private extension SwarmTitlebar {
       "The menu yields the remapped search shortcut to Flutter")
     try checkTitlebar(!main.performKeyEquivalent(with: open), "Menu equivalents defer before input dispatch")
     setKeymap(defaults)
-    try checkTitlebar(strip.newButton.toolTip == nil, "Keymap reload does not restore hover hints")
+    try checkTitlebar(strip.newButton.toolTip == "New Tab ⌘T", "Keymap reload restores the current New Tab hint")
     try checkTitlebar(strip.newButton.accessibilityLabel() == "New Tab", "The plus announces New Tab")
-    try checkTitlebar(main.defersToInput(event("n", 45, .command)) && main.defersToInput(event("o", 31, .command)),
-      "Command-N and Command-O reach their separate New and Open actions")
-    try checkTitlebar(main.defersToInput(event("p", 35, .command)), "Command-P reaches the Orchestrator launcher")
+    try checkTitlebar(main.defersToInput(event("n", 45, .command)) && main.defersToInput(event("t", 17, .command)),
+      "Command-N and Command-T reach creation and New Tab")
+    try checkTitlebar(main.defersToInput(event("p", 35, .command)), "Command-P reaches New Pane")
     try checkTitlebar(main.defersToInput(event("p", 35, [.command, .shift])), "Command-Shift-P reaches command search")
     flutterKeyContext = "picker"
     syncMenuKeys()
@@ -549,7 +547,13 @@ private extension SwarmTitlebar {
       NSApp.mainMenu = originalMenu
     }
     actionsEnabled = true
-    setKeymap(defaults)
+    // Orchestrator has no default chord now. Exercise an explicit user binding;
+    // Cmd-P belongs to New Pane and is covered by the exported default keymap.
+    let viewerMap = HarnessNativeKeymap(["version": 1, "contexts": [
+      "workspace": [["keys": ["cmd+y"], "command": "project.orchestrate", "hint": "⌘Y", "repeatable": false]],
+      "terminal": [], "picker": [], "project": [],
+    ]])!
+    setKeymap(viewerMap)
     let main = NSApp.mainMenu as! HarnessKeymapMenu
     func event(_ text: String, _ code: UInt16, _ flags: NSEvent.ModifierFlags = []) -> NSEvent {
       NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
@@ -565,22 +569,22 @@ private extension SwarmTitlebar {
     defer { web.removeFromSuperview(); window.makeFirstResponder(window.contentInput) }
     try checkTitlebar(window.makeFirstResponder(webInput), "A native viewer descendant can own test focus")
     flutterKeyContext = "workspace"
-    setKeymap(defaults)
+    setKeymap(viewerMap)
     let beforeViewer = messenger.calls.count
-    try checkTitlebar(main.performKeyEquivalent(with: event("p", 35, .command)),
-      "Command-P is consumed by the focused native viewer bridge")
+    try checkTitlebar(main.performKeyEquivalent(with: event("y", 16, .command)),
+      "The custom Orchestrator shortcut is consumed by the focused native viewer bridge")
     try checkTitlebar(messenger.calls.count == beforeViewer + 1 && messenger.calls.last?.method == "keymapCommand" &&
       (messenger.calls.last?.arguments as? [String: String])?["command"] == "project.orchestrate",
       "The native viewer dispatches exactly one Orchestrator command to Flutter")
     let repeated = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
-      timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "p",
-      charactersIgnoringModifiers: "p", isARepeat: true, keyCode: 35)!
+      timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "y",
+      charactersIgnoringModifiers: "y", isARepeat: true, keyCode: 16)!
     try checkTitlebar(main.performKeyEquivalent(with: repeated) && messenger.calls.count == beforeViewer + 1,
-      "Holding Command-P never launches repeated projects")
+      "Holding the shortcut never launches repeated projects")
     _ = main.performKeyEquivalent(with: event("b", 11, .command))
     try checkTitlebar(messenger.calls.count == beforeViewer + 1, "The viewer bridge does not hijack Command-B")
     actionsEnabled = false
-    _ = main.performKeyEquivalent(with: event("p", 35, .command))
+    _ = main.performKeyEquivalent(with: event("y", 16, .command))
     try checkTitlebar(messenger.calls.count == beforeViewer + 1, "Modal state blocks native viewer launch dispatch")
     actionsEnabled = true
     let remapped = HarnessNativeKeymap(["version": 1, "contexts": [
@@ -588,7 +592,7 @@ private extension SwarmTitlebar {
       "terminal": [], "picker": [], "project": [],
     ]])!
     setKeymap(remapped)
-    _ = main.performKeyEquivalent(with: event("p", 35, .command))
+    _ = main.performKeyEquivalent(with: event("y", 16, .command))
     try checkTitlebar(messenger.calls.count == beforeViewer + 1, "The old viewer shortcut stays unbound after remapping")
     try checkTitlebar(main.performKeyEquivalent(with: event("x", 7, .command)) && messenger.calls.count == beforeViewer + 2,
       "The viewer bridge follows the actual remapped two-key shortcut")
@@ -649,12 +653,12 @@ private extension SwarmTitlebar {
     try checkTitlebar(settings.title == "Settings…" && settings.representedObject as? String == "settings", "Settings stays in the application menu")
     let agent = main.item(withTitle: "File")!.submenu!
     let addHarness = agent.items.first(where: { $0.representedObject as? String == "addAgent" })!
-    try checkTitlebar(addHarness.title == "Open Harness…" && addHarness.keyEquivalent == "o" && addHarness.keyEquivalentModifierMask == [.command],
-      "Open Harness advertises Command-O")
-    try checkTitlebar(agent.items.contains { $0.title == "New Harness…" && $0.keyEquivalent == "n" && $0.keyEquivalentModifierMask == [.command] && $0.representedObject as? String == "newAgent" },
-      "New Harness has its own Command-N menu action")
+    try checkTitlebar(addHarness.title == "New Pane…" && addHarness.keyEquivalent == "p" && addHarness.keyEquivalentModifierMask == [.command],
+      "New Pane advertises Command-P")
+    try checkTitlebar(agent.items.contains { $0.title == "New Terminal" && $0.keyEquivalent == "t" && $0.keyEquivalentModifierMask == [.command, .shift] && $0.representedObject as? String == "newTerminal" },
+      "New Terminal has its Command-Shift-T menu action")
     let historyMenu = main.item(withTitle: "History")!.submenu!
-    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["new", "newAgent", "addAgent", "renameActive", "closeActive", "separator", "splitRight", "splitDown", "zoomPane", "closePane"], "File groups Harness and Pane actions, without Pin or Add Project clutter")
+    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["new", "addAgent", "newTerminal", "renameActive", "closeActive", "separator", "zoomPane", "closePane"], "File groups tab, terminal and pane actions")
     try checkTitlebar(agent.items.filter { !$0.isSeparatorItem }.allSatisfy { $0.image != nil && $0.toolTip == nil },
       "Every File action has a native icon and no hover hint")
     try checkTitlebar(agent.items.contains { $0.title == "Rename Tab…" && $0.representedObject as? String == "renameActive" }, "Rename Tab preserves its command")
@@ -684,11 +688,16 @@ private extension SwarmTitlebar {
     ]
     _ = try messenger.receive("machinesState", arguments: ["machines": machineRows])
     let machineMenu = main.item(withTitle: "Machines")!.submenu!
-    let manager = machineMenu.items.first!
-    try checkTitlebar(manager.title == "Open Machines Manager" && manager.representedObject as? String == "manageMachines" && machineMenu.items[1].isSeparatorItem,
-      "Machines Manager leads the menu before linked computers")
-    menuAction(manager)
+    let manage = machineMenu.items[0]
+    let manager = machineMenu.items[1]
+    try checkTitlebar(manage.title == "Manage Machines…" && manage.representedObject as? String == "manageMachines" &&
+      manager.title == "Open Machines Manager" && manager.representedObject as? String == "machineList" && machineMenu.items[2].isSeparatorItem,
+      "The Machines harness and existing manager lead the linked computers")
+    menuAction(manage)
     try checkTitlebar(messenger.calls.last?.method == "manageMachines",
+      "The Machines harness opens through the Flutter command bridge")
+    menuAction(manager)
+    try checkTitlebar(messenger.calls.last?.method == "machineList",
       "Machines Manager opens through the Flutter command bridge")
     let destinations = machineMenu.items.filter { $0.action == #selector(machineAction(_:)) }
     try checkTitlebar(machineMenu.minimumWidth == 0 && machineMenu.size.width < 432 &&
@@ -844,7 +853,7 @@ private extension SwarmTitlebar {
     let models = main.item(withTitle: "Models")!.submenu!
     try checkTitlebar(models.items.filter { !$0.isSeparatorItem }.map(\.title) == [
       "Subscription", "Anthropic, aabbcc, 12% remaining", "OpenAI, Not signed in",
-      "Local", "Open Grid"
+      "Local", "Want to manage local models?", "Open Grid"
     ], "Models carries the two sections with something behind them, ending on the row that starts a model")
     try checkTitlebar(models.items.filter(\.isSeparatorItem).count == 1,
       "One native separator, between the sections — the run row is a Local row, not a section")
@@ -855,6 +864,7 @@ private extension SwarmTitlebar {
     // The caption and button distinguish the manager action from the Local data rows.
     // It remains enabled with nothing served and dispatches through the same guarded
     // handler as Link Machine… so a modal still swallows it.
+    let managerCaption = models.items[models.items.count - 2]
     let runLocal = models.items.last!
     try checkTitlebar(runLocal.title == "Open Grid",
       "the last item in Models is the row that runs a local model")
@@ -873,8 +883,8 @@ private extension SwarmTitlebar {
     actionsEnabled = false
     try checkTitlebar(!validateMenuItem(runLocal), "Open Grid cannot run behind a modal")
     actionsEnabled = true
-    try checkTitlebar(!runLocal.title.lowercased().contains("grid") && !runLocal.title.contains("Mac"),
-      "the command names neither the plumbing nor one vendor's computer")
+    try checkTitlebar(!runLocal.title.contains("Mac"),
+      "The model manager action does not assume one vendor's computer")
 
     // With more than one machine linked, the row has to say WHICH computer the manager opens on:
     // it becomes a submenu of the machines, each child dispatching the same command with that

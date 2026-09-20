@@ -24,13 +24,14 @@ import 'package:harness/widgets/new_harness_box.dart';
 
 import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
+import 'keymap_host_test.dart' show key;
 
 /// Stands in for the machine behind the Open Grid door: the probes New Agent
 /// makes answer at once, and the harness list says whether Grid is installed
 /// there. Nothing is created — the door's job ends when New Agent is open on
 /// the right machine with Grid chosen, or the Store is open on Grid's page.
 class _GridApp extends AppNotifier {
-  _GridApp({required this.grid})
+  _GridApp({required this.grid, this.harness = AppNotifier.gridHarness})
     : super(
         config: AppConfig.dev,
         authSession: AuthSession(),
@@ -42,6 +43,7 @@ class _GridApp extends AppNotifier {
   /// Per machine: true = Grid installed, false = listed but not installed,
   /// absent = the machine never heard of it.
   final Map<String, bool> grid;
+  final String harness;
 
   @override
   Future<void> probeEngines(String machineId, {bool force = false}) async {}
@@ -52,8 +54,8 @@ class _GridApp extends AppNotifier {
     machineStates[machineId]!.dsh.replace([
       if (installed != null)
         DshEntry(
-          id: AppNotifier.gridHarness,
-          name: 'Grid',
+          id: harness,
+          name: harness == AppNotifier.machinesHarness ? 'Machines' : 'Grid',
           engine: 'codex',
           description: 'Talk to your fleet.',
           installed: installed,
@@ -72,8 +74,9 @@ class _GridApp extends AppNotifier {
 _GridApp _gridApp({
   required Map<String, bool> grid,
   bool secondMachine = false,
+  String harness = AppNotifier.gridHarness,
 }) {
-  final app = _GridApp(grid: grid);
+  final app = _GridApp(grid: grid, harness: harness);
   const machine = Machine(
     machineId: 'm',
     authMode: MachineAuthMode.remote,
@@ -347,6 +350,7 @@ void main() {
     WidgetTester tester,
     _GridApp app, {
     String? machineId,
+    String command = 'runLocalModel',
   }) async {
     tester.view.physicalSize = const Size(1200, 900);
     tester.view.devicePixelRatio = 1;
@@ -371,7 +375,7 @@ void main() {
       channel.name,
       const StandardMethodCodec().encodeMethodCall(
         MethodCall(
-          'runLocalModel',
+          command,
           machineId == null ? null : {'machineId': machineId},
         ),
       ),
@@ -380,8 +384,12 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  for (final machineId in [null, 'other']) {
-    testWidgets('native Models opens the product dock on $machineId', (
+  for (final (command, harness, stem, machineId) in [
+    ('runLocalModel', AppNotifier.gridHarness, 'grid', null),
+    ('runLocalModel', AppNotifier.gridHarness, 'grid', 'other'),
+    ('manageMachines', AppNotifier.machinesHarness, 'machines', null),
+  ]) {
+    testWidgets('native $command opens the product dock on $machineId', (
       tester,
     ) async {
       newHarnessOpensInBox = true;
@@ -389,17 +397,18 @@ void main() {
       final app = _gridApp(
         grid: {'m': true, 'other': true},
         secondMachine: true,
+        harness: harness,
       );
       addTearDown(app.dispose);
       app.adoptSessionForTest(terminal('source', []));
       final source = app.activeSwarm;
-      await openGridDoor(tester, app, machineId: machineId);
+      await openGridDoor(tester, app, machineId: machineId, command: command);
       final box = tester
           .widget<NewHarnessBox>(find.byType(NewHarnessBox))
           .controller;
-      expect(box.engine, AppNotifier.gridHarness);
+      expect(box.engine, harness);
       expect(box.machineId, machineId ?? 'm');
-      expect(box.projectLabel, startsWith('~/harnesses/grid-'));
+      expect(box.projectLabel, startsWith('~/harnesses/$stem-'));
       expect(box.placement, HarnessPlacement.newTab);
       expect(find.byType(AlertDialog), findsNothing);
       expect(app.swarms, [source]);
@@ -407,6 +416,24 @@ void main() {
       await tester.pump();
       expect(find.byType(NewHarnessBox), findsNothing);
       expect(app.swarms, [source]);
+      if (command == 'manageMachines') {
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+        await tester.enterText(
+          find.byKey(const ValueKey('swarm-search-input')),
+          '> manage machines',
+        );
+        await tester.pump();
+        await key(tester, LogicalKeyboardKey.enter);
+        expect(
+          tester
+              .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+              .controller
+              .engine,
+          harness,
+        );
+        expect(app.swarms, [source]);
+        await key(tester, LogicalKeyboardKey.escape);
+      }
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(milliseconds: 60));
     });

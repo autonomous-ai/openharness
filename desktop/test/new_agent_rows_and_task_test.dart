@@ -269,9 +269,9 @@ void main() {
         by: 'by YosysHQ',
         line: 'Framework for Verilog RTL synthesis',
       ));
-      await _search(tester, 'godogen');
+      await _search(tester, 'earth');
       expect(
-        find.byKey(const ValueKey('new-agent-agent-row-autonomous/godogen')),
+        find.byKey(const ValueKey('new-agent-agent-row-someone/earth')),
         findsNothing,
         reason: 'a harness this build has no face for waits for the machine',
       );
@@ -292,15 +292,16 @@ void main() {
         'someone/maps',
       ]);
 
-      // The Store's shelf: Simulation is on Science.
-      await _search(tester, 'science');
+      // The Store's Simulation shelf includes physics and robotics.
+      await _search(tester, 'simulation');
       expect(agentRows(tester), contains('autonomous/mujoco'));
+      expect(agentRows(tester), contains('someone/earth'));
       // The domain itself, where no line under a name says it.
       await _search(tester, 'documents');
       expect(agentRows(tester), ['autonomous/typst']);
-      // An unknown domain is on the Store's Other shelf.
+      // A package with no domain is on the Store's Other shelf.
       await _search(tester, 'other');
-      expect(agentRows(tester), contains('someone/earth'));
+      expect(agentRows(tester), contains('someone/maps'));
       // An author the row draws.
       await _search(tester, 'gmbh');
       expect(agentRows(tester), ['autonomous/typst']);

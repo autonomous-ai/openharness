@@ -1,0 +1,30 @@
+{
+  "spec": 1,
+  "id": "autonomous/machines",
+  "name": "Machines",
+  "category": "Compute",
+  "author": "Autonomous",
+  "description": "Talk to your fleet of computers. Link one, name it, retire it — and watch every machine, project and harness you own come alive on one map.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "machines.json",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": ["skills"],
+    "env": {
+      "MACHINES_CLI": "${dsh}/toolchain/machines"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "command": "./viewer.sh",
+    "url": "http://127.0.0.1:${port}/"
+  },
+  "verdict": ".harness/verdict.json"
+}

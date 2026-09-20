@@ -989,6 +989,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
       case 'linkMachine':
         await _dialog(() => showSwarmLinkDialog(context, app, keymap: _keymap));
       case 'manageMachines':
+        await _manageMachines();
+      // BRIDGE, until the Machines menu goes: the old list, so nothing is lost
+      // between this release and that one. When the menu is removed, delete
+      // this case, `machines.list` below, machines_manager.dart and its test,
+      // and the `machineList` action in SwarmTitlebar.swift + keymap_commands.
+      case 'machineList':
         unawaited(
           _dialog(() => showMachinesManager(context, app, keymap: _keymap)),
         );
@@ -1080,6 +1086,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           'newTerminal',
           'runLocalModel',
           'manageMachines',
+          'machineList',
           'deleteMachine',
           'splitRight',
           'splitDown',
@@ -1242,6 +1249,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// Settings ▸ Usage. A palette that finds a setting by name is how an editor
   /// makes a settings screen nobody has to navigate.
   static const _settingsCommand = 'settings:';
+
+  Future<void> _manageMachines() async {
+    Future<void> open() => app.manageMachines(
+      context,
+      onOpenHarness: newHarnessOpensInBox ? _openProduct : null,
+    );
+    if (newHarnessOpensInBox) {
+      await open();
+    } else {
+      await _dialog(open);
+    }
+  }
 
   Future<void> _openProduct(String engine, String machineId, {String? task}) =>
       _newAgent(
@@ -2381,7 +2400,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     'agent.restart': _restartAgent,
     'machine.link': () =>
         _dialog(() => showSwarmLinkDialog(context, app, keymap: _keymap)),
-    'machines.manage': () =>
+    'machines.manage': _manageMachines,
+    'machines.list': () =>
         _dialog(() => showMachinesManager(context, app, keymap: _keymap)),
     'project.add': _addProject,
     'keyboard.open_config': () => openKeyboardConfig(context),
