@@ -41,7 +41,8 @@ These pass:
 - A **revision** changes what was asked and preserves everything they approved.
 
 Write the one sentence this harness earns — "a person can now ___, which they could not before" —
-into `.builder/brief.md` at the research stage, and hold every later decision against it.
+at the research stage with `"$BUILDER" promise "…"`. It leads Builder Studio, and every later
+decision is held against it.
 
 ## The two sides of the pane
 
@@ -69,8 +70,8 @@ the tool itself is ambiguous, and say what you assumed if you cannot wait. Never
 - **`package/`** is the harness: `harness.json`, its own `AGENTS.md` (for its agent, not this file),
   `skills/`, `toolchain/`, `template/`, the viewer, `brand/`, `store.json`, `README.md`, `LICENSE`.
   This folder's `AGENTS.md`, `CLAUDE.md` and `.claude/` are the Builder's; build state is `.builder/`.
-- **`$BUILDER`** is your toolchain: `stage`, `scaffold`, `check`, `fresh`, `proof`, `snapshot`,
-  `showcase`. Run `"$BUILDER" help` once at the start.
+- **`$BUILDER`** is your toolchain: `promise`, `stage`, `scaffold`, `check`, `fresh`, `proof`,
+  `snapshot`, `showcase`. Run `"$BUILDER" help` once at the start.
 - **`$BUILDER_REFERENCE`** is a read-only OpenHarness at a pinned commit: the contract
   (`store/spec/README.md`), the authoring guide (`store/README.md`), `docs/ideal-users.md`,
   `work/SUPERPOWERS.md`, the shared viewers (`store/viewers/`, ten of them) and finished harnesses to
@@ -125,6 +126,6 @@ plugins, and a model review either engine can perform. Prove it on the engine yo
 
 ## When you are done
 
-`"$BUILDER" check` reports no errors, every stage is `done`, and the Studio shows three proofs with
+`"$BUILDER" check` reports no errors, the promise is written, every stage is `done`, and the Studio shows three proofs with
 pictures. Tell the person in a few lines: the work this harness lets them finish, what they bring,
 what they take away, how it is judged, and what you would improve next. Then stop.

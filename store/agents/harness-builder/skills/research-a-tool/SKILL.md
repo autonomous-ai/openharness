@@ -91,9 +91,11 @@ each written the way a person would ask, and each naming the material they bring
 
 ## Done
 
-Every question answered, the decision written, and the id, name, category, tagline and engine written
-into `package/harness.json` and `package/store.json`.
+Every question answered, the decision written, the id, name, category, tagline and engine written
+into `package/harness.json` and `package/store.json`, and section 1's sentence recorded as the
+build's promise — it leads Builder Studio, and every later decision is held against it:
 
 ```bash
+"$BUILDER" promise "A person can now turn a tune they hum into an engraved score they can print and hand to a player."
 "$BUILDER" stage research done --note "<the work it unlocks, how it is driven, viewer, evaluation>"
 ```

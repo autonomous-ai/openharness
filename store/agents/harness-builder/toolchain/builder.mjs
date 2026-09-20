@@ -20,6 +20,8 @@ const WORKSPACE = resolve(process.env.HARNESS_WORKSPACE || process.cwd())
 
 const HELP = `builder — build a domain-specific harness in package/
 
+  promise "A person can now …"
+                     the one sentence this harness earns; it leads Builder Studio
   stage <id> <active|done|failed|pending> [--note "…"]
                      mark a stage; stages: ${STAGES.map((s) => s.id).join(', ')}
   status             the stages, the proofs, the latest check
@@ -112,6 +114,24 @@ async function main() {
     case 'init': {
       const build = ensureWorkspace(WORKSPACE)
       console.log(`ok   Builder workspace ready (${build.stages.length} stages)`)
+      return
+    }
+
+    case 'promise': {
+      // The one sentence the harness earns: what a person can now finish that they could not before.
+      // It leads Builder Studio, and the check asks for it, because a build that cannot say this
+      // is the kind that gets withdrawn.
+      const sentence = a._.join(' ').trim()
+      const build = readBuild(WORKSPACE)
+      if (!sentence) {
+        console.log(build.promise ? build.promise : 'no promise yet: "$BUILDER" promise "A person can now …"')
+        return
+      }
+      if (sentence.length > 160) fail('the promise is one sentence (≤ 160 characters)')
+      build.promise = sentence
+      log(build, `Promise: ${sentence}`)
+      saveBuild(WORKSPACE, build)
+      console.log(sentence)
       return
     }
 

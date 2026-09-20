@@ -89,7 +89,10 @@ function drawHeader() {
   const b = state.build
   const name = b.target?.name
   $('mark').textContent = name ? name.trim()[0].toUpperCase() : '·'
-  $('title').textContent = name ? `A harness for ${name}` : 'Name a tool to build a harness for'
+  // The promise leads: what a person can now finish. The tool's name is the subtitle, because the
+  // tool is the means — the work is the product (work/SUPERPOWERS.md).
+  $('title').textContent = b.promise || (name ? `A harness for ${name}` : 'Name a tool to build a harness for')
+  $('eyebrow').textContent = b.promise && name ? `Harness Builder · ${name}` : 'Harness Builder'
   $('status').textContent = state.verdict?.summary ?? ''
   const gates = (state.verdict?.evaluation ?? []).map((g) => {
     const cls = g.passed === true ? 'pass' : g.passed === false ? 'fail' : ''

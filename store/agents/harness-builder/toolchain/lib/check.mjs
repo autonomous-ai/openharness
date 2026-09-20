@@ -290,8 +290,11 @@ export function checkPackage(pkg, { reference, build, fresh, proofVerdicts = [] 
     }
   }
 
-  // The build around the package: evaluation declared, fresh install, proofs.
+  // The build around the package: the promise, evaluation declared, fresh install, proofs.
   if (build) {
+    if (!build.promise) {
+      findings.push(finding('warning', 'promise_missing', 'the build does not say what a person can now finish: "$BUILDER" promise "A person can now …"', '.builder/build.json'))
+    }
     if (!existsSync(join(pkg, 'toolchain', 'check')) && !build.evaluation?.length) {
       findings.push(finding('warning', 'evaluation_undeclared', 'no toolchain/check and no evaluation declared', 'toolchain/check'))
     }
