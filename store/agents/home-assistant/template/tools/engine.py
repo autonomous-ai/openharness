@@ -3,7 +3,8 @@
 The automation, trigger, condition, script, service and trace implementations are
 upstream Core. Only the clock and explicitly declared device entities are test
 doubles. Every invocation is a fresh process/config directory; no integrations
-are discovered, no account is loaded and no network/subprocess access is allowed.
+are discovered and no account is loaded. After trusted dependency bootstrap,
+scenario execution has no network/subprocess access.
 """
 import asyncio
 from contextlib import nullcontext
@@ -601,6 +602,12 @@ def main():
     # truly fresh. Never reuse a Home Assistant object between independent tests.
     with tempfile.TemporaryDirectory(prefix="habitat-core-", dir=request["testRoot"]) as folder:
         sys.dont_write_bytecode = True
+        # ifaddr's module initialization resolves libc with ctypes.find_library.
+        # Linux may invoke ldconfig for that read-only loader lookup. Do it
+        # before locking down scenario execution, not by permitting subprocesses
+        # inside the guard. Importing does not call get_adapters or discover any
+        # devices; Core/YAML execution below still runs entirely under the guard.
+        import ifaddr  # noqa: F401
         blocked = install_guards(folder)
         with (nullcontext() if real_clock else time_machine.travel(case["start"], tick=False)) as frozen:
             import homeassistant  # installs the official validation backend

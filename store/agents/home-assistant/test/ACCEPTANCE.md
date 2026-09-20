@@ -53,9 +53,9 @@ Core itself deliberately assigns clock-time trackers a 50–500 ms phase offset.
 The user-facing `tools/proof.mjs` readiness path also passed: draft edit/download/reopen, complete native suite, native trace download, verified ZIP download, desktop/mobile screenshots and source/runtime unchanged checks. It writes a source/runtime-bound proof; no verdict was manually set to ready.
 
 Final local evidence:
-`/private/tmp/harness-home-assistant-workflows.KuSIDy/habitat-acceptance-n4pmvH/acceptance.json`.
+`/private/tmp/harness-home-assistant-workflows.KuSIDy/habitat-acceptance-2cYggQ/acceptance.json`.
 Both exported workflows and browser proof match the checked-in portable runtime hash:
-`981e2447a7aa774d28633e769093e4ddc2e6830f01836ecaf991969ae6601faf`.
+`553a4669a45438a20b64c17e4f54a47d283dd49bb8b2635bed6ae6b38f9f4adc`.
 The Store screenshot is an actual uncropped browser capture of the passing starter, not a mockup.
 
 ## Independent verification
@@ -94,5 +94,7 @@ For an ordinary workspace, the skill's `build-automations.sh` command performs t
 Only declared test devices and selected local components are loaded. No real installation, credential, discovery, network device, phone, physical transition, sensor reliability, restart/restore or deployment was tested. Python/Core here is a development/test runtime, not a supported production installation method. Native services act on doubles/helpers, never on a home.
 
 Registries use the official native `load_empty=True` / read-only storage mode. The macOS investigation identified dangling pinned `orjson.Fragment` heap-type references retained by persistent registry caches during interpreter teardown. Ephemeral registries fit this fresh-case lab and avoid that cache path. Full Core/asyncio shutdown still runs. There is no `os._exit`, patched serializer, skipped teardown or acceptance of a failed process's partial output. Persistence and restart behavior remain explicitly outside scope.
+
+The first clean Linux CI run exposed `ifaddr`'s import-time C-library lookup under the subprocess guard. Bootstrap now imports this pinned dependency before installing scenario restrictions; on Linux, Python may use `ldconfig` to read loader metadata. No adapter enumeration or discovery is called, and no subprocess exception was added to the guard. All 26 local tests, both complete browser workflows, export/reopen checks and source/runtime-bound evidence above were regenerated after this correction. The clean Linux rerun remains a required pre-merge gate.
 
 Results cover the declared cases, not every possible template or device behavior. Dynamic entity references require meaningful scenario coverage. Fixture capabilities, supported adapters and resource limits are documented in `PROJECT.md`. Imports retain `initial_state: false` and need actual-installation backups, entity/helper/capability review, configuration checks and supervised real tests before deliberate enablement. Nothing in this harness performs deployment.
