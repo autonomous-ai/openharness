@@ -2,12 +2,12 @@
   "homepage": "https://typesafe.ai",
   "upstream": "https://typesafe.ai",
   "license": "MIT",
-  "tagline": "An address and a sentence. Jev works out the columns and fills the sheet",
+  "tagline": "Name a site, say what you want, and get a spreadsheet",
   "examples": [
     {
-      "prompt": "Here is the search results page for two-bedroom flats in my area. Get me every listing with its address, monthly rent, how many bedrooms, and whether it says pets are allowed. Then tell me which five are the best value.",
-      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-browser/jev-picks-the-columns.jpg",
-      "caption": "No columns were typed. Jev read one page and chose them in about a second"
+      "prompt": "books.toscrape.com — travel books, with the price and whether they are in stock. Then tell me which are running low.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-browser/two-boxes.jpg",
+      "caption": "Two boxes. Jev finds the page, picks the columns and fills the sheet"
     },
     {
       "prompt": "Read every product in this category and put the name, price, stock count and product code in a spreadsheet. Stop after 40. Then tell me which ones are out of stock.",

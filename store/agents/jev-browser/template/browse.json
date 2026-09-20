@@ -1,9 +1,8 @@
 {
-  "task": "",
-  "start": "demo",
-  "want": "what each one is called, what it pays and where it is",
-  "maxItems": 12,
-  "maxPages": 4,
+  "start": "",
+  "want": "",
+  "maxItems": 25,
+  "maxPages": 5,
   "sameSiteOnly": true,
   "show": true
 }
