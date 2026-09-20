@@ -559,6 +559,17 @@ const _harnesses = <String, EngineIdentity>{
     color: Color(0xff2450b2),
     asset: 'assets/engine-icons/vega-lite.png',
   ),
+  // Built by the Harness Builder; an original workflow, so it wears its own mark rather than
+  // ffmpeg's. Unlisted until a person has listened to what it makes.
+  'autonomous/episode-ready': EngineIdentity(
+    id: 'autonomous/episode-ready',
+    label: 'Episode Ready',
+    category: 'Podcast',
+    tagline: 'Raw recording to a published episode: levelled, chaptered, transcribed.',
+    creator: 'Autonomous',
+    color: Color(0xfff6a85b),
+    asset: 'assets/engine-icons/episode-ready.png',
+  ),
   // Harness's own package, so it wears Harness's own icon (`assets/app_icon.png`).
   'autonomous/harness-builder': EngineIdentity(
     id: 'autonomous/harness-builder',
@@ -786,6 +797,7 @@ const knownHarnessBase = <String, String>{
   'autonomous/openmontage': 'claude',
   'autonomous/harness-builder': 'claude',
   'autonomous/vega-lite': 'claude',
+  'autonomous/episode-ready': 'claude',
   'autonomous/comfy-mcp': 'codex',
   'autonomous/dimos': 'codex',
   'autonomous/bonsai-mcp': 'codex',

@@ -1,0 +1,34 @@
+{
+  "spec": 1,
+  "id": "autonomous/episode-ready",
+  "name": "Episode Ready",
+  "category": "Podcast",
+  "author": "Autonomous",
+  "description": "Drop in the recording; get the published episode \u2014 cut, levelled to -16 LUFS, chaptered, transcribed, tagged \u2014 and the files every host accepts.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "episode.json",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "EPISODE_TOOLCHAIN": "${dsh}/toolchain",
+      "EPISODE_FFMPEG": "${dsh}/toolchain/.conda/bin/ffmpeg",
+      "EPISODE_FFPROBE": "${dsh}/toolchain/.conda/bin/ffprobe"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "command": "toolchain/viewer.sh",
+    "url": "http://127.0.0.1:${port}/"
+  },
+  "verdict": ".harness/verdict.json"
+}

@@ -1,0 +1,33 @@
+# Episode Ready — every pinned version. Sourced by toolchain/setup.sh and toolchain/doctor.sh.
+# Nothing here is a range. A change to this file is a toolchain change.
+
+# FFmpeg from conda-forge. The lgpl_* build string is the one built --disable-gpl
+# --enable-version3, and it still carries libmp3lame, aac, opus, flac and every filter we use.
+FFMPEG_VERSION=9.0.2
+FFMPEG_SPEC='ffmpeg=9.0.2=lgpl*'
+
+# The interpreter the transcription runs on. uv downloads it; the machine's Python is untouched.
+PYTHON_VERSION=3.12
+
+# Transcription. Both MIT.
+FASTER_WHISPER_VERSION=1.2.1
+CTRANSLATE2_VERSION=4.8.2
+
+# Whisper weights in CTranslate2 form, pinned by Hugging Face commit. All MIT.
+# The default is the one setup fetches; the others are fetched on demand by `ep transcribe --model`.
+WHISPER_DEFAULT_MODEL=base.en
+WHISPER_MODEL_base_en='Systran/faster-whisper-base.en@3d3d5dee26484f91867d81cb899cfcf72b96be6c'
+WHISPER_MODEL_small_en='Systran/faster-whisper-small.en@d1d751a5f8271d482d14ca55d9e2deeebbae577f'
+WHISPER_MODEL_medium_en='Systran/faster-whisper-medium.en@a29b04bd15381511a9af671baec01072039215e3'
+WHISPER_MODEL_distil_small_en='Systran/faster-distil-whisper-small.en@ef77d90526ccd62cde3808ee70626a01e5cf83e4'
+WHISPER_MODEL_base='Systran/faster-whisper-base@ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66'
+WHISPER_MODEL_small='Systran/faster-whisper-small@536b0662742c02347bc0e980a01041f333bce120'
+WHISPER_MODEL_large_v3='Systran/faster-whisper-large-v3@edaa852ec7e145841d8ffdb056a99866b5f0a478'
+WHISPER_MODEL_large_v3_turbo='deepdml/faster-whisper-large-v3-turbo-ct2@4df90f75321148c3a29a9e2351b7ddf8f5b115a8'
+
+# The recording the workspace opens on: "To Write or Not To Write" by Susan Andrews Rice, read for
+# LibriVox in Short Nonfiction Collection Vol. 013. Public domain. 4:03, 1.94 MB.
+# As downloaded it measures -23.1 LUFS with a -0.7 dBFS true peak, so the demo is a real before
+# and after rather than a file that was already finished.
+DEMO_URL='https://archive.org/download/nonfiction013_librivox/towriteornottowrite_rice_cc_64kb.mp3'
+DEMO_SHA256=866ee34315b826cc1bc6167ec208a1ebb744cce66bebeddcac185a00998a94d6

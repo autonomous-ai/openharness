@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "title": "",
+  "show": "",
+  "summary": "",
+  "author": "",
+  "link": "",
+  "keywords": [],
+  "episode": {
+    "number": null,
+    "season": null,
+    "type": "full",
+    "explicit": false,
+    "guid": "",
+    "pubDate": ""
+  },
+  "artwork": "",
+  "target": {
+    "preset": "apple"
+  },
+  "output": {
+    "sampleRate": 44100,
+    "channels": 1,
+    "mp3Kbps": 96,
+    "aacKbps": 96,
+    "formats": [
+      "mp3",
+      "m4a",
+      "wav"
+    ]
+  },
+  "clean": {
+    "highpassHz": 80,
+    "denoise": 10,
+    "declick": true,
+    "deesser": 0.3,
+    "gateDb": null,
+    "compressor": {
+      "thresholdDb": -20,
+      "ratio": 3,
+      "attackMs": 15,
+      "releaseMs": 250,
+      "makeupDb": 2
+    }
+  },
+  "sources": [],
+  "voice": [],
+  "voiceOffset": 0.0,
+  "music": [],
+  "removed": [],
+  "chapters": [],
+  "links": [],
+  "transcript": {
+    "model": "base.en",
+    "language": "en",
+    "vocabulary": []
+  },
+  "render": {},
+  "phase": "intake"
+}

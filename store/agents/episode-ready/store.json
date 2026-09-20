@@ -1,0 +1,39 @@
+{
+  "homepage": "https://github.com/autonomous-ai/openharness",
+  "upstream": "https://github.com/autonomous-ai/openharness",
+  "license": "MIT",
+  "tagline": "Raw recording to a published episode: levelled, chaptered, transcribed.",
+  "listed": false,
+  "evaluation": [
+    {
+      "method": "tool",
+      "by": "ffmpeg's ebur128 (ITU-R BS.1770), and ffprobe reopening every delivered file"
+    },
+    {
+      "method": "checks",
+      "by": "Apple Podcasts' and AES's published rules, and the brief's own claims"
+    },
+    {
+      "method": "review",
+      "by": "a listening rubric, judged with fresh ears"
+    }
+  ],
+  "screenshots": [],
+  "examples": [
+    {
+      "prompt": "This is my weekly episode for Margins, my show about running a small software business — the recording is in raw/. There is a false start at the very top and my dog goes off about a minute and a half in; lose both. Level it for Apple Podcasts, and give me chapters, a transcript and show notes with timestamps. Cover art is in art/.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/episode-ready/easy.jpg",
+      "caption": "Solo episode · 2:06 of tape to 1:07 at -16 LUFS, false start and dog cut, 4 chapters, transcript"
+    },
+    {
+      "prompt": "Two tracks out of Riverside in raw/ — mine and my guest's — plus our theme. Build episode 14 of Shipping Notes: theme in at the top and under my intro, the two of us matched to each other, -16 LUFS. My guest is Mara Oyelaran, please get her name right in the transcript. Chapters at the topic changes, and I need an MP3 and an M4A to upload. Cover is in art/.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/episode-ready/medium.jpg",
+      "caption": "Two-track interview · speakers matched +2/+14 dB, theme ducked, 5 chapters, MP3 and M4A at -16 LUFS"
+    },
+    {
+      "prompt": "raw/panel-hardware-after-the-pilot.wav is a conference panel I recorded on one mic at the back of the room. There's about a minute and a half of nothing before anyone speaks, the moderator's mic is clipping, and one of the panellists is miles away from it. Make it a listenable episode for my show Hardware After The Pilot — target the AES -18 LUFS for speech, a chapter per question, and I need an SRT and a Podcasting 2.0 chapters JSON for the website.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/episode-ready/hard.jpg",
+      "caption": "Conference salvage · 5:16 on one room mic to 1:31 at AES -18 LUFS, 369 clipped samples to none, SRT"
+    }
+  ]
+}

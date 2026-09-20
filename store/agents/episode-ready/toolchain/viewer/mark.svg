@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Episode Ready">
+  <title>Episode Ready</title>
+  <rect width="64" height="64" rx="14" fill="#12130f"/>
+  <!-- the level band the whole craft aims at -->
+  <rect x="8" y="29" width="48" height="6" rx="3" fill="#2f3a26"/>
+  <!-- the waveform, landing inside it -->
+  <g fill="#cfe3b8">
+    <rect x="11" y="26" width="3" height="12" rx="1.5"/>
+    <rect x="17" y="20" width="3" height="24" rx="1.5"/>
+    <rect x="23" y="14" width="3" height="36" rx="1.5"/>
+    <rect x="29" y="22" width="3" height="20" rx="1.5"/>
+    <rect x="35" y="16" width="3" height="32" rx="1.5"/>
+    <rect x="41" y="24" width="3" height="16" rx="1.5"/>
+    <rect x="47" y="28" width="3" height="8" rx="1.5"/>
+  </g>
+  <!-- the needle: on target -->
+  <rect x="31" y="8" width="2" height="48" rx="1" fill="#f2a65a"/>
+</svg>

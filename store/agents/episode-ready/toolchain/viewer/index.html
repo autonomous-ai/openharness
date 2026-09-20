@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Episode Ready</title>
+<link rel="icon" href="/viewer/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/viewer/app.css">
+</head>
+<body>
+<div class="app" id="app">
+
+  <header class="bar">
+    <div class="ident">
+      <img id="cover" class="cover" alt="" hidden>
+      <div class="ident-text">
+        <h1 id="title">Episode Ready</h1>
+        <p id="show">no episode yet</p>
+      </div>
+    </div>
+    <ol class="phases" id="phases" aria-label="stages"></ol>
+    <div class="verdict" id="verdict"><span class="dot"></span><span id="verdict-text">waiting</span></div>
+  </header>
+
+  <section class="meters" id="meters">
+    <div class="meter primary">
+      <div class="meter-value"><span id="lufs">—</span><span class="unit">LUFS</span></div>
+      <div class="gauge" id="gauge">
+        <div class="gauge-band" id="gauge-band"></div>
+        <div class="gauge-target" id="gauge-target"></div>
+        <div class="gauge-needle" id="gauge-needle"></div>
+      </div>
+      <div class="meter-label" id="target-label">integrated loudness</div>
+    </div>
+    <div class="meter"><div class="meter-value"><span id="tp">—</span><span class="unit">dBTP</span></div><div class="meter-label">true peak</div></div>
+    <div class="meter"><div class="meter-value"><span id="lra">—</span><span class="unit">LU</span></div><div class="meter-label">loudness range</div></div>
+    <div class="meter"><div class="meter-value"><span id="dur">—</span></div><div class="meter-label">running time</div></div>
+    <div class="meter"><div class="meter-value"><span id="was">—</span><span class="unit">LUFS</span></div><div class="meter-label">as recorded</div></div>
+    <div class="meter grow"><div class="meter-value small" id="source-note">—</div><div class="meter-label" id="source-label">sources</div></div>
+  </section>
+
+  <section class="stage" id="stage">
+    <div class="wave-head">
+      <div class="ab" role="group" aria-label="compare">
+        <button id="ab-before" class="chip" type="button" title="What you handed in (A)">Before</button>
+        <button id="ab-master" class="chip on" type="button" title="The master (B)">Master</button>
+        <span class="ab-hint">press <kbd>B</kbd></span>
+      </div>
+      <div class="wave-note" id="wave-note"></div>
+      <button id="rerender" class="chip action" type="button" hidden>Re-render</button>
+    </div>
+    <div class="wave-wrap" id="wave-wrap">
+      <canvas id="wave"></canvas>
+      <div class="chapter-flags" id="flags"></div>
+      <div class="playhead" id="playhead"></div>
+      <div class="hover-line" id="hover-line" hidden><span id="hover-time"></span></div>
+      <div class="selection" id="selection" hidden></div>
+      <div class="empty" id="empty" hidden></div>
+    </div>
+    <div class="transport">
+      <button id="back" class="icon" type="button" title="back 5 s (←)">&#9194;</button>
+      <button id="play" class="icon play" type="button" title="play / pause (space)">&#9654;</button>
+      <button id="fwd" class="icon" type="button" title="forward 5 s (→)">&#9193;</button>
+      <span class="time"><b id="at">0:00</b> / <span id="total">0:00</span></span>
+      <div class="spacer"></div>
+      <button class="chip" id="loop" type="button" title="loop the selection (L)">Loop</button>
+      <div class="speeds" role="group" aria-label="speed">
+        <button class="chip on" data-rate="1" type="button">1×</button>
+        <button class="chip" data-rate="1.25" type="button">1.25×</button>
+        <button class="chip" data-rate="1.5" type="button">1.5×</button>
+        <button class="chip" data-rate="2" type="button">2×</button>
+      </div>
+      <button class="chip" id="add-chapter" type="button" title="add a chapter at the playhead (C)">+ Chapter</button>
+    </div>
+  </section>
+
+  <section class="panels">
+    <aside class="side">
+      <div class="panel">
+        <h2>Chapters <span class="count" id="chapter-count"></span></h2>
+        <ol class="chapters" id="chapters"></ol>
+        <p class="hint" id="chapters-hint">Drag a flag to move it. Click a title to rename it.</p>
+      </div>
+      <div class="panel cuts-panel">
+        <h2>Cut out <span class="count" id="cut-count"></span></h2>
+        <ol class="cuts" id="cuts"></ol>
+      </div>
+    </aside>
+
+    <div class="main">
+      <nav class="tabs" id="tabs">
+        <button class="tab on" data-tab="transcript" type="button">Transcript</button>
+        <button class="tab" data-tab="notes" type="button">Show notes</button>
+        <button class="tab" data-tab="files" type="button">Files</button>
+        <button class="tab" data-tab="checks" type="button">Checks <span class="badge" id="check-badge" hidden></span></button>
+      </nav>
+
+      <div class="tab-body" id="tab-transcript">
+        <div class="find"><input id="find" type="search" placeholder="Find in the transcript" autocomplete="off"></div>
+        <div class="transcript" id="transcript"></div>
+      </div>
+
+      <div class="tab-body" id="tab-notes" hidden>
+        <div class="notes-head">
+          <span class="hint" id="notes-state">shownotes.md</span>
+          <button class="chip action" id="notes-save" type="button" hidden>Save</button>
+        </div>
+        <textarea id="notes" spellcheck="true" placeholder="The episode description. Write it from the transcript — every claim in it should be something that was actually said."></textarea>
+      </div>
+
+      <div class="tab-body" id="tab-files" hidden>
+        <ul class="files" id="files"></ul>
+      </div>
+
+      <div class="tab-body" id="tab-checks" hidden>
+        <ul class="checks" id="checks"></ul>
+      </div>
+    </div>
+  </section>
+
+  <div class="toast" id="toast" hidden></div>
+  <div class="job" id="job" hidden><span class="spin"></span><span id="job-step"></span></div>
+</div>
+<audio id="audio" preload="metadata"></audio>
+<script src="/viewer/app.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# The whole evaluation for the workspace this is run in: measure, judge, write the verdict.
+# Exits 0 only when the episode is ready to publish. The viewer runs the same code on every save.
+set -euo pipefail
+exec "$(cd "$(dirname "$0")" && pwd)/ep" check "$@"

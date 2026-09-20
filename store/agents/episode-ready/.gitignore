@@ -1,0 +1,8 @@
+node_modules/
+.venv/
+.conda/
+.playwright/
+vendor/cache/
+__pycache__/
+upstream/
+showcase/*.jpg
