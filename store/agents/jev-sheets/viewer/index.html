@@ -39,14 +39,14 @@
         <div class="door-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></div>
         <div class="door-text">
           <b id="doorTitle">Use your own file</b>
-          <span id="doorSub">Drop a CSV anywhere on this pane, or paste rows copied from Excel or Google Sheets. Reviews, survey answers, tickets, leads: one row per item. Then type a question and Jev answers it for every row.</span>
+          <span id="doorSub">Drop an Excel or CSV file anywhere on this pane, or paste rows copied from Excel or Google Sheets. Reviews, survey answers, tickets, leads: one row per item. Then type a question and Jev answers it for every row.</span>
         </div>
         <div class="door-actions">
           <button id="pickBtn" class="primary">Choose a file</button>
           <button id="pasteBtn" title="Copy rows in your spreadsheet, then click here. Or press Cmd+V or Ctrl+V anywhere on the pane.">Paste rows</button>
           <button id="downloadBtn" class="hidden" title="Every row with Jev's answer and confidence for each question">Download answers.csv</button>
           <button id="sampleBtn" class="hidden" title="Go back to the made-up sample sheet">Back to the sample</button>
-          <input type="file" id="fileInput" class="hidden" accept=".csv,.tsv,.txt,.json,.jsonl,.ndjson">
+          <input type="file" id="fileInput" class="hidden" accept=".xlsx,.csv,.tsv,.txt,.json,.jsonl,.ndjson">
         </div>
       </section>
       <div id="standin" class="standin hidden"><b>These are not real answers yet.</b> An offline stand-in is filling the cells by matching words. Paste a key in the <b>Jev · live mind</b> panel on the right and every cell is asked again, for real.</div>
@@ -102,7 +102,7 @@
       </section>
     </aside>
   </main>
-  <div id="dropVeil" class="drop-veil hidden"><div><b>Drop your file</b><span>CSV, TSV, JSON or JSONL, up to 32 MB. It is saved in this project folder. Its rows go to the Jev API to be answered, and nowhere else.</span></div></div>
+  <div id="dropVeil" class="drop-veil hidden"><div><b>Drop your file</b><span>Excel, CSV, TSV, JSON or JSONL, up to 32 MB. It is saved in this project folder. Its rows go to the Jev API to be answered, and nowhere else.</span></div></div>
   <div id="toast" class="toast hidden"></div>
 </body>
 </html>

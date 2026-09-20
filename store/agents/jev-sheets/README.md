@@ -16,9 +16,10 @@ findings.
 
 ## Bring your file
 
-- **Drop it on the pane.** A `.csv`, `.tsv`, `.json` or `.jsonl` file, up to 32 MB and 10,000 rows.
+- **Drop it on the pane.** An Excel `.xlsx` file (its first sheet), or `.csv`, `.tsv`, `.json` or
+  `.jsonl`, up to 32 MB and 10,000 rows.
 - **Paste rows** copied from Excel or Google Sheets, anywhere on the pane.
-- **Tell the agent where it is.** It copies the file in. It can also convert an `.xlsx`, a PDF or a
+- **Tell the agent where it is.** It copies the file in. It can also turn a PDF, a chat export or a
   folder of notes into rows for you.
 
 One column is the row's text (a column called `text`, `message`, `review`… or the longest one). The
@@ -116,7 +117,8 @@ jev-sheets/
     viewer.sh setup.sh doctor.sh init-workspace.sh
   viewer/
     viewer.mjs               the server: the sheet, uploads, the call pool, the cache, answers.csv, the verdict
-    source.mjs               reads the person's file: CSV, TSV, JSON, JSONL
+    source.mjs               reads the person's file: Excel, CSV, TSV, JSON, JSONL
+    xlsx.mjs                 a small Excel reader: zip directory, shared strings, the first sheet
     grammar.mjs              the header parser, shared with the pane and check.mjs
     mock.mjs                 the offline stand-in (reads only the row text and the question)
     kit.mjs                  loopback server, same-origin guard, upload, download, key connect, SSE

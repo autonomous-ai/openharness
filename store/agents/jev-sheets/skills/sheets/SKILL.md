@@ -38,7 +38,7 @@ In `sheet.json` a column is a header string or `{ "id": "team", "header": "Team:
 ## Working on the person's own file (the main job)
 
 1. **Get it in.** They drop it on the pane or paste rows, and `"source"` appears in `sheet.json` by
-   itself. Or they give you a path: copy it into the workspace and set `"source"`. An `.xlsx`, a PDF,
+   itself. Or they give you a path: copy it into the workspace and set `"source"` (an Excel `.xlsx` works as it is: the first sheet is read). A PDF,
    a chat export or a folder of notes: convert it to a `.csv` or `.jsonl` in the workspace, one row
    per item, keeping a column that says where each row came from. Long documents: one row per
    paragraph or clause.

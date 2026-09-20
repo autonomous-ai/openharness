@@ -20,7 +20,7 @@ second server.
    - They **drop a file on the pane** or paste rows from a spreadsheet. The viewer saves the file in
      the workspace and points `sheet.json` at it by itself. You will see `"source"` appear.
    - They give you a **path**. Copy the file into the workspace, then set `"source"`.
-   - They have an `.xlsx`, a PDF, an export in an odd shape, or a folder of files. **Convert it for
+   - They have a PDF, an old `.xls`, an export in an odd shape, or a folder of files. **Convert it for
      them** into a `.csv` or `.jsonl` in the workspace, one row per item, and set `"source"`. Long
      documents: one row per paragraph or clause, with a column that says where it came from.
    Only if they have nothing at hand, offer the made-up sample, and say it is made up.
@@ -45,7 +45,7 @@ second server.
 ```jsonc
 {
   "title": "App reviews, Q3",
-  "source": "reviews.csv",        // .csv, .tsv, .jsonl or .json inside the workspace, up to 32 MB
+  "source": "reviews.csv",        // .xlsx (first sheet), .csv, .tsv, .jsonl or .json inside the workspace, up to 32 MB
   "textColumn": "review",         // optional. Default: a column named text, message, body, review… or the longest one
   "textLabel": "review",          // the heading of the text column in the pane
   "context": "Each row is one public review of a note-taking app.",

@@ -632,7 +632,7 @@ function renderDoor() {
     $('doorSub').textContent = `${fmtN(i.used)}${i.total > i.used ? ` of ${fmtN(i.total)}` : ''} rows from your file. Jev reads the "${i.textColumn}" column, with the other columns as context. Answers are saved to answers.csv in this project folder.`
   } else {
     $('doorTitle').textContent = 'Use your own file'
-    $('doorSub').textContent = 'Drop a CSV anywhere on this pane, or paste rows copied from Excel or Google Sheets. Reviews, survey answers, tickets, leads: one row per item. Then type a question and Jev answers it for every row. Below is a made-up sample to try first.'
+    $('doorSub').textContent = 'Drop an Excel or CSV file anywhere on this pane, or paste rows copied from Excel or Google Sheets. Reviews, survey answers, tickets, leads: one row per item. Then type a question and Jev answers it for every row. Below is a made-up sample to try first.'
   }
 }
 async function sendFile(file, name = file.name) {

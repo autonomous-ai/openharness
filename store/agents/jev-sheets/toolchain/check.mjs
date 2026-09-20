@@ -44,7 +44,7 @@ else {
   })
 }
 
-// ---- rows: 1 to 2000, each with text -----------------------------------------------------------
+// ---- rows: 1 to 10,000, each with text -----------------------------------------------------------
 // A sheet may take its rows from the person's own file in the workspace: "source": "leads.csv".
 let sourceRows = 0
 if (sheet.source !== undefined) {

@@ -21,7 +21,7 @@ const GHOST_PAUSE_MS = 60000
 // Starter questions for a file nobody has looked at yet. The chat agent replaces them with sharper ones.
 const OWN_SUGGESTIONS = ['Is this a complaint?', 'Sentiment: negative < neutral < positive', 'Asks a question?', 'Mentions price or cost?', 'Urgency']
 const SAMPLE_BACKUP = 'sheet.sample.json'
-const OWN_EXT = new Set(['.csv', '.tsv', '.txt', '.json', '.jsonl', '.ndjson'])
+const OWN_EXT = new Set(['.xlsx', '.csv', '.tsv', '.txt', '.json', '.jsonl', '.ndjson'])
 const RESERVED = new Set(['sheet.json', 'answers.csv', 'sheet.sample.json', 'report.md'])
 const FALLBACK_SUGGESTIONS = ['Urgency', 'Sentiment: negative < neutral < positive', 'Asks a question?', 'Complaint?']
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -461,7 +461,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     touch()
     const file = safeFileName(name)
     const ext = extname(file).toLowerCase()
-    if (!file || !OWN_EXT.has(ext)) return { ok: false, error: 'Use a .csv, .tsv, .json or .jsonl file. From Excel or Google Sheets, choose "Download as CSV" first.' }
+    if (!file || !OWN_EXT.has(ext)) return { ok: false, error: 'Use an Excel .xlsx file, or a .csv, .tsv, .json or .jsonl file. An old .xls or a Numbers file: save it as .xlsx or CSV first.' }
     if (!buf.length) return { ok: false, error: 'That file is empty.' }
     const target = join(workspace, file)
     const had = existsSync(target) ? readFileSync(target) : null

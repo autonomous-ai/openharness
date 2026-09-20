@@ -2,11 +2,12 @@
 //
 //   { "source": "leads.csv", "textColumn": "message", ... }
 //
-// A .csv or .tsv file (header row first), a .jsonl file (one JSON object or string per line) or a
+// An Excel .xlsx file (first sheet, header row first), a .csv or .tsv file (header row first), a .jsonl file (one JSON object or string per line) or a
 // .json file (a list) becomes the sheet's rows. One column is the row's text; the other columns
 // ride along as plain fields that Jev also reads. The file must live inside the workspace.
 import { readFileSync, statSync } from 'node:fs'
 import { resolve, sep, extname } from 'node:path'
+import { readXlsx } from './xlsx.mjs'
 
 export const SOURCE_LIMITS = { bytes: 32 * 1024 * 1024, field: 300, fields: 24 }
 const TEXT_NAMES = ['text', 'message', 'body', 'content', 'description', 'comment', 'note', 'notes', 'review', 'subject', 'title', 'summary']
@@ -67,15 +68,15 @@ export function loadSource(workspace, name, { textColumn, limit = 10000 } = {}) 
   let raw
   try {
     if (statSync(file).size > SOURCE_LIMITS.bytes) return fail(`source "${name}" is over ${SOURCE_LIMITS.bytes / 1024 / 1024} MB`)
-    raw = readFileSync(file, 'utf8').replace(/^﻿/, '')
+    raw = extname(file).toLowerCase() === '.xlsx' ? readFileSync(file) : readFileSync(file, 'utf8').replace(/^﻿/, '')
   } catch (e) { return fail(`source "${name}" cannot be read: ${e.code ?? e.message}`) }
 
   const ext = extname(file).toLowerCase()
   let records // list of { text, ...fields }
   let textName = 'text'
   try {
-    if (ext === '.csv' || ext === '.tsv' || ext === '.txt') {
-      const table = parseDelimited(raw, ext === '.tsv' ? '\t' : undefined)
+    if (ext === '.csv' || ext === '.tsv' || ext === '.txt' || ext === '.xlsx') {
+      const table = ext === '.xlsx' ? readXlsx(raw) : parseDelimited(raw, ext === '.tsv' ? '\t' : undefined)
       if (table.length < 2) return fail(`source "${name}" needs a header row and at least one data row`)
       const headers = table[0].map((h, i) => String(h).trim() || `column_${i + 1}`)
       const body = table.slice(1)
@@ -102,7 +103,7 @@ export function loadSource(workspace, name, { textColumn, limit = 10000 } = {}) 
         for (const [k, v] of Object.entries(item)) if (k !== textName && ['string', 'number', 'boolean'].includes(typeof v) && Object.keys(rec).length <= SOURCE_LIMITS.fields) { const t = tidyValue(v); if (t !== undefined) rec[tidyKey(k)] = t }
         return rec
       })
-    } else return fail(`source "${name}" must be a .csv, .tsv, .jsonl or .json file`)
+    } else return fail(`source "${name}" must be an .xlsx, .csv, .tsv, .jsonl or .json file`)
   } catch (e) { return fail(`source "${name}" could not be parsed: ${e.message}`) }
 
   const total = records.length
