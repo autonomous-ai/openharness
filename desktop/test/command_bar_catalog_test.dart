@@ -23,14 +23,14 @@ void main() {
         app.machines = [machine.machine];
         machine
           ..nodeOnline = true
-        ..agents = [
-          Agent(
-            id: 'a0',
-            name: 'Test session',
-            engine: engine,
-            terminalAvailable: true,
-          ),
-        ];
+          ..agents = [
+            Agent(
+              id: 'a0',
+              name: 'Test session',
+              engine: engine,
+              terminalAvailable: true,
+            ),
+          ];
         final catalog = buildCommandBarCatalog(
           app,
           commands: [],

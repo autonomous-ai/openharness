@@ -84,10 +84,10 @@ flutter test --no-pub --concurrency=2 \
   test/keymap_host_test.dart test/keymap_native_test.dart
 ```
 
-Before merging into main, the full CLI suite passed **2,949 tests** (52 skipped), along with TypeScript type checking and the CLI build. The full desktop suite passed **1,955 tests** (2 skipped), with one failure in the unchanged `terminal_session_test.dart` recovery test: its 45 ms wall-clock wait expired before the final timer fired under load. Running that complete 57-test file separately passed, including the recovery case. The focused Flutter analyzer reported no issues, and the normal macOS debug build passed without experimental Dart defines.
+Validation against `main` at `a940c824`: TypeScript type checking, the CLI build, the updater's 100% coverage gate, the focused Flutter analyzer, and a normal macOS debug build passed. The full CLI run passed **3,539 tests** (63 skipped), with two failures in unchanged hook-notification and installer tests; rerunning those complete suites with one worker passed all **61 tests**. The full desktop run passed **2,055 tests** (4 skipped). Its two failures, in `engine_identity_test.dart` and `group_a_identity_test.dart`, both come from a pre-existing FreeCAD tagline mismatch between the bundled identity and Store metadata; the affected files are identical to `main`. All JEV, navigation, focus and terminal recovery checks passed.
 
 The desktop run covers the default hidden shortcut, the disabled-feature path, unchanged pane navigation, cancellation, and typing through terminal refreshes. The native shortcut snapshot excludes the command bar binding when the feature is disabled. Plain terminal panes and read-only shared sessions remain navigation targets but are excluded from task delivery.
 
 Set `HARNESS_COMMAND_CAPTURE_DIR` while running the widget tests to render screenshots. Tests cover cancellation, stale session identities, exact prompt delivery, duplicate submission, bounded context, watch scope, offline and blocked agents, keyboard entry, narrow layouts and large text.
 
-The initial visible-home-page design is not part of the app. The experiment opens only with Cmd Shift J.
+The initial visible-home-page design is not part of the app. The experiment opens only with Cmd Shift J. [Current overlay screenshot](../../artifacts/command-bar/hidden-palette.png) uses synthetic workspace data.

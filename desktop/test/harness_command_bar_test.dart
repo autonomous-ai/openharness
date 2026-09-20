@@ -46,6 +46,15 @@ void main() {
     await (FontLoader(
       'MaterialIcons',
     )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
+    for (final (family, asset) in [
+      ('Lucide', 'lucide.ttf'),
+      ('Lucide300', 'build_font/LucideVariable-w300.ttf'),
+    ]) {
+      await (FontLoader('packages/lucide_icons_flutter/$family')..addFont(
+            rootBundle.load('packages/lucide_icons_flutter/assets/$asset'),
+          ))
+          .load();
+    }
   });
 
   testWidgets(
@@ -300,6 +309,7 @@ void main() {
         RepaintBoundary(
           key: boundary,
           child: MaterialApp(
+            debugShowCheckedModeBanner: false,
             theme: grid.buildAppTheme(brightness: Brightness.dark),
             home: SwarmScreen(
               notifier: app,
