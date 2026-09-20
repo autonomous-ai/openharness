@@ -141,7 +141,7 @@ projects visible. Device marketing should demonstrate its usefulness during real
 
 The public audience wording:
 
-> Built for engineers who want to build beyond software.
+> Built for the curious engineer who wants to build beyond software.
 
 Use this invitation in the README. Technical founders remain an initial recruiting focus and guide
 the first examples; readers do not need to have founded a company to belong.
