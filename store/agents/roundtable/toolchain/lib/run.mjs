@@ -45,7 +45,12 @@ async function runOne(seat, room, round, { motionText, peerTurns, ownTurns, time
   // `detached` puts the seat in its own process group. These CLIs shell out (`/bin/zsh -lc rg …`),
   // and killing only the CLI leaves those grandchildren holding the stdout pipe open — the round
   // then hangs well past its own timeout waiting for a close that never comes.
-  const child = spawn(adapter.bin, args, { cwd, env: { ...process.env, NO_COLOR: '1' }, detached: true })
+  // stdin is `ignore`, not a pipe, and that is load-bearing: `codex exec` reads stdin when it is
+  // piped and appends it to the prompt, so an open pipe nobody ever closes means the seat waits for
+  // input that never comes and the round dies on its timeout with nothing to show.
+  const child = spawn(adapter.bin, args, {
+    cwd, env: { ...process.env, NO_COLOR: '1' }, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+  })
   child.stdout.on('data', (d) => { stdout += d })
   child.stderr.on('data', (d) => { stderr += d })
   const timer = setTimeout(() => {

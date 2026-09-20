@@ -187,3 +187,70 @@ describe('a seat that overruns', () => {
     match(room.readTurn('opening', 'slow').front.error, /within 2s/)
   })
 })
+
+describe('a seat never waits on stdin', () => {
+  it('runs a CLI that reads stdin to completion instead of hanging on an open pipe', async () => {
+    const { runRound } = await import('../lib/run.mjs')
+    const { ADAPTERS } = await import('../lib/engines.mjs')
+    const real = ADAPTERS.claude.build
+    ADAPTERS.claude.build = () => ({ args: ['-c', 'cat; echo "**Position.** Read to EOF."'], capture: 'stdout' })
+    ADAPTERS.claude.bin = 'sh'
+    const one = { ...base, seats: [{ id: 'reader', engine: 'claude', stance: null }] }
+    const [result] = await runRound(one, { ...room.PROTOCOL[0], previousId: null }, { motionText: 'x', timeoutMs: 8000 })
+    ADAPTERS.claude.build = real; ADAPTERS.claude.bin = 'claude'
+    strictEqual(result.state, 'answered')
+    match(room.readTurn('opening', 'reader').body, /Read to EOF/)
+  })
+})
+
+describe('the pane does not leak the reader a home directory', () => {
+  it('cites files by their path inside the evidence, not by the absolute one the seat was given', async () => {
+    const { relativise } = await import('../lib/render.mjs')
+    strictEqual(relativise('see /Users/someone/code/app/cli/src/a.ts:20', ['/Users/someone/code/app']), 'see cli/src/a.ts:20')
+    strictEqual(relativise('the repo at /Users/someone/code/app is big', ['/Users/someone/code/app']), 'the repo at app is big')
+    strictEqual(relativise('nothing to do', []), 'nothing to do')
+  })
+})
+
+describe('citations', () => {
+  it('keeps a web link and turns a file link into the path itself', () => {
+    room.writeRoom({ ...base, seats: [SEATS[0]] })
+    room.writeTurn('opening', SEATS[0], { state: 'answered', elapsedMs: 1,
+      body: '**Position.** See [terminalBackend.ts](cli/src/lib/terminalBackend.ts:20) and [the docs](https://example.com/x).' })
+    const html = renderHtml()
+    match(html, /<code>cli\/src\/lib\/terminalBackend\.ts:20<\/code>/)
+    match(html, /<a href="https:\/\/example\.com\/x" target="_blank" rel="noopener noreferrer">the docs<\/a>/)
+    room.writeRoom(base)
+  })
+})
+
+describe('hard-wrapped turns', () => {
+  it('joins wrapped lines so bold across a line break still renders', () => {
+    room.writeRoom({ ...base, seats: [SEATS[0]] })
+    room.writeTurn('opening', SEATS[0], { state: 'answered', elapsedMs: 1,
+      body: '**Position.** Ship the viewer\nnow, and hold the tier.\n\n- a bullet that\n  wraps onto a second line\n- a second bullet' })
+    const html = renderHtml()
+    match(html, /<p><strong>Position\.<\/strong> Ship the viewer now, and hold the tier\.<\/p>/)
+    match(html, /<li>a bullet that wraps onto a second line<\/li>/)
+    match(html, /<li>a second bullet<\/li>/)
+    room.writeRoom(base)
+  })
+
+  it('keeps bold that opens on one line and closes on the next', () => {
+    room.writeRoom({ ...base, seats: [SEATS[0]] })
+    room.writeTurn('opening', SEATS[0], { state: 'answered', elapsedMs: 1, body: '**Ship the viewer now.\nHold the tier.**' })
+    const html = renderHtml()
+    match(html, /<strong>Ship the viewer now\. Hold the tier\.<\/strong>/)
+    ok(!/\*\*Ship/.test(html))
+    room.writeRoom(base)
+  })
+})
+
+describe('a narrow pane', () => {
+  it('scrolls the seats sideways with the round labels pinned, instead of overflowing the page', () => {
+    const html = renderHtml()
+    match(html, /class="scroller"/)
+    match(html, /\.rowhead\{[^}]*position:sticky;left:0/)
+    ok(!/\.grid\{[^}]*overflow:hidden/.test(html), 'the grid itself must not clip its own columns')
+  })
+})

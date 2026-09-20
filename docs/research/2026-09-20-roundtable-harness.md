@@ -260,3 +260,22 @@ about the same file in 17 seconds. So:
 The general lesson is worth keeping: in a panel, an unbounded research task does not produce a slow
 answer, it produces **no answer**, and the seats that fail that way are not the weakest models — they
 are the most thorough. A room has to hand out a budget with the question.
+
+### Two bugs the first room found, both mine
+
+The absent cells were not the vendors' fault. Running four agent CLIs as subprocesses turns out to
+have two traps, and a panel harness hits both on its first run:
+
+- **A piped stdin nobody closes.** `codex exec` reads stdin when it is piped and appends it to the
+  prompt. `spawn()` gives a child a stdin pipe by default, and nothing ever closed it, so the seat
+  waited for input that would never arrive and died on its timeout with nothing to show — while the
+  identical prompt answered in 194 seconds from a shell. Seats now run with `stdio[0] = 'ignore'`.
+- **A kill that does not reach the grandchildren.** These CLIs shell out (`/bin/zsh -lc rg …`).
+  Killing the CLI leaves those holding the stdout pipe open, so the round hangs past its own
+  timeout — the first run's 900-second timeout reported 1079 seconds. Seats now run `detached` and
+  are killed as a process group, and a round now ends at its deadline to the second.
+
+Both are tested. The general form is worth remembering for any harness that drives another agent as
+a subprocess: **you do not control the child's stdio contract, and you do not control its
+children.** Assume both and the panel is reliable; assume neither and it looks like the models
+failed when it was the plumbing.

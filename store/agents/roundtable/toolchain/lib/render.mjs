@@ -12,27 +12,51 @@ import { trimToShape } from './prompts.mjs'
 import { PROTOCOL, WORKSPACE, decision, motion, readClaims, readRoom, readTurn } from './room.mjs'
 
 const ENGINE_HUE = { claude: 18, codex: 220, opencode: 268, grok: 0, pi: 150, hermes: 44 }
+/**
+ * Seats cite files by the absolute path they were given, because that is what they were given. In
+ * the pane that is noise — and on a page anyone might share, it is the reader's home directory. The
+ * evidence root is stripped back to the repo-relative path the reader recognises.
+ */
+export function relativise(text, evidence = []) {
+  let out = String(text ?? '')
+  for (const root of [...evidence].sort((a, b) => b.length - a.length)) {
+    if (!root) continue
+    out = out.split(`${root}/`).join('').split(root).join(root.split('/').pop())
+  }
+  return out
+}
+
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 
 /** Just enough markdown for a turn: headings, bold, code, bullets, paragraphs. No dependencies. */
 function md(text) {
+  // Seats cite differently: Codex writes markdown links to files, others write bare paths. A link to
+  // the web is a link; a link to a file is the path, which is the part a reader can act on.
   const inline = (s) => esc(s)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<code>$2</code>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
+  // Turns arrive hard-wrapped, so a paragraph is a run of lines and a bullet continues until the
+  // next one. Formatting line by line splits `**a bold phrase**` across two lines and it renders as
+  // asterisks — which is exactly what the first draft of this did to the decision card.
   const out = []
   let list = null
+  let para = []
+  const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join(' '))}</p>`); para = [] } }
+  const flushList = () => { if (list) { out.push(`<ul>${list.map((i) => `<li>${inline(i)}</li>`).join('')}</ul>`); list = null } }
   for (const raw of String(text ?? '').split('\n')) {
-    const line = raw.trimEnd()
-    const bullet = /^\s*[-*]\s+(.*)$/.exec(line)
+    const line = raw.trim()
+    const bullet = /^[-*]\s+(.*)$/.exec(line)
     const heading = /^(#{1,6})\s+(.*)$/.exec(line)
-    if (bullet) { list ??= []; list.push(inline(bullet[1])); continue }
-    if (list) { out.push(`<ul>${list.map((i) => `<li>${i}</li>`).join('')}</ul>`); list = null }
-    if (!line) continue
-    if (heading) out.push(`<h4>${inline(heading[2])}</h4>`)
-    else out.push(`<p>${inline(line)}</p>`)
+    if (!line) { flushPara(); flushList(); continue }
+    if (heading) { flushPara(); flushList(); out.push(`<h4>${inline(heading[2])}</h4>`); continue }
+    if (bullet) { flushPara(); list ??= []; list.push(bullet[1]); continue }
+    if (list) { list[list.length - 1] += ` ${line}`; continue }
+    para.push(line)
   }
-  if (list) out.push(`<ul>${list.map((i) => `<li>${i}</li>`).join('')}</ul>`)
+  flushPara(); flushList()
   return out.join('\n')
 }
 
@@ -49,7 +73,7 @@ function seatHead(seat) {
   </div>`
 }
 
-function cell(roundId, seat) {
+function cell(roundId, seat, evidence) {
   const turn = readTurn(roundId, seat.id)
   if (!turn) return '<div class="cell empty"><span>—</span></div>'
   const state = turn.front.state ?? 'answered'
@@ -60,7 +84,7 @@ function cell(roundId, seat) {
   if (state === 'absent') {
     return `<div class="cell absent"><p class="why">No answer.</p><p class="why dim">${esc(turn.front.error ?? '')}</p></div>`
   }
-  return `<div class="cell" tabindex="0" role="button" aria-expanded="false"><div class="turn">${md(trimToShape(turn.body, roundId))}</div>
+  return `<div class="cell" tabindex="0" role="button" aria-expanded="false"><div class="turn">${md(relativise(trimToShape(turn.body, roundId), evidence))}</div>
     <div class="fade"></div>
     <div class="cell-foot"><span class="more">more</span>${esc(seconds(Number(turn.front.elapsed_ms)))}${turn.front.model && turn.front.model !== 'default' ? ` · ${esc(turn.front.model)}` : ''}</div></div>`
 }
@@ -78,8 +102,8 @@ function claimsTable(room, claims) {
       <td class="verdictcol">${settled ? 'settled' : split ? 'split' : 'open'}</td></tr>`
   }).join('')
   return `<section class="claims"><h2>Where they agree, and where they don't</h2>
-    <table><thead><tr><th>Claim</th>${room.seats.map((s) => `<th class="seatcol">${esc(s.id)}</th>`).join('')}<th></th></tr></thead>
-    <tbody>${rows}</tbody></table></section>`
+    <div class="scroller"><table><thead><tr><th>Claim</th>${room.seats.map((s) => `<th class="seatcol">${esc(s.id)}</th>`).join('')}<th></th></tr></thead>
+    <tbody>${rows}</tbody></table></div></section>`
 }
 
 function phaseStrip(room) {
@@ -96,7 +120,7 @@ function readView(room) {
     for (const { seat, turn } of turns) {
       blocks.push(`<article class="readturn" style="--hue:${ENGINE_HUE[seat.engine] ?? 210}">
         <header><span class="chip">${esc(seat.engine.slice(0, 2).toUpperCase())}</span><b>${esc(seat.id)}</b>
-        <span class="dim">${esc(ADAPTERS[seat.engine]?.label ?? seat.engine)}</span></header>${md(trimToShape(turn.body, round.id))}</article>`)
+        <span class="dim">${esc(ADAPTERS[seat.engine]?.label ?? seat.engine)}</span></header>${md(relativise(trimToShape(turn.body, round.id), room.evidence))}</article>`)
     }
   }
   return blocks.join('\n')
@@ -134,24 +158,29 @@ main{padding:16px 20px 60px}
 .call{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;padding:14px 18px;margin-bottom:18px}
 .call h2{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin:0 0 6px}
 .claims{margin-bottom:22px}
+.claims table{min-width:min-content}
+.claims .scroller{margin-top:2px}
 .claims h2,.grid-title{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin:0 0 8px;font-weight:600}
 table{border-collapse:collapse;width:100%;font-size:12.5px}
 th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 th{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:600}
 th.seatcol,td:not(.claim):not(.verdictcol){text-align:center;width:74px}
+td.claim,th:first-child{min-width:260px}
 tr.settled td.claim{color:var(--dim)}tr.split{background:light-dark(#fff8f0,#26211c)}
 .verdictcol{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;width:60px}
 .m.yes{color:var(--yes)}.m.no{color:var(--no)}.m.dim{color:var(--dim)}
-.grid{display:grid;grid-template-columns:${cols};gap:1px;background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.scroller{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+.grid{display:grid;grid-template-columns:${cols};gap:1px;background:var(--line);min-width:min-content}
 .grid>*{background:var(--bg)}
-.corner{background:var(--bg)}
 .seat{padding:10px 12px;background:var(--card)}
 .seat-top{display:flex;gap:8px;align-items:center}
 .chip{display:grid;place-items:center;width:20px;height:20px;border-radius:5px;font-size:9.5px;font-weight:700;letter-spacing:.02em;
 background:oklch(.72 .13 var(--hue));color:#111;flex:none}
 .seat-name{font-weight:600;font-size:12.5px}.seat-engine{font-size:10.5px;color:var(--dim)}
 .stance{margin-top:7px;font-size:11px;color:var(--dim);line-height:1.35}.stance.none{font-style:italic;opacity:.7}
-.rowhead{padding:12px;background:var(--card);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);font-weight:600}
+.rowhead{padding:12px;background:var(--card);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);font-weight:600;
+position:sticky;left:0;z-index:2;box-shadow:1px 0 0 var(--line)}
+.corner{position:sticky;left:0;z-index:3}
 .cell{position:relative;padding:11px 13px 30px;max-height:340px;overflow:hidden;font-size:12.5px;cursor:pointer}
 .cell.open{max-height:none;cursor:default}
 .cell:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
@@ -192,11 +221,11 @@ code{font-family:ui-monospace,SFMono-Regular,monospace;font-size:.92em;backgroun
   ${call ? `<section class="call"><h2>The call</h2>${md(call.replace(/^#\s+.*\n/, ''))}</section>` : ''}
   ${claimsTable(room, claims)}
   ${room.seats.length ? `<div class="grid-title">The room</div>
-  <div class="grid">
+  <div class="scroller"><div class="grid">
     <div class="corner"></div>
     ${room.seats.map(seatHead).join('')}
-    ${PROTOCOL.map((round) => `<div class="rowhead">${esc(round.name)}</div>${room.seats.map((s) => cell(round.id, s)).join('')}`).join('')}
-  </div>` : '<div class="empty-room">No seats yet. The moderator is still setting the room.</div>'}
+    ${PROTOCOL.map((round) => `<div class="rowhead">${esc(round.name)}</div>${room.seats.map((s) => cell(round.id, s, room.evidence)).join('')}`).join('')}
+  </div></div>` : '<div class="empty-room">No seats yet. The moderator is still setting the room.</div>'}
   ${motionText ? `<details style="margin-top:22px"><summary class="grid-title" style="cursor:pointer">The motion in full</summary><div style="max-width:74ch;margin-top:8px">${md(motionText)}</div></details>` : ''}
   <div id="read">${readView(room)}</div>
 </main>

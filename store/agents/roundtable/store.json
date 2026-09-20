@@ -3,7 +3,8 @@
   "examples": [
     {
       "prompt": "Should our Windows port be native, or should we ship the daemon inside WSL2? One engineer on it. Evidence: the cli/ folder.",
-      "caption": "Four vendors read the daemon, split 2–2 on whether it is genuinely tmux-shaped"
+      "caption": "Four vendors read the daemon · agreed on 2 claims, split on 5, decided with the dissent attached",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/roundtable/windows-port-room.jpg"
     },
     {
       "prompt": "We're about to rename the product. Red-team the new name: three seats whose only job is to break it.",
@@ -13,5 +14,9 @@
       "prompt": "Postgres or SQLite for this app's local store? Evidence: this repo. I care about migrations and multi-process access.",
       "caption": "Panel · agreed on five claims, split on one, decided with the dissent attached"
     }
+  ],
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/roundtable/windows-port-room.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/roundtable/claim-map-mid-round.jpg"
   ]
 }
