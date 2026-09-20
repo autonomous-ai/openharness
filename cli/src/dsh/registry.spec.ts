@@ -101,6 +101,24 @@ describe('reading a store tree', () => {
     expect(readStoreDir(join(store, 'missing'))).toEqual([])
   })
 
+  it('`"listed": false` in store.json takes a package off the shelf and keeps its folder: runtime and build agree', () => {
+    write(join(store, 'agents', 'shelved', 'harness.json'), JSON.stringify({ spec: 1, id: 'autonomous/shelved', name: 'Shelved', engine: 'claude' }))
+    write(join(store, 'agents', 'shelved', 'store.json'), JSON.stringify({ license: 'MIT', listed: false }))
+    write(join(store, 'agents', 'said-so', 'harness.json'), JSON.stringify({ spec: 1, id: 'autonomous/said-so', name: 'Said so', engine: 'claude' }))
+    write(join(store, 'agents', 'said-so', 'store.json'), JSON.stringify({ listed: true }))
+    // The publishing build reads strictly: an unlisted package is still left out, not refused.
+    expect(build.readDshRegistry(store, { strict: true }).map((entry: { id: string }) => entry.id)).toEqual(['autonomous/said-so'])
+    fixture()
+    const ids = (readStoreDir(store) as Array<Record<string, unknown>>).map((entry) => entry.id)
+    expect(ids).toContain('autonomous/said-so')
+    expect(ids).not.toContain('autonomous/shelved')
+    // The flag is the store's business, not a fact of the entry.
+    expect((readStoreDir(store) as Array<Record<string, unknown>>).find((entry) => entry.id === 'autonomous/said-so')).not.toHaveProperty('listed')
+    expect(build.readDshRegistry(store).map((entry: { id: string }) => entry.id)).toEqual([...ids, 'acme/thing'])
+    expect(StoreFactsSchema.parse({ listed: false })).toEqual({ listed: false })
+    expect(StoreFactsSchema.safeParse({ listed: 'no' }).success).toBe(false)
+  })
+
   it('reads the outside entries, skipping stray files, links to nothing and malformed JSON', () => {
     fixture()
     write(join(store, 'registry', 'acme', 'broken.json'), '{nope')

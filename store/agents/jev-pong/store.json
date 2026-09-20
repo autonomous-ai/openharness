@@ -9,5 +9,6 @@
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-pong/neon-rally.jpg",
       "caption": "Jev's Rally — a fast decision model chasing a ball that speeds up with every return"
     }
-  ]
+  ],
+  "listed": false
 }

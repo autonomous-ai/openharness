@@ -24,7 +24,7 @@ for (const name of names.sort()) {
     need(typeof m.description === 'string' && m.description.length <= 300, `harness.json description is ${m.description?.length} chars (max 300)`)
     need(typeof m.category === 'string' && m.category.length <= 24, 'harness.json category must be <= 24 chars')
     const f = JSON.parse(readFileSync(join(dir, 'store.json'), 'utf8'))
-    const allowed = ['homepage', 'upstream', 'license', 'tagline', 'screenshots', 'examples']
+    const allowed = ['homepage', 'upstream', 'license', 'tagline', 'screenshots', 'examples', 'listed']
     for (const k of Object.keys(f)) need(allowed.includes(k), `store.json has an unknown key "${k}"`)
     for (const k of ['homepage', 'upstream']) if (f[k] !== undefined) need(isUrl(f[k]), `store.json ${k} must be a URL`)
     need(f.tagline === undefined || (f.tagline.length >= 1 && f.tagline.length <= 80), `store.json tagline is ${f.tagline?.length} chars (max 80)`)

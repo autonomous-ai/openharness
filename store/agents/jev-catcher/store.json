@@ -9,5 +9,6 @@
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-catcher/ballpark.jpg",
       "caption": "Jev's Day at the Field — a fast decision model sliding the glove to catch every pop fly on each tick"
     }
-  ]
+  ],
+  "listed": false
 }
