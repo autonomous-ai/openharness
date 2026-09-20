@@ -1,6 +1,4 @@
-# OpenHarness
-
-**Follow your curiosity. Build across disciplines.**
+# Follow your curiosity. Build across disciplines.
 
 OpenHarness is an open-source workshop for building with coding agents. Use Claude Code, Codex, and
 others to make software, design parts and circuit boards, explore data, and create videos, with your
@@ -17,16 +15,14 @@ a film. You bring the idea, the taste, and the judgment about what is worth maki
 Use the desktop app on its own, or add the optional open-hardware **Harness device** to follow your
 agents, answer their questions, and speak new tasks from your desk.
 
-[Who it's for](#who-its-for) · [What you can make](#domain-specific-harnesses-dsh) · [Run it](#run-it) ·
+[Who it's for](#for-polymaths-in-the-making) · [What you can make](#domain-specific-harnesses-dsh) · [Run it](#run-it) ·
 [Harness device](#harness-device) · [Architecture](docs/architecture.md) · [Contribute](#contributing)
 
 <p align="center">
   <a href=".github/assets/store/workshop-overview.svg"><img src=".github/assets/store/workshop-overview.svg" width="1280" alt="Start with Coding: 14 agents including Claude Code, Codex, and Cursor. Then explore Design, Engineering, Media, Music, Productivity, Science and Data, Simulation, Games, Research, and Local AI."></a>
 </p>
 
-## Who it's for
-
-**For polymaths in the making.**
+## For polymaths in the making.
 
 Built for technical founders who want their hands on more of what they are making, from the software
 and the physical product to the analysis and the launch video. Engineers, makers, and creators with
