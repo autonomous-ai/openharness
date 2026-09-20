@@ -47,27 +47,32 @@
           <form id="askForm" class="ask">
             <div class="ask-head"><b>What do you want off the web?</b><span>A site and a sentence is enough. Jev finds the right page, works out the columns in about a second, and goes.</span></div>
             <label class="ask-row"><span>Start on</span>
-              <input id="askStart" type="text" spellcheck="false" autocomplete="off" placeholder="books.toscrape.com &nbsp;— a site or the exact page">
-            </label>
-            <label class="ask-row"><span>Search for <i>optional</i></span>
-              <input id="askSearch" type="text" spellcheck="false" autocomplete="off" placeholder="leave empty if the address is already the list you want">
+              <input id="askStart" type="text" spellcheck="false" autocomplete="off" placeholder="books.toscrape.com">
             </label>
             <label class="ask-row"><span>What you want</span>
               <input id="askWant" type="text" spellcheck="false" autocomplete="off" placeholder="travel books, with the price and whether they are in stock">
             </label>
-            <label class="ask-row"><span>Each one is <i>optional</i></span>
-              <input id="askItem" type="text" spellcheck="false" autocomplete="off" placeholder="Jev works this out from the page">
-            </label>
-            <label class="ask-row tall"><span>Columns<i>optional, one per line</i></span>
-              <textarea id="askColumns" spellcheck="false" placeholder="Leave this empty and Jev picks the columns off the page.&#10;&#10;Or name them yourself, one per line:&#10;the title&#10;the price&#10;Is it in stock?"></textarea>
-            </label>
-            <label class="ask-row"><span>Only keep <i>optional</i></span>
-              <input id="askKeep" type="text" spellcheck="false" autocomplete="off" placeholder="only the ones under £30">
-            </label>
             <div class="ask-go">
-              <label class="ask-n">at most <input id="askMax" type="number" min="1" max="500" value="25"> of them</label>
-              <button type="button" id="askDemo" title="Walk the small made-up job board this harness serves on your machine">Try the practice site</button>
+              <button type="button" id="askMore" class="more" aria-expanded="false">More ▾</button>
+              <button type="button" id="askDemo" title="Walk the small made-up site this harness serves on your machine">Try the practice site</button>
               <button type="submit" class="primary" id="askSubmit">Go</button>
+            </div>
+            <div id="askExtra" class="ask-extra hidden">
+              <label class="ask-row"><span>Search for</span>
+                <input id="askSearch" type="text" spellcheck="false" autocomplete="off" placeholder="words to type into the site's own search box">
+              </label>
+              <label class="ask-row"><span>Each one is</span>
+                <input id="askItem" type="text" spellcheck="false" autocomplete="off" placeholder="Jev works this out from the page">
+              </label>
+              <label class="ask-row tall"><span>Columns<i>one per line</i></span>
+                <textarea id="askColumns" spellcheck="false" placeholder="Jev picks these off the page. Name them here to decide yourself:&#10;the title&#10;the price&#10;Is it in stock?"></textarea>
+              </label>
+              <label class="ask-row"><span>Only keep</span>
+                <input id="askKeep" type="text" spellcheck="false" autocomplete="off" placeholder="only the ones under £30">
+              </label>
+              <label class="ask-row"><span>How many</span>
+                <span class="ask-n">at most <input id="askMax" type="number" min="1" max="500" value="25"> of them</span>
+              </label>
             </div>
             <div class="ask-msg" id="askMsg"></div>
           </form>

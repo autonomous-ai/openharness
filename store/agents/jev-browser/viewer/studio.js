@@ -182,6 +182,8 @@ function showAsk(on) {
     $('askKeep').value = S?.keep ?? ''
     $('askMax').value = S?.fields.length ? S.maxItems : 25
     $('askMsg').textContent = ''
+    // The extra boxes stay folded away unless this job is actually using one of them.
+    showMore(!!(S?.search || S?.keep || S?.fields.length))
     setTimeout(() => $('askStart').focus(), 30)
   }
 }
@@ -200,9 +202,15 @@ async function sendJob(over = {}) {
   showAsk(false)
   toast('Off it goes. The browser is opening.')
 }
+function showMore(on) {
+  $('askExtra').classList.toggle('hidden', !on)
+  $('askMore').setAttribute('aria-expanded', String(on))
+  $('askMore').textContent = on ? 'Fewer ▴' : 'More ▾'
+}
+$('askMore').addEventListener('click', () => showMore($('askExtra').classList.contains('hidden')))
 $('askForm').addEventListener('submit', (e) => { e.preventDefault(); sendJob() })
 $('askDemo').addEventListener('click', () => sendJob({
-  start: 'demo', search: '', item: '', want: 'what each role pays and where it is', columns: '', keep: '',
+  start: 'demo', search: '', item: '', want: 'what each one is called and what it pays', columns: '', keep: '',
 }))
 $('editBtn').addEventListener('click', () => showAsk(!askOpen))
 

@@ -40,11 +40,13 @@ const browser = async (allowedHosts = ['127.0.0.1', 'localhost']) =>
   openChrome({ profileDir: mkdtempSync(join(tmpdir(), 'jev-browser-test-')), show: false, allowedHosts })
 
 test('the job file: what it fills in, and what it says is wrong', () => {
-  // The starter job is an address and a sentence, and nothing about any particular kind of site.
-  const { job, errors } = normalizeJob(JSON.parse(readFileSync(join(TEMPLATE, 'browse.json'), 'utf8')))
-  assert.deepEqual(errors, [])
+  // The starter job is empty on purpose: the pane's two boxes are the questions, and nothing is
+  // pre-filled with somebody else's job.
+  const starter = JSON.parse(readFileSync(join(TEMPLATE, 'browse.json'), 'utf8'))
+  const { job } = normalizeJob(starter)
   assert.deepEqual(job.fields, [], 'the starter names no columns: Jev works them out')
-  assert.ok(job.want.length > 10, 'it says what is wanted, in a sentence')
+  assert.equal(starter.start, '', 'and no address')
+  assert.equal(starter.want, '', 'and nothing it wants')
   assert.equal(job.sameSiteOnly, true)
   const named = normalizeJob({ start: 'https://x.test/all', fields: FIELDS })
   assert.deepEqual(named.errors, [])
