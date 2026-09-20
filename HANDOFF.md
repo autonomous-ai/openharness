@@ -6,9 +6,17 @@ The main checkout is shared with other sessions; leave it alone.
 **Current sequential rebuild:** the user asked to improve the remaining five one by one.
 See [FIVE-REBUILDS.md](work/FIVE-REBUILDS.md). Creative Direction now has an editable brand
 studio, source save bridge and complete launch exports; [FORME-REBUILD.md](work/FORME-REBUILD.md)
-records the actual tests and limits. It is relisted for Store testing. Voxel Worlds is next;
-Drone Pilot, Game Master and Lab Bench remain unlisted. The older “focus only on Art/Music”
+records the actual tests and limits. It is published for Store testing (#141). Voxel Worlds now has a source-backed 3D studio,
+standard exports and six independently reopened deliveries; publication is in progress. Read
+[its acceptance evidence](store/agents/voxel-worlds/test/ACCEPTANCE.md). Drone Pilot is next;
+Game Master and Lab Bench also remain unlisted. The older “focus only on Art/Music”
 instruction below is historical and has been superseded by this user request.
+
+**Score installation regression fixed and published (#145):** setup now installs official
+checksum-pinned LilyPond 2.26.0 when needed. Real Intel Mac and Linux CI installation/engraving
+passed. The published package was installed normally at `~/.harness/dsh/autonomous/score` on
+this Mac, and `dsh doctor autonomous/score` passed; the user was told to click Retry.
+The public catalog and actual resolver bytes were verified at `b74d3f2b`.
 
 **Current authoring rebuild:** read [AUTHORING-REBUILD.md](work/AUTHORING-REBUILD.md). Art and Music
 now use source under their own `template/studio/` directories, with real editable projects and

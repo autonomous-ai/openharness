@@ -4,10 +4,12 @@ User direction: improve the remaining five one by one. Each must help a person c
 useful work. Preserve the old implementations. Publish each finished rebuild through the Store
 so the user can test it, then move to the next. Do not claim a subjective “wow” from passing tests.
 
-1. **Creative Direction — rebuilt; publication in progress.** A business brief and supplied
+1. **Creative Direction — published (#141).** A business brief and supplied
    materials become an editable identity, coordinated launch assets, a responsive website and a
    portable brand guide. See [tested deliverables and remaining evidence](FORME-REBUILD.md).
-2. **Voxel Worlds — pending.** Original playable world creation and an independently usable handoff.
+2. **Voxel Worlds — rebuilt; publication in progress.** Named object editing, sculpting, source saves,
+   physical walking, VOX import and independent GLB/VOX/offline delivery. See
+   [the acceptance evidence](../store/agents/voxel-worlds/test/ACCEPTANCE.md).
 3. **Drone Pilot — pending.** Useful planning/analysis with actual inputs and explicit simulation
    boundaries. No claim that a simulation authorizes or validates a real flight.
 4. **Game Master — pending.** Create and revise original playable games, then deliver working builds.

@@ -296,7 +296,7 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/voxel-worlds',
     label: 'Voxel Worlds',
     category: 'Games',
-    tagline: 'Build and walk a seeded voxel island',
+    tagline: 'Build original worlds. Keep every piece.',
     creator: 'Autonomous',
     color: Color(0xffaac785),
     asset: 'assets/engine-icons/voxel-worlds.png',

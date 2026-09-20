@@ -1,73 +1,65 @@
 ---
 name: world-builder
-description: Build a playable 3D voxel world in one HTML file from a plain-English description. Use whenever the user asks for a world, a voxel scene, a Minecraft-style sandbox, a place to walk around, or a prompt-to-world build.
+description: Turn a user's brief into an editable voxel environment or asset kit in Voxel Worlds. Use for original scene design, modular assets, terrain sculpting, walkable spaces, importing VOX assets and delivering GLB/VOX files with an offline studio.
 ---
 
-# world-builder
+# From an idea to a world the user can keep building
 
-Take the user's description and produce a **single self-contained `world/index.html`** that is
-walkable first-person, lets the player place and break blocks, has a day/night cycle, and runs
-entirely offline (all three.js/audio inline — no CDN at runtime). Everything ships in that one
-file so the web-viewer pane can load it directly.
+Understand the place, purpose and deliverable. A game environment, architectural massing study,
+tabletop kit and miniature scene need different geometry. State sensible assumptions and produce
+an original first version. Do not funnel the person into the harbor, a style enum or a seed picker.
 
-## The floor (do these first, in order)
+Read [the project contract](references/project.md). The editable source is `world/project.json`.
+Create meaningful named objects with local geometry; use custom palettes and physical scale.
+The coding agent authors new geometry and layouts from the brief. The studio's controls edit
+that geometry directly; there is no pretend generation button or remote model dependency.
 
-1. **Camera + controls.** First-person pointer-lock mouse-look, WASD movement, canvas click to
-   grab. Touch: a virtual stick / drag-to-look so it works on a phone too.
-2. **Terrain.** Generate from a seeded noise function so the same description + seed gives the same
-   world every time. Keep it small enough to walk easily (a few dozen blocks per axis).
-3. **Place & break.** A crosshair; left click breaks the targeted block, right click places a block
-   from a small hotbar. Visible block selection outline.
-4. **Day/night** — a slowly-moving sun/moon and sky color ramp (or at minimum a timed light shift).
-   A clock or sky clearly shows it.
+## Build and revise
 
-## The gold checklist (what separates a good world from a demo)
+1. Read the existing project and `world/DESIGN.md`. Preserve supplied assets, approved objects,
+   names, physical scale and decisions unless the user asks to change them.
+2. Author boxes and cell edits, with generous readable forms at the chosen voxel scale. Shape
+   roofs, openings, terrain and paths deliberately. Ensure that different briefs produce
+   different useful structures, not recolored copies of the same scene.
+3. Build: `node tools/build.mjs`. For a workspace outside the package, `VOXEL_DSH_DIR` is provided
+   by the harness and resolves the installed tools. Setup installs Node and pinned local tools.
+4. Open the actual viewer. Test object selection, transforms, sculpting, materials and save.
+   Walk critical entrances, slopes and destinations with keyboard or touch controls. Check the
+   result from the visitor's viewpoint as well as the overview. Correct geometry, not requirements.
+5. A targeted revision should touch only the requested objects or decisions. Compare preserved
+   objects in source and, for an approved asset, its isolated GLB/VOX export before and after.
+   The studio keeps undo history; workspace saves retain prior sources in `.harness/history/`.
 
-- **Textured, not flat**: procedurally texture grass/dirt/stone/wood (noise + a few tones), so the
-  world reads as voxels from a real game, not colored boxes.
-- **HUD**: crosshair, a health/heart row, and a 5-slot hotbar (even if hotbar is read-only at
-  first).
-- **Specific palette terms win.** Concrete nouns ("dirt road through the center, river along the
-  eastern edge, wheat fields") produce adjacency-aware aligned things (roads join into junctions,
-  shorelines blend into sand). Vague nouns make generic mush. Ask one round of clarifying
-  questions only — then default aggressively.
-- **Audio**: at least a place/break click; a simple background tone is a bonus.
+## Supply and save
 
-## Verify like a visitor, not a compiler
+The studio can import one static `.vox` model, including a single-instance transform graph.
+Geometry, palette and orientation are preserved; the imported object is rebased for placement in
+this world, at this project's physical voxel scale. Multi-model scenes, animation, absent palettes
+and hidden assets fail explicitly. Specialized MagicaVoxel shaders are not reproduced.
 
-Load `world/index.html`, screenshot from the **player camera**, and look. Walk the world: can you
-actually get in and out of the water, up a slope, through a doorway? The camera is the referee —
-a world you cannot move through is not done no matter how the code reads. Render, look, fix,
-re-render.
+Save to workspace writes the actual source with a revision check and rebuilds the offline artifact.
+An agent revision arriving during a browser edit offers both versions instead of silently replacing
+one. Keep the draft download before restoring the source. Open accepts a project file; the local
+viewer also offers recent home-folder projects and an explicit path field. Portable HTML uses the
+browser file picker. Save a complete `.tidelands.json` to retain editable object structure.
 
-## Verdict feed
+## Export and verify
 
-Write `.harness/verdict.json` (in the workspace) at every change:
+Run `node tools/check.mjs` for geometry, a VOX round trip and finite walking-route checks. It writes
+`.harness/world-check.json`, not a ready verdict. Run `node tools/export.mjs` for the delivery folder:
 
-```json
-{ "spec": 1, "ready": false, "summary": "walkable village: road, river, houses · day/night · no audio yet",
-  "findings": [{ "severity": "warning", "kind": "audio", "message": "no place/break sound yet" }],
-  "artifact": "world/index.html",
-  "phases": [{ "id": "world", "name": "World", "state": "done" },
-             { "id": "interaction", "name": "Interaction", "state": "active" },
-             { "id": "polish", "name": "Polish", "state": "pending" }],
-  "updatedAt": "2026-09-18T00:00:00Z" }
-```
+- GLB: Y-up, meters, named visible meshes, palette materials and emissive/transparent surfaces.
+- VOX: Z-up, flattened visible cells and RGBA palette. Source object boundaries are not in VOX.
+- Project JSON: named source objects, rotations, edits, locks, palette, scale, start and destinations.
+- `studio.html` and `walkthrough.html`: standalone files with their runtime embedded, usable offline.
+- ZIP and README: the files above, plus a finite route-check report.
 
-## Starting from Tidelands
+Browser exports use the current draft, including unsaved changes. Isolated object exports include
+all of that object's faces, even where it touches other objects. Whole-scene GLB removes buried
+faces; it is not a collision mesh or physics setup for another engine. Reopen GLB/VOX with an
+independent reader, inspect scale/orientation/materials, and test the offline files. Report which
+checks were actually performed; geometry checks do not establish visual quality or a user's “wow.”
 
-The template is functional: Walk, collision, jump, place/break, five materials, day/night, island overview, world JSON export.
-
-Keep its useful controls and exports when making a user's creation. Test the behavioral core
-(world geometry, collision, camera, raycast editing, day cycle) as well as the visible result. A self-contained HTML file can still have well-separated
-model, rendering, input and export functions. Do not turn a finished starter into a waiting screen.
-
-Presence-only helpers do not prove correctness or reproducibility. Record actual evidence before
-marking the result ready. Export and reopen the result as part of the handoff to the user.
-
-## Check your actual edited model
-
-Run `node tools/check.mjs --seeds 100` in the workspace. It reads the pure model from
-`<script id="harness-model">` in the artifact, checks domain invariants, repeats each seed, and
-writes `.harness/model-check.json`. Preserve that script boundary when editing. Model checks are
-followed by browser interaction, exported-output inspection, and visual or listening review.
+Do not publish a world as ready based on file presence or a screenshot alone. Keep the old working
+handoff while resolving a failing requirement. Return concrete files and concrete revision options
+in the user's language, without requiring them to learn a 3D editor first.
