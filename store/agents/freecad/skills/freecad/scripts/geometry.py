@@ -35,6 +35,16 @@ def solid(shape, name):
     return metrics(shape)
 
 
+def recompute_document(document):
+    document.recompute()
+    # Failed FreeCAD features can retain a perfectly valid *previous* Shape.
+    # Geometry validity cannot substitute for a successful dependency recompute.
+    failures = [obj.Name + ": " + obj.getStatusString() for obj in document.Objects
+                if not obj.isValid() or "Touched" in obj.State]
+    if failures:
+        raise ValueError("Native document has failed or uncomputed features: " + "; ".join(failures))
+
+
 def measure(check, shapes):
     kind = check["type"]
     tolerance = check.get("tolerance", 0.02)
@@ -146,7 +156,7 @@ def drawing(shape, part, title, destination):
 def export_project(project, native, output):
     document = App.openDocument(native)
     try:
-        document.recompute()
+        recompute_document(document)
         document.save()
         shapes, objects = {}, {}
         names = [part["object"] for part in project["parts"]] + project.get("references", [])

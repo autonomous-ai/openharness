@@ -24,13 +24,15 @@ bodies; specified interference checks still reject intersecting volume.
 
 The native kernel cases additionally test misplaced, undersized, oversized,
 overlong and empty-space bore probes; contained solids mistaken for clearance;
-minimum/maximum gaps; misplaced bounding boxes; touching assemblies; and open
-or empty shapes. The bore check requires surrounding material as well as air.
+minimum/maximum gaps; misplaced bounding boxes; touching assemblies; open
+or empty shapes; and failed native features retaining a valid previous shape.
+The bore check requires surrounding material as well as air. A failed or still
+touched document feature prevents export, even if its old Shape remains valid.
 
 ## Delivery, safety and visual checks
 
 The full package suite has **14 passing Node test cases**, including a runner
-for **9 standard-library Python cases** and **6 real-kernel Python cases**.
+for **9 standard-library Python cases** and **7 real-kernel Python cases**.
 Native checks are explicitly skipped without `FREECAD_BIN`; a skipped native
 suite is not release proof. The ordinary package checks run in Experience CI.
 

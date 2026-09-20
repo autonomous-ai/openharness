@@ -7,7 +7,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "skills", "freecad", "scripts"))
 import FreeCAD as App
 import Part
-from geometry import measure, solid
+from geometry import measure, solid, recompute_document
 
 
 class GeometryTests(unittest.TestCase):
@@ -52,6 +52,22 @@ class GeometryTests(unittest.TestCase):
         for shape in [Part.Shape(), Part.makePlane(10, 10)]:
             with self.assertRaises(ValueError):
                 solid(shape, "Invalid")
+
+    def test_failed_recompute_cannot_reuse_a_valid_previous_shape(self):
+        class BrokenFeature:
+            def execute(self, obj):
+                raise RuntimeError("Intentional failed feature")
+        doc = App.newDocument("FailedFeatureTest")
+        try:
+            obj = doc.addObject("Part::FeaturePython", "Broken")
+            obj.Shape = Part.makeBox(10, 10, 10)
+            obj.Proxy = BrokenFeature()
+            with self.assertRaisesRegex(ValueError, "failed or uncomputed features"):
+                recompute_document(doc)
+            self.assertTrue(obj.Shape.isValid())
+            self.assertFalse(obj.isValid())
+        finally:
+            App.closeDocument(doc.Name)
 
 
 result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(GeometryTests))

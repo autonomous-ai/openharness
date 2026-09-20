@@ -35,7 +35,7 @@ test('real kernel detects incorrect holes, interference, containment and dimensi
     await writeFile(join(work, 'native.log'), (result.stdout || '') + (result.stderr || ''));
     assert.equal(result.status, 0, result.error?.message || result.stderr);
     const report = await json(resultFile);
-    assert.equal(report.passed, 6);
+    assert.equal(report.passed, 7);
     console.log('Real FreeCAD kernel cases:', report);
   } finally { await cleanup(work); }
 });
