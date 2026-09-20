@@ -3988,8 +3988,38 @@ class AppNotifier extends ChangeNotifier {
     await openStoreAgent(context, this, gridHarness, machineId);
   }
 
-  /// The machine Grid belongs on when no door named one: this computer's own
-  /// when the app has one, else whatever the person is looking at.
+  /// The Store harness the Machines menu opens: the fleet itself, managed by
+  /// talking to it, with the live map of every machine beside the terminal.
+  static const machinesHarness = 'autonomous/machines';
+
+  /// Open Machines, the same way [runLocalModel] opens Grid.
+  ///
+  /// It belongs on THIS computer and nowhere else: everything it reads — the
+  /// machine list, each machine's roster — it reads through the local daemon,
+  /// so a copy opened on a remote machine would be describing that machine's
+  /// fleet, not the one in front of the person. Not installed here → the
+  /// Store, open on its page, whose Install is the way in.
+  Future<void> manageMachines(BuildContext context) async {
+    final machine = _localModelMachine();
+    if (machine == null) {
+      _lastError = 'Connect a machine before opening Machines.';
+      _lastErrorRetryable = false;
+      notifyListeners();
+      return;
+    }
+    final machineId = machine.machine.machineId;
+    await probeDsh(machineId);
+    if (machine.dsh[machinesHarness]?.installed != true) {
+      openStore(harness: machinesHarness);
+      return;
+    }
+    if (!context.mounted) return;
+    await openStoreAgent(context, this, machinesHarness, machineId);
+  }
+
+  /// The machine Grid and Machines belong on when no door named one: this
+  /// computer's own when the app has one, else whatever the person is looking
+  /// at.
   MachineState? _localModelMachine() {
     final local = machineStates.values
         .where((state) => state.isLocalMachine)

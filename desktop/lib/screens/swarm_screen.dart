@@ -797,6 +797,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
       case 'linkMachine':
         await _dialog(() => showSwarmLinkDialog(context, app));
       case 'manageMachines':
+        // The Machines harness: the fleet managed by talking to it, with the
+        // live map beside the terminal. Wrapped like Open Grid because the
+        // notifier opens New Harness here and the tab it makes takes focus.
+        await _dialog(() => app.manageMachines(context));
+      // BRIDGE, until the Machines menu goes: the old list, so nothing is lost
+      // between this release and that one. When the menu is removed, delete
+      // this case, `machines.list` below, machines_manager.dart and its test,
+      // and the `machineList` action in SwarmTitlebar.swift + keymap_commands.
+      case 'machineList':
         unawaited(_dialog(() => showMachinesManager(context, app)));
       case 'refreshMachines':
         unawaited(app.retryMachines());
@@ -883,6 +892,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           'newAgent',
           'newTerminal',
           'manageMachines',
+          'machineList',
           'deleteMachine',
           'splitRight',
           'splitDown',
@@ -1491,7 +1501,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'pane.focus_$i': () => app.focusPaneByIndex(i - 1),
     'navigation.commands': _showSearchCommands,
     'machine.link': () => _dialog(() => showSwarmLinkDialog(context, app)),
-    'machines.manage': () => _dialog(() => showMachinesManager(context, app)),
+    'machines.manage': () => _dialog(() => app.manageMachines(context)),
+    'machines.list': () => _dialog(() => showMachinesManager(context, app)),
     'project.add': _addProject,
     'keyboard.open_config': () => openKeyboardConfig(context),
     'pane.resize': app.beginPaneResize,

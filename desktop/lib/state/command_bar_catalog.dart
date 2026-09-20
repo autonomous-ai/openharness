@@ -11,7 +11,9 @@ const commandBarCommands = {
   'navigation.history': 'Return to previously opened harnesses and sessions.',
   'app.settings':
       'Change preferences, appearance, account or connection settings.',
-  'machines.manage': 'See connected computers and manage machine connections.',
+  'machines.manage':
+      'Open Machines, the harness that links, names and retires your computers.',
+  'machines.list': 'See connected computers and their link state.',
   'machine.link': 'Open the setup dialog to connect another computer.',
   'swarm.new': 'Open a fresh empty tab.',
   'swarm.reopen': 'Reopen the most recently closed harness.',
@@ -38,9 +40,10 @@ const _commandPhrases = {
     'show settings',
     'open preferences',
   ],
-  'machines.manage': [
+  'machines.manage': ['manage machines', 'open machines'],
+  'machines.list': [
     'show machines',
-    'manage machines',
+    'machine list',
     'show connected computers',
   ],
   'machine.link': ['link machine', 'connect a computer'],

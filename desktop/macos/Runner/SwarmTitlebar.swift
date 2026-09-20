@@ -100,7 +100,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["select", "close", "new", "rename", "commands", "notifications", "addAgent", "newAgent", "newTerminal", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines"].contains(method) else {
+    guard ["select", "close", "new", "rename", "commands", "notifications", "addAgent", "newAgent", "newTerminal", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -324,10 +324,18 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
        $0.count.isEmpty ? $0.status : $0.count)
     })
     let trailingEdge = ceil((compactEdge + 62) * 1.2) - 62
+    // Two doors for one release: the Machines harness, which manages the fleet by conversation and
+    // draws it, and the plain list beneath it. The second is a bridge — it goes when this menu does,
+    // along with machines_manager.dart and the "machineList" action.
+    let manage = NSMenuItem(title: "Manage Machines…", action: #selector(menuAction(_:)), keyEquivalent: "")
+    manage.target = self
+    manage.representedObject = "manageMachines"
+    manage.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + "manageMachines")
+    machinesMenu.addItem(manage)
     let manager = NSMenuItem(title: "Open Machines Manager", action: #selector(menuAction(_:)), keyEquivalent: "")
     manager.target = self
-    manager.representedObject = "manageMachines"
-    manager.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + "manageMachines")
+    manager.representedObject = "machineList"
+    manager.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + "machineList")
     machinesMenu.addItem(manager)
     machinesMenu.addItem(.separator())
     var lastSection: Bool? = nil

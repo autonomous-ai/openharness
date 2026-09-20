@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# The command the agent runs. Keeps Harness's own Node on PATH so a machine without one still works.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+. "$here/runtimes.sh"
+harness_node 22 >/dev/null
+exec node "$here/machines.mjs" "$@"
