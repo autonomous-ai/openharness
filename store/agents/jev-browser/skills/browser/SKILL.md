@@ -22,7 +22,11 @@ a THING page →  the details of one thing
 A search page is a list page, so "search this site for X" is the same job: put the words in
 `"search"` and the harness types them into the site's own search box, then reads the results.
 
-Point `start` at the list. If you point it at one thing's page, that one row is collected and the
+`start` does not have to be the list. Give it the site and Jev walks there: each step is one call
+asking whether this page is already the one, and if not which link goes towards it, up to five
+pages. Where a person gave you the exact page, use it and skip the walking.
+
+Point `start` at the list where you have it. If you point it at one thing's page, that one row is collected and the
 run ends. If the things have no page of their own (everything is on the list), say so to the person:
 this harness collects one row per page, so a list-only site gives one row for the whole list.
 

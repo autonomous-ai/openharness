@@ -9,7 +9,7 @@ import { writeFileSync, renameSync, mkdirSync } from 'node:fs'
 import { evaluate, PRICE_PER_MTOK, resolveCredentials, describeCredentials } from '../toolchain/jev.mjs'
 import { serveViewer, writeVerdict, watchConfig, clean } from './kit.mjs'
 import { openChrome, findChrome, Refused } from '../toolchain/chrome.mjs'
-import { normalizeJob, runJob, proposeJob, LIMITS } from './crawl.mjs'
+import { normalizeJob, runJob, proposeJob, findThePage, LIMITS } from './crawl.mjs'
 import { browserMock } from './mock.mjs'
 import { startDemoSite } from './demosite.mjs'
 
@@ -174,13 +174,28 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
     // second, and the answer is written back into browse.json so the job stays the recipe.
     if (!job.fields.length) {
       proposing = true
-      say('Reading the page to work out the columns…', 'start')
+      say('Looking for the right page…', 'start')
       counters = { pages: 0, calls: 0, questions: 0, tokens: 0, costUsd: 0, links: 0, errors: 0 }
       startedAt = Date.now(); finishedAt = 0; phase = 'running'
       push()
+      const watch = (e) => {
+        if (e.type === 'judged') links = e.links ?? []
+        if (e.type === 'going') here = { url: e.url, title: '' }
+        if (e.type === 'step') say(`Following "${e.label}" (${Math.round(e.p * 100)}%)`, 'go')
+        if (e.type === 'searching') say(`Searching the site for "${e.words}"`, 'go')
+        if (e.type === 'arrived') say(`This is the page: ${e.url}`, 'judge')
+        push('view')
+      }
       let got
       try {
-        got = await proposeJob({ chrome, ask, start: job.start, want: job.want, search: job.search, onEvent: (e) => { if (e.type === 'judged') links = e.links ?? []; if (e.type === 'going') here = { url: e.url, title: '' }; push('view') } })
+        // The address may be a whole site rather than the list itself. Walk to it first.
+        const found = await findThePage({ chrome, ask, start: job.start, want: job.want, search: job.search, onEvent: watch, stopped: () => stopFlag })
+        if (found.walled) { got = { walled: found.walled, columns: [] } }
+        else {
+          if (found.gaveUp) say(`Still looking: ${found.gaveUp}. Reading this page anyway.`, 'bad')
+          if (found.url !== job.start) { job = { ...job, start: found.url }; counters.pages = found.steps }
+          got = await proposeJob({ chrome, ask, start: found.url, page: found.page, want: job.want, search: job.search, onEvent: watch })
+        }
       } catch (e) { got = { columns: [], error: String(e.message ?? e) } }
       proposing = false
       if (got.walled) { lastRun = { walled: got.walled, errors: [] }; say(got.walled, 'bad'); phase = 'done'; finishedAt = Date.now(); push(); saveVerdict(); return { ok: false, error: got.walled } }
@@ -192,7 +207,9 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
         return { ok: false, error: `${why}. Write the columns yourself, one per line.` }
       }
       const saidItem = String(watcher.get()?.item ?? '').trim()
-      const next = { ...watcher.get(), item: saidItem || got.item, fields: got.columns.map((c) => ({ id: c.id, name: c.name, ask: c.ask })) }
+      // Write back the page it walked to, not the address that was typed: otherwise the job resets
+      // to the site's front page and collects whatever happens to be on it.
+      const next = { ...watcher.get(), start: job.start, item: saidItem || got.item, fields: got.columns.map((c) => ({ id: c.id, name: c.name, ask: c.ask })) }
       writeMarker(next)
       applyJobQuiet(next)
       say(`Jev found ${got.columns.length} columns in ${got.ms} ms: ${got.columns.map((c) => c.name).slice(0, 6).join(', ')}`, 'judge')

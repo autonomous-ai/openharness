@@ -27,8 +27,8 @@ do with Chrome yourself is slower, invisible to them, and doubles the work. Writ
 let it run, and look at a page only if something comes back wrong.
 
 1. **Take what they said and turn it into a job.** Often all you need is `start` and `want`:
-   put their own sentence in `want` and leave `fields` out, and Jev reads the page and works the
-   columns out in about a second. That is faster than you deciding, and it names the columns after
+   put their own sentence in `want` and leave `fields` out. `start` can be the whole site; Jev
+   walks it to the right page first, one call a step, then works the columns out in about a second. That is faster than you deciding, and it names the columns after
    the page's own labels. Write the columns yourself only when they asked for something specific
    that a page would not volunteer, such as a judgement ("is this remote?") or a score.
    Do not interview them. Write something, let it run, then fix it.
@@ -51,7 +51,7 @@ let it run, and look at a page only if something comes back wrong.
 ```jsonc
 {
   "task": "Every flat for rent in the search results, with rent and address",
-  "start": "https://example.com/search?area=leeds",   // the page to begin on. "demo" is the made-up job board this harness serves itself
+  "start": "https://example.com",                     // where to begin: a site or the exact page. Jev walks to the right one. "demo" is the practice site this harness serves itself
   "search": "",                                       // optional: words to type into the site's own search box first
   "want": "what each one costs and whether it is in stock",  // the person's own words. Leave "fields" out and Jev works the columns out from the page
   "item": "a flat for rent",                          // one of the things. Used in every question, so make it concrete

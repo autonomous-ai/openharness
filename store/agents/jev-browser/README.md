@@ -6,15 +6,20 @@ watch. No code, no selectors, no copy and paste.
 
 ## How you use it
 
-An address and a sentence is the whole job.
+A site and a sentence is the whole job.
 
 | | |
 |---|---|
-| **Start on** | `books.toscrape.com/catalogue/category/books/travel_2/index.html` |
-| **What you want** | `what each book costs and whether it is in stock` |
+| **Start on** | `books.toscrape.com` |
+| **What you want** | `travel books, with the price and whether they are in stock` |
 
-Press **Go**. Jev reads the page, works out what it lists and what the columns should be in about
-a second, and starts collecting. There is nothing else to press.
+Press **Go**. Jev walks the site to the page you meant, reads it, works out the columns, and
+starts collecting. There is nothing else to press.
+
+**It finds its own way.** The address does not have to be the list you want. Each step is one Jev
+call: does this page already show what was asked for, and if not, which link goes towards it? On
+that example it scores the "Travel" link at 0.97 out of the 62 links on the front page, follows it,
+and works from there. Give it the exact page if you have it and it starts there instead.
 
 **Jev picks the columns, it does not write them.** It is shown every piece of text on one of the
 pages and asked, for each, whether that is a fact about this thing worth a column. The column's
