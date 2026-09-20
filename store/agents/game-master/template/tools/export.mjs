@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import {mkdir,writeFile,readFile} from 'node:fs/promises';
+import {mkdir,writeFile,readFile,realpath} from 'node:fs/promises';
 import {resolve,join,dirname} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {readProject,buildGame,toolsDirectory} from './build.mjs';
@@ -17,4 +17,4 @@ export async function exportGame(workspace,destination,{project:provided,pdf=tru
  }
  await writeFile(join(out,'game-kit.zip'),new Uint8Array(await zipFiles(files).arrayBuffer()));return{title:project.title,destination:out,files:Object.keys(files)};
 }
-if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');console.log(JSON.stringify(await exportGame(root,process.argv[2]??join(root,'delivery'))));}
+if(process.argv[1]&&await realpath(process.argv[1]).catch(()=>null)===fileURLToPath(import.meta.url)){const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');console.log(JSON.stringify(await exportGame(root,process.argv[2]??join(root,'delivery'))));}

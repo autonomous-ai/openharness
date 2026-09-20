@@ -46,6 +46,9 @@ Browser test evidence: `/private/tmp/relay-browser-final/report.json`. Final six
 is under `/private/tmp/relay-acceptance-release/`; final print pages are under `/private/tmp/relay-print-release/`. All 36 pages were reviewed;
 34 stayed pixel-identical after clipping, and the two changed tile sheets were reviewed again. CI repeats package/browser/six-delivery/independent-reader tests.
 Store screenshots are captured from actual games, not mockups.
+A real materialized-workspace check caught silent CLI entry skips through symlinked temporary
+paths. Build/check/export/viewer entry checks now resolve real paths; the entry-point regression
+executes the actual build and rule-check commands through a workspace symlink.
 The shared browser-runner integration was corrected after CI caught an illegal `continue`;
 its Game Master dispatch and sibling-fetch/storage/module viewer regression then passed.
 

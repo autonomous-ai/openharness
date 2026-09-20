@@ -15,7 +15,9 @@ six before/after editions cover drafting, spatial routing and push-your-luck. Re
 reach outcomes; independent readers check the actual physical files. Review found and fixed ZIP
 input handling, rule-worker recovery, private-view keyboard access, small printed values, and
 puzzle tiles that did not fit the original board cells. Browser source conflicts preserve both
-editions. Nonterminating rules can be stopped and repaired.
+editions. Nonterminating rules can be stopped and repaired. Actual workspace materialization found a
+symlinked-path CLI entry bug; the tools now resolve real paths and a regression runs actual
+build/check commands through a workspace symlink.
 
 No customer/installed-agent prompt trial, fun/balance result, printer trial, native tabletop
 simulator import or network multiplayer is claimed. Game Master stays unlisted until publication.

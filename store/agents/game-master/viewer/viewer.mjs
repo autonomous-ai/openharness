@@ -52,7 +52,7 @@ export async function createGameViewer(workspace){
   });
   return server;
 }
-if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+if(process.argv[1]&&await realpath(process.argv[1]).catch(()=>null)===fileURLToPath(import.meta.url)){
   if(!process.env.HARNESS_WORKSPACE)throw new Error('HARNESS_WORKSPACE is required.');
   const port=Number(process.env.HARNESS_VIEWER_PORT);if(!Number.isInteger(port)||port<1||port>65535)throw new Error('HARNESS_VIEWER_PORT must be valid.');
   const server=await createGameViewer(process.env.HARNESS_WORKSPACE);server.listen(port,'127.0.0.1',()=>console.log(`[relay] http://127.0.0.1:${port}/`));
