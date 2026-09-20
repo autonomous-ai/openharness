@@ -1,0 +1,21 @@
+{
+  "board_length": 65,
+  "board_width": 40,
+  "board_thickness": 1.6,
+  "wall": 2.4,
+  "floor": 2.8,
+  "side_clearance": 1.5,
+  "support_height": 3,
+  "component_height": 12,
+  "roof_clearance": 2,
+  "lid_thickness": 2.2,
+  "lip_height": 2,
+  "lip_wall": 1.2,
+  "lid_gap": 0.3,
+  "corner_radius": 4.5,
+  "port_width": 10,
+  "port_height": 5,
+  "port_clearance": 0.4,
+  "port_x": 11,
+  "port_z": 10
+}

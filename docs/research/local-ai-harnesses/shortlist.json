@@ -1,0 +1,125 @@
+{
+  "status": "three_harnesses_implemented_direct_engines_prioritized",
+  "research_date": "2026-09-19",
+  "timezone": "America/New_York",
+  "confirmed_scope": {
+    "modalities": [
+      "language_models"
+    ],
+    "hardware_priority": "current_apple_silicon_mac",
+    "machine": {
+      "chip": "Apple M2 Max",
+      "memory_gib": 64,
+      "macos": "26.6.2"
+    }
+  },
+  "core": [
+    {
+      "id": "ollama",
+      "name": "Ollama",
+      "source": "https://github.com/ollama/ollama"
+    },
+    {
+      "id": "llamacpp",
+      "name": "llama.cpp",
+      "source": "https://github.com/ggml-org/llama.cpp"
+    },
+    {
+      "id": "lmstudio",
+      "name": "LM Studio / llmster",
+      "source": "https://lmstudio.ai/docs/developer/rest"
+    },
+    {
+      "id": "mlx_lm",
+      "name": "MLX-LM",
+      "source": "https://github.com/ml-explore/mlx-lm"
+    },
+    {
+      "id": "omlx",
+      "name": "oMLX",
+      "source": "https://github.com/jundot/omlx"
+    },
+    {
+      "id": "vllm",
+      "name": "vLLM",
+      "source": "https://github.com/vllm-project/vllm-metal",
+      "qualification": "vLLM/vLLM Metal 0.29.0 qualified with Qwen3 0.6B 4-bit on M2 Max; no CUDA feature parity implied.",
+      "backend": "vllm-metal"
+    }
+  ],
+  "experimental": [
+    {
+      "id": "vllm_mlx",
+      "name": "vllm-mlx",
+      "source": "https://github.com/waybarrios/vllm-mlx",
+      "qualification": "Independent of upstream vLLM; use separate adapter and isolated environment."
+    },
+    {
+      "id": "sglang_mlx",
+      "name": "SGLang MLX",
+      "source": "https://github.com/sgl-project/sglang",
+      "qualification": "Validate Mac backend installation, supported models, and metrics; do not assume CUDA feature parity."
+    }
+  ],
+  "next_candidates": [
+    "mistral.rs",
+    "exo",
+    "LocalAI",
+    "Lemonade",
+    "llamafile",
+    "Jan"
+  ],
+  "research_only": [
+    "Flash-MoE",
+    "Parallax",
+    "ik_llama.cpp",
+    "LiteRT-LM",
+    "MLC-LLM"
+  ],
+  "other_hardware": [
+    "vLLM CUDA/ROCm",
+    "SGLang CUDA/ROCm",
+    "KTransformers",
+    "TensorRT-LLM",
+    "ExLlamaV3",
+    "GenieX"
+  ],
+  "orchestration_integrations": [
+    "llama-swap",
+    "RamaLama"
+  ],
+  "excluded": [
+    {
+      "name": "Hugging Face TGI",
+      "reason": "Archived repository; maintainers recommend other serving engines."
+    }
+  ],
+  "benchmarked": true,
+  "implementation_started": true,
+  "decision": {
+    "first_harness": "ollama",
+    "reason": "User requested one working pilot before choosing the rest. Ollama was already installed and provides model management plus local inference.",
+    "remaining_list_locked": false,
+    "second_harness": "mlx_lm",
+    "updated_at": "2026-09-20",
+    "product_direction": "Harness plus the conversational agent provides model management. Prioritize direct engines and valuable advanced capabilities over additional overlapping manager applications.",
+    "next_recommended": "llamacpp",
+    "advanced_targets": [
+      "vllm",
+      "sglang_mlx"
+    ],
+    "deprioritized": [
+      "lmstudio",
+      "omlx",
+      "vllm_mlx"
+    ],
+    "third_harness": "vllm",
+    "framework_backend_policy": "One harness per framework; vLLM Metal is the Apple Silicon backend inside vLLM."
+  },
+  "implemented": [
+    "ollama",
+    "mlx_lm",
+    "vllm"
+  ],
+  "benchmark_scope": "Separate Ollama, MLX-LM and vLLM Metal small-model warm measurements on this M2 Max. vLLM also measures bounded concurrent client requests. Different timing/cache definitions; no controlled cross-framework ranking."
+}

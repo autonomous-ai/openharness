@@ -1,22 +1,149 @@
-# OpenHarness
+# Follow your curiosity. Build across disciplines.
 
-**The open-source software and hardware platform for domain-specific harnesses.**
+OpenHarness is open-source software and hardware for building with coding agents. Use Claude Code,
+Codex, and others to make software, design parts and circuit boards, explore data, and create videos,
+with your agents, domain tools, and live viewers in one place and sessions that persist across every
+machine you own.
 
-Run Claude Code, Codex, and every other coding agent in persistent terminals on all your machines. Give
-them a **domain-specific harness (DSH)** and they design circuit boards, model 3D parts, simulate
-robots, and build games in a live viewer. Keep them on your desk with the open-hardware
-**Harness device**.
+The old rule said ten thousand hours to a craft. That was the tax on curiosity, and most of us could
+only afford to pay it once, so we specialized and called the rest hobbies.
 
-[Run it](#run-it) · [Domain-specific harnesses](#domain-specific-harnesses-dsh) ·
+Coding agents become the specialists, given the tools of a craft and a way to see what they made:
+the geometry that becomes a part, the netlist that becomes a circuit board, the script that becomes
+a film. You bring the idea, the taste, and the judgment about what is worth making.
+
+Use the desktop app on its own, or add the optional **Harness device** to follow your agents, answer
+their questions, and speak new tasks from your desk. The app, firmware, schematics, PCB layouts, and
+enclosure CAD files are all open source.
+
+[Who it's for](#for-polymaths-in-the-making) · [What you can make](#domain-specific-harnesses-dsh) · [Run it](#run-it) ·
 [Harness device](#harness-device) · [Architecture](docs/architecture.md) · [Contribute](#contributing)
 
 <p align="center">
-  <img src=".github/assets/hardware/desk-agents.jpg" width="960" alt="The Harness device on a desk beside a keyboard, with the coding agents it runs: Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build and Kilo Code">
+  <a href=".github/assets/store/workshop-overview.svg"><img src=".github/assets/store/workshop-overview.svg" width="1280" alt="Start with Coding: 14 agents including Claude Code, Codex, and Cursor. Then explore Design, Engineering, Media, Music, Productivity, Science and Data, Simulation, Games, Research, and Local AI."></a>
 </p>
+
+## For polymaths in the making.
+
+> “I think that one kind of perspective for a lot of the world-class entrepreneurs is they’re not
+> specialists. They’re something close to polymaths.”
+>
+> — [Peter Thiel](https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s)
+
+Built for the curious engineer who wants to build beyond software. Get your hands on more of what
+you are making, from the physical product to the analysis and the launch video. Makers and creators
+with the same curiosity are welcome. You get there by directing a specialist in each craft and
+judging what comes back, not by mastering them all first.
+
+Monday, a feature. Tuesday, the customer data. Wednesday, an enclosure for the prototype. Thursday,
+the launch video. You already know how to build with code, and Harness brings that way of working to
+CAD, circuit boards, games, videos, and documents, with agents and tools for each craft.
+
+Your ideas can take you into unfamiliar crafts: an app, a physical product, a game, a film. This is
+a place to follow them. Give each job an agent with the right tools, inspect what it makes, and steer
+the next iteration. The code and project files are there to read, change, version, and build on.
+
+**From handoff to hands-on.** You bring intent and judgment; your agents write and run code. Each
+harness supplies the tools and feedback for a different craft. You can get your hands on more of
+the product and the work of bringing it to customers.
+
+Start with what you know and learn the next craft through the things you build. The
+[ideal-user guide](docs/ideal-users.md) records who we're building for and how the app, community,
+and device serve them.
+
+## Domain-specific harnesses (DSH)
+
+**Coding agents can build far more than software.** Code is the common medium: geometry scripts make
+parts, animation code makes videos, and analysis code turns data into charts and findings. That is
+what connects the dots between crafts, and a harness gives the agent the tools and feedback to work
+in each one.
+
+<img width="1000" height="563" alt="harness" src="https://github.com/user-attachments/assets/25c63335-279a-4f9a-b702-2ffaec2b096f" />
+
+
+A **domain-specific harness** turns a coding agent into a specialist. It brings the domain's
+instructions and skills, a pinned toolchain, a project template, a verdict the app can read, and a
+**live viewer** for what the agent makes. You chat on one side; the board, the part, the robot or the
+game takes shape on the other, and stays interactive after the agent is done.
+
+A DSH is a folder with a `harness.json`. The agent does the reasoning; the harness brings the tools
+and the view. Adding a domain never needs a change to the app or the daemon.
+
+<!-- store-catalog:start -->
+### Coding and beyond
+
+Start with a coding agent you already use. Explore 45 domain-specific harnesses when your
+next idea takes you further.
+
+| Category | Agents and harnesses |
+|---|---|
+| **Coding** | [Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build, Kilo Code](docs/engines.md) |
+| Design | [Autonomous Workshop](store/agents/autonomous-workshop/), [Blender](store/agents/blender/), [Bonsai MCP](store/agents/bonsai-mcp/), [Creative Direction](store/agents/creative-direction/), [Excalidraw](store/agents/excalidraw/), [FreeCAD](store/agents/freecad/), [Generative Art](store/agents/generative-art/), [OpenSCAD](store/agents/openscad/), [text-to-cad](store/agents/text-to-cad/) |
+| Engineering | [Autonomous Circuit](store/agents/autonomous-circuit/), [CircuitJS](store/agents/circuitjs/), [KiCad](store/agents/kicad/), [Orca Slicer](store/agents/orca-slicer/), [Yosys](store/agents/yosys/) |
+| Media | [Comfy MCP](store/agents/comfy-mcp/), [Manim](store/agents/manim/), [OpenMontage](store/agents/openmontage/), [Remotion](store/agents/remotion/) |
+| Music | [Ableton AI](store/agents/ableton-ai/), [JUCE Agent Toolkit](store/agents/juce-agent-toolkit/), [Music Studio](store/agents/music-studio/), [Score](store/agents/score/), [Strudel](store/agents/strudel/) |
+| Productivity | [Jev Sheets](store/agents/jev-sheets/), [Marp](store/agents/marp/), [Typst](store/agents/typst/) |
+| Science & Data | [autoresearch-mlx](store/agents/autoresearch-mlx/), [Data Studio](store/agents/data-studio/), [marimo](store/agents/marimo/), [RDKit](store/agents/rdkit/) |
+| Simulation | [DimOS](store/agents/dimos/), [Drone Pilot](store/agents/drone-pilot/), [Foam-Agent](store/agents/foam-agent/), [MuJoCo](store/agents/mujoco/), [SimSkill](store/agents/simskill/) |
+| Games | [Game Master](store/agents/game-master/), [Godogen](store/agents/godogen/), [Phaser](store/agents/phaser/), [Voxel Worlds](store/agents/voxel-worlds/) |
+| Research | [Jev Browser](store/agents/jev-browser/), [Roundtable](store/agents/roundtable/) |
+| Local AI | [Grid](store/agents/autonomous-grid/), [MLX-LM](store/agents/mlx-lm/), [Ollama](store/agents/ollama/), [vLLM](store/agents/vllm/) |
+
+These are the 45 harnesses currently listed in the Store catalog. They combine upstream
+open-source tools and original workflows, with instructions, setup, checks, and live views for each craft.
+
+The 10 [shared viewers](store/viewers/) cover CAD, 3D models, documents, games, film, video,
+MuJoCo, web pages, isolated web previews, and studios. Viewer packages install alongside the
+harnesses that need them. Experimental packages marked unlisted are not included above.
+<!-- store-catalog:end -->
+
+**The harness we'd love to see next is the one for your craft.** Bring an open-source tool you use,
+a workflow you know well, or your own company's toolchain. A harness can live in this repository or
+in yours.
+
+<!-- store-showcase:start -->
+<p align="center">
+  <a href=".github/assets/store/showcase.gif"><img src=".github/assets/store/showcase.gif" width="1280" alt="Six real harness outputs, shown one at a time with their harness name and complete prompt: Autonomous Circuit, text-to-cad, MuJoCo, Blender, Godogen, and Manim."></a>
+</p>
+
+Six real outputs, one at a time. Each slide includes the harness and the original prompt.
+[Still preview](.github/assets/store/showcase-poster.png) · Individual images and prompts below.
+
+<details>
+<summary>Read the prompts and open individual images</summary>
+
+**[Autonomous Circuit](store/showcase/autonomous-circuit/six-key-macropad.jpg)** · [Open harness](store/agents/autonomous-circuit/)
+
+> Design a six-key USB macropad. Start with the schematic.
+
+**[text-to-cad](store/showcase/text-to-cad/planetary-gear-set.jpg)** · [Open harness](store/agents/text-to-cad/)
+
+> Design a 3D-printable planetary gear set: a 12-tooth sun, three 18-tooth planets and a 48-tooth ring gear with mounting lugs, module 1.5 and 8 mm thick, plus a carrier on steel pins. Give each part its own colour.
+
+**[MuJoCo](store/showcase/mujoco/g1-humanoid-hello.jpg)** · [Open harness](store/agents/mujoco/)
+
+> Make the Unitree G1 humanoid say hello: stand, raise its right hand and wave three times, then lower it and take a small bow. Record it.
+
+**[Blender](store/showcase/blender/cozy-reading-nook.jpg)** · [Open harness](store/agents/blender/)
+
+> Make a cozy isometric reading nook: a cut-away corner of a room with an armchair, a floor lamp glowing warm, a bookshelf full of colourful books, a round rug and a monstera, with evening sun through the window and a cat asleep on the rug.
+
+**[Godogen](store/showcase/godogen/neon-drift.jpg)** · [Open harness](store/agents/godogen/)
+
+> Make a synthwave hoverbike racer: ride down a neon grid canyon toward a striped setting sun, weave between glowing pylons, hop barriers and collect energy cores, with a boost and three shields.
+
+**[Manim](store/showcase/manim/fourier-knight.jpg)** · [Open harness](store/agents/manim/)
+
+> Draw a chess knight using nothing but spinning circles: a Fourier series of 120 epicycles, tip to tail, tracing its silhouette in gold.
+
+</details>
+<!-- store-showcase:end -->
+
+Every picture is real output from the harness's own toolchain, and the prompt is the one that made it.
 
 ## Coding agents, on every machine
 
-The coding agent is still the heart of the work, and OpenHarness is built around it.
+Keep the agents doing that work together, wherever they run.
 
 - **Real terminals that outlive the window.** Every agent runs in a persistent tmux session. Close the
   app and the agents keep working; if tmux goes down with a reboot, the daemon brings the panes back and
@@ -58,7 +185,8 @@ harness start
 Then **Machines → Link Machine** in the app.
 
 macOS is the primary tested platform. Linux builds exist and feature parity is in progress; Windows is
-work in progress. The app and daemon still need a Harness account to start;
+work in progress. Embedded live viewers require macOS; remote viewers also need a current Harness
+CLI on both machines. The app and daemon still need a Harness account to start;
 [account-free local use is tracked](docs/development.md#account-free-local-use).
 
 <details>
@@ -97,74 +225,7 @@ flowchart LR
 The [architecture guide](docs/architecture.md) covers the daemon, the session model, transport and
 encryption.
 
-## Domain-specific harnesses (DSH)
-
-<img width="1000" height="563" alt="harness" src="https://github.com/user-attachments/assets/25c63335-279a-4f9a-b702-2ffaec2b096f" />
-
-
-A **domain-specific harness** turns a coding agent into a specialist. It brings the domain's
-instructions and skills, a pinned toolchain, a project template, a verdict the app can read, and a
-**live viewer** for what the agent makes. You chat on one side; the board, the part, the robot or the
-game takes shape on the other, and stays interactive after the agent is done.
-
-A DSH is a folder with a `harness.json`. The agent does the reasoning; the harness brings the tools
-and the view. Adding a domain never needs a change to the app or the daemon.
-
-### 18 harnesses today
-
-
-| Domain | Harnesses |
-|---|---|
-| CAD | [Autonomous Workshop](store/agents/autonomous-workshop/), [text-to-cad](store/agents/text-to-cad/) |
-| 3D | [Blender](store/agents/blender/) |
-| Electronics | [Autonomous Circuit](store/agents/autonomous-circuit/), [CircuitJS](store/agents/circuitjs/), [Yosys](store/agents/yosys/) |
-| Games | [Godogen](store/agents/godogen/), [Phaser](store/agents/phaser/) |
-| Documents and diagrams | [Marp](store/agents/marp/), [Typst](store/agents/typst/), [Excalidraw](store/agents/excalidraw/) |
-| Video and music | [OpenMontage](store/agents/openmontage/), [Remotion](store/agents/remotion/), [Manim](store/agents/manim/), [Strudel](store/agents/strudel/) |
-| Simulation and analysis | [MuJoCo](store/agents/mujoco/), [RDKit](store/agents/rdkit/), [marimo](store/agents/marimo/) |
-
-Each one wraps an open-source project under its own name, credits it, pins its toolchain, and installs
-on a fresh machine from the Harness Store. Eight [shared viewers](store/viewers/) (CAD, 3D models,
-documents, games, film, video, MuJoCo, web) mean a new harness rarely needs to write its own.
-
-**The harness we'd love to see next is the one for the tool you use.** KiCad, FreeCAD, OpenSCAD, Godot,
-Jupyter, QGIS, Home Assistant, LilyPond, Inkscape — or your own company's toolchain. A harness can live
-in this repository or in yours.
-
-<table>
-  <tr>
-    <td width="33%" valign="top">
-      <a href="store/agents/autonomous-circuit/"><img src="store/showcase/autonomous-circuit/six-key-macropad.jpg" alt="A six-key USB macropad PCB in 3D"></a>
-      <b>Autonomous Circuit</b><br/><sub><i>“Design a six-key USB macropad. Start with the schematic.”</i> A fab-ready board: RP2040, 43 parts.</sub>
-    </td>
-    <td width="33%" valign="top">
-      <a href="store/agents/text-to-cad/"><img src="store/showcase/text-to-cad/planetary-gear-set.jpg" alt="A planetary gear set in the CAD viewer"></a>
-      <b>text-to-cad</b><br/><sub><i>“Design a 3D-printable planetary gear set: a 12-tooth sun, three 18-tooth planets…”</i> Nine parts, zero interference.</sub>
-    </td>
-    <td width="33%" valign="top">
-      <a href="store/agents/mujoco/"><img src="store/showcase/mujoco/g1-humanoid-hello.jpg" alt="A Unitree G1 humanoid waving in MuJoCo"></a>
-      <b>MuJoCo</b><br/><sub><i>“Make the Unitree G1 humanoid say hello: stand, raise its right hand and wave…”</i> A 29-servo rollout.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td width="33%" valign="top">
-      <a href="store/agents/blender/"><img src="store/showcase/blender/cozy-reading-nook.jpg" alt="An isometric reading nook rendered in Blender"></a>
-      <b>Blender</b><br/><sub><i>“Make a cozy isometric reading nook: a cut-away corner of a room with an armchair…”</i> 122 named objects.</sub>
-    </td>
-    <td width="33%" valign="top">
-      <a href="store/agents/godogen/"><img src="store/showcase/godogen/neon-drift.jpg" alt="A synthwave hoverbike racing game"></a>
-      <b>Godogen</b><br/><sub><i>“Make a synthwave hoverbike racer: ride down a neon grid canyon toward a striped setting sun…”</i> Playable in the pane.</sub>
-    </td>
-    <td width="33%" valign="top">
-      <a href="store/agents/manim/"><img src="store/showcase/manim/fourier-knight.jpg" alt="A chess knight traced by Fourier epicycles"></a>
-      <b>Manim</b><br/><sub><i>“Draw a chess knight using nothing but spinning circles…”</i> 120 epicycles in gold.</sub>
-    </td>
-  </tr>
-</table>
-
-Every picture is real output from the harness's own toolchain, and the prompt is the one that made it.
-
-### Your first DSH in ten minutes
+## Your first DSH in ten minutes
 
 The [Hello World example](store/examples/hello-world/) is a Codex session that edits an HTML page
 shown in the shared Web Viewer:
@@ -224,7 +285,7 @@ store pages, and publishing; the [package specification](store/spec/README.md) i
   <img src=".github/assets/hardware/answer.jpg" width="960" alt="A finger taps the round Harness device to answer an agent that redesigned the billing controls">
 </p>
 
-No other agent stack ships this layer. The **Harness device** is a round, always-on display that sits beside
+The optional **Harness device** is a round, always-on display that sits beside
 your keyboard and shows your agents at a glance: what each one is doing, which one has finished, and
 which one is waiting on you. Read a question and answer it on the screen, or tap and speak a new task,
 without switching windows.

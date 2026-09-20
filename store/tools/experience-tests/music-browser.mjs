@@ -1,0 +1,86 @@
+import assert from 'node:assert/strict';
+import { readFile, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { wavBytes } from '../../agents/music-studio/template/studio/session.mjs';
+
+export async function musicBrowser({ page, context, f, ws, output, download, frameOf, checks }) {
+  const ready = () => f.waitForFunction(() => { const s = afterhours.getState(); return s.revision === s.mixRevision && document.querySelector('#error').hidden; }, null, { timeout: 30000 });
+  const edit = async (id, value) => { await f.locator('#' + id).fill(String(value)); await f.locator('#' + id).press('Tab'); };
+  const original = await f.evaluate(() => afterhours.getProject());
+  await f.locator('#play').click();
+  await f.waitForFunction(() => afterhours.getState().playing && afterhours.getState().context === 'running');
+  await f.locator('#stop').click();
+  const basePeak = await f.evaluate(() => afterhours.getState().peak);
+  await f.locator('#solo').click(); await ready();
+  assert.notEqual(await f.evaluate(() => afterhours.getState().peak), basePeak);
+  await f.locator('#undo').click(); await ready();
+  console.log('Music: playback and solo verified');
+  // Author an actual note through the visible piano roll, then revise, drag and undo it.
+  await f.locator('#add-track').click(); await edit('track-name', 'My approved phrase');
+  await f.locator('#piano').click({ position: { x: 140, y: 75 } });
+  assert.equal(await f.evaluate(() => afterhours.getProject().tracks.at(-1).notes.length), 1);
+  await edit('note-pitch', 'F#4'); await edit('note-start', 2); await edit('note-length', .75);
+  assert.deepEqual(await f.evaluate(() => { const n = afterhours.getProject().tracks.at(-1).notes[0]; return [n.midi, n.beat, n.duration]; }), [66, 2, .75]);
+  // Geometry is read only to aim the pointer at the actual rendered note.
+  const target = await f.evaluate(() => ({ ...noteRects[0] }));
+  await f.locator('#piano').scrollIntoViewIfNeeded();
+  const box = await f.locator('#piano').boundingBox();
+  await page.mouse.move(box.x + target.x + 2, box.y + target.y + 2); await page.mouse.down();
+  await page.mouse.move(box.x + target.x + 60, box.y + target.y + 2, { steps: 6 }); await page.mouse.up();
+  assert.ok(await f.evaluate(() => afterhours.getProject().tracks.at(-1).notes[0].beat > 2));
+  await f.locator('#undo').click();
+  assert.equal(await f.evaluate(() => afterhours.getProject().tracks.at(-1).notes[0].beat), 2);
+  await f.locator('#piano').click({ position: { x: target.x + 2, y: target.y + 2 } });
+  await f.locator('#delete-note').click();
+  assert.equal(await f.evaluate(() => afterhours.getProject().tracks.at(-1).notes.length), 0);
+  await f.locator('#undo').click(); await ready();
+  console.log('Music: note authoring verified');
+  const midi = await download(page, () => f.locator('#export-midi').click(), 'afterhours-edited.mid');
+  const saved = await download(page, () => f.locator('#save-project').click(), 'afterhours-edited.json');
+  await f.locator('#midi-file').setInputFiles({ name: 'my-phrase.mid', mimeType: 'audio/midi', buffer: midi }); await ready();
+  assert.equal(await f.evaluate(() => afterhours.getProject().tracks.at(-1).notes[0].midi), 66);
+  assert.equal(await f.evaluate(() => afterhours.getProject().beats), original.beats);
+  await f.locator('#project-file').setInputFiles({ name: 'approved.afterhours.json', mimeType: 'application/json', buffer: saved }); await ready();
+  assert.equal(await f.locator('#track-name').inputValue(), original.tracks[0].name);
+  console.log('Music: MIDI and project roundtrips verified');
+  // This is an original test tone, not a claim of a user's recorded performance.
+  const tone = Float32Array.from({ length: 48000 }, (_, i) => Math.sin(i * 2 * Math.PI * 440 / 48000) * .2 * Math.min(1, i / 480, (48000 - i) / 480));
+  await f.locator('#audio-file').setInputFiles({ name: 'own-recording-fixture.wav', mimeType: 'audio/wav', buffer: Buffer.from(wavBytes([tone, tone], 48000)) });
+  await f.waitForFunction(() => afterhours.getProject().assets.length === 1); await ready();
+  await edit('clip-duration', .5); await edit('clip-offset', .2); await edit('clip-beat', 4); await ready();
+  const recording = await f.evaluate(async () => { const p = afterhours.getProject(), t = p.tracks.at(-1), r = await afterhours.render({ onlyTrack: t.id }); return { clip: t.clips[0], before: r.channels[0].slice(0, Math.floor(2.39 * r.sampleRate)).some(x => Math.abs(x) > 1e-7), peak: r.peak }; });
+  assert.deepEqual([recording.clip.beat, recording.clip.offset, recording.clip.duration], [4, .2, .5]);
+  assert.equal(recording.before, false); assert.ok(recording.peak > .01);
+  assert.equal(await f.evaluate(async () => { const p = afterhours.getProject(), t = p.tracks.at(-1); t.clips[0].gain = 0; return (await renderSession(p, { onlyTrack: t.id })).peak; }), 0, 'A zero-gain recording must be silent');
+  console.log('Music: imported recording timing verified');
+  await f.locator('#duplicate-section').click();
+  assert.equal(await f.locator('#clip-select option').count(), 2);
+  await f.locator('#clip-select').selectOption('1'); await edit('clip-beat', 86);
+  assert.deepEqual(await f.evaluate(() => afterhours.getProject().tracks.at(-1).clips.map(c => c.beat)), [4, 86]);
+  await f.locator('#undo').click(); await f.locator('#undo').click();
+  assert.equal(await f.evaluate(() => afterhours.getProject().beats), original.beats);
+  await f.locator('#add-track').click(); await f.locator('#instrument').selectOption('sampler');
+  await f.locator('#piano').click({ position: { x: 70, y: 75 } }); await ready();
+  assert.equal(await f.evaluate(() => afterhours.getProject().tracks.at(-1).instrument), 'sampler');
+  assert.ok(await f.evaluate(async () => (await afterhours.render({ onlyTrack: afterhours.getProject().tracks.at(-1).id })).peak > .001));
+  await download(page, () => f.locator('#export-wav').click(), 'afterhours-own-material.wav');
+  await download(page, () => f.locator('#export-stems').click(), 'afterhours-production.zip');
+  await download(page, () => f.locator('#export-html').click(), 'afterhours-portable.html');
+  const current = await f.evaluate(() => afterhours.getProject());
+  const portable = await context.newPage(); await portable.goto(pathToFileURL(join(output, 'afterhours-portable.html')).href);
+  await portable.locator('body[data-ready=true]').waitFor();
+  assert.deepEqual(await portable.evaluate(() => afterhours.getProject()), current); await portable.close();
+  // Source revisions and browser edits must both survive a reload.
+  const path = join(ws, 'piece/session.json'), revision = JSON.parse(await readFile(path, 'utf8'));
+  revision.title = 'NEW AGENT SCORE'; await writeFile(path, JSON.stringify(revision));
+  execFileSync(process.execPath, [join(ws, 'tools/build.mjs')]);
+  await page.frameLocator('#preview').locator('#revision-notice:not([hidden])').waitFor(); f = frameOf(page);
+  await f.locator('#keep-draft').click(); await ready();
+  assert.deepEqual(await f.evaluate(() => afterhours.getProject().tracks), current.tracks);
+  await f.locator('#reset-project').click(); await ready();
+  assert.equal(await f.locator('#title').textContent(), 'NEW AGENT SCORE');
+  checks.push('real audio playback', 'solo changes audio', 'note add/edit/drag/delete and undo', 'MIDI notes roundtrip', 'project roundtrip', 'own recording import/trim/move', 'repeated clips individually editable', 'pitched sample instrument', 'mix and aligned stem export', 'portable studio reopened', 'agent revision preserves approved work');
+  return f;
+}

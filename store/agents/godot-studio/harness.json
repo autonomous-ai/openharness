@@ -1,0 +1,31 @@
+{
+  "spec": 1,
+  "id": "autonomous/godot-studio",
+  "name": "Godot Studio",
+  "category": "Games",
+  "author": "OpenHarness contributors",
+  "description": "Describe a game; get a real, playable Godot project \u2014 exported to the browser and running live in the pane.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "project.godot",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": ["skills"],
+    "env": {
+      "GODOT_TOOLCHAIN": "${dsh}/toolchain",
+      "GODOT_SKILLS": "${dsh}/skills"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/isolated-web-viewer",
+    "artifactExtensions": [".pck", ".html"]
+  },
+  "verdict": ".harness/verdict.json"
+}

@@ -23,6 +23,47 @@ class _NoPictures extends CachingAssetBundle {
 }
 
 void main() {
+  testWidgets('Local AI frameworks load their real logos without initials', (
+    tester,
+  ) async {
+    const ids = [
+      'autonomous/ollama',
+      'autonomous/mlx-lm',
+      'autonomous/vllm',
+      'local/ollama',
+      'local/mlx-lm',
+      'local/vllm',
+    ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Row(
+          children: [for (final id in ids) EngineMark(engine: id, size: 32)],
+        ),
+      ),
+    );
+    final context = tester.element(find.byType(Row));
+    await tester.runAsync(() async {
+      for (final id in ids) {
+        final identity = engineIdentity(id);
+        expect(identity.asset, isNotNull, reason: '$id must have a logo');
+        await precacheImage(AssetImage(identity.asset!), context);
+      }
+    });
+    await tester.pump();
+    for (final id in ids) {
+      expect(find.byKey(ValueKey('engine-icon-$id')), findsOneWidget);
+      expect(find.byKey(ValueKey('engine-fallback-$id')), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byKey(ValueKey('engine-icon-$id')),
+          matching: find.byType(RawImage),
+        ),
+        findsOneWidget,
+      );
+    }
+    expect(tester.takeException(), isNull);
+  });
+
   test(
     'every first-party harness has a face and a base engine this build knows',
     () {
@@ -68,39 +109,31 @@ void main() {
     },
   );
 
-  test('every agent package in the store has its face in this build', () {
-    // A package without one draws an initial in its tab, pane header and store
-    // card while every package beside it wears its logo.
-    final agents = Directory('../store/agents')
-        .listSync()
-        .whereType<Directory>()
-        .where((dir) => File('${dir.path}/harness.json').existsSync())
-        .map(
-          (dir) =>
-              'autonomous/${dir.uri.pathSegments.where((s) => s.isNotEmpty).last}',
-        )
-        .toList();
-    expect(agents, isNotEmpty);
-    final faces = {for (final harness in knownHarnesses) harness.id};
-    // Projects that publish no logo draw their initial rather than a mark made
-    // up for them. Godogen's repository has no image of its own; the five
-    // below neither, and the logos they sit beside (Ableton, JUCE, OpenFOAM,
-    // SUMO) belong to other companies.
-    const noLogo = {
-      'autonomous/godogen',
-      'autonomous/ableton-ai',
-      'autonomous/autoresearch-mlx',
-      'autonomous/foam-agent',
-      'autonomous/juce-agent-toolkit',
-      'autonomous/simskill',
-    };
-    for (final id in agents.where((id) => !noLogo.contains(id))) {
-      expect(faces, contains(id), reason: '$id has no EngineIdentity');
-      final asset = engineIdentity(id).asset!;
+  test('shipped brands have a desktop face and every face has an asset', () {
+    // The live Store can add packages between desktop releases. Unknown IDs
+    // intentionally use the initial fallback below; every registered face in
+    // this binary must point to an asset that it actually bundles.
+    expect(knownHarnesses, isNotEmpty);
+    for (final dir in Directory(
+      '../store/agents',
+    ).listSync().whereType<Directory>()) {
+      if (!File('${dir.path}/brand/icon.svg').existsSync()) continue;
+      final manifest = jsonDecode(
+        File('${dir.path}/harness.json').readAsStringSync(),
+      );
+      final id = manifest['id'] as String;
+      expect(
+        engineIdentity(id).asset,
+        isNotNull,
+        reason: '$id ships an original mark but still draws a fallback initial',
+      );
+    }
+    for (final identity in knownHarnesses) {
+      final asset = identity.asset!;
       expect(
         File(asset).existsSync(),
         isTrue,
-        reason: '$id: $asset is missing',
+        reason: '${identity.id}: $asset is missing',
       );
     }
   });
@@ -129,7 +162,11 @@ void main() {
       expect(identity.category, package['category'], reason: '$id category');
       checked++;
     }
-    expect(checked, knownHarnesses.length);
+    // Linked local harnesses are intentionally outside store/agents.
+    expect(
+      checked,
+      knownHarnesses.where((h) => !h.id.startsWith('local/')).length,
+    );
     for (final engine in allEngines) {
       expect(engine.tagline, isNotEmpty, reason: engine.id);
       expect(engine.tagline!.length, lessThanOrEqualTo(80), reason: engine.id);

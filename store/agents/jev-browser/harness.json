@@ -1,0 +1,32 @@
+{
+  "spec": 1,
+  "id": "autonomous/jev-browser",
+  "name": "Jev Browser",
+  "category": "Research",
+  "author": "Autonomous",
+  "description": "Point it at a web page and say what you want from each thing on it. A real Chrome opens, and Jev, TypeSafe's System One model, reads every page: one call judges every link and pulls every field. You get results.csv. Every value is text taken off the page, so nothing is invented.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "browse.json",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": ["skills"],
+    "env": {
+      "JEV_DSH": "${dsh}",
+      "JEV_MODEL": "jev-latest"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "command": "toolchain/viewer.sh",
+    "url": "http://127.0.0.1:${port}/",
+    "artifactExtensions": [".json"]
+  },
+  "verdict": ".harness/verdict.json"
+}

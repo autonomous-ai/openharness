@@ -1,0 +1,49 @@
+{
+  "spec": 1,
+  "title": "After the Rain",
+  "composer": "OpenHarness",
+  "brief": "A gentle, hopeful miniature that I can hear and reshape without owning any instruments. Let a flute melody rise above a warm clarinet reply and an unhurried cello foundation.",
+  "assumptions": [
+    "Original illustrative music, not an arrangement of an existing song.",
+    "Listening comes first: no instruments or music-reading experience are required.",
+    "The ranges and difficulty limits below are starting assumptions, not a real player's assessment."
+  ],
+  "meter": [6, 8],
+  "quarterBpm": 90,
+  "bars": 16,
+  "key": {"tonic": "c", "mode": "major"},
+  "sourceFiles": ["score.ly", "ensemble.json"],
+  "practice": {"speed": 0.75, "countInBars": 1},
+  "players": [
+    {
+      "id": "flute",
+      "label": "Flute",
+      "instrument": "Flute in C",
+      "midiInstrument": "flute",
+      "soundingC": "C4",
+      "staves": [
+        {"id": "flute-line", "music": "fluteMusic", "clef": "treble", "writtenRange": ["C5", "A5"], "maxPolyphony": 1, "maxLeapSemitones": 7, "maxAttacksPerBar": 6}
+      ]
+    },
+    {
+      "id": "clarinet",
+      "label": "B-flat clarinet",
+      "instrument": "B-flat clarinet",
+      "midiInstrument": "clarinet",
+      "soundingC": "Bb3",
+      "staves": [
+        {"id": "clarinet-line", "music": "clarinetMusic", "clef": "treble", "writtenRange": ["C4", "G5"], "maxPolyphony": 1, "maxLeapSemitones": 7, "maxAttacksPerBar": 4}
+      ]
+    },
+    {
+      "id": "cello",
+      "label": "Cello",
+      "instrument": "Cello",
+      "midiInstrument": "cello",
+      "soundingC": "C4",
+      "staves": [
+        {"id": "cello-line", "music": "celloMusic", "clef": "bass", "writtenRange": ["C2", "G3"], "maxPolyphony": 1, "maxLeapSemitones": 12, "maxAttacksPerBar": 2}
+      ]
+    }
+  ]
+}

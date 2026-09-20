@@ -1,0 +1,35 @@
+{
+  "spec": 1,
+  "id": "autonomous/sheet-docs",
+  "name": "Sheet & Docs Studio",
+  "category": "Office",
+  "author": "OpenHarness contributors",
+  "description": "Create editable DOCX documents and XLSX spreadsheets from structured source, with optional LibreOffice PDF previews.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "doc.json",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "SSD_TOOLCHAIN": "${dsh}/toolchain",
+      "SSD_SKILLS": "${dsh}/skills"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/doc-viewer",
+    "artifactExtensions": [
+      ".pdf"
+    ]
+  },
+  "verdict": ".harness/verdict.json"
+}

@@ -1,0 +1,35 @@
+{
+  "spec": 1,
+  "id": "autonomous/game-master",
+  "name": "Game Master",
+  "category": "Games",
+  "author": "Autonomous",
+  "description": "Create original board and card games from an idea. Play the rules, edit components, inspect reproducible playtests and export an offline game plus a physical print-and-play kit.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "game/index.html",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "GAME_DSH_DIR": "${dsh}"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "command": "toolchain/viewer.sh",
+    "artifactExtensions": [
+      ".html"
+    ],
+    "url": "http://127.0.0.1:${port}/"
+  },
+  "verdict": ".harness/verdict.json"
+}

@@ -1,0 +1,8 @@
+{
+  "start": "",
+  "want": "",
+  "maxItems": 25,
+  "maxPages": 5,
+  "sameSiteOnly": true,
+  "show": true
+}

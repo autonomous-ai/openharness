@@ -1,0 +1,22 @@
+{
+  "listed": true,
+  "homepage": "https://lilypond.org",
+  "upstream": "https://github.com/lilypond/lilypond",
+  "license": "MIT",
+  "tagline": "Your musical idea, ready to hear and share",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/score/ensemble.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "I don't play an instrument. Make a gentle, hopeful piece with a flute melody, clarinet reply and warm cello. Let me hear each voice and save an audio sketch.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/score/ensemble.jpg",
+      "caption": "Hear, isolate and loop the actual exported notes; save your mix as WAV"
+    },
+    {
+      "prompt": "Write a beginner flute and piano duet. Keep the flute between C5 and E5 with at most three attacks per bar, keep the piano unchanged when revising, and give me separate parts plus a slower practice pack.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/score/parts.jpg",
+      "caption": "Measured player limits, printable parts and an editable project ZIP"
+    }
+  ]
+}

@@ -11,6 +11,8 @@ import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 
+import 'terminal_find_test.dart' show output;
+
 void main() {
   TerminalSession sessionFor(
     String agentId,
@@ -31,6 +33,58 @@ void main() {
     session.streamId = 'stream-$agentId';
     return session;
   }
+
+  testWidgets('a terminal screen refresh preserves another editor input', (
+    tester,
+  ) async {
+    final frames = <TerminalBinaryFrame>[];
+    final session = sessionFor('codex', frames);
+    final notifier = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+    );
+    final editorFocus = FocusNode();
+    final text = TextEditingController();
+    addTearDown(() {
+      editorFocus.dispose();
+      text.dispose();
+      session.dispose();
+      notifier.dispose();
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              TextField(focusNode: editorFocus, controller: text),
+              Expanded(
+                child: TerminalPanel(
+                  notifier: notifier,
+                  session: session,
+                  focused: true,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.byType(TextField));
+    await tester.pump();
+    tester.testTextInput.enterText('a');
+    await tester.pump();
+    await output(session, 0, 'replacement screen\r\n', keyframe: true);
+    await tester.pump();
+    await tester.pump();
+    expect(editorFocus.hasFocus, isTrue);
+    tester.testTextInput.enterText('another editor keeps the rest of the text');
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(text.text, 'another editor keeps the rest of the text');
+    expect(frames, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   for (final platform in [TargetPlatform.macOS, TargetPlatform.linux]) {
     testWidgets(

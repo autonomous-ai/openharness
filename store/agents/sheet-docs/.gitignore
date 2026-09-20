@@ -1,0 +1,8 @@
+# Generated office output — never source.
+out/
+*.docx
+*.xlsx
+*.pptx
+# Harness bookkeeping.
+.harness/
+.harness-initialized

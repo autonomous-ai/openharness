@@ -1,0 +1,7 @@
+{
+  "homepage": "https://github.com/ml-explore/mlx-lm",
+  "upstream": "https://github.com/ml-explore/mlx-lm",
+  "license": "MIT",
+  "tagline": "Generating text with large language models on Apple silicon with MLX",
+  "screenshots": []
+}

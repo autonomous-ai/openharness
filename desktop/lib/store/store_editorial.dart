@@ -1,17 +1,13 @@
 import '../core/dsh_catalog.dart';
-
-/// Broad browsing sections; packages keep their own precise domain labels.
-const storeCategoryDomains = <String, Set<String>>{
-  'Design': {'3D', 'CAD', 'Diagrams'},
-  'Engineering': {'PCB', 'Circuits', 'Chips'},
-  'Media': {'Documents', 'Slides', 'Video', 'Math animation', 'Music'},
-  'Science': {'Chemistry', 'Notebooks', 'Simulation'},
-  'Games': {'Games'},
-  'Code': {'Code', 'Compute'},
-};
+import 'store_categories.g.dart';
+export 'store_categories.g.dart';
 
 String storeCategoryFor(DshEntry entry) {
-  if (entry.isEngine) return 'Code';
+  if (entry.isEngine) return 'Coding';
+  // Legacy Grid/Ollama packages used Compute before Local AI existed.
+  if (const {'autonomous/autonomous-grid', 'local/ollama'}.contains(entry.id)) {
+    return 'Local AI';
+  }
   final domain = entry.category?.trim().toLowerCase();
   for (final category in storeCategoryDomains.entries) {
     if (category.key.toLowerCase() == domain ||
@@ -155,6 +151,36 @@ const storeStories = <String, StoreStory>{
     benefit: 'Build logic. See it become a chip.',
     prompts: ['Design a four-bit counter and show its simulated waveform.'],
   ),
+  'autonomous/openmontage': StoreStory(
+    benefit: 'Take a film from the first idea to the final cut.',
+    prompts: ['Make a short launch film for a product I am building.'],
+  ),
+  'autonomous/music-studio': StoreStory(
+    benefit: 'Compose a piece, shape every part, and make it yours.',
+    prompts: ['Compose a warm instrumental theme for a short product film.'],
+  ),
+  'autonomous/data-studio': StoreStory(
+    benefit: 'Turn a dataset into evidence you can inspect.',
+    prompts: [
+      'Explore this dataset and show which patterns are worth investigating.',
+    ],
+  ),
+  'autonomous/roundtable': StoreStory(
+    benefit: 'Explore a decision from more than one point of view.',
+    prompts: [
+      'Compare two approaches to my project. Research the tradeoffs and preserve the disagreements.',
+    ],
+  ),
+  'autonomous/jev-sheets': StoreStory(
+    benefit: 'Ask a question of every row in your spreadsheet.',
+    prompts: [
+      'Group these customer reviews by theme and show the uncertain answers.',
+    ],
+  ),
+  'autonomous/ollama': StoreStory(
+    benefit: 'Find a model that fits your machine and put it to work.',
+    prompts: ['Show which local models fit this machine and help me try one.'],
+  ),
 };
 
 class StoreCollection {
@@ -175,37 +201,79 @@ class StoreCollection {
   bool includes(DshEntry entry) =>
       !entry.isEngine &&
       !entry.isViewerPackage &&
-      (categories.contains(entry.category) || featuredIds.contains(entry.id));
+      (categories.contains(storeCategoryFor(entry)) ||
+          featuredIds.contains(entry.id));
 }
 
 const storeCollections = [
   StoreCollection(
     id: 'shape',
     title: 'Give your ideas shape.',
-    subtitle: '3D scenes. Custom parts. Your design.',
-    categories: {'3D', 'CAD'},
-    featuredIds: ['autonomous/blender', 'autonomous/text-to-cad'],
+    subtitle: 'Scenes, parts, architecture, and original art.',
+    categories: {'Design'},
+    featuredIds: [
+      'autonomous/blender',
+      'autonomous/freecad',
+      'autonomous/creative-direction',
+    ],
   ),
   StoreCollection(
     id: 'hardware',
     title: 'Build something real.',
-    subtitle: 'From your first circuit to your own board.',
-    categories: {'PCB', 'Circuits', 'Chips'},
+    subtitle: 'Circuits, fabrication, robotics, and simulation.',
+    categories: {'Engineering', 'Simulation'},
     featuredIds: [
       'autonomous/copper',
       'autonomous/autonomous-circuit',
       'autonomous/circuitjs',
+      'autonomous/kicad',
+      'autonomous/mujoco',
     ],
   ),
   StoreCollection(
     id: 'play',
     title: 'Make something play.',
-    subtitle: 'Invent a game. Find a sound. Set it in motion.',
-    categories: {'Games', 'Music', 'Simulation'},
+    subtitle: 'Invent a game. Compose a piece. Build a world.',
+    categories: {'Games', 'Music'},
     featuredIds: [
       'autonomous/phaser',
       'autonomous/strudel',
-      'autonomous/mujoco',
+      'autonomous/music-studio',
+      'autonomous/voxel-worlds',
+    ],
+  ),
+  StoreCollection(
+    id: 'tell',
+    title: 'Tell your story.',
+    subtitle: 'Films, generated images, slides, and documents.',
+    categories: {'Media', 'Productivity'},
+    featuredIds: [
+      'autonomous/openmontage',
+      'autonomous/remotion',
+      'autonomous/marp',
+    ],
+  ),
+  StoreCollection(
+    id: 'explore',
+    title: 'Follow a question.',
+    subtitle: 'Explore data, run experiments, and weigh a decision.',
+    categories: {'Science & Data', 'Research'},
+    featuredIds: [
+      'autonomous/data-studio',
+      'autonomous/roundtable',
+      'autonomous/marimo',
+    ],
+  ),
+  StoreCollection(
+    id: 'local',
+    title: 'Make AI your own.',
+    subtitle: 'Run, compare, and manage models on your machines.',
+    categories: {'Local AI'},
+    featuredIds: [
+      'autonomous/autonomous-grid',
+      'autonomous/ollama',
+      'autonomous/mlx-lm',
+      'autonomous/vllm',
     ],
   ),
 ];

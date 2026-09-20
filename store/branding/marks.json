@@ -1,0 +1,141 @@
+[
+  {
+    "id": "autonomous/web-studio",
+    "file": "web-studio.svg",
+    "color": "#36876b",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/data-studio",
+    "file": "data-studio.svg",
+    "color": "#4987ca",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/quantum-studio",
+    "file": "quantum-studio.svg",
+    "color": "#9271cc",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/gis",
+    "file": "gis.svg",
+    "color": "#4e947a",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/openscad",
+    "file": "openscad.png",
+    "color": "#e2c63d",
+    "kind": "upstream",
+    "source": "https://raw.githubusercontent.com/openscad/openscad/033ddb6f6aafa7f3042b6ff2b7f60c5ecf59f926/resources/icons/openscad-256.png",
+    "license": "GPL-2.0-or-later",
+    "credit": "OpenSCAD contributors",
+    "licenseFile": "licenses/openscad.txt"
+  },
+  {
+    "id": "autonomous/freecad",
+    "file": "freecad.svg",
+    "color": "#418fde",
+    "kind": "upstream",
+    "source": "https://raw.githubusercontent.com/FreeCAD/FreeCAD/9b86f258893c86016b8d7a62bddb24646b775fb3/src/Gui/Icons/freecad.svg",
+    "license": "LGPL-2.1-or-later",
+    "credit": "FreeCAD contributors; trademark owned by the FreeCAD Project Association",
+    "licenseFile": "licenses/freecad.txt"
+  },
+  {
+    "id": "autonomous/orca-slicer",
+    "file": "orca-slicer.svg",
+    "color": "#009789",
+    "kind": "upstream",
+    "source": "https://raw.githubusercontent.com/OrcaSlicer/OrcaSlicer/8500fcdccaa10b5099ac20d252af3a7c560046f1/resources/images/OrcaSlicer.svg",
+    "license": "AGPL-3.0-only",
+    "credit": "OrcaSlicer contributors",
+    "licenseFile": "licenses/orca-slicer.txt"
+  },
+  {
+    "id": "autonomous/firmware-studio",
+    "file": "firmware-studio.svg",
+    "color": "#4b856b",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/godot-studio",
+    "file": "godot-studio.svg",
+    "color": "#478cbf",
+    "kind": "upstream",
+    "source": "https://godotengine.org/assets/press/icon_color.svg",
+    "license": "CC-BY-4.0",
+    "credit": "Godot Engine logo © 2017 Andrea Calabró",
+    "licenseFile": "licenses/godot.txt"
+  },
+  {
+    "id": "autonomous/home-assistant",
+    "file": "home-assistant.svg",
+    "color": "#b88159",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/score",
+    "file": "score.svg",
+    "color": "#bd965f",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/sheet-docs",
+    "file": "sheet-docs.svg",
+    "color": "#528c85",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/roundtable",
+    "file": "roundtable.svg",
+    "color": "#94b9a5",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/jev-browser",
+    "file": "jev-browser.svg",
+    "color": "#8bd3cc",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/godogen",
+    "file": "godogen.svg",
+    "color": "#b5d9ae",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  }
+]

@@ -3,8 +3,36 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { startHookServer, type HookServerHandlers, chooseHookAgent } from './hookServer.js'
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
+import { CommandBarService } from './lib/commandBar.js'
 
 let server: Server | null = null
+
+describe('native command bar endpoints', () => {
+  it('requires a native local header and rejects browser origins before evaluating', async () => {
+    const decide = vi.fn()
+    const { base } = await start({ onCommandBar: { status: vi.fn(), decide } })
+    const attempts: Record<string, string>[] = [{}, { 'x-adapter-local': '1', origin: 'https://example.com' }]
+    for (const headers of attempts) {
+      const response = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: '{}' })
+      expect(response.status).toBe(403)
+    }
+    expect(decide).not.toHaveBeenCalled()
+  })
+
+  it('returns configuration without credentials and wraps useful setup errors', async () => {
+    const { base } = await start({ onCommandBar: new CommandBarService({ key: async () => null }) })
+    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
+    const status = await fetch(`${base}/api/command-bar/status`, { headers })
+    expect(await status.json()).toMatchObject({ success: true, data: { configured: false, provider: 'OpenRouter' } })
+    const response = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: JSON.stringify({ prompt: 'hello', candidates: [] }) })
+    expect(response.status).toBe(503)
+    expect(await response.json()).toMatchObject({ success: false, error: { code: 'OPENROUTER_REQUIRED' } })
+    const bad = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: '{' })
+    expect(bad.status).toBe(400)
+    const large = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: 'x'.repeat(129_000) })
+    expect(large.status).toBe(413)
+  })
+})
 
 afterEach(async () => {
   if (!server) return

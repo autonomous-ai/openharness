@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="112" viewBox="0 0 480 112">
+  <title>Music Studio logo</title>
+  <rect width="480" height="112" rx="24" fill="#18252b"/>
+  <g transform="translate(8 8)"><rect x="4" y="4" width="88" height="88" rx="23" fill="#272537"/>
+  <path d="M67 17a15 15 0 1 0 12 24 16 16 0 0 1-12-24Z" fill="#edbfa9"/>
+  <g fill="#d6c7e9">
+    <rect x="19" y="47" width="8" height="21" rx="4"/>
+    <rect x="32" y="31" width="8" height="45" rx="4"/>
+    <rect x="45" y="42" width="8" height="26" rx="4"/>
+    <rect x="58" y="53" width="8" height="23" rx="4"/>
+    <rect x="71" y="53" width="8" height="15" rx="4"/>
+  </g></g>
+  <text x="120" y="53" fill="#f4f0e4" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="600" letter-spacing="-.8">Music Studio</text>
+  <text x="121" y="76" fill="#a7bbb7" font-family="Arial, Helvetica, sans-serif" font-size="10" font-weight="600" letter-spacing="2.1">AFTERHOURS · AUTONOMOUS</text>
+</svg>

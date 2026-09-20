@@ -1,0 +1,7 @@
+# Generated artifacts — never source.
+out.docx
+out.xlsx
+out.pdf
+# Harness bookkeeping.
+.harness/
+.harness-initialized

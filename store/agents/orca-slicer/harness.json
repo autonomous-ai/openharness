@@ -1,0 +1,31 @@
+{
+  "spec": 1,
+  "id": "autonomous/orca-slicer",
+  "name": "Orca Slicer",
+  "category": "Fabrication",
+  "author": "OpenHarness contributors",
+  "description": "Turn your STL and printer brief into compared slicing plans, checked G-code, editable native Orca projects and a portable handoff. Inspect actual paths and revise time/material tradeoffs without connecting a printer.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "model.stl",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": ["skills"],
+    "env": {
+      "ORCA_TOOLCHAIN": "${dsh}/toolchain",
+      "ORCA_SKILLS": "${dsh}/skills"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/isolated-web-viewer",
+    "artifactExtensions": [".html", ".gcode"]
+  },
+  "verdict": ".harness/verdict.json"
+}

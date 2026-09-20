@@ -1,0 +1,35 @@
+# New-job fixture: a two-face mounting bracket, not an enclosure derivative.
+import json
+import os
+import FreeCAD as App
+import Part
+
+with open(os.path.join(os.environ["HARNESS_WORKSPACE"], "dimensions.json")) as handle:
+    p = json.load(handle)
+width, depth, height, thickness = p["width"], p["depth"], p["height"], p["thickness"]
+doc = App.newDocument("BenchBracket")
+foot = Part.makeBox(width, depth, thickness, App.Vector(-width / 2, -depth / 2, 0))
+back = Part.makeBox(width, thickness, height, App.Vector(-width / 2, depth / 2 - thickness, 0))
+shape = foot.fuse(back)
+for x in [-width / 2, width / 2 - 3]:
+    wire = Part.makePolygon([App.Vector(x, -5, thickness), App.Vector(x, 15, thickness),
+                             App.Vector(x, 15, height - 10), App.Vector(x, -5, thickness)])
+    shape = shape.fuse(Part.Face(wire).extrude(App.Vector(3, 0, 0)))
+for x in [-p["hole_spacing"] / 2, p["hole_spacing"] / 2]:
+    shape = shape.cut(Part.makeCylinder(p["base_bore"] / 2, thickness + 2, App.Vector(x, -7, -1)))
+    shape = shape.cut(Part.makeCylinder(p["back_bore"] / 2, thickness + 2,
+                                        App.Vector(x, depth / 2 - thickness - 1, p["back_hole_z"]), App.Vector(0, 1, 0)))
+part = doc.addObject("Part::Feature", "Bracket")
+part.Label, part.Shape = "Two-face bench bracket", shape.removeSplitter()
+payload = doc.addObject("Part::Feature", "Payload")
+payload.Shape = Part.makeBox(50, 15, 10, App.Vector(-25, -5, 25))
+bed = doc.addObject("Part::Feature", "AvailableSpace")
+bed.Shape = Part.makeBox(100, 100, 100, App.Vector(-50, -50, 0))
+for side, x in [("Left", -p["hole_spacing"] / 2), ("Right", p["hole_spacing"] / 2)]:
+    access = doc.addObject("Part::Feature", "BaseAccess" + side)
+    access.Shape = Part.makeCylinder(5, 20, App.Vector(x, -7, thickness))
+    access = doc.addObject("Part::Feature", "BackAccess" + side)
+    access.Shape = Part.makeCylinder(5, 25, App.Vector(x, -10, p["back_hole_z"]), App.Vector(0, 1, 0))
+doc.recompute()
+doc.saveAs(os.path.join(os.environ["HARNESS_BUILD_DIR"], "part.FCStd"))
+App.closeDocument(doc.Name)

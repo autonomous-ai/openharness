@@ -35,6 +35,9 @@ function readStoreDir(storeDir, strict) {
       if (strict && (manifest.spec !== 1 || manifest.id !== `autonomous/${name}` || (manifest.kind ?? 'agent') !== (plural === 'agents' ? 'agent' : 'viewer'))) throw new Error(`Invalid package identity: ${dir}`)
       let facts = {}
       try { facts = JSON.parse(readFileSync(join(dir, 'store.json'), 'utf8')) } catch (error) { if (strict) throw error; facts = {} }
+      // `"listed": false` unlists a package: its code stays in the repo, checked like any other, and it
+      // is left out of the registry and the published catalog. Delete the flag to list it again.
+      if (facts.listed === false) continue
       out.push(storeEntry(`store/${plural}/${name}`, manifest, facts))
     }
   }

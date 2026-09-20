@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="112" viewBox="0 0 480 112">
+  <title>Generative Art logo</title>
+  <rect width="480" height="112" rx="24" fill="#f5f2e9"/>
+  <g transform="translate(8 8)"><rect x="4" y="4" width="88" height="88" rx="23" fill="#eee7d5"/>
+  <g fill="none" stroke="#2d5449" stroke-width="5" stroke-linecap="round">
+    <path d="M21 27c31-20 23 45 54 25"/>
+    <path d="M21 39c31-20 23 45 54 25"/>
+    <path d="M21 51c31-20 23 45 54 25"/>
+    <path d="M21 63c21-14 24 14 37 14"/>
+  </g>
+  <circle cx="71" cy="24" r="7" fill="#ce7645"/></g>
+  <text x="120" y="53" fill="#243732" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="600" letter-spacing="-.8">Generative Art</text>
+  <text x="121" y="76" fill="#63746b" font-family="Arial, Helvetica, sans-serif" font-size="10" font-weight="600" letter-spacing="2.1">FIELDWORK · AUTONOMOUS</text>
+</svg>

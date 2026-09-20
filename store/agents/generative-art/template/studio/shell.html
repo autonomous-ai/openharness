@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fieldwork · Your visual studio</title><!-- FAVICON --><style>/* STUDIO_CSS */</style></head>
+<body>
+<header><div class="wordmark"><span class="brand-icon" aria-hidden="true"><!-- PROJECT_ICON --></span>FIELDWORK<span>VISUAL STUDIO</span></div><div class="file-actions"><button id="open-project">Open project</button><button id="save-project">Save project</button><button class="primary" id="export-kit">Export kit ↗</button></div></header>
+<div id="revision-notice" class="notice" hidden><span>The agent has made a new version. Your previous draft is saved on this device.</span><button id="use-revision">Use new version</button><button id="keep-draft">Keep my draft</button></div>
+<main>
+<aside class="project-panel">
+<p class="eyebrow">YOUR PROJECT</p><h1 id="project-title"></h1><p id="brief" class="brief"></p>
+<details class="help"><summary>Make something entirely different</summary><p>Describe it in the Harness chat beside this studio. Ask for a new composition, illustration, pattern or visual identity. The agent creates the artwork and the controls for your idea. You never need to write code.</p><p>Try: “Use my café’s name and logo. Create an illustrated coffee bag, a square announcement and a landscape banner. Use woodcut botanical forms.”</p></details>
+<div class="section-heading"><h2>Make it yours</h2><div><button id="undo" title="Undo" aria-label="Undo">↶</button><button id="redo" title="Redo" aria-label="Redo">↷</button></div></div>
+<div id="controls"></div><div id="assets"></div>
+<details class="brief-details"><summary>Project notes</summary><p id="notes"></p><p>Save project includes the drawing program, your adjustments and embedded images. Keep this file to reopen or attach to a new Harness conversation.</p></details>
+</aside>
+<section class="stage-column">
+<div class="stage-toolbar"><div id="formats" role="group" aria-label="Output format"></div><span id="dimensions"></span></div>
+<div class="art-stage" id="art-stage"><img id="art" alt="Your original artwork"><div class="render-error" id="render-error" role="alert" hidden></div></div>
+<div class="canvas-footer"><span><i class="status-dot"></i><span id="render-status">Preparing your artwork</span></span><span id="draft-status">Saved in this browser</span></div>
+<section class="output-panel"><div><p class="eyebrow">DELIVER SOMETHING REAL</p><h2>From your idea. Into the world.</h2><p>Editable SVG for design tools. PNG for publishing. A complete project to keep creating.</p></div><div class="output-actions"><button id="export-svg">Editable SVG ↗</button><button id="export-png">PNG image ↗</button><button id="export-html">Portable studio ↗</button></div></section>
+</section>
+<aside class="production-panel"><p class="eyebrow">ARTBOARD</p><label>Width<input type="number" min="64" max="8192" id="width"></label><label>Height<input type="number" min="64" max="8192" id="height"></label><p class="hint">Pixels. The SVG stays sharp at any size. Ask the agent to adapt the layout to a new proportion.</p>
+<div id="variation-panel"><div class="rule"></div><p class="eyebrow">VARIATION</p><form id="seed-form"><label for="seed">Composition seed</label><div class="seed-row"><input id="seed" maxlength="128"><button type="submit">Apply</button></div><button id="next-seed" type="button">Explore another ↗</button></form><p class="hint">The same project and seed recreate the same vector geometry.</p></div>
+<div class="rule"></div><p class="eyebrow">EXPORT</p><label>PNG scale<select id="png-scale"><option value="1">1× · artboard size</option><option value="2">2× · double size</option><option value="4">4× · print detail</option></select></label><div id="edition-panel"><label>Edition count<input id="edition-count" type="number" min="1" max="24" value="1"></label><button id="export-edition">Export SVG edition ↗</button><p class="hint">Edition ZIP includes the exact seeds and your editable source. Export kit includes every named format as SVG and PNG.</p></div>
+<div class="rule"></div><button id="reset-project" class="quiet">Restore agent version</button></aside>
+</main><div id="toast" role="status"></div><input type="file" id="project-file" accept=".json,application/json" hidden>
+<script id="fieldwork-data" type="application/json">"PROJECT_DATA"</script><script id="fieldwork-model">/* PROJECT_MODEL */</script><script>/* STUDIO_APP */</script></body></html>

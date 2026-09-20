@@ -1,0 +1,288 @@
+{
+  "spec": 1,
+  "title": "What changed in sales?",
+  "question": "Which categories contributed to the change in net sales between two months, and which transactions make up those numbers?",
+  "example": true,
+  "method": "Join transaction lines to a unique product catalog. Net sales = quantity × unit price − line discount − line refund. Include completed lines only. Compare calendar months using the recorded sale date; refunds are attributed to that sale, not cash receipt dates. Store USD amounts as exact integer cents. Category deltas describe contributions, not causes.",
+  "limitations": [
+    "Synthetic example data, not real business results or accounting statements.",
+    "No exchange-rate conversion, tax, shipping costs or profit calculation. A missing category/month is explicitly treated as no recorded completed sales for this question.",
+    "A sales-line count is not an order count. Growth is missing when baseline sales are zero."
+  ],
+  "tables": [
+    {
+      "id": "transactions",
+      "file": "sources/transactions.csv",
+      "label": "Transaction lines · synthetic",
+      "key": [
+        "line_id"
+      ],
+      "columns": [
+        {
+          "name": "line_id",
+          "source": "line_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "sold_on",
+          "source": "sold_on",
+          "type": "date",
+          "nullable": false
+        },
+        {
+          "name": "product_id",
+          "source": "product_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "region",
+          "source": "region",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "quantity",
+          "source": "quantity",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "unit_price_cents",
+          "source": "unit_price_usd",
+          "type": "decimal",
+          "nullable": false,
+          "scale": 2,
+          "unit": "USD cents"
+        },
+        {
+          "name": "discount_cents",
+          "source": "discount_usd",
+          "type": "decimal",
+          "nullable": false,
+          "scale": 2,
+          "unit": "USD cents"
+        },
+        {
+          "name": "refund_cents",
+          "source": "refund_usd",
+          "type": "decimal",
+          "nullable": false,
+          "scale": 2,
+          "unit": "USD cents"
+        },
+        {
+          "name": "status",
+          "source": "status",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "note",
+          "source": "note",
+          "type": "text",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "id": "products",
+      "file": "sources/products.csv",
+      "label": "Product catalog · synthetic",
+      "key": [
+        "product_id"
+      ],
+      "columns": [
+        {
+          "name": "product_id",
+          "source": "product_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "product",
+          "source": "product",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "category",
+          "source": "category",
+          "type": "text",
+          "nullable": false
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from": {
+        "table": "transactions",
+        "column": "product_id"
+      },
+      "to": {
+        "table": "products",
+        "column": "product_id"
+      },
+      "allowMissing": false
+    }
+  ],
+  "parameters": [
+    {
+      "id": "baseline",
+      "label": "Baseline month (first day)",
+      "type": "date",
+      "default": "2026-01-01"
+    },
+    {
+      "id": "comparison",
+      "label": "Comparison month (first day)",
+      "type": "date",
+      "default": "2026-02-01"
+    },
+    {
+      "id": "region",
+      "label": "Region",
+      "type": "text",
+      "default": "",
+      "choices": [
+        "",
+        "East",
+        "West"
+      ]
+    },
+    {
+      "id": "category",
+      "label": "Drilldown category",
+      "type": "text",
+      "default": "",
+      "hidden": true
+    }
+  ],
+  "queries": [
+    {
+      "id": "headline",
+      "title": "Net sales comparison",
+      "file": "queries/headline.sql",
+      "kind": "metric",
+      "formats": {
+        "baseline_sales": {
+          "style": "currency",
+          "currency": "USD",
+          "divisor": 100,
+          "digits": 2
+        },
+        "comparison_sales": {
+          "style": "currency",
+          "currency": "USD",
+          "divisor": 100,
+          "digits": 2
+        },
+        "change": {
+          "style": "currency",
+          "currency": "USD",
+          "divisor": 100,
+          "digits": 2
+        },
+        "growth": {
+          "style": "percent",
+          "digits": 1
+        },
+        "completed_lines": {
+          "style": "number",
+          "digits": 0
+        }
+      },
+      "explanation": "Completed transaction lines in the selected calendar months and region. Money is calculated in cents, then formatted as USD. Growth = change / absolute baseline; a zero baseline stays missing."
+    },
+    {
+      "id": "contribution",
+      "title": "Where the change came from",
+      "file": "queries/contribution.sql",
+      "kind": "bar",
+      "x": "category",
+      "y": "change",
+      "formats": {
+        "baseline_sales": {
+          "style": "currency",
+          "currency": "USD",
+          "divisor": 100,
+          "digits": 2
+        },
+        "comparison_sales": {
+          "style": "currency",
+          "currency": "USD",
+          "divisor": 100,
+          "digits": 2
+        },
+        "change": {
+          "style": "currency",
+          "currency": "USD",
+          "divisor": 100,
+          "digits": 2
+        }
+      },
+      "explanation": "Change in recorded net sales by category. Select a category to inspect the transactions in both months. This is a decomposition, not a causal explanation.",
+      "trace": {
+        "query": "transactions_detail",
+        "bindings": {
+          "category": "category"
+        }
+      }
+    },
+    {
+      "id": "monthly",
+      "title": "Recorded monthly sales",
+      "file": "queries/monthly.sql",
+      "kind": "bar",
+      "x": "month",
+      "y": "net_sales",
+      "formats": {
+        "net_sales": {
+          "style": "currency",
+          "currency": "USD",
+          "divisor": 100,
+          "digits": 2
+        }
+      },
+      "explanation": "Only months with recorded completed lines are shown. Unrecorded months are not filled with zero."
+    },
+    {
+      "id": "transactions_detail",
+      "title": "Transaction evidence",
+      "file": "queries/detail.sql",
+      "kind": "detail",
+      "formats": {
+        "net_sales": {
+          "style": "currency",
+          "currency": "USD",
+          "divisor": 100,
+          "digits": 2
+        }
+      },
+      "sourceLinks": {
+        "transactions_record": "transactions",
+        "products_record": "products"
+      },
+      "explanation": "The actual joined transaction lines for both comparison months, the region filter and the selected category. Source links open the original CSV record, including unconverted strings."
+    }
+  ],
+  "checks": [
+    {
+      "id": "month_rules",
+      "file": "checks/months.sql",
+      "description": "Comparison controls are distinct first-of-month dates."
+    },
+    {
+      "id": "valid_amounts",
+      "file": "checks/amounts.sql",
+      "description": "Units, prices, discounts, refunds and statuses meet the saved business rules."
+    },
+    {
+      "id": "reconcile",
+      "file": "checks/reconcile.sql",
+      "description": "Category contributions reconcile to the transaction-level net sales change."
+    }
+  ]
+}

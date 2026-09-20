@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Data Studio — patterns into insight</title>
+  <rect x="7" y="32" width="12" height="25" rx="4" fill="#4987ca"/>
+  <rect x="26" y="20" width="12" height="37" rx="4" fill="#2c609c"/>
+  <rect x="45" y="7" width="12" height="50" rx="4" fill="#71b5e6"/>
+  <path d="M9 19L21 7" fill="none" stroke="#2c609c" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="10" cy="9" r="3" fill="#71b5e6"/>
+</svg>

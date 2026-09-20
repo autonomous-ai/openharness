@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Firmware Studio — code becomes a signal</title>
+  <path d="M23 6V16M41 6V16M23 48V58M41 48V58M6 23H16M6 41H16M48 23H58M48 41H58" fill="none" stroke="#4b856b" stroke-width="6" stroke-linecap="round"/>
+  <rect x="14" y="14" width="36" height="36" rx="8" fill="#30634f"/>
+  <path d="M21 35H27L32 24L37 40L41 30H44" fill="none" stroke="#bbe8a1" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

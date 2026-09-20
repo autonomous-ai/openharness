@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Data Studio · Reproducible analysis</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true">▥</span> Data Studio
+        <span class="eyebrow muted">/ LOCAL ANALYST</span>
+      </div>
+      <div class="toolbar">
+        <label class="button file-button"
+          >Open project<input id="open-project" type="file" accept=".json"
+        /></label>
+        <button id="export-db" disabled>SQLite database</button
+        ><button id="export-report" disabled>Export report</button
+        ><button id="save-project" class="primary" disabled>
+          Save project ↗
+        </button>
+      </div>
+    </header>
+    <div class="layout">
+      <aside>
+        <section class="side-section">
+          <h3 class="eyebrow muted">SOURCE FILES</h3>
+          <div id="sources"></div>
+          <p class="side-copy">
+            Local files. Explicit types.<br />No silent cleaning or upload.
+          </p>
+        </section>
+        <section class="side-section">
+          <h3 class="eyebrow muted">SAVED QUESTIONS</h3>
+          <nav id="queries" aria-label="Saved analyses"></nav>
+        </section>
+        <section class="side-section health">
+          <h3 class="eyebrow muted">DATA QUALITY</h3>
+          <div id="check-count" class="check-count">—</div>
+          <p class="side-copy" id="check-summary">Waiting for an analysis</p>
+          <button id="show-checks" class="quiet">Inspect checks</button>
+        </section>
+      </aside>
+      <main>
+        <div class="intro">
+          <div>
+            <p class="eyebrow muted">FROM SOURCE ROWS TO AN ANSWER</p>
+            <h1 id="title">
+              Your data. A question.<br />A reproducible answer.
+            </h1>
+            <p id="question" class="muted">
+              Build the workspace to load its saved analysis.
+            </p>
+          </div>
+          <span id="example" class="pill">LOCAL WORKSPACE</span>
+        </div>
+        <div id="status" class="status" role="status" aria-live="polite">
+          Loading saved project…
+        </div>
+        <button id="cancel-run" hidden>Cancel running query</button>
+        <div
+          id="filters"
+          class="filters"
+          role="form"
+          aria-label="Analysis controls"
+        ></div>
+        <section
+          id="metrics"
+          class="metrics"
+          aria-label="Calculated metrics"
+        ></section>
+        <section class="panel" id="answer">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow muted">EXPLORE THE ANSWER</p>
+              <h2 id="query-title">Saved analysis</h2>
+              <p id="query-explanation"></p>
+            </div>
+            <div class="small-tools">
+              <button id="reset-trace" hidden>Clear drilldown</button
+              ><button id="export-csv" disabled>CSV ↓</button
+              ><button id="export-json" disabled>Exact JSON ↓</button>
+            </div>
+          </div>
+          <div id="chart" class="chart" aria-label="Query chart"></div>
+          <div id="axis" class="chart-axis"></div>
+          <div class="table-scroll">
+            <table id="result-table"></table>
+            <p id="empty" class="empty" hidden>
+              No matching records. Missing values remain missing.
+            </p>
+          </div>
+          <div class="pagination">
+            <span id="row-count">No result yet</span>
+            <div>
+              <button id="previous">← Previous</button>
+              <button id="next">Next →</button>
+            </div>
+          </div>
+          <p class="edit-help">
+            CSV is spreadsheet-safe; formula-looking text gets an apostrophe.
+            Exact JSON preserves text and nulls. Numeric exports retain the
+            query’s stored units.
+          </p>
+          <details id="calculation">
+            <summary>How this answer is calculated · editable SQL</summary>
+            <textarea
+              id="sql"
+              class="sql"
+              spellcheck="false"
+              aria-label="Saved SQL query"
+            ></textarea>
+            <p class="edit-help">
+              Read-only SQLite. Named controls use :parameter. Run validates
+              every saved query and check; Save project retains successful
+              edits.
+            </p>
+            <button id="run-sql">Run revised query</button>
+          </details>
+        </section>
+        <div class="bottom-grid">
+          <section class="panel">
+            <p class="eyebrow muted">METHOD & BOUNDARIES</p>
+            <h2>Know what these numbers mean.</h2>
+            <p id="method"></p>
+            <ul id="limitations"></ul>
+            <a id="portable" class="button" href="output/project.zip" download
+              >Original built project ZIP ↓</a
+            >
+            <p class="edit-help">
+              ZIP is the last workspace build. Save project above captures your
+              current browser changes. Both include source data—review before
+              sharing.
+            </p>
+          </section>
+          <section class="panel">
+            <p class="eyebrow muted">YOUR REVIEW</p>
+            <h2>Keep the reasoning with the result.</h2>
+            <textarea
+              id="notes"
+              rows="5"
+              maxlength="4000"
+              aria-label="Review notes"
+              placeholder="What did you learn? What should someone check next?"
+            ></textarea>
+            <p class="edit-help">
+              Notes persist in Save project and Export report. Browser changes
+              are not written to the workspace automatically.
+            </p>
+          </section>
+        </div>
+        <footer class="footer">
+          <span id="revision">No verified revision</span
+          ><span id="engine"></span><span>PRIVATE BY DESIGN · NO CDN</span>
+        </footer>
+      </main>
+    </div>
+    <dialog id="source-dialog">
+      <div class="dialog-head">
+        <div>
+          <p class="eyebrow muted">ORIGINAL RECORDS & IMPORT RULES</p>
+          <h2 id="source-title"></h2>
+        </div>
+        <button id="close-source" aria-label="Close source">Close</button>
+      </div>
+      <div id="schema"></div>
+      <div class="small-tools">
+        <label class="button file-button"
+          >Replace this CSV<input
+            id="replace-source"
+            type="file"
+            accept=".csv,text/csv" /></label
+        ><button id="download-source">Original CSV ↓</button>
+      </div>
+      <p class="edit-help">
+        Replacement must match the saved headers and types. For a new schema or
+        question, ask the agent to update analysis.json and SQL. Invalid imports
+        keep the last good analysis.
+      </p>
+      <div class="table-scroll"><table id="raw-record"></table></div>
+      <p id="source-caption" class="edit-help"></p>
+    </dialog>
+    <dialog id="checks-dialog">
+      <div class="dialog-head">
+        <h2>Checks, source rules & missing values</h2>
+        <button id="close-checks">Close</button>
+      </div>
+      <div id="checks"></div>
+    </dialog>
+    <script src="core.js"></script>
+    <script src="report.js"></script>
+    <script type="module" src="dashboard.mjs"></script>
+  </body>
+</html>

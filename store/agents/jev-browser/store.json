@@ -1,0 +1,22 @@
+{
+  "homepage": "https://typesafe.ai",
+  "upstream": "https://typesafe.ai",
+  "license": "MIT",
+  "tagline": "Name a site, say what you want, and get a spreadsheet",
+  "examples": [
+    {
+      "prompt": "books.toscrape.com — travel books, with the price and whether they are in stock. Then tell me which are running low.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-browser/two-boxes.jpg",
+      "caption": "Two boxes. Jev finds the page, picks the columns and fills the sheet"
+    },
+    {
+      "prompt": "Read every product in this category and put the name, price, stock count and product code in a spreadsheet. Stop after 40. Then tell me which ones are out of stock.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-browser/reads-real-pages.jpg",
+      "caption": "One call judged all 16 links: the real items at 76-88%, the site menu at 2%"
+    },
+    {
+      "prompt": "I have to check these 60 supplier pages every month for their lead times and minimum order. Write me a job I can run again, then run it and tell me what changed.",
+      "caption": "The job file is the recipe: run it next month and get next month's answer"
+    }
+  ]
+}

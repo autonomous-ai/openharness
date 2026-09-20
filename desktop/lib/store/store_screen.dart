@@ -430,7 +430,7 @@ class _StoreTabState extends State<StoreTab> {
                               onCollection: (collection) =>
                                   _show(_Collection(collection)),
                               onAll: () => _show(const _All()),
-                              onEngines: () => _show(const _Category('Code')),
+                              onEngines: () => _show(const _Category('Coding')),
                             )
                           : _Shelf$View(
                               shelf: _shelf as _Listed,
@@ -785,8 +785,13 @@ IconData _categoryIcon(String category) => switch (category) {
   'Design' => LucideIcons.box300,
   'Engineering' => LucideIcons.cpu300,
   'Media' => LucideIcons.film300,
-  'Science' => LucideIcons.flaskConical300,
-  'Code' => LucideIcons.terminal300,
+  'Music' => LucideIcons.music300,
+  'Productivity' => LucideIcons.fileText300,
+  'Science & Data' => LucideIcons.flaskConical300,
+  'Simulation' => LucideIcons.bot300,
+  'Research' => LucideIcons.search300,
+  'Local AI' => LucideIcons.brainCircuit300,
+  'Coding' => LucideIcons.terminal300,
   'Games' => LucideIcons.gamepad2300,
   _ => LucideIcons.shapes300,
 };
