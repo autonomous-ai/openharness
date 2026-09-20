@@ -44,7 +44,8 @@ In `sheet.json` a column is a header string or `{ "id": "team", "header": "Team:
    paragraph or clause.
 2. **Look.** Read the header and about twenty rows. Say in two lines what is in it. Set `context`
    to one sentence about what a row is, and `textColumn` if the guess was wrong.
-3. **Ask what they are trying to decide**, then write three to five questions aimed at that. Mix the
+3. **Aim at their decision.** If they already said what they want to know, do not ask again. If
+   not, ask what they are trying to decide. Then write three to five questions aimed at that. Mix the
    types: one yes or no, one choice with a meaning for every option and an `other`, one score. The
    other columns are part of what Jev reads, so a question can lean on them ("Worth a call today?"
    can use a `seats` column).
@@ -56,10 +57,14 @@ In `sheet.json` a column is a header string or `{ "id": "team", "header": "Team:
    line and by reading the rows behind the numbers.
 5. **Write `findings.md`.** What was asked and of how many rows. For each question the count and share
    of every answer. For each finding that matters, three to five word-for-word quotes with row
-   numbers. A cross-cut or two when it says something ("of the 212 crash reports, 61% also say they
-   may leave"). What Jev was unsure about. The next question worth asking. Count from `answers.csv`
-   with a small script, never by eye.
-6. **Sharpen and repeat.** Split a fat `other`. Reword a column whose answers sit near 50%.
+   numbers (lead with the answer in the first five lines). A cross-cut or two when it says something ("of the 212 crash reports, 61% also say they
+   may leave"). What Jev was unsure about. The next question worth asking. Count with
+   `node "$JEV_DSH/toolchain/count.mjs"` (counts, `--by a --and b` cross-cuts, `--where a=b --rows 10`
+   to read the rows behind a number, `--unsure a`, `--find "words"`), never by eye.
+6. **Sharpen and repeat.** Split a fat `other`. Reword a column whose answers sit near 50%: a yes
+   or no about intent usually wants to become "says in words that…" or a three-way choice. Try the
+   rewording on ten hard rows through `toolchain/jev.mjs` first, because a full pass takes most of a
+   minute per 1,000 rows however few columns changed.
 
 Keep their data in the workspace. Quote only what the report needs.
 

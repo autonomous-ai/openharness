@@ -55,8 +55,9 @@ this file?"
 
 - **`answers.csv`** holds every row, its own columns, and each answer with its confidence. Download
   it from the pane, or find it in the project folder. Cells that could run as a formula are escaped.
-- **`findings.md`**: ask the agent for the findings. It counts from `answers.csv`, opens the rows
-  behind each number, and quotes them word for word.
+- **`findings.md`**: ask the agent for the findings. It leads with the answer, counts with the
+  shipped `toolchain/count.mjs` (counts, cross-cuts, the rows behind a number), and quotes rows word
+  for word with their row numbers.
 
 ## What it costs
 
@@ -71,6 +72,17 @@ they may cancel or switch?" and an anger scale):
 All 119 reviews that said "I am close to switching" were found. One run on made-up reviews is a
 sanity check, not a benchmark. OpenRouter answers in about half a
 second a call. The native TypeSafe API is several times faster.
+
+## Tested cold
+
+A fresh agent was given only this harness's `AGENTS.md` and skill, a workspace with the 1,200 made-up
+reviews already dropped on the pane, and one sentence: "What are people complaining about most, who
+is about to leave us and why, and what should we fix first?" In 16 minutes and $0.18 of Jev calls
+it wrote five questions, reworded three of them after reading the unsure rows, and wrote findings
+with counts, cross-cuts and quoted rows. It also noticed by itself that the made-up file glues
+closing sentences onto reviews at random, and said so. The first cold run had failed outright, and
+that is how the bugs it hit got fixed. The tool's weak spot stays a tone scale on evenly written
+text: about a quarter of those cells remained unsure, and the findings said not to rank by it.
 
 ## A key
 
@@ -114,6 +126,7 @@ jev-sheets/
   toolchain/
     jev.mjs                  the Jev client (TypeSafe, Cloudflare or OpenRouter, or the offline stand-in)
     check.mjs                validates sheet.json
+    count.mjs                counts answers.csv: every answer, cross-cuts, the rows behind a number
     viewer.sh setup.sh doctor.sh init-workspace.sh
   viewer/
     viewer.mjs               the server: the sheet, uploads, the call pool, the cache, answers.csv, the verdict
@@ -123,7 +136,7 @@ jev-sheets/
     mock.mjs                 the offline stand-in (reads only the row text and the question)
     kit.mjs                  loopback server, same-origin guard, upload, download, key connect, SSE
     index.html studio.css studio.js base.css jev-hud.js     the pane
-  test/viewer.test.mjs test/own-file.test.mjs
+  test/viewer.test.mjs own-file.test.mjs xlsx.test.mjs count.test.mjs
 ```
 
 ## How it runs

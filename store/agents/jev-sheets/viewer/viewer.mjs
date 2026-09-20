@@ -80,8 +80,10 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     m.set(col.id, cell)
     return cell
   }
+  // The context is put in front of every question, so it is part of what was asked.
+  const keyOf = (col) => `${sheet.context ?? ''}\u0001${columnKey(col)}`
   function cacheFor(col) {
-    const k = columnKey(col)
+    const k = keyOf(col)
     let m = cache.get(k)
     if (!m) cache.set(k, (m = new Map()))
     return m
@@ -400,7 +402,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     const col = colById(id)
     if (!col) return { ok: false, error: 'no such column' }
     columns = columns.filter((c) => c !== col)
-    cache.delete(columnKey(col)) // its answers go with it; typing it again asks Jev again
+    cache.delete(keyOf(col)) // its answers go with it; typing it again asks Jev again
     if (sort?.col === id) sort = null
     if (filter?.col === id) filter = null
     refill(); changed()

@@ -33,12 +33,14 @@ second server.
    generic starter `suggestions` with four to six about this file.
 4. **Save, and check that it took** (see "After you save").
 5. **Read the results.** `answers.csv` and `.harness/verdict.json`. Do not edit them.
-6. **Write the findings** in `findings.md` in the workspace: what was asked and of how many rows, the
-   count and share of every answer, a cross-cut or two when it says something ("of the 212 crash
-   reports, 61% also say they may leave"), three to five word-for-word quotes for each finding that
-   matters (with their `row` numbers), what Jev was unsure about, and the next question worth
-   asking. Count with a small script over `answers.csv`, never by eye or from memory. Then tell the
-   person the three things that matter most, in plain words.
+6. **Write the findings** in `findings.md` in the workspace. **Lead with the answer**: the first
+   five lines answer what the person asked, with the numbers. Then, briefly: what was asked and of
+   how many rows, the count and share of every answer, a cross-cut or two when it says something
+   ("of the 212 crash reports, 61% also say they may leave"), two to four word-for-word quotes for
+   each finding that matters (with their `row` numbers), what Jev was unsure about, and the next
+   question worth asking. Keep it to about two screens. Count with `toolchain/count.mjs` (see
+   "Counting"), never by eye or from memory. Then tell the person the three things that matter
+   most, in plain words.
 7. **Sharpen.** If many cells sit under the review line, or the person says an answer is wrong,
    reword that question, save, and read again. Only the changed column is asked again.
 
@@ -64,9 +66,15 @@ The viewer fills cells on its own, whether or not anyone is looking at the pane.
 
 - `sheet.loadedAt` did not move ten seconds after your save: the viewer is not running. Ask the
   person to reopen the harness pane. Do not start one yourself.
-- Then wait for `cellsFilled` to reach `cellsTotal`. With a live key, plan on 30 to 40 seconds for
-  every 1,000 rows, per save. Check every ten seconds or so. Do not read `answers.csv` for counts
-  before it is full.
+- Then wait for `cellsFilled` to reach `cellsTotal`. The verdict moves every two seconds while a
+  fill runs. With a live key, plan on 30 to 55 seconds for every 1,000 rows, per save. Do not read
+  `answers.csv` for counts before it is full.
+- It is one call per row, so **rewording one column takes as long as the first fill**. It costs
+  less, because only that question is sent. Try a rewording on ten hard rows first (see "Writing
+  sharp questions"), then save once.
+- Saving again while a fill runs is safe. The new sheet loads at once and the old pass is dropped.
+- A save that only changes `suggestions`, `title` or `reviewBelow` asks Jev nothing. A changed
+  `context` asks every question again, because the context is part of every question.
 
 ## The answers file
 
@@ -78,6 +86,27 @@ The viewer fills cells on its own, whether or not anyone is looking at the pane.
 - for every question, two columns: `<Name>` holds the answer as a word (`yes` or `no`, the option,
   the level), and `<Name> confidence` holds 0 to 1. `<Name>` is the part of the header before `:` or
   `?` ("Topic", "Says they will cancel").
+
+A yes or no answer's confidence is how far it is from a coin flip: the larger of p(yes) and p(no),
+so it runs from 0.5 to 1. With the review line at 0.65, a yes or no cell is flagged when p(yes) is
+between 0.35 and 0.65. A choice's confidence is the probability of the option it picked.
+
+## Counting
+
+Do not write your own CSV reader: headers and rows hold commas, quotes and line breaks.
+`toolchain/count.mjs` reads `answers.csv` for you and changes nothing. Name a question by its `id`.
+
+```sh
+node "$JEV_DSH/toolchain/count.mjs"                                        # every question: counts, shares, unsure cells
+node "$JEV_DSH/toolchain/count.mjs" --by topic --and leaving               # a cross-cut, shares by row
+node "$JEV_DSH/toolchain/count.mjs" --where topic=price --where leaving=going --rows 10   # read the rows behind a number
+node "$JEV_DSH/toolchain/count.mjs" --unsure topic --rows 10               # the least sure rows of a question
+node "$JEV_DSH/toolchain/count.mjs" --find "charged twice" --by topic      # a plain word search, cut by a question
+node "$JEV_DSH/toolchain/count.mjs" --where "stars<=2" --by platform       # the file's own columns work too
+```
+
+Add `--json` to get the same as data. If you do need a script of your own, keep it in a `scratch/`
+folder in the workspace, so the person's folder stays tidy.
 
 ## The sheet file
 
@@ -93,9 +122,9 @@ The viewer fills cells on its own, whether or not anyone is looking at the pane.
   "concurrency": 16,              // calls in flight at once (1 to 32)
   "demo": false,                  // keep this false on a person's own data
   "columns": [
-    { "id": "topic", "header": "Topic: sync = notes not syncing between devices | price = cost or subscription | crash = crashes or freezing | praise = happy with the app, no complaint | other = a complaint about something else" },
-    { "id": "leaving", "header": "Says they will cancel or switch to another app?" },
-    { "id": "anger", "header": "Anger: calm < annoyed < furious" }
+    { "id": "topic", "header": "Topic: sync = notes not syncing between devices | price = unhappy with the cost or the plan limits | crash = crashes or freezing | support = unhappy with customer support | praise = happy with the app, no complaint | mixed = likes some of it and dislikes some of it | other = a complaint about something else" },
+    { "id": "leaving", "header": "Leaving: going = says in words that they have cancelled, will switch or will stop using it | wavering = says they may leave, or would stay only if something changes | staying = says nothing about leaving, even if unhappy" },
+    { "id": "lostwork", "header": "Says they lost notes or had to redo work?" }
   ],
   "suggestions": ["Asks for a feature?", "Mentions customer support?"]
 }
@@ -137,18 +166,41 @@ saved to `sheet.json`. If they like a column they typed, add it to `columns` for
   `other = a complaint about something else`. When the question is about complaints, also add
   `praise = happy with the app, no complaint`, or the happy rows get forced into a complaint.
   Then look at what landed in `other` and split it.
-- Name score levels so that each one is easy to tell from the next. Three to five levels work best.
+- A topic like `support = customer support` also catches the happy support stories. When you are
+  counting complaints, say so in the meaning: `support = unhappy with customer support`.
+- **Intent and mood make poor yes or no questions.** "Will they cancel?" is a coin flip on every
+  unhappy row that says nothing about leaving. Ask what the row *says in words*
+  (`Says they lost notes or had to redo work?`), or use a three-way choice with a meaning for each
+  (`going | wavering | staying`). A tone scale (`calm < annoyed < furious`) is often the weakest
+  column on evenly written text. If a quarter of its cells stay under the line after one reword,
+  say so in the findings and do not rank anything by it.
+- A score level is only its words, it cannot take a meaning. Make the words carry it:
+  `no complaint < mild complaint < strong complaint`. Three to five levels work best.
 - A yes or no header should read as a full question: `Asks for a refund?` beats `Refund?`.
 - Put shared facts in `context`, not in every header.
+- Characters: the first `:` ends the name, `|` splits options, the first `=` in an option starts its
+  meaning, and `<` makes a score. So keep `|` and `<` out of names and meanings. Commas, `?`, quotes
+  and a later `:` or `=` are fine.
+- A choice in `suggestions` needs its meanings too, the same as in `columns`.
 
 To try a question on a few rows before it goes in the sheet:
 
 ```js
 import { evaluate, jev } from '<the harness folder>/toolchain/jev.mjs'   // $JEV_DSH
-const r = await evaluate({ state: { text: 'It crashes when I paste an image', stars: 1 },
-  questions: { crash: jev.noul('Mentions a crash?'), anger: jev.score(['calm', 'annoyed', 'furious'], 'How angry is the writer?') } })
-console.log(r.client, r.answers)   // client "mock" means there is no key
+const CONTEXT = 'Each row is one public review of a note-taking app. '   // the viewer puts `context` in front of every question; do the same
+const r = await evaluate({ state: { text: 'It crashes when I paste an image', stars: 1 },   // the row: its text plus its other columns
+  questions: {
+    crash: jev.noul(CONTEXT + 'Mentions a crash?'),
+    topic: jev.choice({ crash: 'crashes or freezing', price: 'unhappy with the cost', other: 'a complaint about something else' }, CONTEXT + 'Topic: which option fits this row best?'),
+    strength: jev.score(['no complaint', 'mild complaint', 'strong complaint'], CONTEXT + 'Complaint strength: where does this row sit on the scale?') } })
+console.log(r.client)             // "mock" means there is no key
+console.log(r.answers.crash)      // { type: 'noul', noul: 0.97 }  the probability of yes
+console.log(r.answers.topic)      // { type: 'choice', choice: 'crash', confidence: 0.99, probabilities: { crash: 0.99, … } }
+console.log(r.answers.strength)   // { type: 'score', score: 1.8, confidence: 0.74, legend: { '0': 'no complaint', … }, probabilities: { '0': …, '1': …, '2': … } }
 ```
+
+Run a rewording on the ten rows it got wrong before you put it in the sheet: a trial takes seconds,
+a full pass takes most of a minute.
 
 ## Being honest about the answers
 
@@ -156,6 +208,9 @@ console.log(r.client, r.answers)   // client "mock" means there is no key
   not a finding. Say so and reword it.
 - Before you report a number that matters, open the rows behind it (filter `answers.csv`) and read
   ten of them. Report what you saw.
+- **Check that the file makes sense.** If a cross-cut comes out flat, or a happy five-star row says
+  it is leaving, or a column contradicts the text, read twenty rows and tell the person. Jev reads
+  the words that are there. It cannot know that an export glued the wrong sentences together.
 - You find, count and quote. You do not give legal, medical, financial or hiring advice from a
   column of answers, and you say so if the person's data invites it.
 - Their data stays in the workspace. The rows go to the Jev API to be answered and nowhere

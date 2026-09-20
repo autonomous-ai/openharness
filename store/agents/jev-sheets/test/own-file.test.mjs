@@ -226,3 +226,29 @@ test('the verdict moves while a fill is still running, and says when sheet.json 
     if (weak) assert.equal(typeof weak.n, 'number', 'weakest rows carry the row number answers.csv uses')
   } finally { await v.viewer.close() }
 })
+
+test('a changed context asks again; a changed title or suggestions does not', async () => {
+  const v = await fresh()
+  try {
+    await v.upload('reviews.csv', REVIEWS)
+    const marker = join(v.ws, 'sheet.json')
+    const base = { ...JSON.parse(readFileSync(marker, 'utf8')), columns: ['Complaint?'] }
+    const save = (obj) => { writeFileSync(marker + '.agent', JSON.stringify(obj)); renameSync(marker + '.agent', marker) }
+    const settled = async (pred) => { const end = Date.now() + 5000; for (;;) { const s = await v.state(); if (pred(s)) return s; if (Date.now() > end) assert.fail('timed out: ' + JSON.stringify(s.stats)); await new Promise((r) => setTimeout(r, 50)) } }
+    save({ ...base, context: 'Each row is one review of a notes app.' })
+    await settled((s) => s.columns.length === 1)
+    await v.ctl('drain')
+    const first = (await v.state()).stats
+    assert.equal(first.cellsFilled, 4)
+    save({ ...base, context: 'Each row is one review of a notes app.', title: 'A new title', suggestions: ['Asks for a refund?'] })
+    await settled((s) => s.title === 'A new title')
+    await v.ctl('drain')
+    assert.equal((await v.state()).stats.calls, first.calls, 'nothing is asked again for a title or suggestions')
+    save({ ...base, context: 'Each row is one support ticket to a bank.', title: 'A new title' })
+    await settled((s) => s.stats.cellsFilled === 0 || s.stats.calls > first.calls)
+    await v.ctl('drain')
+    const after = (await v.state()).stats
+    assert.equal(after.cellsFilled, 4)
+    assert.equal(after.calls, first.calls + 4, 'every row is asked again under the new context')
+  } finally { await v.viewer.close() }
+})
