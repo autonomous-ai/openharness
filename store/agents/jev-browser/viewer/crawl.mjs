@@ -121,6 +121,69 @@ export function pickLinks(links, answers, { threshold = 0.5 } = {}) {
 }
 
 
+
+// ---- finding the page to work from ---------------------------------------------------------------
+/**
+ * Walk a site until the page in front of us is the one the person asked for. Every step is one Jev
+ * call: is this it, and if not, which way. Nothing is clicked; links are followed by their address,
+ * and a search box is used only when the site's own search is the obvious way in.
+ * @returns {Promise<{ url, page, steps, walled, gaveUp }>}
+ */
+export async function findThePage({ chrome, ask, start, want, search = '', maxSteps = 5, onEvent, stopped = () => false }) {
+  const say = (type, data) => { try { onEvent?.({ type, at: Date.now(), ...data }) } catch { /* the pane may be gone */ } }
+  let url = start, page = null, searched = false
+  for (let step = 0; step < maxSteps && !stopped(); step++) {
+    say('going', { url, what: step === 0 ? 'the page you gave' : 'looking for the right page' })
+    await chrome.go(url)
+    page = await readPage(chrome)
+    const wall = wallReason(page)
+    if (wall) return { url, page, steps: step + 1, walled: `${new URL(page.url).hostname}: ${wall}` }
+
+    const links = page.links.slice(0, LIMITS.linksPerCall)
+    const box = findSearchBox(page)
+    const asked = want || 'what the person asked for'
+    const q = {
+      here: jev.noul(`The person asked for: "${asked}". Does THIS page already show a list of those, with a link to each one?`,
+        { true: 'this page lists them', false: 'this page is a front page, a menu, an article, or about something else' }),
+      one: jev.noul(`The person asked for: "${asked}". Is THIS page one single one of those, in detail, rather than a list of them?`),
+    }
+    for (const l of links) {
+      q[`g${l.n}`] = jev.noul(`The person asked for: "${asked}". This page has a link reading "${l.label}" going to ${l.path}. Would following it get closer to what they asked for?`,
+        { true: 'it leads towards what they asked for', false: 'it leads away: an unrelated section, a login, a legal page, or an advert' })
+    }
+    if (box && !searched && search) q.usesearch = jev.noul(`This page has a search box. The person asked for: "${asked}". Is searching this site the best way to find them, rather than following a link?`)
+    const res = await ask({ state: pageState(page, { what_they_want: asked }), questions: q })
+
+    const here = res.answers.here?.noul ?? 0
+    const one = res.answers.one?.noul ?? 0
+    const ranked = links.map((l) => ({ l, p: res.answers[`g${l.n}`]?.noul ?? 0 })).sort((a, b) => b.p - a.p)
+    const best = ranked[0]
+    say('judged', { url: page.url, judged: links.length, found: 0, latencyMs: res.latencyMs,
+      links: ranked.map(({ l, p }) => ({ n: l.n, label: l.label, p })).slice(0, 40) })
+    // A front page of a bookshop IS a list of books, so "does this page show them" says yes and the
+    // walk stops one click short of the travel section. A link the person's own words point
+    // straight at beats a page that merely qualifies.
+    const obvious = best && best.p >= 0.75 && here < 0.85
+    if ((here >= 0.5 && !obvious) || one >= 0.6) { say('arrived', { url: page.url, listing: here >= 0.5, steps: step + 1 }); return { url: page.url, page, steps: step + 1, isOne: one >= 0.6 && here < 0.5 } }
+
+    if (search && box && !searched && (res.answers.usesearch?.noul ?? 0) >= 0.5) {
+      say('searching', { words: search })
+      searched = true
+      await chrome.search(box.css, search)
+      url = await chrome.url()
+      continue
+    }
+    if (!best || best.p < 0.5) {
+      // Nothing points onward. If this page at least shows the right sort of thing, work from it.
+      if (here >= 0.5) { say('arrived', { url: page.url, listing: true, steps: step + 1 }); return { url: page.url, page, steps: step + 1 } }
+      return { url: page.url, page, steps: step + 1, gaveUp: 'no link on this page looked like the way to it' }
+    }
+    say('step', { label: best.l.label, p: best.p })
+    url = best.l.url
+  }
+  return { url, page, steps: maxSteps, gaveUp: `it was still looking after ${maxSteps} pages` }
+}
+
 // ---- proposing a job ----------------------------------------------------------------------------
 /** What a page can be listing. A fixed list, so Jev only has to point at one. */
 export const THINGS = {
@@ -153,12 +216,11 @@ export const VALUE_KINDS = {
  * @param {string} [o.search]
  * @returns {Promise<{ kind, item, columns, sample, from, walled }>}
  */
-export async function proposeJob({ chrome, ask, start, want = '', search = '', onEvent }) {
+export async function proposeJob({ chrome, ask, start, want = '', search = '', page = null, onEvent }) {
   const say = (type, data) => { try { onEvent?.({ type, at: Date.now(), ...data }) } catch { /* the pane may be gone */ } }
-  say('going', { url: start, what: 'the page you gave' })
-  await chrome.go(start)
-  let list = await readPage(chrome)
-  if (search) {
+  let list = page
+  if (!list) { say('going', { url: start, what: 'the page you gave' }); await chrome.go(start); list = await readPage(chrome) }
+  if (search && !page) {
     const box = findSearchBox(list)
     if (box) { say('searching', { words: search }); await chrome.search(box.css, search); list = await readPage(chrome) }
   }

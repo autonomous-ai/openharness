@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { connect } from 'node:net'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { normalizeJob, listQuestions, itemQuestions, rowFrom, pickLinks, proposeJob, THINGS, VALUE_KINDS, LIMITS } from '../viewer/crawl.mjs'
+import { normalizeJob, listQuestions, itemQuestions, rowFrom, pickLinks, proposeJob, findThePage, THINGS, VALUE_KINDS, LIMITS } from '../viewer/crawl.mjs'
 import { readPage, blockOptions, blockText, canonical, pageState, wallReason, findSearchBox } from '../viewer/page.mjs'
 import { openChrome, findChrome, checkUrl, Refused } from '../toolchain/chrome.mjs'
 import { startDemoSite } from '../viewer/demosite.mjs'
@@ -16,6 +16,15 @@ import { startBrowserViewer } from '../viewer/viewer.mjs'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const TEMPLATE = join(HERE, '../template')
 const noChrome = findChrome() ? false : 'Google Chrome is not on this machine'
+// The starter job says nothing about jobs any more, so a test that wants columns brings its own.
+const FIELDS = [
+  { id: 'title', name: 'Job title', ask: 'the job title' },
+  { id: 'company', name: 'Company', ask: 'the name of the company hiring' },
+  { id: 'salary', name: 'Salary', ask: 'the pay or salary range' },
+  { id: 'place', name: 'Location', ask: 'where the job is based' },
+  { id: 'posted', name: 'Posted', ask: 'the date it was posted' },
+  { id: 'remote', name: 'Remote?', ask: 'Can this job be done fully remotely?', type: 'yesno' },
+]
 process.env.JEV_BROWSER_HEADLESS = '1'
 
 /** fetch will not send a foreign Host header, so the loopback guard is tested over a raw socket. */
@@ -31,11 +40,15 @@ const browser = async (allowedHosts = ['127.0.0.1', 'localhost']) =>
   openChrome({ profileDir: mkdtempSync(join(tmpdir(), 'jev-browser-test-')), show: false, allowedHosts })
 
 test('the job file: what it fills in, and what it says is wrong', () => {
+  // The starter job is an address and a sentence, and nothing about any particular kind of site.
   const { job, errors } = normalizeJob(JSON.parse(readFileSync(join(TEMPLATE, 'browse.json'), 'utf8')))
   assert.deepEqual(errors, [])
-  assert.equal(job.fields.length, 6)
-  assert.deepEqual(job.fields.map((f) => f.type), ['pick', 'pick', 'pick', 'pick', 'pick', 'yesno'])
+  assert.deepEqual(job.fields, [], 'the starter names no columns: Jev works them out')
+  assert.ok(job.want.length > 10, 'it says what is wanted, in a sentence')
   assert.equal(job.sameSiteOnly, true)
+  const named = normalizeJob({ start: 'https://x.test/all', fields: FIELDS })
+  assert.deepEqual(named.errors, [])
+  assert.deepEqual(named.job.fields.map((f) => f.type), ['pick', 'pick', 'pick', 'pick', 'pick', 'yesno'])
 
   const bare = normalizeJob({})
   assert.match(bare.errors.join(' '), /no "start"/)
@@ -125,7 +138,7 @@ test('the questions: one call holds every link and every field', { skip: noChrom
   const site = await startDemoSite()
   const chrome = await browser()
   try {
-    const { job } = normalizeJob({ ...JSON.parse(readFileSync(join(TEMPLATE, 'browse.json'), 'utf8')), start: site.url })
+    const { job } = normalizeJob({ ...JSON.parse(readFileSync(join(TEMPLATE, 'browse.json'), 'utf8')), start: site.url, fields: FIELDS })
     await chrome.go(site.url)
     const list = await readPage(chrome)
     const { questions, links } = listQuestions(list, job)
@@ -161,7 +174,7 @@ test('a whole run: rows land in results.csv, the verdict says what happened', { 
   const ws = mkdtempSync(join(tmpdir(), 'jev-browser-run-'))
   cpSync(TEMPLATE, ws, { recursive: true })
   const cfg = JSON.parse(readFileSync(join(ws, 'browse.json'), 'utf8'))
-  writeFileSync(join(ws, 'browse.json'), JSON.stringify({ ...cfg, start: site.url, maxItems: 5, maxPages: 2 }))
+  writeFileSync(join(ws, 'browse.json'), JSON.stringify({ ...cfg, start: site.url, fields: FIELDS, maxItems: 5, maxPages: 2 }))
   const v = await startBrowserViewer({ workspace: ws, port: 0 })
   const ctl = async (cmd, body = {}) => (await fetch(`${v.url}/control`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cmd, ...body }) })).json()
   try {
@@ -414,5 +427,39 @@ test("a proposed column is named off the page, and none of it is written", { ski
       assert.ok(c.ask.startsWith('the ') || Object.values(VALUE_KINDS).includes(c.ask), c.ask)
       assert.ok(c.p >= 0.6 && c.p <= 1)
     }
+  } finally { await chrome.close(); await site.close(); delete process.env.JEV_OFFLINE }
+})
+
+test('a whole site is enough: Jev walks to the page the person meant', { skip: noChrome }, async () => {
+  // Typing "the site" used to do nothing sensible, which made the tool look like it only knew
+  // about one kind of page. It now walks: is this it, and if not, which link goes towards it.
+  process.env.JEV_OFFLINE = '1'
+  const site = await startDemoSite()
+  const chrome = await browser()
+  try {
+    const { evaluate } = await import('../toolchain/jev.mjs')
+    const ask = (x) => evaluate({ ...x, salt: 3 })
+    const steps = []
+    const got = await findThePage({ chrome, ask, start: new URL('/about', site.url).toString(), want: 'the open roles and what they pay', onEvent: (e) => steps.push(e.type) })
+    assert.equal(got.walled, undefined)
+    assert.ok(got.steps >= 1 && got.steps <= 5)
+    assert.ok(steps.includes('going'))
+    assert.ok(got.page, 'it hands back the page it stopped on, so nothing is read twice')
+    assert.equal(got.page.url, got.url)
+
+    // A page that is already the list is recognised without wandering off it.
+    const there = await findThePage({ chrome, ask, start: site.url, want: 'the open roles and what they pay' })
+    assert.equal(there.steps, 1, 'it stops where it starts when that is the page')
+    assert.equal(there.gaveUp, undefined)
+    assert.ok(there.url.startsWith(site.url))
+
+    // A site that will not be read is reported, not walked round.
+    const { createServer } = await import('node:http')
+    const blocker = createServer((_q, r) => { r.writeHead(200, { 'content-type': 'text/html' }); r.end('<title>Just a moment...</title><body>Checking your browser</body>') })
+    await new Promise((r) => blocker.listen(0, '127.0.0.1', r))
+    const walled = await findThePage({ chrome, ask, start: `http://127.0.0.1:${blocker.address().port}/`, want: 'anything' })
+    blocker.close()
+    assert.match(walled.walled, /block page|nearly empty/)
+    assert.equal(walled.steps, 1, 'it stops at the wall rather than trying more pages')
   } finally { await chrome.close(); await site.close(); delete process.env.JEV_OFFLINE }
 })
