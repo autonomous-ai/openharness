@@ -2934,3 +2934,62 @@ The debug outer signature needed resealing after incremental framework replaceme
 verification passed and entitlements remained byte-identical. Opened the current workspace's
 `Harness.app` and confirmed active PID 99321. Preserve this review window while preparing the PR.
 Build log: `/private/tmp/harness-review-rebuild.log`.
+
+## Draft PR checkpoint — 2026-09-20
+
+The desktop overhaul is committed as `f2ff876b`. Main is integrated through
+`60764ba9` (PR #164), including the new Store and Machine Monitor. The resulting
+PR contains desktop, CLI and documentation changes; Store package changes are
+inherited from main. Merge resolutions preserve the command dock and the
+existing Machines Manager keyboard controls. Machine Monitor uses the same
+product draft from both the native menu and command search, without allocating
+a tab until launch.
+
+Catalog integration fixes keep Home Assistant's fallback tagline current and
+map its published Automation domain to Engineering. Picker fixtures now use
+the current Simulation category and a genuinely unknown package for the
+pre-catalog fallback case. The AppKit checks now cover the Store button,
+New Pane shortcut, Machine Monitor menu and explicitly bound Orchestrator
+action instead of the retired titlebar controls and default shortcut.
+
+Verification on macOS arm64, Flutter 3.47.2 / Dart 3.13.2:
+
+- Final full unit/widget suite: **2,628 passed, 10 optional tests skipped**.
+  Analyzer: no errors or warnings; the existing 18 informational findings.
+- Native macOS workspace: **26 passed**, including the previously pending
+  first-setup Retry-before-Install stage. Native terminal: **2 passed**.
+  These are Flutter-injected keys with fake transport and installers.
+- AppKit: **130** exported-keymap checks, **463** titlebar/layout checks and
+  **9** custom Orchestrator checks with a focused WKWebView descendant passed.
+- The normal debug build and deep/strict signature verification passed in
+  `/private/tmp/harness-pr-build-t5f6ubu9/desktop/build/macos/Build/Products/Debug/Harness.app`.
+  The original review window, PID 99321, remained running.
+- Fresh render previews passed and the two PR screenshots were inspected.
+  They are synthetic fixtures in `design/review/command-dock.png` and
+  `design/review/launch-task.png`.
+- CLI: the full suite passed on Node 22.23.1 (**3,626 passed, 63 skipped**).
+  Typecheck also passed on the repository's pinned Node 22.23.2. On that pin,
+  **182 focused tests passed**, covering all six affected CLI test files plus
+  the Hermes hook and relay pairing files.
+- The pinned full suite was **not consistently green**: one run missed the
+  Hermes hook registry; a four-worker rerun passed that case but failed relay
+  pairing at `claim.ok`. Each run had 3,625 passed, 1 failed, 63 skipped. Both
+  files and the corresponding hook/relay implementation are unchanged from
+  main. The isolated Hermes file and combined 182-test replay passed without
+  changing those files. The cause of the full-run failures is not established.
+- Real tmux 3.5a on Node 22.23.2: **9 passed, 9 unavailable rows skipped**.
+  Tested Claude, Codex, OpenCode, Pi, Hermes and Grok discovery, owned-process
+  termination, session lifecycle, literal input and the installed Grok alias.
+- Real Herdr was attempted. Installed Herdr 0.9.1 failed the suite's 0.8 API
+  protocol negotiation; all 26 rows remain unverified. The test-owned session
+  left by that setup failure was explicitly stopped and deleted.
+
+Physical AppKit/IME input, native Linux execution and live account/provider
+behavior remain outside this evidence. Keep the pinned full-suite failures
+and Herdr limitation visible in the draft PR rather than reporting all checks
+green.
+
+Logs are `/private/tmp/harness-pr-final-{desktop-tests,analyze,native-workspace,
+native-terminal,native-keymap,review-build,previews,herdr-real}.log` and
+`/private/tmp/harness-pr-pinned-{cli-typecheck,cli-tests,cli-bounded,hook-replay,
+focused,tmux-real}.log`.
