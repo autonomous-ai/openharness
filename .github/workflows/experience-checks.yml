@@ -33,6 +33,8 @@ jobs:
         run: node store/tools/catalog.mjs
       - name: Check FreeCAD contracts and delivery (native suite is opt-in)
         run: node --test store/agents/freecad/test/*.test.mjs
+      - name: Check Score contracts, MIDI and delivery (native suite is opt-in)
+        run: node --test store/agents/score/test/*.test.mjs
 
   authoring-browser:
     runs-on: ubuntu-latest
