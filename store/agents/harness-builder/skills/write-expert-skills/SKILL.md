@@ -28,6 +28,15 @@ Model it on `$BUILDER_REFERENCE/store/agents/marp/AGENTS.md`, the Store's cleare
 4. **What good looks like** in this domain: the concrete rules an expert holds to (a keynote headline is
    eight words or fewer; a chart has a title that states the finding). These come from the brief's
    research, not from taste.
+5. **Author the brief; never impose the example.** Say plainly what the harness is and is not — "a
+   score editor, not a style picker" — and that the template's example is one authored answer, whose
+   palette, layout, key and wording carry no authority over the next brief. Tell the agent to start
+   from the person's actual subject and material (their text, logo, measurements, recording, data),
+   to use it rather than redraw it, and to ask only for material that is necessary and missing.
+   `$BUILDER_REFERENCE/store/agents/creative-direction/AGENTS.md` opens this way; read it.
+6. **Continue, do not restart.** Read the current source before each revision, change what was asked,
+   keep what the person approved, and keep the previous complete version so nothing they accepted is
+   lost. Say where their edits from the pane land and how to tell a saved change from a draft.
 
 ## Skills (`package/skills/<name>/SKILL.md`)
 

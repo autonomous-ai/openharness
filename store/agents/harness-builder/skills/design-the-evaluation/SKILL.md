@@ -25,6 +25,17 @@ Declare one or more, strongest first.
 
 Most good harnesses combine `tool` with `checks`, and add `review` where taste matters.
 
+Two things belong in `tool` that are easy to miss, and they are what make an evaluation domain
+knowledge rather than "it compiled":
+
+- **The craft's own rules.** A violin cannot play below G3. A trace narrower than the fab's minimum
+  will not be made. Type under 6 pt will not read in print. An export at 72 dpi will not print at A2.
+  The brief's research lists these; check them and name them the way the craft does.
+- **The deliverable leaves.** Re-open every exported file with an independent reader and confirm
+  what a recipient would need: the PDF's page count and page size, the SVG's viewBox and that it
+  parses, the audio's duration and sample rate, the mesh's solid count, the CSV's rows and header.
+  A file the harness wrote but cannot re-open is not finished work.
+
 ## The verdict is a feed
 
 `.harness/verdict.json` (the contract: `$BUILDER_REFERENCE/store/spec/README.md`) is rewritten on every

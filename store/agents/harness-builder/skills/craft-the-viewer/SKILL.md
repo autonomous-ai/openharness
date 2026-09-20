@@ -5,9 +5,10 @@ description: Build the harness's viewer pane — the work in progress shown stag
 
 # Craft the viewer
 
-The pane is the product. A person watches it while the agent works, and keeps playing with it after.
-Two failures to avoid above all: a pane that shows nothing until the end, and a pane that shows the end
-result as a flat picture.
+The person chats on the right; **your viewer is the left two thirds**, and it is most of what they
+experience. They watch it while the agent works, and keep working in it after. Four failures to avoid
+above all: a pane blank until the end; a pane that shows the result as a flat picture; a pane that is
+empty until the first prompt; and a pane they can look at but never touch.
 
 ```bash
 "$BUILDER" stage viewer active --note "<reuse|upgrade|new>: <why>"
@@ -26,7 +27,9 @@ Look at the shared viewers in `$BUILDER_REFERENCE/store/viewers/` first (read ea
 | `autonomous/game-viewer` | playable web games, build progress, versions, last good build kept |
 | `autonomous/mujoco-viewer` | live physics, actuators on sliders, replay |
 | `autonomous/film-viewer` | storyboards, a film player, notes on the timeline |
-| `autonomous/web-viewer` | HTML/CSS/JS with live reload |
+| `autonomous/web-viewer` | static HTML projects over loopback, with live reload |
+| `autonomous/isolated-web-viewer` | HTML, CSS, JS, data and WebAssembly previewed in isolation |
+| `autonomous/studio-viewer` | a host for specialist studios: bounded file access, live state, validated controls, one job at a time with cancellation, run history, artifact downloads |
 
 - **Reuse** (`"viewer": { "use": "autonomous/<viewer>" }`) when a shared viewer already shows this
   artifact at the bar below *and* can show this domain's stages.
@@ -53,6 +56,35 @@ Meet every item for your type. Then add the one thing that makes this domain del
 | Animation / video | play, scrub frame-accurately, loop, the list of renders |
 | Simulation | play, pause, step, reset, the parameters on controls |
 | Interactive app / game | runs in the pane, keyboard and mouse, restart |
+
+## It works before the first prompt
+
+The template alone opens something real: the craft, already running, with the controls live. A person
+who installs the harness and opens a tab sees what they just gained before they have typed anything,
+and the agent's first save changes something that was already there rather than filling a void.
+
+- Ship a small, complete, honest example in `template/` — an eight-bar phrase, a two-part assembly,
+  a map of one neighbourhood — authored by you, not a stub.
+- Say in the pane that it is an example and that their brief replaces it. It is a starting point, and
+  it must never become a style the next brief cannot escape.
+- Seed the first verdict in `workspace.init` so the header has a state before the first prompt, with
+  `ready:false`: nothing has been checked yet.
+
+## They work in it, and their changes survive
+
+Looking is not enough. Give the person the craft's controls, and, where the domain allows, direct
+editing that **saves back into the workspace**, so the agent's next turn continues from what they
+changed. `$BUILDER_REFERENCE/store/agents/creative-direction` and `voxel-worlds` are the standard.
+
+- Name the two or three edits that matter most in this craft (from the brief) and make those direct:
+  drag the layer, retune the note, move the wall, change the label.
+- **Save writes the source**, not a private format: the same file the agent reads next turn.
+- **Never lose their work.** Keep the previous complete version (`.harness/history/`), and when the
+  file on disk changed while they were editing, say so and offer both — never overwrite silently.
+- A browser draft has not reached the source until they save; the pane should make which is which
+  obvious.
+- Deliverables are downloadable from the pane in the formats the brief names, and they open
+  elsewhere.
 
 ## Progressive: the stages from the brief
 
@@ -114,9 +146,11 @@ every snapshot yourself (read the PNG). Then check both themes and a narrow widt
 
 ## Done
 
-Reuse, upgrade or new decided and written down; the bar met for the artifact type; every stage visible
-as it lands; errors keep the last good render; snapshots look good in dark and light.
+Reuse, upgrade or new decided and written down; the template opens something real before the first
+prompt; the bar met for the artifact type; the craft's edits are direct and save back without losing
+work; every stage visible as it lands; errors keep the last good render; deliverables downloadable;
+snapshots good in dark and light.
 
 ```bash
-"$BUILDER" stage viewer done --note "<viewer>: <the delightful part>"
+"$BUILDER" stage viewer done --note "<viewer>: <what a person can do in it>"
 ```

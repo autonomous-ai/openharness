@@ -1,6 +1,8 @@
 # What the Builder builds against, fetched read-only into reference/ by toolchain/setup.sh: the
-# contract, the shared runtimes helper, the starter, the shared viewers, and the harnesses it learns
-# from. A newer store is a bump of OPENHARNESS_COMMIT to a later commit on main.
+# contract, who the work is for and the bar it must clear, the shared runtimes helper, the starter,
+# the shared viewers, and the harnesses it learns from — the rebuilt ones first, because they are
+# the standard (a brief authored from the person's own material, an editable pane, deliverables that
+# open elsewhere). A newer store is a bump of OPENHARNESS_COMMIT to a later commit on main.
 OPENHARNESS_REPO="https://github.com/autonomous-ai/openharness.git"
-OPENHARNESS_COMMIT="e077d1768bdacd52d8530ffc32718f52f5c1c2d0"
-OPENHARNESS_SPARSE="store/README.md store/spec store/tools store/starter store/examples store/viewers store/agents/marp store/agents/typst store/agents/blender store/agents/mujoco store/agents/godogen store/agents/strudel store/agents/rdkit"
+OPENHARNESS_COMMIT="cd04d89af63b70934d60f1d8ab8814bf758d5078"
+OPENHARNESS_SPARSE="store/README.md store/spec store/tools store/starter store/examples store/viewers docs/ideal-users.md docs/engines.md work/SUPERPOWERS.md work/FIVE-REBUILDS.md store/agents/creative-direction store/agents/voxel-worlds store/agents/drone-pilot store/agents/marp store/agents/typst store/agents/blender store/agents/mujoco store/agents/godogen store/agents/strudel store/agents/rdkit"

@@ -35,13 +35,29 @@ empty pane. If a proof's final frame is not Store-worthy, the proof did not pass
 
 ```json
 { "homepage": "https://…", "upstream": "https://github.com/…", "license": "MIT",
+  "tagline": "Turn your business brief into an editable brand and complete launch kit",
   "evaluation": [{ "method": "tool", "by": "…" }],
   "examples": [{ "prompt": "…", "image": "…", "caption": "…" }] }
 ```
 
-`evaluation` is what the evaluation stage declared (the `design-the-evaluation` skill): the methods
-the proofs' verdicts actually reported, worded to finish "Verified by …", "Checked against …",
-"Reviewed against …". Never a method the harness does not run.
+- **`tagline`** (≤ 80 characters) is the line under the name in the picker and the Store: what a
+  person can now finish, in their words, not the tool's feature. "Turn a recording into an engraved
+  score you can print", not "LilyPond engraving front end". The brief's section 1 is the source.
+- **`evaluation`** is what the evaluation stage declared (`design-the-evaluation`): the methods the
+  proofs' verdicts actually reported, worded to finish "Verified by …", "Checked against …",
+  "Reviewed against …". Never a method the harness does not run.
+- **`examples`** are the proofs' real briefs and their real pictures — including the one where the
+  person brought their own material. The caption names the deliverable and one concrete fact
+  ("Lead sheet · 16 bars, printed PDF and MIDI").
+- **`listed: false`** keeps a package in the repo and out of the Store. Ship it that way if the
+  proofs did not meet the bar: an honest shelf is worth more than one more tile.
+
+## `brand/`
+
+The tile needs a face: `brand/logo.svg`, and `icon.png` at 128 px for the app's picker. Use the
+upstream project's own logo from its repository (check its trademark guidance and keep the file
+untouched); when the project publishes none, the harness draws its initial rather than wearing a mark
+someone invented for it. Note in the README where the logo came from.
 
 ## Credit and licences
 

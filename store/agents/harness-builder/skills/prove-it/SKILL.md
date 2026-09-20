@@ -13,17 +13,26 @@ harness, not the proof, and never hand-edit a proof's output to make it pass.
 "$BUILDER" stage proof active --note "Proving on three prompts"
 ```
 
-## The three prompts
+## The three briefs
 
-From the brief's "what people make with it", one each:
+From the brief's section 1 — the work this harness unlocks — three **materially different real
+jobs**, not three sizes of the same one. Different subject, different material, different deliverable.
+If the harness can only do the first, you have built a demo.
 
-- **easy**: one clear artifact, the core of the tool (a bar chart of five values; an eight-bar melody).
-- **medium**: several features together, the way a real user asks (a dashboard of three linked charts;
-  a lead sheet with chords and lyrics).
-- **hard**: something a person would show off, pushing the tool's depth (an interactive,
-  multi-layer, annotated result).
+- **easy**: one clear job, the core of the craft, finished end to end.
+- **medium**: a job the way someone actually asks, with **their own material** in it — text they
+  supply, a logo, a measurement, a recording, a CSV. Attach it into the proof workspace as a real
+  file, the way a person would.
+- **hard**: a job that pushes the craft's depth and ends in a deliverable someone would send to a
+  client, a printer, a fabricator or a bandmate.
 
-Write them as a user would: one or two sentences, concrete, no instructions about the harness itself.
+Write them as a person would: one or two sentences, concrete, naming what they want and what they
+brought. Never an instruction about the harness itself.
+
+**Then a fourth run: the revision.** Take the hard proof's workspace, ask for a change the way a
+person would ("keep the type and the layout, make the second panel about the new supplier"), and
+confirm it changed what was asked and preserved everything else. A harness that cannot revise makes
+one-shot output, and nobody finishes real work in one shot.
 
 ## Run a proof
 
@@ -66,6 +75,17 @@ Read `result.json`, the agent's log (`agent.log`), and **look at the frames in o
    `ready: false` on a good result is too.
 6. **Did the agent struggle?** Retries, wrong commands, reading the toolchain source, asking what to do:
    each is a gap in `AGENTS.md` or a skill.
+7. **Was it authored, or selected?** Read the agent's log: did it compose this brief's answer, or
+   reach for the template's example and change its words? Two proofs that look like the shipped
+   example with different text mean the harness only knows one answer — the withdrawn kind
+   (`$BUILDER_REFERENCE/work/SUPERPOWERS.md`). Compare the three results side by side; they should not
+   look like the same thing three times.
+8. **Did it use what the person brought?** In the medium proof, their file must be *in* the result —
+   their words, their logo, their numbers — not politely acknowledged and ignored.
+9. **Does the deliverable leave?** Open the exported files yourself, outside the harness: the PDF's
+   pages and dimensions, the SVG in a renderer, the audio's duration, the CSV's rows, the mesh in
+   another reader. Record what you opened and what you found. A file that only opens here is not a
+   deliverable.
 
 Write the review into `.builder/proofs/<id>/review.md`: pass or fail on each point, and the fixes.
 
@@ -79,11 +99,26 @@ and rerun the same proof. Repeat until all three pass every point. Record each f
 "$BUILDER" proof pass easy --note "<one line: what it made>"     # or: proof fail easy --note "<why>"
 ```
 
-## Done
+## The revision run
 
-All three proofs passed with a written review, and their final frames are good enough to put on the
-Store.
+After `hard` passes, prove that the work can continue. Run a fourth proof in a workspace that already
+holds the hard proof's result:
 
 ```bash
-"$BUILDER" stage proof done --note "easy, medium, hard passed; <N> fixes along the way"
+"$BUILDER" proof run revision --prompt "<the change, as a person would ask it>" --from hard
+```
+
+`--from` copies the finished workspace instead of starting from the template, so the agent meets the
+work already in progress, exactly as the person's second turn does. Review it on two points beyond
+the list above: **what was asked changed**, and **what was approved survived** — their text, their
+colours, their geometry, their takes, byte for byte where it should be. Compare the frames before and
+after. Losing the person's earlier work is the worst failure a harness has, worse than a poor result.
+
+## Done
+
+Three materially different briefs passed with written reviews, the revision preserved the approved
+work, the deliverables opened outside Harness, and the final frames are good enough for the Store.
+
+```bash
+"$BUILDER" stage proof done --note "easy, medium, hard and the revision passed; <N> fixes along the way"
 ```
