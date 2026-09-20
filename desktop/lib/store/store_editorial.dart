@@ -293,7 +293,10 @@ bool storeMatches(DshEntry entry, String query) {
     entry.category,
     storeCategoryFor(entry),
     entry.description,
+    entry.tagline,
     storeBenefit(entry),
+    ...?storeStories[entry.id]?.prompts,
+    ...entry.examples.map((example) => example.prompt),
   ].join(' ').toLowerCase();
   return terms.every(text.contains);
 }

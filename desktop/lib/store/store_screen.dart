@@ -15,10 +15,13 @@ import '../shared/widgets/app_icon_button.dart';
 import '../state/app_state.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/new_agent_dialog.dart';
+import 'store_category.dart';
 import 'store_controller.dart';
 import 'store_discover.dart';
 import 'store_editorial.dart';
+import 'store_listing.dart';
 import 'store_models.dart';
+import 'store_search.dart';
 import 'store_showcase.dart';
 import 'store_viewers.dart';
 
@@ -68,8 +71,7 @@ class _Viewers extends _Shelf {
   const _Viewers();
 }
 
-/// The shelves drawn as a plain listing: everything but Discover's front page
-/// and the Viewers page, which have views of their own.
+/// Catalog shelves: the complete index, search, collections, and disciplines.
 sealed class _Listed extends _Shelf {
   const _Listed();
 }
@@ -121,6 +123,7 @@ class _StoreTabState extends State<StoreTab> {
   late final _search = TextEditingController(
     text: widget.initialHarness == null ? _place.query : '',
   );
+  final _searchFocus = FocusNode(debugLabel: 'Store search');
   Timer? _catalogRefresh;
 
   void _remember() {
@@ -218,6 +221,7 @@ class _StoreTabState extends State<StoreTab> {
     _catalogRefresh?.cancel();
     widget.notifier.removeListener(_onAppChanged);
     _search.dispose();
+    _searchFocus.dispose();
     _store.dispose();
     super.dispose();
   }
@@ -290,6 +294,7 @@ class _StoreTabState extends State<StoreTab> {
   }
 
   void _openPage(String id) {
+    _searchFocus.unfocus();
     analytics.screenView('store_harness', source: 'store');
     setState(() => _selected = id);
   }
@@ -334,14 +339,18 @@ class _StoreTabState extends State<StoreTab> {
                 shelf: _shelf,
                 categories: _categories,
                 onSelect: _show,
-                search: _search,
-                onSearch: _searchChanged,
               ),
               VerticalDivider(width: 1, color: grid.AppPalette.divider),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    StoreSearch(
+                      controller: _search,
+                      focusNode: _searchFocus,
+                      onChanged: _searchChanged,
+                      autofocus: _selected == null,
+                    ),
                     Expanded(
                       child: selected != null
                           ? _ProductPage(
@@ -428,15 +437,11 @@ class _StoreNav extends StatelessWidget {
     required this.shelf,
     required this.categories,
     required this.onSelect,
-    required this.search,
-    required this.onSearch,
   });
 
   final _Shelf shelf;
   final List<String> categories;
   final ValueChanged<_Shelf> onSelect;
-  final TextEditingController search;
-  final ValueChanged<String> onSearch;
 
   @override
   Widget build(BuildContext context) {
@@ -456,38 +461,6 @@ class _StoreNav extends StatelessWidget {
             child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 22),
               children: [
-                TextField(
-                  key: const ValueKey('store-search'),
-                  controller: search,
-                  onChanged: onSearch,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: grid.AppPalette.textPrimary,
-                  ),
-                  decoration: InputDecoration(
-                    hintText: 'Search',
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                    prefixIcon: Icon(
-                      LucideIcons.search300,
-                      size: 15,
-                      color: grid.AppPalette.textSecondary,
-                    ),
-                    prefixIconConstraints: const BoxConstraints(minWidth: 32),
-                    suffixIconConstraints: const BoxConstraints(minWidth: 28),
-                    suffixIcon: search.text.isEmpty
-                        ? null
-                        : AppIconButton(
-                            icon: LucideIcons.x300,
-                            tooltip: 'Clear search',
-                            onPressed: () {
-                              search.clear();
-                              onSearch('');
-                            },
-                          ),
-                  ),
-                ),
-                const SizedBox(height: 18),
                 SidebarItem(
                   key: const ValueKey('store-shelf-discover'),
                   icon: LucideIcons.sparkles300,
@@ -544,8 +517,8 @@ IconData _categoryIcon(String category) => switch (category) {
   _ => LucideIcons.shapes300,
 };
 
-// The searchable catalog, categories and curated collections use the same
-// rows. Discover alone has the editorial front page.
+// Search and the complete index stay compact; disciplines and collections
+// invite exploration through larger previews.
 class _Shelf$View extends StatelessWidget {
   const _Shelf$View({
     required this.shelf,
@@ -581,64 +554,80 @@ class _Shelf$View extends StatelessWidget {
   };
 
   @override
-  Widget build(BuildContext context) => SingleChildScrollView(
-    key: ValueKey('store-catalog:$_title'),
-    padding: const EdgeInsets.fromLTRB(28, 28, 28, 48),
-    child: Align(
-      alignment: Alignment.topCenter,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1440),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              _title,
-              style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -.6,
-                color: grid.AppPalette.textPrimary,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _subtitle,
-              style: TextStyle(
-                fontSize: 13,
-                color: grid.AppPalette.textSecondary,
-              ),
-            ),
-            const SizedBox(height: 24),
-            if (entries.isEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 48),
-                child: Text(
-                  shelf is _Search
-                      ? 'No matching harnesses. Try a name or something you want to make.'
-                      : loaded
-                      ? 'Nothing here yet.'
-                      : 'Asking this computer…',
-                  style: TextStyle(
-                    fontSize: 14,
-                    height: 1.5,
-                    color: grid.AppPalette.textSecondary,
-                  ),
+  Widget build(BuildContext context) {
+    if (shelf is _Category || shelf is _Collection) {
+      return StoreCategory(
+        name: _title,
+        collection: shelf is _Collection
+            ? (shelf as _Collection).collection
+            : null,
+        entries: entries,
+        loaded: loaded,
+        ratingFor: (entry) => store.ratingOf(StoreController.keyFor(entry)),
+        installed: (id) => installedOn(id).isNotEmpty,
+        onOpen: onOpen,
+        onAction: onAction,
+      );
+    }
+    return SingleChildScrollView(
+      key: ValueKey('store-catalog:$_title'),
+      padding: const EdgeInsets.fromLTRB(28, 28, 28, 48),
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1440),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                _title,
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -.6,
+                  color: grid.AppPalette.textPrimary,
                 ),
-              )
-            else
-              StoreListing(
-                entries: entries,
-                ratingFor: (entry) =>
-                    store.ratingOf(StoreController.keyFor(entry)),
-                installed: (id) => installedOn(id).isNotEmpty,
-                onOpen: onOpen,
-                onAction: onAction,
               ),
-          ],
+              const SizedBox(height: 8),
+              Text(
+                _subtitle,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: grid.AppPalette.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 24),
+              if (entries.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 48),
+                  child: Text(
+                    shelf is _Search
+                        ? 'No matching harnesses. Try a name or something you want to make.'
+                        : loaded
+                        ? 'Nothing here yet.'
+                        : 'Asking this computer…',
+                    style: TextStyle(
+                      fontSize: 14,
+                      height: 1.5,
+                      color: grid.AppPalette.textSecondary,
+                    ),
+                  ),
+                )
+              else
+                StoreListing(
+                  entries: entries,
+                  ratingFor: (entry) =>
+                      store.ratingOf(StoreController.keyFor(entry)),
+                  installed: (id) => installedOn(id).isNotEmpty,
+                  onOpen: onOpen,
+                  onAction: onAction,
+                ),
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _Stars extends StatelessWidget {
