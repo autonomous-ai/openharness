@@ -1,124 +1,157 @@
 # Jev Sheets
 
-**A spreadsheet where a column header is a question.** Type `Urgent?` at the top of a column and
-Jev, TypeSafe's System One model, answers it for every row. Each answer comes with a probability,
-so every cell is shaded by how sure Jev is, and the unsure ones are flagged for a person to review.
+![Jev Sheets logo](brand/logo.svg)
 
-This is a harness for OpenHarness. The agent on the right edits `sheet.json`. The viewer on the left
-is the sheet. It asks Jev one call per row, with every Jev column as a parallel question in that
-call, so a new column fills the sheet in a wave, top to bottom, in about a second.
+**Ask your spreadsheet anything, and get an answer for every row.** Drop in a pile of text you could
+never read in full: 5,000 app reviews, a survey's free-text answers, a quarter of support tickets,
+a list of leads. Type a question in plain words as a column header. Jev, TypeSafe's System One
+model, answers it for every row in seconds, for cents, and says how sure it is of each answer.
 
-All the data is made up. The template is 60 inbound sales and support messages for Fernhill Cloud,
-a file sync company that does not exist. The names, the messages and the truth labels are synthetic.
+It turns one person into a research team. Work that used to mean a week of reading and tagging by
+hand, or a script and an afternoon, becomes a question you type.
 
-## Bring your own file
+This is a harness for OpenHarness. The pane on the left is the sheet. The agent on the right is your
+analyst: it looks at your file, writes sharp questions with you, reads the answers and writes up the
+findings.
 
-The starter rows are made up. Put your own `leads.csv` (or `.tsv`, `.jsonl`, `.json`) in the workspace
-and set `"source": "leads.csv"` in `sheet.json`. Up to 2,000 rows load, one column becomes the row's
-text and the others ride along as fields Jev also reads. Then type any question as a column header.
-With a live key that is a few seconds and a fraction of a cent for a question over every row.
+## Bring your file
 
-## You get a file back
+- **Drop it on the pane.** An Excel `.xlsx` file (its first sheet), or `.csv`, `.tsv`, `.json` or
+  `.jsonl`, up to 32 MB and 10,000 rows.
+- **Paste rows** copied from Excel or Google Sheets, anywhere on the pane.
+- **Tell the agent where it is.** It copies the file in. It can also turn a PDF, a chat export or a
+  folder of notes into rows for you.
 
-`answers.csv` in the workspace always holds the sheet as it stands: each row, its fields, and every
-Jev column's answer with its confidence. Open it in a spreadsheet, or ask the agent on the right to
-work from it.
+One column is the row's text (a column called `text`, `message`, `review`… or the longest one). The
+other columns ride along as context, so "stars" or "plan" can inform an answer. The file is saved
+in your project folder. Its rows go to the Jev API to be answered, and nowhere else.
 
-## The header grammar
+The pane opens on a small made-up sample so there is something to try in the first ten seconds. It
+is labelled as made up, and one click takes you back to it.
+
+## Ask
 
 | You type | It becomes |
 |---|---|
-| `Urgent?` | a yes or no question (`noul`). Ends with a question mark. |
-| `Team: billing \| tech \| sales` | a `choice` of 2 to 255 options |
-| `Team: billing = payment or invoice problems \| tech = bugs and outages` | the same, with a meaning for each option. This makes Jev sharper. |
+| `Thinking of leaving?` | a yes or no question (`noul`). Ends with a question mark. |
+| `Topic: sync \| price \| crash` | a `choice` of 2 to 255 options |
+| `Topic: sync = notes not syncing \| price = cost or subscription` | the same, with a meaning for each option. This makes Jev sharper. |
 | `Anger: calm < annoyed < furious` | a `score` on 2 to 10 ordered levels |
 | `Urgency` | a bare word becomes a score: `low < medium < high` |
 
-One parser (`viewer/grammar.mjs`) is used by the viewer, by the pane while you type, and by
-`toolchain/check.mjs`.
+Press Enter and the column fills in a wave. Every question on the sheet is asked in one call per
+row, so five questions cost about the same as one. Or ask the agent: "what should I be asking
+this file?"
 
-## What you can do in the pane
+## Read the answers
 
-- Type a header in the add box and press Enter. The column appears and fills in a wave.
-- Click a header to sort by it. Click again to reverse, again to clear. Rows slide to their places.
-- Click the small x on a header to remove the column.
-- Click a cell to inspect it: the row, the question Jev was asked, the full probability bars, and
-  the truth label if there is one.
-- Double-click a message to edit it. That row is judged again at once, across all columns.
-- Turn on "needs review only", and drag the review line. A small histogram shows where the
-  confidence of all cells sits.
-- Reset drops everything done in the pane and judges the sheet again from `sheet.json`.
+- **Answers so far** counts every answer for every question. Click a count to see only those rows.
+- Cells fade when Jev is less sure. A **?** marks a cell under the review line. Drag the line, or
+  turn on "needs review only", to see the rows a person should look at.
+- Click a cell to see the exact question Jev was asked and the full probabilities.
+- Click a header to sort. Double-click a row to edit its text: it is judged again at once.
 
-While nobody is playing, a "ghost typist" types a suggested header every 20 seconds or so, lets it
-fill, and retires the older demo column. It is tagged "demo". Anything you do rests it for a minute,
-and the demo button turns it off.
+## Take it away
 
-## The honest dial
+- **`answers.csv`** holds every row, its own columns, and each answer with its confidence. Download
+  it from the pane, or find it in the project folder. Cells that could run as a formula are escaped.
+- **`findings.md`**: ask the agent for the findings. It leads with the answer, counts with the
+  shipped `toolchain/count.mjs` (counts, cross-cuts, the rows behind a number), and quotes rows word
+  for word with their row numbers.
 
-The dial is ambiguity. The template has 44 clear rows and 16 rows written with mixed signals on
-purpose ("No rush at all, but our production backups have been failing since Monday"). Nothing is
-randomised. On the offline mock the tests measure:
+## What it costs
 
-- clear rows: average confidence 0.86, 99% right
-- mixed rows: average confidence 0.72, 73% right
-- cells under the 0.65 review line: 1.5% of clear cells, 44% of mixed cells
+Measured on 2026-09-20 with live Jev (`typesafe/jev-1.13`) through OpenRouter, on a made-up file of
+1,200 app reviews dropped on the pane, with three questions asked together (a seven-way topic, "says
+they may cancel or switch?" and an anger scale):
 
-So the review line catches the rows a person should look at. Move the line and the count moves.
+| rows | questions | time | cost | topic right, clear rows | topic right, above the review line |
+|---|---|---|---|---|---|
+| 1,200 | 3 | 36 s | $0.028 | 96.5% | 98.7% |
+
+All 119 reviews that said "I am close to switching" were found. One run on made-up reviews is a
+sanity check, not a benchmark. OpenRouter answers in about half a
+second a call. The native TypeSafe API is several times faster.
+
+## Tested cold
+
+A fresh agent was given only this harness's `AGENTS.md` and skill, a workspace with the 1,200 made-up
+reviews already dropped on the pane, and one sentence: "What are people complaining about most, who
+is about to leave us and why, and what should we fix first?" In 16 minutes and $0.18 of Jev calls
+it wrote five questions, reworded three of them after reading the unsure rows, and wrote findings
+with counts, cross-cuts and quoted rows. It also noticed by itself that the made-up file glues
+closing sentences onto reviews at random, and said so. The first cold run had failed outright, and
+that is how the bugs it hit got fixed. The tool's weak spot stays a tone scale on evenly written
+text: about a quarter of those cells remained unsure, and the findings said not to rank by it.
+
+## A key
+
+Real answers need a Jev key. Paste one into the **Jev · live mind** panel in the pane. An OpenRouter
+key (`openrouter.ai/keys`) takes about a minute and has no waitlist. A TypeSafe key works too. The
+key is checked with one tiny call and saved on your machine in `~/.config/typesafe/credentials`
+(chmod 600). It is never shown again and never leaves the machine except to call the API.
+Cloudflare Workers AI is a third route: see `toolchain/README.md`.
+
+Without a key the pane runs on an offline stand-in that only matches words. It shows how the tool
+works. It is not good enough for your own data, and the pane says so in a yellow bar. After you
+connect, every cell is asked again, for real.
+
+## Being honest
+
+- Jev's confidence is real information. A column where most answers sit near 50% is a vague
+  question, not a finding. Reword it.
+- Read the rows behind a number before you act on it. One click on the count shows them.
+- It finds, counts and sorts. It is not legal, medical, financial or hiring advice.
+- The pane only accepts requests from itself: a web page on another site cannot upload a file, press
+  a control or set a key.
+
+## The sample, and the honest dial
+
+The made-up sample is 60 inbound messages to Fernhill Cloud, a file sync company that does not
+exist, with truth labels. 44 rows are clear and 16 carry mixed signals on purpose ("No rush at all,
+but our production backups have been failing since Monday"). Nothing is randomised. The tests
+measure, on the offline stand-in: clear rows 0.86 average confidence and 99% right, mixed rows 0.72
+and 73% right, and 44% of mixed cells under the review line against 1.5% of clear ones. With live
+Jev on the same 60 rows: Team 98%, Anger 90%, Urgent 85%, filled in 5.4 s for $0.0013. So the review
+line catches the rows a person should look at.
 
 ## Anatomy
 
 ```
 jev-sheets/
   harness.json               DSH manifest (engine: claude)
-  AGENTS.md                  what the chat agent does: build sheets, sharpen questions
-  skills/sheets/SKILL.md     the craft of writing rows and questions
-  template/sheet.json        the starter sheet (60 made-up messages, 3 Jev columns, truth labels)
+  AGENTS.md                  the agent's job: get the file in, ask sharp questions, write the findings
+  skills/sheets/SKILL.md     the craft of questions, review and the report
+  template/sheet.json        the made-up sample (60 messages, 3 Jev columns, truth labels)
   toolchain/
-    jev.mjs                  the Jev client (real TypeSafe API, or a deterministic mock)
+    jev.mjs                  the Jev client (TypeSafe, Cloudflare or OpenRouter, or the offline stand-in)
     check.mjs                validates sheet.json
+    count.mjs                counts answers.csv: every answer, cross-cuts, the rows behind a number
     viewer.sh setup.sh doctor.sh init-workspace.sh
   viewer/
-    viewer.mjs               the server: owns the sheet, the call pool, the cache, the verdict
+    viewer.mjs               the server: the sheet, uploads, the call pool, the cache, answers.csv, the verdict
+    source.mjs               reads the person's file: Excel, CSV, TSV, JSON, JSONL
+    xlsx.mjs                 a small Excel reader: zip directory, shared strings, the first sheet
     grammar.mjs              the header parser, shared with the pane and check.mjs
-    mock.mjs                 the offline stand-in reader (reads only the row text and the question)
-    kit.mjs                  loopback server, SSE, config watcher, verdict writer
+    mock.mjs                 the offline stand-in (reads only the row text and the question)
+    kit.mjs                  loopback server, same-origin guard, upload, download, key connect, SSE
     index.html studio.css studio.js base.css jev-hud.js     the pane
-  test/viewer.test.mjs
+  test/viewer.test.mjs own-file.test.mjs xlsx.test.mjs count.test.mjs
 ```
 
 ## How it runs
 
-`viewer/viewer.mjs` serves the pane on a loopback port and watches `sheet.json`. For each row with a
-missing cell it sends one `evaluate()` call: the row is the state, and every missing Jev column is a
-question. Eight calls run at a time. Answers are cached by row text plus column definition, so
-adding a column asks only for that column, editing a row asks only for that row, and adding rows
-asks only for the new rows. A bad JSON edit keeps the last good sheet on screen and shows the error.
+`viewer/viewer.mjs` serves the pane on a loopback port and watches `sheet.json` and the source file.
+For each row with a missing cell it sends one `evaluate()` call: the row is the state, and every
+missing Jev column is a question. Up to 32 calls run at a time. Answers are cached by row text plus
+column definition, so a new column asks only for that column, an edited row asks only for that row,
+and new rows ask only for themselves. A bad JSON edit keeps the last good sheet on screen and shows
+the error. The viewer writes `answers.csv` and `.harness/verdict.json` itself. The agent reads both.
 
-The viewer writes `.harness/verdict.json` itself: cells filled, cells under the review line, the
-accuracy of each column against the truth labels, and the weakest rows of each column. The chat
-agent reads it to decide which question to sharpen.
+## Logo and icon
 
-With `TYPESAFE_API_KEY` set, the calls go to the real API (`POST /v1/systemone`). Without it, the
-harness runs on a deterministic local mock. The mock reads word cues in the row text, so it is a
-stand-in for the plumbing and not for Jev's judgement. It paces each call at about 90 ms so the
-wave looks like the live one. The pane always shows a MOCK or LIVE badge.
-
-## Jev, honestly
-
-The public claims about Jev are speed and price: about 100 ms per call, and $0.042 per million input
-tokens with free output. This harness shows both numbers live, and the cost of filling the whole
-template is well under a cent. But the inbox is made up, the truth labels are one person's opinion
-about made-up messages, and the accuracy you see offline is the mock's, not Jev's. Treat it as a
-demo of a pattern (typed questions over rows, with calibrated confidence and a review line), not as
-a measurement of any real support queue.
-
-## Measured with the real model
-
-One short run on 2026-09-20 with live Jev (`typesafe/jev-1.13`) through OpenRouter, about 0.45 s a call once warm. Small samples on made-up data: a sanity check, not a benchmark.
-
-The 60-row template with its three starter columns filled in 5.4 s for $0.0013 (60 calls, three
-questions each). Against the made-up truth labels: Team 98%, Anger 90%, Urgent 85%. Average
-confidence was 0.90 on the clear rows and 0.79 on the mixed-signal rows, so the review line does its job.
+The original identity ships in `brand/`: [vector icon](brand/icon.svg), [256px PNG](brand/icon.png),
+[light logo](brand/logo.svg) and [dark logo](brand/logo-dark.svg). MIT, by Autonomous.
 
 ## Credit and stewardship
 

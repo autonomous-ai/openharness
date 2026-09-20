@@ -37,7 +37,7 @@
   .jh-spark{width:100%;height:26px;display:block;margin:2px 0 8px}
   .jh-q{border-top:1px dashed var(--jh-line);padding-top:8px;margin-top:8px}
   .jh-qh{display:flex;align-items:baseline;gap:6px;margin-bottom:5px}
-  .jh-qid{font-weight:700;color:var(--jh-acc)}
+  .jh-qid{font-weight:700;color:var(--jh-acc);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .jh-qt{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--jh-dim);border:1px solid var(--jh-line);border-radius:4px;padding:0 4px}
   .jh-conf{margin-left:auto;color:var(--jh-dim);font-size:11px}
   .jh-conf b{color:var(--jh-ink)}
@@ -57,6 +57,17 @@
   .jh-lvl{font-size:11px;color:var(--jh-ink)}
   .jh-foot{margin-top:10px;font-size:10px;color:var(--jh-dim);line-height:1.45}
   .jh-foot code{color:var(--jh-warn)}
+  .jh-connect{margin-top:10px;padding:10px;border:1px solid rgba(251,191,36,.45);border-radius:10px;background:rgba(251,191,36,.06)}
+  .jh-connect-t{font-size:12px;font-weight:700;color:var(--jh-ink);margin-bottom:4px}
+  .jh-connect-s{font-size:11px;color:var(--jh-dim);line-height:1.45;margin-bottom:8px}
+  .jh-connect-s b{color:var(--jh-warn);font-weight:600}
+  .jh-connect-row{display:flex;gap:6px}
+  .jh-connect input{flex:1;min-width:0;font:12px ui-monospace,Menlo,monospace;padding:7px 9px;border-radius:8px;border:1px solid var(--jh-line);background:rgba(0,0,0,.35);color:var(--jh-ink);outline:none}
+  .jh-connect input:focus{border-color:var(--jh-warn)}
+  .jh-connect button{font:600 12px ui-monospace,Menlo,monospace;padding:7px 12px;border-radius:8px;border:1px solid rgba(251,191,36,.6);background:rgba(251,191,36,.16);color:var(--jh-warn);cursor:pointer}
+  .jh-connect button:disabled{opacity:.5;cursor:default}
+  .jh-connect-msg{margin-top:6px;font-size:11px;line-height:1.4;color:var(--jh-dim);word-break:break-word}
+  .jh-connect-msg.bad{color:var(--jh-bad)} .jh-connect-msg.ok{color:var(--jh-ok)}
   .jh-err{margin-top:8px;color:var(--jh-bad);font-size:11px;word-break:break-word}
   `
   const style = document.createElement('style')
@@ -76,6 +87,12 @@
     <svg class="jh-spark" viewBox="0 0 200 26" preserveAspectRatio="none"><polyline fill="none" stroke="#a78bfa" stroke-width="1.5" points=""/></svg>
     <div class="jh-qs"></div>
     <div class="jh-err" hidden></div>
+    <form class="jh-connect" hidden>
+      <div class="jh-connect-t">Go live with real Jev</div>
+      <div class="jh-connect-s">Right now an <b>offline stand-in</b> answers. It only matches words, so it is not good enough for your own data. Paste a key to use the real model. An OpenRouter key takes about a minute to get at openrouter.ai/keys. The key is saved on this machine only.</div>
+      <div class="jh-connect-row"><input type="password" name="key" autocomplete="off" spellcheck="false" placeholder="sk-or-… or a TypeSafe key"><button type="submit">Connect</button></div>
+      <div class="jh-connect-msg"></div>
+    </form>
     <div class="jh-foot"></div>`
 
   function mount() {
@@ -97,6 +114,24 @@
   const pulse = root.querySelector('.jh-pulse')
   const errBox = root.querySelector('.jh-err')
   const foot = root.querySelector('.jh-foot')
+  const connectForm = root.querySelector('.jh-connect')
+  const connectMsg = root.querySelector('.jh-connect-msg')
+  let connectedAt = 0
+  connectForm.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const input = connectForm.querySelector('input'), btn = connectForm.querySelector('button')
+    const key = input.value.trim()
+    input.value = '' // the key never stays in the page
+    if (!key) return
+    btn.disabled = true; connectMsg.className = 'jh-connect-msg'; connectMsg.textContent = 'Checking the key with one tiny call…'
+    try {
+      const r = await fetch('/connect', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key }) })
+      const j = await r.json()
+      if (j.ok) { connectedAt = Date.now(); connectMsg.className = 'jh-connect-msg ok'; connectMsg.textContent = j.warning || 'Connected. Answers now come from the real model.'; window.dispatchEvent(new CustomEvent('jev-connected', { detail: { provider: j.provider } })) }
+      else { connectMsg.className = 'jh-connect-msg bad'; connectMsg.textContent = j.error || 'That did not work.' }
+    } catch { connectMsg.className = 'jh-connect-msg bad'; connectMsg.textContent = 'The viewer did not answer. Try again.' }
+    btn.disabled = false
+  })
   const spark = root.querySelector('.jh-spark polyline')
 
   const fmtMoney = (v) => v <= 0 ? '$0' : v < 0.0001 ? '<$.0001' : v < 1 ? '$' + v.toFixed(4).replace(/^0/, '') : '$' + v.toFixed(2)
@@ -173,8 +208,14 @@
 
   let lastAt = 0
   function render(s) {
-    const live = s.client && s.client !== 'mock'
-    const route = s.client === 'cloudflare' ? 'Cloudflare Workers AI' : s.client === 'openrouter' ? 'OpenRouter' : 'the TypeSafe API'
+    // `route` is the key that is set up (known before any call); `client` is who answered the last call.
+    const via = s.route || (s.client && s.client !== 'mock' ? s.client : null)
+    const live = !!via
+    root.dataset.live = live ? '1' : '0'
+    // Show the box while there is no key, and leave its "Connected" line up for a few seconds after.
+    connectForm.hidden = !s.canConnect || (live && Date.now() - connectedAt > 6000)
+    connectForm.querySelector('.jh-connect-row').hidden = live
+    const route = via === 'cloudflare' ? 'Cloudflare Workers AI' : via === 'openrouter' ? 'OpenRouter' : 'the TypeSafe API'
     badge.textContent = s.lastError ? 'ERROR' : live ? 'LIVE' : 'MOCK'
     badge.className = 'jh-badge ' + (s.lastError ? 'err' : live ? 'live' : 'mock')
     $k('rate').textContent = s.questionsPerSec >= 10 ? Math.round(s.questionsPerSec) : s.questionsPerSec.toFixed(1)

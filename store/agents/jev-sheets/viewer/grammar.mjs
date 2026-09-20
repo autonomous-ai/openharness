@@ -9,7 +9,7 @@
 //   Urgency                                   a bare word              -> score  low < medium < high
 
 export const LIMITS = {
-  maxRows: 2000, maxColumns: 12, maxHeader: 20000, maxName: 80,
+  maxRows: 10000, maxColumns: 12, maxHeader: 20000, maxName: 80,
   minOptions: 2, maxOptions: 255, minLevels: 2, maxLevels: 10,
 }
 

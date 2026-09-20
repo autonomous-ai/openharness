@@ -25,7 +25,7 @@ let selected = null, inspSeq = 0, inspTimer = null
 let editing = null
 let ghostInfo = { enabled: true, phase: 'idle', pausedMs: 0 }, ghostInfoAt = 0, ghostRun = null, ghostOwnsInput = false
 let lastTouch = -1e9, lastTour = 0, hintErrorUntil = 0, reviewPostTimer = null, draggingReview = false
-let dirty = { rows: false, head: false, top: false, hist: false }
+let dirty = { rows: false, head: false, top: false, hist: false, find: false }
 const tw = { rows: { v: 0, t: 0 }, cols: { v: 0, t: 0 }, cells: { v: 0, t: 0 }, rate: { v: 0, t: 0 }, cost: { v: 0, t: 0 }, flag: { v: 0, t: 0 } }
 
 async function post(cmd, body = {}) {
@@ -77,7 +77,7 @@ function renderHead() {
   headText.children[0].textContent = S.textLabel
   const shownRows = order.length === S.rows.length ? `${S.rows.length} rows` : `${order.length} of ${S.rows.length} rows`
   headText.children[1].textContent = S.source ? `${shownRows} · your file ${S.source.name} · text column "${S.source.textColumn}"${S.source.total > S.source.used ? ` · first ${S.source.used} of ${S.source.total}` : ''}` : `${shownRows} · made-up data · double-click to edit`
-  const pill = document.getElementById('synthPill'); if (pill) { pill.textContent = S.source ? 'your data' : 'synthetic data'; pill.title = S.source ? `Rows come from ${S.source.name} in the workspace.` : 'Every name, message and truth label in this sheet is made up.' }
+  const pill = document.getElementById('synthPill'); if (pill) { pill.textContent = S.source ? 'your data' : 'made-up sample'; pill.title = S.source ? `Rows come from ${S.source.name} in the workspace.` : 'Every name, message and truth label in this sheet is made up.' }
   for (const [id, el] of headCells) if (!colIndex.has(id)) { leave(el); headCells.delete(id) }
   let prev = headText
   for (const col of S.columns) {
@@ -220,7 +220,7 @@ function renderRows() {
   }
   const none = order.length === 0
   $('empty').classList.toggle('hidden', !none)
-  if (none) $('empty').innerHTML = S.rows.length ? '<b>Nothing under the review line</b>Drag the line to the right to see what Jev is least sure about.' : '<b>No rows yet</b>Ask the agent to build a sheet in sheet.json.'
+  if (none) $('empty').innerHTML = !S.rows.length ? '<b>No rows yet</b>Drop your own file on this pane, or ask the agent on the right to load one.' : S.filter ? '<b>No rows with that answer</b>Click the filter chip to show all rows.' : '<b>Nothing under the review line</b>Drag the line to the right to see what Jev is least sure about.'
 }
 /** Re-order rows. Rows slide to their new places; rows entering or leaving slide across the edge. */
 function setOrder(next, animate) {
@@ -274,7 +274,7 @@ function applyState(s) {
     const [a, b] = visibleRange()
     for (let i = a; i <= b; i++) s.columns.forEach((c, j) => { if (s.cells[s.order[i]]?.[c.id]) held.set(s.order[i] + SEP + c.id, now + 260 + (i - a) * 30 + j * 55) })
   }
-  renderHead(); renderRows(); renderChips(); applyShared(s)
+  renderHead(); renderRows(); renderChips(); applyShared(s); renderDoor()
   if (grew) grid.scrollTo({ left: grid.scrollWidth, behavior: 'smooth' })
   if (selected) { if (rowIndex.has(selected.row) && colIndex.has(selected.col)) inspectSoon(); else select(null) }
 }
@@ -284,13 +284,17 @@ function applyShared(v) {
   $('reviewOnlyBtn').classList.toggle('on', !!S.reviewOnly)
   if (!draggingReview) { $('reviewRange').value = S.reviewBelow; $('reviewVal').textContent = S.reviewBelow.toFixed(2) }
   if (v.ghost) applyGhost(v.ghost)
-  dirty.top = dirty.hist = true
+  if (v.client) S.client = v.client
+  // Own data with no key: say plainly that the stand-in is not the real model.
+  $('standin').classList.toggle('hidden', !(S.own && S.client === 'mock'))
+  renderFilterChip()
+  dirty.top = dirty.hist = dirty.find = true
 }
 function applyView(v) {
   if (!S) return
   const orderChanged = v.order.length !== order.length || v.order.some((id, i) => id !== order[i])
   const lineMoved = v.reviewBelow !== S.reviewBelow
-  Object.assign(S, { reviewBelow: draggingReview ? S.reviewBelow : v.reviewBelow, reviewOnly: v.reviewOnly, sort: v.sort, order: v.order, colStats: v.colStats, groups: v.groups, stats: v.stats, running: v.running, error: v.error, jevError: v.jevError })
+  Object.assign(S, { reviewBelow: draggingReview ? S.reviewBelow : v.reviewBelow, reviewOnly: v.reviewOnly, sort: v.sort, filter: v.filter ?? null, order: v.order, colStats: v.colStats, groups: v.groups, stats: v.stats, running: v.running, error: v.error, jevError: v.jevError })
   if (orderChanged) setOrder(v.order, true)
   renderHead(); renderRows(); applyShared(v)
   if (lineMoved && selected) inspectSoon()
@@ -312,7 +316,7 @@ function applyCells(m) {
     touched.get(rid).forEach((cid, k) => held.set(rid + SEP + cid, lastRevealAt + k * 40))
   }
   S.colStats = m.colStats; S.groups = m.groups; S.stats = m.stats
-  dirty.head = dirty.top = dirty.hist = true
+  dirty.head = dirty.top = dirty.hist = dirty.find = true
 }
 
 // ---- top bar ----------------------------------------------------------------------------------
@@ -603,6 +607,132 @@ window.addEventListener('keydown', (e) => { if (e.key === '/' && !/^(INPUT|TEXTA
 grid.addEventListener('scroll', () => { dirty.rows = true; grid.classList.toggle('xscrolled', grid.scrollLeft > 0) }, { passive: true })
 new ResizeObserver(() => { layout(); dirty.rows = dirty.hist = true }).observe(grid)
 
+// ---- the front door: the person's own file --------------------------------------------------------
+const fmtN = (n) => Number(n).toLocaleString('en-US')
+let toastTimer = null
+function toast(msg, bad) {
+  const t = $('toast')
+  t.textContent = msg; t.className = 'toast' + (bad ? ' bad' : '')
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), bad ? 6000 : 3800)
+}
+function renderDoor() {
+  const own = !!S.own
+  $('door').classList.toggle('own', own)
+  $('synthPill').classList.toggle('hidden', own)
+  $('ownPill').classList.toggle('hidden', !own)
+  $('downloadBtn').classList.toggle('hidden', !own)
+  $('sampleBtn').classList.toggle('hidden', !own)
+  $('pickBtn').textContent = own ? 'Use another file' : 'Choose a file'
+  $('pickBtn').classList.toggle('primary', !own)
+  $('pasteBtn').classList.toggle('hidden', own)
+  $('demoBtn').classList.toggle('hidden', own)
+  if (own) {
+    const i = S.source
+    $('doorTitle').textContent = i.name
+    $('doorSub').textContent = `${fmtN(i.used)}${i.total > i.used ? ` of ${fmtN(i.total)}` : ''} rows from your file. Jev reads the "${i.textColumn}" column, with the other columns as context. Answers are saved to answers.csv in this project folder.`
+  } else {
+    $('doorTitle').textContent = 'Use your own file'
+    $('doorSub').textContent = 'Drop an Excel or CSV file anywhere on this pane, or paste rows copied from Excel or Google Sheets. Reviews, survey answers, tickets, leads: one row per item. Then type a question and Jev answers it for every row. Below is a made-up sample to try first.'
+  }
+}
+async function sendFile(file, name = file.name) {
+  if (!file) return
+  if (file.size > 32 * 1024 * 1024) return toast('That file is over 32 MB. Cut it down or split it first.', true)
+  $('door').classList.add('busy'); $('doorTitle').textContent = `Reading ${name}…`
+  let j
+  try {
+    const r = await fetch('/upload?name=' + encodeURIComponent(name), { method: 'POST', body: file })
+    j = await r.json()
+  } catch { j = { ok: false, error: 'The viewer did not answer. Try again.' } }
+  $('door').classList.remove('busy')
+  if (!j.ok) { renderDoor(); return toast(j.error || 'That file could not be read.', true) }
+  select(null)
+  toast(`${fmtN(j.rows)} rows loaded from ${j.file}. Now type a question.`)
+  input.focus()
+}
+/** Rows copied from a spreadsheet arrive as tab-separated text. One column of plain lines works too. */
+function pastedFile(text) {
+  const lines = String(text).replace(/\r\n?/g, '\n').split('\n').filter((l) => l.trim() !== '')
+  if (lines.length < 2) return null
+  if (lines[0].includes('\t')) return { name: 'pasted.tsv', blob: new Blob([lines.join('\n') + '\n']) }
+  // One column. A short first line over longer lines is a header; otherwise every line is a row.
+  const rest = lines.slice(1), avg = rest.reduce((a, l) => a + l.length, 0) / rest.length
+  const hasHeader = lines[0].length <= 30 && lines[0].split(/\s+/).length <= 3 && avg > lines[0].length * 2
+  const body = (hasHeader ? rest : lines).map((l) => JSON.stringify(l)).join('\n') + '\n'
+  return { name: 'pasted.jsonl', blob: new Blob([body]) }
+}
+function usePasted(text) {
+  const f = pastedFile(text)
+  if (!f) return toast('Copy at least two rows in your spreadsheet first, then paste.', true)
+  sendFile(f.blob, f.name)
+}
+$('pickBtn').addEventListener('click', () => $('fileInput').click())
+$('fileInput').addEventListener('change', (e) => { const f = e.target.files?.[0]; e.target.value = ''; sendFile(f) })
+$('pasteBtn').addEventListener('click', async () => {
+  try { usePasted(await navigator.clipboard.readText()) } catch { toast('Click on the pane and press Cmd+V or Ctrl+V to paste your rows.') }
+})
+window.addEventListener('paste', (e) => {
+  if (/^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName ?? '')) return
+  const text = e.clipboardData?.getData('text/plain') ?? ''
+  if (text.includes('\n')) { e.preventDefault(); usePasted(text) }
+})
+$('sampleBtn').addEventListener('click', async () => { select(null); const r = await post('useSample'); if (!r.ok) toast(r.error || 'The sample could not be loaded.', true) })
+$('downloadBtn').addEventListener('click', async () => {
+  await post('export')
+  const a = document.createElement('a'); a.href = '/download/answers.csv'; a.download = 'answers.csv'; document.body.append(a); a.click(); a.remove()
+  toast('answers.csv is also in this project folder.')
+})
+let dragDepth = 0
+const hasFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files')
+window.addEventListener('dragenter', (e) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; $('dropVeil').classList.remove('hidden') })
+window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault() })
+window.addEventListener('dragleave', (e) => { if (!hasFiles(e)) return; dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) $('dropVeil').classList.add('hidden') })
+window.addEventListener('drop', (e) => {
+  if (!hasFiles(e)) return
+  e.preventDefault(); dragDepth = 0; $('dropVeil').classList.add('hidden')
+  sendFile(e.dataTransfer.files?.[0])
+})
+
+// ---- the findings: how many rows got each answer --------------------------------------------------
+function valueLabels(col) { return col.type === 'noul' ? ['no', 'yes'] : col.type === 'choice' ? col.options : col.levels }
+function valueTone(col, i) { return toneOf(col, { v: i }) }
+function renderFilterChip() {
+  const chip = $('filterChip'), f = S.filter, col = f && colIndex.get(f.col)
+  chip.classList.toggle('hidden', !col)
+  if (col) chip.textContent = `${col.name}: ${valueLabels(col)[f.v] ?? '?'}  ×`
+}
+$('filterChip').addEventListener('click', () => { if (S?.filter) post('filter', { col: S.filter.col, v: S.filter.v }) })
+function renderFindings() {
+  const box = $('findBody')
+  const cols = S.columns.filter((c) => S.colStats?.[c.id]?.dist)
+  if (!cols.length) { box.className = 'find-empty'; box.textContent = 'Type a question above. The counts for every answer show up here.'; return }
+  box.className = 'find'
+  box.textContent = ''
+  for (const col of cols) {
+    const st = S.colStats[col.id], labels = valueLabels(col)
+    const block = h('div', 'find-col')
+    const head = h('div', 'find-head')
+    head.append(h('b', '', col.name), h('span', '', st.filled < S.stats.rows ? `${fmtN(st.filled)} of ${fmtN(S.stats.rows)} rows` : `${fmtN(st.filled)} rows`))
+    block.append(head)
+    // A yes/no question leads with yes. A long choice list shows its biggest answers first.
+    let idx = labels.map((_, i) => i)
+    if (col.type === 'noul') idx = [1, 0]
+    else if (col.type === 'choice') idx.sort((a, b) => st.dist[b] - st.dist[a])
+    const shown = idx.slice(0, 8)
+    for (const i of shown) {
+      const n = st.dist[i] ?? 0, share = st.filled ? n / st.filled : 0
+      const row = h('button', 'find-row' + (S.filter && S.filter.col === col.id && S.filter.v === i ? ' on' : ''))
+      row.title = `Show only the ${fmtN(n)} rows where ${col.name} is "${labels[i]}"`
+      const bar = h('i', 'find-bar'); bar.style.width = `${Math.max(share * 100, n ? 1.5 : 0)}%`; bar.style.background = valueTone(col, i)
+      row.append(bar, h('span', 'find-label', labels[i]), h('span', 'find-n', fmtN(n)), h('span', 'find-pct', `${Math.round(share * 100)}%`))
+      row.addEventListener('click', () => post('filter', { col: col.id, v: i }))
+      block.append(row)
+    }
+    if (idx.length > shown.length) block.append(h('div', 'find-more', `+ ${idx.length - shown.length} more answers in answers.csv`))
+    box.append(block)
+  }
+}
+
 // ---- the frame loop ---------------------------------------------------------------------------
 function frame(now) {
   if (S) {
@@ -617,6 +747,7 @@ function frame(now) {
     if (dirty.head) { dirty.head = false; renderHead() }
     if (dirty.top) { dirty.top = false; renderTop() }
     if (dirty.hist) { dirty.hist = false; drawHist() }
+    if (dirty.find) { dirty.find = false; renderFindings() }
     stepTweens(); stepGhost(now); stepTour(now)
   }
   requestAnimationFrame(frame)

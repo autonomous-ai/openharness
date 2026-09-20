@@ -1,4 +1,5 @@
 {
+  "listed": false,
   "homepage": "https://orca-slicer.pages.dev",
   "upstream": "https://github.com/SoftFever/OrcaSlicer",
   "license": "MIT",
