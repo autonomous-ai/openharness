@@ -1,6 +1,6 @@
 # Harness marks
 
-Logo sources for the twelve creative and engineering harnesses, with matching
+Logo sources for creative, engineering, and research harnesses, with matching
 256 × 256 PNG icons bundled by Harness Desktop. The shared `EngineIdentity` map
 uses them in Store listings, New Harness, pane headers, history and native tabs.
 These are desktop assets, not remote catalog fields: publishing the Store alone
@@ -27,6 +27,9 @@ The real Flutter `EngineMark` widget, rendered at 96, 16, 24 and 32 px:
 | Home Assistant | Original Habitat architectural mark | MIT |
 | Score | Original paired musical notes | MIT |
 | Sheet & Docs Studio | Original document and cell grid | MIT |
+| Roundtable | Original table with six seats and a decision at its center | MIT |
+| Jev Browser | Original browser window and evidence-search lens | MIT |
+| Godogen | Original Harness package icon: game controller and creation spark | MIT |
 
 [`marks.json`](marks.json) records each source, credit and license. Upstream GitHub
 sources are pinned to commits; Godot's official press asset is vendored and pinned
@@ -50,12 +53,24 @@ Home Assistant. We deliberately do not distribute the Home Assistant logo:
 its [logo policy](https://github.com/home-assistant/assets/blob/master/logo/README.md)
 restricts commercial promotional use without written permission.
 
+Godogen's [upstream tree](https://github.com/htdt/godogen/tree/05cebffc8b10c5817e8a3db495b82e7b6004ab84)
+contained no logo or image assets when checked on 2026-09-20. The original icon here identifies
+the Harness package; it is not presented as Godogen's official mark or the Godot Engine logo.
+
 ## Regenerate and check
 
 From the repository root, using Node and an installed Playwright Chromium:
 
 ```sh
 node desktop/tool/harness_marks.mjs
+node desktop/tool/harness_marks.mjs --check
+```
+
+On macOS, AppKit can render local vector sources without a browser. The three new original
+marks were rendered this way; `--only` preserves every other recorded PNG:
+
+```sh
+node desktop/tool/harness_marks.mjs --appkit --only=roundtable,jev-browser,godogen
 node desktop/tool/harness_marks.mjs --check
 ```
 
@@ -76,7 +91,7 @@ flutter test test/engine_identity_test.dart test/store_screen_test.dart \
   test/store_page_test.dart test/swarm_screen_test.dart
 ```
 
-The dedicated test checks all twelve identities against their actual package
+The dedicated test checks all registered identities against their actual package
 metadata, decodes every PNG, and renders each mark at 16, 24, 32 and 96 px in both
 themes. With `HARNESS_ICON_QA_DIR` set, it writes `icons-light.png` and
 `icons-dark.png` for visual inspection. Test captures are review evidence, not

@@ -1,0 +1,144 @@
+{
+  "categories": [
+    {
+      "name": "Coding",
+      "domains": [
+        "Code",
+        "Compute",
+        "Web"
+      ],
+      "featured": []
+    },
+    {
+      "name": "Design",
+      "domains": [
+        "3D",
+        "CAD",
+        "Architecture",
+        "Diagrams",
+        "Design",
+        "Original art"
+      ],
+      "featured": [
+        "blender",
+        "freecad",
+        "creative-direction"
+      ]
+    },
+    {
+      "name": "Engineering",
+      "domains": [
+        "PCB",
+        "Circuits",
+        "Chips",
+        "Fabrication",
+        "Firmware",
+        "Home automation"
+      ],
+      "featured": [
+        "autonomous-circuit",
+        "kicad",
+        "orca-slicer"
+      ]
+    },
+    {
+      "name": "Media",
+      "domains": [
+        "Video",
+        "Math animation",
+        "Generative media"
+      ],
+      "featured": [
+        "openmontage",
+        "remotion",
+        "comfy-mcp"
+      ]
+    },
+    {
+      "name": "Music",
+      "domains": [
+        "Music",
+        "Audio"
+      ],
+      "featured": [
+        "music-studio",
+        "strudel",
+        "score"
+      ]
+    },
+    {
+      "name": "Productivity",
+      "domains": [
+        "Documents",
+        "Slides",
+        "Productivity"
+      ],
+      "featured": [
+        "marp",
+        "typst",
+        "jev-sheets"
+      ]
+    },
+    {
+      "name": "Science & Data",
+      "domains": [
+        "Science",
+        "Data",
+        "Notebooks",
+        "Chemistry",
+        "Quantum",
+        "GIS"
+      ],
+      "featured": [
+        "data-studio",
+        "marimo",
+        "rdkit"
+      ]
+    },
+    {
+      "name": "Simulation",
+      "domains": [
+        "Simulation",
+        "Robotics"
+      ],
+      "featured": [
+        "mujoco",
+        "drone-pilot",
+        "dimos"
+      ]
+    },
+    {
+      "name": "Games",
+      "domains": [
+        "Games"
+      ],
+      "featured": [
+        "phaser",
+        "voxel-worlds",
+        "godogen"
+      ]
+    },
+    {
+      "name": "Research",
+      "domains": [
+        "Research",
+        "Decisions"
+      ],
+      "featured": [
+        "roundtable",
+        "jev-browser"
+      ]
+    },
+    {
+      "name": "Local AI",
+      "domains": [
+        "Local AI"
+      ],
+      "featured": [
+        "ollama",
+        "mlx-lm",
+        "vllm"
+      ]
+    }
+  ]
+}
