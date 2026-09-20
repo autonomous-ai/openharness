@@ -1,5 +1,9 @@
 # Creative Direction — Forme
 
+> Withdrawn from Store discovery on 2026-09-20: the current starter does not meet our
+> standard for an open-ended tool that completes real user work. Existing projects and
+> source remain available. See [the product review](../../../work/SUPERPOWERS.md).
+
 ![Creative Direction logo](brand/logo.svg)
 
 Build a coherent visual identity with coordinated posters, typography and palettes. Compare art directions, lock colors, customize a name, and export SVG posters and design tokens.

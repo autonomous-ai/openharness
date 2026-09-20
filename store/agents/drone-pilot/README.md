@@ -1,5 +1,9 @@
 # Drone Pilot — Vector
 
+> Withdrawn from Store discovery on 2026-09-20: the current starter does not meet our
+> standard for an open-ended tool that completes real user work. Existing projects and
+> source remain available. See [the product review](../../../work/SUPERPOWERS.md).
+
 ![Drone Pilot logo](brand/logo.svg)
 
 Fly a seeded canyon course in first person. Switch between manual controls and a tracking autopilot, inspect gate results and the flight path, and export telemetry.

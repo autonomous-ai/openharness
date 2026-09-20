@@ -1,5 +1,9 @@
 # Game Master — Relay
 
+> Withdrawn from Store discovery on 2026-09-20: the current starter does not meet our
+> standard for an open-ended tool that completes real user work. Existing projects and
+> source remain available. See [the product review](../../../work/SUPERPOWERS.md).
+
 ![Game Master logo](brand/logo.svg)
 
 Design and compare strategies in a seeded arena. Watch two squads compete for relays, inspect decisions, step and rewind matches, and run a 32-map tournament.

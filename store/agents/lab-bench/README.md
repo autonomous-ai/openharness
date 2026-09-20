@@ -1,5 +1,9 @@
 # Lab Bench — Signal
 
+> Withdrawn from Store discovery on 2026-09-20: the current starter does not meet our
+> standard for an open-ended tool that completes real user work. Existing projects and
+> source remain available. See [the product review](../../../work/SUPERPOWERS.md).
+
 ![Lab Bench logo](brand/logo.svg)
 
 Explore an experiment with reproducible synthetic data. Change effect, noise and sample size, probe observations, filter groups, inspect computed uncertainty, and export CSV.

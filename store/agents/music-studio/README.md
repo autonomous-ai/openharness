@@ -1,5 +1,9 @@
 # Music Studio — Afterhours
 
+> Withdrawn from Store discovery on 2026-09-20: the current starter does not meet our
+> standard for an open-ended tool that completes real user work. Existing projects and
+> source remain available. See [the product review](../../../work/SUPERPOWERS.md).
+
 ![Music Studio logo](brand/logo.svg)
 
 Compose a seeded eight-bar track, edit five instrument patterns, shape swing and the mix, listen locally, and export the result as a WAV file.

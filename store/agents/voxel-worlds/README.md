@@ -1,5 +1,9 @@
 # Voxel Worlds — Tidelands
 
+> Withdrawn from Store discovery on 2026-09-20: the current starter does not meet our
+> standard for an open-ended tool that completes real user work. Existing projects and
+> source remain available. See [the product review](../../../work/SUPERPOWERS.md).
+
 ![Voxel Worlds logo](brand/logo.svg)
 
 Build and walk a seeded voxel island. Sculpt terrain, place and break blocks, explore a cabin and lighthouse, change the light, and save your world.
