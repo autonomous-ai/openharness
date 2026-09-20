@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
@@ -25,9 +26,9 @@ import 'verdict_marks.dart';
 ///
 /// The webview is a native view (WKWebView through `webview_flutter`), and a
 /// native view cannot exist where no platform implementation is registered:
-/// under `flutter test`, and on Linux today. There the body is the URL in
-/// words, so every layout around it still builds and the tests can prove the
-/// tile is placed, sized and closed correctly without instantiating it.
+/// under `flutter test`, and on Windows and Linux today. Windows offers an
+/// explicit browser action instead, without opening a page on its own; Linux
+/// keeps the existing address-only fallback.
 class WebPanePanel extends StatefulWidget {
   const WebPanePanel({
     super.key,
@@ -43,6 +44,7 @@ class WebPanePanel extends StatefulWidget {
     this.onToggleZoom,
     this.zoomed = false,
     this.compactHeader = false,
+    this.openBrowser,
   });
 
   final AppNotifier notifier;
@@ -67,6 +69,7 @@ class WebPanePanel extends StatefulWidget {
   final VoidCallback? onToggleZoom;
   final bool zoomed;
   final bool compactHeader;
+  final Future<bool> Function(Uri)? openBrowser;
 
   /// Whether this build can put a real webview on screen. One place, so the
   /// panel and its tests agree on when the placeholder is the right answer.
@@ -81,6 +84,14 @@ class _WebPanePanelState extends State<WebPanePanel> {
   String? _loadedUrl;
   bool _loading = false;
   String? _failure;
+  String? _browserUrl;
+  String? _browserFailure;
+  bool _openingBrowser = false;
+  int _browserLaunch = 0;
+
+  // The upstream follow-up is Windows-scoped. [openBrowser] is the test seam
+  // that exercises the action on any host without changing Linux behavior.
+  bool get _browserAvailable => Platform.isWindows || widget.openBrowser != null;
 
   /// The appearance last stamped on the page, so a rebuild that changed nothing runs no script.
   Brightness? _stampedBrightness;
@@ -88,6 +99,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
   @override
   void initState() {
     super.initState();
+    _browserUrl = widget.pane.url;
     if (WebPanePanel.webviewAvailable) _mountController();
   }
 
@@ -186,9 +198,66 @@ class _WebPanePanelState extends State<WebPanePanel> {
     setState(() {});
   }
 
+  Uri? _browserUri() {
+    final url = widget.pane.url;
+    if (url == null ||
+        RegExp(r'[\s\x00-\x1f\x7f\\]|%(?![0-9a-fA-F]{2})').hasMatch(url)) {
+      return null;
+    }
+    try {
+      final uri = Uri.tryParse(url);
+      if (uri == null ||
+          (uri.scheme != 'http' && uri.scheme != 'https') ||
+          !uri.hasAuthority ||
+          uri.host.isEmpty ||
+          uri.port < 1 ||
+          uri.port > 65535) {
+        return null;
+      }
+      return uri;
+    } on FormatException {
+      // URI getters can reject values (such as an oversized port) lazily.
+      return null;
+    }
+  }
+
+  Future<void> _openBrowser() async {
+    final uri = _browserUri();
+    if (uri == null || _openingBrowser) return;
+    final url = widget.pane.url;
+    final launch = ++_browserLaunch;
+    setState(() {
+      _openingBrowser = true;
+      _browserFailure = null;
+    });
+    var opened = false;
+    try {
+      opened =
+          await (widget.openBrowser ??
+              (uri) =>
+                  launchUrl(uri, mode: LaunchMode.externalApplication))(uri);
+    } catch (_) {
+      // A platform error can include the viewer's authenticated URL.
+    }
+    if (!mounted || launch != _browserLaunch || widget.pane.url != url) return;
+    setState(() {
+      _openingBrowser = false;
+      if (!opened) {
+        _browserFailure = 'Could not open your browser. Check your default browser, then try again.';
+      }
+    });
+  }
+
   @override
   void didUpdateWidget(WebPanePanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // TerminalPane is mutable, so oldWidget.pane can already hold the new URL.
+    if (widget.pane.url != _browserUrl) {
+      _browserUrl = widget.pane.url;
+      ++_browserLaunch;
+      _openingBrowser = false;
+      _browserFailure = null;
+    }
     // The daemon named a different page — the newest artifact, a viewer
     // restarted on another port. Navigate in place; the tile stays.
     if (widget.pane.url != _loadedUrl) _load();
@@ -309,11 +378,32 @@ class _WebPanePanelState extends State<WebPanePanel> {
     final controller = _controller;
     final url = widget.pane.url;
     if (controller == null) {
+      if (!_browserAvailable) {
+        return _Notice(
+          key: const ValueKey('web-pane-placeholder'),
+          icon: LucideIcons.globe,
+          title: 'Viewer',
+          detail: url ?? 'No viewer yet.',
+        );
+      }
+      final uri = _browserUri();
       return _Notice(
         key: const ValueKey('web-pane-placeholder'),
         icon: LucideIcons.globe,
         title: 'Viewer',
-        detail: url ?? 'No viewer yet.',
+        detail:
+            _browserFailure ??
+            (url == null
+                ? 'No viewer yet.'
+                : uri == null
+                ? 'The viewer did not provide a valid HTTP or HTTPS address.'
+                : url),
+        action: TextButton.icon(
+          key: const ValueKey('web-pane-open-browser'),
+          onPressed: uri == null || _openingBrowser ? null : _openBrowser,
+          icon: const Icon(LucideIcons.externalLink, size: 16),
+          label: Text(_openingBrowser ? 'Opening…' : 'Open in browser'),
+        ),
       );
     }
     return Stack(
@@ -414,7 +504,8 @@ class _Notice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Center(
-    child: Padding(
+    child: SingleChildScrollView(
+      primary: false,
       padding: const EdgeInsets.all(20),
       child: Column(
         mainAxisSize: MainAxisSize.min,

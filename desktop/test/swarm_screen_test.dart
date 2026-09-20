@@ -53,7 +53,9 @@ Future<void> mount(
 /// run the Swift, and the channel carrying a path the loader then refuses is
 /// exactly the break this guards.
 bool nativeIconLoaderOpens(String asset) {
-  final swift = File('macos/Runner/SwarmTitlebar.swift').readAsStringSync();
+  final swift = File('macos/Runner/SwarmTitlebar.swift')
+      .readAsStringSync()
+      .replaceAll('\r\n', '\n');
   final start = swift.indexOf('class SwarmHistoryIcons');
   expect(start, isNonNegative, reason: 'SwarmHistoryIcons moved');
   final body = swift.substring(start, swift.indexOf('\n}\n', start));

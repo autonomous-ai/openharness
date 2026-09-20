@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -304,13 +305,18 @@ void main() {
   test(
     'a fixed reconnect delay retries at that pace instead of backing off',
     () async {
-      // Nobody on the port: each attempt is refused at once. With the backoff the second attempt is
-      // 2s out and the third 4s; with a flat delay they come every tick — the policy the socket to
-      // this computer's own daemon uses, so a restarted daemon is found within a second.
-      final free = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-      final port = free.port;
-      await free.close();
-      var reconnecting = 0;
+      // Reject the handshake immediately: connection refusal to an unused port
+      // can take a second on Windows and would measure the OS, not this policy.
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      hub = FakeHub._(server, false, null);
+      var connections = 0;
+      final retried = Completer<void>();
+      server.listen((request) {
+        connections++;
+        request.response.statusCode = HttpStatus.serviceUnavailable;
+        unawaited(request.response.close());
+        if (connections >= 4 && !retried.isCompleted) retried.complete();
+      });
       conn = WsConn(
         wsBaseUrl: 'wss://unused.example',
         autonomousEnv: 'prod',
@@ -318,19 +324,19 @@ void main() {
         accessTokenProvider: (_, _) async => '',
         onAuthFailure: (_) {},
         onEvent: (_) {},
-        onStatus: (status) {
-          if (status == ConnectionStatus.reconnecting) reconnecting++;
-        },
+        onStatus: (_) {},
         transportKind: WsTransportKind.localPlaintext,
-        localWsUri: Uri.parse('ws://127.0.0.1:$port/api/local-ws'),
+        localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
         fixedReconnectDelay: const Duration(milliseconds: 100),
       );
       await conn!.connect();
-      await Future<void>.delayed(const Duration(milliseconds: 650));
+      // Four actual attempts need ~300ms with the flat delay, but at least
+      // seven seconds with the ordinary 1s/2s/4s backoff. Allow scheduling slack.
+      await retried.future.timeout(const Duration(seconds: 2));
       expect(
-        reconnecting,
+        connections,
         greaterThanOrEqualTo(4),
-        reason: 'backoff would allow one',
+        reason: 'ordinary backoff cannot make four attempts within two seconds',
       );
     },
   );

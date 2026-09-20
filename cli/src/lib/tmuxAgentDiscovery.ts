@@ -10,6 +10,7 @@ import { execFile } from 'node:child_process'
 import {
   agentAliasOwner,
   agentCommandOwnershipSnapshot,
+  engineBinaryOwnershipSnapshot,
   PROCESS_ENGINES,
   type AgentCommandOwnershipSnapshot,
 } from './engineBin.js'
@@ -26,6 +27,7 @@ import {
   enrichProcessRows,
   parseProcessRow,
   processTreePids,
+  repairMangledRows,
   resumeSessionId,
   setPaneMouseOn,
   type ProcessRow,
@@ -259,21 +261,25 @@ export async function probeTmuxAgents(
   daemonPid = process.pid,
   hints: ReadonlyMap<string, AgentEngine> = new Map(),
 ): Promise<TmuxAgentProbe> {
-  const [tmux, ps] = await Promise.all([
+  const [tmux, ps, ownership] = await Promise.all([
     listTmuxPanes(),
     // parseProcessRow below anchors on the `lstart` column, which only has its documented shape
     // under LC_TIME=C — see psEnv (lib/childLocale.ts).
     execText('ps', ['-axo', 'pid=,ppid=,comm=,lstart=,args='], 3_000, psEnv()),
+    engineBinaryOwnershipSnapshot(),
   ])
   if (!tmux.ok) return { ok: false, error: `tmux list-panes failed: ${tmux.error}` }
   if (!ps.ok) return { ok: false, error: `process table failed: ${ps.error}` }
   const parsed = ps.stdout.split('\n').map(parseProcessRow).filter((row): row is ProcessRow => row !== null)
-  const rows = await enrichProcessRows(parsed, processTreePids(parsed, tmux.panes.map((pane) => pane.rootPid)))
+  // `ps` hides the Windows interpreter and script behind WSL's `/init` relay. Rebuild those rows
+  // from `/proc/<pid>/cmdline` before matching, just as the composite terminal probe does.
+  const repaired = repairMangledRows(parsed)
+  const rows = await enrichProcessRows(repaired, processTreePids(repaired, tmux.panes.map((pane) => pane.rootPid)))
   const probe = discoverTmuxAgentsFromSnapshot(
     tmux.panes,
     rows,
     daemonPid,
-    agentCommandOwnershipSnapshot(),
+    ownership,
     hints,
   )
   // Which endpoint each agent is pointed at, and which grid. Both read the same process environment

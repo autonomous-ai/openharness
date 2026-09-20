@@ -58,6 +58,37 @@ void main() {
     expect(projectFolderName('***', at), 'harness-2026-12-25-00-00');
   });
   test(
+    'existing empty folders are preserved and parent paths stay literal',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'harness-project-literal-',
+      );
+      addTearDown(() => root.delete(recursive: true));
+      final parent = Directory(p.join(root.path, 'spaces & %TEMP% \u6587'));
+      await parent.create();
+      final at = DateTime(2026, 9, 19, 20, 10, 30);
+      final existing = Directory(
+        p.join(parent.path, projectFolderName('Codex', at)),
+      );
+      await existing.create();
+      final folder = await const ProjectFolderRequest.newProject().prepareLocal(
+        projectHome: parent.path,
+        label: 'Codex',
+        now: () => at,
+      );
+      expect(folder, p.join(parent.path, 'codex-2026-09-19-20-10-30'));
+      expect(await existing.exists(), isTrue);
+      expect(await existing.list().toList(), isEmpty);
+      expect(await Directory(folder).exists(), isTrue);
+      expect(
+        (await parent.list().toList())
+            .map((entry) => p.basename(entry.path))
+            .toSet(),
+        {'codex-2026-09-19-20-10', 'codex-2026-09-19-20-10-30'},
+      );
+    },
+  );
+  test(
     'remote repository uses the existing safe clone on this computer',
     () async {
       final root = await Directory.systemTemp.createTemp(

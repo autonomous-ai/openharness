@@ -57,11 +57,7 @@ class ProjectFolderRequest {
               ? precise
               : '$precise-$attempt',
         );
-        // Directory.create accepts an existing directory. The platform mkdir
-        // command reserves it exclusively, so concurrent creates never share
-        // a workspace. Paths are arguments, never shell text.
-        final result = await Process.run('mkdir', [folder]);
-        if (result.exitCode == 0) return folder;
+        if (await _createExclusiveDirectory(folder)) return folder;
         if (await FileSystemEntity.type(folder, followLinks: false) ==
             FileSystemEntityType.notFound) {
           throw FileSystemException('Could not create folder', folder);
@@ -76,6 +72,28 @@ class ProjectFolderRequest {
         'Could not create a project folder. Browse for a folder you can edit.',
       );
     }
+  }
+}
+
+Future<bool> _createExclusiveDirectory(String folder) async {
+  if (!Platform.isWindows) {
+    // Directory.create accepts existing directories; mkdir reserves exclusively.
+    return (await Process.run('mkdir', [folder])).exitCode == 0;
+  }
+  // Windows has no mkdir executable. Renaming a private, empty sibling uses
+  // MoveFileEx without REPLACE_EXISTING, so it cannot reuse even an empty folder.
+  // Keep this Windows-only: POSIX rename can replace an empty destination.
+  final staging = await Directory(p.dirname(folder))
+      .createTemp('.harness-project-');
+  var moved = false;
+  try {
+    await staging.rename(folder);
+    moved = true;
+    return true;
+  } on FileSystemException {
+    return false;
+  } finally {
+    if (!moved) await staging.delete();
   }
 }
 
