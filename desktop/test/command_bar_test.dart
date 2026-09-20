@@ -12,19 +12,188 @@ CommandBarAction action({
   CommandKind kind = CommandKind.command,
   Future<String?> Function(String)? perform,
   String context = '',
+  List<String> phrases = const [],
+  bool? automatic,
+  Future<String?> Function()? goBack,
 }) => CommandBarAction(
   id: id,
   version: version,
   title: 'Open Settings',
   detail: 'Appearance and accounts',
   kind: kind,
-  automatic: kind == CommandKind.command,
+  automatic: automatic ?? kind == CommandKind.command,
   isSession: session,
   perform: perform,
   context: context,
+  phrases: phrases,
+  goBack: goBack,
 );
 
 void main() {
+  test('an exact app command acts on Enter without a provider or a second selection', () async {
+    var executions = 0, calls = 0;
+    final a = action(
+      phrases: ['open settings'],
+      perform: (_) async {
+        executions++;
+        return null;
+      },
+    );
+    final bar = CommandBarController(
+      catalog: () => [a],
+      resolve: (_, _) async {
+        calls++;
+        throw Exception('offline');
+      },
+    );
+    addTearDown(bar.dispose);
+    bar.edit('  OPEN   settings! ');
+    expect(executions, 0);
+    await bar.submit(bar.query);
+    expect(executions, 1);
+    expect(calls, 0);
+    expect(bar.phase, CommandPhase.done);
+    expect(bar.error, isNull);
+  });
+
+  test('partial matches and compound requests reach JEV without executing a local fragment', () async {
+    var executions = 0;
+    final requests = <String>[];
+    final bar = CommandBarController(
+      catalog: () => [
+        action(
+          phrases: ['open settings'],
+          perform: (_) async {
+            executions++;
+            return null;
+          },
+        ),
+      ],
+      resolve: (request, _) async {
+        requests.add(request['prompt'] as String);
+        return {'selectedId': null};
+      },
+    );
+    addTearDown(bar.dispose);
+    for (final prompt in [
+      'open',
+      'do not open settings',
+      'open settings and delete my projects',
+      'open settings\nthen send the task',
+    ]) {
+      await bar.submit(prompt);
+    }
+    expect(executions, 0);
+    expect(requests, hasLength(4));
+    expect(requests.last, 'open settings\nthen send the task');
+  });
+
+  test('duplicate exact names remain a choice, including beyond the transmitted snapshot', () async {
+    var calls = 0, executions = 0;
+    final actions = List.generate(
+      100,
+      (i) => action(
+        id: '$i',
+        phrases: i == 0 || i == 99 ? ['open research'] : [],
+        perform: (_) async {
+          executions++;
+          return null;
+        },
+      ),
+    );
+    final bar = CommandBarController(
+      catalog: () => actions,
+      resolve: (_, _) async {
+        calls++;
+        return {};
+      },
+    );
+    addTearDown(bar.dispose);
+    await bar.submit('open research');
+    expect(calls, 0);
+    expect(executions, 0);
+    expect(bar.rows.map((a) => a.id), ['0', '99']);
+    expect(bar.message, contains('Which one'));
+    await bar.choose(bar.rows.last);
+    expect(executions, 1);
+  });
+
+  for (final kind in [
+    CommandKind.send,
+    CommandKind.create,
+    CommandKind.watch,
+  ]) {
+    test(
+      '$kind cannot auto-run even if its flag and the provider both say yes',
+      () async {
+        var executions = 0;
+        final a = action(
+          kind: kind,
+          automatic: true,
+          phrases: ['do this'],
+          perform: (_) async {
+            executions++;
+            return null;
+          },
+        );
+        final bar = CommandBarController(
+          catalog: () => [a],
+          resolve: (_, _) async => {'selectedId': a.id, 'autoExecute': true},
+        );
+        addTearDown(bar.dispose);
+        await bar.submit('do this');
+        expect(executions, 0);
+        expect(bar.phase, CommandPhase.choosing);
+        expect(bar.watches, isEmpty);
+      },
+    );
+  }
+
+  test(
+    'an explicit explanation accompanies competing semantic matches',
+    () async {
+      final a = action(kind: CommandKind.open);
+      final bar = CommandBarController(
+        catalog: () => [a],
+        resolve: (_, _) async => {
+          'selectedId': a.id,
+          'autoExecute': false,
+          'reviewReason': 'ambiguous_target',
+        },
+      );
+      addTearDown(bar.dispose);
+      await bar.submit('back to the research');
+      expect(bar.message, contains('Which one did you mean'));
+    },
+  );
+
+  test('Go back is offered only for a successful action and cleared on the next command', () async {
+    var returns = 0;
+    String? failure;
+    final a = action(
+      phrases: ['open settings'],
+      perform: (_) async => failure,
+      goBack: () async {
+        returns++;
+        return null;
+      },
+    );
+    final bar = CommandBarController(
+      catalog: () => [a],
+      resolve: (_, _) async => {},
+    );
+    addTearDown(bar.dispose);
+    await bar.submit('open settings');
+    expect(bar.goBack, isNotNull);
+    await bar.goBack!();
+    expect(returns, 1);
+    bar.edit('next');
+    expect(bar.goBack, isNull);
+    failure = 'Unavailable';
+    await bar.submit('open settings');
+    expect(bar.goBack, isNull);
+  });
+
   test('typing is local and a superseded decision cannot execute', () async {
     var calls = 0, executions = 0;
     final answer = Completer<Map<String, dynamic>>();

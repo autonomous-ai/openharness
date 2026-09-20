@@ -304,7 +304,6 @@ void main() {
         app.dispose();
       });
       var calls = 0;
-      var automaticNavigation = false;
       await tester.pumpWidget(
         RepaintBoundary(
           key: boundary,
@@ -317,12 +316,7 @@ void main() {
               projectStore: SwarmProjectStore(),
               commandResolver: (_, _) async {
                 calls++;
-                return {
-                  'selectedId': automaticNavigation
-                      ? 'command:swarm.new'
-                      : null,
-                  'autoExecute': automaticNavigation,
-                };
+                return {'selectedId': null};
               },
             ),
           ),
@@ -356,7 +350,6 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(input, findsNothing);
-      automaticNavigation = true;
       final previousTab = app.activeSwarmId;
       await chord(tester, LogicalKeyboardKey.keyJ, shift: true);
       await tester.pump();
@@ -365,7 +358,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(app.activeSwarmId, isNot(previousTab));
       expect(input, findsNothing);
-      expect(calls, 2);
+      // The exact app command opens the tab even without a provider decision.
+      expect(calls, 1);
       expect(tester.takeException(), isNull);
     },
   );
@@ -407,6 +401,58 @@ void main() {
       );
       expect(app.activeSwarmId, previousTab);
       expect(calls, 0);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'direct navigation closes the palette and Go back returns to the original tab',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final app = createApp();
+      app.renameSwarm(app.activeSwarmId, 'Research');
+      final original = app.activeSwarmId;
+      app.newSwarm(name: 'Prototype');
+      final target = app.activeSwarmId;
+      app.selectSwarm(original);
+      final boundary = GlobalKey();
+      addTearDown(() async {
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      });
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: SwarmScreen(
+              notifier: app,
+              nativeTabs: false,
+              projectStore: SwarmProjectStore(),
+              commandResolver: (_, _) async =>
+                  throw Exception('exact navigation stays local'),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await chord(tester, LogicalKeyboardKey.keyJ, shift: true);
+      await tester.pump();
+      await tester.enterText(input, 'Open Prototype');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      expect(input, findsNothing);
+      expect(app.activeSwarmId, target);
+      expect(find.text('Opened Prototype'), findsOneWidget);
+      expect(find.text('Go back'), findsOneWidget);
+      await capture(tester, boundary, 'direct-navigation');
+      await tester.tap(find.text('Go back'));
+      await tester.pumpAndSettle();
+      expect(app.activeSwarmId, original);
+      expect(app.swarms.any((s) => s.id == target), isTrue);
       expect(tester.takeException(), isNull);
     },
   );
