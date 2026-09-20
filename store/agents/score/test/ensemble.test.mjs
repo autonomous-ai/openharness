@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile,mkdtemp,writeFile,mkdir,symlink,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {validateEnsemble,pitch,makeWrapper,checkEnsemble} from '../skills/score/scripts/ensemble.mjs';
+import {validateEnsemble,validateMusicSources,pitch,makeWrapper,checkEnsemble} from '../skills/score/scripts/ensemble.mjs';
 import {parseMidi,writePracticeMidi} from '../skills/score/scripts/midi.mjs';
 import {snapshotSources,build} from '../skills/score/scripts/build.mjs';
 import {zip} from '../skills/score/scripts/archive.mjs';
@@ -71,6 +71,11 @@ test('slow practice preserves notes, changes tempo, shifts for count-in and rese
   const silence=parseMidi(writePracticeMidi({notes:[],division:384,endTick:1536,quarterBpm:80,meter:[4,4]}),{allowEmpty:true});
   assert.equal(silence.notes.length,0);assert.equal(silence.duration,3);
 });
+test('checked source rejects ambiguous bar grids and wrapper overrides, without treating comments or strings as commands',()=>{
+  const validate=code=>validateMusicSources([{name:'score.ly',bytes:Buffer.from(code)}]);
+  for(const command of ['\\partial 4','\\repeat volta 2 { c1 }','\\cadenzaOn','\\time 3/4','\\tempo 4 = 99','\\clef "treble_8"','\\transposition c','\\score { c1 }'])assert.throws(()=>validate('music = { '+command+' }'),/owned|complete-bar/);
+  assert.doesNotThrow(()=>validate('% \\partial 4\nmusic = { \\repeat unfold 2 { c1 } ^"A caption about \\\\time" }\n%{ \\repeat volta 2 %}'));
+});
 test('MIDI rejects events that escape a track, missing end events and trailing bytes',()=>{
   const bytes=writePracticeMidi({notes:[note],division:384,endTick:1536,quarterBpm:80,meter:[4,4]});
   const shortened=Buffer.from(bytes);shortened.writeUInt32BE(2,18);
@@ -85,6 +90,8 @@ test('source allowlist rejects omitted includes and symlinks; build lock remains
   try {
     await writeFile(join(root,'score.ly'),'\\include "private.ily"\n');
     await assert.rejects(snapshotSources(root,{sourceFiles:['score.ly']}),/sourceFiles/);
+    await writeFile(join(root,'voice.ILY'),'\\include "private.ily"\n');
+    await assert.rejects(snapshotSources(root,{sourceFiles:['voice.ILY']}),/sourceFiles/);
     await writeFile(join(root,'private.ily'),'music = { c1 }');
     assert.equal((await snapshotSources(root,{sourceFiles:['score.ly','private.ily']})).length,2);
     await symlink(join(root,'private.ily'),join(root,'linked.ily'));

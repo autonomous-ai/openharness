@@ -65,15 +65,19 @@ individual notes within a chord. These are editable limits, not skill ratings.
 
 ## Source and timing
 
-The builder places the initial key/meter/tempo before each variable. Do not put
+The builder places the initial key/meter/tempo before each variable. Clefs are
+fixed per staff in this workflow; set them in the contract. Do not put
 book/score blocks in a new checked source, pretranspose written parts, change
 MIDI instrument within a staff, or override `\transposition`. Dynamics, slurs,
 rests, chord voicings and breaks belong in the music variables.
 
 The supported time grid is constant: no pickup, mid-piece meter/tempo change,
 unexpanded repeat structure, cadenza or zero-duration grace notes. If needed,
-write an explicitly expanded complete-bar version and explain the change, or
-keep it as legacy engraving without claiming checked readiness.
+write an explicitly expanded complete-bar version (including \repeat unfold)
+and explain the change, or
+keep it as legacy engraving without claiming checked readiness. The source guard
+rejects literal pickups, folded repeats, cadenzas and wrapper-owned commands;
+it is not a parser or security boundary for arbitrary Scheme.
 
 The builder measures end-of-track duration including rests against
 `bars × numerator × 4/denominator` quarter notes. A literal `|` is a LilyPond

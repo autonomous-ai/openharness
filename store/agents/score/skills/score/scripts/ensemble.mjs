@@ -83,6 +83,21 @@ export function validateEnsemble(raw) {
   return spec;
 }
 
+export function validateMusicSources(files) {
+  // This is a supported-workflow guard, not a sandbox for LilyPond/Scheme.
+  const owned=new Set(['time','tempo','key','clef','transposition','score','book','bookpart','layout','midi','paper','header']);
+  for (const {name,bytes} of files.filter(file=>/\.(ly|ily)$/i.test(file.name))) {
+    const code=bytes.toString('utf8').replace(/%\{[\s\S]*?%\}|%[^\n]*|"(?:\\.|[^"\\])*"/g,' ');
+    for (const match of code.matchAll(/\\([a-zA-Z]+)\b/g)) {
+      const command=match[1];
+      if (owned.has(command)) throw new Error(name+': \\'+command+' is owned by ensemble.json/the generated wrapper. Checked sources contain concert-pitch music variables only.');
+      if (['partial','cadenzaOn','cadenzaOff'].includes(command) || command==='repeat' && !/^\s+unfold\b/.test(code.slice(match.index+match[0].length))) {
+        throw new Error(name+': \\'+command+' is outside the complete-bar checked workflow. Expand repeats and remove pickups/cadenzas deliberately, or use legacy engraving without checked readiness.');
+      }
+    }
+  }
+}
+
 // The same written-music expression feeds the printed part and the written MIDI
 // proof. A separate concert proof makes incorrect or double transposition visible.
 export function makeWrapper(spec, {svg=false}={}) {

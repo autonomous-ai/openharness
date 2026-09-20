@@ -4,7 +4,7 @@ import {resolve,join,dirname,basename,sep,posix} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {parseMidi,writePracticeMidi} from './midi.mjs';
-import {validateEnsemble,makeWrapper,checkEnsemble,sameNotes} from './ensemble.mjs';
+import {validateEnsemble,validateMusicSources,makeWrapper,checkEnsemble,sameNotes} from './ensemble.mjs';
 import {zip} from './archive.mjs';
 
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -27,7 +27,7 @@ export async function snapshotSources(workspace,spec) {
   const files=[];
   for (const name of spec.sourceFiles) files.push({name,bytes:await regularSource(workspace,name)});
   const allowed=new Set(files.map(file=>file.name));
-  for (const file of files.filter(file=>/\.(ly|ily)$/.test(file.name))) {
+  for (const file of files.filter(file=>/\.(ly|ily)$/i.test(file.name))) {
     for (const match of file.bytes.toString('utf8').matchAll(/\\include\s+"([^"]+)"/g)) {
       const included=posix.normalize(posix.join(posix.dirname(file.name),match[1]));
       if (match[1].startsWith('/') || !allowed.has(included)) throw new Error('Add the trusted include to sourceFiles: '+match[1]);
@@ -75,6 +75,7 @@ export async function build(workspace,{bin=process.env.LILYPOND_BIN||'lilypond'}
     const contract=await exists(join(workspace,'ensemble.json')) ? await regularSource(workspace,'ensemble.json') : null;
     const spec=contract?validateEnsemble(JSON.parse(contract)):null;
     const files=await snapshotSources(workspace,spec||{sourceFiles:['score.ly']});
+    if (spec) validateMusicSources(files);
     if (contract && !contract.equals(files.find(file=>file.name==='ensemble.json').bytes)) throw new Error('Ensemble brief changed while reading sources.');
     const sources=Object.fromEntries(files.map(file=>[file.name,sha(file.bytes)]).sort(([a],[b])=>a.localeCompare(b)));
     const sourceRevision=sha(JSON.stringify(sources));

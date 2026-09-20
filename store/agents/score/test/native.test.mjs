@@ -78,7 +78,7 @@ test('native rejects overridden transposition, wrong length, polyphony and sourc
   await build(ws,{bin});
   const source=await readFile(join(ws,'score.ly'),'utf8'),good=await digest(join(ws,'score.pdf'));
   for(const [name,candidate,pattern] of [
-    ['transposition',source.replace("clarinetMusic = \\relative c' {","clarinetMusic = \\relative c' { \\transposition c'"),/part-sounds|score:notes/],
+    ['transposition',source.replace("clarinetMusic = \\relative c' {","clarinetMusic = \\relative c' { \\set Staff.instrumentTransposition = #(ly:make-pitch 0 0)"),/part-sounds|score:notes/],
     ['length',source.replace('c2.\\pp \\bar "|."','c2.\\pp c2. \\bar "|."'),/duration/],
     ['polyphony',source.replace('c4.\\p( e8 d c)','<c e>4.\\p( e8 d c)'),/polyphony/]
   ]){

@@ -26,7 +26,7 @@ no Harness account, Python or npm package was required for rebuilding.
 LILYPOND_BIN=/path/to/lilypond node --test store/agents/score/test/*.test.mjs
 ```
 
-**14/14 passed**, including four opt-in native tests. Without `LILYPOND_BIN`,
+**15/15 passed**, including four opt-in native tests. Without `LILYPOND_BIN`,
 the native cases are explicitly skipped, not counted as native proof.
 
 Coverage includes:
@@ -37,6 +37,8 @@ Coverage includes:
 - Fifteen pitched MIDI channels without consuming channel 10; simple and
   compound count-in; tempo changes and note-preserving export round trips.
 - Source allowlisting, omitted includes, traversal, symlinks and exclusive lock.
+- Rejection of literal pickups, folded repeats, cadenzas and wrapper overrides
+  that would make complete-bar loop claims ambiguous.
 - Native wrong-transposition, wrong-length and chord/polyphony failures.
 - Native source mutation during rendering; failed revisions preserve good output.
 - Strict revision that leaves unaffected piano bytes unchanged; prior handoff
@@ -78,7 +80,8 @@ Package conformance, skill validation, generated experience/branding checks,
 `git diff --check` and the 433 registry/store/catalog/publisher tests passed.
 
 Local QA root for this run: `/private/tmp/harness-score-workflows.HyXxOL`.
-Final native fixtures are in `release-native/`; browser receipts, WAVs, downloaded
+Final guard/native fixtures are in `guard-native/`; earlier fixtures with the
+same engraved music are in `release-native/`. Browser receipts, WAVs, downloaded
 files and screenshots are in `release-browser-trio/` and
 `release-browser-duet/`. These temporary local paths are evidence locations for
 this workstation, not files shipped in the Store package.
