@@ -5,6 +5,7 @@ three implementations are [Ollama](../../../store/agents/ollama/README.md),
 [MLX-LM](../../../store/agents/mlx-lm/README.md), and
 [vLLM](../../../store/agents/vllm/README.md), using Metal on the Mac.
 
+- [Store packaging and clean-install verification](store-verification.json).
 - [Ecosystem research](recommendation.md) and [candidate list](shortlist.json).
 - [Product direction and framework/backend boundary](architecture.md).
 - [Ollama findings](pilot-findings.md), [checks](pilot-verification.json), and
@@ -29,3 +30,6 @@ Private home/workspace prefixes in evidence are replaced with `<home>` and
 `<pilot-checkout>`. Model weights, runtime environments, endpoint control tokens,
 session state and copied upstream source snapshots are excluded. Source links
 and public repository/release metadata preserve the research provenance.
+
+The Store sidebar [capture](store-category.png) is rendered by the Flutter widget
+check using its fixture catalog; it is not a live-model dashboard capture.

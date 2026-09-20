@@ -144,3 +144,11 @@ context was available in this session, so that optional integration is not verif
 The package uses OpenHarness's existing `harness.json`/viewer contract, also used by the
 Grid package. The Ollama model adapter is framework-specific; the control plane and viewer logic are shared with MLX-LM. Grid's fleet collector
 was not reused because its engine and telemetry contract differs from Ollama's local API.
+
+## Credit and stewardship
+
+The native framework and official mark belong to [Ollama](https://github.com/ollama/ollama).
+OpenHarness contributors maintain this independent integration, its agent instructions
+and viewer. The harness is MIT-licensed; see [LICENSE](LICENSE). Upstream notices
+and license texts are recorded in [THIRD_PARTY.md](THIRD_PARTY.md) and `licenses/`.
+Model weights are downloaded separately under their respective model licenses.

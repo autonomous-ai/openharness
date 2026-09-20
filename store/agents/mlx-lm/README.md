@@ -77,3 +77,11 @@ the two small baseline models, benchmark them and exercise cancellation.
 log and selected HF revisions. Chat prompts are not persisted by the controller, but model
 output is. Benchmarks and logs belong to the workspace. Framework workspaces must remain
 separate; their common state format does not authorize concurrent writers.
+
+## Credit and stewardship
+
+The native framework and official mark belong to [Apple’s MLX and MLX-LM projects](https://github.com/ml-explore/mlx-lm).
+OpenHarness contributors maintain this independent integration, its agent instructions
+and viewer. The harness is MIT-licensed; see [LICENSE](LICENSE). Upstream notices
+and license texts are recorded in [THIRD_PARTY.md](THIRD_PARTY.md) and `licenses/`.
+Model weights are downloaded separately under their respective model licenses.

@@ -24,7 +24,7 @@ assert.ok(!(await state()).runtime.models.find(m => m.id === model)?.running, 'M
 await action({ type: 'deploy', model });
 assert.equal((await state()).runtime.models.find(m => m.id === model)?.running, true);
 const chat = await action({ type: 'chat', model, prompt: 'What is 2 + 2? Reply with just the number.' });
-assert.match(chat.output.trim(), /^4[.!]?$/);
+assert.match(chat.output.trim(), /^(?:2\s*\+\s*2\s*=\s*)?4[.!]?$/);
 assert.ok(chat.result.metrics.tokensPerSecond > 0);
 let snapshot = await state();
 if (!snapshot.benchmarks.some(b => b.model === model)) { await action({ type: 'benchmark', models: [model] }); snapshot = await state(); }

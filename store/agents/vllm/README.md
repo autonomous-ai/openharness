@@ -101,3 +101,11 @@ serving, training, multimodal inference or model deletion is claimed.
 See [findings and sources](../../../docs/research/local-ai-harnesses/vllm/findings.md),
 [live verification](../../../docs/research/local-ai-harnesses/vllm/verification.json) and
 [raw benchmarks](../../../docs/research/local-ai-harnesses/vllm/benchmarks.json).
+
+## Credit and stewardship
+
+The native framework and official mark belong to [the vLLM and vLLM Metal contributors](https://github.com/vllm-project/vllm-metal).
+OpenHarness contributors maintain this independent integration, its agent instructions
+and viewer. The harness is MIT-licensed; see [LICENSE](LICENSE). Upstream notices
+and license texts are recorded in [THIRD_PARTY.md](THIRD_PARTY.md) and `licenses/`.
+Model weights are downloaded separately under their respective model licenses.
