@@ -81,7 +81,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 15_000, collect
       }
       if (!['GET', 'HEAD'].includes(req.method)) {
         res.setHeader('allow', 'GET, HEAD, POST');
-        json(res, 405, { error: 'This pane is read-only. Ask the Machines agent to change something.' });
+        json(res, 405, { error: 'This pane is read-only. Ask the Machine Monitor agent to change something.' });
         return;
       }
       if (url.pathname === '/health') { json(res, 200, { ok: true }); return; }
@@ -173,7 +173,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const port = Number(process.env.HARNESS_VIEWER_PORT || 0);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('HARNESS_VIEWER_PORT must be a port number.');
   const viewer = createViewer({ workspace, port });
-  console.log(`[machines] http://127.0.0.1:${await viewer.start()}/`);
+  console.log(`[machine-monitor] http://127.0.0.1:${await viewer.start()}/`);
   const close = () => viewer.close().then(() => process.exit(0));
   process.once('SIGINT', close); process.once('SIGTERM', close);
 }

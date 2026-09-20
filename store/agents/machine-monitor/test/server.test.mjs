@@ -33,7 +33,7 @@ test('the pane serves its own observation and its three files', async () => {
   const page = await fetch(`${base}/`);
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-security-policy'), /default-src 'self'/);
-  assert.match(await page.text(), /<title>Machines/);
+  assert.match(await page.text(), /<title>Machine Monitor/);
 
   for (const path of ['/app.js', '/app.css']) assert.equal((await fetch(`${base}${path}`)).status, 200);
   assert.equal((await fetch(`${base}/../lib/daemon.mjs`)).status, 404);

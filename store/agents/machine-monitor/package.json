@@ -1,10 +1,12 @@
 {
-  "name": "@autonomous/machines-harness",
+  "name": "@autonomous/machine-monitor",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "start": "./viewer.sh"
   },
-  "engines": { "node": ">=22" }
+  "engines": {
+    "node": ">=22"
+  }
 }

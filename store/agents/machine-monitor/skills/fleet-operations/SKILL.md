@@ -1,6 +1,6 @@
 ---
 name: fleet-operations
-description: Manage the machines on a Harness account by conversation — read the fleet, link and unlink, rename, note and group, bring a new computer in, remove one. Use in a Machines workspace whenever the person asks about their computers, what is running on them, or wants one added, named, linked or retired.
+description: Manage the machines on a Harness account by conversation — read the fleet, link and unlink, rename, note and group, bring a new computer in, remove one. Use in a Machine Monitor workspace whenever the person asks about their computers, what is running on them, or wants one added, named, linked or retired.
 ---
 
 # Fleet operations

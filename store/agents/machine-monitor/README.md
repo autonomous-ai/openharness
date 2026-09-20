@@ -1,4 +1,4 @@
-# Machines, as a Harness agent
+# Machine Monitor, as a Harness agent
 
 Your computers, managed by talking. Ask for a machine to be linked, renamed, grouped, noted or
 retired; ask what any of them is carrying; ask how to bring a new one in. Beside the conversation,
@@ -12,14 +12,14 @@ computer. This package never holds a token, a key or a password.
 
 ## Install and open
 
-Choose **Machines** in the Harness Store, or install this checkout:
+Choose **Machine Monitor** in the Harness Store, or install this checkout:
 
 ```sh
-harness dsh install "$PWD/store/agents/machines" --link
-harness dsh doctor autonomous/machines
+harness dsh install "$PWD/store/agents/machine-monitor" --link
+harness dsh doctor autonomous/machine-monitor
 ```
 
-Open Machines in a new workspace and ask: "Show me my machines, and link the one that needs it."
+Open Machine Monitor in a new workspace and ask: "Show me my machines, and link the one that needs it."
 
 ## What it can do
 
@@ -66,17 +66,17 @@ lives in a transcript, and this one never needs to.
 ## Develop and verify
 
 ```sh
-npm test --prefix store/agents/machines
-harness dsh check "$PWD/store/agents/machines"
+npm test --prefix store/agents/machine-monitor
+harness dsh check "$PWD/store/agents/machine-monitor"
 node store/tools/catalog.mjs
 
 # The pane against a workspace; the chosen port is printed.
-HARNESS_WORKSPACE=/path/to/workspace store/agents/machines/viewer.sh
+HARNESS_WORKSPACE=/path/to/workspace store/agents/machine-monitor/viewer.sh
 ```
 
 The tests run without a daemon: the collector's reads and the machine bridge are both injectable,
 so a whole fleet — linked, unlinked, offline, shared, failing — is exercised from fixtures. What
-they do not cover is a real relayed dial to another computer; `harness dsh doctor autonomous/machines`
+they do not cover is a real relayed dial to another computer; `harness dsh doctor autonomous/machine-monitor`
 on a machine with peers is the check for that.
 
 ## Credit and stewardship

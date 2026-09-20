@@ -1,9 +1,12 @@
 {
   "spec": 1,
-  "id": "autonomous/machines",
-  "name": "Machines",
+  "id": "autonomous/machine-monitor",
+  "name": "Machine Monitor",
   "category": "Compute",
   "author": "Autonomous",
+  "formerly": [
+    "autonomous/machines"
+  ],
   "description": "Talk to your fleet of computers. Link one, name it, retire it — and watch every machine, project and harness you own come alive on one map.",
   "engine": "claude",
   "workspace": {
@@ -13,7 +16,9 @@
   },
   "agent": {
     "instructions": "AGENTS.md",
-    "skills": ["skills"],
+    "skills": [
+      "skills"
+    ],
     "env": {
       "MACHINES_CLI": "${dsh}/toolchain/machines"
     }
