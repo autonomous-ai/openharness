@@ -15,7 +15,9 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 12px; pa
 .screen { position: relative; flex: 1 1 46%; min-height: 200px; border-radius: var(--radius); border: 1px solid var(--line); background: #0a0c12; overflow: hidden; display: grid; place-items: center; }
 .screen img { width: 100%; height: 100%; object-fit: contain; object-position: top center; display: block; }
 .screen img.hidden { display: none; }
-.screen-idle { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 30px 48px; }
+/* Opaque: the form sits over the last picture of the page, and a white error page behind it made
+   the words unreadable. */
+.screen-idle { position: absolute; inset: 0; background: var(--panel, #0d1117); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 30px 48px; }
 .screen-idle.hidden { display: none; }
 .screen-idle b { font-size: 19px; color: var(--ink); }
 .screen-idle span { font-size: 12.5px; line-height: 1.6; color: var(--dim); max-width: 620px; }

@@ -39,6 +39,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const DANGER = /\b(pay|buy|purchase|checkout|order now|place order|subscribe|donate|confirm and pay|delete|remove|deactivate|close account|unsubscribe|send|post|publish|submit|apply now|book now|reserve|sign out|log out)\b/i
 const SECRET_FIELD = /pass|pwd|secret|otp|2fa|one.?time|cvv|cvc|card|iban|account.?number|ssn|social.?security|pin\b/i
 
+// A pop-up that covers the page stops it being read: the text under it is there, but a site that
+// locks scrolling behind a modal collapses the document, and half the page goes missing. These are
+// the controls that put such a thing away WITHOUT deciding anything on the person's behalf, most
+// clearly harmless first. Anything that accepts, agrees or allows is deliberately not here: that is
+// the person's choice to make, in their own window, and it is remembered for next time.
+const DISMISS = [
+  /^(close|dismiss|close this|close dialog|close popup|close banner|[x\u00d7\u2715\u2716\u2573])$/i,
+  /\b(no thanks|no,? thanks|not now|maybe later|decline|reject all|reject|refuse|deny|continue without accepting|only necessary|necessary only|essential only|strictly necessary)\b/i,
+  /^(no|stay|stay here|stay on this site|keep me here|remain here)$/i,
+]
+const CONSENTS = /\b(accept|agree|allow|consent|got it|understood|i understand|yes|ok|okay)\b/i
+
 export class Refused extends Error {}
 
 /** Only http(s), and only a host the job named. */
@@ -166,7 +178,11 @@ export async function openChrome({ profileDir, show = true, allowedHosts = [], w
       lastStatus = null
       await send('Page.navigate', { url: safe })
       await settle()
-      return { url: await evaluate('location.href'), status: lastStatus }
+      const landed = await evaluate('location.href')
+      // Chrome parks a failed navigation on its own error page. Reading that and reporting
+      // "chromewebdata came back nearly empty" tells nobody anything.
+      if (/^chrome-error:/.test(landed)) throw new Error(`${safe} could not be opened. Check the address, and that the site is up.`)
+      return { url: landed, status: lastStatus }
     },
     evaluate,
     settle,
@@ -177,6 +193,52 @@ export async function openChrome({ profileDir, show = true, allowedHosts = [], w
      * script that buys something. The address is checked like any other.
      */
     async open(href) { return api.go(href) },
+    /**
+     * Put away a cookie or region pop-up that is covering the page, so the page underneath can be
+     * read. This is the only control this harness ever presses by itself, and only the kind that
+     * decides nothing: close, no thanks, not now, reject. A pop-up whose only way out is "Accept"
+     * is left exactly as it is, and named, so the person can answer it themselves in the window.
+     * The element is pressed directly rather than by mouse position, because the thing in the way
+     * is usually a full-page sheet that would swallow the click.
+     */
+    async dismissOverlays() {
+      const found = await evaluate(`(() => {
+        const DISMISS = [${DISMISS.map((r) => r.toString()).join(', ')}]
+        const CONSENTS = ${CONSENTS.toString()}
+        const DANGER = ${DANGER.toString()}
+        const vw = innerWidth, vh = innerHeight
+        const label = (b) => ((b.innerText || b.value || b.getAttribute('aria-label') || b.getAttribute('title') || '').trim().replace(/\\s+/g, ' ').slice(0, 60))
+        const put = [], left = []
+        const covers = []
+        for (const e of document.querySelectorAll('body *')) {
+          const cs = getComputedStyle(e)
+          if (cs.position !== 'fixed' && cs.position !== 'sticky') continue
+          if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) < 0.05) continue
+          const r = e.getBoundingClientRect()
+          const over = (Math.max(0, Math.min(r.right, vw) - Math.max(r.left, 0)) * Math.max(0, Math.min(r.bottom, vh) - Math.max(r.top, 0))) / (vw * vh)
+          if (over < 0.1) continue
+          if (covers.some((c) => c.contains(e))) continue
+          covers.push(e)
+        }
+        for (const box of covers.slice(0, 4)) {
+          const controls = [...box.querySelectorAll('button, [role=button], a, input[type=button]')]
+            .map((b) => ({ b, t: label(b) })).filter((c) => c.t && !DANGER.test(c.t))
+          let hit = null
+          for (const rule of DISMISS) { hit = controls.find((c) => rule.test(c.t) && !CONSENTS.test(c.t)); if (hit) break }
+          if (hit) { hit.b.click(); put.push(hit.t) }
+          else {
+            const asks = controls.find((c) => CONSENTS.test(c.t))
+            const words = (box.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 90)
+            if (asks) left.push(words || asks.t)
+          }
+        }
+        return JSON.stringify({ put, left })
+      })()`)
+      let out = { put: [], left: [] }
+      try { out = JSON.parse(found) } catch { /* nothing on the page */ }
+      if (out.put.length) await settle(4000)
+      return out
+    },
     /** Click an element the page reader found, by the css path it gave. Refused on a danger word. */
     async click(cssPath, label = '') {
       if (DANGER.test(label)) throw new Refused(`"${label.trim().slice(0, 60)}" looks like it does something for real. This harness only reads pages.`)

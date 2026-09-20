@@ -156,6 +156,10 @@ The refusals live in `toolchain/chrome.mjs`, next to the only code that touches 
   signs in themselves in the window; the profile is kept in the workspace, so next time it is
   already signed in.
 - **It stays on the sites the job names**, and only on http and https. Downloads are refused.
+- **It will put away a pop-up that covers the page**, because the page cannot be read through one,
+  and only with a control that decides nothing: close, no thanks, not now, reject. A cookie box
+  whose only way out is "Accept" is left standing and reported in the feed, because that answer
+  belongs to the person, and the visible window is where they give it.
 - **A search box is the one exception**, because searching asks a site a question rather than
   buying, sending or deleting. Put what to search for in `"search"` and the harness types it into
   the site's own search box.

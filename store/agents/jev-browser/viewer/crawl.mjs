@@ -362,7 +362,7 @@ export async function runJob({ chrome, job, ask, onEvent, stopped = () => false 
     }
     out.pagesRead++
     visited.add(canonical(listUrl))
-    say('read', { url: page.url, title: page.title, links: page.links.length, blocks: page.blocks.length })
+    say('read', { url: page.url, title: page.title, links: page.links.length, blocks: page.blocks.length, dismissed: page.dismissed, consentWall: page.consentWall })
 
     const { questions, links } = listQuestions(page, job, { wantNext: listPages < job.maxPages })
     const res = await ask({ state: pageState(page), questions })
@@ -388,7 +388,7 @@ export async function runJob({ chrome, job, ask, onEvent, stopped = () => false 
         itemPage = await readPage(chrome)
       } catch (e) { out.errors.push({ url: link.url, message: String(e.message ?? e) }); say('trouble', { url: link.url, message: String(e.message ?? e) }); continue }
       out.pagesRead++
-      say('read', { url: itemPage.url, title: itemPage.title, links: itemPage.links.length, blocks: itemPage.blocks.length })
+      say('read', { url: itemPage.url, title: itemPage.title, links: itemPage.links.length, blocks: itemPage.blocks.length, dismissed: itemPage.dismissed, consentWall: itemPage.consentWall })
       // A site can serve its list happily and then challenge every page under it. Without this the
       // challenge page's words become a blank row and the run looks like it worked.
       const itemWall = wallReason(itemPage)

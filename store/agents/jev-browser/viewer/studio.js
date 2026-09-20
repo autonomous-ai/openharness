@@ -140,11 +140,19 @@ function applyState(s) {
   renderJob(); renderRows(); renderLinks(); renderFeed(); renderTop()
   if (first) showAsk(!s.rows.length && s.phase === 'idle')
   else if (askOpen && s.phase === 'running') showAsk(false)
+  // A go that came to nothing used to leave a blank screen with no form and no reason: the only
+  // way back in was a button in the top bar nobody had reason to look at. Put the form back.
+  else if (!askOpen && !closedByHand && s.lastProblem && !s.proposing && s.phase !== 'running' && !s.fields.length && !s.rows.length) showAsk(true)
+  else if (askOpen && s.lastProblem && $('askMsg').textContent !== s.lastProblem && !$('askSubmit').disabled) {
+    $('askMsg').className = 'ask-msg bad'; $('askMsg').textContent = s.lastProblem
+  }
   $('chromeNote').textContent = s.walled ? s.walled + '. This harness does not work around a block. Try a site that allows reading, or open the page yourself in the window and see what it wants.'
     : !s.chrome.found
     ? 'Google Chrome was not found on this machine. Install it, or set CHROME_PATH to where it is.'
     : s.client === 'mock' ? 'No Jev key yet, so an offline stand-in will answer. It only matches words: good enough to watch, not good enough to act on. Paste a key in the panel on the right.' : ''
   $('chromeNote').className = 'screen-note' + (!s.chrome.found || s.walled ? ' bad' : s.client === 'mock' ? ' warn' : '')
+  // The form already carries the reason. Printing it again underneath reads as two problems.
+  if (askOpen && s.lastProblem && $('chromeNote').textContent && s.lastProblem.startsWith($('chromeNote').textContent.slice(0, 40))) $('chromeNote').textContent = ''
   if (document.activeElement !== $('urlInput')) $('urlInput').value = s.here.url || ''
   $('urlInput').placeholder = s.chrome.open ? 'where the browser is' : 'the browser is not open yet'
   if (first) $('screen').classList.toggle('hidden', true)
@@ -167,6 +175,7 @@ function step() {
 // The pane takes the job itself. Before this the only way in was the agent or the JSON file, and a
 // person looking at the pane could not tell what to do.
 let askOpen = false
+let closedByHand = false   // the form comes back on its own, unless the person put it away
 function showAsk(on) {
   askOpen = on
   $('screenIdle').classList.toggle('hidden', !on)
@@ -181,7 +190,9 @@ function showAsk(on) {
     $('askColumns').value = (S?.fields ?? []).map((f) => f.ask).join('\n')
     $('askKeep').value = S?.keep ?? ''
     $('askMax').value = S?.fields.length ? S.maxItems : 25
-    $('askMsg').textContent = ''
+    // Whatever went wrong last time belongs here, where the person is already looking.
+    $('askMsg').className = S?.lastProblem ? 'ask-msg bad' : 'ask-msg'
+    $('askMsg').textContent = S?.lastProblem ?? ''
     // The extra boxes stay folded away unless this job is actually using one of them.
     showMore(!!(S?.search || S?.keep || S?.fields.length))
     setTimeout(() => $('askStart').focus(), 30)
@@ -199,6 +210,7 @@ async function sendJob(over = {}) {
   const r = await post('setJob', body)
   $('askSubmit').disabled = false
   if (!r.ok) { $('askMsg').className = 'ask-msg bad'; $('askMsg').textContent = r.error || 'that did not work'; return }
+  closedByHand = false
   showAsk(false)
   toast('Off it goes. The browser is opening.')
 }
@@ -212,7 +224,7 @@ $('askForm').addEventListener('submit', (e) => { e.preventDefault(); sendJob() }
 $('askDemo').addEventListener('click', () => sendJob({
   start: 'demo', search: '', item: '', want: 'what each one is called and what it pays', columns: '', keep: '',
 }))
-$('editBtn').addEventListener('click', () => showAsk(!askOpen))
+$('editBtn').addEventListener('click', () => { closedByHand = askOpen; showAsk(!askOpen) })
 
 // ---- controls ---------------------------------------------------------------------------------------------
 $('startBtn').addEventListener('click', async () => {

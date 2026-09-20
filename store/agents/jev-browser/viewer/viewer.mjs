@@ -24,6 +24,9 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
   let rows = [], feed = [], links = [], here = { url: '', title: '' }
   let counters = { pages: 0, calls: 0, questions: 0, tokens: 0, costUsd: 0, links: 0, errors: 0 }
   let phase = 'idle', startedAt = 0, finishedAt = 0, lastRun = null, proposing = false
+  // Why the last go came to nothing. The feed empties when this process restarts, and a person who
+  // reopens the pane was being shown a blank screen with no hint of what went wrong.
+  let lastProblem = ''
   let shotTimer = null, shotBusy = false
   let expecting = { expecting: 'list', item: '' }
   const mock = browserMock(() => expecting)
@@ -37,7 +40,7 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
     keep: job.keep, maxItems: job.maxItems, maxPages: job.maxPages, limits: LIMITS,
     error: configError, jevError, client: liveRoute() ?? 'mock', jevSays: describeCredentials(),
     chrome: { found: !!chromePath, open: !!chrome?.alive },
-    demoUrl: demo?.url ?? null, phase, here,
+    demoUrl: demo?.url ?? null, phase, here, lastProblem,
     progress: {
       ...counters,
       rows: rows.length,
@@ -47,7 +50,12 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
     links, feed, rows, resultsFile: RESULTS,
   })
   const push = (event = 'state') => server?.broadcast(view(), event)
-  const say = (text, kind = 'info') => { feed = [{ at: Date.now(), kind, text: clean(text).slice(0, 220) }, ...feed].slice(0, FEED) }
+  const say = (text, kind = 'info') => {
+    const line = clean(text).slice(0, 220)
+    // The same sentence twice in a row reads like it happened twice. It did not.
+    if (feed[0]?.text === line && feed[0]?.kind === kind) return
+    feed = [{ at: Date.now(), kind, text: line }, ...feed].slice(0, FEED)
+  }
 
   // ---- results.csv ------------------------------------------------------------------------------
   // A value that starts with = + - @ would run as a formula in a spreadsheet: quote it.
@@ -167,9 +175,10 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
       demo ??= await startDemoSite()
       job = { ...job, start: demo.url, hosts: [...new Set([...job.hosts, '127.0.0.1', 'localhost'])] }
     }
+    lastProblem = ''
     let opened
-    try { opened = await openBrowser() } catch (e) { const error = clean(e?.message ?? e); say(error, 'bad'); phase = 'idle'; push(); verdictSoon(); return { ok: false, error } }
-    if (opened.ok === false) { say(opened.error, 'bad'); push(); return opened }
+    try { opened = await openBrowser() } catch (e) { const error = clean(e?.message ?? e); lastProblem = error; say(error, 'bad'); phase = 'idle'; push(); verdictSoon(); return { ok: false, error } }
+    if (opened.ok === false) { lastProblem = opened.error; say(opened.error, 'bad'); push(); return opened }
     rows = []; links = []; feed = []
     // Nobody should have to name the columns. Jev reads one page and proposes them, in about a
     // second, and the answer is written back into browse.json so the job stays the recipe.
@@ -199,12 +208,13 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
         }
       } catch (e) { got = { columns: [], error: String(e.message ?? e), provider: e?.provider === true } }
       proposing = false
-      if (got.walled) { lastRun = { walled: got.walled, errors: [] }; say(got.walled, 'bad'); phase = 'done'; finishedAt = Date.now(); push(); saveVerdict(); return { ok: false, error: got.walled } }
+      if (got.walled) { lastRun = { walled: got.walled, errors: [] }; lastProblem = got.walled; say(got.walled, 'bad'); phase = 'done'; finishedAt = Date.now(); push(); saveVerdict(); return { ok: false, error: got.walled } }
       if (!got.columns.length) {
         phase = 'idle'; finishedAt = Date.now()
         const why = got.error || got.none || 'nothing on that page looked like a value worth a column'
         // A key that is refused or out of credit is not a "the page was no good" problem, and
         // saying so sends the person off reading the page instead of fixing the key.
+        lastProblem = got.provider ? why : `Nothing could be collected from ${job.start}: ${why}. Try a page that lists several of them, or write the columns yourself under More.`
         say(got.provider ? why : `No columns could be worked out: ${why}`, 'bad')
         push(); saveVerdict()
         return { ok: false, error: got.provider ? why : `${why}. Write the columns yourself, one per line.` }
@@ -229,7 +239,11 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
           chrome, job, ask, stopped: () => stopFlag,
           onEvent: (e) => {
             if (e.type === 'going') { here = { url: e.url, title: '' }; expecting = { expecting: e.what?.startsWith('list page') || e.url === job.start ? 'list' : 'item', item: job.item }; say(`Opening ${e.what || e.url}`, 'go') }
-            else if (e.type === 'read') { here = { url: e.url, title: e.title }; counters.pages++ }
+            else if (e.type === 'read') {
+              here = { url: e.url, title: e.title }; counters.pages++
+              if (e.dismissed?.length) say(`Put away the pop-up in the way (pressed "${e.dismissed[0]}")`, 'go')
+              if (e.consentWall) say(`This page wants a cookie choice before it shows itself: "${e.consentWall}". Answer it yourself in the browser window and it will be remembered.`, 'bad')
+            }
             else if (e.type === 'judged') { links = e.links ?? []; counters.links += e.judged; say(`${e.judged} links judged in one call: ${e.found} are ${job.item}${e.next ? `, next page "${e.next}"` : ''}`, 'judge') }
             else if (e.type === 'row') { rows = [...rows, e.row]; say(`Collected #${e.row.n}: ${Object.values(e.row.fields).find(Boolean) ?? e.row.title}`, 'row'); saveResults() }
             else if (e.type === 'skipped') say(`Nothing of the job on ${e.url}`, 'skip')
@@ -240,7 +254,8 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
         })
       } catch (e) {
         counters.errors++
-        say(e instanceof Refused ? `Refused: ${e.message}` : `Stopped: ${String(e.message ?? e)}`, 'bad')
+        lastProblem = e instanceof Refused ? `Refused: ${e.message}` : `Stopped: ${String(e.message ?? e)}`
+        say(lastProblem, 'bad')
       } finally {
         phase = stopFlag ? 'stopped' : 'done'
         finishedAt = Date.now()

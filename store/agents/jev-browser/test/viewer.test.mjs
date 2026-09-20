@@ -526,3 +526,89 @@ test("a key with no credit left is said plainly, not as a blob of the provider's
     server.close()
   }
 })
+
+test('a pop-up in the way is put away, and a consent one is left for the person', { skip: noChrome }, async () => {
+  // autonomous.ai puts a "Switch to Vietnam?" sheet plus a full-page scrim over the page. The
+  // scrim locks scrolling, which collapses the document, and everything below the fold then reads
+  // as off-screen: the run found no products at all and said nothing about why.
+  const { createServer } = await import('node:http')
+  const LOCK = '<style>body{position:fixed;overflow:hidden;height:100vh;width:100vw}</style>'
+  const DEEP = Array.from({ length: 40 }, (_, i) => `<p style="margin:60px 0">Widget number ${i} costs $${i + 3}.00</p>`).join('')
+  const pages = {
+    '/shifts': `<!doctype html><title>Region</title>${LOCK}
+      <div id=scrim style="position:fixed;inset:0;z-index:9999;background:#0008"></div>
+      <div id=sheet style="position:fixed;inset:20% 25%;z-index:1001;background:#fff">
+        <p>Switch to another country? See pricing for your location.</p>
+        <button>Yes</button><button onclick="sheet.remove();scrim.remove();document.body.removeAttribute('style')">No thanks</button></div>
+      <main>${DEEP}</main>`,
+    '/asks': `<!doctype html><title>Consent</title>${LOCK}
+      <div style="position:fixed;inset:0;z-index:9999;background:#fff">
+        <p>We value your privacy and use cookies.</p>
+        <button>Accept all</button><button>Manage choices</button></div>
+      <main>${DEEP}</main>`,
+  }
+  const server = createServer((req, res) => {
+    const body = pages[new URL(req.url, 'http://x').pathname]
+    res.writeHead(body ? 200 : 404, { 'content-type': 'text/html' })
+    res.end(body ?? 'no')
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  const base = `http://127.0.0.1:${server.address().port}`
+  const chrome = await openChrome({ profileDir: mkdtempSync(join(tmpdir(), 'jev-overlay-')), show: false, allowedHosts: ['127.0.0.1'] })
+  try {
+    await chrome.go(`${base}/shifts`)
+    const blind = await readPage(chrome, { dismiss: false })
+    const seeing = await readPage(chrome)
+    assert.deepEqual(seeing.dismissed, ['No thanks'], 'it presses the one that decides nothing')
+    assert.equal(seeing.consentWall, null)
+    assert.ok(!seeing.text.includes('Switch to another country'), 'the sheet is gone from what Jev is shown')
+    // The reader must find the page under the sheet whether or not scrolling is locked.
+    for (const page of [blind, seeing]) {
+      assert.ok(page.text.includes('Widget number 39'), 'the bottom of a scroll-locked page is still read')
+    }
+
+    await chrome.go(`${base}/asks`)
+    const asked = await readPage(chrome)
+    assert.deepEqual(asked.dismissed, [], 'accepting cookies is the person\'s call, not the harness\'s')
+    assert.match(String(asked.consentWall), /value your privacy/, 'and it says what is standing in the way')
+  } finally { await chrome.close(); server.close() }
+})
+
+test('a go that comes to nothing puts the form back, with the reason in it', { skip: noChrome }, async () => {
+  // What Dee saw: the form vanished when the job was sent, the go came to nothing, and the pane
+  // was left blank. No form, no error, no way back in except a button in the top bar.
+  process.env.JEV_OFFLINE = '1'
+  const ws = mkdtempSync(join(tmpdir(), 'jev-deadend-'))
+  writeFileSync(join(ws, 'browse.json'), '{}')
+  const v = await startBrowserViewer({ workspace: ws, port: 0, show: false })
+  const chrome = await openChrome({ profileDir: mkdtempSync(join(tmpdir(), 'jev-deadend-c-')), show: false, allowedHosts: ['127.0.0.1'] })
+  const look = () => chrome.evaluate(`(() => {
+    const el = (i) => document.getElementById(i)
+    const shown = (i) => !el(i).classList.contains('hidden') && el(i).getBoundingClientRect().height > 4
+    return { form: shown('screenIdle'), msg: el('askMsg').textContent, phase: el('phasePill').textContent }
+  })()`)
+  try {
+    await chrome.go(v.url)
+    await new Promise((r) => setTimeout(r, 1200))
+    assert.equal((await look()).form, true, 'the form is there to begin with')
+
+    await chrome.evaluate(`(() => {
+      const set = (id, val) => { const e = document.getElementById(id); e.value = val; e.dispatchEvent(new Event('input', { bubbles: true })) }
+      set('askStart', 'http://127.0.0.1:1/'); set('askWant', 'anything at all')
+      document.getElementById('askSubmit').click(); return 1 })()`)
+
+    const end = Date.now() + 30000
+    let seen = null
+    for (;;) {
+      seen = await look()
+      if (seen.form && seen.msg) break
+      if (Date.now() > end) assert.fail(`the pane never came back: ${JSON.stringify(seen)}`)
+      await new Promise((r) => setTimeout(r, 400))
+    }
+    assert.equal(seen.phase, 'idle', 'and it is not still pretending to work')
+    assert.ok(seen.msg.length > 20, `the reason is written where the person is looking: ${seen.msg}`)
+    // The same sentence must not be stacked up twice under the form.
+    const notes = await chrome.evaluate(`document.getElementById('chromeNote').textContent`)
+    assert.ok(!notes || !seen.msg.startsWith(String(notes).slice(0, 40)), 'and it is said once, not twice')
+  } finally { await chrome.close(); await v.close(); delete process.env.JEV_OFFLINE }
+})

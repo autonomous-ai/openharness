@@ -11,7 +11,10 @@
 export const READER = `(() => {
   const MAX_LINKS = 220, MAX_BLOCKS = 90, MAX_LABEL = 110, MAX_BLOCK = 180
   for (const e of document.querySelectorAll('[data-jev-n]')) e.removeAttribute('data-jev-n')
-  const seen = document.documentElement.getBoundingClientRect()
+  // Not documentElement's rect: a site that locks scrolling behind a modal collapses that to one
+  // screen, and then every rect below the fold looks off-page and the page reads as half empty.
+  const tall = Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0, innerHeight)
+  const seen = { height: tall }
   const vis = (e) => {
     const r = e.getBoundingClientRect()
     if (r.width < 4 || r.height < 4) return null
@@ -134,7 +137,11 @@ export const READER = `(() => {
  * filling in, and a read a moment too early comes back nearly empty. So a thin first read is given
  * one more second and tried again, which is the difference between a column and a blank column.
  */
-export async function readPage(chrome, { retry = true } = {}) {
+export async function readPage(chrome, { retry = true, dismiss = true } = {}) {
+  // A cookie or region sheet over the page is the difference between reading it and reading the
+  // sheet. Put away the kind that decides nothing; name the kind only the person should answer.
+  let shifted = { put: [], left: [] }
+  if (dismiss && chrome.dismissOverlays) { try { shifted = await chrome.dismissOverlays() } catch { /* nothing in the way */ } }
   let page = await chrome.evaluate(READER)
   if (!page) throw new Error('the page could not be read')
   if (retry && page.blocks.length < 8 && page.links.length < 8) {
@@ -143,6 +150,8 @@ export async function readPage(chrome, { retry = true } = {}) {
     if (again && again.blocks.length + again.links.length > page.blocks.length + page.links.length) page = again
   }
   for (const list of [page.links, page.controls, page.blocks]) for (const row of list) row.css = `[data-jev-n="${row.n}"]`
+  page.dismissed = shifted.put ?? []
+  page.consentWall = (shifted.left ?? [])[0] ?? null
   return page
 }
 

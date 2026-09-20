@@ -65,6 +65,10 @@ The refusals sit next to the only code that can touch a page, so nothing above t
   in yourself in the window. The profile is kept in your project folder, so the next run is already
   signed in.
 - **It stays on the sites your job names**, on http and https only, and downloads are refused.
+- **It will close a pop-up that is covering the page**, because a page cannot be read through one.
+  Only a control that decides nothing on your behalf: close, no thanks, not now, reject. A cookie
+  box whose only way out is "Accept" is left exactly as it is and named in the feed, so you can
+  answer it yourself in the window. Your answer is remembered for next time.
 - **A search box is the one control it will ever use**, because searching asks a site a question
   rather than buying, sending or deleting anything.
 
@@ -113,6 +117,7 @@ On 2026-09-20 with live Jev (`typesafe/jev-1.13`) through OpenRouter.
 |---|---|---|---|---|
 | The built-in job board, 36 roles | 24 | 33 s | $0.0023 | 144 of 144 cells exactly matched the site's own data, no repeats, nothing skipped |
 | `books.toscrape.com`, a public sandbox | 8 | 21 s | $0.0018 | every title, price, stock count and UPC code right |
+| `autonomous.ai`, typed in as "find me the coolest product" | 6 | 65 s | $0.0041 | walked the shop to the robots page on its own, put the region pop-up away, and read back real prices, names and ratings |
 
 Working out the job from scratch, on the same site: two Jev calls, 61 questions then 33, **1.2
 seconds** to decide the page lists products and to propose columns named Price, Availability, UPC
