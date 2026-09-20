@@ -202,3 +202,27 @@ test('the agent saves sheet.json atomically, again and again, and every save is 
     await until((x) => x.rows.length === 5)
   } finally { await v.viewer.close() }
 })
+
+test('the verdict moves while a fill is still running, and says when sheet.json was loaded', async () => {
+  const v = await fresh()
+  try {
+    const verdict = () => JSON.parse(readFileSync(join(v.ws, '.harness/verdict.json'), 'utf8'))
+    const t0 = Date.now()
+    await v.upload('reviews.csv', REVIEWS)
+    await v.ctl('addColumn', { header: 'Complaint?' })
+    await v.ctl('tick', { n: 2 }) // two of the four rows: the fill is NOT finished
+    const end = Date.now() + 5000
+    let got
+    for (;;) { got = verdict(); if (got.sheet.cellsFilled === 2) break; if (Date.now() > end) assert.fail('the verdict never showed the fill in progress: ' + got.summary); await new Promise((r) => setTimeout(r, 100)) }
+    assert.equal(got.ready, false)
+    assert.equal(got.sheet.cellsTotal, 4)
+    assert.equal(got.sheet.source, 'reviews.csv')
+    assert.ok(Date.parse(got.sheet.loadedAt) >= t0 - 1000, 'loadedAt is the time this sheet was taken in')
+    await v.ctl('drain')
+    const until = Date.now() + 5000
+    for (;;) { got = verdict(); if (got.ready) break; if (Date.now() > until) assert.fail('the verdict never became ready'); await new Promise((r) => setTimeout(r, 100)) }
+    assert.equal(got.sheet.cellsFilled, 4)
+    const weak = got.sheet.columns[0].weakest[0]
+    if (weak) assert.equal(typeof weak.n, 'number', 'weakest rows carry the row number answers.csv uses')
+  } finally { await v.viewer.close() }
+})

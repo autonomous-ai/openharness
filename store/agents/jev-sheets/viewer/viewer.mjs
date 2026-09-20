@@ -43,7 +43,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
   let loadedAt = null        // when sheet.json was last taken in: the agent's proof that a save was seen
   let counters = { calls: 0, cacheHits: 0, tokens: 0, costUsd: 0, errors: 0, computed: 0 }
   let burst = { active: false, startedAt: 0, cells: 0, rate: 0, ms: 0 }
-  let patches = [], patchTimer = null, verdictTimer = null, retryTimer = null, ghostTimer = null
+  let patches = [], patchTimer = null, verdictTimer = null, retryTimer = null, ghostTimer = null, progressTimer = null
   let ghost = { enabled: true, phase: 'idle', header: '', typeMs: 0, startedAt: 0, nextAt: 0, removeAt: 0, pausedUntil: 0, cursor: 0, watching: false }
   const rng = mulberry32(20260919)
   // Which live route is active (typesafe, cloudflare, openrouter), or null for the offline stand-in.
@@ -214,6 +214,8 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
   function flushPatches() {
     clearTimeout(patchTimer); patchTimer = null
     if (!patches.length) return
+    // While a long fill runs, the verdict moves every two seconds, so the chat agent can watch it climb.
+    if (!progressTimer) progressTimer = setTimeout(() => { progressTimer = null; saveVerdict() }, 2000)
     const out = patches; patches = []
     const t = tally()
     server?.broadcast({ rev, patches: out, colStats: t.colStats, groups: t.groups, stats: t.stats }, 'cells')
@@ -646,7 +648,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     async close() {
       sourceWatcher?.close(); clearTimeout(sourceTimer); saveAnswers(); clearTimeout(answersTimer)
       stopped = true
-      clearInterval(ghostTimer); clearTimeout(patchTimer); clearTimeout(verdictTimer); clearTimeout(retryTimer)
+      clearInterval(ghostTimer); clearTimeout(patchTimer); clearTimeout(verdictTimer); clearTimeout(retryTimer); clearTimeout(progressTimer)
       watcher.close()
       await server.close()
     },
