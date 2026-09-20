@@ -21,7 +21,7 @@ class StoreDiscover extends StatefulWidget {
     required this.installed,
     required this.onOpen,
     required this.onAction,
-    required this.onCollection,
+    required this.onCategory,
     required this.onAll,
     required this.onEngines,
   });
@@ -32,7 +32,7 @@ class StoreDiscover extends StatefulWidget {
   final bool Function(String) installed;
   final ValueChanged<String> onOpen;
   final ValueChanged<DshEntry> onAction;
-  final ValueChanged<StoreCollection> onCollection;
+  final ValueChanged<String> onCategory;
   final VoidCallback onAll;
   final VoidCallback onEngines;
 
@@ -90,9 +90,12 @@ class _StoreDiscoverState extends State<StoreDiscover> {
       final rank = (ai < 0 ? 999 : ai).compareTo(bi < 0 ? 999 : bi);
       return rank == 0 ? a.name.compareTo(b.name) : rank;
     });
-    final collections = storeCollections
-        .where((c) => crafts.any(c.includes))
-        .toList();
+    final categories = [
+      for (final name in [...storeCategoryDomains.keys, 'Other'])
+        if (name != 'Coding' &&
+            crafts.any((entry) => storeCategoryFor(entry) == name))
+          name,
+    ];
     return LayoutBuilder(
       builder: (context, box) {
         final padding = box.maxWidth < 680 ? 20.0 : 36.0;
@@ -105,15 +108,8 @@ class _StoreDiscoverState extends State<StoreDiscover> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _CuriosityHero(
-                    samples: samples,
-                    onOpen: widget.onOpen,
-                    onExplore: collections.isEmpty
-                        ? widget.onEngines
-                        : _explore,
-                  ),
                   if (engines.isNotEmpty) ...[
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 4),
                     _CodingStart(
                       entries: engines,
                       installed: widget.installed,
@@ -122,13 +118,18 @@ class _StoreDiscoverState extends State<StoreDiscover> {
                       onAll: widget.onEngines,
                     ),
                   ],
-                  if (collections.isNotEmpty) ...[
+                  const SizedBox(height: 22),
+                  _CuriosityHero(
+                    samples: samples,
+                    onOpen: widget.onOpen,
+                    onExplore: categories.isEmpty ? widget.onEngines : _explore,
+                  ),
+                  if (categories.isNotEmpty) ...[
                     const SizedBox(height: 40),
                     StoreExploreHeading(
                       key: _paths,
                       title: 'Choose your next superpower.',
-                      subtitle:
-                          'A new discipline starts with one small project.',
+                      subtitle: 'Same curiosity. New tools. What do you want to make next?',
                       action: 'Browse all',
                       onAction: widget.onAll,
                     ),
@@ -150,18 +151,19 @@ class _StoreDiscoverState extends State<StoreDiscover> {
                           spacing: 20,
                           runSpacing: 20,
                           children: [
-                            for (final collection in collections)
+                            for (final name in categories)
                               SizedBox(
                                 width: width,
                                 child: _CuriosityPath(
-                                  key: ValueKey(
-                                    'store-collection:${collection.id}',
-                                  ),
-                                  collection: collection,
+                                  key: ValueKey('store-category:$name'),
+                                  name: name,
                                   entries: crafts
-                                      .where(collection.includes)
+                                      .where(
+                                        (entry) =>
+                                            storeCategoryFor(entry) == name,
+                                      )
                                       .toList(),
-                                  onTap: () => widget.onCollection(collection),
+                                  onTap: () => widget.onCategory(name),
                                 ),
                               ),
                           ],
@@ -170,8 +172,8 @@ class _StoreDiscoverState extends State<StoreDiscover> {
                     ),
                     const SizedBox(height: 42),
                     const StoreExploreHeading(
-                      title: 'Make something you haven’t made before.',
-                      subtitle: 'Real projects. Familiar agents. A few places to begin.',
+                      title: 'It started with a prompt.',
+                      subtitle: 'Borrow a starting point. Make it your own.',
                     ),
                     const SizedBox(height: 22),
                     StoreProjectGrid(
@@ -244,7 +246,7 @@ class _CuriosityHero extends StatelessWidget {
             Text(
               'Follow your\ncuriosity.',
               style: TextStyle(
-                fontSize: compact ? 45 : 59,
+                fontSize: compact ? 43 : 54,
                 height: .98,
                 letterSpacing: -2.5,
                 fontWeight: FontWeight.w700,
@@ -263,7 +265,7 @@ class _CuriosityHero extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             const Text(
-              'A part. A film. A world of your own.\nGive your next idea somewhere to go.',
+              'Your ideas can take you into unfamiliar crafts.\nThis is a place to follow them.',
               style: TextStyle(
                 fontSize: 14,
                 height: 1.6,
@@ -283,7 +285,7 @@ class _CuriosityHero extends StatelessWidget {
                 ),
               ),
               icon: const Icon(LucideIcons.arrowDown300, size: 16),
-              label: const Text('Find your next project'),
+              label: const Text('Explore disciplines'),
             ),
           ],
         ),
@@ -337,7 +339,7 @@ class _CuriosityHero extends StatelessWidget {
             : Row(
                 children: [
                   Expanded(flex: 11, child: copy),
-                  Expanded(flex: 12, child: art),
+                  Expanded(flex: 10, child: art),
                 ],
               ),
       );
@@ -501,63 +503,65 @@ class _CodingStart extends StatelessWidget {
 class _CuriosityPath extends StatelessWidget {
   const _CuriosityPath({
     super.key,
-    required this.collection,
+    required this.name,
     required this.entries,
     required this.onTap,
   });
-  final StoreCollection collection;
+  final String name;
   final List<DshEntry> entries;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final discipline = storeDiscipline(collection.categories.first);
-    final example = storeCollectionExample(collection, entries)!;
+    final discipline = storeDiscipline(name);
+    final example = discipline.example(entries)!;
     final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+    final marks = [
+      example,
+      ...entries.where((entry) => entry.id != example.id),
+    ].take(3);
     return StoreExploreCard(
       color: discipline.color,
       onTap: onTap,
-      semanticLabel: 'Explore ${collection.title}',
+      semanticLabel: 'Explore $name',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          AspectRatio(aspectRatio: 2, child: StoreProjectArt(entry: example)),
+          AspectRatio(aspectRatio: 2.1, child: StoreProjectArt(entry: example)),
+          Container(height: 3, color: discipline.color),
           SizedBox(
-            height: 195 * scale,
+            height: 151 * scale,
             child: Padding(
-              padding: const EdgeInsets.all(22),
+              padding: const EdgeInsets.all(20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    collection.categories.join(' + ').toUpperCase(),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 10,
-                      letterSpacing: 1.2,
-                      fontWeight: FontWeight.w600,
-                      color: grid.AppTheme.isDark
-                          ? discipline.color
-                          : const Color(0xff485648),
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 22,
+                            height: 1.15,
+                            letterSpacing: -.4,
+                            fontWeight: FontWeight.w700,
+                            color: grid.AppPalette.textPrimary,
+                          ),
+                        ),
+                      ),
+                      Icon(
+                        LucideIcons.arrowUpRight300,
+                        size: 18,
+                        color: grid.AppPalette.textSecondary,
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 8),
                   Text(
-                    collection.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 23,
-                      height: 1.1,
-                      letterSpacing: -.5,
-                      fontWeight: FontWeight.w700,
-                      color: grid.AppPalette.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    collection.subtitle,
+                    discipline.headline.replaceAll('\n', ' '),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -569,19 +573,24 @@ class _CuriosityPath extends StatelessWidget {
                   const Spacer(),
                   Row(
                     children: [
-                      Expanded(
-                        child: Text(
-                          '${entries.length} ${entries.length == 1 ? 'harness' : 'harnesses'} to explore',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: grid.AppPalette.textSecondary,
+                      for (final entry in marks) ...[
+                        Tooltip(
+                          message: entry.name,
+                          child: EngineMark(
+                            engine: entry.id,
+                            displayName: entry.name,
+                            size: 24,
                           ),
                         ),
-                      ),
-                      Icon(
-                        LucideIcons.arrowRight300,
-                        size: 18,
-                        color: grid.AppPalette.textPrimary,
+                        const SizedBox(width: 7),
+                      ],
+                      const Spacer(),
+                      Text(
+                        '${entries.length} ${entries.length == 1 ? 'harness' : 'harnesses'}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: grid.AppPalette.textSecondary,
+                        ),
                       ),
                     ],
                   ),

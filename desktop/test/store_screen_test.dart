@@ -394,6 +394,34 @@ void main() {
             .text,
         'typ',
       );
+      await tester.tap(find.byKey(const ValueKey('store-back')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('store-page:autonomous/typst')),
+        findsNothing,
+      );
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('store-search')))
+            .controller!
+            .text,
+        'typ',
+      );
+      await tester.tap(find.byKey(const ValueKey('store-back')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const PageStorageKey('store-discover-scroll')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('store-nav-forward')));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('store-search')))
+            .controller!
+            .text,
+        'typ',
+      );
       expect(tester.takeException(), isNull);
     },
   );

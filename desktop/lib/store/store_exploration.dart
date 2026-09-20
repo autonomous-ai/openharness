@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/dsh_catalog.dart';
 import 'store_editorial.dart';
+import 'store_project_examples.dart';
 
 /// Editorial direction for browsing. Product-page copy and package metadata
 /// remain in their existing sources; these introductions invite an experiment.
@@ -217,14 +218,25 @@ const storeProjectAssets = <String, String>{
 String? storeProjectAsset(DshEntry entry) =>
     storeProjectAssets[entry.id] ?? storeStories[entry.id]?.asset;
 
-DshEntry? storeCollectionExample(
-  StoreCollection collection,
-  List<DshEntry> entries,
-) {
-  for (final id in [...collection.featuredIds, ...entries.map((e) => e.id)]) {
-    for (final entry in entries) {
-      if (entry.id == id && storeProjectAsset(entry) != null) return entry;
-    }
-  }
-  return entries.firstOrNull;
-}
+String? storeProjectPrompt(DshEntry entry) =>
+    storeProjectExamples[entry.id]?.prompt ??
+    entry.examples.firstOrNull?.prompt ??
+    storeStories[entry.id]?.prompts.firstOrNull;
+
+String? storeProjectTitle(DshEntry entry) =>
+    storeProjectExamples[entry.id]?.title ??
+    entry.examples.firstOrNull?.caption;
+
+const storeRelatedDisciplines = <String, List<String>>{
+  'Coding': ['Design', 'Games', 'Science & Data'],
+  'Design': ['Engineering', 'Media', 'Games'],
+  'Engineering': ['Design', 'Simulation', 'Coding'],
+  'Media': ['Music', 'Design', 'Productivity'],
+  'Music': ['Media', 'Games', 'Coding'],
+  'Productivity': ['Research', 'Science & Data', 'Media'],
+  'Science & Data': ['Research', 'Simulation', 'Productivity'],
+  'Simulation': ['Engineering', 'Science & Data', 'Games'],
+  'Games': ['Design', 'Music', 'Simulation'],
+  'Research': ['Science & Data', 'Productivity', 'Coding'],
+  'Local AI': ['Coding', 'Research', 'Science & Data'],
+};

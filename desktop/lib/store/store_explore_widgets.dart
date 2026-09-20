@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/widgets/app_icon_button.dart';
 import '../widgets/engine_identity.dart';
 import 'store_editorial.dart';
 import 'store_exploration.dart';
@@ -250,6 +252,16 @@ class _ProjectCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+    final prompt = storeProjectPrompt(entry);
+    final title = storeProjectTitle(entry);
+    Future<void> copyPrompt() async {
+      await Clipboard.setData(ClipboardData(text: prompt!));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Prompt copied')));
+      }
+    }
+
     return StoreExploreCard(
       color: storeDiscipline(storeCategoryFor(entry)).color,
       onTap: onOpen,
@@ -258,7 +270,7 @@ class _ProjectCard extends StatelessWidget {
         children: [
           AspectRatio(aspectRatio: 1.65, child: StoreProjectArt(entry: entry)),
           SizedBox(
-            height: 185 * scale,
+            height: 222 * scale,
             child: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
@@ -288,9 +300,23 @@ class _ProjectCard extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 12),
+                  if (title != null) ...[
+                    Text(
+                      title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 14,
+                        height: 1.3,
+                        fontWeight: FontWeight.w600,
+                        color: grid.AppPalette.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
                   Text(
-                    storeBenefit(entry),
-                    maxLines: 2,
+                    prompt == null ? storeBenefit(entry) : '“$prompt”',
+                    maxLines: title == null ? 3 : 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 13,
@@ -313,6 +339,31 @@ class _ProjectCard extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 12,
                             color: grid.AppPalette.textSecondary,
+                          ),
+                        ),
+                        if (prompt != null) ...[
+                          const SizedBox(width: 8),
+                          AppIconButton(
+                            key: ValueKey('store-copy-idea:${entry.id}'),
+                            icon: LucideIcons.copy300,
+                            size: 14,
+                            tooltip: 'Copy prompt',
+                            onPressed: copyPrompt,
+                          ),
+                        ],
+                      ] else if (prompt != null) ...[
+                        TextButton.icon(
+                          key: ValueKey('store-copy-idea:${entry.id}'),
+                          onPressed: copyPrompt,
+                          style: TextButton.styleFrom(
+                            foregroundColor: grid.AppPalette.textSecondary,
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            minimumSize: const Size(0, 34),
+                          ),
+                          icon: const Icon(LucideIcons.copy300, size: 13),
+                          label: const Text(
+                            'Copy prompt',
+                            style: TextStyle(fontSize: 12),
                           ),
                         ),
                       ] else ...[
