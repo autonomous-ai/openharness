@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { buildArt } from "../agents/generative-art/template/tools/build.mjs";
 import { buildMusic } from "../agents/music-studio/template/tools/build.mjs";
 import { buildBrand } from "../agents/creative-direction/template/tools/build.mjs";
+import { buildWorld } from "../agents/voxel-worlds/template/tools/build.mjs";
 const source = new URL("./experiences/", import.meta.url);
 export const experiences = [
   {
@@ -61,7 +62,7 @@ export async function build({ check = false } = {}) {
   ]);
   let drift = false;
   for (const exp of experiences) {
-    if (["generative-art", "music-studio", "creative-direction"].includes(exp.id)) {
+    if (["generative-art", "music-studio", "creative-direction", "voxel-worlds"].includes(exp.id)) {
       try {
         const packageRoot = new URL(`../agents/${exp.id}/`, import.meta.url);
         const icon = await readFile(new URL('brand/icon.svg', packageRoot), 'utf8');
@@ -69,7 +70,7 @@ export async function build({ check = false } = {}) {
         if (check) {
           if (await readFile(studioIcon, 'utf8') !== icon) throw new Error(`${exp.id}: packaged studio icon is out of date.`);
         } else await writeFile(studioIcon, icon);
-        const builder = { 'generative-art': buildArt, 'music-studio': buildMusic, 'creative-direction': buildBrand }[exp.id];
+        const builder = { 'generative-art': buildArt, 'music-studio': buildMusic, 'creative-direction': buildBrand, 'voxel-worlds': buildWorld }[exp.id];
         await builder(fileURLToPath(new URL(`../agents/${exp.id}/template/`, import.meta.url)), { check });
       } catch (error) {
         if (!check) throw error;

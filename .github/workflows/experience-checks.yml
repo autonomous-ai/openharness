@@ -20,7 +20,9 @@ jobs:
         with:
           node-version: '22.23.2'
       - name: Verify generated artifacts match reviewed sources
-        run: node store/tools/build-experiences.mjs --check
+        run: |
+          sh store/agents/voxel-worlds/toolchain/setup.sh
+          node store/tools/build-experiences.mjs --check
       - name: Verify packaged branding matches desktop assets
         run: node store/tools/build-experience-branding.mjs --check
       - name: Check models, packages and viewer behavior
@@ -68,6 +70,13 @@ jobs:
         env:
           EXPERIENCE_IDS: generative-art,music-studio,creative-direction
         run: node store/tools/experience-tests/browser.mjs
+      - name: Edit, walk and export a Voxel Worlds project in the browser
+        env:
+          VOXEL_QA_ROOT: work/experience-evidence/tidelands-browser
+        run: |
+          npm ci --prefix store/agents/voxel-worlds/toolchain --ignore-scripts --no-audit --no-fund
+          node store/agents/voxel-worlds/test/browser.mjs
+          node store/agents/voxel-worlds/test/acceptance.mjs
       - name: Verify MIDI and aligned audio with independent readers
         run: |
           python3 -m venv /tmp/music-delivery-reader

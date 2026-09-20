@@ -4,7 +4,7 @@
   "name": "Voxel Worlds",
   "category": "Games",
   "author": "Autonomous",
-  "description": "Build and walk a seeded voxel island. Sculpt terrain, place and break blocks, explore a cabin and lighthouse, change the light, and save your world.",
+  "description": "Turn an idea into an editable 3D environment and a reusable asset kit. Shape named objects, sculpt terrain, walk the result, import voxel assets and export GLB, VOX and an offline walkthrough.",
   "engine": "claude",
   "workspace": {
     "template": "template",
@@ -25,11 +25,11 @@
     "doctor": "toolchain/doctor.sh"
   },
   "viewer": {
-    "use": "autonomous/web-viewer",
+    "command": "toolchain/viewer.sh",
     "artifactExtensions": [
       ".html"
     ],
-    "url": "http://127.0.0.1:${port}/?file=${artifact}"
+    "url": "http://127.0.0.1:${port}/"
   },
   "verdict": ".harness/verdict.json"
 }
