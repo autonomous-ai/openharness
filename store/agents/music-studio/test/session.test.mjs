@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
 import { readFile, mkdtemp, cp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateSession, secondsAt, beatAt, duplicateSection, writeSessionMidi, readSessionMidi, wavBytes } from '../template/studio/session.mjs';
 import { buildMusic } from '../template/tools/build.mjs';
-const { Midi } = createRequire(import.meta.url)('../template/studio/vendor/midi.js');
+const { Midi } = createRequire(import.meta.url)('../template/studio/vendor/midi.cjs');
 const root = fileURLToPath(new URL('..', import.meta.url));
 const source = JSON.parse(await readFile(join(root, 'template/piece/session.json')));
 test('tempo changes are integrated in both directions, including a 3/8 score', () => {
@@ -72,5 +73,11 @@ test('fresh build embeds the real score, escapes user text, rejects stale HTML a
     const embedded = JSON.parse(html.match(/<script id="afterhours-data" type="application\/json">([\s\S]*?)<\/script>/)[1]);
     assert.equal(embedded.title, p.title); assert.equal(embedded.tracks.length, 5);
     assert.equal(JSON.parse(await readFile(join(ws, '.harness/verdict.json'))).ready, false);
+    // A pre-existing JavaScript workspace must not change the vendored parser's module type.
+    await writeFile(join(ws, 'package.json'), '{"type":"module"}');
+    const midiPath = join(ws, 'own-melody.mid');
+    await writeFile(midiPath, Buffer.from(writeSessionMidi(validateSession(source), Midi)));
+    execFileSync(process.execPath, [join(ws, 'tools/import-project.mjs'), midiPath], { cwd: ws });
+    assert.equal(JSON.parse(await readFile(join(ws, 'piece/session.json'))).tracks[0].notes.length, source.tracks[0].notes.length);
   } finally { await rm(ws, { recursive: true, force: true }); }
 });

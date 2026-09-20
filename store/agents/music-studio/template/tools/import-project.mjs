@@ -10,7 +10,7 @@ const root = fileURLToPath(new URL('..', import.meta.url)), path = resolve(proce
 if (bytes.length > 28000000) throw new Error('Project exceeds 28 MB.');
 let project;
 if (['.mid', '.midi'].includes(extname(path).toLowerCase())) {
-  const { Midi } = createRequire(import.meta.url)(fileURLToPath(new URL('../studio/vendor/midi.js', import.meta.url)));
+  const { Midi } = createRequire(import.meta.url)(fileURLToPath(new URL('../studio/vendor/midi.cjs', import.meta.url)));
   project = readSessionMidi(bytes, Midi);
 } else project = validateSession(JSON.parse(bytes.toString('utf8')));
 const backup = join(root, '.harness/history', new Date().toISOString().replace(/[:.]/g, '-') + '.json');

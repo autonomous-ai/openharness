@@ -21,7 +21,7 @@ export async function buildMusic(workspace, { check = false } = {}) {
     asset.data = `data:${mime};base64,${bytes.toString('base64')}`; delete asset.file;
   }
   const project = validateSession(source), revision = createHash('sha256').update(JSON.stringify(project)).digest('hex');
-  const [shell, css, model, engine, files, app, midi, icon] = await Promise.all(['studio/shell.html', 'studio/style.css', 'studio/session.mjs', 'studio/audio.mjs', 'studio/files.mjs', 'studio/app.js', 'studio/vendor/midi.js', 'studio/icon.svg'].map(read));
+  const [shell, css, model, engine, files, app, midi, icon] = await Promise.all(['studio/shell.html', 'studio/style.css', 'studio/session.mjs', 'studio/audio.mjs', 'studio/files.mjs', 'studio/app.js', 'studio/vendor/midi.cjs', 'studio/icon.svg'].map(read));
   const inline = source => source.replace(/^import .*?;\n/gm, '').replace(/^export /gm, '').replace(/<\/script/gi, '<\\/script');
   const replacements = { '/* STUDIO_CSS */': css, '/* SESSION_MODEL */': inline(model), '/* AUDIO_ENGINE */': inline(engine), '/* FILE_TOOLS */': inline(files), '/* STUDIO_APP */': inline(app), '/* MIDI_LIBRARY */': midi, '"PROJECT_DATA"': JSON.stringify({ ...project, revision }).replace(/</g, '\\u003c'), '<!-- PROJECT_ICON -->': icon, '<!-- FAVICON -->': `<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(icon)}">` };
   let html = shell; for (const [key, value] of Object.entries(replacements)) html = html.replace(key, () => value);

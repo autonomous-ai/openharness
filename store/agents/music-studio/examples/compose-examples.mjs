@@ -3,7 +3,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { validateSession, writeSessionMidi, readSessionMidi } from '../template/studio/session.mjs';
-const { Midi } = createRequire(import.meta.url)('../template/studio/vendor/midi.js');
+const { Midi } = createRequire(import.meta.url)('../template/studio/vendor/midi.cjs');
 const save = async (name, p) => { const dir = new URL(name + '/', import.meta.url); await mkdir(dir, { recursive: true }); await writeFile(new URL('session.json', dir), JSON.stringify(validateSession(p), null, 2) + '\n'); };
 const note = (p, track, beat, midi, duration, velocity) => p.tracks[track].notes.push({ beat, midi, duration, velocity });
 const orbit = {
