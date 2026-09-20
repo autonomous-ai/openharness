@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Compile dependency-free, editable single-file starters. No build is needed after installation.
+// Package portable HTML studios. Art/Music use their own source-project builders.
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -62,6 +62,12 @@ export async function build({ check = false } = {}) {
   for (const exp of experiences) {
     if (exp.id === "generative-art" || exp.id === "music-studio") {
       try {
+        const packageRoot = new URL(`../agents/${exp.id}/`, import.meta.url);
+        const icon = await readFile(new URL('brand/icon.svg', packageRoot), 'utf8');
+        const studioIcon = new URL('template/studio/icon.svg', packageRoot);
+        if (check) {
+          if (await readFile(studioIcon, 'utf8') !== icon) throw new Error(`${exp.id}: packaged studio icon is out of date.`);
+        } else await writeFile(studioIcon, icon);
         const builder = exp.id === 'generative-art' ? buildArt : buildMusic;
         await builder(fileURLToPath(new URL(`../agents/${exp.id}/template/`, import.meta.url)), { check });
       } catch (error) {
