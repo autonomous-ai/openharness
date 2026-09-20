@@ -1,0 +1,17 @@
+{
+  "license": "MIT",
+  "examples": [
+    {
+      "prompt": "Should our Windows port be native, or should we ship the daemon inside WSL2? One engineer on it. Evidence: the cli/ folder.",
+      "caption": "Four vendors read the daemon, split 2–2 on whether it is genuinely tmux-shaped"
+    },
+    {
+      "prompt": "We're about to rename the product. Red-team the new name: three seats whose only job is to break it.",
+      "caption": "Red team · one proposal, three attackers, the objections ranked"
+    },
+    {
+      "prompt": "Postgres or SQLite for this app's local store? Evidence: this repo. I care about migrations and multi-process access.",
+      "caption": "Panel · agreed on five claims, split on one, decided with the dissent attached"
+    }
+  ]
+}
