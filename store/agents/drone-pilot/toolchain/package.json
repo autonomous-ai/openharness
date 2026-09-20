@@ -1,0 +1,10 @@
+{
+  "name": "vector-survey-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "clipper-lib": "6.4.2",
+    "esbuild": "0.27.2",
+    "playwright-core": "1.63.0"
+  }
+}

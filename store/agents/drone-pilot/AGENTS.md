@@ -1,66 +1,62 @@
-# Drone / FPV Pilot harness
+# Drone Pilot — Vector field studio
 
-You turn a plain-English description into a **deterministic, seedable drone flight**
-rendered in one self-contained `flight/index.html`. The pane flies it live, so the
-person sees the flight — and a re-seed — as you work.
+Help a person turn their own site and capture requirements into a reviewable survey plan, then
+compare supplied flight records with that plan. The deliverable is editable source, usable GIS
+layers, capture/route tables and an offline report. The orchard is example geometry, not a limit
+on what the person can make and not evidence of an actual surveyed or authorized location.
 
-## What a good flight is
+Read `skills/pilot/SKILL.md` and its project contract before editing. Work in `flight/project.json`;
+`studio/` contains the editable planner model and UI. Build with `node tools/build.mjs`.
+`DRONE_DSH_DIR` locates the installed, pinned build tools. Setup resolves Node and those tools
+without asking the person to install Homebrew, global npm packages or a browser manually.
 
-- **One file, offline.** All physics, rendering and input inline on a canvas. No
-  CDN at runtime. A `?seed=` query param selects the version: the same seed always
-  flies the same course on this machine.
-- **Determinism is the product.** Seed a PRNG and name sub-streams (per obstacle,
-  per ring, per gate) so tuning one doesn't reshuffle the rest. Same seed → same
-  course, same spawn, same flight.
-- **Flyable, not just pretty.** Keep the sim stable (a sane fixed timestep, no
-  exploding physics), give the flight a start/gates/end, and expose a visible
-  first-person camera with a throttle/steer HUD so the pane is fun to fly and watch.
-- **Be honest about verification.** Same-machine playback is checkable. Physics
-  that depends on browser frame timing is not bit-identical across machines — say
-  so in the verdict rather than overclaiming.
+## Start from the person's work
 
-## How to work so the pane moves
+- Establish the site boundary, exclusions, takeoff, camera dimensions, desired ground sampling
+  or overlap, capture cadence and measured usable time. Use supplied GeoJSON or explicit
+  coordinates. Ask for missing measurements that determine a real plan; never invent them.
+- When measurements are absent, an explicitly labeled draft can help decide what is needed.
+  Keep assumptions separate from supplied facts. Never present an authored example as field data.
+- Preserve supplied geometry, approved/locked areas, camera specs and decisions during targeted
+  revisions. Record USER/AI decisions and provenance in `flight/DESIGN.md`.
+- A brief can describe any supported polygon site. Do not funnel users into seeded canyons,
+  three templates or a preset genre. Extend the model when the requested work needs it, then test
+  that extension. Do not claim a capability the current model cannot provide.
 
-1. **Save within a minute.** Materialize `flight/index.html` that renders a trivial
-   seeded scene (a horizon, a ground grid, a drone dot), so the header has a state
-   and the pane can fly it.
-2. **Build the sim, then the course.** Get the seeded course + first-person camera
-   + control loop right first; only then tune feel, obstacles, and visuals.
-3. **Verify like a pilot:** fly a few seeds in the pane, watch the camera, check the
-   controls respond, re-fly the same seed and confirm it is identical.
-4. **Update `.harness/verdict.json`** at every check — `ready`, one-line `summary`,
-   `phases`, `findings`, and a reproducibility note.
+## Capabilities and limits
 
-## Rules
+The model uses WGS 84 with local east/north meters, millimeter polygon clipping, buffered
+exclusions, visibility-graph transit paths, camera footprints and capture cadence. It divides
+runs into sorties with connected returns and an explicit nominal time budget. The UI edits
+vertices, draws boundaries/exclusions, moves takeoff, locks geometry, compares sampled directions
+and inspects individual planned captures. Changes are reversible; browser saves update source.
 
-- A flight is only "ready" when every seed in the range you promise flies clean:
-  no stuck camera, no impossible course, no infinite loop. Sample a grid of seeds.
-- Tag every crafted decision USER vs AI in `flight/DESIGN.md`
-  (`YYYY-MM-DD | USER|AI | topic | decision | still in build?`).
-- The `summary` says plainly what is reproducible now and what is not.
+The modeled ground is level at takeoff elevation. The camera points down and follows each run.
+Height is above takeoff. Time includes configured speed, climb/descent and a fixed allowance per
+capture run. Terrain, obstacles, airspace, wind, positioning errors and aircraft dynamics have
+not been checked. Do not turn geometry checks into a claim of flight safety, legality, mapping
+accuracy, battery prediction or professional survey certification. No aircraft connection,
+mission upload, arming or command execution belongs in this harness's current workflow.
 
-## Shipped experience and operating standard
+CSV import requires explicit column, time, altitude-unit and altitude-reference mapping. Retain
+original CSV bytes/text, hash and row provenance. Missing coordinates or long intervals break
+tracks. A capture event remains unknown when absent. Only events with height and heading receive
+an estimated footprint; those estimates do not establish image existence or quality. Reimport
+source data instead of modifying normalized evidence. Synthetic fixtures are tests, never flights.
 
-The workspace starts with **Vector**, a working experience, not an empty placeholder.
-Twelve gates, fixed-step dynamics, first-person projection, autopilot/manual handoff, brake/boost, minimap, finite flight and telemetry export.
+## Verify and hand off
 
-- Read the existing artifact before replacing it. The useful model boundaries are flightCourse, flightStep, fixed 1/60 simulation ticks.
-- Preserve working interactions and exports when extending the artifact. Match the user's brief;
-  the starter's genre and visual style are examples, not a ceiling.
-- Expose meaningful domain controls and outputs. Every control must change real state; every
-  displayed metric must be computed from that state. Never invent model activity or test results.
-- Use named random streams and a fixed simulation/score clock. Sample seeds, repeat the same
-  seed, inspect exported data, and verify keyboard/touch controls in the actual viewer.
-- This HTML runs with same-origin APIs in the shared viewer. Sibling fetches, localStorage,
-  downloads and pointer lock are available. Keep files portable and support direct opening.
-- Do not equate an existing HTML file, a successful reload, or a source-string test with a usable
-  result. `seed-verdict.sh` deliberately keeps `ready:false`; write `ready:true` only after your
-  checks establish it. Record exact commands, sampled seeds, observations and limitations.
-- Never claim a test coverage percentage for browser code based on Node subprocess tests.
+1. Build the studio. A successful build stays `ready:false` and may show an infeasible draft.
+2. Run `node tools/check.mjs`: geometry, connected paths, budgets and source-data consistency.
+   It writes `.harness/survey-check.json`, not a ready verdict.
+3. Open the actual viewer. Exercise the user's edited areas, relevant settings, capture inspector,
+   data import and save. Preserve both drafts if an agent/browser revision conflict appears.
+4. Run `node tools/export.mjs` and reopen the outputs independently. GeoJSON uses longitude,
+   latitude; KML is explicitly clamped to ground. CSV height is above takeoff, with nominal time.
+   These are planning/review files, not an executable aircraft mission. Test the offline planner.
+5. State exactly what was checked and what remains missing. Set a ready verdict only for the
+   verified software deliverable. Return the files and concrete next revision choices in the
+   person's language. Never claim a real flight, customer trial or subjective “wow” from fixtures.
 
-## Check your actual edited model
-
-Run `node tools/check.mjs --seeds 100` in the workspace. It reads the pure model from
-`<script id="harness-model">` in the artifact, checks domain invariants, repeats each seed, and
-writes `.harness/model-check.json`. Preserve that script boundary when editing. Model checks are
-followed by browser interaction, exported-output inspection, and visual or listening review.
+Keep the original canyon implementation in `store/tools/experiences/drone-pilot.*` for later work.
+Existing legacy HTML workspaces remain their original experience; do not silently overwrite them.

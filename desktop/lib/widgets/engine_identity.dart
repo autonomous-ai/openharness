@@ -333,7 +333,7 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/drone-pilot',
     label: 'Drone Pilot',
     category: 'Simulation',
-    tagline: 'Fly a seeded canyon course in first person',
+    tagline: 'Plan your survey. Inspect the evidence. Keep the work.',
     creator: 'Autonomous',
     color: Color(0xffd3eb9c),
     asset: 'assets/engine-icons/drone-pilot.png',
