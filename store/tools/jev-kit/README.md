@@ -21,7 +21,7 @@ person into a team of tireless readers and judges. **No demos. No watch-only pan
 - Open it cold and ask "what do I do here?". If the answer is "watch", it fails.
 
 `store/agents/jev-sheets` is the reference: drop a CSV, ask in plain words, every row answered, counts
-you can click, `answers.csv` to keep, `report.md` from the agent. Harnesses that miss this bar are
+you can click, `answers.csv` to keep, `findings.md` from the agent. Harnesses that miss this bar are
 unlisted with `node store/tools/listing.mjs unlist <name>`. Their code stays.
 
 The kit gives you the plumbing for this (all in `serveViewer`, all same-origin only):
