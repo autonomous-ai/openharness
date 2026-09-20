@@ -36,7 +36,8 @@ export function normalizeJob(raw) {
     if (type === 'score' && levels.length < 2) { errors.push(`field "${id}" is a score, so it needs at least two levels`); continue }
     fields.push({ id, ask, type, levels, name: short(typeof f === 'object' ? f?.name : '', 40) || id })
   }
-  if (!fields.length) errors.push('no "fields": say what to collect for each item, in plain words')
+  // No fields is not a mistake any more: the pane reads the page and proposes them.
+  const wants = short(j.want, 300)
   let hosts = []
   try { hosts = [new URL(start).hostname.toLowerCase()] } catch { /* the start address is already reported */ }
   for (const h of Array.isArray(j.alsoVisit) ? j.alsoVisit : []) { const s = short(h, 200).toLowerCase().replace(/^https?:\/\//, '').split('/')[0]; if (s) hosts.push(s) }
@@ -45,6 +46,7 @@ export function normalizeJob(raw) {
       task: short(j.task, 200) || `Collect ${item}`,
       start, item, fields,
       search: short(j.search, 120),
+      want: wants,
       keep: short(j.keep, 300),
       maxPages: clamp(j.maxPages, 1, LIMITS.maxPages, 25),
       maxItems: clamp(j.maxItems, 1, LIMITS.maxItems, 60),
@@ -83,7 +85,8 @@ export function itemQuestions(page, job) {
   for (const f of job.fields) {
     if (f.type === 'yesno') q[`f_${f.id}`] = jev.noul(`About ${job.item} on this page: ${f.ask}`)
     else if (f.type === 'score') q[`f_${f.id}`] = jev.score(f.levels, `About ${job.item} on this page: ${f.ask}`)
-    else q[`f_${f.id}`] = jev.choice(options, `On this page, which piece of text is ${f.ask}? Pick the exact words from the page.`)
+    // "Number of reviews: 0" and "0" are both offered; a column wants the 0.
+    else q[`f_${f.id}`] = jev.choice(options, `On this page, which piece of text is ${f.ask}? Pick the exact words from the page, and where the page prints a label next to its value, pick the value on its own rather than the whole line.`)
   }
   if (job.keep) q.keep = jev.noul(`The person wants only the ones where: ${job.keep}. Does ${job.item} on this page fit that?`)
   return { questions: q, blocks: page.blocks.length }
@@ -115,6 +118,123 @@ export function pickLinks(links, answers, { threshold = 0.5 } = {}) {
   const pick = answers.nextpage?.choice
   const next = pick && pick !== 'none' ? links.find((l) => `l${l.n}` === pick) ?? null : null
   return { items, next, judged: links.length }
+}
+
+
+// ---- proposing a job ----------------------------------------------------------------------------
+/** What a page can be listing. A fixed list, so Jev only has to point at one. */
+export const THINGS = {
+  product: 'things for sale, with prices', job: 'job openings or roles', article: 'articles, posts or news stories',
+  issue: 'bug reports, tickets or issues', property: 'homes or places to rent or buy', person: 'people or profiles',
+  paper: 'research papers or publications', repo: 'code projects or repositories', event: 'events with dates',
+  listing: 'listings of some other kind', other: 'this page does not list many of one thing',
+}
+const ITEM_WORDS = {
+  product: 'a product for sale', job: 'a job opening', article: 'an article', issue: 'an issue or bug report',
+  property: 'a property', person: 'a person', paper: 'a research paper', repo: 'a code project',
+  event: 'an event', listing: 'one of the listings', other: 'one of the things on this page',
+}
+/** What kind of value a piece of text is, and what to ask for it on every page. */
+export const VALUE_KINDS = {
+  name: 'the name or title of it', price: 'the price or cost', date: 'the date', quantity: 'how many there are',
+  code: 'the reference, product code or number', rating: 'the rating or score', place: 'where it is',
+  status: 'its current status', who: 'the person or company behind it', kind: 'what type it is',
+  detail: 'a longer description of it', other: 'none of these',
+}
+
+/**
+ * Read one list page and one of its things, and propose the whole job.
+ * @param {object} o
+ * @param {object} o.chrome
+ * @param {function} o.ask
+ * @param {string} o.start   the page to read
+ * @param {string} [o.want]  what the person said they want, in their own words. Never parsed: it is
+ *                           shown to Jev as context while it decides what is worth a column.
+ * @param {string} [o.search]
+ * @returns {Promise<{ kind, item, columns, sample, from, walled }>}
+ */
+export async function proposeJob({ chrome, ask, start, want = '', search = '', onEvent }) {
+  const say = (type, data) => { try { onEvent?.({ type, at: Date.now(), ...data }) } catch { /* the pane may be gone */ } }
+  say('going', { url: start, what: 'the page you gave' })
+  await chrome.go(start)
+  let list = await readPage(chrome)
+  if (search) {
+    const box = findSearchBox(list)
+    if (box) { say('searching', { words: search }); await chrome.search(box.css, search); list = await readPage(chrome) }
+  }
+  const wall = wallReason(list)
+  if (wall) return { walled: `${new URL(list.url).hostname}: ${wall}`, columns: [] }
+
+  // CALL 1 — what does this page list, and which of its links are the things?
+  const wanted = want ? ` The person asked for: "${want}".` : ''
+  const links = list.links.slice(0, LIMITS.linksPerCall)
+  const q1 = { kind: jev.choice(THINGS, `This page may list many of one kind of thing.${wanted} What is it listing?`) }
+  for (const l of links) {
+    q1[`l${l.n}`] = jev.noul(`"${l.label}" is the text of a link on this page, pointing at ${l.path}. Is "${l.label}" the title of one of the things this page lists, rather than part of the site's own menu?`)
+  }
+  const r1 = await ask({ state: pageState(list, want ? { what_they_want: want } : {}) , questions: q1 })
+  const kind = r1.answers.kind?.choice ?? 'listing'
+  const items = links.map((l) => ({ ...l, p: r1.answers[`l${l.n}`]?.noul ?? 0 })).filter((l) => l.p >= 0.5)
+  // To learn what a thing's page looks like, open the one Jev is surest about, not the first on the
+  // page: the first is often a menu link that only just scraped over the line.
+  const surest = [...items].sort((a, b) => b.p - a.p)[0]
+  const item = ITEM_WORDS[kind] ?? ITEM_WORDS.other
+  say('judged', { url: list.url, kind, judged: links.length, found: items.length, latencyMs: r1.latencyMs, links: links.map((l) => ({ n: l.n, label: l.label, p: r1.answers[`l${l.n}`]?.noul ?? 0 })).sort((a, b) => b.p - a.p).slice(0, 40) })
+  if (!items.length) return { kind, item, columns: [], from: list.url, none: 'no link on this page looks like one of the things' }
+
+  // CALL 2 — on one of them, which pieces of text deserve a column, and what is each one?
+  say('going', { url: surest.url, what: `one ${item}, to see what it says` })
+  await chrome.go(surest.url)
+  const one = await readPage(chrome)
+  const itemWall = wallReason(one)
+  if (itemWall) return { kind, item, columns: [], from: one.url, walled: `${new URL(one.url).hostname}: ${itemWall}` }
+  const q2 = {}
+  for (const b of one.blocks) {
+    const text = b.text.slice(0, 140)
+    // "A fact about this one" has to exclude the other things a page shows alongside: a page of one
+    // product carries a "recently viewed" strip full of other products' names and prices, and those
+    // are facts about something, just not about this.
+    q2[`w${b.n}`] = jev.noul(`This page is about ONE ${item}: "${one.title.slice(0, 80)}".${wanted} The page also shows the text "${text}". Is that a fact about THAT ONE thing, worth its own column in a spreadsheet?`,
+      { true: 'it is a fact about the one this page is about, such as its name, price, date, code or status', false: 'it is a heading, a button, a menu, boilerplate, the same words on every page, or a fact about a DIFFERENT thing shown alongside such as a related or recently viewed one' })
+    q2[`k${b.n}`] = jev.choice(VALUE_KINDS, `On the page of ${item}, the text "${text}" is what kind of value?`)
+  }
+  const r2 = await ask({ state: pageState(one, want ? { what_they_want: want } : {}), questions: q2 })
+
+  // A page prints the same value more than once: "£45.17", "Price (excl. tax): £45.17",
+  // "Price (incl. tax): £45.17". Three columns of the same number is not a spreadsheet, and it
+  // makes Jev choose between identical texts on every page, which is where the low confidences
+  // come from. Group by the value each column would actually pull, and keep one of each.
+  const groups = new Map()
+  for (const b of one.blocks) {
+    const worth = r2.answers[`w${b.n}`]?.noul ?? 0
+    if (worth < 0.6) continue
+    const label = b.text.includes(': ') ? b.text.slice(0, b.text.indexOf(': ')).trim() : ''
+    const vk = r2.answers[`k${b.n}`]?.choice ?? 'other'
+    if (!label && vk === 'other') continue          // nothing to call it, and nothing it is
+    const value = (label ? b.text.slice(label.length + 2) : b.text).trim()
+    const key = value.toLowerCase().replace(/[^a-z0-9]+/g, '')
+    if (!key) continue
+    const entry = groups.get(key) ?? { best: null, label: '', kind: vk }
+    if (label && !entry.label) entry.label = label
+    if (!entry.best || worth > entry.best.worth) entry.best = { text: b.text, worth, label, vk, value }
+    groups.set(key, entry)
+  }
+  const seen = new Set()
+  const columns = []
+  for (const { best, label } of groups.values()) {
+    // The name is the page's own label where there is one, so the spreadsheet reads like the site.
+    const name = (best.label || label || best.vk).slice(0, 40)
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    // Ask for the bare value, not the label-and-value line: a column should hold £45.17, not
+    // "Price (excl. tax): £45.17".
+    const ask = best.label ? `the ${best.label}` : VALUE_KINDS[best.vk]
+    columns.push({ id, name, ask, sample: best.value.slice(0, 80), p: Math.round(best.worth * 100) / 100, kind: best.vk })
+  }
+  columns.sort((a, b) => b.p - a.p)
+  say('proposed', { columns: columns.length, latencyMs: r1.latencyMs + r2.latencyMs })
+  return { kind, item, columns: columns.slice(0, LIMITS.fields), from: one.url, ms: Math.round(r1.latencyMs + r2.latencyMs) }
 }
 
 /**

@@ -26,10 +26,12 @@ in front of the person, and a run starts by itself the moment `browse.json` chan
 do with Chrome yourself is slower, invisible to them, and doubles the work. Write the file first,
 let it run, and look at a page only if something comes back wrong.
 
-1. **Take what they said and turn it into a job.** A start address, what one "thing" is, and the
-   columns. Guess sensibly from their words: "the best fencing gloves on a shop" means a product
-   listing page, one thing is a glove for sale, and the columns are name, price, rating, reviews.
-   Do not interview them. Write something, watch it, then fix it.
+1. **Take what they said and turn it into a job.** Often all you need is `start` and `want`:
+   put their own sentence in `want` and leave `fields` out, and Jev reads the page and works the
+   columns out in about a second. That is faster than you deciding, and it names the columns after
+   the page's own labels. Write the columns yourself only when they asked for something specific
+   that a page would not volunteer, such as a judgement ("is this remote?") or a score.
+   Do not interview them. Write something, let it run, then fix it.
 2. **Write `browse.json`** and validate with `node "$JEV_DSH/toolchain/check.mjs"`. Saving it starts
    the run: the browser opens in the pane and rows begin landing within a few seconds.
 3. **Watch `.harness/verdict.json`** (see "While it runs"). Say one short line about what is
@@ -51,6 +53,7 @@ let it run, and look at a page only if something comes back wrong.
   "task": "Every flat for rent in the search results, with rent and address",
   "start": "https://example.com/search?area=leeds",   // the page to begin on. "demo" is the made-up job board this harness serves itself
   "search": "",                                       // optional: words to type into the site's own search box first
+  "want": "what each one costs and whether it is in stock",  // the person's own words. Leave "fields" out and Jev works the columns out from the page
   "item": "a flat for rent",                          // one of the things. Used in every question, so make it concrete
   "fields": [
     { "id": "address", "name": "Address", "ask": "the street address" },
@@ -70,9 +73,13 @@ let it run, and look at a page only if something comes back wrong.
 }
 ```
 
-- **`fields`**: up to 12. `pick` (the default) takes the exact text off the page. `yesno` is Jev's
-  judgement about the thing. `score` puts it on your named scale. Every field gets a confidence
-  column in the spreadsheet.
+- **`fields`**: up to 12, and optional. Leave it out and Jev proposes the columns from one of the
+  pages, writing them back into `browse.json` so the recipe stays complete. `pick` (the default)
+  takes the exact text off the page. `yesno` is Jev's judgement about the thing. `score` puts it on
+  your named scale. Every field gets a confidence column in the spreadsheet.
+- **`want`**: the person's own sentence. It is never parsed. It is shown to Jev as context while it
+  decides which values are worth a column, so "what each one costs" pulls the proposal towards
+  price and away from the site's boilerplate.
 - **`item`** goes into the question asked about every link, so "a flat for rent" works and "an item"
   does not.
 

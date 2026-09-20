@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { connect } from 'node:net'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { normalizeJob, listQuestions, itemQuestions, rowFrom, pickLinks, LIMITS } from '../viewer/crawl.mjs'
+import { normalizeJob, listQuestions, itemQuestions, rowFrom, pickLinks, proposeJob, THINGS, VALUE_KINDS, LIMITS } from '../viewer/crawl.mjs'
 import { readPage, blockOptions, blockText, canonical, pageState, wallReason, findSearchBox } from '../viewer/page.mjs'
 import { openChrome, findChrome, checkUrl, Refused } from '../toolchain/chrome.mjs'
 import { startDemoSite } from '../viewer/demosite.mjs'
@@ -39,7 +39,11 @@ test('the job file: what it fills in, and what it says is wrong', () => {
 
   const bare = normalizeJob({})
   assert.match(bare.errors.join(' '), /no "start"/)
-  assert.match(bare.errors.join(' '), /no "fields"/)
+  // No columns is not a mistake: Jev reads the page and proposes them.
+  const noColumns = normalizeJob({ start: 'https://example.com/all', want: 'what each one costs' })
+  assert.deepEqual(noColumns.errors, [])
+  assert.deepEqual(noColumns.job.fields, [])
+  assert.equal(noColumns.job.want, 'what each one costs')
 
   const messy = normalizeJob({
     start: 'https://shop.example.com/all', item: 'a product', alsoVisit: ['https://cdn.example.org/x'],
@@ -210,11 +214,11 @@ test('a whole run: rows land in results.csv, the verdict says what happened', { 
 
 test('a broken job file keeps the pane alive and says what to fix', async () => {
   const ws = mkdtempSync(join(tmpdir(), 'jev-browser-bad-'))
-  writeFileSync(join(ws, 'browse.json'), '{ "start": "https://example.com", "fields": [] }')
+  writeFileSync(join(ws, 'browse.json'), '{ "fields": ["the price"] }')   // no "start"
   const v = await startBrowserViewer({ workspace: ws, port: 0 })
   try {
     const s = await (await fetch(`${v.url}/state`)).json()
-    assert.match(s.error, /no "fields"/)
+    assert.match(s.error, /no "start"/)
     const start = await (await fetch(`${v.url}/control`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"cmd":"start"}' })).json()
     assert.equal(start.ok, false, 'it will not run a job it cannot read')
     const verdict = JSON.parse(readFileSync(join(ws, '.harness/verdict.json'), 'utf8'))
@@ -364,4 +368,51 @@ test('a site that serves a wall is named, not silently collected from', { skip: 
     assert.ok(verdict.findings.some((f) => f.kind === 'walled' && /refusing an automated browser|block page/.test(f.message)))
     assert.match(verdict.run.walled, /block page/)
   } finally { await v.close(); blocker.close(); delete process.env.JEV_OFFLINE }
+})
+
+test('Jev proposes the whole job from the page, and it then runs with no columns given', { skip: noChrome }, async () => {
+  process.env.JEV_OFFLINE = '1'
+  const site = await startDemoSite()
+  const ws = mkdtempSync(join(tmpdir(), 'jev-browser-prop-'))
+  // An address and a sentence, and no columns at all.
+  writeFileSync(join(ws, 'browse.json'), JSON.stringify({ start: site.url, want: 'what each role pays and where it is', maxItems: 2, maxPages: 1, autoStart: false }))
+  const v = await startBrowserViewer({ workspace: ws, port: 0 })
+  const state = async () => (await fetch(`${v.url}/state`)).json()
+  try {
+    const before = await state()
+    assert.deepEqual(before.fields, [], 'it starts with no columns')
+    assert.equal(before.want, 'what each role pays and where it is')
+    assert.equal(before.error, null, 'no columns is not an error any more')
+
+    await (await fetch(`${v.url}/control`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"cmd":"run"}' })).json()
+    const s = await state()
+    assert.ok(s.fields.length >= 1, `Jev proposed columns: ${JSON.stringify(s.fields.map((f) => f.name))}`)
+    // What it worked out is written back, because browse.json is the recipe.
+    const written = JSON.parse(readFileSync(join(ws, 'browse.json'), 'utf8'))
+    assert.equal(written.fields.length, s.fields.length)
+    assert.ok(written.fields.every((f) => f.id && f.name && f.ask))
+    assert.equal(s.rows.length, 2, 'and then it collected with them')
+    const csv = readFileSync(join(ws, 'results.csv'), 'utf8').trim().split('\n')
+    assert.equal(csv.length, 3)
+    assert.ok(csv[0].includes(s.fields[0].name))
+  } finally { await v.close(); await site.close(); delete process.env.JEV_OFFLINE }
+})
+
+test("a proposed column is named off the page, and none of it is written", { skip: noChrome }, async () => {
+  process.env.JEV_OFFLINE = '1'
+  const site = await startDemoSite()
+  const chrome = await browser()
+  try {
+    const { evaluate } = await import('../toolchain/jev.mjs')
+    const got = await proposeJob({ chrome, ask: (x) => evaluate({ ...x, salt: 3 }), start: site.url, want: 'the pay' })
+    assert.ok(Object.keys(THINGS).includes(got.kind))
+    assert.ok(got.from.includes('/job/'), 'it opened one of the things to look at')
+    assert.equal(new Set(got.columns.map((x) => x.id)).size, got.columns.length, 'no two columns share an id')
+    for (const c of got.columns) {
+      assert.ok(c.name && c.id && c.ask, JSON.stringify(c))
+      // Every ask is either the page's own label or one of the fixed phrases. Nothing is invented.
+      assert.ok(c.ask.startsWith('the ') || Object.values(VALUE_KINDS).includes(c.ask), c.ask)
+      assert.ok(c.p >= 0.6 && c.p <= 1)
+    }
+  } finally { await chrome.close(); await site.close(); delete process.env.JEV_OFFLINE }
 })

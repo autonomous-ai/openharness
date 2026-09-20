@@ -45,18 +45,21 @@
         <img id="screen" alt="">
         <div id="screenIdle" class="screen-idle">
           <form id="askForm" class="ask">
-            <div class="ask-head"><b>What do you want off the web?</b><span>Fill this in and it goes. A real Chrome opens and reads the pages for you.</span></div>
+            <div class="ask-head"><b>What do you want off the web?</b><span>An address and a sentence is enough. Jev reads the page, works out the columns in about a second, and goes.</span></div>
             <label class="ask-row"><span>Start on</span>
               <input id="askStart" type="text" spellcheck="false" autocomplete="off" placeholder="books.toscrape.com/catalogue/category/books/travel_2/index.html">
             </label>
             <label class="ask-row"><span>Search for <i>optional</i></span>
               <input id="askSearch" type="text" spellcheck="false" autocomplete="off" placeholder="leave empty if the address is already the list you want">
             </label>
-            <label class="ask-row"><span>Each one is</span>
-              <input id="askItem" type="text" spellcheck="false" autocomplete="off" placeholder="a book for sale">
+            <label class="ask-row"><span>What you want</span>
+              <input id="askWant" type="text" spellcheck="false" autocomplete="off" placeholder="what each book costs and whether it is in stock">
             </label>
-            <label class="ask-row tall"><span>Columns<i>one per line</i></span>
-              <textarea id="askColumns" spellcheck="false" placeholder="the title&#10;the price&#10;how many copies are available&#10;Is it in stock?"></textarea>
+            <label class="ask-row"><span>Each one is <i>optional</i></span>
+              <input id="askItem" type="text" spellcheck="false" autocomplete="off" placeholder="Jev works this out from the page">
+            </label>
+            <label class="ask-row tall"><span>Columns<i>optional, one per line</i></span>
+              <textarea id="askColumns" spellcheck="false" placeholder="Leave this empty and Jev picks the columns off the page.&#10;&#10;Or name them yourself, one per line:&#10;the title&#10;the price&#10;Is it in stock?"></textarea>
             </label>
             <label class="ask-row"><span>Only keep <i>optional</i></span>
               <input id="askKeep" type="text" spellcheck="false" autocomplete="off" placeholder="only the ones under £30">

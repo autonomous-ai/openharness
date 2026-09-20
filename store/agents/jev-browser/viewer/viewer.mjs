@@ -9,7 +9,7 @@ import { writeFileSync, renameSync, mkdirSync } from 'node:fs'
 import { evaluate, PRICE_PER_MTOK, resolveCredentials, describeCredentials } from '../toolchain/jev.mjs'
 import { serveViewer, writeVerdict, watchConfig, clean } from './kit.mjs'
 import { openChrome, findChrome, Refused } from '../toolchain/chrome.mjs'
-import { normalizeJob, runJob, LIMITS } from './crawl.mjs'
+import { normalizeJob, runJob, proposeJob, LIMITS } from './crawl.mjs'
 import { browserMock } from './mock.mjs'
 import { startDemoSite } from './demosite.mjs'
 
@@ -23,7 +23,7 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
   let job = normalizeJob({}).job, configError = null, jevError = null
   let rows = [], feed = [], links = [], here = { url: '', title: '' }
   let counters = { pages: 0, calls: 0, questions: 0, tokens: 0, costUsd: 0, links: 0, errors: 0 }
-  let phase = 'idle', startedAt = 0, finishedAt = 0, lastRun = null
+  let phase = 'idle', startedAt = 0, finishedAt = 0, lastRun = null, proposing = false
   let shotTimer = null, shotBusy = false
   let expecting = { expecting: 'list', item: '' }
   const mock = browserMock(() => expecting)
@@ -33,7 +33,7 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
   // ---- what the pane sees ---------------------------------------------------------------------
   const view = () => ({
     task: job.task, item: job.item, start: job.start, search: job.search, fields: job.fields.map((f) => ({ id: f.id, name: f.name, ask: f.ask, type: f.type })),
-    walled: lastRun?.walled ?? null,
+    walled: lastRun?.walled ?? null, want: job.want, proposing,
     keep: job.keep, maxItems: job.maxItems, maxPages: job.maxPages, limits: LIMITS,
     error: configError, jevError, client: liveRoute() ?? 'mock', jevSays: describeCredentials(),
     chrome: { found: !!chromePath, open: !!chrome?.alive },
@@ -170,6 +170,34 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
     const opened = await openBrowser()
     if (opened.ok === false) return opened
     rows = []; links = []; feed = []
+    // Nobody should have to name the columns. Jev reads one page and proposes them, in about a
+    // second, and the answer is written back into browse.json so the job stays the recipe.
+    if (!job.fields.length) {
+      proposing = true
+      say('Reading the page to work out the columns…', 'start')
+      counters = { pages: 0, calls: 0, questions: 0, tokens: 0, costUsd: 0, links: 0, errors: 0 }
+      startedAt = Date.now(); finishedAt = 0; phase = 'running'
+      push()
+      let got
+      try {
+        got = await proposeJob({ chrome, ask, start: job.start, want: job.want, search: job.search, onEvent: (e) => { if (e.type === 'judged') links = e.links ?? []; if (e.type === 'going') here = { url: e.url, title: '' }; push('view') } })
+      } catch (e) { got = { columns: [], error: String(e.message ?? e) } }
+      proposing = false
+      if (got.walled) { lastRun = { walled: got.walled, errors: [] }; say(got.walled, 'bad'); phase = 'done'; finishedAt = Date.now(); push(); saveVerdict(); return { ok: false, error: got.walled } }
+      if (!got.columns.length) {
+        phase = 'idle'; finishedAt = Date.now()
+        const why = got.error || got.none || 'nothing on that page looked like a value worth a column'
+        say(`No columns could be worked out: ${why}`, 'bad')
+        push(); saveVerdict()
+        return { ok: false, error: `${why}. Write the columns yourself, one per line.` }
+      }
+      const saidItem = String(watcher.get()?.item ?? '').trim()
+      const next = { ...watcher.get(), item: saidItem || got.item, fields: got.columns.map((c) => ({ id: c.id, name: c.name, ask: c.ask })) }
+      writeMarker(next)
+      applyJobQuiet(next)
+      say(`Jev found ${got.columns.length} columns in ${got.ms} ms: ${got.columns.map((c) => c.name).slice(0, 6).join(', ')}`, 'judge')
+      push()
+    }
     counters = { pages: 0, calls: 0, questions: 0, tokens: 0, costUsd: 0, links: 0, errors: 0 }
     stopFlag = false; phase = 'running'; startedAt = Date.now(); finishedAt = 0
     say(`Starting: ${job.task}`, 'start')
@@ -223,19 +251,26 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
       case 'export': { saveResults(); return { file: RESULTS, rows: rows.length } }
       // The pane's own form. It writes browse.json exactly as the agent would, so the file stays
       // the one place a job lives, and the recipe is the same however it was made.
+      case 'propose': {
+        // Just the proposal, without running: the pane can show it and let a person untick.
+        if (!chrome?.alive) { const o = await openBrowser(); if (o.ok === false) return o }
+        proposing = true; push()
+        try { return await proposeJob({ chrome, ask, start: String(body.start ?? job.start), want: String(body.want ?? job.want ?? ''), search: String(body.search ?? '') }) }
+        catch (e) { return { ok: false, error: String(e.message ?? e) } } finally { proposing = false; push() }
+      }
       case 'setJob': {
         const columns = String(body.columns ?? '').split('\n').map((l) => l.trim()).filter(Boolean).slice(0, LIMITS.fields)
-        if (!columns.length) return { ok: false, error: 'Say what you want for each one, one per line.' }
         const start = String(body.start ?? '').trim()
         if (!start) return { ok: false, error: 'Put in the address of the page to start on.' }
         const next = {
-          task: String(body.task ?? '').trim() || `${columns[0]} for every ${String(body.item ?? 'thing').trim()}`,
+          task: String(body.task ?? '').trim() || String(body.want ?? '').trim() || (columns[0] ? `${columns[0]} for every ${String(body.item ?? 'thing').trim()}` : `Read ${start.replace(/^https?:\/\//, '').split('/')[0]}`),
           start: /^[a-z]+:\/\//i.test(start) || /^demo$/i.test(start) ? start : `https://${start}`,
           search: String(body.search ?? '').trim(),
-          item: String(body.item ?? '').trim() || 'one of the things on this page',
+          item: String(body.item ?? '').trim(),
           fields: columns.map((ask) => (/^(is|are|does|do|can|has|have|will|should|was|were)\b/i.test(ask) || ask.endsWith('?')
             ? { ask, type: 'yesno', name: ask.replace(/\?$/, '').slice(0, 40) }
             : { ask, name: ask.slice(0, 40) })),
+          want: String(body.want ?? '').trim(),
           keep: String(body.keep ?? '').trim(),
           maxItems: Math.max(1, Math.min(LIMITS.maxItems, Math.floor(Number(body.maxItems) || 25))),
           maxPages: Math.max(1, Math.min(LIMITS.maxPages, Math.floor(Number(body.maxPages) || 5))),
@@ -243,8 +278,7 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
         }
         const { errors } = normalizeJob(next)
         if (errors.length) return { ok: false, error: errors.join('; ') }
-        const f = join(workspace, MARKER)
-        writeFileSync(f + '.tmp', JSON.stringify(next, null, 2) + '\n'); renameSync(f + '.tmp', f)
+        writeMarker(next)
         applyJob(next)          // this starts it
         return { ok: true, start: next.start, fields: next.fields.length }
       }
@@ -262,6 +296,20 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
   // What makes a job a different job. A changed title or budget is not worth a new run.
   const jobPrint = (j) => JSON.stringify([j.start, j.search, j.item, j.keep, j.fields.map((f) => [f.id, f.ask, f.type, f.levels])])
   let lastPrint = null, autoTimer = null
+
+  /** browse.json is the recipe, so anything the pane works out is written back into it. */
+  function writeMarker(obj) {
+    const f = join(workspace, MARKER)
+    writeFileSync(f + '.tmp', JSON.stringify(obj, null, 2) + '\n'); renameSync(f + '.tmp', f)
+  }
+  /** Take a job on without setting it running: used from inside a run that is already going. */
+  function applyJobQuiet(raw) {
+    const { job: next, errors } = normalizeJob(raw)
+    configError = errors.length ? `${MARKER}: ${errors.join('; ')}` : null
+    job = demo && /^demo$/i.test(next.start) ? { ...next, start: demo.url, hosts: [...new Set([...next.hosts, '127.0.0.1', 'localhost'])] } : next
+    if (chrome) chrome.allowedHosts = job.sameSiteOnly ? [...job.hosts, ...(demo ? ['127.0.0.1', 'localhost'] : [])] : []
+    lastPrint = jobPrint(job)
+  }
 
   function applyJob(raw, fresh = false) {
     const { job: next, errors } = normalizeJob(raw)
