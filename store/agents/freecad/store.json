@@ -1,17 +1,17 @@
 {
-  "listed": false,
   "homepage": "https://freecad.org",
   "upstream": "https://github.com/FreeCAD/FreeCAD",
   "license": "MIT",
-  "tagline": "Parametric 3D modeling with verified STEP exports",
+  "tagline": "From your measurements to checked, editable custom parts",
   "screenshots": [
-    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/freecad/starter.jpg"
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/freecad/bracket.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/freecad/handoff.jpg"
   ],
   "examples": [
     {
-      "prompt": "Build the Pocket enclosure with its vented lid and export validated STEP solids.",
-      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/freecad/starter.jpg",
-      "caption": "Pocket · editable enclosure and two closed STEP solids"
+      "prompt": "Build a bench bracket with a 60 mm mounting pattern. Check the hole positions and screwdriver access, then give me the part files and an editable project.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/freecad/bracket.jpg",
+      "caption": "Bench bracket · measured holes and tool access, individual exports and portable source"
     }
   ]
 }

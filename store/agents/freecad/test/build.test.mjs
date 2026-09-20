@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { build } from '../skills/freecad/scripts/build.mjs';
@@ -20,4 +20,15 @@ test('a successful CLI exit with no fresh STEP receipt cannot reuse an old artif
       assert.equal(await readFile(join(workspace,'part.step'),'utf8'),saved);
     }
   }finally{await rm(workspace,{recursive:true,force:true});}
+});
+
+test('a second build cannot steal the active lock or replace its verdict', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'freecad-lock-test-'));
+  try {
+    await mkdir(join(workspace, '.harness/freecad-build.lock'), {recursive:true});
+    const marker = '{"ready":false,"summary":"Active build owns this verdict"}\n';
+    await writeFile(join(workspace, '.harness/verdict.json'), marker);
+    await assert.rejects(() => build(workspace), /Another FreeCAD build/);
+    assert.equal(await readFile(join(workspace, '.harness/verdict.json'), 'utf8'), marker);
+  } finally { await rm(workspace, {recursive:true, force:true}); }
 });
