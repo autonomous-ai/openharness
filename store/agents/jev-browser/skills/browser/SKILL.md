@@ -35,7 +35,14 @@ A field is what to look for, in the words a person would use.
 
 - **Say it as it appears.** "the pay or salary range" beats "compensation" if the page says Salary.
 - **One value per field.** If the page prints "Acme · Leeds · £45,000" the reader offers that line
-  and each of its parts, so `company`, `place` and `salary` can each take their own part.
+  and each of its parts, so `company`, `place` and `salary` can each take their own part. A line
+  splits on ` · `, ` | `, a dash or a bullet, a label keeps its value (`UPC: a22124811bfa8350`), and
+  any number inside a line is offered alone.
+- **Ask for a number when you want to sort by one.** A page that says "In stock (19 available)"
+  offers both the sentence and `19`: ask for "how many copies are available" and you get the
+  number; ask for "the availability line" and you get the sentence. If the page never prints the
+  number on its own and Jev returns the sentence, that is right and honest. Derive the number with
+  a script afterwards and tell the person you did.
 - **A value that is not on the thing's page cannot be collected.** Rating stars drawn as pictures,
   a price loaded after a click, a number inside an image: none of those are text. Check with the
   reader (see AGENTS.md, "Look before you write the job") before promising a column.
@@ -66,8 +73,9 @@ data. The time is page loads, not Jev: expect about a second and a half a page.
 
 ## The dial that is real
 
-Turn `maxItems` up and nothing gets worse; the tool is not fighting a budget. The honest limit is
-the **page**. A site that prints its values as text reads perfectly. A site that draws them, hides
+Accuracy does not fall away as `maxItems` goes up; the tool is not fighting a budget, and the
+hundredth thing is read as carefully as the first. It is still a page load each, so ask for what the
+person needs. The honest limit is the **page**. A site that prints its values as text reads perfectly. A site that draws them, hides
 them behind a click, or loads them after a scroll gives blanks, and the blanks show up as a thin
 column rather than as a wrong answer. That is the tool telling the truth: it would rather leave a
 cell empty than write something the page never said.

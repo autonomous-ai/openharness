@@ -70,21 +70,36 @@ export const READER = `(() => {
   // footers are left out. A line that mashes values together ("Acme Ltd · London · £45,000") is
   // also offered in parts, because a person wants the company in the company column.
   const FURNITURE = 'header, footer, nav, aside, [role="banner"], [role="contentinfo"], [role="navigation"], [role="search"]'
+  const LABELLED = /^(dt|th)$/i          // a label whose value sits in the element next to it
   const SPLIT = /\\s+[·|•\\u2014\\u2013\\u2022]\\s+/
-  const blocks = [], sawText = new Set()
+  const blocks = [], sawText = new Set(), consumed = new Set()
+  const ownText = (e) => tidy(Array.from(e.childNodes).filter((c) => c.nodeType === 3).map((c) => c.textContent).join(' '), MAX_BLOCK)
+  // Numbers a person would want on their own: "In stock (19 available)" also offers "19".
+  const numbersIn = (t) => (t.match(/\\d[\\d,.]*/g) || []).map((x) => x.replace(/[.,]$/, '')).filter((x) => x.length && x !== t).slice(0, 2)
   const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT)
   for (let e = walker.currentNode; e && blocks.length < MAX_BLOCKS; e = walker.nextNode()) {
     if (/^(script|style|noscript|svg|head|meta|link)$/i.test(e.tagName)) continue
-    const own = Array.from(e.childNodes).filter((c) => c.nodeType === 3).map((c) => c.textContent).join(' ')
-    const text = tidy(own, MAX_BLOCK)
+    if (consumed.has(e)) continue
+    let text = ownText(e)
+    let label = ''
+    // A label and its value belong together, or the value gets dropped as a repeat of one further up
+    // and the label is left looking like an empty promise.
+    if (LABELLED.test(e.tagName)) {
+      const next = e.nextElementSibling
+      const value = next && /^(dd|td)$/i.test(next.tagName) ? ownText(next) : ''
+      if (text && value) { consumed.add(next); label = text; text = tidy(text.replace(/:\\s*$/, '') + ': ' + value, MAX_BLOCK) }
+    }
     if (text.length < 2) continue
     if (!vis(e)) continue
     if (e.closest(FURNITURE)) continue
     const key = text.toLowerCase()
     if (sawText.has(key)) continue
     sawText.add(key)
-    const parts = SPLIT.test(text) ? text.split(SPLIT).map((p) => p.trim()).filter((p) => p.length > 1 && p.length < 80).slice(0, 5) : []
-    blocks.push({ n: mark(e), text, tag: e.tagName.toLowerCase(), parts: parts.length > 1 ? parts : [] })
+    let parts = SPLIT.test(text) ? text.split(SPLIT).map((p) => p.trim()) : []
+    if (label) parts = [text.slice(label.replace(/:\\s*$/, '').length + 2)]
+    parts = parts.map((p) => p.trim()).filter((p) => p.length > 1 && p.length < 80)
+    for (const p of [...parts, text]) for (const num of numbersIn(p)) if (!parts.includes(num)) parts.push(num)
+    blocks.push({ n: mark(e), text, tag: e.tagName.toLowerCase(), parts: parts.slice(0, 5) })
   }
 
   const heads = Array.from(document.querySelectorAll('h1, h2')).map((h) => tidy(h.innerText, 120)).filter(Boolean).slice(0, 6)
@@ -116,12 +131,17 @@ export function pageState(page, extra = {}) {
 }
 
 /** The numbered text blocks, as choice options: the key is the number, the meaning is the text. */
+export const MAX_OPTIONS = 250   // a choice takes at most 255
 export function blockOptions(page, { none = 'nothing on this page says it' } = {}) {
   const options = { none }
+  let n = 1
   for (const b of page.blocks) {
+    if (n >= MAX_OPTIONS) break
     options[`b${b.n}`] = b.text
-    // A mashed line is offered whole and in parts, so a column can hold just the part it wants.
-    b.parts?.forEach((p, i) => { options[`b${b.n}p${i}`] = p })
+    n++
+    // A line that holds more than one value is offered whole and in parts, so a column can take the
+    // part it wants: the company out of "Acme · Leeds", the 19 out of "In stock (19 available)".
+    b.parts?.forEach((p, i) => { if (n < MAX_OPTIONS) { options[`b${b.n}p${i}`] = p; n++ } })
   }
   return options
 }

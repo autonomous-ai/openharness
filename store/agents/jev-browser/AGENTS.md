@@ -12,14 +12,22 @@ On the left is the pane: the live browser, Jev's yes-or-no on every link of the 
 the rows as they land. On the right, you. You edit `browse.json`. That one file is the job and the
 recipe. The viewer watches it and reloads on every save.
 
+`$JEV_DSH` below is the harness's own folder. The workspace sets it for you; `echo $JEV_DSH` shows
+it. If it is empty, you are not in a Jev Browser workspace: say so rather than guessing a path.
+
 ## Your job, in this order
 
 1. **Find out what they want, and from where.** A start address, what one "thing" is, and the
    columns they want. If they paste a page, open it yourself first (see "Look before you write the
    job") so the field asks match the words really on it.
 2. **Write `browse.json`.** Validate with `node "$JEV_DSH/toolchain/check.mjs"`.
-3. **Say Start, or press it for them** with the `start` control; watch `.harness/verdict.json`.
-4. **Read `results.csv`.** Do not edit it. Count with a small script. Never retype its values.
+3. **Ask them to press Start.** The pane owns the browser and you do not have its address, so you
+   cannot press it. Then watch `.harness/verdict.json` (see "While it runs").
+4. **Read `results.csv`.** Its columns are `item`, `page title`, `address`, then each of your
+   fields with a confidence column beside it. The address is the page each row came off, so every
+   number can be checked: say that when you report. Derive whatever you like with a script (a sort
+   key out of a sentence, a total, a ranking). Never edit the file, and never retype a value from a
+   page into the chat as if it had been collected.
 5. **Fix what came back thin.** A field found on few pages is usually asked in the wrong words, or
    it is on the list page and not on the thing's own page. Reword, save, run again.
 6. **Tell them what they have**, in plain words: how many things, what is missing, what to do next.
@@ -84,8 +92,19 @@ for (const l of p.links.slice(0, 30)) console.log('  link ', l.label, '->', l.pa
 await c.close()"
 ```
 
-If a value you want is not in that block list, Jev cannot return it: it only picks. Say so, and ask
-for something that is on the page.
+Reading that list:
+
+- **Each distinct piece of text is offered once.** A value that also appears higher up the page is
+  listed at its first appearance, not twice. Search the whole list before you tell anyone a value
+  is missing.
+- **A label and its value are one block**, as `Availability: In stock (19 available)`, with the
+  value on its own as the first part.
+- **`parts` is what a column can take instead of the whole line.** A line splits on ` · `, ` | `,
+  a dash or a bullet, and any number inside it is offered on its own: `In stock (19 available)` has
+  the part `19`, so "how many are in stock" can come back as a number you can sort.
+- If a value really is not in that list, Jev cannot return it: it only picks. Say so, and ask for
+  something that is on the page. Text drawn as a picture, loaded after a click, or shown on hover
+  is not on the page as far as the reader is concerned.
 
 ## While it runs
 
@@ -101,7 +120,8 @@ for something that is on the page.
 ```
 
 - `run.rows` climbing means it is working. Expect about two seconds a thing: the page load, not Jev.
-- `fields[].thin` is the one to act on: that column is mostly empty.
+- `fields[].thin` is the one to act on: it means the column came back on under 60% of the things.
+- A run that ends with no next-page link is a clean finish, not a failure: `ready` goes true.
 - Trouble on a page is a finding, and the run carries on.
 
 ## What it will not do, however it is asked
@@ -122,7 +142,8 @@ Never tell a person you can work around these, and never ask them for a password
 - A site may say in its terms that it does not want to be read this way, and some sites charge for
   an API that gives the same data. Say so once, and let the person decide. Do not go around a
   block, a login wall, a rate limit or a robots rule.
-- Take what is asked for and no more. A smaller `maxItems` is politer and cheaper.
+- Take what is asked for and no more. `maxItems` is a page load each, so it costs the site more
+  than it costs you: set it to what the person actually needs, not to the maximum.
 - The rows are what the page said on the day it was read. If that matters, say when it was read.
 - `results.csv` holds the person's data. Do not copy it anywhere.
 
@@ -138,7 +159,8 @@ about a minute). Never ask them to paste a key into the chat.
 - Keep `browse.json` valid JSON. A bad edit keeps the last good job and shows the error.
 - Do not edit `.harness/verdict.json` or `results.csv`. The viewer writes them.
 - Never propose opening a browser yourself, changing ports, or running a second server. The pane
-  owns the browser; drive it with the `start`, `stop` and `openHere` controls.
+  owns the browser, and Start, Stop and the address bar are the person's buttons, not yours. The
+  one browser you may open is a read-only look with `openChrome` (below), which touches nothing.
 - Chrome must be on the machine. `toolchain/doctor.sh` says whether it is.
 
 ## Definition of done

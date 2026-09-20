@@ -241,3 +241,31 @@ test('one address, one row: the same page under two names is not collected twice
   assert.equal(canonical('https://a.com/x'), canonical('https://a.com/x/'))
   assert.equal(canonical('https://a.com/x?page=2'), 'https://a.com/x?page=2')
 })
+
+test('a label keeps its value, and a number in a sentence is offered on its own', { skip: noChrome }, async () => {
+  // The demo site prints its details as <dt>Salary</dt><dd>£35,000 - £55,000</dd>. Each distinct
+  // string is offered once, so without pairing the value is dropped as a repeat of the one on the
+  // list page and the label is left alone, looking like the page never said it.
+  const site = await startDemoSite()
+  const chrome = await browser()
+  try {
+    await chrome.go(new URL('/job/1000', site.url).toString())
+    const page = await readPage(chrome)
+    const texts = page.blocks.map((b) => b.text)
+    assert.ok(!texts.includes('Salary'), 'a label is never offered on its own')
+    const salary = page.blocks.find((b) => /^Salary: /.test(b.text))
+    assert.ok(salary, `the label and its value are one block: ${JSON.stringify(texts)}`)
+    assert.match(salary.parts[0], /^£[\d,]+ - £[\d,]+$/, 'the value alone is the first part')
+    const posted = page.blocks.find((b) => /^Posted: /.test(b.text))
+    assert.ok(posted && posted.parts.some((p) => /^\d{1,2} \w+ \d{4}$/.test(p)), 'the date alone is offered')
+    // A number inside a sentence is offered on its own, so a column can be sorted.
+    await chrome.evaluate(`(() => { const p = document.createElement('p'); p.textContent = 'In stock (19 available)'; document.querySelector('main').append(p) })()`)
+    const again = await readPage(chrome)
+    const stock = again.blocks.find((b) => b.text === 'In stock (19 available)')
+    assert.ok(stock, 'the sentence is offered')
+    assert.ok(stock.parts.includes('19'), `and the number on its own: ${JSON.stringify(stock.parts)}`)
+    assert.equal(blockText(again, `b${stock.n}p${stock.parts.indexOf('19')}`), '19')
+    // A choice takes at most 255 options, and parts push the count up.
+    assert.ok(Object.keys(blockOptions(again)).length <= 250)
+  } finally { await chrome.close(); await site.close() }
+})

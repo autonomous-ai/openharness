@@ -68,7 +68,8 @@ Run it again next month and you get next month's answer. That file is the whole 
 ## What you get
 
 - **`results.csv`** in your project folder: one row per thing, every column with the confidence Jev
-  had in it. Download it from the pane or open it from the folder.
+  had in it, and the address of the page it came off. Every number in your spreadsheet can be
+  checked against the page that produced it. Download it from the pane or open it from the folder.
 - The agent on the right will count it, tell you what is missing, and sharpen the weak columns.
 
 ## Measured
@@ -80,8 +81,8 @@ On 2026-09-20 with live Jev (`typesafe/jev-1.13`) through OpenRouter.
 | The built-in job board, 36 roles | 24 | 33 s | $0.0023 | 144 of 144 cells exactly matched the site's own data, no repeats, nothing skipped |
 | `books.toscrape.com`, a public sandbox | 8 | 21 s | $0.0018 | every title, price, stock count and UPC code right |
 
-The UPC codes matter: `a22124811bfa8350` is not something a model could write from memory. It came
-off the page, which is the whole point. Two small runs are a sanity check, not a benchmark.
+The product codes matter: `a22124811bfa8350` is not something a model could write from memory. It
+came off the page, which is the whole point. Small runs are a sanity check, not a benchmark.
 
 ## Without a key
 
