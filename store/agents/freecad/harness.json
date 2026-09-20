@@ -4,7 +4,7 @@
   "name": "FreeCAD",
   "category": "CAD",
   "author": "OpenHarness contributors",
-  "description": "Build parametric FreeCAD macros, inspect real STEP assemblies, and verify freshly reimported solids. Includes an editable enclosure and vented lid.",
+  "description": "Turn measurements into custom parts with checked holes, clearances and tool access. Keep an editable FreeCAD project, individual STEP/STL exports, reference drawings and a portable handoff.",
   "engine": "claude",
   "workspace": {
     "template": "template",

@@ -1,0 +1,31 @@
+{
+  "spec": 1,
+  "title": "Two-face bench bracket",
+  "brief": "Make a prototype bracket for a small bench sensor: an 80 × 40 mm foot, 45 mm overall height and 5 mm material. Two 6.4 mm vertical bores are 50 mm apart at y=-7; two 4.5 mm horizontal bores use the same spacing, 30 mm above the foot. Leave the specified sensor envelope unobstructed. This is a fit prototype, not a rated structural mount.",
+  "units": "mm",
+  "sourceFiles": ["part.FCMacro", "dimensions.json", "design.json"],
+  "parts": [{"id": "bracket", "object": "Bracket", "label": "Two-face bench bracket", "material": "Prototype plastic; process and grade not selected", "quantity": 1, "notes": "Two gussets connect the faces. Verify fastener/tool access and printed hole fit before installation."}],
+  "references": ["Payload", "AvailableSpace", "BaseAccessLeft", "BaseAccessRight", "BackAccessLeft", "BackAccessRight"],
+  "checks": [
+    {"id": "overall-envelope", "type": "bounds", "part": "Bracket", "size": [80, 40, 45], "origin": [-40, -20, 0], "reason": "The bracket must fit the measured installation envelope."},
+    {"id": "base-left-bore", "type": "bore", "part": "Bracket", "origin": [-25, -7, 0], "axis": [0, 0, 1], "diameter": 6.4, "length": 5, "wall": 2, "reason": "The first base mounting hole must match the bench pattern."},
+    {"id": "base-right-bore", "type": "bore", "part": "Bracket", "origin": [25, -7, 0], "axis": [0, 0, 1], "diameter": 6.4, "length": 5, "wall": 2, "reason": "The second base hole must be 50 mm from the first."},
+    {"id": "back-left-bore", "type": "bore", "part": "Bracket", "origin": [-25, 15, 30], "axis": [0, 1, 0], "diameter": 4.5, "length": 5, "wall": 2, "reason": "The sensor mounting hole must have the specified height and diameter."},
+    {"id": "back-right-bore", "type": "bore", "part": "Bracket", "origin": [25, 15, 30], "axis": [0, 1, 0], "diameter": 4.5, "length": 5, "wall": 2, "reason": "The sensor mounting pattern requires 50 mm between centres."},
+    {"id": "payload-envelope", "type": "bounds", "part": "Payload", "size": [50, 15, 10], "origin": [-25, -5, 25], "reason": "The clearance reference must represent the specified sensor envelope."},
+    {"id": "payload-clearance", "type": "clearance", "parts": ["Bracket", "Payload"], "minimum": 5, "reason": "Keep at least 5 mm clear around the sensor envelope."},
+    {"id": "work-envelope", "type": "bounds", "part": "AvailableSpace", "size": [100, 100, 100], "origin": [-50, -50, 0], "reason": "Keep the installation-space reference fixed to the acceptance brief."},
+    {"id": "available-space", "type": "contains", "part": "AvailableSpace", "other": "Bracket", "reason": "The finished bracket must stay inside the available 100 mm work envelope."},
+    {"id": "base-left-access-envelope", "type": "bounds", "part": "BaseAccessLeft", "size": [10, 10, 20], "origin": [-30, -12, 5], "reason": "Preserve the specified 10 mm diameter fastener/tool access above the left foot hole."},
+    {"id": "base-right-access-envelope", "type": "bounds", "part": "BaseAccessRight", "size": [10, 10, 20], "origin": [20, -12, 5], "reason": "Preserve the specified fastener/tool access above the right foot hole."},
+    {"id": "back-left-access-envelope", "type": "bounds", "part": "BackAccessLeft", "size": [10, 25, 10], "origin": [-30, -10, 25], "reason": "Preserve the specified 10 mm diameter access in front of the left sensor hole."},
+    {"id": "back-right-access-envelope", "type": "bounds", "part": "BackAccessRight", "size": [10, 25, 10], "origin": [20, -10, 25], "reason": "Preserve the specified fastener/tool access in front of the right sensor hole."},
+    {"id": "base-left-access", "type": "no-overlap", "parts": ["Bracket", "BaseAccessLeft"], "reason": "The gusset must not obstruct access to the left foot fastener."},
+    {"id": "base-right-access", "type": "no-overlap", "parts": ["Bracket", "BaseAccessRight"], "reason": "The gusset must not obstruct access to the right foot fastener."},
+    {"id": "back-left-access", "type": "no-overlap", "parts": ["Bracket", "BackAccessLeft"], "reason": "The gusset must not obstruct access to the left sensor fastener."},
+    {"id": "back-right-access", "type": "no-overlap", "parts": ["Bracket", "BackAccessRight"], "reason": "The gusset must not obstruct access to the right sensor fastener."}
+  ],
+  "assumptions": ["Dimensions describe a synthetic acceptance brief, not a measured commercial sensor.", "No load, fatigue, temperature or electrical-safety qualification has been performed.", "Nominal bores must be checked against the selected process and actual fasteners."],
+  "assembly": ["Review the STEP and individual drawing against your measurements.", "Make a fit prototype; check hole spacing, tool access and the sensor envelope.", "Use only after choosing appropriate material and verifying the actual loads and mounting surfaces."],
+  "hardware": ["Fastener sizes and lengths require selection against the real bench and sensor; bore diameters alone do not define a safe joint."]
+}

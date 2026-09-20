@@ -31,3 +31,5 @@ jobs:
           store/viewers/web-viewer/test/*.test.mjs
       - name: Validate Store catalog
         run: node store/tools/catalog.mjs
+      - name: Check FreeCAD contracts and delivery (native suite is opt-in)
+        run: node --test store/agents/freecad/test/*.test.mjs
