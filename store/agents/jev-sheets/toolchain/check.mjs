@@ -23,7 +23,8 @@ try {
 if (!sheet || typeof sheet !== 'object' || Array.isArray(sheet)) { console.log('error  sheet.json must be a JSON object'); process.exit(1) }
 
 if (!sheet.title || typeof sheet.title !== 'string') warn('no title')
-if (!sheet.description || !/made.?up|synthetic|fictional|not real/i.test(String(sheet.description))) warn('say in "description" that the data is made up')
+// Rows the agent wrote are made up and must say so. Rows from the person's own file are what they are.
+if (sheet.source === undefined && (!sheet.description || !/made.?up|synthetic|fictional|not real/i.test(String(sheet.description)))) warn('say in "description" that the data is made up')
 
 // ---- columns: 0 to 12 valid headers ------------------------------------------------------------
 const columns = new Map()
@@ -43,7 +44,7 @@ else {
   })
 }
 
-// ---- rows: 1 to 2000, each with text -----------------------------------------------------------
+// ---- rows: 1 to 10,000, each with text -----------------------------------------------------------
 // A sheet may take its rows from the person's own file in the workspace: "source": "leads.csv".
 let sourceRows = 0
 if (sheet.source !== undefined) {
@@ -87,4 +88,4 @@ if (sheet.suggestions != null) {
 }
 
 if (errors) { console.log(`fail   invalid sheet.json (${errors} error${errors > 1 ? 's' : ''}, ${warnings} warning${warnings === 1 ? '' : 's'})`); process.exit(1) }
-console.log(`ok     sheet.json is valid: ${rows.length} rows, ${columns.size} Jev columns${warnings ? `, ${warnings} warning${warnings > 1 ? 's' : ''}` : ''}`)
+console.log(`ok     sheet.json is valid: ${sourceRows ? `${rows.length + sourceRows} rows (${sourceRows} from ${sheet.source})` : `${rows.length} rows`}, ${columns.size} Jev columns${warnings ? `, ${warnings} warning${warnings > 1 ? 's' : ''}` : ''}`)

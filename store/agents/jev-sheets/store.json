@@ -2,16 +2,20 @@
   "homepage": "https://typesafe.ai",
   "upstream": "https://typesafe.ai",
   "license": "MIT",
-  "tagline": "Type a question as a column header and Jev answers it for every row, live",
+  "tagline": "Drop in any spreadsheet, ask in plain words, get every row answered in seconds",
   "examples": [
     {
-      "prompt": "Build me a sheet of 80 made-up job applications for a junior designer role. Add Jev columns: \"Has a portfolio link?\", \"Fit: weak < fair < strong\" and \"Next step: reject = no relevant work | phone screen = some relevant work | interview = strong relevant work\". Put in 15 rows with mixed signals, label the truth, then read the accuracy and sharpen the weakest question.",
-      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-sheets/typed-column.jpg",
-      "caption": "A header is a question: Jev fills every row in about a second, and the pane shows where it is unsure"
+      "prompt": "I dropped my app reviews export on the pane. Read a sample of it, then work out what people complain about most, who is thinking of leaving, and how angry they are. Write me a findings report with the counts and word-for-word quotes.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-sheets/own-file.jpg",
+      "caption": "1,200 reviews, three questions, 36 seconds, 3 cents: the 119 who may leave. The reviews shown are made up"
     },
     {
-      "prompt": "Turn the inbox sheet into a churn watch. Keep the rows, replace the columns with \"Wants to cancel?\", \"Churn risk: low < medium < high\" and \"Reason: price | bugs | missing feature | support\" with a clear meaning for each option. Then tell me which rows Jev is least sure about and why.",
-      "caption": "Reword the questions, watch only the changed column fill again, and review the low confidence cells"
+      "prompt": "Our survey export is in survey.csv with 3,000 free-text answers. Code every answer by theme, tell me the top five themes among the unhappy customers, and list the 20 answers I should read myself.",
+      "caption": "The agent writes the questions with you, Jev answers them for every row, and the review line shows what to read"
+    },
+    {
+      "prompt": "tickets.csv is last month of support tickets. Send each one to a team, flag the urgent ones, and tell me which three problems cost us the most tickets. Save the result so I can open it in Excel.",
+      "caption": "Every row gets an answer and a confidence. answers.csv is yours to keep"
     }
   ]
 }

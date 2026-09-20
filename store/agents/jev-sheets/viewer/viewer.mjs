@@ -8,15 +8,21 @@
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { evaluate, jev, toWire, PRICE_PER_MTOK, resolveCredentials } from '../toolchain/jev.mjs'
-import { serveViewer, writeVerdict, watchConfig, mulberry32, clean } from './kit.mjs'
+import { serveViewer, writeVerdict, watchConfig, watchPath, mulberry32, clean } from './kit.mjs'
 import { parseHeader, normalizeSheet, columnKey, judge, confidenceOf, levelOf, describeColumn, LIMITS } from './grammar.mjs'
 import { sheetMock } from './mock.mjs'
 import { loadSource } from './source.mjs'
-import { watch as watchFile, writeFileSync, renameSync } from 'node:fs'
+import { writeFileSync, renameSync, readFileSync, existsSync, rmSync } from 'node:fs'
+import { extname } from 'node:path'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const MARKER = 'sheet.json'
 const GHOST_PAUSE_MS = 60000
+// Starter questions for a file nobody has looked at yet. The chat agent replaces them with sharper ones.
+const OWN_SUGGESTIONS = ['Is this a complaint?', 'Sentiment: negative < neutral < positive', 'Asks a question?', 'Mentions price or cost?', 'Urgency']
+const SAMPLE_BACKUP = 'sheet.sample.json'
+const OWN_EXT = new Set(['.xlsx', '.csv', '.tsv', '.txt', '.json', '.jsonl', '.ndjson'])
+const RESERVED = new Set(['sheet.json', 'answers.csv', 'sheet.sample.json', 'findings.md', 'report.md'])
 const FALLBACK_SUGGESTIONS = ['Urgency', 'Sentiment: negative < neutral < positive', 'Asks a question?', 'Complaint?']
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const r3 = (x) => Math.round(x * 1000) / 1000
@@ -32,10 +38,12 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
   let todo = new Set()       // row ids with at least one missing cell
   let inflight = new Set()   // row objects being judged right now
   let order = [], sort = null, reviewOnly = false, reviewBelow = 0.65, fileReviewBelow = null, fileDemo = null
+  let filter = null          // { col, v }: show only the rows whose answer in that column is option/level v
   let running = autostart, stopped = false, epoch = 0, rev = 0
+  let loadedAt = null        // when sheet.json was last taken in: the agent's proof that a save was seen
   let counters = { calls: 0, cacheHits: 0, tokens: 0, costUsd: 0, errors: 0, computed: 0 }
   let burst = { active: false, startedAt: 0, cells: 0, rate: 0, ms: 0 }
-  let patches = [], patchTimer = null, verdictTimer = null, retryTimer = null, ghostTimer = null
+  let patches = [], patchTimer = null, verdictTimer = null, retryTimer = null, ghostTimer = null, progressTimer = null
   let ghost = { enabled: true, phase: 'idle', header: '', typeMs: 0, startedAt: 0, nextAt: 0, removeAt: 0, pausedUntil: 0, cursor: 0, watching: false }
   const rng = mulberry32(20260919)
   // Which live route is active (typesafe, cloudflare, openrouter), or null for the offline stand-in.
@@ -72,8 +80,10 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     m.set(col.id, cell)
     return cell
   }
+  // The context is put in front of every question, so it is part of what was asked.
+  const keyOf = (col) => `${sheet.context ?? ''}\u0001${columnKey(col)}`
   function cacheFor(col) {
-    const k = columnKey(col)
+    const k = keyOf(col)
     let m = cache.get(k)
     if (!m) cache.set(k, (m = new Map()))
     return m
@@ -98,7 +108,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
   // ---- the numbers ---------------------------------------------------------------------------
   function tally() {
     const colStats = {}, groups = {}
-    for (const c of columns) colStats[c.id] = { filled: 0, flagged: 0, labelled: 0, correct: 0, conf: 0 }
+    for (const c of columns) colStats[c.id] = { filled: 0, flagged: 0, labelled: 0, correct: 0, conf: 0, dist: new Array(c.type === 'noul' ? 2 : c.type === 'choice' ? c.options.length : c.levels.length).fill(0) }
     let filled = 0, flagged = 0
     for (const row of rows) {
       const m = cells.get(row.id)
@@ -108,6 +118,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
         if (!cell) continue
         const s = colStats[c.id]
         s.filled++; s.conf += cell.conf; filled++
+        const v = valueIndex(c, cell); if (v >= 0 && v < s.dist.length) s.dist[v]++
         if (cell.conf < reviewBelow) { s.flagged++; flagged++ }
         if (cell.ok != null) { s.labelled++; if (cell.ok) s.correct++ }
         if (row.group) {
@@ -130,6 +141,14 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     }
   }
 
+  /** The answer as an index: no/yes = 0/1, a choice = its option, a score = its level. */
+  function valueIndex(col, cell) {
+    const a = cell.answer
+    if (col.type === 'noul') return a.noul >= 0.5 ? 1 : 0
+    if (col.type === 'choice') return col.options.indexOf(String(a.choice))
+    return levelOf(col, a)
+  }
+
   // ---- order: sort and the "needs review only" filter -----------------------------------------
   function rowNeedsReview(row) {
     const m = cells.get(row.id)
@@ -147,6 +166,9 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
   function computeOrder() {
     let list = rows
     if (reviewOnly) list = list.filter((r) => rowNeedsReview(r) || hasMissing(r))
+    const fcol = filter && colById(filter.col)
+    if (filter && !fcol) filter = null
+    if (fcol) list = list.filter((r) => { const cell = cellOf(r.id, fcol.id); return cell && valueIndex(fcol, cell) === filter.v })
     const col = sort && colById(sort.col)
     if (!col) { if (sort) sort = null; order = list.map((r) => r.id); return }
     const dir = sort.dir === 'asc' ? 1 : -1
@@ -165,7 +187,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     }
   }
   function lightView() {
-    return { rev, running, reviewBelow, reviewOnly, sort, order, error: configError, jevError, ghost: ghostView(), ...tally() }
+    return { rev, running, reviewBelow, reviewOnly, sort, filter, order, error: configError, jevError, client: liveRoute() ?? 'mock', ghost: ghostView(), ...tally() }
   }
   function fullState() {
     const cellsOut = {}
@@ -179,6 +201,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     return {
       title: sheet.title, description: sheet.description, textLabel: sheet.textLabel, client: liveRoute() ?? 'mock',
       source: sourceInfo, // set when the rows come from the person's own file
+      own: !!sourceInfo, answersFile: ANSWERS,
       concurrency: sheet.concurrency, limits: LIMITS,
       suggestions: sheet.suggestions.length ? sheet.suggestions : FALLBACK_SUGGESTIONS,
       columns: columns.map((c) => ({ id: c.id, header: c.header, name: c.name, type: c.type, options: c.options, descriptions: c.descriptions, levels: c.levels, bare: !!c.bare, source: c.source, kind: describeColumn(c) })),
@@ -193,6 +216,8 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
   function flushPatches() {
     clearTimeout(patchTimer); patchTimer = null
     if (!patches.length) return
+    // While a long fill runs, the verdict moves every two seconds, so the chat agent can watch it climb.
+    if (!progressTimer) progressTimer = setTimeout(() => { progressTimer = null; saveVerdict() }, 2000)
     const out = patches; patches = []
     const t = tally()
     server?.broadcast({ rev, patches: out, colStats: t.colStats, groups: t.groups, stats: t.stats }, 'cells')
@@ -213,7 +238,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
       // The rows worth a second look: wrong ones first, then the least sure.
       const weak = rows.map((r) => ({ r, cell: cellOf(r.id, c.id) })).filter((x) => x.cell && (x.cell.ok === false || x.cell.conf < reviewBelow))
         .sort((a, b) => (a.cell.ok === false ? 0 : 1) - (b.cell.ok === false ? 0 : 1) || a.cell.conf - b.cell.conf).slice(0, 5)
-        .map(({ r, cell }) => ({ row: r.id, text: r.text.slice(0, 90), answered: shown(c, cell.answer), confidence: r3(cell.conf), truth: r.truth?.[c.id] ?? null }))
+        .map(({ r, cell }) => ({ row: r.id, n: rows.indexOf(r) + 1, text: r.text.slice(0, 90), answered: shown(c, cell.answer), confidence: r3(cell.conf), truth: r.truth?.[c.id] ?? null }))
       report.push({ id: c.id, header: c.header, type: c.type, source: c.source, filled: s.filled, accuracy: s.acc, labelled: s.labelled, underReviewLine: s.flagged, avgConfidence: s.avgConf, weakest: weak })
       const share = s.filled ? s.flagged / s.filled : 0
       findings.push({
@@ -233,7 +258,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
         { id: 'fill', name: 'Cells filled', state: full ? 'done' : stats.cellsTotal ? 'active' : 'pending' },
         { id: 'review', name: 'Review', state: !full ? 'pending' : stats.flagged ? 'active' : 'done' },
       ],
-      sheet: { client: liveRoute() ?? 'mock', reviewBelow, rows: stats.rows, cellsFilled: stats.cellsFilled, cellsTotal: stats.cellsTotal, flagged: stats.flagged, costUsd: stats.costUsd, groups, columns: report },
+      sheet: { client: liveRoute() ?? 'mock', loadedAt, source: sourceInfo?.name ?? null, reviewBelow, rows: stats.rows, cellsFilled: stats.cellsFilled, cellsTotal: stats.cellsTotal, flagged: stats.flagged, costUsd: stats.costUsd, groups, columns: report },
     }
   }
   function shown(col, a) {
@@ -334,9 +359,9 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     if (todo.size || inflight.size) return
     const wasBusy = burst.active
     burst.active = false
-    if (sort || reviewOnly) computeOrder()
+    if (sort || reviewOnly || filter) computeOrder()
     flushPatches()
-    if (wasBusy || sort || reviewOnly) pushView()
+    if (wasBusy || sort || reviewOnly || filter) pushView()
     verdictSoon()
   }
   function pump() {
@@ -377,8 +402,9 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     const col = colById(id)
     if (!col) return { ok: false, error: 'no such column' }
     columns = columns.filter((c) => c !== col)
-    cache.delete(columnKey(col)) // its answers go with it; typing it again asks Jev again
+    cache.delete(keyOf(col)) // its answers go with it; typing it again asks Jev again
     if (sort?.col === id) sort = null
+    if (filter?.col === id) filter = null
     refill(); changed()
     return { removed: id }
   }
@@ -404,7 +430,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     if (file === sourceFile) return
     sourceWatcher?.close(); sourceWatcher = null; sourceFile = file
     if (!file) return
-    try { sourceWatcher = watchFile(file, () => { clearTimeout(sourceTimer); sourceTimer = setTimeout(() => { if (!stopped) applySheet(watcher.get(), false) }, 80) }) } catch { /* the file may vanish; the next edit to sheet.json retries */ }
+    sourceWatcher = watchPath(file, () => { clearTimeout(sourceTimer); sourceTimer = setTimeout(() => { if (!stopped) applySheet(watcher.get(), false) }, 80) })
   }
   function applySheet(raw, fresh) {
     const next = normalizeSheet(expandSource(raw))
@@ -412,6 +438,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     if (!next.rows.length && rows.length && !fresh) { configError = `${MARKER}: ${problems || 'needs at least one row with text'}. Showing the last good sheet`; pushView(); verdictSoon(); return }
     configError = problems ? `${MARKER}: ${problems}` : null
     sheet = next
+    loadedAt = new Date().toISOString()
     epoch++
     rows = next.rows.map((r) => ({ ...r, edited: false, retryAt: 0 }))
     rowById = new Map(rows.map((r) => [r.id, r]))
@@ -424,8 +451,56 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     fileReviewBelow = next.reviewBelow; fileDemo = next.demo
     refill(); changed()
   }
+  // ---- the person's own file: dropped or pasted in the pane --------------------------------------
+  function safeFileName(name) {
+    let base = String(name ?? '').split(/[\\/]/).pop().normalize('NFKD').replace(/[^\w.\- ]+/g, '').trim().replace(/\s+/g, '-').replace(/^\.+/, '')
+    if (base.length > 80) base = base.slice(0, 60) + base.slice(-20)
+    if (!base || !extname(base)) return ''
+    return RESERVED.has(base.toLowerCase()) ? `my-${base}` : base
+  }
+  function writeMarker(obj) {
+    const f = join(workspace, MARKER)
+    writeFileSync(f + '.tmp', JSON.stringify(obj, null, 2) + '\n'); renameSync(f + '.tmp', f)
+  }
+  /** A file lands from the pane. It is checked first; only a file that reads well replaces the sheet. */
+  async function upload(name, buf) {
+    touch()
+    const file = safeFileName(name)
+    const ext = extname(file).toLowerCase()
+    if (!file || !OWN_EXT.has(ext)) return { ok: false, error: 'Use an Excel .xlsx file, or a .csv, .tsv, .json or .jsonl file. An old .xls or a Numbers file: save it as .xlsx or CSV first.' }
+    if (!buf.length) return { ok: false, error: 'That file is empty.' }
+    const target = join(workspace, file)
+    const had = existsSync(target) ? readFileSync(target) : null
+    writeFileSync(target, buf)
+    const got = loadSource(workspace, file, { limit: LIMITS.maxRows })
+    if (got.error) { if (had) writeFileSync(target, had); else rmSync(target, { force: true }); return { ok: false, error: got.error } }
+    // Keep the made-up sample, so "back to the sample" works.
+    try {
+      const cur = JSON.parse(readFileSync(join(workspace, MARKER), 'utf8'))
+      if (!cur.source && !existsSync(join(workspace, SAMPLE_BACKUP))) writeFileSync(join(workspace, SAMPLE_BACKUP), JSON.stringify(cur, null, 2) + '\n')
+    } catch { /* no sample worth keeping */ }
+    const title = file.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim() || 'My file'
+    const next = { title, description: `Rows from ${file}, the person's own file.`, source: file, textLabel: got.info.textColumn, demo: false, concurrency: 16, columns: [], suggestions: OWN_SUGGESTIONS }
+    writeMarker(next)
+    filter = null; sort = null; reviewOnly = false
+    applySheet(next, true)
+    return { file, rows: got.info.used, total: got.info.total, textColumn: got.info.textColumn }
+  }
+  function useSample() {
+    touch()
+    let sample = null
+    for (const f of [join(workspace, SAMPLE_BACKUP), join(HERE, '..', 'template', MARKER)]) {
+      try { sample = JSON.parse(readFileSync(f, 'utf8')); if (sample && !sample.source) break; sample = null } catch { sample = null }
+    }
+    if (!sample) return { ok: false, error: 'the made-up sample is not on this machine' }
+    writeMarker(sample)
+    filter = null; sort = null; reviewOnly = false
+    applySheet(sample, true)
+    return { sample: true }
+  }
+
   function reset() {
-    cache = new Map(); sort = null; reviewOnly = false; jevError = null
+    cache = new Map(); sort = null; reviewOnly = false; filter = null; jevError = null
     counters = { calls: 0, cacheHits: 0, tokens: 0, costUsd: 0, errors: 0, computed: 0 }
     burst = { active: false, startedAt: 0, cells: 0, rate: 0, ms: 0 }
     patches = []
@@ -531,6 +606,14 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
         computeOrder(); pushView(); return { sort }
       }
       case 'reviewOnly': touch(); reviewOnly = !!body.on; computeOrder(); pushView(); return { reviewOnly }
+      case 'filter': {
+        // Click an answer count to see only those rows. The same click again clears it.
+        touch()
+        const col = colById(String(body.col ?? '')), v = Number(body.v)
+        filter = !col || !Number.isInteger(v) || v < 0 || (filter && filter.col === col.id && filter.v === v) ? null : { col: col.id, v }
+        computeOrder(); pushView(); return { filter }
+      }
+      case 'useSample': return useSample()
       case 'setReview': {
         touch()
         const v = Number(body.value)
@@ -553,7 +636,10 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     if (err) { configError = `${err}. Showing the last good sheet`; pushView(); verdictSoon(); return }
     applySheet(cfg, false)
   })
-  server = await serveViewer({ here: HERE, port, files: ['index.html', 'base.css', 'studio.css', 'studio.js', 'jev-hud.js', 'grammar.mjs'], state: fullState, control })
+  server = await serveViewer({ here: HERE, port, files: ['index.html', 'base.css', 'studio.css', 'studio.js', 'jev-hud.js', 'grammar.mjs'], state: fullState, control,
+    upload, downloads: () => { saveAnswers(); return { [ANSWERS]: join(workspace, ANSWERS) } },
+    // A key just arrived: the stand-in's answers are dropped and every cell is asked again, for real.
+    onConnect: () => reset() })
   applySheet(watcher.get(), true)
   if (watcher.error()) configError = watcher.error()
   saveVerdict()
@@ -564,7 +650,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     async close() {
       sourceWatcher?.close(); clearTimeout(sourceTimer); saveAnswers(); clearTimeout(answersTimer)
       stopped = true
-      clearInterval(ghostTimer); clearTimeout(patchTimer); clearTimeout(verdictTimer); clearTimeout(retryTimer)
+      clearInterval(ghostTimer); clearTimeout(patchTimer); clearTimeout(verdictTimer); clearTimeout(retryTimer); clearTimeout(progressTimer)
       watcher.close()
       await server.close()
     },

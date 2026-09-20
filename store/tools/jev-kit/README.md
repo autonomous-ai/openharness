@@ -3,8 +3,34 @@
 You are building ONE harness for the OpenHarness store. A harness is a folder. When a person opens
 it, they get a **viewer on the left** (a live web pane) and a **coding agent in a chat on the
 right**. The agent edits one JSON file in the workspace; the viewer watches that file and reacts
-live. **The viewer is the experience.** It must be a joy to watch and to poke at. A plain canvas with
-a few shapes is a failure. Aim for something a person would screen-record and post.
+live. **The viewer is the experience.**
+
+## The bar: a real tool, never a demo
+
+A harness gives a person a new superpower on their own work. Lovable turns non-developers into
+developers. The KiCad harness turns non-engineers into board designers. A Jev harness turns one
+person into a team of tireless readers and judges. **No demos. No watch-only panes.**
+
+- Before you build, write one line: "turns a non-X into an X, and the real thing that comes out is Y".
+  If you cannot write it, do not build it.
+- **The person's own data is the front door.** They drop a file on the pane, paste rows, or point at
+  their folder. A made-up sample is a ten-second fallback, clearly labelled.
+- **They take the result away**: a file they can open elsewhere, and findings the agent writes up.
+- **Real answers need the real model.** The pane says plainly when the offline stand-in is answering,
+  and takes a pasted key right there.
+- Open it cold and ask "what do I do here?". If the answer is "watch", it fails.
+
+`store/agents/jev-sheets` is the reference: drop a CSV, ask in plain words, every row answered, counts
+you can click, `answers.csv` to keep, `findings.md` from the agent. Harnesses that miss this bar are
+unlisted with `node store/tools/listing.mjs unlist <name>`. Their code stays.
+
+The kit gives you the plumbing for this (all in `serveViewer`, all same-origin only):
+
+| option | route | what it is for |
+|---|---|---|
+| `upload: async (name, buffer) => reply` | `POST /upload?name=` | the person's own file, up to `maxUpload` (32 MB). Sanitise the name yourself and keep it inside the workspace |
+| `downloads: () => ({ 'answers.csv': path })` | `GET /download/<name>` | the results, as an attachment. Only the names you list |
+| `onConnect: (result) => …` | `POST /connect` | a key pasted into the live panel. It is saved chmod 600, proven with one call, never echoed. Re-ask your cells when it lands |
 
 ## What Jev is (facts, verified from the docs)
 
@@ -175,6 +201,14 @@ Rules for the words you write (README, AGENTS.md, SKILL.md, store.json):
 - `harness dsh check .` from your harness folder prints `conforms to spec 1`.
 - `node toolchain/check.mjs` accepts the template and rejects an out-of-range value.
 - Screenshots reviewed at 1440x900 and 1100x800, with a clean page console.
+
+## Logos and icons
+
+Draw `brand/icon.svg` by hand (256x256, viewBox `0 0 96 96`, the shared rounded square first) and add the harness's subtitle word to `WORDS` in `brand.mjs`.
+With a headless Chrome on CDP port 9555 (the command is at the top of `brand.mjs`), run `node store/tools/jev-kit/brand.mjs`.
+It writes `logo.svg`, `logo-dark.svg`, `icon.png` and `assets.json`, and copies the PNG to `desktop/assets/engine-icons/<folder>.png`.
+`--sheet <out.png>` renders every icon at 96, 48, 24 and 16 px so you can judge it. `--check` needs no browser and fails on any drift.
+Then register the harness in `_harnesses` and `knownHarnessBase` in `desktop/lib/widgets/engine_identity.dart`.
 
 ## Report back
 

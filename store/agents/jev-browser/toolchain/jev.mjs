@@ -112,9 +112,9 @@ function clamp(x) {
 }
 
 // Imports are hoisted, so they can live here with the code that needs them.
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, renameSync, mkdirSync, chmodSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 
 // ---------------------------------------------------------------------------
 // Wire format. The live API (POST /v1/systemone) takes, per question:
@@ -234,6 +234,7 @@ export function snapshot() {
   const span = recent.length > 1 ? Math.max(0.5, (now - recent[0].t) / 1000) : 5
   return {
     ...telemetry,
+    route: resolveCredentials()?.provider ?? null, // the live route a key is set up for, before any call is made
     callsPerSec: recent.length / span,
     questionsPerSec: recent.reduce((a, r) => a + r.n, 0) / span,
     latencies: latencies.slice(-40),
@@ -289,6 +290,62 @@ export function resolveCredentials(explicitKey) {
   const orKey = get('OPENROUTER_API_KEY')
   if (orKey) return { provider: 'openrouter', secret: orKey, url: get('OPENROUTER_API_URL') || 'https://openrouter.ai/api/alpha/decisions', model: get('OPENROUTER_JEV_MODEL') || 'typesafe/jev-1.13' }
   return null
+}
+
+/**
+ * Store one credential in the credentials file, so a pane can go live without a terminal. The file
+ * is created chmod 600 inside a chmod 700 folder. The value is never logged and never returned.
+ */
+export function saveCredential(name, value) {
+  if (!CRED_KEYS.includes(name)) throw new JevError(`unknown credential "${name}"`)
+  const v = String(value ?? '').trim()
+  if (v.length < 8 || v.length > 400 || /[\s'"\\#=]/.test(v)) throw new JevError('that does not look like a key')
+  const path = credentialsPath()
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  let lines = []
+  try { lines = readFileSync(path, 'utf8').split('\n') } catch { /* first key on this machine */ }
+  const mine = new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=`)
+  const kept = lines.filter((l) => l.trim() !== '' && !mine.test(l))
+  kept.push(`${name}=${v}`)
+  writeFileSync(path + '.tmp', kept.join('\n') + '\n', { mode: 0o600 })
+  renameSync(path + '.tmp', path)
+  try { chmodSync(path, 0o600) } catch { /* a filesystem without modes */ }
+  credCache = null
+}
+
+/** Remove one credential from the credentials file (used when a pasted key turns out to be wrong). */
+export function removeCredential(name) {
+  if (!CRED_KEYS.includes(name)) return
+  const path = credentialsPath()
+  try {
+    const mine = new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=`)
+    const kept = readFileSync(path, 'utf8').split('\n').filter((l) => l.trim() !== '' && !mine.test(l))
+    writeFileSync(path + '.tmp', kept.length ? kept.join('\n') + '\n' : '', { mode: 0o600 })
+    renameSync(path + '.tmp', path)
+  } catch { /* nothing to remove */ }
+  credCache = null
+}
+
+/**
+ * A person pasted a key into a pane. Work out which route it is for, store it, and prove it with
+ * one tiny real call. A key the service refuses is removed again. Never throws.
+ * @returns {Promise<{ ok: boolean, provider?: string, error?: string }>}
+ */
+export async function connectKey(value, { probe = true } = {}) {
+  const v = String(value ?? '').trim()
+  const name = /^sk-or-/i.test(v) ? 'OPENROUTER_API_KEY' : 'TYPESAFE_API_KEY'
+  try { saveCredential(name, v) } catch (e) { return { ok: false, error: e.message } }
+  const cred = resolveCredentials()
+  // Under `node --test` or JEV_OFFLINE the stand-in stays on: the key is stored, nothing is called.
+  if (!cred || !probe) return { ok: true, provider: name === 'OPENROUTER_API_KEY' ? 'openrouter' : 'typesafe', stored: true, probed: false }
+  try {
+    await liveEvaluate({ model: 'jev-latest', state: { text: 'The sky is blue.' }, questions: toWire({ q: { type: 'noul', instructions: 'Does the text mention a colour?' } }) }, cred)
+    return { ok: true, provider: cred.provider, stored: true, probed: true }
+  } catch (e) {
+    const msg = String(e?.message ?? e)
+    if (/\b(401|403)\b|unauthor|invalid.*key|forbidden/i.test(msg)) { removeCredential(name); return { ok: false, error: 'The service refused that key. Nothing was saved.' } }
+    return { ok: true, provider: cred.provider, stored: true, probed: false, warning: `The key is saved, but the test call failed: ${msg.slice(0, 160)}` }
+  }
 }
 
 /** One safe line for doctor scripts and panes: says which route is active, never the secret. */
