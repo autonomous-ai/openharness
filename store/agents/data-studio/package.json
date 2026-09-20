@@ -7,6 +7,6 @@
     "perf": "node skills/data/scripts/perf.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.16"
   }
 }

@@ -1,106 +1,107 @@
-// The Data Studio harness's scripts, run the way Harness runs them: by path, in the directory
-// Harness gives them, with the environment Harness sets.
-//
-//   node --test test/*.test.mjs
-import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
-import { accessSync, constants, existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync, chmodSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { after, test } from 'node:test'
-
-const here = fileURLToPath(new URL('..', import.meta.url))
-const manifest = JSON.parse(readFileSync(join(here, 'harness.json'), 'utf8'))
-const scratch = []
-after(() => { for (const dir of scratch) rmSync(dir, { recursive: true, force: true }) })
-
-function tempDir() {
-  const dir = mkdtempSync(join(tmpdir(), 'data-studio-'))
-  scratch.push(dir)
-  return dir
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import {
+  mkdtemp,
+  cp,
+  readFile,
+  writeFile,
+  access,
+  symlink,
+  mkdir,
+} from "node:fs/promises";
+import { constants } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+const root = fileURLToPath(new URL("../", import.meta.url));
+async function workspace() {
+  const p = await mkdtemp(join(tmpdir(), "data-toolchain-"));
+  await cp(join(root, "template"), p, { recursive: true });
+  return p;
 }
-
-function run(script, { cwd = here, env = {} } = {}) {
-  const merged = { ...process.env }
-  for (const [key, value] of Object.entries(env)) if (value === null) delete merged[key]; else merged[key] = value
-  const result = spawnSync(join(here, script), { cwd, env: merged, encoding: 'utf8' })
-  return { code: result.status, stdout: result.stdout, stderr: result.stderr }
-}
-
-/** A fake `node` (this harness's only local runtime gate) that reports a version. */
-function fakeNode() {
-  const dir = tempDir()
-  const bin = join(dir, 'node')
-  writeFileSync(bin, '#!/bin/sh\nfor a in "$@"; do [ "$a" = "--version" ] && echo "v20.19.0"; done; exit 0\n')
-  chmodSync(bin, 0o755)
-  return dir
-}
-
-test('every script the manifest names is in the folder and executable', () => {
-  for (const script of [manifest.workspace.init, manifest.toolchain.setup, manifest.toolchain.doctor, 'skills/data/scripts/update-verdict.sh']) {
-    assert.doesNotThrow(() => accessSync(join(here, script), constants.X_OK), script)
-  }
-})
-
-test('setup finds node on PATH and says ok', () => {
-  const dir = fakeNode()
-  const { code, stdout } = run(manifest.toolchain.setup, { env: { PATH: `${dir}:/usr/bin:/bin` } })
-  assert.equal(code, 0)
-  assert.match(stdout, /ok   node/)
-})
-
-test('doctor says ok when node is on PATH', () => {
-  const dir = fakeNode()
-  const { code, stdout } = run(manifest.toolchain.doctor, { env: { PATH: `${dir}:/usr/bin:/bin` } })
-  assert.equal(code, 0)
-  assert.match(stdout, /ok   node/)
-})
-
-test('doctor says miss and fails when node is absent', () => {
-  const { code, stdout } = run(manifest.toolchain.doctor, { env: { PATH: tempDir() } })
-  assert.equal(code, 1)
-  assert.match(stdout, /miss node/)
-})
-
-test('init seeds the first verdict and the initialized marker', () => {
-  const workspace = tempDir()
-  const { code } = run(manifest.workspace.init, { cwd: workspace, env: { HARNESS_DSH: manifest.id } })
-  assert.equal(code, 0)
-  const verdict = JSON.parse(readFileSync(join(workspace, '.harness/verdict.json'), 'utf8'))
-  assert.equal(verdict.ready, false)
-  assert.match(readFileSync(join(workspace, '.harness-initialized'), 'utf8'), new RegExp(manifest.id.replace('/', '/')))
-})
-
-test('file existence cannot turn an unavailable browser proof into a ready verdict', () => {
-  const skill = readFileSync(join(here, 'skills/data/SKILL.md'), 'utf8')
-  const command = 'sh "$DATA_SKILLS/data/scripts/update-verdict.sh"'
-  assert.ok(skill.includes(command), 'SKILL.md should document the one-stop update command')
-  assert.equal(manifest.agent.env.DATA_SKILLS, '${dsh}/skills')
-
-  const workspace = tempDir()
-  writeFileSync(join(workspace, 'index.html'), '<!doctype html><h1>dash</h1>\n')
-  writeFileSync(join(workspace, 'data.csv'), 'quarter,region,revenue\n2025-Q1,North,12\n')
-  const result = spawnSync('/bin/sh', ['-c', command], {
-    cwd: workspace,
-    env: { ...process.env, DATA_SKILLS: join(here, 'skills'), HARNESS_WORKSPACE: workspace, PLAYWRIGHT_MODULE: join(workspace, 'missing-playwright.mjs') },
-    encoding: 'utf8',
-  })
-  assert.equal(result.status, 1, result.stderr)
-  const verdict = JSON.parse(readFileSync(join(workspace, '.harness/verdict.json'), 'utf8'))
-  assert.equal(verdict.ready, false)
-  assert.match(verdict.findings[0].message, /Playwright is missing/)
-  assert.equal(verdict.artifact, 'index.html')
-})
-
-test('update-verdict.sh reports missing index.html and fails', () => {
-  const workspace = tempDir()
-  writeFileSync(join(workspace, 'data.csv'), 'q,r,v\n1,2,3\n')
-  const result = spawnSync('/bin/sh', ['-c', 'sh "$DATA_SKILLS/data/scripts/update-verdict.sh"'], {
-    cwd: workspace,
-    env: { ...process.env, DATA_SKILLS: join(here, 'skills'), HARNESS_WORKSPACE: workspace },
-    encoding: 'utf8',
-  })
-  assert.equal(result.status, 1)
-  assert.match(readFileSync(join(workspace, '.harness/verdict.json'), 'utf8'), /index\.html missing/)
-})
+const run = (script, work, extra = {}) =>
+  spawnSync("/bin/sh", [join(root, script)], {
+    cwd: work,
+    env: {
+      ...process.env,
+      PATH: dirname(process.execPath) + ":" + process.env.PATH,
+      HARNESS_WORKSPACE: work,
+      HARNESS_DSH: "autonomous/data-studio",
+      ...extra,
+    },
+    encoding: "utf8",
+    timeout: 30000,
+  });
+test("manifest scripts are executable and doctor verifies real native/browser SQLite", async () => {
+  for (const p of [
+    "toolchain/setup.sh",
+    "toolchain/doctor.sh",
+    "toolchain/init-workspace.sh",
+    "toolchain/node.sh",
+    "skills/data/scripts/update-verdict.sh",
+  ])
+    await access(join(root, p), constants.X_OK);
+  const r = run("toolchain/doctor.sh", root);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /native SQLite/);
+  assert.match(r.stdout, /pinned SQLite/);
+});
+test("doctor fails when both PATH and managed Node are absent", async () => {
+  const runtime = await mkdtemp(join(tmpdir(), "data-no-node-")),
+    bin = join(runtime, "bin");
+  await mkdir(bin);
+  for (const [name, target] of [
+    ["bash", "/bin/bash"],
+    ["dirname", "/usr/bin/dirname"],
+    ["cat", "/bin/cat"],
+  ])
+    await symlink(target, join(bin, name));
+  const r = run("toolchain/doctor.sh", root, {
+    PATH: bin,
+    ADAPTER_RUNTIME_DIR: runtime,
+  });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /miss node/);
+});
+test("actual initializer builds a usable source project but keeps readiness false pending browser proof", async () => {
+  const w = await workspace(),
+    r = run("toolchain/init-workspace.sh", w);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(
+    await readFile(join(w, ".harness-initialized"), "utf8"),
+    /autonomous\/data-studio/,
+  );
+  assert.equal(
+    JSON.parse(await readFile(join(w, ".harness/verdict.json"))).ready,
+    false,
+  );
+  await access(join(w, "output/analysis.sqlite"));
+  await access(join(w, "output/project.zip"));
+});
+test("missing browser dependency cannot turn a native build into ready", async () => {
+  const w = await workspace(),
+    r = run("skills/data/scripts/update-verdict.sh", w, {
+      PLAYWRIGHT_MODULE: join(w, "missing-playwright.mjs"),
+    });
+  assert.equal(r.status, 1, r.stderr);
+  const v = JSON.parse(await readFile(join(w, ".harness/verdict.json")));
+  assert.equal(v.ready, false);
+  assert.match(v.findings[0].message, /Playwright is missing/);
+});
+test("invalid input clears readiness and keeps the previous useful output", async () => {
+  const w = await workspace();
+  assert.equal(run("toolchain/init-workspace.sh", w).status, 0);
+  const zip = await readFile(join(w, "output/project.zip"));
+  await writeFile(
+    join(w, ".harness/verdict.json"),
+    JSON.stringify({ spec: 1, ready: true }),
+  );
+  await writeFile(join(w, "sources/products.csv"), "wrong,header\nx,y\n");
+  assert.equal(run("skills/data/scripts/update-verdict.sh", w).status, 1);
+  assert.equal(
+    JSON.parse(await readFile(join(w, ".harness/verdict.json"))).ready,
+    false,
+  );
+  assert.deepEqual(await readFile(join(w, "output/project.zip")), zip);
+});

@@ -1,204 +1,684 @@
-import { parseCSV, numericColumns, inferFields, summarize, exportCSV } from './data.mjs';
-
-const $ = id => document.getElementById(id);
-const colors = ['#2b6451', '#88a965', '#c29a5c', '#829ea9', '#b57c75', '#817da3', '#4a8e89', '#9a8255'];
-const NS = 'http://www.w3.org/2000/svg';
-let table, fields, enabled, groups, periods, snapshot, mode = 'trend', selected = null;
-const title = value => value.replaceAll('_', ' ').replace(/^\w/, c => c.toUpperCase());
-// Units belong to the data, never guessed from a word such as "revenue".
-const currency = () => fields.metric.match(/_(usd|eur|gbp|jpy|vnd)$/i)?.[1].toUpperCase();
-const format = (value, compact = false) => new Intl.NumberFormat('en-US', {
-  ...(currency() ? { style: 'currency', currency: currency() } : {}),
-  maximumFractionDigits: compact ? 1 : 2, ...(compact ? { notation: 'compact' } : {})
-}).format(value);
-const color = group => colors[groups.indexOf(group) % colors.length];
-function element(tag, attributes = {}, text, svg = false) {
-  const node = svg ? document.createElementNS(NS, tag) : document.createElement(tag);
-  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
-  if (text !== undefined) node.textContent = text;
-  return node;
+const C = globalThis.DataStudioCore,
+  $ = (s) => document.querySelector(s),
+  clone = (v) => structuredClone(v);
+const bytes = (s) => new TextEncoder().encode(s),
+  hash = async (v) =>
+    Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", v)), (b) =>
+      b.toString(16).padStart(2, "0"),
+    ).join("");
+const label = (s) => s.replaceAll("_", " "),
+  el = (tag, text, cls) => {
+    const e = document.createElement(tag);
+    if (text !== undefined) e.textContent = text;
+    if (cls) e.className = cls;
+    return e;
+  };
+let current = null,
+  selected = "",
+  pageIndex = 0,
+  sourceId = null,
+  worker = null,
+  cancelCalculation = null,
+  busy = false,
+  assetsPromise;
+const status = (text, error = false) => {
+  $("#status").textContent = text;
+  $("#status").classList.toggle("error", error);
+};
+const download = (name, data, type = "application/json") => {
+  const url = URL.createObjectURL(new Blob([data], { type })),
+    a = el("a");
+  a.href = url;
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+};
+async function get(url, binary = false) {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok)
+    throw new Error(
+      url +
+        ": " +
+        response.status +
+        " — run the build helper if this is a fresh workspace.",
+    );
+  const data = await response.arrayBuffer();
+  if (data.byteLength > 16 * 1024 * 1024)
+    throw new Error("File exceeds 16 MiB.");
+  return binary ? data : new TextDecoder("utf-8", { fatal: true }).decode(data);
 }
-function options(id, values, chosen) {
-  $(id).replaceChildren(...values.map(value => element('option', { value }, value)));
-  $(id).value = chosen;
+async function assets() {
+  if (!assetsPromise)
+    assetsPromise = (async () => {
+      const [vendor, core, code, wasm, pins] = await Promise.all([
+        get("vendor/sqlite3.js"),
+        get("core.js"),
+        get("worker.js"),
+        get("vendor/sqlite3.wasm", true),
+        get("vendor/checksums.json"),
+      ]);
+      const expected = JSON.parse(pins);
+      if (
+        (await hash(bytes(vendor))) !== expected["sqlite3.js"] ||
+        (await hash(wasm)) !== expected["sqlite3.wasm"]
+      )
+        throw new Error("SQLite runtime checksum mismatch.");
+      return {
+        code:
+          "globalThis.sqlite3ApiConfig={disable:{vfs:{opfs:true,'opfs-sahpool':true,'opfs-wl':true,kvvfs:true}}};\n" +
+          vendor +
+          "\n" +
+          core +
+          "\n" +
+          code,
+        wasm,
+      };
+    })().catch((e) => {
+      assetsPromise = null;
+      throw e;
+    });
+  return assetsPromise;
 }
-function configure() {
-  groups = [...new Set(table.rows.map(row => row[fields.group]))].sort((a,b) => a.localeCompare(b));
-  periods = [...new Set(table.rows.map(row => row[fields.period]))].sort((a,b) => a.localeCompare(b, undefined, { numeric: true }));
-  enabled = new Set(groups); selected = null;
-  options('start', periods, periods[0]); options('end', periods, periods.at(-1));
-  options('period-field', table.headers, fields.period); options('group-field', table.headers, fields.group);
-  options('metric-field', numericColumns(table), fields.metric);
-  $('group-label').textContent = title(fields.group);
-  $('regions').replaceChildren(...groups.map(group => {
-    const button = element('button', { class: 'region', 'aria-pressed': 'true', 'aria-label': group });
-    const dot = element('i', { class: 'dot', 'aria-hidden': 'true' }); dot.style.background = color(group);
-    button.append(dot, element('span', {}, group), element('span', { class: 'count' }, table.rows.filter(row => row[fields.group] === group).length), element('span', { class: 'check', 'aria-hidden': 'true' }, '✓'));
-    button.onclick = () => {
-      enabled.has(group) ? enabled.delete(group) : enabled.add(group);
-      button.setAttribute('aria-pressed', String(enabled.has(group)));
-      button.querySelector('.check').textContent = enabled.has(group) ? '✓' : '';
-      selected = null; render();
+function setBusy(value) {
+  busy = value;
+  document.body.dataset.busy = String(value);
+  if (!value) $("#cancel-run").hidden = true;
+  for (const id of [
+    "save-project",
+    "export-db",
+    "export-report",
+    "export-csv",
+    "export-json",
+    "run-sql",
+    "download-source",
+  ])
+    $("#" + id).disabled = value || !current;
+  $("#filters")
+    .querySelectorAll("button")
+    .forEach((b) => (b.disabled = value));
+}
+async function calculate(bundle, parameters) {
+  const a = await assets();
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(
+      new Blob([a.code], { type: "text/javascript" }),
+    );
+    worker = new Worker(url);
+    URL.revokeObjectURL(url);
+    const finish = (error, value) => {
+      clearTimeout(timer);
+      worker?.terminate();
+      worker = null;
+      cancelCalculation = null;
+      error ? reject(error) : resolve(value);
     };
-    return button;
-  }));
-  render();
+    const timer = setTimeout(
+      () =>
+        finish(
+          new Error(
+            "20-second query budget exceeded; narrow the data or query.",
+          ),
+        ),
+      20000,
+    );
+    cancelCalculation = () => finish(new Error("Query cancelled."));
+    $("#cancel-run").hidden = false;
+    worker.onerror = (event) =>
+      finish(new Error(event.message || "SQLite worker failed."));
+    worker.onmessage = ({ data }) =>
+      data.error ? finish(new Error(data.error)) : finish(null, data);
+    worker.postMessage({ bundle, parameters, wasm: a.wasm });
+  });
+}
+$("#cancel-run").onclick = () => cancelCalculation?.();
+async function commit(bundle, view, { baseline = null } = {}) {
+  if (busy) return false;
+  setBusy(true);
+  status("Checking source types, joins and saved queries…");
+  try {
+    C.validateConfig(bundle.config);
+    C.validateView(view, bundle.config);
+    const result = await calculate(bundle, view.parameters),
+      revision = await hash(bytes(C.stable(bundle)));
+    C.verifyLinks(bundle, result.report.results);
+    if (
+      baseline &&
+      (baseline.revision !== revision ||
+        C.stable(baseline.parameters) !== C.stable(result.report.parameters) ||
+        C.stable(baseline.results) !== C.stable(result.report.results))
+    )
+      throw new Error(
+        "Browser results disagree with the saved native build. Rebuild and investigate before using them.",
+      );
+    result.report.revision = revision;
+    current = {
+      bundle: clone(bundle),
+      view: { ...clone(view), parameters: result.report.parameters },
+      ...result,
+    };
+    selected = view.selectedQuery;
+    pageIndex = 0;
+    render();
+    status(
+      (bundle.config.example ? "Synthetic example · " : "") +
+        result.report.records +
+        " source records · " +
+        result.report.checks.length +
+        " checks passed" +
+        (baseline
+          ? " · browser and saved SQLite results agree."
+          : " · analysis recalculated. Save project to keep changes."),
+    );
+    document.body.dataset.ready = "true";
+    return true;
+  } catch (error) {
+    status(
+      error.message +
+        (current
+          ? " Last good analysis is still shown; the attempted change was not applied."
+          : ""),
+      true,
+    );
+    return false;
+  } finally {
+    setBusy(false);
+  }
+}
+function viewFromControls() {
+  const view = clone(current.view);
+  for (const p of current.bundle.config.parameters.filter((p) => !p.hidden)) {
+    const value = $("#param-" + p.id).value;
+    view.parameters[p.id] = ["integer", "real"].includes(p.type)
+      ? Number(value)
+      : value;
+  }
+  view.notes = $("#notes").value;
+  view.selectedQuery = selected;
+  return view;
 }
 function render() {
-  snapshot = summarize(table, fields, enabled, { start: $('start').value, end: $('end').value });
-  const { total, rows, ranked, growth } = snapshot;
-  const metric = title(fields.metric);
-  $('headline').textContent = metric + ', in perspective.';
-  $('takeaway').textContent = rows.length && ranked.length
-    ? ranked[0].name + ' leads your selection with ' + format(ranked[0].value) + '. Explore what changes across ' + snapshot.periods.length + ' periods.'
-    : 'Choose a group to start exploring.';
-  $('total-label').textContent = 'Total ' + fields.metric.replaceAll('_',' ');
-  $('total').textContent = rows.length ? format(total) : '—';
-  $('row-count').textContent = rows.length + ' of ' + table.rows.length + ' rows selected';
-  $('growth').textContent = growth === null || !rows.length ? '—' : (growth > 0 ? '+' : '') + (growth * 100).toFixed(1) + '%';
-  $('growth-detail').textContent = snapshot.periods.length < 2 ? 'Choose more than one period' : snapshot.periods[0] + ' → ' + snapshot.periods.at(-1);
-  $('leader').textContent = rows.length ? ranked[0]?.name || '—' : '—';
-  $('leader-detail').textContent = rows.length ? format(ranked[0]?.value || 0) + ' in this selection' : 'No groups selected';
-  $('chart-title').textContent = metric + ' over time';
-  $('chart-subtitle').textContent = (currency() ? currency() + ' · ' : '') + title(fields.period) + ' / ' + title(fields.group);
-  $('export').disabled = !rows.length;
-  $('tooltip').hidden = true;
-  drawChart(); drawRanking(); drawTable();
-  $('legend').replaceChildren(...snapshot.series.map(series => {
-    const item = element('span'), dot = element('i', { class: 'dot', 'aria-hidden': 'true' });
-    dot.style.background = color(series.name); item.append(dot, document.createTextNode(series.name)); return item;
-  }));
-}
-function drawChart() {
-  const plot = $('plot'); plot.replaceChildren();
-  if (!snapshot.rows.length) {
-    const empty = element('div', { class: 'empty' });
-    empty.append(element('strong', {}, 'A fresh perspective starts with a selection.'), document.createTextNode('Choose a group, or reset your filters.'));
-    plot.append(empty); return;
+  const c = current.bundle.config,
+    r = current.report;
+  $("#title").textContent = c.title;
+  document.title = c.title + " · Data Studio";
+  $("#question").textContent = c.question;
+  $("#example").textContent = c.example
+    ? "SYNTHETIC EXAMPLE DATA"
+    : "USER-SUPPLIED DATA";
+  $("#method").textContent = c.method;
+  $("#limitations").replaceChildren(...c.limitations.map((v) => el("li", v)));
+  $("#notes").value = current.view.notes;
+  $("#revision").textContent = "REVISION " + r.revision.slice(0, 16);
+  $("#revision").title = r.revision;
+  $("#engine").textContent = r.engine;
+  $("#check-count").textContent = r.checks.length + " passed";
+  $("#check-summary").textContent =
+    c.tables.length + " files · " + r.records + " records";
+  const sources = $("#sources");
+  sources.replaceChildren();
+  for (const t of c.tables) {
+    const b = el("button", t.file.split("/").pop(), "source-button");
+    b.dataset.source = t.id;
+    b.append(
+      el(
+        "small",
+        t.columns.length +
+          " typed columns" +
+          (t.key ? " · key: " + t.key.join(" + ") : ""),
+      ),
+    );
+    b.onclick = () => showSource(t.id);
+    sources.append(b);
   }
-  const W = 900, H = 310, L = 70, R = 30, T = 30, B = 42, pw = W - L - R, ph = H - T - B;
-  const values = snapshot.series.flatMap(series => series.values.map(point => point.value));
-  let min = Math.min(0, ...values), max = Math.max(0, ...values);
-  if (min === max) max = min + 1;
-  const extent = max - min; if (min < 0) min -= extent * .08; if (max > 0) max += extent * .12;
-  const y = value => T + ph * (max - value) / (max - min);
-  const step = pw / Math.max(1, snapshot.periods.length);
-  const x = index => L + step * (index + .5);
-  const svg = element('svg', { viewBox: '0 0 '+W+' '+H, role: 'img', 'aria-label': fields.metric + ' by ' + fields.period + ' and ' + fields.group }, undefined, true);
-  for (let i = 0; i <= 4; i++) {
-    const value = min + (max - min) * i / 4, yy = y(value);
-    svg.append(element('line', { x1: L, x2: W-R, y1: yy, y2: yy, stroke: '#e8ede5', 'stroke-dasharray': '3 5' }, undefined, true));
-    svg.append(element('text', { x: L-12, y: yy+4, 'text-anchor': 'end' }, format(value,true), true));
+  const nav = $("#queries");
+  nav.replaceChildren();
+  for (const q of c.queries.filter((q) => q.kind !== "metric")) {
+    const b = el("button", q.title, "query-button");
+    b.dataset.query = q.id;
+    b.setAttribute("aria-pressed", String(selected === q.id));
+    b.onclick = () => {
+      if (busy) return;
+      selected = q.id;
+      current.view.selectedQuery = selected;
+      pageIndex = 0;
+      renderQuery();
+    };
+    nav.append(b);
   }
-  svg.append(element('line', { x1:L, x2:W-R, y1:y(0), y2:y(0), stroke:'#dce4d8' }, undefined, true));
-  const stride = Math.max(1, Math.ceil(snapshot.periods.length / 8));
-  snapshot.periods.forEach((period,i) => {
-    if (i % stride === 0 || i === snapshot.periods.length-1) svg.append(element('text', {x:x(i), y:H-14, 'text-anchor':'middle'}, period.length > 14 ? period.slice(0,12)+'…' : period, true));
-  });
-  snapshot.series.forEach((series, si) => {
-    if (mode === 'trend') {
-      const points = series.values.map((point,i) => x(i)+','+y(point.value)).join(' ');
-      svg.append(element('polyline', { points, fill:'none', stroke:color(series.name), 'stroke-width':2.5, 'stroke-linejoin':'round', 'stroke-linecap':'round' }, undefined, true));
-    }
-    series.values.forEach((point, i) => {
-      const label = series.name+' · '+point.period+' · '+format(point.value);
-      let mark;
-      if (mode === 'trend') mark = element('circle', {cx:x(i), cy:y(point.value), r:4, fill:'white', stroke:color(series.name), 'stroke-width':2}, undefined, true);
-      else {
-        const barWidth = Math.max(1, step * .64 / snapshot.series.length);
-        mark = element('rect', {x:x(i)-step*.32+si*barWidth, y:Math.min(y(0),y(point.value)), width:Math.max(.5,barWidth-2), height:Math.max(1,Math.abs(y(point.value)-y(0))), rx:2, fill:color(series.name)}, undefined, true);
+  const filters = $("#filters");
+  filters.replaceChildren();
+  for (const p of c.parameters.filter((p) => !p.hidden)) {
+    const l = el("label", p.label),
+      input = el(p.choices ? "select" : "input");
+    input.id = "param-" + p.id;
+    if (p.choices)
+      for (const choice of p.choices) {
+        const o = el("option", choice || "All");
+        o.value = choice;
+        input.append(o);
       }
-      mark.setAttribute('class','point'); mark.setAttribute('tabindex','0'); mark.setAttribute('role','button'); mark.setAttribute('aria-label',label);
-      const show = event => {
-        const tip = $('tooltip'); tip.replaceChildren(element('span',{},series.name+' · '+point.period),element('strong',{},format(point.value)));
-        tip.hidden = false;
-        const rect = mark.getBoundingClientRect();
-        const px = Number.isFinite(event.clientX) ? event.clientX : rect.x + rect.width/2;
-        const py = Number.isFinite(event.clientY) ? event.clientY : rect.y;
-        tip.style.left = Math.max(8,Math.min(innerWidth-tip.offsetWidth-8, px+14))+'px';
-        tip.style.top = Math.max(8,Math.min(innerHeight-tip.offsetHeight-8,py-55))+'px';
-      };
-      mark.onpointerenter = show; mark.onfocus = show;
-      mark.onpointerleave = () => $('tooltip').hidden = true;
-      mark.onblur = () => $('tooltip').hidden = true;
-      mark.onclick = event => { selected = { group: series.name, period: point.period }; drawTable(); show(event); };
-      mark.onkeydown = event => { if (event.key==='Enter' || event.key===' ') { event.preventDefault(); mark.onclick(event); } if(event.key==='Escape') $('tooltip').hidden=true; };
-      svg.append(mark);
-    });
-  });
-  plot.append(svg);
-}
-function drawRanking() {
-  const maximum = Math.max(1,...snapshot.ranked.map(row=>Math.abs(row.value)));
-  $('ranking').replaceChildren(...snapshot.ranked.map(row => {
-    const container = element('div',{class:'ranking-row'}), label = element('div',{class:'ranking-label'}), track=element('div',{class:'track'}), bar=element('i');
-    label.append(element('span',{},row.name),element('span',{},format(row.value)));
-    bar.style.width=(Math.abs(row.value)/maximum*100)+'%'; bar.style.background=color(row.name); track.append(bar); container.append(label,track); return container;
-  }));
-  if (!snapshot.rows.length) $('ranking').textContent='No groups selected.';
-}
-function drawTable() {
-  const columns = [...new Set([fields.period,fields.group,fields.metric])];
-  const head = element('tr'); head.append(...columns.map(key=>element('th',{scope:'col'},title(key))));
-  $('table').querySelector('thead').replaceChildren(head);
-  const rows = selected ? snapshot.rows.filter(row=>row[fields.group]===selected.group && row[fields.period]===selected.period) : snapshot.rows;
-  $('table').querySelector('tbody').replaceChildren(...rows.slice(0,100).map(row=>{
-    const tr = element('tr',selected?{class:'selected'}:{});
-    tr.append(...columns.map(key=>element('td',{},key===fields.metric?format(Number(row[key])):row[key]))); return tr;
-  }));
-  $('table-note').textContent = selected ? 'Inspecting '+selected.group+' · '+selected.period+' — change a filter to clear' : (rows.length>100?'First 100 of '+rows.length+' rows · export for all rows':rows.length+' source rows · values are aggregated in the chart');
-}
-function failure(error) {
-  $('error-message').textContent=error.message;
-  $('error').hidden=false; $('dashboard').hidden=true; $('loading').hidden=true; $('export').disabled=true;
-}
-function accept(text,name) {
-  try {
-    if(text.length>5*1024*1024) throw new Error('Choose a CSV smaller than 5 MB for this interactive view.');
-    const parsed = parseCSV(text);
-    if(!parsed.rows.length) throw new Error('The header is present, but there are no data rows yet.');
-    const inferred = inferFields(parsed);
-    table=parsed; fields=inferred;
-    $('source').textContent=name; $('error').hidden=true; $('loading').hidden=true; $('dashboard').hidden=false;
-    configure();
-  } catch(error) { failure(error); }
-}
-async function load() {
-  $('loading').hidden=false; $('dashboard').hidden=true; $('error').hidden=true;
-  try {
-    const response=await fetch('data.csv');
-    if(!response.ok) throw new Error('data.csv returned HTTP '+response.status+'. Add it to this workspace or open a CSV.');
-    accept(await response.text(),'data.csv');
-  } catch(error) { failure(error); }
-}
-$('open').onclick=()=>$('upload').click();
-$('upload').onchange=async event=>{
-  const file=event.target.files[0]; if(!file)return;
-  if(file.size>5*1024*1024) failure(new Error('Choose a CSV smaller than 5 MB.'));
-  else accept(await file.text(),file.name);
-  event.target.value='';
-};
-$('retry').onclick=load;
-$('reset').onclick=()=>configure();
-for(const id of ['start','end']) $(id).onchange=()=>{
-  if(periods.indexOf($('start').value)>periods.indexOf($('end').value)) $(id==='start'?'end':'start').value=$(id).value;
-  selected=null; render();
-};
-for(const [id,key] of [['period-field','period'],['group-field','group'],['metric-field','metric']]) $(id).onchange=()=>{
-  const value=$(id).value;
-  if((key==='period' && value===fields.group)||(key==='group' && value===fields.period)) {
-    const other=key==='period'?'group':'period'; fields[other]=fields[key];
+    else {
+      input.type =
+        p.type === "date"
+          ? "date"
+          : ["integer", "real"].includes(p.type)
+            ? "number"
+            : "text";
+      if (p.type === "real") input.step = "any";
+    }
+    input.value = String(current.view.parameters[p.id]);
+    input.oninput = () =>
+      status(
+        "Controls changed, but the displayed result still uses the last applied controls. Apply controls to recalculate.",
+      );
+    l.append(input);
+    filters.append(l);
   }
-  fields[key]=value; configure();
+  const run = el("button", "Apply controls", "primary");
+  run.type = "button";
+  run.id = "apply-controls";
+  run.onclick = () => {
+    if (current && !busy) commit(current.bundle, viewFromControls());
+  };
+  filters.append(run);
+  const reset = el("button", "Reset");
+  reset.type = "button";
+  reset.onclick = () => {
+    if (!busy)
+      commit(current.bundle, {
+        ...clone(current.view),
+        notes: $("#notes").value,
+        parameters: C.parameters(c, {}),
+      });
+  };
+  filters.append(reset);
+  const metrics = $("#metrics");
+  metrics.replaceChildren();
+  for (const q of c.queries.filter((q) => q.kind === "metric")) {
+    const result = r.results.find((x) => x.id === q.id);
+    result.columns.forEach((col, i) => {
+      const card = el("div", undefined, "metric");
+      card.dataset.metric = col;
+      card.append(
+        el("div", label(col), "label"),
+        el("strong", C.format(result.rows[0][i], q.formats?.[col])),
+        el("small", q.title),
+      );
+      metrics.append(card);
+    });
+  }
+  renderQuery();
+  $("#checks").replaceChildren(
+    ...r.checks.map((check) => {
+      const item = el("section");
+      item.append(el("p", "✓ " + check.description));
+      if (check.nulls)
+        item.append(
+          el("pre", JSON.stringify({ missingValues: check.nulls }, null, 2)),
+        );
+      return item;
+    }),
+  );
+}
+function renderQuery() {
+  const q =
+      current.bundle.config.queries.find((q) => q.id === selected) ??
+      current.bundle.config.queries[0],
+    r = current.report.results.find((r) => r.id === q.id);
+  selected = q.id;
+  current.view.selectedQuery = selected;
+  $("#query-title").textContent = q.title;
+  $("#query-explanation").textContent = q.explanation;
+  $("#sql").value = current.bundle.sql[q.file];
+  $("#result-table").dataset.query = q.id;
+  $("#queries")
+    .querySelectorAll("button")
+    .forEach((b) =>
+      b.setAttribute("aria-pressed", String(b.dataset.query === selected)),
+    );
+  const chart = $("#chart"),
+    axis = $("#axis");
+  chart.replaceChildren();
+  axis.replaceChildren();
+  chart.hidden = q.kind !== "bar";
+  axis.hidden = q.kind !== "bar" || !r.rows.length;
+  if (q.kind === "bar" && r.rows.length) {
+    const xi = r.columns.indexOf(q.x),
+      yi = r.columns.indexOf(q.y),
+      values = r.rows.map((row) => row[yi]).filter((v) => v !== null),
+      min = Math.min(0, ...values),
+      max = Math.max(q.formats?.[q.y]?.style === "percent" ? 1 : 0, ...values),
+      range = max - min || 1,
+      zero = ((0 - min) / range) * 100;
+    for (const row of r.rows) {
+      const value = row[yi],
+        b = el(q.trace ? "button" : "div", undefined, "bar-row");
+      b.dataset.category = String(row[xi]);
+      b.setAttribute(
+        "aria-label",
+        String(row[xi]) + ": " + C.format(value, q.formats?.[q.y]),
+      );
+      b.append(el("span", String(row[xi]), "bar-label"));
+      const track = el("span", undefined, "bar-track"),
+        line = el("span", undefined, "zero");
+      line.style.left = zero + "%";
+      track.append(line);
+      if (value === null) track.append(el("span", "Missing", "null-bar"));
+      else {
+        const bar = el(
+          "span",
+          undefined,
+          "bar" + (value < 0 ? " negative" : ""),
+        );
+        bar.style.left = ((Math.min(0, value) - min) / range) * 100 + "%";
+        bar.style.width = (Math.abs(value) / range) * 100 + "%";
+        track.append(bar);
+      }
+      b.append(
+        track,
+        el("span", C.format(value, q.formats?.[q.y]), "bar-value"),
+      );
+      if (q.trace) b.onclick = () => trace(q, row, r.columns);
+      chart.append(b);
+    }
+    axis.append(
+      el("span", C.format(min, q.formats?.[q.y])),
+      el("span", C.format(max, q.formats?.[q.y])),
+    );
+  }
+  const table = $("#result-table"),
+    head = el("thead"),
+    tr = el("tr");
+  r.columns.forEach((col) => tr.append(el("th", label(col))));
+  head.append(tr);
+  const body = el("tbody"),
+    start = pageIndex * 50;
+  for (const row of r.rows.slice(start, start + 50)) {
+    const tr = el("tr");
+    row.forEach((v, i) => {
+      const col = r.columns[i],
+        td = el(
+          "td",
+          undefined,
+          v === null ? "missing" : typeof v === "number" ? "numeric" : "",
+        );
+      if (q.sourceLinks?.[col] && v !== null) {
+        const b = el("button", "record " + v + " ↗", "source-link");
+        b.dataset.record = String(v);
+        b.dataset.table = q.sourceLinks[col];
+        b.onclick = () => showSource(q.sourceLinks[col], v);
+        td.append(b);
+      } else td.textContent = C.format(v, q.formats?.[col]);
+      tr.append(td);
+    });
+    if (q.trace) {
+      const td = el("td"),
+        b = el("button", "Trace rows ↗", "source-link");
+      b.onclick = () => trace(q, row, r.columns);
+      td.append(b);
+      tr.append(td);
+    }
+    body.append(tr);
+  }
+  if (q.trace) tr.append(el("th", "Evidence"));
+  table.replaceChildren(head, body);
+  $("#empty").hidden = Boolean(r.rows.length);
+  $("#row-count").textContent = r.rows.length
+    ? start +
+      1 +
+      "–" +
+      Math.min(start + 50, r.rows.length) +
+      " of " +
+      r.rows.length +
+      " exact result rows"
+    : "0 matching result rows";
+  $("#previous").disabled = pageIndex === 0;
+  $("#next").disabled = start + 50 >= r.rows.length;
+  $("#row-count").dataset.count = String(r.rows.length);
+  $("#reset-trace").hidden = !current.bundle.config.parameters.some(
+    (p) => p.hidden && current.view.parameters[p.id] !== p.default,
+  );
+}
+async function trace(q, row, columns) {
+  if (busy) return;
+  const view = viewFromControls();
+  for (const [p, col] of Object.entries(q.trace.bindings))
+    view.parameters[p] = row[columns.indexOf(col)];
+  view.selectedQuery = q.trace.query;
+  await commit(current.bundle, view);
+}
+function showSource(id, record) {
+  sourceId = id;
+  const t = current.bundle.config.tables.find((t) => t.id === id),
+    parsed = C.parseCSV(current.bundle.sources[t.file]);
+  $("#source-title").textContent = t.label;
+  const schema = $("#schema");
+  schema.replaceChildren();
+  const ul = el("ul");
+  for (const col of t.columns)
+    ul.append(
+      el(
+        "li",
+        col.source +
+          " → " +
+          col.name +
+          " · " +
+          col.type +
+          (col.type === "decimal"
+            ? " × 10^" + col.scale + " integer storage"
+            : "") +
+          (col.unit ? " · " + col.unit : "") +
+          " · " +
+          (col.nullable ? "missing allowed" : "required") +
+          (col.trim ? " · trim whitespace" : ""),
+      ),
+    );
+  const rules = el("details");
+  rules.open = !record;
+  rules.append(
+    el(
+      "summary",
+      "Import rules · " + t.columns.length + " explicitly typed columns",
+    ),
+    ul,
+  );
+  schema.append(rules);
+  const table = $("#raw-record"),
+    head = el("thead"),
+    tr = el("tr");
+  (record
+    ? ["Source field", "Original value"]
+    : ["CSV record", ...parsed.headers]
+  ).forEach((h) => tr.append(el("th", h)));
+  head.append(tr);
+  const body = el("tbody");
+  const rows = record
+    ? [
+        ["CSV record", record],
+        ...parsed.headers.map((h, i) => [h, parsed.records[record - 2][i]]),
+      ]
+    : parsed.records.slice(0, 20).map((r, i) => [i + 2, ...r]);
+  for (const row of rows) {
+    const tr = el("tr");
+    row.forEach((v) => tr.append(el("td", v)));
+    body.append(tr);
+  }
+  table.replaceChildren(head, body);
+  $("#source-caption").textContent = record
+    ? "Original CSV record " +
+      record +
+      ". Header is record 1; a quoted multiline field is still one record."
+    : "First " +
+      rows.length +
+      " of " +
+      parsed.records.length +
+      " original records. Download retains all source text. Raw CSV may contain spreadsheet formulas; do not open untrusted raw data with formula evaluation enabled.";
+  if (!$("#source-dialog").open) $("#source-dialog").showModal();
+}
+$("#filters").onkeydown = (e) => {
+  if (e.key === "Enter" && e.target.tagName !== "BUTTON") {
+    e.preventDefault();
+    if (current && !busy) commit(current.bundle, viewFromControls());
+  }
 };
-for(const kind of ['trend','bars']) $(kind).onclick=()=>{
-  mode=kind;
-  for(const id of ['trend','bars']) $(id).setAttribute('aria-pressed',String(id===mode));
-  drawChart();
+$("#run-sql").onclick = async () => {
+  if (!current || busy) return;
+  const bundle = clone(current.bundle),
+    q = bundle.config.queries.find((q) => q.id === selected);
+  bundle.sql[q.file] = $("#sql").value;
+  if (
+    bundle.sql[q.file] !== current.bundle.sql[q.file] &&
+    !q.explanation.startsWith("Edited query.")
+  )
+    q.explanation =
+      "Edited query. Review the SQL before interpreting this result. Original explanation: " +
+      q.explanation;
+  await commit(bundle, viewFromControls());
 };
-$('export').onclick=()=>{
-  const blob=new Blob([exportCSV(table.headers,snapshot.rows)],{type:'text/csv;charset=utf-8'});
-  const url=URL.createObjectURL(blob), link=document.createElement('a');
-  link.href=url; link.download='data-studio-selection.csv'; link.click(); setTimeout(()=>URL.revokeObjectURL(url),30000);
+$("#sql").oninput = () =>
+  status(
+    "SQL draft changed. The displayed result and exports still use the last successful query. Run revised query to apply it.",
+  );
+$("#reset-trace").onclick = () => {
+  if (!current || busy) return;
+  const view = viewFromControls();
+  for (const p of current.bundle.config.parameters.filter((p) => p.hidden))
+    view.parameters[p.id] = p.default;
+  commit(current.bundle, view);
 };
-await load();
+$("#previous").onclick = () => {
+  if (pageIndex) {
+    pageIndex--;
+    renderQuery();
+  }
+};
+$("#next").onclick = () => {
+  pageIndex++;
+  renderQuery();
+};
+$("#close-source").onclick = () => $("#source-dialog").close();
+$("#close-checks").onclick = () => $("#checks-dialog").close();
+$("#show-checks").onclick = () => current && $("#checks-dialog").showModal();
+$("#replace-source").onchange = async (event) => {
+  const file = event.target.files[0];
+  event.target.value = "";
+  if (!file || !current || busy) return;
+  if (file.size > C.LIMITS.sourceBytes) {
+    status("Replacement exceeds 6 MiB; last good analysis is unchanged.", true);
+    return;
+  }
+  setBusy(true);
+  status("Reading replacement CSV…");
+  try {
+    const bundle = clone(current.bundle),
+      t = bundle.config.tables.find((t) => t.id === sourceId);
+    bundle.sources[t.file] = new TextDecoder("utf-8", { fatal: true }).decode(
+      await file.arrayBuffer(),
+    );
+    const view = viewFromControls();
+    setBusy(false);
+    const ok = await commit(bundle, view);
+    if (ok) showSource(sourceId);
+  } catch (e) {
+    setBusy(false);
+    status(e.message + " Last good analysis is unchanged.", true);
+  }
+};
+$("#download-source").onclick = () => {
+  const t = current.bundle.config.tables.find((t) => t.id === sourceId);
+  download(t.file.split("/").pop(), current.bundle.sources[t.file], "text/csv");
+};
+$("#open-project").onchange = async (event) => {
+  const file = event.target.files[0];
+  event.target.value = "";
+  if (!file || busy) return;
+  setBusy(true);
+  status("Reading saved project…");
+  try {
+    if (file.size > 12 * 1024 * 1024)
+      throw new Error("Project exceeds 12 MiB.");
+    const p = C.validateProject(
+      JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(
+          await file.arrayBuffer(),
+        ),
+      ),
+    );
+    if ((await hash(bytes(C.stable(p.bundle)))) !== p.revision)
+      throw new Error("Project revision checksum mismatch.");
+    setBusy(false);
+    await commit(p.bundle, p.view);
+  } catch (error) {
+    setBusy(false);
+    status(
+      error.message + (current ? " Last good analysis is unchanged." : ""),
+      true,
+    );
+  }
+};
+$("#save-project").onclick = () => {
+  current.view.notes = $("#notes").value;
+  download(
+    "analysis.data-studio.json",
+    JSON.stringify(
+      {
+        format: "data-studio",
+        spec: 1,
+        revision: current.report.revision,
+        bundle: current.bundle,
+        view: current.view,
+      },
+      null,
+      2,
+    ),
+  );
+  status(
+    "Project saved with source CSVs, types, queries, applied controls and notes. Unapplied controls or SQL drafts are not included.",
+  );
+};
+$("#export-db").onclick = () =>
+  download("analysis.sqlite", current.database, "application/vnd.sqlite3");
+$("#export-report").onclick = () =>
+  download(
+    "analysis-report.html",
+    globalThis.DataStudioReport(
+      current.bundle,
+      current.report,
+      $("#notes").value,
+    ),
+    "text/html",
+  );
+$("#export-csv").onclick = () => {
+  const r = current.report.results.find((r) => r.id === selected);
+  download(selected + ".csv", C.csv(r.columns, r.rows), "text/csv");
+};
+$("#export-json").onclick = () => {
+  const r = current.report.results.find((r) => r.id === selected);
+  download(
+    selected + ".json",
+    JSON.stringify(
+      {
+        revision: current.report.revision,
+        parameters: current.report.parameters,
+        query: current.bundle.config.queries.find((q) => q.id === selected),
+        ...r,
+      },
+      null,
+      2,
+    ),
+  );
+};
+try {
+  const [p, baseline] = await Promise.all([
+    get("output/project.data-studio.json").then(JSON.parse),
+    get("output/analysis-result.json").then(JSON.parse),
+  ]);
+  C.validateProject(p);
+  if ((await hash(bytes(C.stable(p.bundle)))) !== p.revision)
+    throw new Error("Saved project revision mismatch.");
+  await commit(p.bundle, p.view, { baseline });
+} catch (error) {
+  status(error.message, true);
+}

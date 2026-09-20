@@ -4,7 +4,7 @@
   "name": "Data Studio",
   "category": "Data",
   "author": "OpenHarness contributors",
-  "description": "Turn CSV into a local interactive dashboard with dynamic metrics, filtering, exact-value inspection, safe imports and selection export.",
+  "description": "Turn CSV files and a question into a repeatable local analysis: checked joins, exact calculations, source-record drilldown, revisions and portable SQLite/report/project exports.",
   "engine": "claude",
   "workspace": {
     "template": "template",

@@ -21,7 +21,7 @@ catalog workflow and verify the live catalog after each accepted release.
 | 2 | score | Musical brief and player constraints → revised score, audible mix, individual parts and practice exports | Implemented and validated; relisted in this change. See [acceptance evidence](../agents/score/test/ACCEPTANCE.md). |
 | 3 | openscad | Dimensions and fabrication constraints → parametric parts, verified variants and usable exports | Implemented and validated; relisted in this change. See [acceptance evidence](../agents/openscad/test/ACCEPTANCE.md). |
 | 4 | orca-slicer | User mesh and explicit machine/material profiles → compared slicing options and reviewed toolpath handoff | Implemented and validated; relisted in this change. See [acceptance evidence](../agents/orca-slicer/test/ACCEPTANCE.md). |
-| 5 | data-studio | User data and a question → saved analysis, source-linked results and repeatable report | Not started; unlisted |
+| 5 | data-studio | User data and a question → saved analysis, source-linked results and repeatable report | Implemented and validated; relisted in this change. See [acceptance evidence](../agents/data-studio/test/ACCEPTANCE.md). |
 | 6 | gis | User geographic data and a decision → reproducible spatial analysis and exported results | Not started; unlisted |
 | 7 | web-studio | User application brief → useful app with durable data and a runnable handoff | Not started; unlisted |
 | 8 | sheet-docs | User document/data requirements → editable, recalculated and reconciled deliverables | Not started; unlisted |
