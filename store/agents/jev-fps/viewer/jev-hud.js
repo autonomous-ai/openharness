@@ -174,7 +174,7 @@
   let lastAt = 0
   function render(s) {
     const live = s.client && s.client !== 'mock'
-    const route = s.client === 'cloudflare' ? 'Cloudflare Workers AI' : 'the TypeSafe API'
+    const route = s.client === 'cloudflare' ? 'Cloudflare Workers AI' : s.client === 'openrouter' ? 'OpenRouter (about 2 s a call)' : 'the TypeSafe API'
     badge.textContent = s.lastError ? 'ERROR' : live ? 'LIVE' : 'MOCK'
     badge.className = 'jh-badge ' + (s.lastError ? 'err' : live ? 'live' : 'mock')
     $k('rate').textContent = s.questionsPerSec >= 10 ? Math.round(s.questionsPerSec) : s.questionsPerSec.toFixed(1)

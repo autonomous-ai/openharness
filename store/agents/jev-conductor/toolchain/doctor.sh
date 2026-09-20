@@ -19,4 +19,6 @@ else
   echo "warn  jq not found (optional, used by some tooling)"
 fi
 
+cd "$(dirname "$0")/.."
+node -e "import('./toolchain/jev.mjs').then((m) => console.log('ok   Jev: ' + m.describeCredentials())).catch((e) => console.log('warn   Jev client did not load: ' + e.message))"
 echo "done"
