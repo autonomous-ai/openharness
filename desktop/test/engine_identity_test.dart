@@ -26,7 +26,14 @@ void main() {
   testWidgets('Local AI frameworks load their real logos without initials', (
     tester,
   ) async {
-    const ids = ['local/ollama', 'local/mlx-lm', 'local/vllm'];
+    const ids = [
+      'autonomous/ollama',
+      'autonomous/mlx-lm',
+      'autonomous/vllm',
+      'local/ollama',
+      'local/mlx-lm',
+      'local/vllm',
+    ];
     await tester.pumpWidget(
       MaterialApp(
         home: Row(

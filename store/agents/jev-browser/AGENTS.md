@@ -15,14 +15,27 @@ recipe. The viewer watches it and reloads on every save.
 `$JEV_DSH` below is the harness's own folder. The workspace sets it for you; `echo $JEV_DSH` shows
 it. If it is empty, you are not in a Jev Browser workspace: say so rather than guessing a path.
 
+**The person can do the simple version without you.** The pane has a form: a start address, what
+one thing is, and the columns. Point at it when that is all they need. You are for the rest: a
+messy site, a tricky column, reading what came back, and saying what it means.
+
 ## Your job, in this order
 
-1. **Find out what they want, and from where.** A start address, what one "thing" is, and the
-   columns they want. If they paste a page, open it yourself first (see "Look before you write the
-   job") so the field asks match the words really on it.
-2. **Write `browse.json`.** Validate with `node "$JEV_DSH/toolchain/check.mjs"`.
-3. **Ask them to press Start.** The pane owns the browser and you do not have its address, so you
-   cannot press it. Then watch `.harness/verdict.json` (see "While it runs").
+**Do not open a browser to plan. Write the job; the pane runs it.** The pane has the browser open
+in front of the person, and a run starts by itself the moment `browse.json` changes. Anything you
+do with Chrome yourself is slower, invisible to them, and doubles the work. Write the file first,
+let it run, and look at a page only if something comes back wrong.
+
+1. **Take what they said and turn it into a job.** Often all you need is `start` and `want`:
+   put their own sentence in `want` and leave `fields` out. `start` can be the whole site; Jev
+   walks it to the right page first, one call a step, then works the columns out in about a second. That is faster than you deciding, and it names the columns after
+   the page's own labels. Write the columns yourself only when they asked for something specific
+   that a page would not volunteer, such as a judgement ("is this remote?") or a score.
+   Do not interview them. Write something, let it run, then fix it.
+2. **Write `browse.json`** and validate with `node "$JEV_DSH/toolchain/check.mjs"`. Saving it starts
+   the run: the browser opens in the pane and rows begin landing within a few seconds.
+3. **Watch `.harness/verdict.json`** (see "While it runs"). Say one short line about what is
+   happening; do not narrate every page.
 4. **Read `results.csv`.** Its columns are `item`, `page title`, `address`, then each of your
    fields with a confidence column beside it. The address is the page each row came off, so every
    number can be checked: say that when you report. Derive whatever you like with a script (a sort
@@ -38,7 +51,9 @@ it. If it is empty, you are not in a Jev Browser workspace: say so rather than g
 ```jsonc
 {
   "task": "Every flat for rent in the search results, with rent and address",
-  "start": "https://example.com/search?area=leeds",   // the page to begin on. "demo" is the made-up job board this harness serves itself
+  "start": "https://example.com",                     // where to begin: a site or the exact page. Jev walks to the right one. "demo" is the practice site this harness serves itself
+  "search": "",                                       // optional: words to type into the site's own search box first
+  "want": "what each one costs and whether it is in stock",  // the person's own words. Leave "fields" out and Jev works the columns out from the page
   "item": "a flat for rent",                          // one of the things. Used in every question, so make it concrete
   "fields": [
     { "id": "address", "name": "Address", "ask": "the street address" },
@@ -53,13 +68,18 @@ it. If it is empty, you are not in a Jev Browser workspace: say so rather than g
   "maxPages": 25,                          // how far down the list to walk (page 2, page 3…)
   "sameSiteOnly": true,                    // stay on the site the start address is on
   "alsoVisit": [],                         // other hosts it may reach, if the things live elsewhere
-  "show": true                             // a window the person can watch and take over
+  "show": true,                            // a window the person can watch and take over
+  "autoStart": true                        // saving the file starts the run. false to make them press Start
 }
 ```
 
-- **`fields`**: up to 12. `pick` (the default) takes the exact text off the page. `yesno` is Jev's
-  judgement about the thing. `score` puts it on your named scale. Every field gets a confidence
-  column in the spreadsheet.
+- **`fields`**: up to 12, and optional. Leave it out and Jev proposes the columns from one of the
+  pages, writing them back into `browse.json` so the recipe stays complete. `pick` (the default)
+  takes the exact text off the page. `yesno` is Jev's judgement about the thing. `score` puts it on
+  your named scale. Every field gets a confidence column in the spreadsheet.
+- **`want`**: the person's own sentence. It is never parsed. It is shown to Jev as context while it
+  decides which values are worth a column, so "what each one costs" pulls the proposal towards
+  price and away from the site's boilerplate.
 - **`item`** goes into the question asked about every link, so "a flat for rent" works and "an item"
   does not.
 
@@ -76,9 +96,11 @@ One Jev call per page, and that call holds everything worth asking about it.
 
 It opens the things it found, then asks for the next list page, until `maxItems` or `maxPages`.
 
-## Look before you write the job
+## Looking at a page yourself
 
-Open the page yourself and see what the reader sees, so your asks match the page's words:
+Only when something came back wrong: a column is thin, the rows are the wrong things, or the site
+served a wall. Never as a first step, and never to plan a job you have not tried. It costs the
+person half a minute of waiting and shows them nothing.
 
 ```sh
 node --input-type=module -e "
@@ -134,6 +156,9 @@ The refusals live in `toolchain/chrome.mjs`, next to the only code that touches 
   signs in themselves in the window; the profile is kept in the workspace, so next time it is
   already signed in.
 - **It stays on the sites the job names**, and only on http and https. Downloads are refused.
+- **A search box is the one exception**, because searching asks a site a question rather than
+  buying, sending or deleting. Put what to search for in `"search"` and the harness types it into
+  the site's own search box.
 
 Never tell a person you can work around these, and never ask them for a password.
 
@@ -142,6 +167,13 @@ Never tell a person you can work around these, and never ask them for a password
 - A site may say in its terms that it does not want to be read this way, and some sites charge for
   an API that gives the same data. Say so once, and let the person decide. Do not go around a
   block, a login wall, a rate limit or a robots rule.
+- **Many sites block an automated browser, and you cannot tell which by looking.** Measured on
+  2026-09-20: Hacker News, arXiv, gov.uk, data.gov.uk, GitHub, We Work Remotely and shop.bbc.com
+  read; Amazon, Wikipedia, Rightmove and three specialist fencing shops blocked. So do not promise
+  a person a site will work. Write the job, let it run, and read what comes back: it takes ten
+  seconds. When the verdict carries `run.walled`, that is the end of that site. Do not retry it,
+  do not try another address on it, and do not pretend it half worked. Offer a different source
+  and say what that one will give them instead.
 - Take what is asked for and no more. `maxItems` is a page load each, so it costs the site more
   than it costs you: set it to what the person actually needs, not to the maximum.
 - The rows are what the page said on the day it was read. If that matters, say when it was read.
@@ -161,7 +193,11 @@ about a minute). Never ask them to paste a key into the chat.
 - Never propose opening a browser yourself, changing ports, or running a second server. The pane
   owns the browser, and Start, Stop and the address bar are the person's buttons, not yours. The
   one browser you may open is a read-only look with `openChrome` (below), which touches nothing.
-- Chrome must be on the machine. `toolchain/doctor.sh` says whether it is.
+- Chrome must be on the machine. When they say the pane is stuck, did nothing, or never opened a
+  browser, run `bash toolchain/doctor.sh` before theorising: it walks the whole chain — Chrome, a
+  page, the reader, one Jev call — and prints `ok` or `FAIL` for each, and the first `FAIL` is the
+  thing to fix. Tell them that line, not a guess. The usual three are an account out of credit, a
+  browser window left open on this harness's profile, and a site that refuses automated browsers.
 
 ## Definition of done
 

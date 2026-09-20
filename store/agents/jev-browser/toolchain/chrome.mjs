@@ -75,18 +75,38 @@ export async function openChrome({ profileDir, show = true, allowedHosts = [], w
   ]
   if (!show) args.unshift('--headless=new')
   const proc = spawn(chromePath, args, { stdio: 'ignore', detached: false })
-  const dead = new Promise((_, reject) => proc.once('exit', (code) => reject(new Error(`Chrome closed (code ${code})`))))
+  // Chrome exiting is expected at the end of every run, so this must never be an unheard rejection:
+  // an unhandled one takes the whole viewer down with it, and then nothing at all happens.
+  let exited = null
+  proc.once('exit', (code) => { exited = code ?? 0 })
+  proc.once('error', () => { exited = -1 })
+  const dead = new Promise((resolve) => proc.once('exit', resolve))
+  dead.catch(() => {})
 
   // Wait for the debugging port. Chrome takes a moment on a cold profile.
   let version = null
-  for (let i = 0; i < 100 && !version; i++) {
+  for (let i = 0; i < 100 && !version && exited === null; i++) {
     try { version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json() } catch { await sleep(100) }
   }
-  if (!version) { proc.kill(); throw new Error('Chrome started but never opened its debugging port') }
+  if (!version) {
+    proc.kill()
+    // Chrome will not open a second window on a profile another Chrome is holding: it hands the
+    // request to that window and quits (code 21 on macOS). The fix is to close the other window,
+    // and the person needs telling that, not "it did not start".
+    if (exited !== null) {
+      throw new Error(exited === 21 || exited === 0
+        ? 'A browser window from an earlier run is still open on this harness\'s profile. Close that window and press Go again.'
+        : `Chrome would not start (it exited with code ${exited}).`)
+    }
+    throw new Error('Chrome started but never opened its debugging port')
+  }
 
   const target = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })).json()
   const ws = new WebSocket(target.webSocketDebuggerUrl)
-  await Promise.race([new Promise((r, j) => { ws.onopen = r; ws.onerror = () => j(new Error('Chrome refused the debugging connection')) }), dead])
+  await Promise.race([
+    new Promise((r, j) => { ws.onopen = r; ws.onerror = () => j(new Error('Chrome refused the debugging connection')) }),
+    dead.then(() => { throw new Error('Chrome closed before it could be driven') }),
+  ])
 
   let nextId = 1
   const pending = new Map()
@@ -172,6 +192,29 @@ export async function openChrome({ profileDir, show = true, allowedHosts = [], w
         await send('Input.dispatchMouseEvent', { type, x: box[0], y: box[1], button: 'left', clickCount: type === 'mouseMoved' ? 0 : 1 })
       }
       await settle(8000)
+      return { url: await evaluate('location.href') }
+    },
+    /**
+     * Search a site: type words into its search box and press Enter. This is the ONLY form control
+     * the harness may work: a search asks a question of the site, it does not buy, send or delete.
+     * Anything that is not recognisably a search box is refused here as everywhere else.
+     */
+    async search(cssPath, words) {
+      const look = await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(cssPath)}); if (!e) return null
+        const t = (e.tagName || '').toLowerCase(), ty = (e.getAttribute('type') || '').toLowerCase()
+        if (t !== 'input' && t !== 'textarea') return 'not a field'
+        if (ty && !['search', 'text', ''].includes(ty)) return 'not a search box'
+        return [ty, [e.getAttribute('name'), e.getAttribute('id'), e.getAttribute('placeholder'), e.getAttribute('aria-label'), e.getAttribute('role')].join(' ')] })()`)
+      if (!look) throw new Refused('that search box is not on the page any more')
+      if (typeof look === 'string') throw new Refused(`${look}: this harness only ever types into a search box`)
+      const [type, about] = look
+      if (type !== 'search' && !/search|query|\bq\b|keyword|find|look ?up/i.test(about)) throw new Refused('that field does not look like a search box, so it is left alone')
+      if (SECRET_FIELD.test(about)) throw new Refused('that field wants something private')
+      await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(cssPath)}); e.focus(); e.value = '' })()`)
+      await send('Input.insertText', { text: String(words).slice(0, 200) })
+      await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(cssPath)}); e.dispatchEvent(new Event('input', { bubbles: true })) })()`)
+      for (const type2 of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type: type2, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: type2 === 'keyDown' ? '\r' : undefined })
+      await settle(12000)
       return { url: await evaluate('location.href') }
     },
     /** Type into a field. A field that could hold a secret is refused, whoever asks. */

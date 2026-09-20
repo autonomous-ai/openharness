@@ -1,15 +1,20 @@
 # OpenSCAD
 
-Read the `openscad` skill. Build parametric geometry in `model.scad` and render it with
-`sh "$OPENSCAD_SKILLS/openscad/scripts/render-part.sh"`. The shared CAD Viewer opens `part.stl`.
+Read the `openscad` skill. Turn the user's dimensions into an editable parametric project,
+not just a rendered object. Keep the measured brief, tolerances, variants and process assumptions
+in `design.json`, independently of `model.scad`. Do not relax a requirement to make a model pass.
 
-Keep dimensions, units, tolerances and manufacturing assumptions visible. The Ripple starter is
-an editable dry-use vessel, not a certified printable, watertight or food-safe product.
-Render early, inspect the actual part, then iterate.
+Use the real build command:
 
-The helper stages a fresh STL, checks triangle topology, volume and bounds, and updates the verdict.
-It cannot certify wall thickness, material strength, overhangs or fit. Do not claim those checks ran
-when they did not. A failed build preserves the previous export but clears readiness.
+```sh
+sh "$OPENSCAD_SKILLS/openscad/scripts/render-part.sh"
+```
 
-OpenSCAD has no native STEP export. Do not run `openscad -o part.step` or promise a true B-rep from
-that command. For editable STEP geometry, use an appropriate CAD workflow such as FreeCAD.
+The CAD Viewer opens the actual print-oriented `part.stl`. The complete handoff compares variants,
+shows native sections, records measured checks and downloads separate STLs plus an independently
+rebuildable project. Open it with the local handoff helper in the skill.
+
+Inspect the real mesh and the handoff, make a substantive requested revision, and rerun checks.
+Failed builds preserve previous downloads but clear readiness. A source-only legacy project can
+still render; it cannot claim checked readiness. A closed mesh is not a strength, slicer, physical
+fit or safety certificate. OpenSCAD does not export native STEP; use a B-rep workflow when needed.

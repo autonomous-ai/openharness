@@ -1,0 +1,221 @@
+{
+  "spec": 1,
+  "title": "Know when the laundry is actually done",
+  "brief": "Recognize a real wash cycle only after the washer uses more than 12 W for two minutes. Notify locally only after an active cycle stays below 3 W for five minutes. Reject idle standby and short pauses. Do not cut power to the appliance.",
+  "example": true,
+  "timezone": "America/New_York",
+  "entities": [
+    {
+      "id": "sensor.example_washer_power",
+      "name": "Washer power",
+      "kind": "state",
+      "state": "0",
+      "attributes": {
+        "unit_of_measurement": "W"
+      }
+    },
+    {
+      "id": "input_boolean.example_wash_active",
+      "name": "Wash cycle active",
+      "kind": "input_boolean",
+      "state": "off",
+      "attributes": {}
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "complete-cycle",
+      "name": "A complete wash",
+      "why": "An active cycle reaches sustained low power and creates one local notification.",
+      "start": "2026-04-06T12:00:00Z",
+      "initial": {},
+      "steps": [
+        {
+          "at": 0,
+          "entity": "sensor.example_washer_power",
+          "state": "80"
+        },
+        {
+          "at": 600,
+          "entity": "sensor.example_washer_power",
+          "state": "2"
+        }
+      ],
+      "until": 910,
+      "expect": {
+        "calls": [
+          {
+            "service": "input_boolean.turn_on",
+            "entities": [
+              "input_boolean.example_wash_active"
+            ],
+            "data": {},
+            "between": [
+              120,
+              120.1
+            ]
+          },
+          {
+            "service": "persistent_notification.create",
+            "entities": [],
+            "data": {
+              "title": "Laundry is ready",
+              "message": "The example washer has stayed below 3 W for five minutes.",
+              "notification_id": "habitat_laundry"
+            },
+            "between": [
+              900,
+              900.1
+            ]
+          },
+          {
+            "service": "input_boolean.turn_off",
+            "entities": [
+              "input_boolean.example_wash_active"
+            ],
+            "data": {},
+            "between": [
+              900,
+              900.1
+            ]
+          }
+        ],
+        "states": {
+          "input_boolean.example_wash_active": {
+            "state": "off"
+          }
+        },
+        "pending": 0
+      }
+    },
+    {
+      "id": "standby",
+      "name": "Idle standby is not a wash",
+      "why": "Low standby power must not produce a completion notification.",
+      "start": "2026-04-06T12:00:00Z",
+      "initial": {},
+      "steps": [
+        {
+          "at": 0,
+          "entity": "sensor.example_washer_power",
+          "state": "2"
+        }
+      ],
+      "until": 1000,
+      "expect": {
+        "calls": [],
+        "states": {
+          "input_boolean.example_wash_active": {
+            "state": "off"
+          }
+        },
+        "pending": 0
+      }
+    },
+    {
+      "id": "brief-pause",
+      "name": "A pause between wash stages",
+      "why": "A short low-power pause cancels the finish timer; another high period must not arm a second cycle.",
+      "start": "2026-04-06T12:00:00Z",
+      "initial": {},
+      "steps": [
+        {
+          "at": 0,
+          "entity": "sensor.example_washer_power",
+          "state": "80"
+        },
+        {
+          "at": 600,
+          "entity": "sensor.example_washer_power",
+          "state": "2"
+        },
+        {
+          "at": 720,
+          "entity": "sensor.example_washer_power",
+          "state": "80"
+        },
+        {
+          "at": 1200,
+          "entity": "sensor.example_washer_power",
+          "state": "2"
+        }
+      ],
+      "until": 1510,
+      "expect": {
+        "calls": [
+          {
+            "service": "input_boolean.turn_on",
+            "entities": [
+              "input_boolean.example_wash_active"
+            ],
+            "data": {},
+            "between": [
+              120,
+              120.1
+            ]
+          },
+          {
+            "service": "persistent_notification.create",
+            "entities": [],
+            "data": {
+              "title": "Laundry is ready",
+              "message": "The example washer has stayed below 3 W for five minutes.",
+              "notification_id": "habitat_laundry"
+            },
+            "between": [
+              1500,
+              1500.1
+            ]
+          },
+          {
+            "service": "input_boolean.turn_off",
+            "entities": [
+              "input_boolean.example_wash_active"
+            ],
+            "data": {},
+            "between": [
+              1500,
+              1500.1
+            ]
+          }
+        ],
+        "states": {
+          "input_boolean.example_wash_active": {
+            "state": "off"
+          }
+        },
+        "pending": 0
+      }
+    },
+    {
+      "id": "power-glitch",
+      "name": "A brief power spike",
+      "why": "A short spike is not a running wash cycle.",
+      "start": "2026-04-06T12:00:00Z",
+      "initial": {},
+      "steps": [
+        {
+          "at": 0,
+          "entity": "sensor.example_washer_power",
+          "state": "80"
+        },
+        {
+          "at": 60,
+          "entity": "sensor.example_washer_power",
+          "state": "2"
+        }
+      ],
+      "until": 1000,
+      "expect": {
+        "calls": [],
+        "states": {
+          "input_boolean.example_wash_active": {
+            "state": "off"
+          }
+        },
+        "pending": 0
+      }
+    }
+  ],
+  "notes": "Synthetic power readings; no appliance is controlled. A Home Assistant persistent notification is local to the test engine, not a phone alert."
+}

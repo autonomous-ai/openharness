@@ -1,17 +1,8 @@
 {
-  "task": "Every open role on the job board, into a spreadsheet",
-  "start": "demo",
-  "item": "a job posting",
-  "fields": [
-    { "id": "title", "name": "Job title", "ask": "the job title" },
-    { "id": "company", "name": "Company", "ask": "the name of the company hiring" },
-    { "id": "salary", "name": "Salary", "ask": "the pay or salary range" },
-    { "id": "place", "name": "Location", "ask": "where the job is based" },
-    { "id": "posted", "name": "Posted", "ask": "the date it was posted" },
-    { "id": "remote", "name": "Remote?", "ask": "Can this job be done fully remotely?", "type": "yesno" }
-  ],
-  "maxItems": 12,
-  "maxPages": 4,
+  "start": "",
+  "want": "",
+  "maxItems": 25,
+  "maxPages": 5,
   "sameSiteOnly": true,
   "show": true
 }

@@ -1,16 +1,28 @@
 {
-  "listed": false,
+  "listed": true,
   "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/game-master",
   "license": "MIT",
-  "tagline": "Design and compare strategies in a seeded arena",
+  "tagline": "Create a game. Play it. Put it on the table.",
   "screenshots": [
-    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/game-master/starter.jpg"
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/game-master/starter.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/game-master/signal-garden.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/game-master/night-ferry.jpg"
   ],
   "examples": [
     {
-      "prompt": "Create a capture arena where patient defenders face aggressive hunters. Show every decision and compare their win rates over 32 maps.",
-      "caption": "Relay · interactive offline starter",
+      "prompt": "Make a two-player garden drafting game we can play without knowing game design. Let us pass private hands, reward flower-and-water pairs, revise the scoring and print the full deck. Keep approved artwork when we change the rules.",
+      "caption": "Pocket Conservatory \u00b7 original drafting rules, editable cards and printable kit",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/game-master/starter.jpg"
+    },
+    {
+      "prompt": "Invent a solo routing puzzle with nine rotating tiles. Let me solve it by clicking the tiles, make a harder edition with fewer moves, and give me correctly sized board and tile sheets to play on paper.",
+      "caption": "Signal Garden \u00b7 human-playable spatial puzzle and physical tiles",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/game-master/signal-garden.jpg"
+    },
+    {
+      "prompt": "Design a small push-your-luck game about night ferries. Let us choose to draw cargo or dock, lose only unbanked cargo in a storm, and compare repeated playtests. Then revise the valuable cargo while preserving the approved tea card.",
+      "caption": "Night Ferry \u00b7 original risk/reward rules with editable source",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/game-master/night-ferry.jpg"
     }
   ]
 }

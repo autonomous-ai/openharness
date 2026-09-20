@@ -1,17 +1,29 @@
 {
-  "listed": false,
+  "listed": true,
   "homepage": "https://orca-slicer.pages.dev",
-  "upstream": "https://github.com/SoftFever/OrcaSlicer",
+  "upstream": "https://github.com/OrcaSlicer/OrcaSlicer",
   "license": "MIT",
-  "tagline": "An open-source slicer for FFF 3D printers",
+  "tagline": "Your mesh. Compared plans. Editable native projects.",
   "screenshots": [
-    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/orca-slicer/starter.jpg"
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/orca-slicer/starter.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/orca-slicer/review.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/orca-slicer/spacer.jpg"
   ],
   "examples": [
     {
-      "prompt": "Slice the included vessel with the labeled demo profile and inspect its layers. Do not print it.",
+      "prompt": "Compare faster and finer slicing plans for my rack using a clearly labelled example printer. Give me checked G-code, editable 3MF projects and the full source handoff; do not print.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/orca-slicer/starter.jpg",
-      "caption": "Strata · real Orca G-code, 240 extrusion heights"
+      "caption": "Three actual native plans · 225 software checks · editable 3MF + G-code"
+    },
+    {
+      "prompt": "Show the exact heater commands and full motion, including purge and parking. Help me record what must be reviewed before using a real printer.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/orca-slicer/review.jpg",
+      "caption": "Actual command evidence and revision-bound review notes · no printer connected"
+    },
+    {
+      "prompt": "Prepare this 24 mm spacer with my exported profiles, then revise the Everyday plan to four walls at 0.16 mm. Reopen the native export and show the time/material change.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/orca-slicer/spacer.jpg",
+      "caption": "Independent mesh and explicit profiles · revised from 30 to 37 layers"
     }
   ]
 }

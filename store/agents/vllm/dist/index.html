@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10151d">
+  <meta name="description" content="Run, inspect, and benchmark your vLLM models on this Mac using natural language.">
+  <title>vLLM — Your local model space</title>
+  <link rel="icon" type="image/png" href="/assets/vllm-icon.png">
+  <link rel="apple-touch-icon" href="/assets/vllm-icon.png">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/?view=grid" aria-label="vLLM model space"><img class="brand-mark" src="/assets/vllm-icon.png" width="40" height="40" alt=""><span>vLLM</span><span class="pilot">LOCAL AI</span></a>
+    <div class="top-status"><span class="local-symbol" aria-hidden="true">◈</span> On your machine <span class="separator"></span><span id="connection-status">Connecting</span></div>
+  </header>
+  <main class="workspace">
+    <section class="control-room" aria-label="vLLM control room">
+      <div class="page-heading"><div><p class="eyebrow">vLLM / METAL ON THIS MAC</p><h1>Models, ready to serve.</h1></div><button id="refresh" class="icon-button" aria-label="Refresh model status" title="Refresh model status">↻</button></div>
+      <div id="runtime-notice" class="runtime-notice" role="status" hidden></div>
+      <div class="stats-row" id="stats-row">
+        <div class="stat"><span>Models on disk</span><strong id="model-count">—</strong></div>
+        <div class="stat"><span>In memory</span><strong id="running-count">—</strong></div>
+        <div class="stat"><span>Last request</span><strong id="last-speed">— <small>tok/s</small></strong></div>
+        <div class="stat"><span>Server RSS</span><strong id="model-memory">— <small>GiB</small></strong></div>
+      </div>
+      <section class="map-panel" aria-labelledby="map-heading">
+        <div class="panel-heading"><h2 id="map-heading">vLLM · Metal backend</h2><span class="mono live-label" id="map-status">DISCOVERING</span></div>
+        <div id="runtime-map" class="runtime-map"><div class="map-empty">Discovering your vLLM models…</div></div>
+        <div class="map-footer"><span><i class="legend-dot loaded"></i> In memory <i class="legend-dot"></i> On disk</span><span id="machine-info">Apple Silicon</span></div>
+      </section>
+      <section class="serving-panel" aria-labelledby="serving-heading"><div class="panel-heading"><h2 id="serving-heading">Serving</h2><span class="secondary" id="serving-state">Idle</span></div><div id="serving-content"></div></section>
+      <section class="models-panel" aria-labelledby="models-heading">
+        <div class="panel-heading"><h2 id="models-heading">vLLM models <span id="models-total" class="count-pill">0</span></h2><span class="secondary">One server · continuous batching</span></div>
+        <div id="models-list" class="models-list"></div>
+      </section>
+      <section class="concurrency-panel" aria-labelledby="concurrency-heading"><div class="panel-heading"><h2 id="concurrency-heading">Concurrent performance</h2><span class="secondary">Throughput &amp; latency</span></div><div id="concurrency-content"></div></section>
+      <section class="performance-panel" aria-labelledby="performance-heading">
+        <div class="panel-heading"><h2 id="performance-heading">Single-request baseline</h2><a id="export-benchmarks" class="secondary" href="/api/export" download hidden>Export results ↗</a></div>
+        <div id="performance-content" class="performance-content"><div class="empty-small"><span class="empty-icon" aria-hidden="true">▥</span><p>Your first run sets the baseline.</p><span>Benchmark a model to compare speed and response time.</span></div></div>
+      </section>
+      <section class="activity-panel" aria-labelledby="activity-heading"><div class="panel-heading"><h2 id="activity-heading">Activity</h2><span class="secondary">Live from vLLM</span></div><div id="activity-content"></div></section>
+    </section>
+    <aside class="assistant-panel" aria-label="Natural language model controls">
+      <div class="assistant-header"><img class="assistant-avatar" src="/assets/vllm-icon.png" width="36" height="36" alt=""><div><h2>vLLM operator</h2><span>Tell it what you want to run.</span></div><span class="private-badge">LOCAL</span></div>
+      <div class="conversation" id="conversation" role="log" aria-live="polite" aria-relevant="additions">
+        <div class="assistant-message"><span class="message-label">vLLM</span><p>Your vLLM models.<br>At your command.</p><p class="secondary">I can find a model, deploy it with vLLM, and measure how it performs here.</p></div>
+        <div class="suggestions" id="suggestions"><button data-prompt="Run a lightweight model">Run a lightweight model <span>↗</span></button><button data-prompt="Find a small model for coding">Find a model for coding <span>↗</span></button><button data-prompt="Show my models">Show my models <span>↗</span></button></div>
+      </div>
+      <div id="job-panel" class="job-panel" hidden></div>
+      <label class="model-picker" for="selected-model">Chat / follow-up model<select id="selected-model"><option value="">Auto · running model</option></select></label>
+      <form id="command-form" class="composer"><label class="sr-only" for="command-input">Ask the vLLM operator</label><textarea id="command-input" rows="3" placeholder="Run an vLLM model, compare speeds, free up memory…" maxlength="4000"></textarea><div class="composer-footer"><span id="operator-status">vLLM harness</span><button id="send-button" type="submit" aria-label="Send request">↑</button></div></form>
+      <div class="assistant-footer">vLLM inference stays on this Mac.<span>↵ Send · ⇧↵ New line</span></div>
+    </aside>
+  </main>
+  <dialog id="model-dialog" aria-labelledby="detail-title"><div id="model-detail"></div><button class="dialog-close" aria-label="Close model details">×</button></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

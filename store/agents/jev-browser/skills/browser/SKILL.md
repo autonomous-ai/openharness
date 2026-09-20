@@ -19,9 +19,27 @@ a LIST page  →  links to each thing, and a link to the next list page
 a THING page →  the details of one thing
 ```
 
-Point `start` at the list. If you point it at one thing's page, that one row is collected and the
+A search page is a list page, so "search this site for X" is the same job: put the words in
+`"search"` and the harness types them into the site's own search box, then reads the results.
+
+`start` does not have to be the list. Give it the site and Jev walks there: each step is one call
+asking whether this page is already the one, and if not which link goes towards it, up to five
+pages. Where a person gave you the exact page, use it and skip the walking.
+
+Point `start` at the list where you have it. If you point it at one thing's page, that one row is collected and the
 run ends. If the things have no page of their own (everything is on the list), say so to the person:
 this harness collects one row per page, so a list-only site gives one row for the whole list.
+
+## Letting Jev write the fields
+
+Put the person's sentence in `want`, leave `fields` out, and two Jev calls decide it: one asks what
+the page lists and which links are the things, the other asks of every piece of text on one of them
+"is that a fact about this one, worth a column?" and "what kind of value is it?". About a second,
+and the names come off the page's own labels.
+
+Do that first. Read what it proposed, then add or reword. What it cannot propose is a judgement:
+"is this remote?", "how urgent is this". Those are yours to write, and they are where the tool earns
+its keep, because no page prints them.
 
 ## Writing the fields
 
@@ -79,6 +97,21 @@ person needs. The honest limit is the **page**. A site that prints its values as
 them behind a click, or loads them after a scroll gives blanks, and the blanks show up as a thin
 column rather than as a wrong answer. That is the tool telling the truth: it would rather leave a
 cell empty than write something the page never said.
+
+## When a site says no
+
+A site that runs bot protection answers with a wall: "Just a moment…", "Sorry, something went
+wrong", a captcha, a 403, or a robot-policy page. The harness names it, stops, and puts it in
+`run.walled`. Trying another address on the same site is the same wall. Do not work around it.
+
+**Do not guess which sites will block.** Measured on 2026-09-20: Hacker News, arXiv, gov.uk,
+data.gov.uk, GitHub, We Work Remotely and shop.bbc.com all read. Amazon, Wikipedia, Rightmove and
+three specialist fencing retailers all blocked. Small does not mean open, and big does not mean
+shut: it is whether the site runs a challenge. Point the job at the page and let the pane tell you
+in ten seconds, rather than promising a person it will work.
+
+When it walls, say so plainly and offer a different source: a public dataset, an official API, a
+government or reference site, or the maker's own pages. Do not re-run it hoping.
 
 ## Never
 

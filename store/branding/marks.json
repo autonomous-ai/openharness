@@ -110,5 +110,32 @@
     "license": "MIT",
     "credit": "© 2026 OpenHarness contributors",
     "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/roundtable",
+    "file": "roundtable.svg",
+    "color": "#94b9a5",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/jev-browser",
+    "file": "jev-browser.svg",
+    "color": "#8bd3cc",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/godogen",
+    "file": "godogen.svg",
+    "color": "#b5d9ae",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
   }
 ]

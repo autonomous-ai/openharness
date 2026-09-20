@@ -1,11 +1,18 @@
 # Experience verification
 
-Art and Music have authoring rebuilds listed in the Store for user testing;
-their source is inside each package's `template/studio/`, with a drawing program/project or an
-editable score. `build-experiences.mjs` delegates to their package builders. The five parked
-packages and the retained original Art/Music models live in `store/tools/experiences/`.
-See [the product review](../../../work/SUPERPOWERS.md) and
-[current evidence](../../../work/AUTHORING-REBUILD.md). These are technical checks, not product approval.
+The seven authoring rebuilds use source inside each package's `template/studio/` and their own
+builders. `build-experiences.mjs` delegates to those builders. The original models remain under
+`store/tools/experiences/` as retained history; their tests do not stand in for the rebuilt tools.
+See [current release status](../../../work/FIVE-REBUILDS.md). These checks establish technical
+behavior and delivered output, not a subjective product response or an installed-agent trial.
+
+Game Master and Lab Bench provide package-local browser/acceptance suites. Lab Bench additionally
+reopens all six authored deliveries, exercises numeric/category/block controls, and independently
+reconstructs its design matrices with Python statsmodels/SciPy. See each package's `test/ACCEPTANCE.md`.
+
+Creative Direction's [evidence](../../../work/FORME-REBUILD.md) includes three distinct briefs,
+targeted revisions, actual canvas/source saves and independently read print deliveries. Run its
+`test/acceptance.mjs`, then `test/verify-delivery.py PATH_TO_RUN` with Poppler available.
 
 From the repository root:
 
@@ -18,7 +25,7 @@ node --test store/agents/generative-art/test/*.test.mjs store/agents/music-studi
 node --test store/viewers/web-viewer/test/*.test.mjs
 ```
 
-The parked packages include a pure-model checker. Run it **in their workspace**:
+Legacy workspaces include a pure-model checker. Run it **in their workspace**:
 
 ```sh
 node tools/check.mjs --seeds 100

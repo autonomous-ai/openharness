@@ -1,7 +1,105 @@
 {
-  "mode": "demo",
-  "model": "model.stl",
-  "printer": "Prusa/machine/Prusa MK3S 0.4 nozzle.json",
-  "process": "Prusa/process/0.20mm Standard @MK3S 0.4.json",
-  "filament": "Prusa/filament/Prusa Generic PLA.json"
+  "spec": 1,
+  "title": "Bottle Bench · Choose the print plan",
+  "brief": "Turn a six-bottle craft rack into an editable, inspectable slicing project. Compare draft, everyday and fine layers using the same mesh, printer, material and orientation.",
+  "assumptions": "Software-only example: Prusa MK3S, one 0.4 mm nozzle, PLA, High Temp Plate. These are not facts about your printer. The 26.6 mm bottle pockets and 2.4 mm floor have not been physically fit-tested; dry indoor craft storage only.",
+  "sourceFiles": [
+    "slice-config.json",
+    "model.stl",
+    "model.scad",
+    "print-config.md"
+  ],
+  "profiles": {
+    "source": "installed",
+    "printer": "Prusa/machine/Prusa MK3S 0.4 nozzle.json",
+    "process": "Prusa/process/0.20mm Standard @MK3S 0.4.json",
+    "filament": "Prusa/filament/Prusa Generic PLA.json"
+  },
+  "machine": {
+    "context": "example",
+    "label": "Prusa MK3S · example only",
+    "printerModel": "Prusa MK3S",
+    "nozzleMM": 0.4,
+    "bedMM": [
+      250,
+      210,
+      210
+    ],
+    "bedType": "High Temp Plate",
+    "firmware": "marlin",
+    "material": "PLA",
+    "nozzleTemperatureRange": [
+      190,
+      230
+    ],
+    "bedTemperatureRange": [
+      50,
+      70
+    ]
+  },
+  "model": {
+    "path": "model.stl",
+    "expectedSizeMM": [
+      87.8,
+      59.2,
+      18
+    ],
+    "toleranceMM": 0.03,
+    "rotationDegrees": [
+      0,
+      0,
+      0
+    ],
+    "scale": 1
+  },
+  "plans": [
+    {
+      "id": "draft",
+      "label": "Draft",
+      "description": "Coarser layers and two walls. Compare a faster dimensional trial; this is not a strength recommendation.",
+      "layerHeightMM": 0.28,
+      "firstLayerMM": 0.2,
+      "wallLoops": 2,
+      "infillPercent": 10,
+      "infillPattern": "gyroid",
+      "topLayers": 4,
+      "bottomLayers": 3,
+      "supports": false,
+      "brimMM": 0
+    },
+    {
+      "id": "everyday",
+      "label": "Everyday",
+      "description": "A middle comparison with three walls and 0.20 mm layers. Inspect the first layer and pocket paths.",
+      "layerHeightMM": 0.2,
+      "firstLayerMM": 0.2,
+      "wallLoops": 3,
+      "infillPercent": 15,
+      "infillPattern": "gyroid",
+      "topLayers": 4,
+      "bottomLayers": 3,
+      "supports": false,
+      "brimMM": 0
+    },
+    {
+      "id": "fine",
+      "label": "Fine layers",
+      "description": "0.16 mm layers, same walls and infill as Everyday. Compare surface resolution against time and material—not a guaranteed finish.",
+      "layerHeightMM": 0.16,
+      "firstLayerMM": 0.2,
+      "wallLoops": 3,
+      "infillPercent": 15,
+      "infillPattern": "gyroid",
+      "topLayers": 5,
+      "bottomLayers": 4,
+      "supports": false,
+      "brimMM": 0
+    }
+  ],
+  "selectedPlan": "everyday",
+  "limits": {
+    "maxTimeSeconds": 28800,
+    "maxFilamentGrams": 80,
+    "bedMarginMM": 5
+  }
 }

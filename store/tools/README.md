@@ -1,5 +1,31 @@
 # DSH tools
 
+## Store categories and README visuals
+
+[`browse-categories.json`](../browse-categories.json) maps precise manifest domains into the
+Store's browsing categories. Coding comes first; the other categories group domain harnesses.
+The metadata-only generator reads the same listed catalog as the registry and updates the
+desktop category map, README inventory, and overview graphic together:
+
+```sh
+node store/tools/presentation.mjs
+node store/tools/presentation.mjs --check
+```
+
+The README slideshow uses the screenshots selected in
+[`readme-showcase.json`](../readme-showcase.json) and their complete original prompts from each
+package's `store.json`. With the release-pinned Flutter SDK and FFmpeg on PATH:
+
+```sh
+node store/tools/showcase.mjs
+```
+
+Set `FLUTTER_BIN` and `FFMPEG_BIN` if needed. The script renders captions with Flutter and encodes
+an infinitely looping GIF. It also writes a still preview and readable prompt links into the README.
+Sources and visual-review notes are in [the asset guide](../../.github/assets/store/README.md).
+
+## Daemon checks
+
 Daemon-level checks over the same loopback WebSocket the desktop uses (`ws://127.0.0.1:18473/api/local-ws`).
 They need a running daemon with the harness installed on this machine, and `cli/node_modules` (for `ws`).
 

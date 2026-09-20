@@ -9,7 +9,7 @@ import { writeFileSync, renameSync, mkdirSync } from 'node:fs'
 import { evaluate, PRICE_PER_MTOK, resolveCredentials, describeCredentials } from '../toolchain/jev.mjs'
 import { serveViewer, writeVerdict, watchConfig, clean } from './kit.mjs'
 import { openChrome, findChrome, Refused } from '../toolchain/chrome.mjs'
-import { normalizeJob, runJob, LIMITS } from './crawl.mjs'
+import { normalizeJob, runJob, proposeJob, findThePage, LIMITS } from './crawl.mjs'
 import { browserMock } from './mock.mjs'
 import { startDemoSite } from './demosite.mjs'
 
@@ -23,7 +23,7 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
   let job = normalizeJob({}).job, configError = null, jevError = null
   let rows = [], feed = [], links = [], here = { url: '', title: '' }
   let counters = { pages: 0, calls: 0, questions: 0, tokens: 0, costUsd: 0, links: 0, errors: 0 }
-  let phase = 'idle', startedAt = 0, finishedAt = 0, lastRun = null
+  let phase = 'idle', startedAt = 0, finishedAt = 0, lastRun = null, proposing = false
   let shotTimer = null, shotBusy = false
   let expecting = { expecting: 'list', item: '' }
   const mock = browserMock(() => expecting)
@@ -32,7 +32,8 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
 
   // ---- what the pane sees ---------------------------------------------------------------------
   const view = () => ({
-    task: job.task, item: job.item, start: job.start, fields: job.fields.map((f) => ({ id: f.id, name: f.name, ask: f.ask, type: f.type })),
+    task: job.task, item: job.item, start: job.start, search: job.search, fields: job.fields.map((f) => ({ id: f.id, name: f.name, ask: f.ask, type: f.type })),
+    walled: lastRun?.walled ?? null, want: job.want, proposing,
     keep: job.keep, maxItems: job.maxItems, maxPages: job.maxPages, limits: LIMITS,
     error: configError, jevError, client: liveRoute() ?? 'mock', jevSays: describeCredentials(),
     chrome: { found: !!chromePath, open: !!chrome?.alive },
@@ -77,6 +78,7 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
     if (configError) findings.push({ severity: 'error', kind: 'job', ref: MARKER, message: configError })
     if (jevError) findings.push({ severity: 'warning', kind: 'jev', message: jevError })
     if (!chromePath) findings.push({ severity: 'error', kind: 'chrome', message: 'Google Chrome was not found on this machine. Install it, or set CHROME_PATH.' })
+    if (lastRun?.walled) findings.push({ severity: 'error', kind: 'walled', message: `${lastRun.walled}. This is the site refusing an automated browser, not a fault here. Do not retry it: pick a site that allows reading.` })
     if (liveRoute() === null && rows.length) findings.push({ severity: 'warning', kind: 'jev', message: 'These rows came from the offline stand-in, not from Jev. They are not good enough to act on.' })
     for (const f of filled) if (f.thin) findings.push({ severity: 'warning', kind: 'field', ref: f.id, message: `"${f.name}" was found on only ${f.found} of ${f.of} pages. Reword what it asks for, or the value may not be on those pages.` })
     for (const e of (lastRun?.errors ?? []).slice(0, 3)) findings.push({ severity: 'warning', kind: 'page', ref: e.url, message: clean(e.message) })
@@ -93,6 +95,7 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
       ],
       run: {
         client: liveRoute() ?? 'mock', task: job.task, start: job.start, item: job.item,
+        walled: lastRun?.walled ?? null,
         rows: rows.length, pages: counters.pages, linksJudged: counters.links, calls: counters.calls,
         questions: counters.questions, costUsd: Math.round(counters.costUsd * 1e6) / 1e6,
         elapsedMs: startedAt ? (finishedAt || Date.now()) - startedAt : 0, fields: filled,
@@ -164,9 +167,57 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
       demo ??= await startDemoSite()
       job = { ...job, start: demo.url, hosts: [...new Set([...job.hosts, '127.0.0.1', 'localhost'])] }
     }
-    const opened = await openBrowser()
-    if (opened.ok === false) return opened
+    let opened
+    try { opened = await openBrowser() } catch (e) { const error = clean(e?.message ?? e); say(error, 'bad'); phase = 'idle'; push(); verdictSoon(); return { ok: false, error } }
+    if (opened.ok === false) { say(opened.error, 'bad'); push(); return opened }
     rows = []; links = []; feed = []
+    // Nobody should have to name the columns. Jev reads one page and proposes them, in about a
+    // second, and the answer is written back into browse.json so the job stays the recipe.
+    if (!job.fields.length) {
+      proposing = true
+      say('Looking for the right page…', 'start')
+      counters = { pages: 0, calls: 0, questions: 0, tokens: 0, costUsd: 0, links: 0, errors: 0 }
+      startedAt = Date.now(); finishedAt = 0; phase = 'running'
+      push()
+      const watch = (e) => {
+        if (e.type === 'judged') links = e.links ?? []
+        if (e.type === 'going') here = { url: e.url, title: '' }
+        if (e.type === 'step') say(`Following "${e.label}" (${Math.round(e.p * 100)}%)`, 'go')
+        if (e.type === 'searching') say(`Searching the site for "${e.words}"`, 'go')
+        if (e.type === 'arrived') say(`This is the page: ${e.url}`, 'judge')
+        push('view')
+      }
+      let got
+      try {
+        // The address may be a whole site rather than the list itself. Walk to it first.
+        const found = await findThePage({ chrome, ask, start: job.start, want: job.want, search: job.search, onEvent: watch, stopped: () => stopFlag })
+        if (found.walled) { got = { walled: found.walled, columns: [] } }
+        else {
+          if (found.gaveUp) say(`Still looking: ${found.gaveUp}. Reading this page anyway.`, 'bad')
+          if (found.url !== job.start) { job = { ...job, start: found.url }; counters.pages = found.steps }
+          got = await proposeJob({ chrome, ask, start: found.url, page: found.page, want: job.want, search: job.search, onEvent: watch })
+        }
+      } catch (e) { got = { columns: [], error: String(e.message ?? e), provider: e?.provider === true } }
+      proposing = false
+      if (got.walled) { lastRun = { walled: got.walled, errors: [] }; say(got.walled, 'bad'); phase = 'done'; finishedAt = Date.now(); push(); saveVerdict(); return { ok: false, error: got.walled } }
+      if (!got.columns.length) {
+        phase = 'idle'; finishedAt = Date.now()
+        const why = got.error || got.none || 'nothing on that page looked like a value worth a column'
+        // A key that is refused or out of credit is not a "the page was no good" problem, and
+        // saying so sends the person off reading the page instead of fixing the key.
+        say(got.provider ? why : `No columns could be worked out: ${why}`, 'bad')
+        push(); saveVerdict()
+        return { ok: false, error: got.provider ? why : `${why}. Write the columns yourself, one per line.` }
+      }
+      const saidItem = String(watcher.get()?.item ?? '').trim()
+      // Write back the page it walked to, not the address that was typed: otherwise the job resets
+      // to the site's front page and collects whatever happens to be on it.
+      const next = { ...watcher.get(), start: job.start, item: saidItem || got.item, fields: got.columns.map((c) => ({ id: c.id, name: c.name, ask: c.ask })) }
+      writeMarker(next)
+      applyJobQuiet(next)
+      say(`Jev found ${got.columns.length} columns in ${got.ms} ms: ${got.columns.map((c) => c.name).slice(0, 6).join(', ')}`, 'judge')
+      push()
+    }
     counters = { pages: 0, calls: 0, questions: 0, tokens: 0, costUsd: 0, links: 0, errors: 0 }
     stopFlag = false; phase = 'running'; startedAt = Date.now(); finishedAt = 0
     say(`Starting: ${job.task}`, 'start')
@@ -218,6 +269,39 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
         return { phase }
       }
       case 'export': { saveResults(); return { file: RESULTS, rows: rows.length } }
+      // The pane's own form. It writes browse.json exactly as the agent would, so the file stays
+      // the one place a job lives, and the recipe is the same however it was made.
+      case 'propose': {
+        // Just the proposal, without running: the pane can show it and let a person untick.
+        if (!chrome?.alive) { const o = await openBrowser(); if (o.ok === false) return o }
+        proposing = true; push()
+        try { return await proposeJob({ chrome, ask, start: String(body.start ?? job.start), want: String(body.want ?? job.want ?? ''), search: String(body.search ?? '') }) }
+        catch (e) { return { ok: false, error: String(e.message ?? e) } } finally { proposing = false; push() }
+      }
+      case 'setJob': {
+        const columns = String(body.columns ?? '').split('\n').map((l) => l.trim()).filter(Boolean).slice(0, LIMITS.fields)
+        const start = String(body.start ?? '').trim()
+        if (!start) return { ok: false, error: 'Put in the address of the page to start on.' }
+        const next = {
+          task: String(body.task ?? '').trim() || String(body.want ?? '').trim() || (columns[0] ? `${columns[0]} for every ${String(body.item ?? 'thing').trim()}` : `Read ${start.replace(/^https?:\/\//, '').split('/')[0]}`),
+          start: /^[a-z]+:\/\//i.test(start) || /^demo$/i.test(start) ? start : `https://${start}`,
+          search: String(body.search ?? '').trim(),
+          item: String(body.item ?? '').trim(),
+          fields: columns.map((ask) => (/^(is|are|does|do|can|has|have|will|should|was|were)\b/i.test(ask) || ask.endsWith('?')
+            ? { ask, type: 'yesno', name: ask.replace(/\?$/, '').slice(0, 40) }
+            : { ask, name: ask.slice(0, 40) })),
+          want: String(body.want ?? '').trim(),
+          keep: String(body.keep ?? '').trim(),
+          maxItems: Math.max(1, Math.min(LIMITS.maxItems, Math.floor(Number(body.maxItems) || 25))),
+          maxPages: Math.max(1, Math.min(LIMITS.maxPages, Math.floor(Number(body.maxPages) || 5))),
+          sameSiteOnly: true, show: true,
+        }
+        const { errors } = normalizeJob(next)
+        if (errors.length) return { ok: false, error: errors.join('; ') }
+        writeMarker(next)
+        applyJob(next)          // this starts it
+        return { ok: true, start: next.start, fields: next.fields.length }
+      }
       case 'openHere': {
         // The person asks the browser to go somewhere, from the pane. Same rules as everything else.
         if (!chrome?.alive) { const o = await openBrowser(); if (o.ok === false) return o }
@@ -229,13 +313,46 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
   }
 
   // ---- the job file --------------------------------------------------------------------------------
+  // What makes a job a different job. A changed title or budget is not worth a new run.
+  const jobPrint = (j) => JSON.stringify([j.start, j.search, j.item, j.keep, j.fields.map((f) => [f.id, f.ask, f.type, f.levels])])
+  let lastPrint = null, autoTimer = null
+
+  /** browse.json is the recipe, so anything the pane works out is written back into it. */
+  function writeMarker(obj) {
+    const f = join(workspace, MARKER)
+    writeFileSync(f + '.tmp', JSON.stringify(obj, null, 2) + '\n'); renameSync(f + '.tmp', f)
+  }
+  /** Take a job on without setting it running: used from inside a run that is already going. */
+  function applyJobQuiet(raw) {
+    const { job: next, errors } = normalizeJob(raw)
+    configError = errors.length ? `${MARKER}: ${errors.join('; ')}` : null
+    job = demo && /^demo$/i.test(next.start) ? { ...next, start: demo.url, hosts: [...new Set([...next.hosts, '127.0.0.1', 'localhost'])] } : next
+    if (chrome) chrome.allowedHosts = job.sameSiteOnly ? [...job.hosts, ...(demo ? ['127.0.0.1', 'localhost'] : [])] : []
+    lastPrint = jobPrint(job)
+  }
+
   function applyJob(raw, fresh = false) {
     const { job: next, errors } = normalizeJob(raw)
     configError = errors.length ? `${MARKER}: ${errors.join('; ')}` : null
     if (!configError || fresh || !job.fields.length) job = next
     if (demo && /^demo$/i.test(job.start)) job = { ...job, start: demo.url, hosts: [...new Set([...job.hosts, '127.0.0.1', 'localhost'])] }
     if (chrome) chrome.allowedHosts = job.sameSiteOnly ? [...job.hosts, ...(demo ? ['127.0.0.1', 'localhost'] : [])] : []
+    const print = jobPrint(job)
+    const changed = lastPrint !== null && print !== lastPrint
+    lastPrint = print
     push(); verdictSoon()
+    // Somebody just asked for something different. Go and get it, rather than waiting to be told
+    // twice: the person who typed it, or the agent that wrote the file for them, has already said so.
+    if (changed && !configError && job.autoStart && !running) {
+      clearTimeout(autoTimer)
+      autoTimer = setTimeout(() => {
+        if (running || configError) return
+        // A job that starts itself must still say when it could not. Swallowing this is what made
+        // a browser that would not open look like nothing happening at all.
+        start().then((r) => { if (r?.ok === false) { say(r.error, 'bad'); phase = 'idle'; push(); verdictSoon() } })
+          .catch((e) => { say(clean(e?.message ?? e), 'bad'); phase = 'idle'; proposing = false; push(); verdictSoon() })
+      }, 400)
+    }
   }
 
   mkdirSync(join(workspace, '.harness'), { recursive: true })
@@ -258,7 +375,7 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
     async close() {
       stopFlag = true
       await running
-      stopShots(); clearTimeout(verdictTimer)
+      stopShots(); clearTimeout(verdictTimer); clearTimeout(autoTimer)
       watcher.close()
       await closeBrowser()
       await demo?.close()

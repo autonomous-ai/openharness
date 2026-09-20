@@ -1,0 +1,7 @@
+{
+  "homepage": "https://docs.vllm.ai/projects/vllm-metal/en/latest/",
+  "upstream": "https://github.com/vllm-project/vllm-metal",
+  "license": "MIT",
+  "tagline": "High-performance LLM inference on Apple Silicon using MLX and vLLM",
+  "screenshots": []
+}

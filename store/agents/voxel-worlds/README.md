@@ -1,60 +1,57 @@
 # Voxel Worlds — Tidelands
 
-> Withdrawn from Store discovery on 2026-09-20: the current starter does not meet our
-> standard for an open-ended tool that completes real user work. Existing projects and
-> source remain available. See [the product review](../../../work/SUPERPOWERS.md).
-
 ![Voxel Worlds logo](brand/logo.svg)
 
-Build and walk a seeded voxel island. Sculpt terrain, place and break blocks, explore a cabin and lighthouse, change the light, and save your world.
+Turn an idea into an editable 3D environment and a reusable asset kit. Describe a harbor, a civic
+courtyard, a dungeon module or a place of your own. The agent authors the geometry; you can move
+objects, sculpt voxels, change materials, walk the result and take it into other tools.
 
-## Try it
+The studio supports named objects, snapping movement, quarter turns, duplication, locking,
+visibility, build/erase/paint brushes, custom materials, physical scale, undo/redo and lighting.
+Save source to the workspace, reopen complete projects, and retain both versions when an agent
+revision conflicts with a browser draft. A single static MagicaVoxel asset can be imported with
+its palette and orientation, including a single-instance transform graph.
 
-> Turn this island into a harbor village with a walkable pier, a hilltop observatory, and lanterns along the road.
+Export a named GLB in meters, a flattened VOX, individual reusable assets, the source project and
+an offline editable studio/walkthrough. A ZIP collects the complete handoff. The harbor is an
+authored example; there is no fixed style selector. The earlier island implementation is preserved
+under `store/tools/experiences/voxel-worlds.*` for reference.
 
-The starter already works before the first prompt. Change it with the agent, interact with the
-result in the pane, and keep the output. Everything needed at runtime is in `world/index.html`.
-It works offline and can be opened outside Harness.
+## Use and build
 
-## What you can do
+Harness setup installs pinned package-local Three.js, esbuild and browser tools. Node comes from
+the shared runtime helper when needed. No CDN, paid API or network is required by the built HTML.
 
-Walk, collision, jump, place/break, five materials, day/night, island overview, world JSON save and restore.
+```sh
+sh toolchain/setup.sh
+# Inside a materialized workspace (VOXEL_DSH_DIR is set by Harness):
+node tools/build.mjs
+node tools/check.mjs
+node tools/export.mjs
+```
 
-## Build on the starter
+Edit `world/project.json`; source modules live under `studio/`. The [project contract](skills/world-builder/references/project.md)
+defines limits and coordinates. The local viewer only accepts same-origin saves, verifies source
+revisions and keeps history. It runs trusted workspace code; it is not a sandbox for hostile scripts.
 
-The model functions `voxelWorld`, `movePlayer`, `raycastWorld`, `putBlock` and `importWorld` are the starting points for substantive changes. Preserve seed
-reproducibility and user controls while changing the domain behavior. A different brief can replace
-this starter's entire visual language. Keep the artifact self-contained and test the actual result.
+## What the files preserve
 
-The source checkout builds these starters with `node store/tools/build-experiences.mjs`. Installed
-workspaces are editable HTML; no build tool, network dependency or paid service is required.
+GLB retains visible geometry as named meshes with materials, in meters, Y-up. VOX flattens geometry
+and colors, Z-up. The source JSON keeps object structure and editing settings. Isolated object
+exports retain faces hidden by other objects in the scene. MagicaVoxel import supports one static
+model/instance; it rejects multi-model scenes, animation and missing palettes. Imported placement
+is rebased to the object bounds; specialized shaders are not reproduced.
 
-## Verification
+This is an environment and asset authoring tool. Walking uses a simulated 1.7 m visitor; it does
+not supply game rules, multiplayer, rigging, construction validation or accessibility certification.
+Geometry checks do not establish visual quality. See [acceptance evidence](test/ACCEPTANCE.md)
+for the tests actually performed and remaining validation.
 
-Model census: `node --test store/tools/experience-tests/models.test.mjs` from the source checkout.
-Browser interactions, exports, same-origin APIs and manifest routing: see
-[`store/tools/experience-tests`](../../tools/experience-tests/README.md).
-
-`seed-verdict.sh` establishes only artifact presence and keeps `ready:false`. The agent must run
-and record real domain and browser checks before writing a ready verdict. No cross-device pixel or
-audio equality is promised. The research is inspiration; this is original code, not a wrapper of
-any cited third-party engine.
-
-## Check your actual edited model
-
-Run `node tools/check.mjs --seeds 100` in the workspace. It reads the pure model from
-`<script id="harness-model">` in the artifact, checks domain invariants, repeats each seed, and
-writes `.harness/model-check.json`. Preserve that script boundary when editing. Model checks are
-followed by browser interaction, exported-output inspection, and visual or listening review.
-
-## Logo and icon
-
-The original identity ships in `brand/`: [vector icon](brand/icon.svg),
-[256px PNG](brand/icon.png), [light logo](brand/logo.svg) and
-[dark logo](brand/logo-dark.svg). The same mark appears in the starter header,
-its offline favicon and the desktop Store/picker/tabs. MIT, by OpenHarness contributors.
+The original [logo and icon](brand/) are retained in the Store, studio and favicon. Three.js and
+runtime provenance are recorded in [PROVENANCE.md](PROVENANCE.md).
 
 ## Credit and stewardship
 
 Original implementation and visual identity by OpenHarness contributors, maintained by
-Autonomous under the [MIT license](LICENSE). Report issues in the OpenHarness repository.
+Autonomous under the [MIT license](LICENSE). Dependency notices and source references are in
+[PROVENANCE.md](PROVENANCE.md). Report issues in the OpenHarness repository.

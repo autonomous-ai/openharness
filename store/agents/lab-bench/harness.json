@@ -4,7 +4,7 @@
   "name": "Lab Bench",
   "category": "Science",
   "author": "Autonomous",
-  "description": "Explore an experiment with reproducible synthetic data. Change effect, noise and sample size, probe observations, filter groups, inspect computed uncertainty, and export CSV.",
+  "description": "Turn a practical question into a real experiment. Plan randomized runs, collect your measurements, inspect uncertainty and diagnostics, and design a follow-up with a reproducible report.",
   "engine": "claude",
   "workspace": {
     "template": "template",
@@ -15,18 +15,21 @@
     "instructions": "AGENTS.md",
     "skills": [
       "skills"
-    ]
+    ],
+    "env": {
+      "LAB_DSH_DIR": "${dsh}"
+    }
   },
   "toolchain": {
     "setup": "toolchain/setup.sh",
     "doctor": "toolchain/doctor.sh"
   },
   "viewer": {
-    "use": "autonomous/web-viewer",
+    "command": "toolchain/viewer.sh",
     "artifactExtensions": [
       ".html"
     ],
-    "url": "http://127.0.0.1:${port}/?file=${artifact}"
+    "url": "http://127.0.0.1:${port}/"
   },
   "verdict": ".harness/verdict.json"
 }

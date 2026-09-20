@@ -1,0 +1,11 @@
+{
+  "name": "signal-build-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "esbuild": "0.27.2",
+    "playwright-core": "1.63.0",
+    "ml-matrix": "6.15.0",
+    "jstat": "1.9.6"
+  }
+}

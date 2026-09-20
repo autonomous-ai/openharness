@@ -1,0 +1,8 @@
+[
+  {"id": "autonomous-circuit", "image": "six-key-macropad.jpg"},
+  {"id": "text-to-cad", "image": "planetary-gear-set.jpg"},
+  {"id": "mujoco", "image": "g1-humanoid-hello.jpg"},
+  {"id": "blender", "image": "cozy-reading-nook.jpg"},
+  {"id": "godogen", "image": "neon-drift.jpg"},
+  {"id": "manim", "image": "fourier-knight.jpg"}
+]

@@ -26,6 +26,7 @@
       <div class="stat"><label>cost so far</label><span id="sCost">$0</span></div>
     </div>
     <div class="controls">
+      <button id="editBtn" title="Change what to collect">Change the job</button>
       <button id="startBtn" class="primary">Start</button>
       <button id="stopBtn" class="hidden">Stop</button>
       <button id="downloadBtn" title="Every row Jev collected, with its confidence">Download results.csv</button>
@@ -43,8 +44,38 @@
       <div id="screenWrap" class="screen">
         <img id="screen" alt="">
         <div id="screenIdle" class="screen-idle">
-          <b>A real Chrome, driven by Jev</b>
-          <span id="screenIdleSub">Press Start. A browser window opens and Jev reads real pages: one call per page judges every link on it and pulls every field at once.</span>
+          <form id="askForm" class="ask">
+            <div class="ask-head"><b>What do you want off the web?</b><span>A site and a sentence is enough. Jev finds the right page, works out the columns in about a second, and goes.</span></div>
+            <label class="ask-row"><span>Start on</span>
+              <input id="askStart" type="text" spellcheck="false" autocomplete="off" placeholder="books.toscrape.com">
+            </label>
+            <label class="ask-row"><span>What you want</span>
+              <input id="askWant" type="text" spellcheck="false" autocomplete="off" placeholder="travel books, with the price and whether they are in stock">
+            </label>
+            <div class="ask-go">
+              <button type="button" id="askMore" class="more" aria-expanded="false">More ▾</button>
+              <button type="button" id="askDemo" title="Walk the small made-up site this harness serves on your machine">Try the practice site</button>
+              <button type="submit" class="primary" id="askSubmit">Go</button>
+            </div>
+            <div id="askExtra" class="ask-extra hidden">
+              <label class="ask-row"><span>Search for</span>
+                <input id="askSearch" type="text" spellcheck="false" autocomplete="off" placeholder="words to type into the site's own search box">
+              </label>
+              <label class="ask-row"><span>Each one is</span>
+                <input id="askItem" type="text" spellcheck="false" autocomplete="off" placeholder="Jev works this out from the page">
+              </label>
+              <label class="ask-row tall"><span>Columns<i>one per line</i></span>
+                <textarea id="askColumns" spellcheck="false" placeholder="Jev picks these off the page. Name them here to decide yourself:&#10;the title&#10;the price&#10;Is it in stock?"></textarea>
+              </label>
+              <label class="ask-row"><span>Only keep</span>
+                <input id="askKeep" type="text" spellcheck="false" autocomplete="off" placeholder="only the ones under £30">
+              </label>
+              <label class="ask-row"><span>How many</span>
+                <span class="ask-n">at most <input id="askMax" type="number" min="1" max="500" value="25"> of them</span>
+              </label>
+            </div>
+            <div class="ask-msg" id="askMsg"></div>
+          </form>
           <div class="screen-note" id="chromeNote"></div>
         </div>
       </div>

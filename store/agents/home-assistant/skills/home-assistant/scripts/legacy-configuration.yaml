@@ -1,0 +1,3 @@
+# Retired example configuration from the subset preview. Not used by the native lab.
+# Do not replace an existing installation's configuration.yaml with this file.
+automation: !include automations.yaml

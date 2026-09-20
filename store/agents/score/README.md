@@ -23,10 +23,12 @@ flute revision that leaves the piano MIDI unchanged.
 
 ## First run
 
-Install `autonomous/score` from the Harness Store and install
-[LilyPond](https://lilypond.org/download.html) separately (tested 2.26.0).
-Set `LILYPOND_BIN` if it is not on PATH. The managed helper finds Node 20+;
-no global npm packages or audio service are needed.
+Install `autonomous/score` from the Harness Store. Setup finds an existing LilyPond 2.24.3+
+or downloads the official, checksummed 2.26.0 release on Intel/Apple Silicon macOS and
+x86-64 Linux. The managed copy stays under `~/.harness/runtime/score/`; no Homebrew,
+administrator password or shell configuration is needed. Builds find it automatically.
+`LILYPOND_BIN` remains available for a custom installation. Node 20+ is supplied by
+Harness's runtime helper; no global npm packages or audio service are needed.
 
 Describe the music you want. The agent edits `ensemble.json` (brief and limits)
 and `score.ly` (concert-pitch music), then runs:

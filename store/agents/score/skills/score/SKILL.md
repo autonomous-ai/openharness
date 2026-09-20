@@ -60,8 +60,9 @@ Offer concrete revisions in the user's language (“make the ending warmer,”
 
 ## Boundaries
 
-Requires LilyPond (tested 2.26.0) and Node 20+. `LILYPOND_BIN` overrides the
-binary. Only compile trusted input: LilyPond can execute Scheme and read local
+Setup installs LilyPond 2.26.0 when needed on supported Macs/Linux x86-64; the builder
+finds that managed runtime automatically. Node 20+ comes from the runtime helper.
+`LILYPOND_BIN` overrides the binary. Only compile trusted input: LilyPond can execute Scheme and read local
 files. The source allowlist makes delivery explicit; it is not a Scheme sandbox.
 Do not add unrelated files, credentials or recordings to the portable project.
 

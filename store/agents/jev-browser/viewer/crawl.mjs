@@ -8,7 +8,7 @@
 // On an item page the same single call pulls every field: each field is a choice over the numbered
 // text blocks the reader found, so the answer IS a piece of text from the page.
 import { jev } from '../toolchain/jev.mjs'
-import { readPage, pageState, blockOptions, blockText, canonical } from './page.mjs'
+import { readPage, pageState, blockOptions, blockText, canonical, wallReason, findSearchBox } from './page.mjs'
 
 export const LIMITS = { fields: 12, maxPages: 500, maxItems: 2000, linksPerCall: 120 }
 
@@ -36,7 +36,8 @@ export function normalizeJob(raw) {
     if (type === 'score' && levels.length < 2) { errors.push(`field "${id}" is a score, so it needs at least two levels`); continue }
     fields.push({ id, ask, type, levels, name: short(typeof f === 'object' ? f?.name : '', 40) || id })
   }
-  if (!fields.length) errors.push('no "fields": say what to collect for each item, in plain words')
+  // No fields is not a mistake any more: the pane reads the page and proposes them.
+  const wants = short(j.want, 300)
   let hosts = []
   try { hosts = [new URL(start).hostname.toLowerCase()] } catch { /* the start address is already reported */ }
   for (const h of Array.isArray(j.alsoVisit) ? j.alsoVisit : []) { const s = short(h, 200).toLowerCase().replace(/^https?:\/\//, '').split('/')[0]; if (s) hosts.push(s) }
@@ -44,11 +45,15 @@ export function normalizeJob(raw) {
     job: {
       task: short(j.task, 200) || `Collect ${item}`,
       start, item, fields,
+      search: short(j.search, 120),
+      want: wants,
       keep: short(j.keep, 300),
       maxPages: clamp(j.maxPages, 1, LIMITS.maxPages, 25),
       maxItems: clamp(j.maxItems, 1, LIMITS.maxItems, 60),
       sameSiteOnly: j.sameSiteOnly !== false,
       show: j.show !== false,
+      // A job that changes starts itself. Nobody should watch an idle screen waiting to press a button.
+      autoStart: j.autoStart !== false,
       hosts: [...new Set(hosts)],
     },
     errors,
@@ -80,7 +85,8 @@ export function itemQuestions(page, job) {
   for (const f of job.fields) {
     if (f.type === 'yesno') q[`f_${f.id}`] = jev.noul(`About ${job.item} on this page: ${f.ask}`)
     else if (f.type === 'score') q[`f_${f.id}`] = jev.score(f.levels, `About ${job.item} on this page: ${f.ask}`)
-    else q[`f_${f.id}`] = jev.choice(options, `On this page, which piece of text is ${f.ask}? Pick the exact words from the page.`)
+    // "Number of reviews: 0" and "0" are both offered; a column wants the 0.
+    else q[`f_${f.id}`] = jev.choice(options, `On this page, which piece of text is ${f.ask}? Pick the exact words from the page, and where the page prints a label next to its value, pick the value on its own rather than the whole line.`)
   }
   if (job.keep) q.keep = jev.noul(`The person wants only the ones where: ${job.keep}. Does ${job.item} on this page fit that?`)
   return { questions: q, blocks: page.blocks.length }
@@ -114,6 +120,201 @@ export function pickLinks(links, answers, { threshold = 0.5 } = {}) {
   return { items, next, judged: links.length }
 }
 
+
+
+// ---- finding the page to work from ---------------------------------------------------------------
+/**
+ * Walk a site until the page in front of us is the one the person asked for. Every step is one Jev
+ * call: is this it, and if not, which way. Nothing is clicked; links are followed by their address,
+ * and a search box is used only when the site's own search is the obvious way in.
+ * @returns {Promise<{ url, page, steps, walled, gaveUp }>}
+ */
+export async function findThePage({ chrome, ask, start, want, search = '', maxSteps = 5, onEvent, stopped = () => false }) {
+  const say = (type, data) => { try { onEvent?.({ type, at: Date.now(), ...data }) } catch { /* the pane may be gone */ } }
+  let url = start, page = null, searched = false
+  for (let step = 0; step < maxSteps && !stopped(); step++) {
+    say('going', { url, what: step === 0 ? 'the page you gave' : 'looking for the right page' })
+    await chrome.go(url)
+    page = await readPage(chrome)
+    const wall = wallReason(page)
+    if (wall) return { url, page, steps: step + 1, walled: `${new URL(page.url).hostname}: ${wall}` }
+
+    const links = page.links.slice(0, LIMITS.linksPerCall)
+    const box = findSearchBox(page)
+    const asked = want || 'what the person asked for'
+    const q = {
+      here: jev.noul(`The person asked for: "${asked}". Does THIS page already show a list of those, with a link to each one?`,
+        { true: 'this page lists them', false: 'this page is a front page, a menu, an article, or about something else' }),
+      one: jev.noul(`The person asked for: "${asked}". Is THIS page one single one of those, in detail, rather than a list of them?`),
+    }
+    for (const l of links) {
+      q[`g${l.n}`] = jev.noul(`The person asked for: "${asked}". This page has a link reading "${l.label}" going to ${l.path}. Would following it get closer to what they asked for?`,
+        { true: 'it leads towards what they asked for', false: 'it leads away: an unrelated section, a login, a legal page, or an advert' })
+      // The difference between "Travel" and "It's Only the Himalayas": one is a shelf, one is a book.
+      q[`s${l.n}`] = jev.noul(`Is the link "${l.label}" (${l.path}) a section, category or search that would show MANY of them, rather than one single one?`,
+        { true: 'it opens a page listing many of them', false: 'it opens one single one, in detail' })
+    }
+    if (box && !searched && search) q.usesearch = jev.noul(`This page has a search box. The person asked for: "${asked}". Is searching this site the best way to find them, rather than following a link?`)
+    const res = await ask({ state: pageState(page, { what_they_want: asked }), questions: q })
+
+    const here = res.answers.here?.noul ?? 0
+    const one = res.answers.one?.noul ?? 0
+    const ranked = links.map((l) => ({ l, p: res.answers[`g${l.n}`]?.noul ?? 0, section: res.answers[`s${l.n}`]?.noul ?? 0 })).sort((a, b) => b.p - a.p)
+    const best = ranked[0]
+    // On a page that already lists them, only a NARROWER section is worth following. Following an
+    // individual one from here lands on a single product with nothing left to collect.
+    const narrower = ranked.find((r) => r.p >= 0.7 && r.section >= 0.6)
+    say('judged', { url: page.url, judged: links.length, found: 0, latencyMs: res.latencyMs,
+      links: ranked.map(({ l, p }) => ({ n: l.n, label: l.label, p })).slice(0, 40) })
+    // A front page of a bookshop IS a list of books, so "does this page show them" says yes and the
+    // walk stops one click short of the travel section. A link the person's own words point
+    // straight at beats a page that merely qualifies.
+    const obvious = !!narrower && here < 0.85
+    if ((here >= 0.5 && !obvious) || one >= 0.6) { say('arrived', { url: page.url, listing: here >= 0.5, steps: step + 1 }); return { url: page.url, page, steps: step + 1, isOne: one >= 0.6 && here < 0.5 } }
+
+    if (search && box && !searched && (res.answers.usesearch?.noul ?? 0) >= 0.5) {
+      say('searching', { words: search })
+      searched = true
+      await chrome.search(box.css, search)
+      url = await chrome.url()
+      continue
+    }
+    const go = here >= 0.5 ? narrower : (narrower ?? best)
+    if (!go || go.p < 0.5) {
+      // Nothing points onward. If this page at least shows the right sort of thing, work from it.
+      if (here >= 0.5) { say('arrived', { url: page.url, listing: true, steps: step + 1 }); return { url: page.url, page, steps: step + 1 } }
+      return { url: page.url, page, steps: step + 1, gaveUp: 'no link on this page looked like the way to it' }
+    }
+    say('step', { label: go.l.label, p: go.p })
+    url = go.l.url
+  }
+  return { url, page, steps: maxSteps, gaveUp: `it was still looking after ${maxSteps} pages` }
+}
+
+// ---- proposing a job ----------------------------------------------------------------------------
+/** What a page can be listing. A fixed list, so Jev only has to point at one. */
+export const THINGS = {
+  product: 'things for sale, with prices', job: 'job openings or roles', article: 'articles, posts or news stories',
+  issue: 'bug reports, tickets or issues', property: 'homes or places to rent or buy', person: 'people or profiles',
+  paper: 'research papers or publications', repo: 'code projects or repositories', event: 'events with dates',
+  listing: 'listings of some other kind', other: 'this page does not list many of one thing',
+}
+const ITEM_WORDS = {
+  product: 'a product for sale', job: 'a job opening', article: 'an article', issue: 'an issue or bug report',
+  property: 'a property', person: 'a person', paper: 'a research paper', repo: 'a code project',
+  event: 'an event', listing: 'one of the listings', other: 'one of the things on this page',
+}
+/** What kind of value a piece of text is, and what to ask for it on every page. */
+export const VALUE_KINDS = {
+  name: 'the name or title of it', price: 'the price or cost', date: 'the date', quantity: 'how many there are',
+  code: 'the reference, product code or number', rating: 'the rating or score', place: 'where it is',
+  status: 'its current status', who: 'the person or company behind it', kind: 'what type it is',
+  detail: 'a longer description of it', other: 'none of these',
+}
+
+/**
+ * Read one list page and one of its things, and propose the whole job.
+ * @param {object} o
+ * @param {object} o.chrome
+ * @param {function} o.ask
+ * @param {string} o.start   the page to read
+ * @param {string} [o.want]  what the person said they want, in their own words. Never parsed: it is
+ *                           shown to Jev as context while it decides what is worth a column.
+ * @param {string} [o.search]
+ * @returns {Promise<{ kind, item, columns, sample, from, walled }>}
+ */
+export async function proposeJob({ chrome, ask, start, want = '', search = '', page = null, onEvent }) {
+  const say = (type, data) => { try { onEvent?.({ type, at: Date.now(), ...data }) } catch { /* the pane may be gone */ } }
+  let list = page
+  if (!list) { say('going', { url: start, what: 'the page you gave' }); await chrome.go(start); list = await readPage(chrome) }
+  if (search && !page) {
+    const box = findSearchBox(list)
+    if (box) { say('searching', { words: search }); await chrome.search(box.css, search); list = await readPage(chrome) }
+  }
+  const wall = wallReason(list)
+  if (wall) return { walled: `${new URL(list.url).hostname}: ${wall}`, columns: [] }
+
+  // CALL 1 — what does this page list, and which of its links are the things?
+  const wanted = want ? ` The person asked for: "${want}".` : ''
+  const links = list.links.slice(0, LIMITS.linksPerCall)
+  const q1 = {
+    kind: jev.choice(THINGS, `This page may list many of one kind of thing.${wanted} What is it listing?`),
+    single: jev.noul(`${wanted} Is THIS page one single one of those, shown in detail, rather than a list of many of them?`),
+  }
+  for (const l of links) {
+    q1[`l${l.n}`] = jev.noul(`"${l.label}" is the text of a link on this page, pointing at ${l.path}. Is "${l.label}" the title of one of the things this page lists, rather than part of the site's own menu?`)
+  }
+  const r1 = await ask({ state: pageState(list, want ? { what_they_want: want } : {}) , questions: q1 })
+  const kind = r1.answers.kind?.choice ?? 'listing'
+  const items = links.map((l) => ({ ...l, p: r1.answers[`l${l.n}`]?.noul ?? 0 })).filter((l) => l.p >= 0.5)
+  // To learn what a thing's page looks like, open the one Jev is surest about, not the first on the
+  // page: the first is often a menu link that only just scraped over the line.
+  const surest = [...items].sort((a, b) => b.p - a.p)[0]
+  const item = ITEM_WORDS[kind] ?? ITEM_WORDS.other
+  say('judged', { url: list.url, kind, judged: links.length, found: items.length, latencyMs: r1.latencyMs, links: links.map((l) => ({ n: l.n, label: l.label, p: r1.answers[`l${l.n}`]?.noul ?? 0 })).sort((a, b) => b.p - a.p).slice(0, 40) })
+  const single = (r1.answers.single?.noul ?? 0) >= 0.6
+  if (!items.length && !single) return { kind, item, columns: [], from: list.url, none: 'no link on this page looks like one of the things' }
+
+  // CALL 2 — which pieces of text deserve a column. Usually on one of the things this page links
+  // to; but a walk can land ON one of them, and then this page is the one to read.
+  let one = list, onlyThis = true
+  if (items.length) {
+    onlyThis = false
+    say('going', { url: surest.url, what: `one ${item}, to see what it says` })
+    await chrome.go(surest.url)
+    one = await readPage(chrome)
+    const itemWall = wallReason(one)
+    if (itemWall) return { kind, item, columns: [], from: one.url, walled: `${new URL(one.url).hostname}: ${itemWall}` }
+  } else say('judged', { url: list.url, kind, judged: 0, found: 1, latencyMs: r1.latencyMs, links: [] })
+  const q2 = {}
+  for (const b of one.blocks) {
+    const text = b.text.slice(0, 140)
+    // "A fact about this one" has to exclude the other things a page shows alongside: a page of one
+    // product carries a "recently viewed" strip full of other products' names and prices, and those
+    // are facts about something, just not about this.
+    q2[`w${b.n}`] = jev.noul(`This page is about ONE ${item}: "${one.title.slice(0, 80)}".${wanted} The page also shows the text "${text}". Is that a fact about THAT ONE thing, worth its own column in a spreadsheet?`,
+      { true: 'it is a fact about the one this page is about, such as its name, price, date, code or status', false: 'it is a heading, a button, a menu, boilerplate, the same words on every page, or a fact about a DIFFERENT thing shown alongside such as a related or recently viewed one' })
+    q2[`k${b.n}`] = jev.choice(VALUE_KINDS, `On the page of ${item}, the text "${text}" is what kind of value?`)
+  }
+  const r2 = await ask({ state: pageState(one, want ? { what_they_want: want } : {}), questions: q2 })
+
+  // A page prints the same value more than once: "£45.17", "Price (excl. tax): £45.17",
+  // "Price (incl. tax): £45.17". Three columns of the same number is not a spreadsheet, and it
+  // makes Jev choose between identical texts on every page, which is where the low confidences
+  // come from. Group by the value each column would actually pull, and keep one of each.
+  const groups = new Map()
+  for (const b of one.blocks) {
+    const worth = r2.answers[`w${b.n}`]?.noul ?? 0
+    if (worth < 0.6) continue
+    const label = b.text.includes(': ') ? b.text.slice(0, b.text.indexOf(': ')).trim() : ''
+    const vk = r2.answers[`k${b.n}`]?.choice ?? 'other'
+    if (!label && vk === 'other') continue          // nothing to call it, and nothing it is
+    const value = (label ? b.text.slice(label.length + 2) : b.text).trim()
+    const key = value.toLowerCase().replace(/[^a-z0-9]+/g, '')
+    if (!key) continue
+    const entry = groups.get(key) ?? { best: null, label: '', kind: vk }
+    if (label && !entry.label) entry.label = label
+    if (!entry.best || worth > entry.best.worth) entry.best = { text: b.text, worth, label, vk, value }
+    groups.set(key, entry)
+  }
+  const seen = new Set()
+  const columns = []
+  for (const { best, label } of groups.values()) {
+    // The name is the page's own label where there is one, so the spreadsheet reads like the site.
+    const name = (best.label || label || best.vk).slice(0, 40)
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    // Ask for the bare value, not the label-and-value line: a column should hold £45.17, not
+    // "Price (excl. tax): £45.17".
+    const ask = best.label ? `the ${best.label}` : VALUE_KINDS[best.vk]
+    columns.push({ id, name, ask, sample: best.value.slice(0, 80), p: Math.round(best.worth * 100) / 100, kind: best.vk })
+  }
+  columns.sort((a, b) => b.p - a.p)
+  say('proposed', { columns: columns.length, latencyMs: r1.latencyMs + r2.latencyMs })
+  return { kind, item, columns: columns.slice(0, LIMITS.fields), from: one.url, onlyThis, ms: Math.round(r1.latencyMs + r2.latencyMs) }
+}
+
 /**
  * Run a job. Every step is reported through `onEvent` so the pane can show it live.
  * @param {object} o
@@ -141,7 +342,24 @@ export async function runJob({ chrome, job, ask, onEvent, stopped = () => false 
     try {
       await chrome.go(listUrl)
       page = await readPage(chrome)
+      // "amazon.com" plus "fencing gloves" is how a person says it. Type it into the site's own box.
+      if (listPages === 1 && job.search) {
+        const box = findSearchBox(page)
+        if (!box) say('trouble', { url: page.url, message: `no search box was found on this page, so "${job.search}" was not searched for. Put the site's own search address in "start" instead.` })
+        else {
+          say('searching', { words: job.search })
+          await chrome.search(box.css, job.search)
+          page = await readPage(chrome)
+        }
+      }
     } catch (e) { out.errors.push({ url: listUrl, message: String(e.message ?? e) }); say('trouble', { url: listUrl, message: String(e.message ?? e) }); break }
+    const wall = wallReason(page)
+    if (wall) {
+      out.walled = `${new URL(page.url).hostname}: ${wall}`
+      out.errors.push({ url: page.url, message: out.walled })
+      say('walled', { url: page.url, message: out.walled })
+      break
+    }
     out.pagesRead++
     visited.add(canonical(listUrl))
     say('read', { url: page.url, title: page.title, links: page.links.length, blocks: page.blocks.length })
@@ -171,6 +389,15 @@ export async function runJob({ chrome, job, ask, onEvent, stopped = () => false 
       } catch (e) { out.errors.push({ url: link.url, message: String(e.message ?? e) }); say('trouble', { url: link.url, message: String(e.message ?? e) }); continue }
       out.pagesRead++
       say('read', { url: itemPage.url, title: itemPage.title, links: itemPage.links.length, blocks: itemPage.blocks.length })
+      // A site can serve its list happily and then challenge every page under it. Without this the
+      // challenge page's words become a blank row and the run looks like it worked.
+      const itemWall = wallReason(itemPage)
+      if (itemWall) {
+        out.walled = `${new URL(itemPage.url).hostname}: ${itemWall}`
+        out.errors.push({ url: itemPage.url, message: out.walled })
+        say('walled', { url: itemPage.url, message: out.walled })
+        break
+      }
       const row = await collect(itemPage, link.label)
       if (row) say('row', { row, of: out.rows.length })
     }

@@ -1,3 +1,0 @@
-# Optional Home Assistant check_config entrypoint. This is a local authoring project.
-# Do not replace an existing installation's configuration.yaml with this file.
-automation: !include automations.yaml

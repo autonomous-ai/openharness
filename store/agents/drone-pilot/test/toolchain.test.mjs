@@ -28,11 +28,13 @@ test('every script the manifest names is in the folder and executable', () => {
   }
 })
 
-test('setup installs nothing and succeeds quietly', () => {
-  assert.deepEqual(run(manifest.toolchain.setup), { code: 0, stdout: '', stderr: '' })
+test('setup uses pinned local dependencies and resolves Node without asking for a system install', () => {
+  const packages=JSON.parse(readFileSync(join(here,'toolchain/package.json'),'utf8'));
+  assert.deepEqual(packages.dependencies,{'clipper-lib':'6.4.2','esbuild':'0.27.2','playwright-core':'1.63.0'});
+  assert.match(readFileSync(join(here,'toolchain/install.sh'),'utf8'),/harness_node 20/);
 })
 
-test('doctor says ok when sh is on PATH', () => {
+test('doctor verifies the actual Node, build tools and local browser', () => {
   assert.equal(run(manifest.toolchain.doctor).code, 0)
 })
 
@@ -43,8 +45,8 @@ test('init lays out a workspace and seeds a not-ready verdict', () => {
   assert.equal(readFileSync(join(ws, '.harness-initialized'), 'utf8'), `initialized by ${manifest.id}\n`)
 })
 
-test('the manifest names a viewer package and an HTML artifact', () => {
-  assert.equal(manifest.viewer.use, 'autonomous/web-viewer')
+test('the manifest names its source-saving viewer and an HTML artifact', () => {
+  assert.equal(manifest.viewer.command, 'toolchain/viewer.sh')
   assert.deepEqual(manifest.viewer.artifactExtensions, ['.html'])
 })
 
@@ -60,7 +62,8 @@ test('seed-verdict reflects whether a flight exists', () => {
 })
 
 
-test('the manifest routes the actual nested artifact through the shared viewer', () => {
-  assert.equal(manifest.viewer.url, 'http://127.0.0.1:${port}/?file=${artifact}')
+test('the manifest opens the field studio and provides its installed tools to the agent', () => {
+  assert.equal(manifest.viewer.url, 'http://127.0.0.1:${port}/')
+  assert.deepEqual(manifest.agent.env,{DRONE_DSH_DIR:'${dsh}'})
   assert.ok(manifest.workspace.marker.endsWith('/index.html'))
 })

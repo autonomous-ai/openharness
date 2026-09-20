@@ -1,16 +1,28 @@
 {
-  "listed": false,
+  "listed": true,
   "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/drone-pilot",
   "license": "MIT",
-  "tagline": "Fly a seeded canyon course in first person",
+  "tagline": "Turn your site into a survey plan you can inspect and keep",
   "screenshots": [
-    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/drone-pilot/starter.jpg"
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/drone-pilot/starter.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/drone-pilot/works-yard.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/drone-pilot/estuary-evidence.jpg"
   ],
   "examples": [
     {
-      "prompt": "Design a slalom course over a canyon floor. Make the autopilot fly a clean lap, then give me manual controls and a trace to compare against it.",
-      "caption": "Vector · interactive offline starter",
+      "prompt": "Use my orchard boundary GeoJSON and camera measurements to plan a photo survey. Keep the pond excluded, show the ground sampling and each camera footprint, and divide the work into sorties that include a return. Give me editable files and a field report.",
+      "caption": "Alder Orchard \u00b7 editable capture plan; example geometry",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/drone-pilot/starter.jpg"
+    },
+    {
+      "prompt": "This work site is L-shaped and has two equipment areas to avoid. Compare capture directions and revise the equipment exclusion without moving the approved storage compound. Export a GIS layer and capture table I can review.",
+      "caption": "Works Yard \u00b7 original boundary and exclusion geometry",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/drone-pilot/works-yard.jpg"
+    },
+    {
+      "prompt": "Compare this recorded CSV with the revised survey plan. I will map the time, altitude units and camera-event columns. Show missing samples and estimated event footprints, and retain my original data with the report.",
+      "caption": "Estuary Plots \u00b7 evidence workflow using a synthetic CSV fixture",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/drone-pilot/estuary-evidence.jpg"
     }
   ]
 }

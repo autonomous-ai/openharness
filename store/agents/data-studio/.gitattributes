@@ -1,0 +1,8 @@
+# Preserve byte-pinned upstream assets exactly, including upstream whitespace.
+template/vendor/sqlite3.js -text -whitespace linguist-vendored
+template/vendor/sqlite3.wasm -text linguist-vendored
+template/vendor/EMSCRIPTEN-LICENSE.txt -text -whitespace linguist-vendored
+template/vendor/MUSL-COPYRIGHT.txt -text -whitespace linguist-vendored
+# CSV fixtures intentionally exercise CRLF and must retain exact source bytes.
+template/sources/*.csv -text whitespace=cr-at-eol
+test/fixtures/**/sources/*.csv -text whitespace=cr-at-eol

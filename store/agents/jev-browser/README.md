@@ -1,8 +1,39 @@
 # Jev Browser
 
-**Point it at a web page. Get a spreadsheet.** Say what one "thing" is on that page and which
-columns you want, and a real Chrome walks the site: it opens every thing, pulls out your columns,
-and writes `results.csv` while you watch. No code, no selectors, no copy and paste.
+**Point it at a web page. Get a spreadsheet.** Type an address, say what one "thing" on it is, and
+list the columns you want. A real Chrome opens, walks the site, and writes `results.csv` while you
+watch. No code, no selectors, no copy and paste.
+
+## How you use it
+
+A site and a sentence is the whole job.
+
+| | |
+|---|---|
+| **Start on** | `books.toscrape.com` |
+| **What you want** | `travel books, with the price and whether they are in stock` |
+
+Press **Go**. Jev walks the site to the page you meant, reads it, works out the columns, and
+starts collecting. There is nothing else to press.
+
+**It finds its own way.** The address does not have to be the list you want. Each step is one Jev
+call: does this page already show what was asked for, and if not, which link goes towards it? On
+that example it scores the "Travel" link at 0.97 out of the 62 links on the front page, follows it,
+and works from there. Give it the exact page if you have it and it starts there instead.
+
+**Jev picks the columns, it does not write them.** It is shown every piece of text on one of the
+pages and asked, for each, whether that is a fact about this thing worth a column. The column's
+name comes from the page's own label where there is one, so a spreadsheet of books comes out with
+Price, Availability, UPC and Number of reviews on it. Your sentence is never parsed into a config;
+it is given to Jev as context while it decides what matters.
+
+Name the columns yourself if you would rather: put them in the **Columns** box, one per line. A
+line that reads like a question ("Is it in stock?") becomes a yes-or-no column, and everything else
+is taken off the page word for word.
+
+The agent on the right is for the rest: a site that fights back, a column that comes back empty,
+and reading what you collected. You do not need it to run a job. Ask it in plain words and it
+writes the same job file the form does, and that starts on its own too.
 
 **Every value is text taken off the page.** Jev, TypeSafe's System One model, never writes words. It
 is shown the numbered pieces of text that really are on the page and it picks one. So a cell holds
@@ -34,17 +65,17 @@ The refusals sit next to the only code that can touch a page, so nothing above t
   in yourself in the window. The profile is kept in your project folder, so the next run is already
   signed in.
 - **It stays on the sites your job names**, on http and https only, and downloads are refused.
+- **A search box is the one control it will ever use**, because searching asks a site a question
+  rather than buying, sending or deleting anything.
 
 Some sites say in their terms that they do not want to be read this way, and some sell an API for
 the same data. That is your call to make, and the harness will not go around a block or a login.
 
 ## Try it in ten seconds
 
-The harness serves its own small job board on your machine, so there is something honest to walk
-before you point it anywhere real. Press **Start**. Only the content of that site is made up: the
-HTTP, the links, the pagination and the browser are all real.
-
-Then change `start` in `browse.json` to a real address.
+Press **Try the practice site**. The harness serves its own small job board on your machine, with
+real HTTP, real links, real pagination and a real browser. Only the content of that site is made
+up. It even has a search box, so you can try the "search for" line on it.
 
 ## The job, which is also the recipe
 
@@ -63,7 +94,9 @@ Then change `start` in `browse.json` to a real address.
 }
 ```
 
-Run it again next month and you get next month's answer. That file is the whole recipe.
+Run it again next month and you get next month's answer. That file is the whole recipe. Saving it
+starts a run, so the agent writing it for you has the same effect as pressing Go. Set
+`"autoStart": false` if you would rather press the button yourself.
 
 ## What you get
 
@@ -81,6 +114,11 @@ On 2026-09-20 with live Jev (`typesafe/jev-1.13`) through OpenRouter.
 | The built-in job board, 36 roles | 24 | 33 s | $0.0023 | 144 of 144 cells exactly matched the site's own data, no repeats, nothing skipped |
 | `books.toscrape.com`, a public sandbox | 8 | 21 s | $0.0018 | every title, price, stock count and UPC code right |
 
+Working out the job from scratch, on the same site: two Jev calls, 61 questions then 33, **1.2
+seconds** to decide the page lists products and to propose columns named Price, Availability, UPC
+and Number of reviews. No language model is involved at any point, in setting the job up or in
+running it.
+
 The product codes matter: `a22124811bfa8350` is not something a model could write from memory. It
 came off the page, which is the whole point. Small runs are a sanity check, not a benchmark.
 
@@ -90,6 +128,47 @@ The pane runs on an offline stand-in that matches words. It shows the plumbing a
 about being a stand-in, but its rows are not worth acting on. Paste an OpenRouter or TypeSafe key
 into the **Jev · live mind** panel in the pane. It is saved on your machine in
 `~/.config/typesafe/credentials` and checked with one tiny call.
+
+## When the pane does nothing
+
+One command runs the whole chain — Chrome, a page, the reader, one Jev call — and prints `ok` or
+`FAIL` for each link, so you find out which one broke instead of guessing:
+
+```
+bash toolchain/doctor.sh                  the built-in site, about five seconds
+bash toolchain/doctor.sh https://…        that site instead
+bash toolchain/doctor.sh --show           a visible window, the way the pane runs it
+```
+
+The three that actually happen:
+
+- **out of credit.** Every call comes back 402 and nothing can be answered. Top the account up
+  with your provider. The pane says so in as many words now.
+- **a browser left open.** Chrome will not open a second window on this harness's profile; it
+  hands the request to the open one and quits. Close that window and press Go again.
+- **the site says no.** Some sites serve a challenge page to any automated browser. It is named in
+  the pane rather than collected from. Try another site.
+
+## Which sites let it read
+
+Checked on 2026-09-20, one page each, with the headless browser the tests use.
+
+| Reads | Blocks |
+|---|---|
+| news.ycombinator.com, arxiv.org, gov.uk, data.gov.uk, github.com, weworkremotely.com, shop.bbc.com, books.toscrape.com | amazon.com, en.wikipedia.org, rightmove.co.uk, and three fencing retailers (absolutefencinggear.com, blue-gauntlet.com, leonpaul.com) |
+
+The pattern is not "big versus small". It is whether the site runs bot protection. Cloudflare's
+"Just a moment…", Amazon's "Sorry! Something went wrong", Rightmove's "Client Challenge" and
+Wikipedia's robot-policy page are all the same answer: no. Plenty of small specialist shops sit
+behind Cloudflare, and a large shop like shop.bbc.com does not.
+
+Public, reference, government, open-data, code, papers, forums and job boards mostly read. Consumer
+retail and property mostly do not. There is no way to know but to try, which takes about ten
+seconds: point it at the page and the pane tells you straight away.
+
+When a site says no, that is the end of it. The harness names the site and stops. It will not
+change what it looks like to get past a challenge, and neither should the agent. Where a site sells
+an API for the same data, that is the route they want you to use.
 
 ## The honest limit
 
@@ -110,6 +189,7 @@ jev-browser/
     chrome.mjs               drives a real Chrome over the DevTools protocol, and holds every refusal
     jev.mjs                  the Jev client (TypeSafe, Cloudflare or OpenRouter, or the stand-in)
     check.mjs                validates browse.json
+    selftest.mjs             runs the whole chain and says which link broke
     viewer.sh setup.sh doctor.sh init-workspace.sh
   viewer/
     viewer.mjs               the server: the job, the browser, the run, results.csv, the verdict

@@ -28,8 +28,10 @@ test('every script the manifest names is in the folder and executable', () => {
   }
 })
 
-test('setup installs nothing and succeeds quietly', () => {
-  assert.deepEqual(run(manifest.toolchain.setup), { code: 0, stdout: '', stderr: '' })
+test('setup pins local tools and resolves its managed Node runtime', () => {
+  const pkg=JSON.parse(readFileSync(join(here,'toolchain/package.json'),'utf8'));
+  assert.deepEqual(pkg.dependencies,{'esbuild':'0.27.2','playwright-core':'1.63.0'});
+  assert.match(readFileSync(join(here,'toolchain/install.sh'),'utf8'),/harness_node 20/);
 })
 
 test('doctor says ok when sh is on PATH', () => {
@@ -44,7 +46,7 @@ test('init lays out a workspace and seeds a not-ready verdict', () => {
 })
 
 test('the manifest names a viewer package and an HTML artifact', () => {
-  assert.equal(manifest.viewer.use, 'autonomous/web-viewer')
+  assert.equal(manifest.viewer.command, 'toolchain/viewer.sh')
   assert.deepEqual(manifest.viewer.artifactExtensions, ['.html'])
 })
 
@@ -61,6 +63,7 @@ test('seed-verdict reflects whether a game exists', () => {
 
 
 test('the manifest routes the actual nested artifact through the shared viewer', () => {
-  assert.equal(manifest.viewer.url, 'http://127.0.0.1:${port}/?file=${artifact}')
+  assert.equal(manifest.viewer.url, 'http://127.0.0.1:${port}/')
+  assert.deepEqual(manifest.agent.env,{GAME_DSH_DIR:'${dsh}'})
   assert.ok(manifest.workspace.marker.endsWith('/index.html'))
 })

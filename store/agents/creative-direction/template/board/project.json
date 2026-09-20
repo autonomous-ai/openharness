@@ -1,0 +1,1303 @@
+{
+  "spec": "forme/1",
+  "id": "morrow-bakery",
+  "title": "Morrow — neighborhood bakery",
+  "brief": "A fictional independent bakery is opening its first neighborhood shop. Build a generous, recognizable identity that works on bread bags, opening posters, the menu and the web. It should feel like a daily ritual, never like a luxury patisserie. All copy and illustrations in this fixture were authored for testing.",
+  "copy": {
+    "name": "Morrow",
+    "category": "A neighborhood bakery",
+    "tagline": "A little better, every morning.",
+    "headline": "Good bread.\nBetter mornings.",
+    "description": "Slow dough, early starts, and something warm for the walk home. Bread and pastries, made here every morning.",
+    "offer": "Opening weekend\n26–27 September",
+    "address": "14 Orchard Lane",
+    "contact": "hello@morrow.example",
+    "hours": "Tuesday–Sunday · 7am–3pm",
+    "note": "Slow dough. Warm hands.\nYour daily loaf.",
+    "item-1": "Country sourdough",
+    "price-1": "$7",
+    "item-2": "Seeded rye",
+    "price-2": "$8",
+    "item-3": "Morning bun",
+    "price-3": "$4",
+    "item-4": "Brown butter cookie",
+    "price-4": "$3"
+  },
+  "fonts": [
+    {
+      "family": "DM Sans",
+      "file": "fonts/DM Sans.ttf",
+      "licenseFile": "fonts/DM Sans-OFL.txt"
+    },
+    {
+      "family": "Fraunces",
+      "file": "fonts/Fraunces.ttf",
+      "licenseFile": "fonts/Fraunces-OFL.txt"
+    }
+  ],
+  "assets": [],
+  "active": "morning-ritual",
+  "notes": "Voice: warm, direct and neighborly. Describe what we make without invented heritage or health claims.\nThe sunrise and doorway share one silhouette: a daily beginning and an open welcome.\nUse ink on paper for longer copy. Reserve the yellow field for moments of recognition. Keep a clear space around the mark equal to one quarter of its height.\nThe shop, address and contact are fictional fixture material. Replace them before a real launch.",
+  "website": {
+    "title": "{{name}} — {{category}}",
+    "cta": "Say hello",
+    "href": "mailto:hello@morrow.example",
+    "sections": [
+      {
+        "title": "A loaf worth slowing down for.",
+        "text": "Flour, water, salt, time. Our bread starts the day before you do. Pick up your daily loaf, stay for a pastry, and make yourself at home."
+      },
+      {
+        "title": "Come by in the morning.",
+        "text": "{{address}}\n{{hours}}"
+      }
+    ]
+  },
+  "directions": [
+    {
+      "id": "morning-ritual",
+      "name": "Morning ritual",
+      "rationale": "A rising sun that also reads as an open door. Generous serif lettering, butter-yellow stock and green-black ink make an everyday bakery feel quietly unmistakable.",
+      "colors": {
+        "ink": "#24382F",
+        "paper": "#FAF7E8",
+        "accent": "#F4CA48",
+        "soft": "#DDE2D0"
+      },
+      "fonts": {
+        "display": "Fraunces",
+        "body": "DM Sans"
+      },
+      "symbols": {
+        "mark": {
+          "viewBox": [
+            0,
+            0,
+            100,
+            100
+          ],
+          "paths": [
+            {
+              "d": "M 16 52 A 34 34 0 0 1 84 52 L 84 84 L 16 84 Z M 29 54 L 29 72 L 71 72 L 71 54 A 21 21 0 0 0 29 54 Z",
+              "fillRule": "evenodd"
+            },
+            {
+              "d": "M 46 0 L 54 0 L 54 11 L 46 11 Z M 5 21 L 11 15 L 21 25 L 15 31 Z M 79 25 L 89 15 L 95 21 L 85 31 Z"
+            }
+          ]
+        }
+      },
+      "boards": [
+        {
+          "id": "wordmark",
+          "name": "Primary identity",
+          "width": 1600,
+          "height": 650,
+          "background": "$accent",
+          "layers": [
+            {
+              "id": "sunrise",
+              "type": "symbol",
+              "symbol": "mark",
+              "x": 98,
+              "y": 144,
+              "width": 190,
+              "height": 208,
+              "fill": "$ink"
+            },
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 342,
+              "y": 125,
+              "width": 1130,
+              "height": 263,
+              "size": 230,
+              "minSize": 100,
+              "font": "display",
+              "fill": "$ink",
+              "weight": 600,
+              "tracking": -6
+            },
+            {
+              "id": "descriptor",
+              "type": "text",
+              "text": "{{category}}",
+              "x": 355,
+              "y": 408,
+              "width": 930,
+              "height": 56,
+              "size": 28,
+              "minSize": 28,
+              "font": "body",
+              "fill": "$ink",
+              "tracking": 4
+            },
+            {
+              "id": "rule",
+              "type": "line",
+              "x": 100,
+              "y": 522,
+              "width": 1400,
+              "height": 0,
+              "stroke": "$ink",
+              "strokeWidth": 2
+            },
+            {
+              "id": "promise",
+              "type": "text",
+              "text": "{{tagline}}",
+              "x": 100,
+              "y": 550,
+              "width": 1200,
+              "height": 45,
+              "size": 25,
+              "minSize": 25,
+              "font": "body",
+              "fill": "$ink"
+            }
+          ],
+          "role": "logo"
+        },
+        {
+          "id": "bread-label",
+          "name": "Bread bag label",
+          "width": 600,
+          "height": 800,
+          "background": "$accent",
+          "layers": [
+            {
+              "id": "stamp",
+              "type": "symbol",
+              "symbol": "mark",
+              "x": 216,
+              "y": 72,
+              "width": 168,
+              "height": 178,
+              "fill": "$ink"
+            },
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 52,
+              "y": 284,
+              "width": 496,
+              "height": 120,
+              "size": 102,
+              "minSize": 48,
+              "font": "display",
+              "fill": "$ink",
+              "weight": 600,
+              "align": "center",
+              "tracking": -3
+            },
+            {
+              "id": "category",
+              "type": "text",
+              "text": "DAILY BREAD",
+              "x": 80,
+              "y": 441,
+              "width": 440,
+              "height": 45,
+              "size": 21,
+              "minSize": 21,
+              "font": "body",
+              "fill": "$ink",
+              "tracking": 5,
+              "align": "center"
+            },
+            {
+              "id": "rule",
+              "type": "line",
+              "x": 60,
+              "y": 514,
+              "width": 480,
+              "height": 0,
+              "stroke": "$ink",
+              "strokeWidth": 2
+            },
+            {
+              "id": "note",
+              "type": "text",
+              "text": "{{note}}",
+              "x": 60,
+              "y": 554,
+              "width": 480,
+              "height": 103,
+              "size": 28,
+              "minSize": 28,
+              "font": "display",
+              "fill": "$ink",
+              "align": "center",
+              "leading": 1.3
+            },
+            {
+              "id": "address",
+              "type": "text",
+              "text": "{{address}}",
+              "x": 60,
+              "y": 713,
+              "width": 480,
+              "height": 35,
+              "size": 18,
+              "minSize": 18,
+              "font": "body",
+              "fill": "$ink",
+              "align": "center"
+            }
+          ],
+          "role": "packaging",
+          "printMm": [
+            75,
+            100
+          ]
+        },
+        {
+          "id": "opening-poster",
+          "name": "Opening poster",
+          "width": 900,
+          "height": 1200,
+          "background": "$paper",
+          "layers": [
+            {
+              "id": "category",
+              "type": "text",
+              "text": "{{category}}",
+              "x": 65,
+              "y": 57,
+              "width": 760,
+              "height": 42,
+              "size": 19,
+              "minSize": 19,
+              "font": "body",
+              "fill": "$ink",
+              "tracking": 4
+            },
+            {
+              "id": "headline",
+              "type": "text",
+              "text": "{{headline}}",
+              "x": 60,
+              "y": 174,
+              "width": 780,
+              "height": 286,
+              "size": 104,
+              "minSize": 68,
+              "font": "display",
+              "fill": "$ink",
+              "weight": 500,
+              "leading": 1.03,
+              "tracking": -3
+            },
+            {
+              "id": "sunrise",
+              "type": "symbol",
+              "symbol": "mark",
+              "x": 520,
+              "y": 532,
+              "width": 265,
+              "height": 278,
+              "fill": "$ink"
+            },
+            {
+              "id": "opening",
+              "type": "text",
+              "text": "{{offer}}",
+              "x": 70,
+              "y": 598,
+              "width": 380,
+              "height": 112,
+              "size": 36,
+              "minSize": 36,
+              "font": "body",
+              "fill": "$ink",
+              "leading": 1.35
+            },
+            {
+              "id": "footer",
+              "type": "rect",
+              "x": 0,
+              "y": 913,
+              "width": 900,
+              "height": 287,
+              "fill": "$ink"
+            },
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 58,
+              "y": 950,
+              "width": 550,
+              "height": 130,
+              "size": 103,
+              "minSize": 58,
+              "font": "display",
+              "fill": "$paper",
+              "weight": 600,
+              "tracking": -3
+            },
+            {
+              "id": "address",
+              "type": "text",
+              "text": "{{address}}",
+              "x": 65,
+              "y": 1102,
+              "width": 740,
+              "height": 41,
+              "size": 24,
+              "minSize": 24,
+              "font": "body",
+              "fill": "$paper"
+            }
+          ],
+          "role": "poster",
+          "printMm": [
+            297,
+            396
+          ]
+        },
+        {
+          "id": "social-launch",
+          "name": "Launch announcement",
+          "width": 1080,
+          "height": 1080,
+          "background": "$accent",
+          "layers": [
+            {
+              "id": "sun",
+              "type": "symbol",
+              "symbol": "mark",
+              "x": 698,
+              "y": 72,
+              "width": 252,
+              "height": 270,
+              "fill": "$ink"
+            },
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 70,
+              "y": 72,
+              "width": 600,
+              "height": 165,
+              "size": 124,
+              "minSize": 72,
+              "font": "display",
+              "fill": "$ink",
+              "weight": 600,
+              "tracking": -4
+            },
+            {
+              "id": "headline",
+              "type": "text",
+              "text": "{{headline}}",
+              "x": 70,
+              "y": 405,
+              "width": 940,
+              "height": 278,
+              "size": 106,
+              "minSize": 65,
+              "font": "display",
+              "fill": "$ink",
+              "weight": 500,
+              "leading": 1.06,
+              "tracking": -2
+            },
+            {
+              "id": "rule",
+              "type": "line",
+              "x": 76,
+              "y": 812,
+              "width": 928,
+              "height": 0,
+              "stroke": "$ink",
+              "strokeWidth": 2
+            },
+            {
+              "id": "offer",
+              "type": "text",
+              "text": "{{offer}}",
+              "x": 76,
+              "y": 864,
+              "width": 600,
+              "height": 118,
+              "size": 36,
+              "minSize": 36,
+              "font": "body",
+              "fill": "$ink",
+              "leading": 1.3
+            },
+            {
+              "id": "address",
+              "type": "text",
+              "text": "{{address}}",
+              "x": 730,
+              "y": 921,
+              "width": 270,
+              "height": 55,
+              "size": 21,
+              "minSize": 16,
+              "font": "body",
+              "fill": "$ink",
+              "align": "right"
+            }
+          ],
+          "role": "social"
+        },
+        {
+          "id": "calling-card",
+          "name": "Calling card",
+          "width": 1050,
+          "height": 600,
+          "background": "$soft",
+          "layers": [
+            {
+              "id": "sun",
+              "type": "symbol",
+              "symbol": "mark",
+              "x": 78,
+              "y": 75,
+              "width": 120,
+              "height": 130,
+              "fill": "$ink"
+            },
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 270,
+              "y": 55,
+              "width": 710,
+              "height": 160,
+              "size": 132,
+              "minSize": 75,
+              "font": "display",
+              "fill": "$ink",
+              "weight": 600,
+              "tracking": -4
+            },
+            {
+              "id": "tagline",
+              "type": "text",
+              "text": "{{tagline}}",
+              "x": 78,
+              "y": 285,
+              "width": 870,
+              "height": 84,
+              "size": 36,
+              "minSize": 36,
+              "font": "display",
+              "fill": "$ink"
+            },
+            {
+              "id": "address",
+              "type": "text",
+              "text": "{{address}}",
+              "x": 78,
+              "y": 448,
+              "width": 750,
+              "height": 40,
+              "size": 23,
+              "minSize": 23,
+              "font": "body",
+              "fill": "$ink"
+            },
+            {
+              "id": "contact",
+              "type": "text",
+              "text": "{{contact}}",
+              "x": 78,
+              "y": 493,
+              "width": 800,
+              "height": 35,
+              "size": 21,
+              "minSize": 21,
+              "font": "body",
+              "fill": "$ink"
+            }
+          ],
+          "role": "card",
+          "printMm": [
+            85,
+            48.57
+          ]
+        },
+        {
+          "id": "daily-menu",
+          "name": "Counter menu",
+          "width": 900,
+          "height": 1100,
+          "background": "$paper",
+          "layers": [
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 67,
+              "y": 63,
+              "width": 670,
+              "height": 132,
+              "size": 104,
+              "minSize": 55,
+              "font": "display",
+              "fill": "$ink",
+              "weight": 600,
+              "tracking": -3
+            },
+            {
+              "id": "sun",
+              "type": "symbol",
+              "symbol": "mark",
+              "x": 714,
+              "y": 75,
+              "width": 103,
+              "height": 110,
+              "fill": "$ink"
+            },
+            {
+              "id": "rule",
+              "type": "line",
+              "x": 65,
+              "y": 235,
+              "width": 770,
+              "height": 0,
+              "stroke": "$ink",
+              "strokeWidth": 2
+            },
+            {
+              "id": "menu-title",
+              "type": "text",
+              "text": "From the oven.",
+              "x": 65,
+              "y": 290,
+              "width": 770,
+              "height": 100,
+              "size": 62,
+              "minSize": 62,
+              "font": "display",
+              "fill": "$ink"
+            },
+            {
+              "id": "lower-rule",
+              "type": "line",
+              "x": 65,
+              "y": 879,
+              "width": 770,
+              "height": 0,
+              "stroke": "$ink",
+              "strokeWidth": 2
+            },
+            {
+              "id": "hours",
+              "type": "text",
+              "text": "{{hours}}",
+              "x": 67,
+              "y": 936,
+              "width": 765,
+              "height": 49,
+              "size": 24,
+              "minSize": 20,
+              "font": "body",
+              "fill": "$ink"
+            },
+            {
+              "id": "item-1",
+              "type": "text",
+              "text": "{{item-1}}",
+              "x": 70,
+              "y": 466,
+              "width": 620,
+              "height": 52,
+              "size": 34,
+              "minSize": 22,
+              "font": "body",
+              "fill": "$ink"
+            },
+            {
+              "id": "price-1",
+              "type": "text",
+              "text": "{{price-1}}",
+              "x": 740,
+              "y": 466,
+              "width": 95,
+              "height": 52,
+              "size": 34,
+              "minSize": 34,
+              "font": "body",
+              "fill": "$ink",
+              "align": "right"
+            },
+            {
+              "id": "item-2",
+              "type": "text",
+              "text": "{{item-2}}",
+              "x": 70,
+              "y": 534,
+              "width": 620,
+              "height": 52,
+              "size": 34,
+              "minSize": 22,
+              "font": "body",
+              "fill": "$ink"
+            },
+            {
+              "id": "price-2",
+              "type": "text",
+              "text": "{{price-2}}",
+              "x": 740,
+              "y": 534,
+              "width": 95,
+              "height": 52,
+              "size": 34,
+              "minSize": 34,
+              "font": "body",
+              "fill": "$ink",
+              "align": "right"
+            },
+            {
+              "id": "item-3",
+              "type": "text",
+              "text": "{{item-3}}",
+              "x": 70,
+              "y": 602,
+              "width": 620,
+              "height": 52,
+              "size": 34,
+              "minSize": 22,
+              "font": "body",
+              "fill": "$ink"
+            },
+            {
+              "id": "price-3",
+              "type": "text",
+              "text": "{{price-3}}",
+              "x": 740,
+              "y": 602,
+              "width": 95,
+              "height": 52,
+              "size": 34,
+              "minSize": 34,
+              "font": "body",
+              "fill": "$ink",
+              "align": "right"
+            },
+            {
+              "id": "item-4",
+              "type": "text",
+              "text": "{{item-4}}",
+              "x": 70,
+              "y": 670,
+              "width": 620,
+              "height": 52,
+              "size": 34,
+              "minSize": 22,
+              "font": "body",
+              "fill": "$ink"
+            },
+            {
+              "id": "price-4",
+              "type": "text",
+              "text": "{{price-4}}",
+              "x": 740,
+              "y": 670,
+              "width": 95,
+              "height": 52,
+              "size": 34,
+              "minSize": 34,
+              "font": "body",
+              "fill": "$ink",
+              "align": "right"
+            }
+          ],
+          "role": "menu",
+          "printMm": [
+            180,
+            220
+          ]
+        }
+      ],
+      "logos": [
+        {
+          "id": "wordmark",
+          "board": "wordmark",
+          "layers": [
+            "sunrise",
+            "name"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "neighborhood-note",
+      "name": "Neighborhood note",
+      "rationale": "A handbill language: bold sans-serif, tomato red and a compact wheat stamp. Strong rules and little notes make every application feel like a personal invitation.",
+      "colors": {
+        "ink": "#B43422",
+        "paper": "#FFF6DD",
+        "accent": "#EABD91",
+        "soft": "#F4DCCC"
+      },
+      "fonts": {
+        "display": "DM Sans",
+        "body": "DM Sans"
+      },
+      "symbols": {
+        "mark": {
+          "viewBox": [
+            0,
+            0,
+            100,
+            100
+          ],
+          "paths": [
+            {
+              "d": "M 47 20 L 53 20 L 53 95 L 47 95 Z M 50 5 C 28 18 31 39 50 46 C 69 39 72 18 50 5 Z M 12 32 C 10 55 26 67 48 65 C 47 44 35 30 12 32 Z M 88 32 C 90 55 74 67 52 65 C 53 44 65 30 88 32 Z M 15 61 C 16 84 30 95 48 89 C 49 71 37 58 15 61 Z M 85 61 C 84 84 70 95 52 89 C 51 71 63 58 85 61 Z"
+            }
+          ]
+        }
+      },
+      "boards": [
+        {
+          "id": "wordmark",
+          "name": "Primary identity",
+          "width": 1600,
+          "height": 650,
+          "background": "$paper",
+          "layers": [
+            {
+              "id": "frame",
+              "type": "rect",
+              "x": 34,
+              "y": 34,
+              "width": 1532,
+              "height": 582,
+              "fill": "none",
+              "stroke": "$ink",
+              "strokeWidth": 4
+            },
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 90,
+              "y": 98,
+              "width": 1170,
+              "height": 288,
+              "size": 247,
+              "minSize": 105,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 800,
+              "tracking": -15
+            },
+            {
+              "id": "wheat",
+              "type": "symbol",
+              "symbol": "mark",
+              "x": 1301,
+              "y": 125,
+              "width": 178,
+              "height": 215,
+              "fill": "$ink"
+            },
+            {
+              "id": "promise",
+              "type": "text",
+              "text": "{{tagline}}",
+              "x": 95,
+              "y": 468,
+              "width": 1350,
+              "height": 71,
+              "size": 35,
+              "minSize": 35,
+              "font": "body",
+              "fill": "$ink",
+              "tracking": 1
+            }
+          ],
+          "role": "logo"
+        },
+        {
+          "id": "bread-label",
+          "name": "Bread bag label",
+          "width": 600,
+          "height": 800,
+          "background": "$paper",
+          "layers": [
+            {
+              "id": "border",
+              "type": "rect",
+              "x": 28,
+              "y": 28,
+              "width": 544,
+              "height": 744,
+              "fill": "none",
+              "stroke": "$ink",
+              "strokeWidth": 3
+            },
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 55,
+              "y": 86,
+              "width": 490,
+              "height": 146,
+              "size": 112,
+              "minSize": 55,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 800,
+              "align": "center",
+              "tracking": -6
+            },
+            {
+              "id": "wheat",
+              "type": "symbol",
+              "symbol": "mark",
+              "x": 173,
+              "y": 314,
+              "width": 254,
+              "height": 274,
+              "fill": "$ink"
+            },
+            {
+              "id": "note",
+              "type": "text",
+              "text": "{{note}}",
+              "x": 62,
+              "y": 626,
+              "width": 476,
+              "height": 85,
+              "size": 27,
+              "minSize": 27,
+              "font": "body",
+              "fill": "$ink",
+              "align": "center"
+            }
+          ],
+          "role": "packaging",
+          "printMm": [
+            75,
+            100
+          ]
+        },
+        {
+          "id": "opening-poster",
+          "name": "Opening poster",
+          "width": 900,
+          "height": 1200,
+          "background": "$paper",
+          "layers": [
+            {
+              "id": "opening",
+              "type": "text",
+              "text": "{{offer}}",
+              "x": 70,
+              "y": 50,
+              "width": 740,
+              "height": 136,
+              "size": 36,
+              "minSize": 36,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 600
+            },
+            {
+              "id": "rule",
+              "type": "line",
+              "x": 60,
+              "y": 231,
+              "width": 780,
+              "height": 0,
+              "stroke": "$ink",
+              "strokeWidth": 5
+            },
+            {
+              "id": "headline",
+              "type": "text",
+              "text": "{{headline}}",
+              "x": 60,
+              "y": 292,
+              "width": 780,
+              "height": 293,
+              "size": 105,
+              "minSize": 64,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 800,
+              "leading": 1.03,
+              "tracking": -6
+            },
+            {
+              "id": "wheat",
+              "type": "symbol",
+              "symbol": "mark",
+              "x": 600,
+              "y": 713,
+              "width": 223,
+              "height": 239,
+              "fill": "$ink"
+            },
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 55,
+              "y": 713,
+              "width": 510,
+              "height": 170,
+              "size": 101,
+              "minSize": 55,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 800,
+              "tracking": -6
+            },
+            {
+              "id": "address",
+              "type": "text",
+              "text": "{{address}}",
+              "x": 63,
+              "y": 1056,
+              "width": 774,
+              "height": 58,
+              "size": 31,
+              "minSize": 31,
+              "font": "body",
+              "fill": "$ink"
+            }
+          ],
+          "role": "poster",
+          "printMm": [
+            297,
+            396
+          ]
+        },
+        {
+          "id": "social-launch",
+          "name": "Launch announcement",
+          "width": 1080,
+          "height": 1080,
+          "background": "$paper",
+          "layers": [
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 55,
+              "y": 50,
+              "width": 960,
+              "height": 231,
+              "size": 196,
+              "minSize": 80,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 800,
+              "tracking": -10
+            },
+            {
+              "id": "rule",
+              "type": "line",
+              "x": 65,
+              "y": 337,
+              "width": 950,
+              "height": 0,
+              "stroke": "$ink",
+              "strokeWidth": 5
+            },
+            {
+              "id": "headline",
+              "type": "text",
+              "text": "{{headline}}",
+              "x": 65,
+              "y": 441,
+              "width": 900,
+              "height": 225,
+              "size": 81,
+              "minSize": 55,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 700,
+              "leading": 1.1,
+              "tracking": -3
+            },
+            {
+              "id": "offer",
+              "type": "text",
+              "text": "{{offer}}",
+              "x": 65,
+              "y": 824,
+              "width": 700,
+              "height": 129,
+              "size": 40,
+              "minSize": 40,
+              "font": "body",
+              "fill": "$ink"
+            },
+            {
+              "id": "wheat",
+              "type": "symbol",
+              "symbol": "mark",
+              "x": 838,
+              "y": 822,
+              "width": 166,
+              "height": 184,
+              "fill": "$ink"
+            }
+          ],
+          "role": "social"
+        },
+        {
+          "id": "calling-card",
+          "name": "Calling card",
+          "width": 1050,
+          "height": 600,
+          "background": "$paper",
+          "layers": [
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 64,
+              "y": 52,
+              "width": 775,
+              "height": 209,
+              "size": 166,
+              "minSize": 75,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 800,
+              "tracking": -8
+            },
+            {
+              "id": "wheat",
+              "type": "symbol",
+              "symbol": "mark",
+              "x": 839,
+              "y": 70,
+              "width": 133,
+              "height": 155,
+              "fill": "$ink"
+            },
+            {
+              "id": "rule",
+              "type": "line",
+              "x": 67,
+              "y": 310,
+              "width": 916,
+              "height": 0,
+              "stroke": "$ink",
+              "strokeWidth": 3
+            },
+            {
+              "id": "address",
+              "type": "text",
+              "text": "{{address}}",
+              "x": 68,
+              "y": 373,
+              "width": 900,
+              "height": 62,
+              "size": 29,
+              "minSize": 29,
+              "font": "body",
+              "fill": "$ink"
+            },
+            {
+              "id": "contact",
+              "type": "text",
+              "text": "{{contact}}",
+              "x": 68,
+              "y": 464,
+              "width": 900,
+              "height": 52,
+              "size": 27,
+              "minSize": 27,
+              "font": "body",
+              "fill": "$ink"
+            }
+          ],
+          "role": "card",
+          "printMm": [
+            85,
+            48.57
+          ]
+        },
+        {
+          "id": "daily-menu",
+          "name": "Counter menu",
+          "width": 900,
+          "height": 1100,
+          "background": "$paper",
+          "layers": [
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 58,
+              "y": 58,
+              "width": 780,
+              "height": 196,
+              "size": 159,
+              "minSize": 70,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 800,
+              "tracking": -8
+            },
+            {
+              "id": "rule",
+              "type": "line",
+              "x": 61,
+              "y": 300,
+              "width": 778,
+              "height": 0,
+              "stroke": "$ink",
+              "strokeWidth": 4
+            },
+            {
+              "id": "hours",
+              "type": "text",
+              "text": "{{hours}}",
+              "x": 65,
+              "y": 918,
+              "width": 770,
+              "height": 77,
+              "size": 27,
+              "minSize": 20,
+              "font": "body",
+              "fill": "$ink"
+            },
+            {
+              "id": "item-1",
+              "type": "text",
+              "text": "{{item-1}}",
+              "x": 65,
+              "y": 414,
+              "width": 620,
+              "height": 52,
+              "size": 34,
+              "minSize": 22,
+              "font": "body",
+              "fill": "$ink"
+            },
+            {
+              "id": "price-1",
+              "type": "text",
+              "text": "{{price-1}}",
+              "x": 740,
+              "y": 414,
+              "width": 95,
+              "height": 52,
+              "size": 34,
+              "minSize": 34,
+              "font": "body",
+              "fill": "$ink",
+              "align": "right"
+            },
+            {
+              "id": "item-2",
+              "type": "text",
+              "text": "{{item-2}}",
+              "x": 65,
+              "y": 482,
+              "width": 620,
+              "height": 52,
+              "size": 34,
+              "minSize": 22,
+              "font": "body",
+              "fill": "$ink"
+            },
+            {
+              "id": "price-2",
+              "type": "text",
+              "text": "{{price-2}}",
+              "x": 740,
+              "y": 482,
+              "width": 95,
+              "height": 52,
+              "size": 34,
+              "minSize": 34,
+              "font": "body",
+              "fill": "$ink",
+              "align": "right"
+            },
+            {
+              "id": "item-3",
+              "type": "text",
+              "text": "{{item-3}}",
+              "x": 65,
+              "y": 550,
+              "width": 620,
+              "height": 52,
+              "size": 34,
+              "minSize": 22,
+              "font": "body",
+              "fill": "$ink"
+            },
+            {
+              "id": "price-3",
+              "type": "text",
+              "text": "{{price-3}}",
+              "x": 740,
+              "y": 550,
+              "width": 95,
+              "height": 52,
+              "size": 34,
+              "minSize": 34,
+              "font": "body",
+              "fill": "$ink",
+              "align": "right"
+            },
+            {
+              "id": "item-4",
+              "type": "text",
+              "text": "{{item-4}}",
+              "x": 65,
+              "y": 618,
+              "width": 620,
+              "height": 52,
+              "size": 34,
+              "minSize": 22,
+              "font": "body",
+              "fill": "$ink"
+            },
+            {
+              "id": "price-4",
+              "type": "text",
+              "text": "{{price-4}}",
+              "x": 740,
+              "y": 618,
+              "width": 95,
+              "height": 52,
+              "size": 34,
+              "minSize": 34,
+              "font": "body",
+              "fill": "$ink",
+              "align": "right"
+            }
+          ],
+          "role": "menu",
+          "printMm": [
+            180,
+            220
+          ]
+        }
+      ],
+      "logos": [
+        {
+          "id": "wordmark",
+          "board": "wordmark",
+          "layers": [
+            "name",
+            "wheat"
+          ]
+        }
+      ]
+    }
+  ]
+}

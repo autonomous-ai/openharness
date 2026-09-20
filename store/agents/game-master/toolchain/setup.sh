@@ -1,3 +1,4 @@
-#!/usr/bin/env bash
-# Game Master has no toolchain: everything is inline HTML + a turn loop. Nothing to install.
-exit 0
+#!/bin/sh
+set -eu
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec bash "$here/install.sh"
