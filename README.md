@@ -30,10 +30,10 @@ enclosure CAD files are all open source.
 >
 > — [Peter Thiel](https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s)
 
-Built for technical founders who want their hands on more of what they are making, from the software
-and the physical product to the analysis and the launch video. Engineers, makers, and creators with
-the same curiosity are welcome. You get there by directing a specialist in each craft and judging
-what comes back, not by mastering them all first.
+Built for engineers who want to build beyond software. Get your hands on more of what you are making,
+from the physical product to the analysis and the launch video. Makers and creators with the same
+curiosity are welcome. You get there by directing a specialist in each craft and judging what comes
+back, not by mastering them all first.
 
 Monday, a feature. Tuesday, the customer data. Wednesday, an enclosure for the prototype. Thursday,
 the launch video. You already know how to build with code, and Harness brings that way of working to

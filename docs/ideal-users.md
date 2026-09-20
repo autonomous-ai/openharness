@@ -139,6 +139,13 @@ projects visible. Device marketing should demonstrate its usefulness during real
 
 ## Positioning and messaging
 
+The public audience wording:
+
+> Built for engineers who want to build beyond software.
+
+Use this invitation in the README. Technical founders remain an initial recruiting focus and guide
+the first examples; readers do not need to have founded a company to belong.
+
 The project description:
 
 > Follow your curiosity. Build across disciplines. Open-source software and hardware for polymaths in the making.
