@@ -287,6 +287,17 @@ const _harnesses = <String, EngineIdentity>{
     asset: 'assets/engine-icons/lab-bench.png',
   ),
 
+  // Jev harnesses; marks are built by store/tools/jev-kit/brand.mjs from brand/icon.svg.
+  'autonomous/jev-sheets': EngineIdentity(
+    id: 'autonomous/jev-sheets',
+    label: 'Jev Sheets',
+    category: 'Productivity',
+    tagline: 'Type a question as a column header and Jev answers it for every row, live',
+    creator: 'Autonomous',
+    color: Color(0xfffbbf24),
+    asset: 'assets/engine-icons/jev-sheets.png',
+  ),
+
   'autonomous/autonomous-circuit': EngineIdentity(
     id: 'autonomous/autonomous-circuit',
     label: 'Autonomous Circuit',
@@ -626,6 +637,8 @@ const knownHarnessBase = <String, String>{
   'autonomous/drone-pilot': 'claude',
   'autonomous/game-master': 'claude',
   'autonomous/lab-bench': 'claude',
+
+  'autonomous/jev-sheets': 'claude',
 
   'autonomous/autonomous-circuit': 'claude',
   'autonomous/kicad': 'claude',

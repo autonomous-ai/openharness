@@ -1,5 +1,7 @@
 # Jev Sheets
 
+![Jev Sheets logo](brand/logo.svg)
+
 **A spreadsheet where a column header is a question.** Type `Urgent?` at the top of a column and
 Jev, TypeSafe's System One model, answers it for every row. Each answer comes with a probability,
 so every cell is shaded by how sure Jev is, and the unsure ones are flagged for a person to review.
@@ -119,6 +121,11 @@ One short run on 2026-09-20 with live Jev (`typesafe/jev-1.13`) through OpenRout
 The 60-row template with its three starter columns filled in 5.4 s for $0.0013 (60 calls, three
 questions each). Against the made-up truth labels: Team 98%, Anger 90%, Urgent 85%. Average
 confidence was 0.90 on the clear rows and 0.79 on the mixed-signal rows, so the review line does its job.
+
+## Logo and icon
+
+The original identity ships in `brand/`: [vector icon](brand/icon.svg), [256px PNG](brand/icon.png),
+[light logo](brand/logo.svg) and [dark logo](brand/logo-dark.svg). MIT, by Autonomous.
 
 ## Credit and stewardship
 
