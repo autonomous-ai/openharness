@@ -1,7 +1,7 @@
 // The front door: a person brings their own file to the pane, asks, filters, and takes the answers away.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, statSync, readdirSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, statSync, readdirSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -178,4 +178,27 @@ test('a key pasted in the pane lands in the credentials file, chmod 600, and is 
     await v.viewer.close()
     if (old === undefined) delete process.env.TYPESAFE_CREDENTIALS; else process.env.TYPESAFE_CREDENTIALS = old
   }
+})
+
+test('the agent saves sheet.json atomically, again and again, and every save is seen', async () => {
+  // Editors and coding agents write a temp file and rename it over the target. A watcher on the
+  // file itself goes deaf after the first such save. The drop itself is one, so this broke for real.
+  const v = await fresh()
+  try {
+    await v.upload('reviews.csv', REVIEWS) // the viewer's own write of sheet.json is an atomic save
+    const marker = join(v.ws, 'sheet.json')
+    const save = (obj) => { writeFileSync(marker + '.agent', JSON.stringify(obj)); renameSync(marker + '.agent', marker) }
+    const until = async (pred) => { const end = Date.now() + 5000; for (;;) { const s = await v.state(); if (pred(s)) return s; if (Date.now() > end) assert.fail('the viewer never saw the save'); await new Promise((r) => setTimeout(r, 50)) } }
+    const base = JSON.parse(readFileSync(marker, 'utf8'))
+    save({ ...base, columns: ['Complaint?'] })
+    await until((s) => s.columns.length === 1)
+    save({ ...base, columns: ['Complaint?', 'Anger: calm < annoyed < furious'] })
+    await until((s) => s.columns.length === 2)
+    save({ ...base, context: 'Each row is one review.', columns: ['Mentions a crash?'] })
+    const s = await until((x) => x.columns.length === 1 && x.columns[0].id === 'mentions_a_crash')
+    assert.equal(s.own, true)
+    // the person's file is watched the same way
+    writeFileSync(join(v.ws, 'reviews.csv.new'), REVIEWS + '5,4,A brand new review about the editor\n'); renameSync(join(v.ws, 'reviews.csv.new'), join(v.ws, 'reviews.csv'))
+    await until((x) => x.rows.length === 5)
+  } finally { await v.viewer.close() }
 })

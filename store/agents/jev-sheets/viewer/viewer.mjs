@@ -8,11 +8,11 @@
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { evaluate, jev, toWire, PRICE_PER_MTOK, resolveCredentials } from '../toolchain/jev.mjs'
-import { serveViewer, writeVerdict, watchConfig, mulberry32, clean } from './kit.mjs'
+import { serveViewer, writeVerdict, watchConfig, watchPath, mulberry32, clean } from './kit.mjs'
 import { parseHeader, normalizeSheet, columnKey, judge, confidenceOf, levelOf, describeColumn, LIMITS } from './grammar.mjs'
 import { sheetMock } from './mock.mjs'
 import { loadSource } from './source.mjs'
-import { watch as watchFile, writeFileSync, renameSync, readFileSync, existsSync, rmSync } from 'node:fs'
+import { writeFileSync, renameSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { extname } from 'node:path'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -425,7 +425,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     if (file === sourceFile) return
     sourceWatcher?.close(); sourceWatcher = null; sourceFile = file
     if (!file) return
-    try { sourceWatcher = watchFile(file, () => { clearTimeout(sourceTimer); sourceTimer = setTimeout(() => { if (!stopped) applySheet(watcher.get(), false) }, 80) }) } catch { /* the file may vanish; the next edit to sheet.json retries */ }
+    sourceWatcher = watchPath(file, () => { clearTimeout(sourceTimer); sourceTimer = setTimeout(() => { if (!stopped) applySheet(watcher.get(), false) }, 80) })
   }
   function applySheet(raw, fresh) {
     const next = normalizeSheet(expandSource(raw))

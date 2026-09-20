@@ -2,8 +2,8 @@
 // a loopback-only HTTP server with static files, /state, /events (SSE), /jev (telemetry) and
 // /control, plus an atomic verdict writer and a safe JSON config watcher.
 import { createServer } from 'node:http'
-import { watch, readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs'
-import { join, extname } from 'node:path'
+import { watch, readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, statSync } from 'node:fs'
+import { join, extname, dirname, basename } from 'node:path'
 import { snapshot as jevSnapshot, connectKey } from '../toolchain/jev.mjs'
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml' }
@@ -134,6 +134,24 @@ export function writeVerdict(workspace, verdict) {
 }
 
 /**
+ * Call `onChange` whenever one file changes, however it was saved. Editors and coding agents save
+ * atomically (write a temp file, rename it over the target). `fs.watch` on the file itself keeps
+ * following the old inode and goes deaf after the first such save. So this watches the folder for
+ * that name, and a slow stat check catches anything the platform's watcher drops.
+ * @returns {{ close(): void }}
+ */
+export function watchPath(file, onChange, { pollMs = 1000 } = {}) {
+  const dir = dirname(file), name = basename(file)
+  const stamp = () => { try { const s = statSync(file); return `${s.ino}:${s.size}:${s.mtimeMs}` } catch { return 'missing' } }
+  let last = stamp(), closed = false, watcher = null
+  const check = () => { if (closed) return; const now = stamp(); if (now !== last) { last = now; onChange() } }
+  try { watcher = watch(dir, (_event, changed) => { if (!changed || changed === name) check() }) } catch { /* the folder may be gone; the poll still runs */ }
+  const poll = setInterval(check, pollMs)
+  poll.unref?.()
+  return { close() { closed = true; clearInterval(poll); watcher?.close() } }
+}
+
+/**
  * Load a JSON config merged over defaults, and re-load on every edit. A bad edit keeps the last
  * good config and reports the parse error instead of crashing the demo.
  * @returns {{ get(): object, error(): string|null, close(): void }}
@@ -145,9 +163,7 @@ export function watchConfig(file, defaults, onChange) {
     catch (e) { err = existsSync(file) ? clean(`${file.split('/').pop()}: ${e.message}`) : null }
   }
   load()
-  let watcher = null
-  try {
-    watcher = watch(file, () => { clearTimeout(timer); timer = setTimeout(() => { load(); onChange?.(cfg, err) }, 40) })
-  } catch { /* file may not exist yet; defaults stand */ }
-  return { get: () => cfg, error: () => err, close() { clearTimeout(timer); watcher?.close() } }
+  // watchPath also sees a file that did not exist yet, and every save after an atomic replace.
+  const watcher = watchPath(file, () => { clearTimeout(timer); timer = setTimeout(() => { load(); onChange?.(cfg, err) }, 40) })
+  return { get: () => cfg, error: () => err, close() { clearTimeout(timer); watcher.close() } }
 }
