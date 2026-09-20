@@ -61,7 +61,8 @@ export const READER = `(() => {
     const type = (e.getAttribute('type') || '').toLowerCase()
     const label = labelOf(e) || tidy(e.name || e.id, MAX_LABEL)
     if (!label) continue
-    controls.push({ n: mark(e), label, tag, type, inForm: !!e.closest('form'), box })
+    const attr = (k) => tidy(e.getAttribute(k) || '', 60)
+    controls.push({ n: mark(e), label, tag, type, name: attr('name'), placeholder: attr('placeholder'), aria: attr('aria-label'), id: attr('id'), inForm: !!e.closest('form'), box })
   }
 
   // ---- blocks: the text a value could be --------------------------------------------------------
@@ -154,6 +155,29 @@ export function blockText(page, pick) {
   const block = page.blocks.find((b) => b.n === Number(m[1]))
   if (!block) return ''
   return m[2] === undefined ? block.text : block.parts?.[Number(m[2])] ?? block.text
+}
+
+const WALL = /sorry[!,. ]{0,3}something went wrong|are you a (robot|human)|unusual traffic|access denied|permission denied|request blocked|captcha|verify (you are|your) human|enable javascript|checking your browser|rate limit|too many requests|403 forbidden|pardon our interruption/i
+/**
+ * Did the site serve its page, or a wall? A bot wall has almost nothing on it, or says so outright.
+ * Worth naming: a run that quietly collects nothing looks like a broken tool, and it is not.
+ * @returns {string|null} what to tell the person, or null when the page looks real
+ */
+export function wallReason(page) {
+  const hit = `${page.title} ${page.text.slice(0, 600)}`.match(WALL)
+  if (hit) return `the site answered with a block page ("${hit[0]}") instead of its own`
+  if (page.links.length < 3 && page.blocks.length < 4) return 'the page came back nearly empty, which usually means the site refused an automated browser or needs a sign-in'
+  return null
+}
+
+/** The search box a site puts on its pages, or null. */
+export function findSearchBox(page) {
+  const fields = page.controls.filter((c) => c.tag === 'input' || c.tag === 'textarea')
+  const about = (c) => `${c.type} ${c.name} ${c.id} ${c.placeholder} ${c.aria} ${c.label}`
+  return fields.find((c) => c.type === 'search')
+    ?? fields.find((c) => /search|query|keyword|find/i.test(about(c)) && !/pass|card|email|postcode|zip/i.test(about(c)))
+    ?? fields.find((c) => /^q$|^s$|^query$/i.test(c.name))
+    ?? null
 }
 
 const CLEAN = /(^|[?&])(utm_[^=]+|fbclid|gclid|ref|source)=[^&]*/gi

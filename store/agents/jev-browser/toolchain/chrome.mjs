@@ -174,6 +174,29 @@ export async function openChrome({ profileDir, show = true, allowedHosts = [], w
       await settle(8000)
       return { url: await evaluate('location.href') }
     },
+    /**
+     * Search a site: type words into its search box and press Enter. This is the ONLY form control
+     * the harness may work: a search asks a question of the site, it does not buy, send or delete.
+     * Anything that is not recognisably a search box is refused here as everywhere else.
+     */
+    async search(cssPath, words) {
+      const look = await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(cssPath)}); if (!e) return null
+        const t = (e.tagName || '').toLowerCase(), ty = (e.getAttribute('type') || '').toLowerCase()
+        if (t !== 'input' && t !== 'textarea') return 'not a field'
+        if (ty && !['search', 'text', ''].includes(ty)) return 'not a search box'
+        return [ty, [e.getAttribute('name'), e.getAttribute('id'), e.getAttribute('placeholder'), e.getAttribute('aria-label'), e.getAttribute('role')].join(' ')] })()`)
+      if (!look) throw new Refused('that search box is not on the page any more')
+      if (typeof look === 'string') throw new Refused(`${look}: this harness only ever types into a search box`)
+      const [type, about] = look
+      if (type !== 'search' && !/search|query|\bq\b|keyword|find|look ?up/i.test(about)) throw new Refused('that field does not look like a search box, so it is left alone')
+      if (SECRET_FIELD.test(about)) throw new Refused('that field wants something private')
+      await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(cssPath)}); e.focus(); e.value = '' })()`)
+      await send('Input.insertText', { text: String(words).slice(0, 200) })
+      await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(cssPath)}); e.dispatchEvent(new Event('input', { bubbles: true })) })()`)
+      for (const type2 of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type: type2, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: type2 === 'keyDown' ? '\r' : undefined })
+      await settle(12000)
+      return { url: await evaluate('location.href') }
+    },
     /** Type into a field. A field that could hold a secret is refused, whoever asks. */
     async type(cssPath, text) {
       const kind = await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(cssPath)}); if (!e) return null
