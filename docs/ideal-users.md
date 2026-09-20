@@ -154,8 +154,9 @@ The wording draws on three recurring ideas in the saved research:
   Keep human intent and judgment central to the promise.
 
 These are editorial interpretations, not measured effects on signups or purchases. The description
-stays short; examples in the README show what building across disciplines means. The Thiel excerpt
-belongs in the audience section, with its 2018 context and source; it is not a product endorsement.
+stays short; examples in the README show what building across disciplines means. The audience section
+uses Founder Mode's concise summary of Thiel, credited to that account and linked to the clip. The
+source notes retain the original interview wording and 2018 context; neither is a product endorsement.
 
 The technical thesis:
 

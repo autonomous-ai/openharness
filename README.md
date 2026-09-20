@@ -24,9 +24,9 @@ agents, answer their questions, and speak new tasks from your desk.
 
 ## For polymaths in the making.
 
-> “They’re not specialists. They’re something close to polymaths.”
+> “World-class entrepreneurs are polymaths.”
 >
-> — Peter Thiel, on world-class entrepreneurs, [The Rubin Report, 2018](https://www.youtube.com/watch?v=h10kXgTdhNU&t=819s)
+> — [Founder Mode](https://x.com/Founder_Mode_/status/2000973572248940648), summarizing Peter Thiel
 
 Built for technical founders who want their hands on more of what they are making, from the software
 and the physical product to the analysis and the launch video. Engineers, makers, and creators with
