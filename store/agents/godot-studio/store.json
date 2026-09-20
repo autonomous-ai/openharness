@@ -1,4 +1,5 @@
 {
+  "listed": false,
   "homepage": "https://godotengine.org",
   "upstream": "https://github.com/godotengine/godot",
   "license": "MIT",

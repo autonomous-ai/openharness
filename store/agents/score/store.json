@@ -1,4 +1,5 @@
 {
+  "listed": false,
   "homepage": "https://lilypond.org",
   "upstream": "https://github.com/lilypond/lilypond",
   "license": "MIT",

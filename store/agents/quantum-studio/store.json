@@ -1,4 +1,5 @@
 {
+  "listed": false,
   "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/quantum-studio",
   "upstream": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/quantum-studio",
   "license": "MIT",

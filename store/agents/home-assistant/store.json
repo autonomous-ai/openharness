@@ -1,4 +1,5 @@
 {
+  "listed": false,
   "homepage": "https://www.home-assistant.io",
   "upstream": "https://github.com/home-assistant/core",
   "license": "MIT",
