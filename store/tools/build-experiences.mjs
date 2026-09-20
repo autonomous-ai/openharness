@@ -8,6 +8,7 @@ import { buildMusic } from "../agents/music-studio/template/tools/build.mjs";
 import { buildBrand } from "../agents/creative-direction/template/tools/build.mjs";
 import { buildWorld } from "../agents/voxel-worlds/template/tools/build.mjs";
 import { buildFlight } from "../agents/drone-pilot/template/tools/build.mjs";
+import { buildGame } from "../agents/game-master/template/tools/build.mjs";
 const source = new URL("./experiences/", import.meta.url);
 export const experiences = [
   {
@@ -63,7 +64,7 @@ export async function build({ check = false } = {}) {
   ]);
   let drift = false;
   for (const exp of experiences) {
-    if (["generative-art", "music-studio", "creative-direction", "voxel-worlds", "drone-pilot"].includes(exp.id)) {
+    if (["generative-art", "music-studio", "creative-direction", "voxel-worlds", "drone-pilot", "game-master"].includes(exp.id)) {
       try {
         const packageRoot = new URL(`../agents/${exp.id}/`, import.meta.url);
         const icon = await readFile(new URL('brand/icon.svg', packageRoot), 'utf8');
@@ -71,7 +72,7 @@ export async function build({ check = false } = {}) {
         if (check) {
           if (await readFile(studioIcon, 'utf8') !== icon) throw new Error(`${exp.id}: packaged studio icon is out of date.`);
         } else await writeFile(studioIcon, icon);
-        const builder = { 'generative-art': buildArt, 'music-studio': buildMusic, 'creative-direction': buildBrand, 'voxel-worlds': buildWorld, 'drone-pilot': buildFlight }[exp.id];
+        const builder = { 'generative-art': buildArt, 'music-studio': buildMusic, 'creative-direction': buildBrand, 'voxel-worlds': buildWorld, 'drone-pilot': buildFlight, 'game-master': buildGame }[exp.id];
         await builder(fileURLToPath(new URL(`../agents/${exp.id}/template/`, import.meta.url)), { check });
       } catch (error) {
         if (!check) throw error;
