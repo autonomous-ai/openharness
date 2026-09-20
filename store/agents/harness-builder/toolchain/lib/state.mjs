@@ -90,6 +90,15 @@ export function log(build, message) {
   if (build.log.length > 200) build.log.splice(0, build.log.length - 200)
 }
 
+/**
+ * Whether the record itself shows a stage's work finished, for the stages where that is knowable.
+ * Only `proof` is: every proof passed. The rest are the agent's word, and stay its word.
+ */
+function stageComplete(build, id) {
+  if (id !== 'proof') return false
+  return PROOF_IDS.every((pid) => build.proofs?.[pid]?.state === 'passed')
+}
+
 export function setStage(build, id, state, note) {
   const stage = build.stages.find((s) => s.id === id)
   if (!stage) throw new Error(`unknown stage "${id}"; stages are ${STAGES.map((s) => s.id).join(', ')}`)
@@ -101,7 +110,12 @@ export function setStage(build, id, state, note) {
   if (state === 'active') {
     for (const other of build.stages) {
       if (other.id === id || other.state !== 'active') continue
-      other.state = 'pending'
+      // Moving on from a stage whose work demonstrably finished settles it as done rather than
+      // pending: a track that says "Proof · not started" over four passed proofs states something
+      // the record itself disproves.
+      const finished = order(other.id) < order(id) && stageComplete(build, other.id)
+      other.state = finished ? 'done' : 'pending'
+      if (finished) log(build, `${other.name}: done — its work finished before ${stage.name.toLowerCase()} began`)
       if (order(other.id) > order(id)) build.returnTo = other.id
     }
   }

@@ -68,6 +68,29 @@ describe('the build record', () => {
     assert.equal(build.stages.find((s) => s.id === 'proof').state, 'pending')
   })
 
+  it('settles a finished proof stage as done when the work moves on, and never overstates the rest', () => {
+    const ws = tmp()
+    const build = ensureWorkspace(ws)
+    for (const id of ['research', 'toolchain', 'skills', 'viewer', 'evaluation']) setStage(build, id, 'done')
+    setStage(build, 'proof', 'active', 'three briefs and a revision')
+    for (const pid of ['easy', 'medium', 'hard', 'revision']) build.proofs[pid] = { state: 'passed' }
+    setStage(build, 'store', 'active')
+    assert.equal(build.stages.find((s) => s.id === 'proof').state, 'done', 'four passed proofs are a finished proof stage')
+
+    // A proof still outstanding is not a finished stage: the record says pending, as it should.
+    const partial = ensureWorkspace(tmp())
+    setStage(partial, 'proof', 'active')
+    partial.proofs = { easy: { state: 'passed' }, medium: { state: 'passed' }, hard: { state: 'passed' } }
+    setStage(partial, 'store', 'active')
+    assert.equal(partial.stages.find((s) => s.id === 'proof').state, 'pending')
+
+    // The stages a machine cannot judge stay the agent's word.
+    const viewer = ensureWorkspace(tmp())
+    setStage(viewer, 'viewer', 'active')
+    setStage(viewer, 'evaluation', 'active')
+    assert.equal(viewer.stages.find((s) => s.id === 'viewer').state, 'pending')
+  })
+
   it('refuses a stage or state that does not exist', () => {
     const build = ensureWorkspace(tmp())
     assert.throws(() => setStage(build, 'polish', 'active'), /unknown stage/)
