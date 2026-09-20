@@ -1,0 +1,10 @@
+.harness/
+.venv/
+.runtime/
+__pycache__/
+*.pyc
+*.log
+node_modules/
+.DS_Store
+!/dist/
+!/dist/**

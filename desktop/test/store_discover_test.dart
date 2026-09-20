@@ -37,6 +37,7 @@ final _catalog = [
     ('circuitjs', 'CircuitJS', 'Circuits'),
     ('rdkit', 'RDKit', 'Chemistry'),
     ('yosys', 'Yosys', 'Chips'),
+    ('ollama', 'Ollama', 'Local AI'),
   ])
     DshEntry(
       id: 'autonomous/$id',
@@ -196,6 +197,35 @@ Future<void> _capture(WidgetTester tester, GlobalKey key, String name) async {
 }
 
 void main() {
+  test('Local AI groups Grid and current and future local runtimes', () {
+    for (final (id, domain) in [
+      ('autonomous/autonomous-grid', 'Compute'),
+      ('local/ollama', 'Compute'),
+      ('local/mlx-lm', 'Local AI'),
+      ('local/vllm', 'Local AI'),
+      ('community/next-runtime', 'local ai'),
+    ]) {
+      expect(
+        storeCategoryFor(
+          DshEntry(id: id, name: id, engine: 'codex', category: domain),
+        ),
+        'Local AI',
+      );
+    }
+    expect(
+      storeCategoryFor(
+        const DshEntry(
+          id: 'codex',
+          name: 'Codex',
+          engine: 'codex',
+          kind: 'engine',
+          category: 'Code',
+        ),
+      ),
+      'Code',
+    );
+  });
+
   setUpAll(() async {
     await loadRealFonts();
     await (FontLoader(
@@ -244,6 +274,7 @@ void main() {
         'Media',
         'Science',
         'Games',
+        'Local AI',
         'Code',
       ]) {
         expect(

@@ -1,0 +1,51 @@
+{
+  "at": "2026-09-20T05:58:11.404Z",
+  "package": "local/vllm",
+  "viewer": "http://127.0.0.1:4312/?view=grid",
+  "workspace": "<pilot-checkout>/vllm",
+  "nativeAppInstalled": true,
+  "nativeWorkspaceOpened": false,
+  "nativeHandoffLimitation": "Desktop control failed to start; embedded browser unavailable.",
+  "concurrentCancellation": {
+    "jobId": "fa5914b0-affc-4f21-9fc1-945a2c4cc26c",
+    "status": "cancelled",
+    "observedDuringMeasurements": true,
+    "serverReleased": true
+  },
+  "recovery": {
+    "jobId": "01292d33-24fb-485e-9ff3-4645e41d27b9",
+    "output": "Bicycle brakes are essential for safety and control, preventing skidding and ensuring smooth movement on the road.",
+    "metrics": {
+      "model": "mlx-community/Qwen3-0.6B-4bit",
+      "tokens": 22,
+      "promptTokens": 25,
+      "tokensPerSecond": 87.40616253175972,
+      "firstTokenMs": 84.27175000001444,
+      "firstOutputMs": 84.2723330000299,
+      "totalMs": 251.6984999999986,
+      "thinking": false,
+      "doneReason": "stop",
+      "metric": "client_end_to_end",
+      "serving": {
+        "context": 2048,
+        "maxSequences": 4,
+        "memoryFraction": 0.1,
+        "prefixCaching": true
+      }
+    }
+  },
+  "serving": {
+    "context": 2048,
+    "maxSequences": 4,
+    "memoryFraction": 0.1,
+    "prefixCaching": true,
+    "status": "serving",
+    "model": "mlx-community/Qwen3-0.6B-4bit",
+    "processRssBytes": 2444001280,
+    "runningRequests": 0,
+    "waitingRequests": 0,
+    "cacheUsage": 0,
+    "prefixQueries": 25,
+    "prefixHits": 0
+  }
+}

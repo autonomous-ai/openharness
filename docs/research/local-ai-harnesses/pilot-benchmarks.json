@@ -1,0 +1,259 @@
+[
+  {
+    "id": "b7c69a02-084f-442c-8c5b-7a361d73fc07",
+    "model": "gemma3:1b",
+    "digest": "8648f39daa8fbf5b18c7b4e6a8fb4990c692751d49917417b8842ca5758e7ffc",
+    "at": "2026-09-20T02:39:24.639Z",
+    "runtime": {
+      "name": "Ollama",
+      "version": "0.34.0"
+    },
+    "hardware": {
+      "platform": "darwin",
+      "arch": "arm64",
+      "chip": "Apple M2 Max",
+      "totalMemory": 68719476736,
+      "cores": 12
+    },
+    "settings": {
+      "context": 2048,
+      "maxTokens": 128,
+      "seed": 42,
+      "temperature": 0,
+      "thinking": false
+    },
+    "prompt": "Explain how a bicycle works to a curious beginner. Discuss the pedals, chain, gears, wheels, brakes, and balance. Write a clear explanation of at least 250 words without a heading.",
+    "promptHash": "e3aff106a75867995dfbb42b73d60cb031d6d1d9511c155329d29033854e829a",
+    "mode": "warm; repeated prompt may use prefix cache",
+    "samples": [
+      {
+        "model": "gemma3:1b",
+        "tokens": 128,
+        "promptTokens": 51,
+        "tokensPerSecond": 152.5140390364449,
+        "promptTokensPerSecond": 2825.1717261245294,
+        "loadMs": 0.9075,
+        "evalMs": 839.267,
+        "doneReason": "length",
+        "firstTokenMs": 22.768708000001425,
+        "firstOutputMs": 22.76887500000157,
+        "elapsedMs": 861.9158330000009,
+        "context": 2048,
+        "maxTokens": 128,
+        "temperature": 0,
+        "seed": 42,
+        "thinking": null
+      },
+      {
+        "model": "gemma3:1b",
+        "tokens": 128,
+        "promptTokens": 51,
+        "tokensPerSecond": 154.88136450482128,
+        "promptTokensPerSecond": 2105.0024764735017,
+        "loadMs": 0.750458,
+        "evalMs": 826.439,
+        "doneReason": "length",
+        "firstTokenMs": 29.213208000001032,
+        "firstOutputMs": 29.213417000000845,
+        "elapsedMs": 855.3763330000002,
+        "context": 2048,
+        "maxTokens": 128,
+        "temperature": 0,
+        "seed": 42,
+        "thinking": null
+      },
+      {
+        "model": "gemma3:1b",
+        "tokens": 128,
+        "promptTokens": 51,
+        "tokensPerSecond": 142.72127093291766,
+        "promptTokensPerSecond": 3196.690485144791,
+        "loadMs": 0.945875,
+        "evalMs": 896.853,
+        "doneReason": "length",
+        "firstTokenMs": 20.11791599999924,
+        "firstOutputMs": 20.118124999999054,
+        "elapsedMs": 916.9944999999989,
+        "context": 2048,
+        "maxTokens": 128,
+        "temperature": 0,
+        "seed": 42,
+        "thinking": null
+      }
+    ],
+    "medianTokensPerSecond": 152.5140390364449,
+    "medianFirstTokenMs": 22.768708000001425,
+    "medianFirstOutputMs": 22.76887500000157,
+    "residentBytes": 883603537
+  },
+  {
+    "id": "5fecc978-ca9a-42b0-9134-dd146aaec770",
+    "model": "qwen3:0.6b",
+    "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+    "at": "2026-09-20T02:39:19.316Z",
+    "runtime": {
+      "name": "Ollama",
+      "version": "0.34.0"
+    },
+    "hardware": {
+      "platform": "darwin",
+      "arch": "arm64",
+      "chip": "Apple M2 Max",
+      "totalMemory": 68719476736,
+      "cores": 12
+    },
+    "settings": {
+      "context": 2048,
+      "maxTokens": 128,
+      "seed": 42,
+      "temperature": 0,
+      "thinking": false
+    },
+    "prompt": "Explain how a bicycle works to a curious beginner. Discuss the pedals, chain, gears, wheels, brakes, and balance. Write a clear explanation of at least 250 words without a heading.",
+    "promptHash": "e3aff106a75867995dfbb42b73d60cb031d6d1d9511c155329d29033854e829a",
+    "mode": "warm; repeated prompt may use prefix cache",
+    "samples": [
+      {
+        "model": "qwen3:0.6b",
+        "tokens": 128,
+        "promptTokens": 58,
+        "tokensPerSecond": 277.06887109587234,
+        "promptTokensPerSecond": 11924.342105263157,
+        "loadMs": 0.907042,
+        "evalMs": 461.979,
+        "doneReason": "length",
+        "firstTokenMs": 9.088958999999704,
+        "firstOutputMs": 9.089334000000235,
+        "elapsedMs": 471.1010839999999,
+        "context": 2048,
+        "maxTokens": 128,
+        "temperature": 0,
+        "seed": 42,
+        "thinking": false
+      },
+      {
+        "model": "qwen3:0.6b",
+        "tokens": 128,
+        "promptTokens": 58,
+        "tokensPerSecond": 290.56041840700254,
+        "promptTokensPerSecond": 13116.236996834012,
+        "loadMs": 0.752667,
+        "evalMs": 440.528,
+        "doneReason": "length",
+        "firstTokenMs": 10.607291999999688,
+        "firstOutputMs": 10.607417000000169,
+        "elapsedMs": 451.0408749999997,
+        "context": 2048,
+        "maxTokens": 128,
+        "temperature": 0,
+        "seed": 42,
+        "thinking": false
+      },
+      {
+        "model": "qwen3:0.6b",
+        "tokens": 128,
+        "promptTokens": 58,
+        "tokensPerSecond": 290.91305790533505,
+        "promptTokensPerSecond": 15705.3885729759,
+        "loadMs": 0.723917,
+        "evalMs": 439.994,
+        "doneReason": "length",
+        "firstTokenMs": 7.3243750000001455,
+        "firstOutputMs": 7.324542000000292,
+        "elapsedMs": 448.0642090000001,
+        "context": 2048,
+        "maxTokens": 128,
+        "temperature": 0,
+        "seed": 42,
+        "thinking": false
+      }
+    ],
+    "medianTokensPerSecond": 290.56041840700254,
+    "medianFirstTokenMs": 9.088958999999704,
+    "medianFirstOutputMs": 9.089334000000235,
+    "residentBytes": 793719603
+  },
+  {
+    "id": "62251a02-7b91-4291-9428-f5c3365605eb",
+    "model": "qwen3:0.6b",
+    "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+    "at": "2026-09-20T02:25:27.450Z",
+    "runtime": {
+      "name": "Ollama",
+      "version": "0.34.0"
+    },
+    "hardware": {
+      "platform": "darwin",
+      "arch": "arm64",
+      "chip": "Apple M2 Max",
+      "totalMemory": 68719476736,
+      "cores": 12
+    },
+    "settings": {
+      "context": 2048,
+      "maxTokens": 128,
+      "seed": 42,
+      "temperature": 0
+    },
+    "prompt": "Explain how a bicycle works to a curious beginner. Discuss the pedals, chain, gears, wheels, brakes, and balance. Write a clear explanation of at least 250 words without a heading.",
+    "promptHash": "e3aff106a75867995dfbb42b73d60cb031d6d1d9511c155329d29033854e829a",
+    "mode": "warm; repeated prompt may use prefix cache",
+    "samples": [
+      {
+        "model": "qwen3:0.6b",
+        "tokens": 128,
+        "promptTokens": 58,
+        "tokensPerSecond": 276.84474849303456,
+        "promptTokensPerSecond": 11473.788328387736,
+        "firstTokenMs": 9.06441600015387,
+        "firstOutputMs": 9.064750000135973,
+        "elapsedMs": 471.8668750000652,
+        "loadMs": 0.809583,
+        "evalMs": 462.353,
+        "context": 2048,
+        "maxTokens": 128,
+        "temperature": 0,
+        "seed": 42,
+        "doneReason": "length"
+      },
+      {
+        "model": "qwen3:0.6b",
+        "tokens": 128,
+        "promptTokens": 58,
+        "tokensPerSecond": 266.45294919699825,
+        "promptTokensPerSecond": 13027.85265049416,
+        "firstTokenMs": 10.354583000065759,
+        "firstOutputMs": 10.355125000001863,
+        "elapsedMs": 490.79725000006147,
+        "loadMs": 0.622792,
+        "evalMs": 480.385,
+        "context": 2048,
+        "maxTokens": 128,
+        "temperature": 0,
+        "seed": 42,
+        "doneReason": "length"
+      },
+      {
+        "model": "qwen3:0.6b",
+        "tokens": 128,
+        "promptTokens": 58,
+        "tokensPerSecond": 278.56486861749124,
+        "promptTokensPerSecond": 14602.21550855992,
+        "firstTokenMs": 8.22295799991116,
+        "firstOutputMs": 8.223041999852285,
+        "elapsedMs": 467.6280829999596,
+        "loadMs": 0.705416,
+        "evalMs": 459.498,
+        "context": 2048,
+        "maxTokens": 128,
+        "temperature": 0,
+        "seed": 42,
+        "doneReason": "length"
+      }
+    ],
+    "medianTokensPerSecond": 276.84474849303456,
+    "medianFirstTokenMs": 9.06441600015387,
+    "medianFirstOutputMs": 9.064750000135973,
+    "residentBytes": 793719603
+  }
+]
