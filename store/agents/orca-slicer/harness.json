@@ -4,7 +4,7 @@
   "name": "Orca Slicer",
   "category": "Fabrication",
   "author": "OpenHarness contributors",
-  "description": "Describe a part to print; get G-code \u2014 a printable mesh sliced to your printer's profile, with a print summary (time, filament, layers) live in the pane.",
+  "description": "Turn your STL and printer brief into compared slicing plans, checked G-code, editable native Orca projects and a portable handoff. Inspect actual paths and revise time/material tradeoffs without connecting a printer.",
   "engine": "claude",
   "workspace": {
     "template": "template",

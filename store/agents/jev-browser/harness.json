@@ -2,13 +2,13 @@
   "spec": 1,
   "id": "autonomous/jev-browser",
   "name": "Jev Browser",
-  "category": "AI",
+  "category": "Research",
   "author": "Autonomous",
-  "description": "Jev operates a web browser, live. On a made-up travel site it books flights in seconds: each step the page is written out as text and Jev, TypeSafe's System One model, picks one element from the list. Add pop-ups and layout shifts, or click the page yourself, and watch it cope.",
+  "description": "Point it at a web page and say what you want from each thing on it. A real Chrome opens, and Jev, TypeSafe's System One model, reads every page: one call judges every link and pulls every field. You get results.csv. Every value is text taken off the page, so nothing is invented.",
   "engine": "claude",
   "workspace": {
     "template": "template",
-    "marker": "site.json",
+    "marker": "browse.json",
     "init": "toolchain/init-workspace.sh"
   },
   "agent": {

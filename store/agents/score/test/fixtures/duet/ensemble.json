@@ -1,0 +1,30 @@
+{
+  "spec": 1,
+  "title": "A Small Beginning",
+  "composer": "OpenHarness",
+  "brief": "An original eight-bar beginner flute melody with a quiet piano accompaniment, playable as a computer sketch with no real instruments. Leave breathing space and give each player a printable part.",
+  "assumptions": ["Flute written C5-G5, no more than four attacks per bar, steps or thirds; piano is intermediate, not assessed by a player."],
+  "meter": [4, 4],
+  "quarterBpm": 80,
+  "bars": 8,
+  "key": {"tonic": "c", "mode": "major"},
+  "sourceFiles": ["score.ly", "ensemble.json"],
+  "practice": {"speed": 0.7, "countInBars": 1},
+  "players": [
+    {
+      "id": "flute", "label": "Flute", "instrument": "Beginner flute in C",
+      "midiInstrument": "flute", "soundingC": "C4",
+      "staves": [
+        {"id": "flute-line", "music": "fluteMusic", "clef": "treble", "writtenRange": ["C5", "G5"], "maxPolyphony": 1, "maxLeapSemitones": 4, "maxAttacksPerBar": 4}
+      ]
+    },
+    {
+      "id": "piano", "label": "Piano", "instrument": "Piano, two hands",
+      "midiInstrument": "acoustic grand", "soundingC": "C4",
+      "staves": [
+        {"id": "piano-right", "music": "pianoRight", "clef": "treble", "writtenRange": ["C4", "C6"], "maxPolyphony": 3, "maxAttacksPerBar": 4},
+        {"id": "piano-left", "music": "pianoLeft", "clef": "bass", "writtenRange": ["C2", "C4"], "maxPolyphony": 2, "maxAttacksPerBar": 2}
+      ]
+    }
+  ]
+}

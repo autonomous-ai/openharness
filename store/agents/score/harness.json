@@ -4,7 +4,7 @@
   "name": "Score",
   "category": "Music",
   "author": "OpenHarness contributors",
-  "description": "Compose editable LilyPond music, engrave a real PDF, and explore its MIDI notes with a local playback and score viewer.",
+  "description": "Turn a musical idea into editable music, checked instrument parts and a practice pack. Listen, isolate voices, reshape phrases and save a WAV sketch—no instruments required.",
   "engine": "claude",
   "workspace": {
     "template": "template",

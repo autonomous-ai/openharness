@@ -17,8 +17,9 @@ second server.
 ## Your job, in this order
 
 1. **Get the person's own data in.** Three ways in:
-   - They **drop a file on the pane** or paste rows from a spreadsheet. The viewer saves the file in
-     the workspace and points `sheet.json` at it by itself: `"source"` is already set when you look.
+   - They press **Choose a file** in the pane (its own chooser: recent spreadsheets, folders, or a
+     pasted path) or paste rows from a spreadsheet. The viewer saves the file in the workspace and
+     points `sheet.json` at it by itself: `"source"` is already set when you look.
    - They give you a **path**. Copy the file into the workspace, then set `"source"`.
    - They have a PDF, an old `.xls`, an export in an odd shape, or a folder of files. **Convert it for
      them** into a `.csv` or `.jsonl` in the workspace, one row per item, and set `"source"`. Long

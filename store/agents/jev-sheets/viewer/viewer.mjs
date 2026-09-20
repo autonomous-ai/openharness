@@ -12,6 +12,7 @@ import { serveViewer, writeVerdict, watchConfig, watchPath, mulberry32, clean } 
 import { parseHeader, normalizeSheet, columnKey, judge, confidenceOf, levelOf, describeColumn, LIMITS } from './grammar.mjs'
 import { sheetMock } from './mock.mjs'
 import { loadSource } from './source.mjs'
+import { createPicker } from './picker.mjs'
 import { writeFileSync, renameSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { extname } from 'node:path'
 
@@ -49,6 +50,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
   // Which live route is active (typesafe, cloudflare, openrouter), or null for the offline stand-in.
   // Asked each time, because a key can arrive in the credentials file while the viewer runs.
   const liveRoute = () => resolveCredentials()?.provider ?? null
+  const picker = createPicker()
   const colById = (id) => columns.find((c) => c.id === id)
   const mock = sheetMock(colById)
 
@@ -614,6 +616,14 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
         computeOrder(); pushView(); return { filter }
       }
       case 'useSample': return useSample()
+      // The pane's own file chooser: the desktop web view cannot open the system one.
+      case 'recentFiles': return picker.recent()
+      case 'browse': return picker.browse(body.dir)
+      case 'usePath': {
+        const got = picker.read(body.path)
+        if (got.error) return { ok: false, error: got.error }
+        return upload(got.name, got.buffer)
+      }
       case 'setReview': {
         touch()
         const v = Number(body.value)

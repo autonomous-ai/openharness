@@ -1,103 +1,45 @@
 # OpenHarness
 
-**The open-source software and hardware platform for domain-specific harnesses.**
+**An open-source workshop for technical founders who build across disciplines.**
 
-Run Claude Code, Codex, and every other coding agent in persistent terminals on all your machines. Give
-them a **domain-specific harness (DSH)** and they design circuit boards, model 3D parts, simulate
-robots, and build games in a live viewer. Keep them on your desk with the open-hardware
-**Harness device**.
+Use Claude Code, Codex, and other coding agents to build software, design parts and circuit boards,
+explore data, and make videos. OpenHarness brings your agents, domain tools, and live viewers into one
+workspace, with persistent agent sessions across your machines.
 
-[Run it](#run-it) · [Domain-specific harnesses](#domain-specific-harnesses-dsh) ·
+Use the desktop app on its own, or add the optional open-hardware **Harness device** to follow your
+agents, answer their questions, and speak new tasks from your desk.
+
+[Who it's for](#who-its-for) · [What you can make](#domain-specific-harnesses-dsh) · [Run it](#run-it) ·
 [Harness device](#harness-device) · [Architecture](docs/architecture.md) · [Contribute](#contributing)
 
 <p align="center">
   <img src=".github/assets/hardware/desk-agents.jpg" width="960" alt="The Harness device on a desk beside a keyboard, with the coding agents it runs: Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build and Kilo Code">
 </p>
 
-## Coding agents, on every machine
+## Who it's for
 
-The coding agent is still the heart of the work, and OpenHarness is built around it.
+The ideal user is a **technical founder who is also a polymath**: someone with an engineering or
+coding background whose curiosity and responsibilities span product, design, analysis, and marketing.
+You already know how to build with code. Harness brings that way of working to CAD, circuit boards,
+games, videos, and documents, with agents and tools for each craft.
 
-- **Real terminals that outlive the window.** Every agent runs in a persistent tmux session. Close the
-  app and the agents keep working; if tmux goes down with a reboot, the daemon brings the panes back and
-  resumes the sessions.
-- **Every engine, no wrappers.** Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin,
-  Muse Code, Amp, Kilo, Grok Build, Antigravity and GitHub Copilot. OpenHarness reads the transcript each
-  agent already writes and installs the vendor's own hooks. Your credentials stay in `~/.claude`, `~/.codex` and
-  so on. See the [engine list](docs/engines.md).
-- **All your machines in one window.** The laptop, the Mac mini at home, the server in the rack. Each
-  runs a daemon with outbound connections only. Terminal traffic is end-to-end encrypted, the relay only
-  forwards ciphertext, and it goes peer to peer over WebRTC when it can. No SSH server, VPN, or open
-  port.
-- **Built for many agents at once.** Split panes, a keyboard-driven layout, fuzzy search across
-  sessions and machines (**⌘O**), and one shortcut to the agents waiting on you (**⇧⌘I**). The
-  [workspace guide](docs/app.md) and [keybindings](docs/keyboard.md) cover the rest.
+You might prototype a feature, explore customer data, design an enclosure, and make a launch video.
+Give each job an agent with the right tools, inspect what it makes, and steer the next iteration.
+The code and project files are there to read, change, version, and build on.
 
-<p align="center">
+**From handoff to hands-on.** You bring intent and judgment; your agents write and run code. Each
+harness supplies the tools and feedback for a different craft. You can get your hands on more of
+the product and the work of bringing it to customers.
 
-<img width="1280" height="716" alt="ezgif-3355e1eae4366c76" src="https://github.com/user-attachments/assets/e3401aae-9402-4710-a46d-1da150ff96bf" />
-
-
-</p>
-
-
-### Run it
-
-1. [Download the desktop app](https://harness.autonomous.ai/desktop) for macOS or Linux.
-2. Sign in to a coding agent you already use, with your own subscription, API key, or local model.
-3. Press **⌘N**, pick an agent or a harness, a machine and a project, and start.
-
-On another machine:
-
-```bash
-curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
-harness login
-harness start
-```
-
-Then **Machines → Link Machine** in the app.
-
-macOS is the primary tested platform. Linux builds exist and feature parity is in progress; Windows is
-work in progress. The app and daemon still need a Harness account to start;
-[account-free local use is tracked](docs/development.md#account-free-local-use).
-
-<details>
-<summary><b>Build from source</b></summary>
-
-For macOS, install Node.js 20+, tmux, Xcode, and Flutter 3.47+ / Dart 3.13+:
-
-```bash
-git clone https://github.com/autonomous-ai/openharness.git
-cd openharness
-(cd cli && npm ci)
-make install-cli
-cd desktop
-flutter config --enable-swift-package-manager
-flutter pub get
-flutter run -d macos
-```
-
-`make install-cli` installs this checkout's CLI and restarts the local daemon. The
-[development guide](docs/development.md) covers tests and isolated environments.
-
-</details>
-
-### How it fits together
-
-```mermaid
-flowchart LR
-  device["Harness device"] -- USB --> daemon
-  app["Harness app<br/>(Flutter)"] -- loopback --> daemon["harness daemon<br/>(TypeScript)"]
-  daemon --> tmux["tmux"] --> agents["Claude Code · Codex · OpenCode · …"]
-  daemon --> dsh["DSH toolchain<br/>+ live viewer"]
-  daemon <-- "E2EE · WebRTC" --> relay["Harness relay"]
-  relay <--> remote["daemons on your<br/>other machines"]
-```
-
-The [architecture guide](docs/architecture.md) covers the daemon, the session model, transport and
-encryption.
+Engineers, makers, and creators who share that approach are welcome too. The
+[ideal-user guide](docs/ideal-users.md) records who we're building for and how the app, community,
+and device serve them.
 
 ## Domain-specific harnesses (DSH)
+
+**Coding agents can build far more than software.** Code is the common medium: geometry scripts make
+parts, animation code makes videos, and analysis code turns data into charts and findings. A harness
+gives the agent the tools and feedback to work in that domain.
 
 <img width="1000" height="563" alt="harness" src="https://github.com/user-attachments/assets/25c63335-279a-4f9a-b702-2ffaec2b096f" />
 
@@ -164,7 +106,91 @@ in this repository or in yours.
 
 Every picture is real output from the harness's own toolchain, and the prompt is the one that made it.
 
-### Your first DSH in ten minutes
+## Coding agents, on every machine
+
+Keep the agents doing that work together, wherever they run.
+
+- **Real terminals that outlive the window.** Every agent runs in a persistent tmux session. Close the
+  app and the agents keep working; if tmux goes down with a reboot, the daemon brings the panes back and
+  resumes the sessions.
+- **Every engine, no wrappers.** Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin,
+  Muse Code, Amp, Kilo, Grok Build, Antigravity and GitHub Copilot. OpenHarness reads the transcript each
+  agent already writes and installs the vendor's own hooks. Your credentials stay in `~/.claude`, `~/.codex` and
+  so on. See the [engine list](docs/engines.md).
+- **All your machines in one window.** The laptop, the Mac mini at home, the server in the rack. Each
+  runs a daemon with outbound connections only. Terminal traffic is end-to-end encrypted, the relay only
+  forwards ciphertext, and it goes peer to peer over WebRTC when it can. No SSH server, VPN, or open
+  port.
+- **Built for many agents at once.** Split panes, a keyboard-driven layout, fuzzy search across
+  sessions and machines (**⌘O**), and one shortcut to the agents waiting on you (**⇧⌘I**). The
+  [workspace guide](docs/app.md) and [keybindings](docs/keyboard.md) cover the rest.
+
+<p align="center">
+
+<img width="1280" height="716" alt="ezgif-3355e1eae4366c76" src="https://github.com/user-attachments/assets/e3401aae-9402-4710-a46d-1da150ff96bf" />
+
+
+</p>
+
+
+### Run it
+
+1. [Download the desktop app](https://harness.autonomous.ai/desktop) for macOS or Linux.
+2. Sign in to a coding agent you already use, with your own subscription, API key, or local model.
+3. Press **⌘N**, pick an agent or a harness, a machine and a project, and start.
+
+On another machine:
+
+```bash
+curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
+harness login
+harness start
+```
+
+Then **Machines → Link Machine** in the app.
+
+macOS is the primary tested platform. Linux builds exist and feature parity is in progress; Windows is
+work in progress. Embedded live viewers require macOS; remote viewers also need a current Harness
+CLI on both machines. The app and daemon still need a Harness account to start;
+[account-free local use is tracked](docs/development.md#account-free-local-use).
+
+<details>
+<summary><b>Build from source</b></summary>
+
+For macOS, install Node.js 20+, tmux, Xcode, and Flutter 3.47+ / Dart 3.13+:
+
+```bash
+git clone https://github.com/autonomous-ai/openharness.git
+cd openharness
+(cd cli && npm ci)
+make install-cli
+cd desktop
+flutter config --enable-swift-package-manager
+flutter pub get
+flutter run -d macos
+```
+
+`make install-cli` installs this checkout's CLI and restarts the local daemon. The
+[development guide](docs/development.md) covers tests and isolated environments.
+
+</details>
+
+### How it fits together
+
+```mermaid
+flowchart LR
+  device["Harness device"] -- USB --> daemon
+  app["Harness app<br/>(Flutter)"] -- loopback --> daemon["harness daemon<br/>(TypeScript)"]
+  daemon --> tmux["tmux"] --> agents["Claude Code · Codex · OpenCode · …"]
+  daemon --> dsh["DSH toolchain<br/>+ live viewer"]
+  daemon <-- "E2EE · WebRTC" --> relay["Harness relay"]
+  relay <--> remote["daemons on your<br/>other machines"]
+```
+
+The [architecture guide](docs/architecture.md) covers the daemon, the session model, transport and
+encryption.
+
+## Your first DSH in ten minutes
 
 The [Hello World example](store/examples/hello-world/) is a Codex session that edits an HTML page
 shown in the shared Web Viewer:
@@ -224,7 +250,7 @@ store pages, and publishing; the [package specification](store/spec/README.md) i
   <img src=".github/assets/hardware/answer.jpg" width="960" alt="A finger taps the round Harness device to answer an agent that redesigned the billing controls">
 </p>
 
-No other agent stack ships this layer. The **Harness device** is a round, always-on display that sits beside
+The optional **Harness device** is a round, always-on display that sits beside
 your keyboard and shows your agents at a glance: what each one is doing, which one has finished, and
 which one is waiting on you. Read a question and answer it on the screen, or tap and speak a new task,
 without switching windows.

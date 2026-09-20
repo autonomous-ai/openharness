@@ -1,7 +1,18 @@
-// Original small fluted vessel, for slicer exploration. Millimetres, dry use only.
-height=48; diameter=55; wall=2; base=2.4; ribs=18; twist=22; resolution=72;
-difference(){
-  linear_extrude(height=height,twist=twist,slices=24,convexity=10)
-    polygon([for(i=[0:resolution-1])let(a=i*360/resolution,r=diameter/2+1.5*(1+cos(ribs*a))/2)[r*cos(a),r*sin(a)]]);
-  translate([0,0,base])cylinder(h=height+0.1,r=diameter/2-wall,$fn=resolution);
+// Original Bottle Bench rack, millimetres. Dry indoor craft storage only.
+// Regenerate model.stl with OpenSCAD after edits; the slicer does not compile this.
+// This geometry matches the Everyday rack in the OpenSCAD harness acceptance case.
+bottle_diameter=26;
+radial_clearance=0.3;
+wall=2;
+floor=2.4;
+height=18;
+columns=3;
+rows=2;
+bore=bottle_diameter+2*radial_clearance;
+$fn=128;
+difference() {
+    cube([columns*bore+(columns+1)*wall,rows*bore+(rows+1)*wall,height]);
+    for(x=[0:columns-1],y=[0:rows-1])
+        translate([wall+bore/2+x*(bore+wall),wall+bore/2+y*(bore+wall),floor])
+            cylinder(d=bore,h=height+1);
 }

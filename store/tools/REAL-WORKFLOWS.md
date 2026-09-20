@@ -18,9 +18,9 @@ catalog workflow and verify the live catalog after each accepted release.
 | Order | Package | Intended complete workflow | Status |
 | --- | --- | --- | --- |
 | 1 | freecad | Measurements and fit requirements → checked assembly, individual parts, editable native/source project and handoff | Implemented and validated; relisted in this change. See [acceptance evidence](../agents/freecad/test/ACCEPTANCE.md). |
-| 2 | score | Musical brief and player constraints → revised score, individual parts and practice exports | Not started; unlisted |
-| 3 | openscad | Dimensions and fabrication constraints → parametric parts, verified variants and usable exports | Not started; unlisted |
-| 4 | orca-slicer | User mesh and explicit machine/material profiles → compared slicing options and reviewed toolpath handoff | Not started; unlisted |
+| 2 | score | Musical brief and player constraints → revised score, audible mix, individual parts and practice exports | Implemented and validated; relisted in this change. See [acceptance evidence](../agents/score/test/ACCEPTANCE.md). |
+| 3 | openscad | Dimensions and fabrication constraints → parametric parts, verified variants and usable exports | Implemented and validated; relisted in this change. See [acceptance evidence](../agents/openscad/test/ACCEPTANCE.md). |
+| 4 | orca-slicer | User mesh and explicit machine/material profiles → compared slicing options and reviewed toolpath handoff | Implemented and validated; relisted in this change. See [acceptance evidence](../agents/orca-slicer/test/ACCEPTANCE.md). |
 | 5 | data-studio | User data and a question → saved analysis, source-linked results and repeatable report | Not started; unlisted |
 | 6 | gis | User geographic data and a decision → reproducible spatial analysis and exported results | Not started; unlisted |
 | 7 | web-studio | User application brief → useful app with durable data and a runnable handoff | Not started; unlisted |
