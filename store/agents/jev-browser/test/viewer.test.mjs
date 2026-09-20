@@ -495,3 +495,34 @@ test('a browser left open on the profile is reported, and does not take the view
     assert.ok(r.ok !== false || r.error)
   } finally { await v.close(); delete process.env.JEV_OFFLINE }
 })
+
+test("a key with no credit left is said plainly, not as a blob of the provider's JSON", async () => {
+  // This is the one that had the pane stuck at "reading the page": the account behind the key had
+  // run dry, every call came back 402, and the pane said
+  // `No columns could be worked out: Jev API 402: {"error":{"message":"Insufficient credits…`.
+  const { createServer } = await import('node:http')
+  const { evaluate, jev } = await import('../toolchain/jev.mjs')
+  const seen = []
+  const server = createServer((req, res) => {
+    seen.push(req.url)
+    res.writeHead(402, { 'content-type': 'application/json' })
+    res.end('{"error":{"message":"Insufficient credits. Add more using https://openrouter.ai/settings/credits","code":402}}')
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  const before = process.env.TYPESAFE_API_URL
+  process.env.TYPESAFE_API_URL = `http://127.0.0.1:${server.address().port}/v1/systemone`
+  try {
+    const err = await evaluate({ state: { page: 'a page' }, questions: { q: jev.noul('is it?') }, key: 'not-a-real-key' })
+      .then(() => null, (e) => e)
+    assert.ok(err, 'the call fails')
+    assert.match(err.message, /out of credit/, err.message)
+    assert.ok(!err.message.includes('{'), `no JSON in front of a person: ${err.message}`)
+    assert.equal(err.provider, true, 'flagged, so the pane repeats it as it is')
+    assert.equal(err.status, 402)
+    assert.equal(seen.length, 1, 'no point retrying a dry account')
+  } finally {
+    if (before === undefined) delete process.env.TYPESAFE_API_URL
+    else process.env.TYPESAFE_API_URL = before
+    server.close()
+  }
+})

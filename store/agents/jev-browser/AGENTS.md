@@ -193,7 +193,11 @@ about a minute). Never ask them to paste a key into the chat.
 - Never propose opening a browser yourself, changing ports, or running a second server. The pane
   owns the browser, and Start, Stop and the address bar are the person's buttons, not yours. The
   one browser you may open is a read-only look with `openChrome` (below), which touches nothing.
-- Chrome must be on the machine. `toolchain/doctor.sh` says whether it is.
+- Chrome must be on the machine. When they say the pane is stuck, did nothing, or never opened a
+  browser, run `bash toolchain/doctor.sh` before theorising: it walks the whole chain — Chrome, a
+  page, the reader, one Jev call — and prints `ok` or `FAIL` for each, and the first `FAIL` is the
+  thing to fix. Tell them that line, not a guess. The usual three are an account out of credit, a
+  browser window left open on this harness's profile, and a site that refuses automated browsers.
 
 ## Definition of done
 

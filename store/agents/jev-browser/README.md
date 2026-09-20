@@ -129,6 +129,26 @@ about being a stand-in, but its rows are not worth acting on. Paste an OpenRoute
 into the **Jev · live mind** panel in the pane. It is saved on your machine in
 `~/.config/typesafe/credentials` and checked with one tiny call.
 
+## When the pane does nothing
+
+One command runs the whole chain — Chrome, a page, the reader, one Jev call — and prints `ok` or
+`FAIL` for each link, so you find out which one broke instead of guessing:
+
+```
+bash toolchain/doctor.sh                  the built-in site, about five seconds
+bash toolchain/doctor.sh https://…        that site instead
+bash toolchain/doctor.sh --show           a visible window, the way the pane runs it
+```
+
+The three that actually happen:
+
+- **out of credit.** Every call comes back 402 and nothing can be answered. Top the account up
+  with your provider. The pane says so in as many words now.
+- **a browser left open.** Chrome will not open a second window on this harness's profile; it
+  hands the request to the open one and quits. Close that window and press Go again.
+- **the site says no.** Some sites serve a challenge page to any automated browser. It is named in
+  the pane rather than collected from. Try another site.
+
 ## Which sites let it read
 
 Checked on 2026-09-20, one page each, with the headless browser the tests use.
@@ -169,6 +189,7 @@ jev-browser/
     chrome.mjs               drives a real Chrome over the DevTools protocol, and holds every refusal
     jev.mjs                  the Jev client (TypeSafe, Cloudflare or OpenRouter, or the stand-in)
     check.mjs                validates browse.json
+    selftest.mjs             runs the whole chain and says which link broke
     viewer.sh setup.sh doctor.sh init-workspace.sh
   viewer/
     viewer.mjs               the server: the job, the browser, the run, results.csv, the verdict
