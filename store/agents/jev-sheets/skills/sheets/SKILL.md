@@ -48,10 +48,13 @@ In `sheet.json` a column is a header string or `{ "id": "team", "header": "Team:
    types: one yes or no, one choice with a meaning for every option and an `other`, one score. The
    other columns are part of what Jev reads, so a question can lean on them ("Worth a call today?"
    can use a `seats` column).
-4. **Read the answers.** `answers.csv` has every row, its columns, and each answer with a
-   confidence. There are no truth labels, so judge a question by how many cells sit under the review
+4. **Check the save took, then read the answers.** In `.harness/verdict.json`, `sheet.loadedAt`
+   moves within two seconds of a save, and the fill is done when `sheet.cellsFilled` equals
+   `sheet.cellsTotal` (30 to 40 seconds for every 1,000 rows with a live key; `"client": "mock"` means
+   no key, so stop and say so). `answers.csv` has a `row` number, the text, the file's own columns,
+   and for each question the answer as a word plus `<Name> confidence`. There are no truth labels, so judge a question by how many cells sit under the review
    line and by reading the rows behind the numbers.
-5. **Write `report.md`.** What was asked and of how many rows. For each question the count and share
+5. **Write `findings.md`.** What was asked and of how many rows. For each question the count and share
    of every answer. For each finding that matters, three to five word-for-word quotes with row
    numbers. A cross-cut or two when it says something ("of the 212 crash reports, 61% also say they
    may leave"). What Jev was unsure about. The next question worth asking. Count from `answers.csv`
@@ -110,7 +113,7 @@ accuracy says nothing about live Jev.
 ## Definition of done
 
 On the person's own file: `sheet.json` passes `check.mjs`, `context` is set, every choice option has
-a meaning, you read `answers.csv` and the rows behind the main numbers, and `report.md` is written.
+a meaning, you read `answers.csv` and the rows behind the main numbers, and `findings.md` is written.
 
 On a made-up sheet:
 

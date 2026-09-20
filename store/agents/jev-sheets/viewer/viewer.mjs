@@ -22,7 +22,7 @@ const GHOST_PAUSE_MS = 60000
 const OWN_SUGGESTIONS = ['Is this a complaint?', 'Sentiment: negative < neutral < positive', 'Asks a question?', 'Mentions price or cost?', 'Urgency']
 const SAMPLE_BACKUP = 'sheet.sample.json'
 const OWN_EXT = new Set(['.xlsx', '.csv', '.tsv', '.txt', '.json', '.jsonl', '.ndjson'])
-const RESERVED = new Set(['sheet.json', 'answers.csv', 'sheet.sample.json', 'report.md'])
+const RESERVED = new Set(['sheet.json', 'answers.csv', 'sheet.sample.json', 'findings.md', 'report.md'])
 const FALLBACK_SUGGESTIONS = ['Urgency', 'Sentiment: negative < neutral < positive', 'Asks a question?', 'Complaint?']
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const r3 = (x) => Math.round(x * 1000) / 1000
@@ -40,6 +40,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
   let order = [], sort = null, reviewOnly = false, reviewBelow = 0.65, fileReviewBelow = null, fileDemo = null
   let filter = null          // { col, v }: show only the rows whose answer in that column is option/level v
   let running = autostart, stopped = false, epoch = 0, rev = 0
+  let loadedAt = null        // when sheet.json was last taken in: the agent's proof that a save was seen
   let counters = { calls: 0, cacheHits: 0, tokens: 0, costUsd: 0, errors: 0, computed: 0 }
   let burst = { active: false, startedAt: 0, cells: 0, rate: 0, ms: 0 }
   let patches = [], patchTimer = null, verdictTimer = null, retryTimer = null, ghostTimer = null
@@ -233,7 +234,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
       // The rows worth a second look: wrong ones first, then the least sure.
       const weak = rows.map((r) => ({ r, cell: cellOf(r.id, c.id) })).filter((x) => x.cell && (x.cell.ok === false || x.cell.conf < reviewBelow))
         .sort((a, b) => (a.cell.ok === false ? 0 : 1) - (b.cell.ok === false ? 0 : 1) || a.cell.conf - b.cell.conf).slice(0, 5)
-        .map(({ r, cell }) => ({ row: r.id, text: r.text.slice(0, 90), answered: shown(c, cell.answer), confidence: r3(cell.conf), truth: r.truth?.[c.id] ?? null }))
+        .map(({ r, cell }) => ({ row: r.id, n: rows.indexOf(r) + 1, text: r.text.slice(0, 90), answered: shown(c, cell.answer), confidence: r3(cell.conf), truth: r.truth?.[c.id] ?? null }))
       report.push({ id: c.id, header: c.header, type: c.type, source: c.source, filled: s.filled, accuracy: s.acc, labelled: s.labelled, underReviewLine: s.flagged, avgConfidence: s.avgConf, weakest: weak })
       const share = s.filled ? s.flagged / s.filled : 0
       findings.push({
@@ -253,7 +254,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
         { id: 'fill', name: 'Cells filled', state: full ? 'done' : stats.cellsTotal ? 'active' : 'pending' },
         { id: 'review', name: 'Review', state: !full ? 'pending' : stats.flagged ? 'active' : 'done' },
       ],
-      sheet: { client: liveRoute() ?? 'mock', reviewBelow, rows: stats.rows, cellsFilled: stats.cellsFilled, cellsTotal: stats.cellsTotal, flagged: stats.flagged, costUsd: stats.costUsd, groups, columns: report },
+      sheet: { client: liveRoute() ?? 'mock', loadedAt, source: sourceInfo?.name ?? null, reviewBelow, rows: stats.rows, cellsFilled: stats.cellsFilled, cellsTotal: stats.cellsTotal, flagged: stats.flagged, costUsd: stats.costUsd, groups, columns: report },
     }
   }
   function shown(col, a) {
@@ -433,6 +434,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     if (!next.rows.length && rows.length && !fresh) { configError = `${MARKER}: ${problems || 'needs at least one row with text'}. Showing the last good sheet`; pushView(); verdictSoon(); return }
     configError = problems ? `${MARKER}: ${problems}` : null
     sheet = next
+    loadedAt = new Date().toISOString()
     epoch++
     rows = next.rows.map((r) => ({ ...r, edited: false, retryAt: 0 }))
     rowById = new Map(rows.map((r) => [r.id, r]))

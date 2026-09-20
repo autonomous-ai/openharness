@@ -55,7 +55,7 @@ this file?"
 
 - **`answers.csv`** holds every row, its own columns, and each answer with its confidence. Download
   it from the pane, or find it in the project folder. Cells that could run as a formula are escaped.
-- **`report.md`**: ask the agent for the findings. It counts from `answers.csv`, opens the rows
+- **`findings.md`**: ask the agent for the findings. It counts from `answers.csv`, opens the rows
   behind each number, and quotes them word for word.
 
 ## What it costs

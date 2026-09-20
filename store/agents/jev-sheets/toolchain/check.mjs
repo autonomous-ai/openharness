@@ -88,4 +88,4 @@ if (sheet.suggestions != null) {
 }
 
 if (errors) { console.log(`fail   invalid sheet.json (${errors} error${errors > 1 ? 's' : ''}, ${warnings} warning${warnings === 1 ? '' : 's'})`); process.exit(1) }
-console.log(`ok     sheet.json is valid: ${rows.length} rows, ${columns.size} Jev columns${warnings ? `, ${warnings} warning${warnings > 1 ? 's' : ''}` : ''}`)
+console.log(`ok     sheet.json is valid: ${sourceRows ? `${rows.length + sourceRows} rows (${sourceRows} from ${sheet.source})` : `${rows.length} rows`}, ${columns.size} Jev columns${warnings ? `, ${warnings} warning${warnings > 1 ? 's' : ''}` : ''}`)
