@@ -321,7 +321,7 @@
     const best = Math.max(S.session.best, g.lines), sy = cSess.mid - 14
     text(`game ${g.n}`, bx, sy, 12, '#e9ecf5', 'left', 700); text(`${S.session.topOuts} top-out${S.session.topOuts === 1 ? '' : 's'}`, bx + bw, sy, 10.5, S.session.topOuts ? '#fb7185' : '#8b92aa', 'right')
     text('best', bx, sy + 20, 9.5, '#8b92aa'); text(`${fmt(best)} lines`, bx + bw, sy + 20, 12, '#c084fc', 'right', 700)
-    text('client', bx, sy + 40, 9.5, '#8b92aa'); text(S.client === 'typesafe' ? 'LIVE Jev' : 'offline MOCK', bx + bw, sy + 40, 10.5, S.client === 'typesafe' ? '#34d399' : '#fbbf24', 'right', 700)
+    text('client', bx, sy + 40, 9.5, '#8b92aa'); text(S.client && S.client !== 'mock' ? 'LIVE Jev' : 'offline MOCK', bx + bw, sy + 40, 10.5, S.client && S.client !== 'mock' ? '#34d399' : '#fbbf24', 'right', 700)
   }
 
   // ------------------------------------------------------------------ the well

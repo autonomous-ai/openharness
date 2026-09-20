@@ -128,6 +128,13 @@ Jev would charge for the same tokens ($0.042 per million input tokens, output fr
 The "2s per message" comparison is an assumption drawn as a ghost bar, not a measurement of any
 model.
 
+## Measured with the real model
+
+One short run on 2026-09-20 with live Jev (`typesafe/jev-1.13`) through OpenRouter, about 0.45 s a call once warm. Small samples on made-up data: a sanity check, not a benchmark.
+
+300 made-up messages at noise 0.2 and threshold 0.55: 25.4 s, $0.0107, 98.0% of auto-routed messages
+right, 1.0% escalated. That is five questions a message, about 12 messages a second with a pool of 8.
+
 ## Credit and stewardship
 
 - **Jev** is the work of **TypeSafe AI** (typesafe.ai). This harness only calls the public API. It

@@ -611,9 +611,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 // you happen to have open. Two live routes are supported, both speaking the same question format:
 //   TypeSafe direct         TYPESAFE_API_KEY                               (api.typesafe.ai)
 //   Cloudflare Workers AI   CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN   (no TypeSafe waitlist)
+//   OpenRouter              OPENROUTER_API_KEY                             (no waitlist; alpha endpoint, ~0.45 s a call measured)
+// When several are present the fastest wins: TypeSafe, then Cloudflare, then OpenRouter.
 // The file is ~/.config/typesafe/credentials (or $TYPESAFE_CREDENTIALS). Keep it chmod 600.
 // ---------------------------------------------------------------------------
-const CRED_KEYS = ['TYPESAFE_API_KEY', 'TYPESAFE_API_URL', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN']
+const CRED_KEYS = ['TYPESAFE_API_KEY', 'TYPESAFE_API_URL', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN', 'OPENROUTER_API_KEY', 'OPENROUTER_API_URL', 'OPENROUTER_JEV_MODEL']
 let credCache = null
 export const credentialsPath = () => process.env.TYPESAFE_CREDENTIALS || join(homedir(), '.config', 'typesafe', 'credentials')
 
@@ -644,6 +646,9 @@ export function resolveCredentials(explicitKey) {
   if (key) return { provider: 'typesafe', secret: key, url: get('TYPESAFE_API_URL') || LIVE_ENDPOINT }
   const account = get('CLOUDFLARE_ACCOUNT_ID'), token = get('CLOUDFLARE_API_TOKEN')
   if (account && token) return { provider: 'cloudflare', secret: token, url: `${process.env.CLOUDFLARE_API_BASE || 'https://api.cloudflare.com'}/client/v4/accounts/${encodeURIComponent(account)}/ai/run` }
+  // OpenRouter proxies the same API on an alpha path. It wants its own model id, not "jev-latest".
+  const orKey = get('OPENROUTER_API_KEY')
+  if (orKey) return { provider: 'openrouter', secret: orKey, url: get('OPENROUTER_API_URL') || 'https://openrouter.ai/api/alpha/decisions', model: get('OPENROUTER_JEV_MODEL') || 'typesafe/jev-1.13' }
   return null
 }
 
@@ -651,13 +656,16 @@ export function resolveCredentials(explicitKey) {
 export function describeCredentials() {
   const c = resolveCredentials()
   if (!c) return `offline stand-in (no key found in the environment or in ${credentialsPath()})`
+  if (c.provider === 'openrouter') return `live Jev through OpenRouter (${c.model}; alpha endpoint, about half a second a call: great for batch work, and the real-time games run at about two decisions a second)`
   return c.provider === 'cloudflare' ? 'live Jev through Cloudflare Workers AI' : 'live Jev through the TypeSafe API'
 }
 
 async function liveEvaluate(body, cred) {
   const endpoint = cred.url
   const key = cred.secret
-  const payload = cred.provider === 'cloudflare' ? { model: 'typesafe/jev', input: { state: body.state, questions: body.questions } } : body
+  const payload = cred.provider === 'cloudflare' ? { model: 'typesafe/jev', input: { state: body.state, questions: body.questions } }
+    : cred.provider === 'openrouter' ? { ...body, model: cred.model }
+    : body
   let lastErr
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt) { telemetry.retries++; await sleep(250 * 3 ** (attempt - 1)) }
@@ -666,7 +674,7 @@ async function liveEvaluate(body, cred) {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(cred.provider === 'openrouter' ? 30000 : 10000),
       })
       if (res.ok) {
         const data = await res.json()

@@ -25,6 +25,11 @@ const server = createServer(async (req, res) => {
     if (req.headers.authorization !== 'Bearer cf-token') { res.writeHead(401); return res.end('bad token') }
     if (j.model !== 'typesafe/jev' || !j.input) return fail('cloudflare wants { model: "typesafe/jev", input }')
     j = { model: 'jev-latest', ...j.input }
+  } else if (req.url === '/api/alpha/decisions') {
+    // OpenRouter: the native body, its own key, and its own model id (a TypeSafe model name is a 404 there).
+    if (req.headers.authorization !== 'Bearer or-key') { res.writeHead(401); return res.end('bad key') }
+    if (j.model !== 'typesafe/jev-1.13') { res.writeHead(404); return res.end('no such model') }
+    j.model = 'jev-latest'
   } else if (req.headers.authorization !== 'Bearer test-key') { res.writeHead(401); return res.end('bad key') }
   if (j.model !== 'jev-latest') return fail('model')
   if (j.state == null) return fail('state required')
@@ -96,11 +101,22 @@ for (const name of readdirSync(ROOT).filter((n) => n.startsWith('jev-')).sort())
       const forcedMock = await evaluate({ key: '', state: 'x', questions: { a: jev.noul('x?') } })
       const safeLine = m.describeCredentials()
       routes = c1?.provider === 'cloudflare' && viaCf?.client === 'cloudflare' && viaCf.answers.a.choice === 'keep' && forcedMock.client === 'mock' && !/cf-token/.test(safeLine)
+      // OpenRouter, when the client knows it: key from the file, its own model id on the wire.
+      if (routes && /OPENROUTER_API_KEY/.test(String(m.resolveCredentials))) {
+        process.env.OPENROUTER_API_URL = `http://127.0.0.1:${server.address().port}/api/alpha/decisions`
+        process.env.TYPESAFE_CREDENTIALS = join(dir, 'credentials-openrouter') // a new path, so the 5 s credential cache does not answer
+        writeFileSync(process.env.TYPESAFE_CREDENTIALS, 'OPENROUTER_API_KEY=or-key\n')
+        await new Promise((r) => setTimeout(r, 0))
+        const c2 = m.resolveCredentials()
+        const viaOr = c2?.provider === 'openrouter' ? await evaluate({ state: 'x', questions: { a: jev.choice({ keep: 'k', drop: 'd' }, 'Keep?') } }) : null
+        routes = c2?.provider === 'openrouter' && viaOr?.client === 'openrouter' && viaOr.answers.a.choice === 'keep' && !/or-key/.test(m.describeCredentials())
+        delete process.env.OPENROUTER_API_URL
+      }
       delete process.env.TYPESAFE_CREDENTIALS; delete process.env.CLOUDFLARE_API_BASE
       if (!routes) bad++
     }
     if (!(ok && fastFail && mockOk)) bad++
-    console.log(`${ok && fastFail && mockOk && routes !== false ? 'OK  ' : 'BAD '} ${name.padEnd(14)} live=${ok} fastFail401=${fastFail} mock=${mockOk} credentialsFile+cloudflare=${routes}`)
+    console.log(`${ok && fastFail && mockOk && routes !== false ? 'OK  ' : 'BAD '} ${name.padEnd(14)} live=${ok} fastFail401=${fastFail} mock=${mockOk} credentialsFile+cloudflare+openrouter=${routes}`)
   } catch (e) {
     bad++
     console.log(`BAD  ${name.padEnd(14)} ${e.message}`)

@@ -31,14 +31,15 @@ printf 'TYPESAFE_API_KEY=%s\n' 'paste-your-key-here' > ~/.config/typesafe/creden
 chmod 600 ~/.config/typesafe/credentials
 ```
 
-Two routes work, and both speak the same question format:
+Three routes work, and all speak the same question format:
 
 | route | what goes in the file | where to get it |
 |---|---|---|
 | TypeSafe direct | `TYPESAFE_API_KEY=...` | https://console.typesafe.ai/keys (there may be a waitlist) |
 | Cloudflare Workers AI | `CLOUDFLARE_ACCOUNT_ID=...` and `CLOUDFLARE_API_TOKEN=...` | a Cloudflare API token with Workers AI permission, no TypeSafe waitlist |
+| OpenRouter | `OPENROUTER_API_KEY=...` | https://openrouter.ai/keys, no waitlist. It is an alpha endpoint. Measured on 2026-09-20: about 0.45 s a call once warm (others have reported up to 2 s). Batch harnesses fly; the real-time games run at about two decisions a second instead of nine |
 
-Environment variables of the same names win over the file. Restart the harness after changing the
+When more than one is present the fastest wins: TypeSafe, then Cloudflare, then OpenRouter. Environment variables of the same names win over the file. Restart the harness after changing the
 file. `toolchain/doctor.sh` prints which route is active and never prints the key. One file serves
 every Jev harness on the machine. Never paste a key into the chat, and never save one in the
 workspace. Under `node --test`, or with `JEV_OFFLINE=1`, a key is ignored so tests stay deterministic.

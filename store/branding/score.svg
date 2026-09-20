@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Score — a phrase made visible</title>
+  <path d="M22 43V16L53 8V37" fill="none" stroke="#816447" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M22 25L53 17" fill="none" stroke="#bd965f" stroke-width="5"/>
+  <ellipse cx="14" cy="46" rx="11" ry="8" transform="rotate(-25 14 46)" fill="#816447"/>
+  <ellipse cx="45" cy="40" rx="11" ry="8" transform="rotate(-25 45 40)" fill="#bd965f"/>
+  <path d="M29 55H55" fill="none" stroke="#bd965f" stroke-width="3" stroke-linecap="round"/>
+</svg>

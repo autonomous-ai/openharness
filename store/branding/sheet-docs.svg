@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Sheet and Docs — one source, clear outputs</title>
+  <path d="M17 5H40L55 20V53A6 6 0 0 1 49 59H17A6 6 0 0 1 11 53V11A6 6 0 0 1 17 5Z" fill="#528c85"/>
+  <path d="M40 5V15A5 5 0 0 0 45 20H55Z" fill="#a7d5bd"/>
+  <path d="M21 20H30M21 28H43" fill="none" stroke="#eff8f2" stroke-width="4" stroke-linecap="round"/>
+  <rect x="20" y="37" width="10" height="13" rx="2" fill="#c1e4ca"/>
+  <rect x="35" y="37" width="10" height="13" rx="2" fill="#eff8f2"/>
+</svg>
