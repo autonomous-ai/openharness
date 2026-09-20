@@ -114,6 +114,10 @@ The brief lists the domain's stages. The viewer shows each one the moment its fi
   in about 130 lines of Node with no dependencies: start from it.
 - No network at runtime: vendor every script and font into the package (pinned in the lockfile), and set
   a Content-Security-Policy that keeps fetches on the page's own origin.
+- **Answer `/favicon.ico`** — the harness's mark, or a 204. Every browser asks for it unprompted, and
+  an unanswered one puts a console error in every frame of every proof, which is exactly the signal
+  the review uses to tell a healthy pane from a broken one. Keep the console clean so an error means
+  something.
 - Dark and light: follow `prefers-color-scheme`, and design both on purpose.
 - `?snapshot=1` renders deterministically (no animation, final state of the current files) so
   `"$BUILDER" snapshot` and proofs can take clean pictures — and shows the result **whole**: a
