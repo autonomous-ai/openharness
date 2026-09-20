@@ -1,4 +1,5 @@
 {
+  "listed": false,
   "homepage": "https://openscad.org",
   "upstream": "https://github.com/openscad/openscad",
   "license": "MIT",
