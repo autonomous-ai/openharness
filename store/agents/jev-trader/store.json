@@ -9,5 +9,6 @@
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-trader/paper-desk.jpg",
       "caption": "Jev's Desk — a decision model trading a synthetic market, tick by tick"
     }
-  ]
+  ],
+  "listed": false
 }

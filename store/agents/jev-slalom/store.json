@@ -9,5 +9,6 @@
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-slalom/slope.jpg",
       "caption": "Jev's Run — a fast decision model carving a slalom line and threading each gate on every tick"
     }
-  ]
+  ],
+  "listed": false
 }

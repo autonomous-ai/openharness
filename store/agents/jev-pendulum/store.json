@@ -9,5 +9,6 @@
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-pendulum/balancing-rig.jpg",
       "caption": "Jev's Balancing Act — a fast decision model keeping a rod upright, and losing it at high gravity"
     }
-  ]
+  ],
+  "listed": false
 }

@@ -9,5 +9,6 @@
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-lander/soft-landing.jpg",
       "caption": "Jev's Landing — a fast decision model flying a booster down to a soft touchdown on every tick"
     }
-  ]
+  ],
+  "listed": false
 }

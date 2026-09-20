@@ -91,6 +91,11 @@ export const StoreFactsSchema = z.strictObject({
   tagline: z.string().min(1).max(80).optional(),
   screenshots: z.array(z.string().url().max(2048)).max(8).optional(),
   examples: z.array(StoreExampleSchema.strict()).max(8).optional(),
+  /**
+   * `false` unlists the package: the folder and its code stay in the repo and keep passing every
+   * check, and the package is left out of the registry and the published catalog. Absent means listed.
+   */
+  listed: z.boolean().optional(),
 })
 
 export type StoreFacts = z.infer<typeof StoreFactsSchema>
@@ -119,7 +124,7 @@ export function storeEntry(path: string, manifest: Record<string, unknown>, fact
   return entry
 }
 
-/** Every `store/<agents|viewers>/<name>` folder with a manifest, as registry entries. */
+/** Every listed `store/<agents|viewers>/<name>` folder with a manifest, as registry entries. */
 export function readStoreDir(storeDir: string): unknown[] {
   const out: unknown[] = []
   for (const [plural] of STORE_KINDS) {
@@ -131,6 +136,9 @@ export function readStoreDir(storeDir: string): unknown[] {
       try { manifest = JSON.parse(readFileSync(join(dir, 'harness.json'), 'utf8')) as Record<string, unknown> } catch { continue }
       let facts: Record<string, unknown> = {}
       try { facts = JSON.parse(readFileSync(join(dir, 'store.json'), 'utf8')) as Record<string, unknown> } catch { facts = {} }
+      // `"listed": false` unlists a package: its code stays in the repo, checked like any other, and it
+      // is left out of the registry and the published catalog. Delete the flag to list it again.
+      if (facts.listed === false) continue
       out.push(storeEntry(`store/${plural}/${name}`, manifest, facts))
     }
   }

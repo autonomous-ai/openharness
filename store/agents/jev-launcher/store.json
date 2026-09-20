@@ -9,5 +9,6 @@
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-launcher/ranked-as-you-type.jpg",
       "caption": "Jev's Palette — a fast decision model ranking launch targets live, per keystroke"
     }
-  ]
+  ],
+  "listed": false
 }
