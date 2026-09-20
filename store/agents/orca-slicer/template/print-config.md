@@ -1,11 +1,21 @@
-# Print intent
+# Saved slicing brief
 
-The included fluted vessel and slice-config.json are a **demo for toolpath exploration**, not a recommendation for your printer. No printer is connected.
+slice-config.json is executable; these notes explain the example.
 
-The executable settings are the printer, process and filament JSON profiles named in slice-config.json. This Markdown file is notes only; changing it does not change the slice.
+- Goal: compare the same six-pocket rack across three actual native slicing plans.
+- Requirements: source mesh 87.8 × 59.2 × 18 mm, explicitly millimetres.
+- Machine/material: example Prusa MK3S / one 0.4 mm nozzle / PLA / High Temp Plate.
+  This is not a claim about the user's printer. No printer is connected.
+- Each plan must stay within the saved 8-hour / 80 g estimate budgets and the
+  5 mm model/support-centerline bed inset. Custom purge and parking are reported
+  separately and must be reviewed; they are not guaranteed to stay in that inset.
+- Source pocket size 26.6 mm is not a measured printed fit. Ask for actual bottle,
+  printer and filament details before preparing a hardware-specific job.
+- Revisions change the JSON before slicing. Export G-code + editable 3MF + all
+  source/profile files, not just a screenshot. Open the 3MF in OrcaSlicer.
+- These tests do not establish structural strength, material compatibility,
+  support adequacy, food safety, thermal safety or successful physical printing.
 
-For a real project, set mode to "custom", provide your OrcaSlicer-exported profile paths (relative to the workspace or absolute), and confirm printer model, nozzle, bed dimensions, firmware flavor, material temperatures, cooling, layer height, walls and supports. Inherited profiles must resolve in your installed OrcaSlicer. Do not copy the demo profile onto an unrelated printer.
-
-Run: `sh "$ORCA_SKILLS/orcaslicer/scripts/slice-part.sh"`
-
-The helper loads all three profiles explicitly, arranges one mesh onto the bed, disables arc fitting for the linear inspector, disables post-processing commands, and never uploads or prints. Review machine-specific start/end G-code and geometry in OrcaSlicer before printing.
+model.scad is editable CAD provenance. Re-export its STL with OpenSCAD after a
+CAD edit; this harness does not claim that the SCAD and STL are automatically in
+sync. The STL is the actual slicing input.
