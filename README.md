@@ -1,9 +1,9 @@
 # Follow your curiosity. Build across disciplines.
 
-OpenHarness is open-source software for building with coding agents. Use Claude Code, Codex, and
-others to make software, design parts and circuit boards, explore data, and create videos, with your
-agents, domain tools, and live viewers in one place and sessions that persist across every machine
-you own.
+OpenHarness is open-source software and hardware for building with coding agents. Use Claude Code,
+Codex, and others to make software, design parts and circuit boards, explore data, and create videos,
+with your agents, domain tools, and live viewers in one place and sessions that persist across every
+machine you own.
 
 The old rule said ten thousand hours to a craft. That was the tax on curiosity, and most of us could
 only afford to pay it once, so we specialized and called the rest hobbies.
@@ -12,8 +12,9 @@ Coding agents become the specialists, given the tools of a craft and a way to se
 the geometry that becomes a part, the netlist that becomes a circuit board, the script that becomes
 a film. You bring the idea, the taste, and the judgment about what is worth making.
 
-Use the desktop app on its own, or add the optional open-hardware **Harness device** to follow your
-agents, answer their questions, and speak new tasks from your desk.
+Use the desktop app on its own, or add the optional **Harness device** to follow your agents, answer
+their questions, and speak new tasks from your desk. The app, firmware, schematics, PCB layouts, and
+enclosure CAD files are all open source.
 
 [Who it's for](#for-polymaths-in-the-making) · [What you can make](#domain-specific-harnesses-dsh) · [Run it](#run-it) ·
 [Harness device](#harness-device) · [Architecture](docs/architecture.md) · [Contribute](#contributing)

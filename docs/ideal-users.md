@@ -8,9 +8,9 @@ remain hands-on, and work across product, design, analysis, and marketing. They 
 medium for making things: something expressive that they can inspect, change, reuse, and apply across
 disciplines.
 
-**Follow your curiosity. Build across disciplines.** Harness is open-source software for people who
-build in more than one craft. It gives them a place to direct their agents, use domain tools, and turn
-ideas into work they can inspect, change, and use.
+**Follow your curiosity. Build across disciplines.** Harness is open-source software and hardware
+for people who build in more than one craft. It gives them a place to direct their agents, use domain
+tools, and turn ideas into work they can inspect, change, and use.
 
 ## The ideal user
 
@@ -141,7 +141,12 @@ projects visible. Device marketing should demonstrate its usefulness during real
 
 The project description:
 
-> Follow your curiosity. Build across disciplines. Open-source software for polymaths in the making.
+> Follow your curiosity. Build across disciplines. Open-source software and hardware for polymaths in the making.
+
+Name both software and hardware in the description. The device makes that openness tangible: its
+firmware, schematics, PCB layouts, and enclosure CAD files are available to study, change, and build.
+Show those files and the physical device in the README; keep the short description focused on the
+invitation.
 
 The wording draws on three recurring ideas in the saved research:
 
