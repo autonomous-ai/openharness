@@ -1,5 +1,7 @@
 # Jev Sheets
 
+![Jev Sheets logo](brand/logo.svg)
+
 **Ask your spreadsheet anything, and get an answer for every row.** Drop in a pile of text you could
 never read in full: 5,000 app reviews, a survey's free-text answers, a quarter of support tickets,
 a list of leads. Type a question in plain words as a column header. Jev, TypeSafe's System One
@@ -130,6 +132,11 @@ missing Jev column is a question. Up to 32 calls run at a time. Answers are cach
 column definition, so a new column asks only for that column, an edited row asks only for that row,
 and new rows ask only for themselves. A bad JSON edit keeps the last good sheet on screen and shows
 the error. The viewer writes `answers.csv` and `.harness/verdict.json` itself. The agent reads both.
+
+## Logo and icon
+
+The original identity ships in `brand/`: [vector icon](brand/icon.svg), [256px PNG](brand/icon.png),
+[light logo](brand/logo.svg) and [dark logo](brand/logo-dark.svg). MIT, by Autonomous.
 
 ## Credit and stewardship
 

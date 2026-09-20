@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 96 96">
+  <title>Jev Sheets — one question, a column of answers</title>
+  <rect x="4" y="4" width="88" height="88" rx="23" fill="#2b2010"/>
+  <rect x="16" y="17" width="64" height="62" rx="9" fill="#6e5d37"/>
+  <path d="M25 17h26.5v19H16V26a9 9 0 0 1 9-9Z" fill="#b89c5e"/>
+  <path d="M51.5 17H71a9 9 0 0 1 9 9v10H51.5Z" fill="#fde7a3"/>
+  <path d="M51.5 36H80v34a9 9 0 0 1-9 9H51.5Z" fill="#fbbf24"/>
+  <path d="M33 17v62M51.5 17v62M16 36h64M16 51h64M16 66h64" stroke="#2b2010" stroke-width="3.5"/>
+  <path d="M59 22v7" stroke="#2b2010" stroke-width="3" stroke-linecap="round"/>
+</svg>

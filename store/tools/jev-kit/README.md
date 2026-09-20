@@ -202,6 +202,14 @@ Rules for the words you write (README, AGENTS.md, SKILL.md, store.json):
 - `node toolchain/check.mjs` accepts the template and rejects an out-of-range value.
 - Screenshots reviewed at 1440x900 and 1100x800, with a clean page console.
 
+## Logos and icons
+
+Draw `brand/icon.svg` by hand (256x256, viewBox `0 0 96 96`, the shared rounded square first) and add the harness's subtitle word to `WORDS` in `brand.mjs`.
+With a headless Chrome on CDP port 9555 (the command is at the top of `brand.mjs`), run `node store/tools/jev-kit/brand.mjs`.
+It writes `logo.svg`, `logo-dark.svg`, `icon.png` and `assets.json`, and copies the PNG to `desktop/assets/engine-icons/<folder>.png`.
+`--sheet <out.png>` renders every icon at 96, 48, 24 and 16 px so you can judge it. `--check` needs no browser and fails on any drift.
+Then register the harness in `_harnesses` and `knownHarnessBase` in `desktop/lib/widgets/engine_identity.dart`.
+
 ## Report back
 
 End with a short report: what you built, the interactions, the dial and its measured numbers, the
