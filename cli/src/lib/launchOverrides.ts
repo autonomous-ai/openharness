@@ -15,6 +15,7 @@
 import { join } from 'node:path'
 import type { AgentEngine } from '../engines/types.js'
 import { subscriptionModelLaunch } from './subscriptionModel.js'
+import { ownLoginProviderArgs } from '../engines/codex/ownLoginProvider.js'
 import { namedAgentArgs, supportsNamedAgent } from './engineLaunch.js'
 import {
   buildGridEngineLaunch,
@@ -59,6 +60,15 @@ export interface LaunchOverridesDeps {
   /** Install the daemon's hooks into a non-default Codex profile. The caller decides whether hook
    *  installation is enabled at all. */
   installCodexHooks: (codexHome: string) => void
+  /**
+   * Read a Codex `config.toml`, for the provider an agent goes back to when it leaves a grid.
+   *
+   * A seam rather than a direct read: without it every relaunch built in a test would consult
+   * whatever Codex configuration the machine running the test happens to have, and a developer who
+   * had set `model_provider` would watch unrelated specs change their answer. Absent ⇒ the real
+   * file. See `engines/codex/ownLoginProvider.ts`.
+   */
+  readCodexConfig?: (path: string) => string | null
   /** What a DSH adds to the launch (its env and argv), or null when it is not installed here any
    *  more — in which case the agent relaunches as its plain base engine and says so in the log. */
   dshLaunch?: (dsh: string, workspace: string) => DshLaunch | null
@@ -164,20 +174,30 @@ async function buildBaseLaunchOverrides(
 ): Promise<LaunchOverridesResult> {
   const valid = await validateLaunchOverrides(deps, engine, source)
   if (!valid.ok) return valid
+  // Coming back to the engine's own login undoes TWO things the grid launch set, and they are
+  // undone separately because the engine remembers them differently.
+  //
+  //   * The MODEL — re-selected so the engine does not fall back to a house default. See
+  //     `subscriptionModel.ts` for why an engine with no cited mechanism is given nothing rather
+  //     than a guess.
+  //   * The PROVIDER — named again, because Codex persists the grid's in state of its own that
+  //     outlives the argv defining it, and a resume then fails before the TUI is up. See
+  //     `engines/codex/ownLoginProvider.ts`.
+  //
+  // Accumulated rather than returned, because a Codex agent needs its profile (below) as well, and
+  // an early return here used to drop it: a row with both a remembered model and a CODEX_HOME came
+  // back on the DEFAULT profile, reading hooks from a folder that was not the one it writes to.
+  let ownLogin: LaunchOverrides | null = null
   if (!source.gridLaunch) {
-    // Coming back to the engine's own login: re-select the model this agent was on before it left,
-    // so the engine does not fall back to a house default. See `subscriptionModel.ts` for why an
-    // engine with no cited mechanism is given nothing rather than a guess.
     const restored = subscriptionModelLaunch(engine, source.subscriptionModel)
-    if (restored) {
-      const base = noOverrides()
-      return {
-        ok: true,
-        overrides: {
-          ...base,
-          env: { ...base.env, ...restored.env },
-          extraArgs: [...base.extraArgs, ...restored.args],
-        },
+    // Ahead of the model on the command line: `-c` configures, `-m` selects, and Codex resolves the
+    // model against the provider it has been given.
+    const provider = ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
+    if (restored || provider.length) {
+      ownLogin = {
+        env: { ...(restored?.env ?? {}) },
+        extraArgs: [...provider, ...(restored?.args ?? [])],
+        clearEnv: [],
       }
     }
   }
@@ -212,7 +232,15 @@ async function buildBaseLaunchOverrides(
     // A Codex agent on a profile OTHER than this machine's default reads hooks.json from THAT folder,
     // not the one `harness login` installed into — without this it fires no hook at all. Idempotent.
     deps.installCodexHooks(source.codexHome)
-    return { ok: true, overrides: { env: { CODEX_HOME: source.codexHome }, extraArgs: [], clearEnv: [] } }
+    return {
+      ok: true,
+      overrides: {
+        env: { CODEX_HOME: source.codexHome, ...(ownLogin?.env ?? {}) },
+        extraArgs: [...(ownLogin?.extraArgs ?? [])],
+        clearEnv: [],
+      },
+    }
   }
+  if (ownLogin) return { ok: true, overrides: ownLogin }
   return { ok: true, overrides: noOverrides() }
 }

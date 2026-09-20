@@ -17,6 +17,9 @@ function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
     writeGridConfigDir: async (key) => { calls.push(`writeConfig:${key}`); return `/state/grid-engine-config/${key}` },
     tmuxSupportsSessionEnv: async () => true,
     installCodexHooks: (home) => { calls.push(`hooks:${home}`) },
+    // No Codex configuration unless a test says so — otherwise every relaunch built here would
+    // consult the config.toml of whoever is running the suite.
+    readCodexConfig: () => null,
     ...overrides,
   }
   return { d, calls }
@@ -65,10 +68,20 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     expect(calls).toEqual([])
   })
 
-  it('a Codex profile gets its CODEX_HOME and its hooks, and clears nothing', async () => {
+  it('a Codex profile gets its CODEX_HOME, its hooks and its own provider, and clears nothing', async () => {
     const { d, calls } = deps()
     const result = await buildLaunchOverrides(d, 'codex', { gridLaunch: null, codexHome: '/home/u/.codex-work' }, 'agent-2')
-    expect(result).toEqual({ ok: true, overrides: { env: { CODEX_HOME: '/home/u/.codex-work' }, extraArgs: [], clearEnv: [] } })
+    // `model_provider` rides every own-login Codex launch, not only one that follows a grid: the
+    // row does not record where the thread has been, and naming the provider Codex would have
+    // picked anyway is what makes a poisoned thread resumable again.
+    expect(result).toEqual({
+      ok: true,
+      overrides: {
+        env: { CODEX_HOME: '/home/u/.codex-work' },
+        extraArgs: ['-c', 'model_provider="openai"'],
+        clearEnv: [],
+      },
+    })
     expect(calls).toEqual(['hooks:/home/u/.codex-work'])
   })
 
@@ -99,12 +112,81 @@ describe('buildLaunchOverrides — coming back off a grid', () => {
 
   it('uses argv for an engine whose interactive CLI resolves the model there', async () => {
     const result = await buildLaunchOverrides(deps().d, 'codex', { subscriptionModel: 'gpt-5-codex' }, 'a')
-    expect(result).toMatchObject({ ok: true, overrides: { extraArgs: ['-m', 'gpt-5-codex'] } })
+    // The provider comes FIRST: `-c` configures and `-m` selects, and Codex resolves the model
+    // against the provider it was given.
+    expect(result).toMatchObject({ ok: true, overrides: { extraArgs: ['-c', 'model_provider="openai"', '-m', 'gpt-5-codex'] } })
   })
 
   it('adds nothing when there is no model to come back to', async () => {
     const result = await buildLaunchOverrides(deps().d, 'claude', {}, 'a')
     expect(result).toMatchObject({ ok: true, overrides: { env: {}, extraArgs: [] } })
+  })
+
+  // ── the provider, which Codex remembers on its own ────────────────────────────────────────────
+  //
+  // Codex records the provider per THREAD (`threads.model_provider` in its own state database),
+  // written from the `-c model_provider=` the grid launch passed. Dropping that argv on the way back
+  // leaves the NAME stored with nothing defining it, and `codex resume` dies before the TUI is up:
+  //   thread/resume failed: failed to load configuration: Model provider `grid` not found
+  // The daemon's only answer was to abandon the conversation ("retrying fresh"). Reproduced against
+  // codex-cli 0.155.1; see `engines/codex/ownLoginProvider.ts`.
+
+  it('names a provider for Codex even when no model is remembered', async () => {
+    // The case a model-shaped fix misses entirely: nothing to re-select, and the stale provider is
+    // still what stops the resume.
+    const result = await buildLaunchOverrides(deps().d, 'codex', {}, 'a')
+    expect(result).toMatchObject({ ok: true, overrides: { extraArgs: ['-c', 'model_provider="openai"'] } })
+  })
+
+  it('keeps the user’s own model_provider instead of forcing them onto openai', async () => {
+    const { d } = deps({ readCodexConfig: () => 'model = "gpt-6"\nmodel_provider = "azure"\n' })
+    const result = await buildLaunchOverrides(d, 'codex', { subscriptionModel: 'gpt-6' }, 'a')
+    expect(result).toMatchObject({ ok: true, overrides: { extraArgs: ['-c', 'model_provider="azure"', '-m', 'gpt-6'] } })
+  })
+
+  it('reads the AGENT’s Codex profile, not this machine’s default', async () => {
+    const seen: string[] = []
+    const { d } = deps({ readCodexConfig: (path) => { seen.push(path); return null } })
+    await buildLaunchOverrides(d, 'codex', { codexHome: '/profiles/work' }, 'a')
+    expect(seen).toEqual(['/profiles/work/config.toml'])
+  })
+
+  it('keeps the Codex profile AND its hooks while naming the provider', async () => {
+    // Both used to be lost: a row with a remembered model returned before the profile branch, so it
+    // came back on the default profile and fired no hook.
+    const { d, calls } = deps()
+    const result = await buildLaunchOverrides(d, 'codex', { codexHome: '/profiles/work', subscriptionModel: 'gpt-6' }, 'a')
+    expect(result).toMatchObject({
+      ok: true,
+      overrides: { env: { CODEX_HOME: '/profiles/work' }, extraArgs: ['-c', 'model_provider="openai"', '-m', 'gpt-6'] },
+    })
+    expect(calls).toContain('hooks:/profiles/work')
+  })
+
+  it('leaves every other engine’s provider alone', async () => {
+    // Only Codex persists one. Claude Code and Hermes read theirs fresh each launch, and OpenCode's
+    // lives in a file this daemon writes and can simply stop writing.
+    for (const engine of ['claude', 'hermes', 'opencode'] as const) {
+      const result = await buildLaunchOverrides(deps().d, engine, { subscriptionModel: 'a/b' }, 'a')
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.overrides.extraArgs.join(' ')).not.toContain('model_provider')
+    }
+  })
+
+  it('never names a provider on a GRID launch — that launch names its own', async () => {
+    // `-c model_provider="grid"` is the grid contract's, and a second one after it would decide the
+    // launch. Nothing about coming back may reach the way out.
+    let reads = 0
+    const { d } = deps({ readCodexConfig: () => { reads++; return null } })
+    const result = await buildLaunchOverrides(d, 'codex', { gridLaunch: GRID, subscriptionModel: 'gpt-6' }, 'a')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const providers = result.overrides.extraArgs.filter((arg) => arg.startsWith('model_provider='))
+    expect(providers).toEqual(['model_provider="grid"'])
+    // And it is not merely outvoted downstream: a launch going TO a grid has no reason to open the
+    // user's Codex configuration at all, so the question is never asked.
+    expect(reads).toBe(0)
   })
 
   it('never lets a remembered model reach a GRID launch — that launch names its own', async () => {
