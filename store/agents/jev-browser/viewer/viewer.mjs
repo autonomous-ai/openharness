@@ -167,8 +167,9 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
       demo ??= await startDemoSite()
       job = { ...job, start: demo.url, hosts: [...new Set([...job.hosts, '127.0.0.1', 'localhost'])] }
     }
-    const opened = await openBrowser()
-    if (opened.ok === false) return opened
+    let opened
+    try { opened = await openBrowser() } catch (e) { const error = clean(e?.message ?? e); say(error, 'bad'); phase = 'idle'; push(); verdictSoon(); return { ok: false, error } }
+    if (opened.ok === false) { say(opened.error, 'bad'); push(); return opened }
     rows = []; links = []; feed = []
     // Nobody should have to name the columns. Jev reads one page and proposes them, in about a
     // second, and the answer is written back into browse.json so the job stays the recipe.
@@ -342,7 +343,13 @@ export async function startBrowserViewer({ workspace, port = 0, show = null } = 
     // twice: the person who typed it, or the agent that wrote the file for them, has already said so.
     if (changed && !configError && job.autoStart && !running) {
       clearTimeout(autoTimer)
-      autoTimer = setTimeout(() => { if (!running && !configError) start().catch(() => {}) }, 400)
+      autoTimer = setTimeout(() => {
+        if (running || configError) return
+        // A job that starts itself must still say when it could not. Swallowing this is what made
+        // a browser that would not open look like nothing happening at all.
+        start().then((r) => { if (r?.ok === false) { say(r.error, 'bad'); phase = 'idle'; push(); verdictSoon() } })
+          .catch((e) => { say(clean(e?.message ?? e), 'bad'); phase = 'idle'; proposing = false; push(); verdictSoon() })
+      }, 400)
     }
   }
 
