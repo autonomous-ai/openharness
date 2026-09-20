@@ -28,11 +28,13 @@ test('every script the manifest names is in the folder and executable', () => {
   }
 })
 
-test('setup installs nothing and succeeds quietly', () => {
-  assert.deepEqual(run(manifest.toolchain.setup), { code: 0, stdout: '', stderr: '' })
+test('setup installs package-local exports and locates the browser', () => {
+  const result = run(manifest.toolchain.setup)
+  assert.equal(result.code, 0, result.stderr)
+  assert.match(result.stdout, /ok   export browser:/)
 })
 
-test('doctor says ok when sh is on PATH', () => {
+test('doctor verifies Node and an export browser', () => {
   assert.equal(run(manifest.toolchain.doctor).code, 0)
 })
 
@@ -43,8 +45,8 @@ test('init lays out a workspace and seeds a not-ready verdict', () => {
   assert.equal(readFileSync(join(ws, '.harness-initialized'), 'utf8'), `initialized by ${manifest.id}\n`)
 })
 
-test('the manifest names a viewer package and an HTML artifact', () => {
-  assert.equal(manifest.viewer.use, 'autonomous/web-viewer')
+test('the manifest names its workspace bridge and an HTML artifact', () => {
+  assert.equal(manifest.viewer.command, 'toolchain/viewer.sh')
   assert.deepEqual(manifest.viewer.artifactExtensions, ['.html'])
 })
 
@@ -60,7 +62,7 @@ test('seed-verdict reflects whether a board exists', () => {
 })
 
 
-test('the manifest routes the actual nested artifact through the shared viewer', () => {
-  assert.equal(manifest.viewer.url, 'http://127.0.0.1:${port}/?file=${artifact}')
+test('the manifest routes the actual project through its local workspace bridge', () => {
+  assert.equal(manifest.viewer.url, 'http://127.0.0.1:${port}/')
   assert.ok(manifest.workspace.marker.endsWith('/index.html'))
 })
