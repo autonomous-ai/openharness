@@ -48,6 +48,12 @@ Map<ShortcutAction, List<String>> _readWorkspaceKeys() {
 
 final harnessCommands = <HarnessCommand>[
   const HarnessCommand(
+    'navigation.command_bar',
+    'Ask Harness',
+    ShortcutGroup.actions,
+    extraKeys: ['cmd+shift+j'],
+  ),
+  const HarnessCommand(
     'navigation.commands',
     'Search commands',
     ShortcutGroup.actions,

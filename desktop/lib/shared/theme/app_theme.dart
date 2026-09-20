@@ -195,6 +195,11 @@ abstract final class AppPalette {
   static Color get swarmSearchSurface => AppTheme.palette.value.search;
   static const agentEntrySurface = Color(0xff101113);
   static const agentEntryField = Color(0xff1d1f22);
+  // The command field deliberately stays light, like a browser's new-tab omnibox.
+  static const commandField = Color(0xFFF7F8FA);
+  static const commandInk = Color(0xFF202124);
+  static const commandMuted = Color(0xFF646971);
+  static const commandChip = Color(0xFFE9EBEF);
 
   // the conversation / content area — pure white in light, like Codex.
   //

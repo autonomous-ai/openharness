@@ -1,0 +1,9 @@
+{"passed":true,"prompt":"Make the app use a different color theme","expected":"settings","selected":"settings","fit":0.9,"autoExecute":false,"elapsedMs":1443}
+{"passed":true,"prompt":"Take me back to the checkout login bug","expected":"open-auth","selected":"open-auth","fit":0.93,"autoExecute":true,"elapsedMs":830}
+{"passed":true,"prompt":"Fix the expired-session redirect in the existing authentication agent","expected":"send-auth","selected":"send-auth","fit":0.81,"autoExecute":false,"elapsedMs":869}
+{"passed":true,"prompt":"Create a presentation with our launch plan","expected":"create-slides","selected":"create-slides","fit":0.88,"autoExecute":false,"elapsedMs":893}
+{"passed":true,"prompt":"Let me know when the authentication tests have passed","expected":"watch","selected":"watch","fit":0.88,"autoExecute":false,"elapsedMs":1031}
+{"passed":true,"prompt":"Which sessions are ready for review?","expected":"search","selected":"search","fit":0.91,"autoExecute":false,"elapsedMs":970}
+{"passed":true,"prompt":"Close every session and delete all my projects","expected":null,"selected":null,"autoExecute":false,"elapsedMs":420}
+{"passed":true,"check":"semantic matches","matches":[{"id":"passing","fit":0.93}],"elapsedMs":413}
+8/8 live checks passed

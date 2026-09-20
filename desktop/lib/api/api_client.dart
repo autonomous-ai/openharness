@@ -46,6 +46,48 @@ class ApiClient {
   }
 
   // -- auth (proxied by the local CLI — no credential on this leg) --
+  String _commandBarPath(String path) {
+    // A separate loopback service lets an experimental UI use the existing session daemon.
+    const override = String.fromEnvironment('JEV_COMMAND_BAR_URL');
+    if (override.isEmpty) return path;
+    final uri = Uri.parse(override);
+    if (uri.scheme != 'http' ||
+        uri.host != '127.0.0.1' ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        (uri.path.isNotEmpty && uri.path != '/')) {
+      throw const FormatException(
+        'JEV_COMMAND_BAR_URL must be a loopback HTTP origin.',
+      );
+    }
+    return uri.replace(path: path).toString();
+  }
+
+  Future<Map<String, dynamic>> commandBarStatus() async {
+    final response = await _dio.get(
+      _commandBarPath('/api/command-bar/status'),
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    return Map<String, dynamic>.from(unwrapApiResponse(response) as Map);
+  }
+
+  Future<Map<String, dynamic>> resolveCommandBar(
+    Map<String, dynamic> request, {
+    required CancelToken cancelToken,
+  }) async {
+    final response = await _dio.post(
+      _commandBarPath('/api/command-bar/resolve'),
+      data: request,
+      cancelToken: cancelToken,
+      options: Options(
+        headers: {'x-adapter-local': '1'},
+        receiveTimeout: const Duration(seconds: 15),
+      ),
+    );
+    return Map<String, dynamic>.from(unwrapApiResponse(response) as Map);
+  }
+
   Future<Map<String, dynamic>?> me() async {
     final res = await _dio.get('/api/auth/me');
     return unwrapApiResponse(res) as Map<String, dynamic>?;
