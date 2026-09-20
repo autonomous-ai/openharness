@@ -1,68 +1,65 @@
-# Lab Bench / Experiment Log harness
+# Lab Bench / Signal
 
-You turn a plain-English description into a **deterministic, seedable bench page**
-rendered in one self-contained `bench/index.html`. The pane renders the experiment
-live — seeded synthetic data with interactive charts — so the person probes the
-dataset, and a re-seed, as you work.
+Help a person turn a practical question into an experiment they can carry out, then turn their
+actual observations into a decision they can explain. Author the factors, independent units,
+procedure, allocation and analysis for their question. The coffee plan is an editable example;
+there is no fixed list of experiment genres and no synthetic-response generator in the product.
 
-## What a good bench is
+## Complete the experiment workflow
 
-- **One file, offline.** All data generation and charting inline on canvas. No CDN
-  at runtime. A `?seed=` query param selects the version: the same seed always
-  renders the same dataset on this machine.
-- **Determinism is the product.** Seed a PRNG and name sub-streams (per variable,
-  per group, per noise source) so tuning one doesn't reshuffle the rest. Same seed
-  → same dataset, same trend, same spread.
-- **Probeable, not just pretty.** Make the dataset interrogable: a live-rendering
-  run, a trendline, and filters the person can click. The bench should invite
-  questions about the data, not just display it.
-- **Be honest about verification.** Same-machine render is checkable. Anything that
-  depends on browser timing (animated runs) is not bit-identical across machines —
-  say so in the verdict rather than overclaiming.
+1. Establish the decision, continuous response and unit, controllable factors/ranges, independent
+   experimental unit, available repetitions, blocking conditions and practical constraints.
+   Ask only for missing information that materially changes the design. Record assumptions.
+2. Author `bench/project.json` using the [source contract](skills/bench/references/project.md).
+   Full factorial designs cover every combination within each block. Randomize independent runs;
+   repeated readings of the same sample do not become independent replicates. Scheduled controls
+   use numeric midpoints and categorical reference levels at the start, end and between treatments.
+3. Build `node tools/build.mjs`. Deliver an actual collection sheet early. Explain the procedure
+   in the person's language, including what to measure and what to record if a run goes wrong.
+   The person can approve the protocol in the studio; collecting measurements also protects it.
+4. Import actual CSVs or record supplied observations. Keep original bytes, hashes, run ids, units
+   and row references. Never fill missing responses with predictions or fabricated measurements.
+   Use the correction/exclusion helpers with reasons. Preserve existing run settings and sources.
+5. Fit only an identifiable, appropriate model. Inspect the raw/run-order, measured–fitted and
+   residual views. Distinguish uncertainty in the mean from uncertainty in a new observation.
+   A high R² or an influence flag is not a decision. Do not delete rows to improve a result.
+6. Compare practical settings and append a follow-up. Confirmation snapshots freeze the training
+   matrix, model and forecasts; new responses stay held out. Extensions explicitly add future
+   measurements to the model. Keep approved factors, response definition and procedure unchanged;
+   a different method or blocking condition needs a separate experiment with its earlier source kept.
+7. Deliver `node tools/export.mjs delivery`: offline editable studio, complete project, original
+   CSVs, collection sheets, model matrix, figures, report, PDFs and Python reproduction script.
+   Open the actual delivery. Record what is measured, inferred, unresolved and ready for the next run.
 
-## How to work so the pane moves
+`LAB_DSH_DIR` points to the installed package. Setup supplies managed Node and pinned build/browser
+utilities. If Node is absent from PATH, use `bash "$LAB_DSH_DIR/toolchain/node.sh" tools/build.mjs`
+from the workspace. Do not send a nonprogrammer away to install a runtime manually.
 
-1. **Save within a minute.** Materialize `bench/index.html` that renders a trivial
-   seeded scatter (a few points + a trendline) on canvas, so the header has a state
-   and the pane can show it.
-2. **Build the data, then the charts.** Get the seeded generator + chart renderer
-   right first; only then tune axis labels, filters, and interactions.
-3. **Verify like a researcher:** probe a few seeds in the pane, change a filter,
-   check the trendline tracks the data, re-render the same seed and confirm it is
-   identical.
-4. **Update `.harness/verdict.json`** at every check — `ready`, one-line `summary`,
-   `phases`, `findings`, and a reproducibility note.
+## Verification and honest status
 
-## Rules
+Run `node tools/check.mjs`: it checks source hashes, matrix identifiability and repeatable analysis.
+Then exercise the actual browser controls and exported files. The kit's `reproduce.py` uses an
+independent statsmodels/SciPy implementation of the delivered matrix and frozen forecasts.
+Inspect PDF pages and every figure for readable labels, units, intervals and source retention.
+For a new experiment with no measurements, verify and deliver the plan; do not claim results.
 
-- A bench is only "ready" when every seed in the range you promise renders clean:
-  no empty chart, no overlapping garbage, no broken axis. Sample a grid of seeds.
-- Tag every crafted decision USER vs AI in `bench/DESIGN.md`
-  (`YYYY-MM-DD | USER|AI | topic | decision | still in build?`).
-- The `summary` says plainly what is reproducible now and what is not.
+Builders and presence helpers keep `.harness/verdict.json` at `ready:false`. Only actual checks
+justify changing it; state whether the plan, measured analysis or final delivery is ready. Record
+commands, inputs, observations and limitations in `bench/DESIGN.md`, separating USER decisions,
+AI assumptions and supplied evidence. Never claim a physical experiment, customer validation,
+installed-agent trial or empirical finding from synthetic acceptance fixtures.
 
-## Shipped experience and operating standard
+## Method scope
 
-The workspace starts with **Signal**, a working experience, not an empty placeholder.
-Seeded synthetic experiment, adjustable effect/noise/sample size, group filters, regression, difference-of-means interval, point probe, collection replay, CSV.
+Small continuous-response experiments: numeric/categorical factors, main effects, two-factor
+interactions, numeric quadratics and fixed blocks. SVD checks rank and conditioning. Conventional
+OLS intervals assume independent units, constant residual variance, a suitable mean model and
+approximately normal errors. The intervals are pointwise, without adjustment for searching many
+settings. Planned-range checks are not proof that a prediction is empirically supported there.
 
-- Read the existing artifact before replacing it. The useful model boundaries are experiment, stats, regression, treatmentEffect, csvRows.
-- Preserve working interactions and exports when extending the artifact. Match the user's brief;
-  the starter's genre and visual style are examples, not a ceiling.
-- Expose meaningful domain controls and outputs. Every control must change real state; every
-  displayed metric must be computed from that state. Never invent model activity or test results.
-- Use named random streams and a fixed simulation/score clock. Sample seeds, repeat the same
-  seed, inspect exported data, and verify keyboard/touch controls in the actual viewer.
-- This HTML runs with same-origin APIs in the shared viewer. Sibling fetches, localStorage,
-  downloads and pointer lock are available. Keep files portable and support direct opening.
-- Do not equate an existing HTML file, a successful reload, or a source-string test with a usable
-  result. `seed-verdict.sh` deliberately keeps `ready:false`; write `ready:true` only after your
-  checks establish it. Record exact commands, sampled seeds, observations and limitations.
-- Never claim a test coverage percentage for browser code based on Node subprocess tests.
-
-## Check your actual edited model
-
-Run `node tools/check.mjs --seeds 100` in the workspace. It reads the pure model from
-`<script id="harness-model">` in the artifact, checks domain invariants, repeats each seed, and
-writes `.harness/model-check.json`. Preserve that script boundary when editing. Model checks are
-followed by browser interaction, exported-output inspection, and visual or listening review.
+The package does not implement clinical trials, repeated-measure/mixed/GLM models, arbitrary
+observational causal inference, adaptive optimization, hardware acquisition or instrument control.
+If the requested method exceeds this model, explain the mismatch and author an appropriate, verified
+method or separate tool; do not relabel this calculation to imply unsupported capabilities.
+Keep the original Signal identity and old `store/tools/experiences/lab-bench.*` implementation.
+Never overwrite a person's legacy workspace to migrate it into this format.

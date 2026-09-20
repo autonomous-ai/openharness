@@ -1,6 +1,6 @@
 # Game Master — original tabletop-game workshop
 
-Implementation complete; final checks and publication are in progress. The prior arena remains
+Published in [#153](https://github.com/autonomous-ai/openharness/pull/153) at `1dee0b70289522d0b7a1091d730b367bb329383a`. Both CI jobs passed at the exact PR head; catalog publisher `35508683804` succeeded. The public catalog, studio HTML and three screenshots match the tested source. Normal installation, doctor, fresh workspace materialization, actual build/check/export commands and the viewer command passed on this Mac. Installed/public package revision: `7a0e20d840a4e163dac81f95fc3c1536d34a5e2d`. The prior arena remains
 under `store/tools/experiences/game-master.*`. Relay branding is preserved. The new package uses
 ordinary authored JavaScript rules and editable component/board data to produce playable tabletop
 games and physical kits. Phaser/Godot already cover video-game engine creation in the Store.
@@ -20,6 +20,4 @@ symlinked-path CLI entry bug; the tools now resolve real paths and a regression 
 build/check commands through a workspace symlink.
 
 No customer/installed-agent prompt trial, fun/balance result, printer trial, native tabletop
-simulator import or network multiplayer is claimed. Game Master stays unlisted until publication.
-After its tested PR is merged, verify public catalog/artifact/screenshots and normal setup/doctor,
-then begin Lab Bench. Do not delete old code or change other sessions' worktrees.
+simulator import or network multiplayer is claimed. Evidence is in `/private/tmp/relay-public-bytes.json`, `/private/tmp/relay-installed-workspace.json` and `/private/tmp/relay-installed-viewer.json`. Lab Bench is next. Do not delete old code or change other sessions' worktrees.

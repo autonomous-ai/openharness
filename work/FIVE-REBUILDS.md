@@ -12,8 +12,8 @@ so the user can test it, then move to the next. Do not claim a subjective “wow
    [the acceptance evidence](../store/agents/voxel-worlds/test/ACCEPTANCE.md).
 3. **Drone Pilot — published (#151), installed readiness verified on this Mac.** [Survey planning and post-flight evidence](DRONE-REBUILD.md), with actual inputs and explicit simulation
    boundaries. No claim that a simulation authorizes or validates a real flight.
-4. **Game Master — in progress.** Original board/card games: authored rules, human play, component editing, reproducible playtests and printable kits.
-5. **Lab Bench — pending.** Analyze the person's observations with reproducible methods and outputs.
+4. **Game Master — published (#153), normal install and fresh workspace verified on this Mac.** Original board/card games: authored rules, human play, component editing, reproducible playtests and printable kits. Public catalog, studio and three screenshots match the tested release.
+5. **Lab Bench — implementation and local acceptance complete, publication pending.** Plan real experiments, collect measurements with provenance, inspect uncertainty and diagnostics, and prepare follow-up runs with reproducible outputs. Six delivered editions pass independent statistical readers; all 48 PDF pages were visually reviewed. See [the evidence](../store/agents/lab-bench/test/ACCEPTANCE.md).
 
 ## Creative Direction acceptance
 

@@ -1,0 +1,257 @@
+{
+  "spec": 1,
+  "id": "clearwater",
+  "title": "Clearwater Coffee",
+  "question": "Which steeping time and coffee dose bring extraction closest to our target, with a repeatable process?",
+  "response": {
+    "id": "extraction",
+    "name": "Extraction yield",
+    "unit": "%",
+    "goal": "target",
+    "target": 19
+  },
+  "factors": [
+    {
+      "id": "steep",
+      "name": "Steeping time",
+      "type": "number",
+      "unit": "h",
+      "levels": [
+        8,
+        16
+      ]
+    },
+    {
+      "id": "dose",
+      "name": "Coffee dose",
+      "type": "number",
+      "unit": "g/L",
+      "levels": [
+        60,
+        90
+      ]
+    }
+  ],
+  "protocol": {
+    "unit": "One separately prepared brewing jar. Repeated readings from the same jar are not independent runs.",
+    "randomization": "Prepare separate jars in the randomized order within the water batch. Keep the scheduled midpoint controls at the beginning, middle and end.",
+    "analysisPlan": "Use the planned time, dose and interaction terms. Examine residuals and repeatability. Compare two chosen settings, then collect fresh independent confirmation jars.",
+    "steps": [
+      "Label every jar with its run id before preparation. Keep the coffee lot, water batch, grind and filtering procedure consistent.",
+      "Set the planned coffee dose and steeping duration for that jar. Record any preparation departure in its note.",
+      "Use the same calibrated measurement procedure for each jar. Record extraction yield in percent; keep raw instrument observations separately.",
+      "Enter one final response per independently prepared jar. Review the residual and run-order plots before selecting the next comparison."
+    ],
+    "notes": "Example protocol. Adapt the procedure to your actual equipment before approving it. Supply measured responses from your own independent runs."
+  },
+  "approved": false,
+  "design": {
+    "seed": "clearwater-01",
+    "replicates": 3,
+    "blocks": [
+      "Water batch A"
+    ],
+    "controls": 3
+  },
+  "model": {
+    "terms": [
+      "steep",
+      "dose",
+      "steep:dose"
+    ],
+    "blocks": false,
+    "confidence": 0.95
+  },
+  "phases": [
+    {
+      "id": "initial",
+      "label": "Initial experiment",
+      "kind": "plan",
+      "reason": "Full factorial, independent repetitions and complete blocks.",
+      "seed": "clearwater-01"
+    }
+  ],
+  "runs": [
+    {
+      "id": "r0001",
+      "order": 1,
+      "phase": "initial",
+      "block": "Water batch A",
+      "kind": "control",
+      "settings": {
+        "steep": 12,
+        "dose": 75
+      }
+    },
+    {
+      "id": "r0002",
+      "order": 2,
+      "phase": "initial",
+      "block": "Water batch A",
+      "kind": "factorial",
+      "settings": {
+        "steep": 8,
+        "dose": 60
+      }
+    },
+    {
+      "id": "r0003",
+      "order": 3,
+      "phase": "initial",
+      "block": "Water batch A",
+      "kind": "factorial",
+      "settings": {
+        "steep": 8,
+        "dose": 90
+      }
+    },
+    {
+      "id": "r0004",
+      "order": 4,
+      "phase": "initial",
+      "block": "Water batch A",
+      "kind": "factorial",
+      "settings": {
+        "steep": 16,
+        "dose": 60
+      }
+    },
+    {
+      "id": "r0005",
+      "order": 5,
+      "phase": "initial",
+      "block": "Water batch A",
+      "kind": "factorial",
+      "settings": {
+        "steep": 8,
+        "dose": 90
+      }
+    },
+    {
+      "id": "r0006",
+      "order": 6,
+      "phase": "initial",
+      "block": "Water batch A",
+      "kind": "factorial",
+      "settings": {
+        "steep": 16,
+        "dose": 90
+      }
+    },
+    {
+      "id": "r0007",
+      "order": 7,
+      "phase": "initial",
+      "block": "Water batch A",
+      "kind": "factorial",
+      "settings": {
+        "steep": 16,
+        "dose": 60
+      }
+    },
+    {
+      "id": "r0008",
+      "order": 8,
+      "phase": "initial",
+      "block": "Water batch A",
+      "kind": "control",
+      "settings": {
+        "steep": 12,
+        "dose": 75
+      }
+    },
+    {
+      "id": "r0009",
+      "order": 9,
+      "phase": "initial",
+      "block": "Water batch A",
+      "kind": "factorial",
+      "settings": {
+        "steep": 16,
+        "dose": 90
+      }
+    },
+    {
+      "id": "r0010",
+      "order": 10,
+      "phase": "initial",
+      "block": "Water batch A",
+      "kind": "factorial",
+      "settings": {
+        "steep": 8,
+        "dose": 90
+      }
+    },
+    {
+      "id": "r0011",
+      "order": 11,
+      "phase": "initial",
+      "block": "Water batch A",
+      "kind": "factorial",
+      "settings": {
+        "steep": 8,
+        "dose": 60
+      }
+    },
+    {
+      "id": "r0012",
+      "order": 12,
+      "phase": "initial",
+      "block": "Water batch A",
+      "kind": "factorial",
+      "settings": {
+        "steep": 16,
+        "dose": 60
+      }
+    },
+    {
+      "id": "r0013",
+      "order": 13,
+      "phase": "initial",
+      "block": "Water batch A",
+      "kind": "factorial",
+      "settings": {
+        "steep": 16,
+        "dose": 90
+      }
+    },
+    {
+      "id": "r0014",
+      "order": 14,
+      "phase": "initial",
+      "block": "Water batch A",
+      "kind": "factorial",
+      "settings": {
+        "steep": 8,
+        "dose": 60
+      }
+    },
+    {
+      "id": "r0015",
+      "order": 15,
+      "phase": "initial",
+      "block": "Water batch A",
+      "kind": "control",
+      "settings": {
+        "steep": 12,
+        "dose": 75
+      }
+    }
+  ],
+  "measurements": [],
+  "sources": [],
+  "audit": [
+    {
+      "id": "starter-design",
+      "at": "2026-09-20T00:00:00.000Z",
+      "action": "design",
+      "reason": "Generated a randomized run sheet; control positions are scheduled.",
+      "previous": {
+        "runs": [],
+        "phases": []
+      },
+      "runs": 15
+    }
+  ],
+  "conclusion": ""
+}

@@ -109,6 +109,11 @@ async function shellRegression() {
 }
 
 async function one(exp) {
+  if (exp.id === 'lab-bench') {
+    const result = execFileSync(process.execPath, [join(repo, 'store/agents/lab-bench/test/browser.mjs')], { env: { ...process.env, LAB_QA_ROOT: join(output, 'signal-browser') }, encoding: 'utf8', timeout: 180000 });
+    results.push({name:'lab-bench-studio',ok:true,output:result.trim()});
+    return;
+  }
   if (exp.id === 'game-master') {
     const result = execFileSync(process.execPath, [join(repo, 'store/agents/game-master/test/browser.mjs')], { env: { ...process.env, GAME_QA_ROOT: join(output, 'relay-browser') }, encoding: 'utf8', timeout: 180000 });
     results.push({name:'game-master-studio',ok:true,output:result.trim()});
