@@ -1,14 +1,5 @@
-#!/bin/sh
-# Runs once in a fresh workspace (cwd = the workspace) after the template copy.
-# Seeds the first verdict and a placeholder dashboard so the pane has something to show.
-set -u
-mkdir -p .harness
-cat > .harness/verdict.json <<'JSON'
-{ "spec": 1, "ready": false, "summary": "Home Assistant workspace ready — describe an automation to write",
-  "findings": [], "artifact": null, "updatedAt": "2026-09-18T00:00:00Z" }
-JSON
-cat > dashboard.html <<'HTML'
-<!doctype html><meta charset="utf-8"><title>Automations</title>
-<h1>Home Assistant</h1><p>No automations built yet. Describe one — each rule will appear here.</p>
-HTML
-printf 'Home Assistant workspace initialized by %s\n' "${HARNESS_DSH:-home-assistant}" > .harness-initialized
+#!/usr/bin/env bash
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+workspace="${HARNESS_WORKSPACE:-$PWD}"
+exec bash "$here/node.sh" --input-type=module -e 'import {pathToFileURL} from "node:url";import {resolve} from "node:path";const root=resolve(process.argv[1]);const {readSource,verdict,exists}=await import(pathToFileURL(root+"/tools/project.mjs"));await readSource(root);if(!await exists(root+"/.harness/verdict.json"))await verdict(root,"Example devices are ready. Describe the behavior you want, then test it in Core.");console.log("ok   Habitat source preserved; no home connected")' "$workspace"

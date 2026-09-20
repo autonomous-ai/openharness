@@ -1,7 +1,67 @@
-import {test,after} from 'node:test';import assert from 'node:assert/strict';import {spawnSync} from 'node:child_process';import {accessSync,constants,mkdtempSync,readFileSync,writeFileSync,rmSync,cpSync} from 'node:fs';import {tmpdir} from 'node:os';import {join,dirname} from 'node:path';import {fileURLToPath} from 'node:url';
-const root=fileURLToPath(new URL('..',import.meta.url)),dirs=[];const temp=()=>{const d=mkdtempSync(join(tmpdir(),'ha-test-'));dirs.push(d);return d;};after(()=>dirs.forEach(d=>rmSync(d,{recursive:true,force:true})));
-const build=ws=>spawnSync(process.execPath,[join(root,'skills/home-assistant/scripts/build.mjs')],{cwd:ws,encoding:'utf8'});
-test('manifest scripts executable and doctor detects the local parser',()=>{for(const p of ['toolchain/init-workspace.sh','toolchain/setup.sh','toolchain/doctor.sh','skills/home-assistant/scripts/build-automations.sh'])accessSync(join(root,p),constants.X_OK);const r=spawnSync('sh',[join(root,'toolchain/doctor.sh')],{cwd:root,encoding:'utf8'});assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/local config-only/);});
-test('real YAML starter builds all three automations without Home Assistant',()=>{const ws=temp();cpSync(join(root,'template'),ws,{recursive:true});const r=build(ws);assert.equal(r.status,0,r.stderr);const v=JSON.parse(readFileSync(join(ws,'.harness/verdict.json')));assert.equal(v.ready,true);assert.match(v.findings[0].message,/No Home Assistant/);assert.match(readFileSync(join(ws,'dashboard.html'),'utf8'),/A warmer welcome/);});
-test('malformed YAML, duplicate keys, aliases and invalid shape clear stale ready',()=>{const ws=temp();cpSync(join(root,'template'),ws,{recursive:true});assert.equal(build(ws).status,0);const previous=readFileSync(join(ws,'dashboard.html'),'utf8');for(const input of ['- id: [broken','- id: a\n  id: b\n','- !include secret.yaml','{}','- id: a\n  alias: A\n  triggers: []\n  actions: []']){writeFileSync(join(ws,'automations.yaml'),input);assert.notEqual(build(ws).status,0);assert.equal(JSON.parse(readFileSync(join(ws,'.harness/verdict.json'))).ready,false);assert.equal(readFileSync(join(ws,'dashboard.html'),'utf8'),previous);}});
-test('HTML-like source is encoded in the data block, not interpreted',()=>{const ws=temp();writeFileSync(join(ws,'automations.yaml'),JSON.stringify([{id:'x',alias:'</script><img src=x onerror=alert(1)>',trigger:{platform:'state',entity_id:'person.x',to:'home'},action:{action:'light.turn_on'}}]));assert.equal(build(ws).status,0);const html=readFileSync(join(ws,'dashboard.html'),'utf8');assert.ok(!html.includes('</script><img'));assert.ok(html.includes('\\u003c/script>'));});
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { access, readFile, writeFile, readdir } from "node:fs/promises";
+import { constants } from "node:fs";
+import { join } from "node:path";
+import { packageRoot, workspace, shortSource } from "./helpers.mjs";
+import { engine } from "../template/tools/calculate.mjs";
+
+test("manifest entrypoints exist and the native runtime stays outside the copyable template", async () => {
+  const manifest = JSON.parse(
+    await readFile(join(packageRoot, "harness.json")),
+  );
+  for (const name of [
+    manifest.workspace.init,
+    manifest.toolchain.setup,
+    manifest.toolchain.doctor,
+    manifest.viewer.command,
+    "skills/home-assistant/scripts/build-automations.sh",
+  ])
+    await access(join(packageRoot, name), constants.X_OK);
+  assert.equal(manifest.viewer.use, undefined);
+  assert.equal(manifest.viewer.url, "http://127.0.0.1:${port}/");
+  assert.ok(
+    !(await readdir(join(packageRoot, "template/tools"))).includes(".venv"),
+  );
+});
+test("legacy source cannot silently use the retired subset model to claim readiness", async (t) => {
+  const root = await workspace(t);
+  const result = spawnSync(
+    process.execPath,
+    [join(packageRoot, "skills/home-assistant/scripts/build.mjs")],
+    {
+      cwd: join(root, "tools"),
+      env: { ...process.env, HARNESS_WORKSPACE: join(root, "tools") },
+      encoding: "utf8",
+      timeout: 10000,
+    },
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /fresh Habitat workspace/);
+});
+test("abnormal child exits cannot be accepted even after printing plausible JSON", async (t) => {
+  const root = await workspace(t),
+    fake = join(root, "test-python");
+  const result = {
+    scenario: "presence",
+    engine: { version: "2026.9.3" },
+    checks: [],
+    traces: [],
+    rules: [],
+  };
+  await writeFile(
+    fake,
+    "#!" +
+      process.execPath +
+      "\nprocess.stdout.write(" +
+      JSON.stringify(JSON.stringify(result)) +
+      ");process.exit(139);\n",
+    { mode: 0o700 },
+  );
+  await assert.rejects(
+    engine(root, shortSource(), "presence", { python: fake }),
+    /did not complete/,
+  );
+  assert.deepEqual(await readdir(join(root, ".harness/jobs")), []);
+});

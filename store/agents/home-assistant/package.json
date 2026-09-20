@@ -2,7 +2,13 @@
   "name": "@autonomous/home-assistant-harness",
   "private": true,
   "type": "module",
-  "dependencies": { "yaml": "2.8.1" },
-  "scripts": { "test": "node --test test/*.test.mjs" },
-  "engines": { "node": ">=20" }
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
 }

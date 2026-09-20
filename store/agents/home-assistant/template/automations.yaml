@@ -1,57 +1,60 @@
-# Demo entities below are placeholders, not discovered devices. Replace before deployment.
-- id: welcome_lights
-  alias: A warmer welcome
-  description: Arrive home after dark and bring the living room gently to life.
+# Example devices, not discovered hardware. Keep disabled until installation review.
+- id: habitat_hallway
+  alias: Hallway lighting with quiet hours and manual hold
+  description: A two-second motion hold, dim quiet-hours branch, and restartable two-minute vacancy timer.
+  initial_state: false
+  mode: restart
+  trace:
+    stored_traces: 40
   triggers:
     - trigger: state
-      entity_id: person.demo
-      from: not_home
-      to: home
+      entity_id: binary_sensor.example_hall_motion
+      from: "off"
+      to: "on"
+      for:
+        seconds: 2
   conditions:
     - condition: state
-      entity_id: sun.sun
-      state: below_horizon
+      entity_id: input_boolean.example_manual_hold
+      state: "off"
+    - condition: template
+      value_template: >-
+        {{ is_number(states('sensor.example_hall_lux'))
+           and states('sensor.example_hall_lux') | float(9999) < 30 }}
   actions:
-    - action: light.turn_on
+    - choose:
+        - conditions:
+            - condition: state
+              entity_id: input_boolean.example_quiet_hours
+              state: "on"
+          sequence:
+            - action: light.turn_on
+              target:
+                entity_id: light.example_hall
+              data:
+                brightness_pct: 12
+                transition: 1
+      default:
+        - action: light.turn_on
+          target:
+            entity_id: light.example_hall
+          data:
+            brightness_pct: 45
+            transition: 1
+    - wait_for_trigger:
+        - trigger: state
+          entity_id: binary_sensor.example_hall_motion
+          to: "off"
+          for:
+            seconds: 120
+      timeout:
+        minutes: 30
+      continue_on_timeout: false
+    - condition: state
+      entity_id: input_boolean.example_manual_hold
+      state: "off"
+    - action: light.turn_off
       target:
-        entity_id: light.demo_living_room
+        entity_id: light.example_hall
       data:
-        brightness_pct: 45
-        transition: 3
-  mode: single
-
-- id: quiet_evening
-  alias: Let the evening settle
-  description: At eleven, dim the lights if someone is home.
-  triggers:
-    - trigger: time
-      at: "23:00:00"
-  conditions:
-    - condition: state
-      entity_id: person.demo
-      state: home
-  actions:
-    - action: light.turn_on
-      target:
-        entity_id: light.demo_living_room
-      data:
-        brightness_pct: 15
-        transition: 10
-  mode: single
-
-- id: fresh_air
-  alias: A little fresh air
-  description: When CO₂ crosses 1000 ppm, request the fan while someone is home.
-  triggers:
-    - trigger: numeric_state
-      entity_id: sensor.demo_co2
-      above: 1000
-  conditions:
-    - condition: state
-      entity_id: person.demo
-      state: home
-  actions:
-    - action: fan.turn_on
-      target:
-        entity_id: fan.demo_study
-  mode: single
+        transition: 1

@@ -1,20 +1,36 @@
 ---
 name: home-assistant
-description: Author Home Assistant automation YAML and inspect local scenario traces in Habitat. Use for automation design and configuration work, not unrequested device control.
+description: Turn home-automation requirements into editable Home Assistant YAML, tested what-if scenarios, native Core traces and a reviewed installation kit in Habitat. Use for automation authoring and revision, not unrequested device control.
 ---
 
-# Automation authoring
+# Build an automation people can use
 
-Source: `automations.yaml`. Viewer: `dashboard.html`. Read user entity IDs and requirements before replacing the clearly labeled demo entities.
+The deliverable is standard `automations.yaml`, a testable brief and fixture inventory in `project.json`, and a portable installation kit—not a diagram or a preview-only dashboard. Habitat's `index.html` is served by `tools/serve.mjs`; opening it as a static file is insufficient.
+
+Start with the desired outcome and constraints. If the user has no devices, use explicitly labeled example entities. If they provide existing YAML, keep a copy and preserve unrelated entries; do not replace their installation configuration. Clarify consequential choices such as manual overrides, thresholds and timeout behavior when needed, but do not require hardware for a device-free project.
+
+Read [references/scenarios.md](references/scenarios.md) when creating or changing the test model. Use actual Core triggers, conditions, templates and actions; do not translate them into a homegrown interpreter. Support a new user request with its own entity inventory and meaningful cases. The hallway starter is an editable starting point, not the definition of this harness.
+
+Design assertions from the brief before adjusting the implementation. Cover normal operation and important non-firing cases where guards matter; include interruption, bounce, missing sensor or manual takeover when relevant. Assert exact call sequence, target, timing and important final states. A complete suite requires each automation to finish with a service call in at least one case; this is minimum coverage, not exhaustive proof.
+
+## Build, inspect and deliver
+
+From the workspace:
 
 ```sh
-sh "$HA_SKILLS/home-assistant/scripts/build-automations.sh"
+bash "$HA_SKILLS/home-assistant/scripts/build-automations.sh"
 ```
 
-The builder parses YAML 1.2, rejects duplicate keys/unresolved tags, and checks IDs, aliases and basic trigger/condition/action shape. Both singular legacy keys and plural keys are accepted, but not both in one automation. Home Assistant supports more configurations than this local checker (including blueprints); report that limit, do not silently rewrite unsupported source.
+This runs the actual Core suite, preserves a checked delivery in `output/`, then tests the studio's draft round trip, native trace, ZIP download and desktop/mobile layout in Chromium. It records source/runtime-bound evidence in `.harness/last-run.json` and `.harness/browser-proof.json`. Setup installs pinned Python/Core and browser runtimes; it does not connect to a home. Use `node tools/build.mjs` for a quick CLI-only check while iterating; it intentionally leaves browser readiness false.
 
-Habitat models a strict subset: simple state changes, numeric threshold entry, fixed times, state/numeric conditions, and service-call intents. Numeric triggers fire on crossing, not merely on an already-high value. Templates, durations, attribute/entity-list triggers, complex actions and other unsupported semantics return “not modeled.” Never present the preview as Home Assistant execution.
+Inspect expected versus actual calls and Core traces, and look at the generated desktop/mobile screenshots. Change the automation to satisfy the intended behavior, not the test to excuse a bug. Rebuild after every substantive revision. For a new workflow, also reopen the saved JSON or exported ZIP in a fresh directory and rerun it; the user must be able to continue their work without the original workspace.
 
-For a change, inspect a passing scenario and a near miss (daylight, already-high sensor, person away). Use the real installation's configuration checks and automation traces when deployment is requested. This helper never contacts Home Assistant or invokes services automatically. The local `configuration.yaml` includes the automation file; it is not a replacement for a user's live configuration.
+Deliver the editable project, `automations.yaml`, readable report, evidence, entity checklist and `INTEGRATION.md`. Explain the behavior, how the user can revise it, the significant scenarios checked, and the remaining limits. Browser edits are unsaved drafts until **Save to workspace**; saves preserve history and reject concurrent source changes. Any source/runtime edit invalidates checked output. Failed checks preserve the last useful delivery and clear readiness. Never write a passing verdict manually.
 
-The verdict distinguishes local checks from runtime validation and clears ready on failure. Preserve prior outputs, report errors, and rebuild after source changes. Scenario edits in the browser are temporary; only source YAML persists.
+## Scope and installation boundary
+
+Core **2026.9.3** executes real automation logic, local services/helpers and native traces. Time and light/fan/switch device I/O are test doubles; registries are non-persistent. A green result does not verify physical devices, a real installation, restart/restore, network failures or notifications on a phone. Do not claim an unsupported adapter was tested or silently omit it. See `PROJECT.md` for the supported fixture/trigger types and limits.
+
+Keep each rule's stable ID and `initial_state: false`; only the isolated runner enables its own copy. That line also disables the imported automation at each real startup until deliberately removed/changed after review. Real installation requires a backup, matching IDs/units/capabilities/helpers/time zone, merging only reviewed entries, that installation's own configuration check, and supervised tests including important non-firing behavior. `Run actions` alone does not test triggers or conditions.
+
+No URL/token entry, discovery, real service call or deployment is part of this workflow. Such actions require separate user authorization. Reports include source text, states and notes; remind the user to review them before sharing. If a native test, adapter or runtime is unavailable, report the precise limit, keep the draft, and do not relabel it as verified.
