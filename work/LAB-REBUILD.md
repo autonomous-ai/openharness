@@ -1,6 +1,6 @@
 # Lab Bench — plan, measure, understand, follow up
 
-Implementation and local acceptance complete; release PR/publication pending. Preserve the original Signal logo/icon and the earlier synthetic viewer under
+Published in [PR #155](https://github.com/autonomous-ai/openharness/pull/155). Preserve the original Signal logo/icon and the earlier synthetic viewer under
 `store/tools/experiences/lab-bench.*`. The new workshop works with authored experimental plans
 and actual user measurements. No synthetic-response generator is part of the product.
 
@@ -27,6 +27,22 @@ rank recovery through new runs and held-out confirmation. All 27 package tests a
 Store/check tests pass locally. See [the complete evidence and reproducible checks](../store/agents/lab-bench/test/ACCEPTANCE.md).
 
 The response fixtures are explicitly synthetic test data, never empirical product claims.
-The candidate has `listed:true`; the public package remains unlisted until release. Normal Store
-installation and fresh materialization, exact-head CI, publisher completion, public catalog,
-studio and screenshot bytes remain to be verified before reporting publication complete.
+The rebuilt package has `listed:true` and is live in the public Store. Exact-head CI
+`35512306940` passed at `a11fc47003dec8e2263ce85c8c93625be6b567e7`; the merge is
+`119c5b69ac1d585a649658a5aeb5f1a52376361e`. Publisher `35512724426` passed. The public catalog
+lists all seven rebuilt harnesses; the Lab studio and all three screenshots match the tested
+bytes. Published package revision: `ec6642b1ae73fbef5b19d1d0cc792be7573f94ae`.
+
+Normal Store-ID installation at that merge passes setup and doctor on this Mac. Actual
+framework materialization and launch environment then run build/check/export, produce real
+PDFs, start the installed viewer and save/reopen a browser edit with source history and zero
+page errors. The initial unmeasured plan's seven PDF pages were also visually reviewed.
+Installed path: `/Users/d/.harness/dsh/autonomous/lab-bench`. Final workspace:
+`/var/folders/cm/6rf6j7pn1ys698mtjh434zsw0000gp/T/signal-installed-9VHvVn`.
+Proof: `/private/tmp/signal-public-bytes.json`, `/private/tmp/signal-installed-workspace.json`,
+`/private/tmp/signal-installed-viewer.json`, `/private/tmp/signal-published-id-install.log`.
+
+The first immediate Store-ID lookup missed the new catalog entry and tried it as a Git source.
+The explicit repository/path install passed; forcing a catalog refresh then made Store-ID
+installation pass too. The underlying first-lookup cause was not established, so do not claim
+a resolver fix. No installed-agent prompt trial or actual physical experiment is claimed.
