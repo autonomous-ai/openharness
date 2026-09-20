@@ -49,3 +49,9 @@ for the tests actually performed and remaining validation.
 
 The original [logo and icon](brand/) are retained in the Store, studio and favicon. Three.js and
 runtime provenance are recorded in [PROVENANCE.md](PROVENANCE.md).
+
+## Credit and stewardship
+
+Original implementation and visual identity by OpenHarness contributors, maintained by
+Autonomous under the [MIT license](LICENSE). Dependency notices and source references are in
+[PROVENANCE.md](PROVENANCE.md). Report issues in the OpenHarness repository.

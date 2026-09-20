@@ -109,6 +109,11 @@ async function shellRegression() {
 }
 
 async function one(exp) {
+  if (exp.id === 'drone-pilot') {
+    const result = execFileSync(process.execPath, [join(repo, 'store/agents/drone-pilot/test/browser.mjs')], { env: { ...process.env, DRONE_QA_ROOT: join(output, 'vector-browser') }, encoding: 'utf8', timeout: 180000 });
+    results.push({name:'drone-pilot-studio',ok:true,output:result.trim()});
+    return;
+  }
   if (exp.id === 'voxel-worlds') {
     const result = execFileSync(process.execPath, [join(repo, 'store/agents/voxel-worlds/test/browser.mjs')], { env: { ...process.env, VOXEL_QA_ROOT: join(output, 'tidelands-browser') }, encoding: 'utf8', timeout: 180000 });
     results.push({ id: exp.id, ...JSON.parse(result.trim()) });

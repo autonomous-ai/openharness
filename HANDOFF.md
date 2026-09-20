@@ -7,8 +7,9 @@ The main checkout is shared with other sessions; leave it alone.
 See [FIVE-REBUILDS.md](work/FIVE-REBUILDS.md). Creative Direction now has an editable brand
 studio, source save bridge and complete launch exports; [FORME-REBUILD.md](work/FORME-REBUILD.md)
 records the actual tests and limits. It is published for Store testing (#141). Voxel Worlds now has a source-backed 3D studio,
-standard exports and six independently reopened deliveries; publication is in progress. Read
-[its acceptance evidence](store/agents/voxel-worlds/test/ACCEPTANCE.md). Drone Pilot is next;
+standard exports and six independently reopened deliveries; published in #146 at `88250305`,
+with public catalog/artifact/screenshots verified and a normal Store install on this Mac. Read
+[its acceptance evidence](store/agents/voxel-worlds/test/ACCEPTANCE.md). Drone Pilot is in progress;
 Game Master and Lab Bench also remain unlisted. The older “focus only on Art/Music”
 instruction below is historical and has been superseded by this user request.
 

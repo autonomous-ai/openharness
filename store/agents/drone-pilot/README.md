@@ -1,60 +1,56 @@
-# Drone Pilot — Vector
+# Drone Pilot · Vector
 
-> Withdrawn from Store discovery on 2026-09-20: the current starter does not meet our
-> standard for an open-ended tool that completes real user work. Existing projects and
-> source remain available. See [the product review](../../../work/SUPERPOWERS.md).
+Turn a site boundary and photography requirements into an editable field-survey plan. Bring
+GeoJSON or draw your own polygons, keep exclusions, choose camera geometry and compare directions.
+Inspect each planned capture, split the job into sorties with routed returns, then import recorded
+flight CSV to compare the plan with supplied evidence.
 
-![Drone Pilot logo](brand/logo.svg)
-
-Fly a seeded canyon course in first person. Switch between manual controls and a tracking autopilot, inspect gate results and the flight path, and export telemetry.
-
-## Try it
-
-> Design a slalom course over a canyon floor. Make the autopilot fly a clean lap, then give me manual controls and a trace to compare against it.
-
-The starter already works before the first prompt. Change it with the agent, interact with the
-result in the pane, and keep the output. Everything needed at runtime is in `flight/index.html`.
-It works offline and can be opened outside Harness.
+You keep the work: an offline planner, editable project, GIS layers, map overlay, route/photo CSVs,
+SVG map and printable report. No account, map key or cloud service is required to use those files.
+Existing logos and icons are included. The starter orchard is editable example geometry.
 
 ## What you can do
 
-Twelve gates, fixed-step dynamics, first-person projection, autopilot/manual handoff, brake/boost, minimap, finite flight and telemetry export.
+- Edit arbitrary named boundaries/exclusions, drag or enter precise vertices, move takeoff, lock
+  approved geometry, undo revisions and save the actual project back to the workspace.
+- Derive ground sampling and footprint coverage from your camera; enforce capture cadence and
+  configured overlap. Compare sampled directions without changing your other requirements.
+- Divide captures into nominal time budgets that include climb, descent, transits and a connected
+  return. Infeasible settings produce a concrete issue; requirements are not silently relaxed.
+- Import your flight CSV with explicit time, coordinate, altitude and event mapping. Inspect
+  records, gaps, nearest-route distances and estimated event footprints. Keep original source.
+- Export standard GeoJSON, ground-clamped KML, CSV, a printable HTML report and a complete ZIP.
+  Reopen the planner offline and keep editing your own geometry and camera settings.
 
-## Build on the starter
+## Model scope
 
-The model functions `flightCourse` and `flightStep` are the starting points for substantive changes. Preserve seed
-reproducibility and user controls while changing the domain behavior. A different brief can replace
-this starter's entire visual language. Keep the artifact self-contained and test the actual result.
+This is level-ground, nadir-camera planning within 5 km of the chosen WGS 84 origin, excluding sites that cross the 180° meridian. Camera
+footprints and time are geometric/nominal estimates. Terrain, obstacles, airspace, wind, positioning
+error and aircraft dynamics are not verified. Files support planning and review; there is no
+vehicle connection or executable aircraft mission. Event footprints do not prove that photographs
+exist or form a usable map. No photogrammetric reconstruction is included.
 
-The source checkout builds these starters with `node store/tools/build-experiences.mjs`. Installed
-workspaces are editable HTML; no build tool, network dependency or paid service is required.
+## Build and verify
 
-## Verification
+Setup resolves Node, installs pinned package-local tools, and reuses Chrome/Chromium or installs
+its local browser. In a workspace, `DRONE_DSH_DIR` points to the installed package:
 
-Model census: `node --test store/tools/experience-tests/models.test.mjs` from the source checkout.
-Browser interactions, exports, same-origin APIs and manifest routing: see
-[`store/tools/experience-tests`](../../tools/experience-tests/README.md).
+```sh
+node tools/build.mjs
+node tools/check.mjs
+node tools/export.mjs
+```
 
-`seed-verdict.sh` establishes only artifact presence and keeps `ready:false`. The agent must run
-and record real domain and browser checks before writing a ready verdict. No cross-device pixel or
-audio equality is promised. The research is inspiration; this is original code, not a wrapper of
-any cited third-party engine.
+The browser's **Save to workspace** updates source and retains its previous version. An agent
+revision arriving during a browser draft offers both versions. **Save file** keeps `.vector.json`;
+**Export field kit** includes the current draft and all delivery files. See the
+[project contract](skills/pilot/references/project.md) and [acceptance evidence](test/ACCEPTANCE.md).
 
-## Check your actual edited model
-
-Run `node tools/check.mjs --seeds 100` in the workspace. It reads the pure model from
-`<script id="harness-model">` in the artifact, checks domain invariants, repeats each seed, and
-writes `.harness/model-check.json`. Preserve that script boundary when editing. Model checks are
-followed by browser interaction, exported-output inspection, and visual or listening review.
-
-## Logo and icon
-
-The original identity ships in `brand/`: [vector icon](brand/icon.svg),
-[256px PNG](brand/icon.png), [light logo](brand/logo.svg) and
-[dark logo](brand/logo-dark.svg). The same mark appears in the starter header,
-its offline favicon and the desktop Store/picker/tabs. MIT, by OpenHarness contributors.
+The original FPV canyon code remains under `store/tools/experiences/drone-pilot.*` for future work.
+Existing legacy workspaces are not automatically migrated or overwritten.
 
 ## Credit and stewardship
 
 Original implementation and visual identity by OpenHarness contributors, maintained by
-Autonomous under the [MIT license](LICENSE). Report issues in the OpenHarness repository.
+Autonomous under the [MIT license](LICENSE). Dependency notices and source references are in
+[PROVENANCE.md](PROVENANCE.md). Report issues in the OpenHarness repository.

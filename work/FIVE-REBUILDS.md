@@ -7,10 +7,10 @@ so the user can test it, then move to the next. Do not claim a subjective “wow
 1. **Creative Direction — published (#141).** A business brief and supplied
    materials become an editable identity, coordinated launch assets, a responsive website and a
    portable brand guide. See [tested deliverables and remaining evidence](FORME-REBUILD.md).
-2. **Voxel Worlds — rebuilt; publication in progress.** Named object editing, sculpting, source saves,
+2. **Voxel Worlds — published (#146), normal Store install verified on this Mac.** Named object editing, sculpting, source saves,
    physical walking, VOX import and independent GLB/VOX/offline delivery. See
    [the acceptance evidence](../store/agents/voxel-worlds/test/ACCEPTANCE.md).
-3. **Drone Pilot — pending.** Useful planning/analysis with actual inputs and explicit simulation
+3. **Drone Pilot — in progress.** [Survey planning and post-flight evidence](DRONE-REBUILD.md), with actual inputs and explicit simulation
    boundaries. No claim that a simulation authorizes or validates a real flight.
 4. **Game Master — pending.** Create and revise original playable games, then deliver working builds.
 5. **Lab Bench — pending.** Analyze the person's observations with reproducible methods and outputs.

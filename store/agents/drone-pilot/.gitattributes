@@ -1,0 +1,3 @@
+template/studio/vendor/* linguist-vendored=true whitespace=-blank-at-eol,-space-before-tab
+template/flight/index.html linguist-generated=true
+toolchain/package-lock.json linguist-generated=true

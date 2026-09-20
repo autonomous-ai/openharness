@@ -1,77 +1,71 @@
 ---
 name: pilot
-description: Build a deterministic, seedable first-person drone flight in one HTML file from a plain-English description. Use whenever the user asks for a drone flight, an FPV line, an obstacle course, a stunt run, or prompt-to-flight.
+description: Create and revise field-survey plans from supplied GeoJSON boundaries, exclusions, camera geometry and capture requirements. Use Drone Pilot for editable routes and sorties, recorded-flight CSV analysis, and portable GIS, CSV and report delivery.
 ---
 
-# pilot
+# From a site to a field kit
 
-Take the user's description and produce a **single self-contained `flight/index.html`**
-that flies a **deterministic, seedable** first-person drone, loading the seed from a
-`?seed=` query param so the web-viewer can preview the current seed and re-seed live.
+Read [the project contract](references/project.md). Start with what the person needs to document
+and the measurements they can supply. Translate ground-sampling or overlap requirements into
+camera geometry. Preserve their boundary and approved exclusions. Explain missing inputs in
+plain language; do not fabricate a georeferenced site, aircraft specifications or flight records.
 
-## The floor (in order)
+## Author and revise
 
-1. **Seeded PRNG.** A small seeded PRNG derived from the hash of the seed string.
-   Nothing may call a non-seeded random — the flight must be reproducible.
-2. **Seeded course + physics.** A seeded course (gates, rings, obstacles, spawn)
-   driven by a small, stable fixed-timestep physics loop (position, velocity,
-   yaw/pitch, throttle).
-3. **`?seed=` plumbing.** Reading the param, plus a tiny UI (input + "re-seed"
-   button, and throttle/steer controls) so the person can browse seeds in the pane.
-4. **Named sub-streams.** One PRNG sub-stream per concern (course layout, obstacle
-   placement, decor) so tuning one doesn't reshuffle the other.
+1. Read `flight/project.json` and `flight/DESIGN.md`. Distinguish supplied measurements, user
+   decisions and explicit draft assumptions. The agent can create original polygon geometry;
+   the starter orchard is only an example. Importing a GeoJSON file can replace or extend a site.
+2. Author named boundary/exclusion layers and takeoff in local east/north meters. Keep the WGS 84
+   origin and locked geometry stable during targeted edits. Camera sensor width is across a run;
+   sensor height is along it. Line angles are counterclockwise from east.
+3. Run `node tools/build.mjs`. `DRONE_DSH_DIR` resolves tools for materialized workspaces. The HTML
+   embeds its runtime; no CDN, map key or cloud service is needed to use or share the planner.
+4. Resolve infeasibility explicitly: cadence, narrow geometry, disconnected paths or an inadequate
+   return budget. Do not silently relax requested height, speed, overlap, margin or reserve.
+5. Compare directions with the UI when useful. It samples 12 angles in 15-degree steps plus the
+   current direction and reports time and coverage. This is not a global route optimization.
+   Photo footprints and source paths are inspectable. Never imply that a straight geometric
+   segment models the aircraft's turn radius, acceleration or navigation error.
 
-## The gold checklist
+The UI supports named area edits, direct vertex dragging, new polygons, precise coordinate edits,
+geometry locks, moving takeoff, camera/cadence settings, undo/redo and a take-home project file.
+Workspace saves keep prior source in `.harness/history/`. Source changes arriving while the user
+has a draft offer both versions. Do not overwrite either without an explicit save/restore choice.
+Offline HTML has the same model and browser file import/export; native path opening uses only the
+local viewer's explicit home-folder project picker.
 
-- **Trait tables that survive an edition**: seed → flight (course length, obstacle
-  count, difficulty), and a census that shows no impossible/duplicated course in
-  the range you claim.
-- **Level discipline**: a stable step so nothing explodes at high throttle; a HUD
-  (throttle, speed, gate count) that reads clearly.
-- **Style range**: a racing line, a slalom through gates, a canyon weave, an
-  obstacle run — matched to the brief, not all at once.
-- **Export route**: expose a "watch" mode that flies the seeded course on its own
-  and a visible minimap or gate list.
+## Inspect recorded evidence
 
-## Verify like a pilot, not a compiler
+Import a CSV with explicit latitude/longitude and time columns. Select elapsed seconds,
+milliseconds, or ISO 8601 timestamps with timezone. Altitude requires meters/feet and takeoff/AMSL
+reference; AMSL requires supplied takeoff elevation. Heading is degrees clockwise from north.
+Battery is a percentage. Events use 1/0, true/false or yes/no, with blank meaning unknown.
 
-Fly a grid of seeds — actually fly them — and watch.
-Two hard checks before "ready":
-- **Re-fly same-seed** — it must be identical on this machine.
-- **Census the seed range you promise** (e.g. 0–99); reject any stuck camera,
-  impossible course, or infinite loop.
+The retained original CSV and SHA-256 establish provenance. Row numbers and missing-coordinate
+breaks remain in the normalized records. Time gaps above the selected continuity threshold are
+not connected. Compare nearest-route distances with all planned routes or one sortie, inspect
+individual records and report samples/segments outside the inset region.
 
-Be explicit in the verdict about the reproducibility guarantee: same-machine yes;
-frame-timing physics you cannot prove bit-identical — say so.
+Footprint estimates need an event flag, positive height and heading, plus the current camera and
+level-ground/nadir assumptions. Do not infer events from ordinary telemetry, fill unknown fields,
+call nominal footprints observed images or claim an orthomosaic/photogrammetric reconstruction.
+The model does not process photographs. Reimport the original source to revise its mapping.
 
-## Verdict feed
+## Deliver and verify
 
-Write `.harness/verdict.json` at every change:
+Run `node tools/check.mjs` for source, geometry and budget checks, then `node tools/export.mjs`:
 
-```json
-{ "spec": 1, "ready": false, "summary": "seeded slalom run · re-seed live · census 0–99 clean",
-  "findings": [{ "severity": "info", "kind": "reproducibility", "message": "same-machine verification pending; frame-timing physics not provable bit-identical" }],
-  "artifact": "flight/index.html",
-  "phases": [{ "id": "seed", "name": "Seeded core", "state": "done" },
-             { "id": "flight", "name": "The flight", "state": "active" },
-             { "id": "edition", "name": "Edition", "state": "pending" }],
-  "updatedAt": "2026-09-18T00:00:00Z" }
-```
+- `.vector.json`: editable boundaries, settings, camera and retained flight source, if supplied.
+- `planner.html`: one offline file with editing and all required runtime/license text embedded.
+- `survey.geojson`: source polygons, inset region, routes, planned captures, footprint estimates
+  and gaps. Recorded paths/estimated event coverage are separate named features when present.
+- `overlay.kml`: map overlay with ground-clamped site and routes; not an altitude or mission file.
+- `planned-photos.csv` / `planned-route.csv`: explicit coordinates, height above takeoff and nominal
+  times. CSV values are review data, not commands or tested autopilot configuration.
+- `site-map.svg`, `report.html` and `report.json`: portable map and calculations; print HTML to PDF.
+- Original and normalized recorded CSV when supplied, full dependency licenses, README and ZIP.
 
-## Starting from Vector
-
-The template is functional: Twelve gates, fixed-step dynamics, first-person projection, autopilot/manual handoff, brake/boost, minimap, finite flight and telemetry export.
-
-Keep its useful controls and exports when making a user's creation. Test the behavioral core
-(flightCourse, flightStep, fixed 1/60 simulation ticks) as well as the visible result. A self-contained HTML file can still have well-separated
-model, rendering, input and export functions. Do not turn a finished starter into a waiting screen.
-
-Presence-only helpers do not prove correctness or reproducibility. Record actual evidence before
-marking the result ready. Export and reopen the result as part of the handoff to the user.
-
-## Check your actual edited model
-
-Run `node tools/check.mjs --seeds 100` in the workspace. It reads the pure model from
-`<script id="harness-model">` in the artifact, checks domain invariants, repeats each seed, and
-writes `.harness/model-check.json`. Preserve that script boundary when editing. Model checks are
-followed by browser interaction, exported-output inspection, and visual or listening review.
+Browser exports use the current draft. Reopen GIS/CSV/HTML with an independent reader and review
+scale, coordinate order, dates, gaps and source retention. Test the actual viewer edits and an
+offline reopen. Record exact commands and outcomes. Unit/schema checks do not establish native
+GIS or ground-station imports, a completed real flight, a customer's success or visual quality.
