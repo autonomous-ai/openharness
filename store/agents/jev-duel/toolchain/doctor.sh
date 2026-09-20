@@ -12,4 +12,6 @@ if ! node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 18 ? 0
 fi
 node_v="$(node -v)"
 echo "ok   node $node_v"
+cd "$(dirname "$0")/.."
+node -e "import('./toolchain/jev.mjs').then((m) => console.log('ok   Jev: ' + m.describeCredentials())).catch((e) => console.log('warn   Jev client did not load: ' + e.message))"
 echo "done"

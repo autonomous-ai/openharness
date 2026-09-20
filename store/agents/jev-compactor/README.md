@@ -107,6 +107,14 @@ for the plumbing, not for Jev's judgement, and the pane badges it `MOCK`. Times 
 are the mock's times, not Jev's. Cost is what live Jev would charge for the same input tokens
 ($0.042 per million input tokens).
 
+## Measured with the real model
+
+One short run on 2026-09-20 with live Jev (`typesafe/jev-1.13`) through OpenRouter, about 0.45 s a call once warm. Small samples on made-up data: a sanity check, not a benchmark.
+
+14 compactions of the made-up session at distraction 0.12: needle recall 95.6%, average reduction
+76.1%, 684 questions in 14 calls (about 49 questions a call, about 0.57 s a call), $0.0066. The toy
+summarize baseline kept 48.8% of the needle tokens on the same session.
+
 ## Credit and stewardship
 
 - **Jev** is the work of **TypeSafe AI** (typesafe.ai). This harness is an OpenHarness wrapper that
