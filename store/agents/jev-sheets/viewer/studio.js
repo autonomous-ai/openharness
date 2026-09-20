@@ -632,11 +632,12 @@ function renderDoor() {
     $('doorSub').textContent = `${fmtN(i.used)}${i.total > i.used ? ` of ${fmtN(i.total)}` : ''} rows from your file. Jev reads the "${i.textColumn}" column, with the other columns as context. Answers are saved to answers.csv in this project folder.`
   } else {
     $('doorTitle').textContent = 'Use your own file'
-    $('doorSub').textContent = 'Drop an Excel or CSV file anywhere on this pane, or paste rows copied from Excel or Google Sheets. Reviews, survey answers, tickets, leads: one row per item. Then type a question and Jev answers it for every row. Below is a made-up sample to try first.'
+    $('doorSub').textContent = 'Choose an Excel or CSV file, or paste rows copied from a spreadsheet. Reviews, survey answers, tickets, leads: one row per item. Then type a question and Jev answers it for every row. Below is a made-up sample to try first.'
   }
 }
-async function sendFile(file, name = file.name) {
-  if (!file) return
+async function sendFile(file, name) {
+  if (!file) return null
+  name ??= file.name
   if (file.size > 32 * 1024 * 1024) return toast('That file is over 32 MB. Cut it down or split it first.', true)
   $('door').classList.add('busy'); $('doorTitle').textContent = `Reading ${name}…`
   let j
@@ -645,10 +646,11 @@ async function sendFile(file, name = file.name) {
     j = await r.json()
   } catch { j = { ok: false, error: 'The viewer did not answer. Try again.' } }
   $('door').classList.remove('busy')
-  if (!j.ok) { renderDoor(); return toast(j.error || 'That file could not be read.', true) }
+  if (!j.ok) { renderDoor(); toast(j.error || 'That file could not be read.', true); return j }
   select(null)
   toast(`${fmtN(j.rows)} rows loaded from ${j.file}. Now type a question.`)
   input.focus()
+  return j
 }
 /** Rows copied from a spreadsheet arrive as tab-separated text. One column of plain lines works too. */
 function pastedFile(text) {
@@ -666,11 +668,85 @@ function usePasted(text) {
   if (!f) return toast('Copy at least two rows in your spreadsheet first, then paste.', true)
   sendFile(f.blob, f.name)
 }
-$('pickBtn').addEventListener('click', () => $('fileInput').click())
-$('fileInput').addEventListener('change', (e) => { const f = e.target.files?.[0]; e.target.value = ''; sendFile(f) })
-$('pasteBtn').addEventListener('click', async () => {
-  try { usePasted(await navigator.clipboard.readText()) } catch { toast('Click on the pane and press Cmd+V or Ctrl+V to paste your rows.') }
+// ---- the pane's own file chooser ---------------------------------------------------------------
+// The Harness desktop pane is a web view that never opens the system file dialog, so the viewer
+// lists the person's files itself. The system dialog stays as one button for ordinary browsers.
+const fmtSize = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`)
+function fmtAge(ms) {
+  const m = (Date.now() - ms) / 60000
+  return m < 1 ? 'just now' : m < 60 ? `${Math.round(m)} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : m < 43200 ? `${Math.round(m / 1440)} d ago` : new Date(ms).toLocaleDateString()
+}
+function pickerMsg(text, bad) { const m = $('pickerMsg'); m.textContent = text || ''; m.className = 'picker-msg' + (bad ? ' bad' : '') }
+function fileRow(f, withFolder) {
+  const b = h('button', 'picker-item file')
+  b.append(h('span', 'pi-name', f.name), h('span', 'pi-meta', `${withFolder ? f.folder + ' · ' : ''}${fmtSize(f.size)} · ${fmtAge(f.mtimeMs)}`))
+  b.addEventListener('click', () => openPath(f.path))
+  return b
+}
+async function openPath(path) {
+  pickerMsg('Reading the file…')
+  const r = await post('usePath', { path })
+  if (!r.ok) return pickerMsg(r.error || 'That file could not be read.', true)
+  afterLoad(r)
+}
+function afterLoad(r) {
+  closePicker(); select(null)
+  toast(`${fmtN(r.rows)} rows loaded from ${r.file}. Now type a question.`)
+  input.focus()
+}
+function setTab(name) {
+  for (const t of ['Recent', 'Browse', 'Paste']) $('tab' + t).classList.toggle('on', t === name)
+  $('pickerList').classList.toggle('hidden', name === 'Paste')
+  $('pickerPaste').classList.toggle('hidden', name !== 'Paste')
+  $('pickerPath').classList.toggle('hidden', name !== 'Browse')
+  pickerMsg('')
+  if (name === 'Recent') showRecent(); else if (name === 'Browse') showFolder(''); else $('pasteArea').focus()
+}
+async function showRecent() {
+  const box = $('pickerList'); box.textContent = ''; box.append(h('div', 'picker-empty', 'Looking in Downloads, Desktop and Documents…'))
+  const r = await post('recentFiles')
+  box.textContent = ''
+  if (!r.ok) return pickerMsg(r.error || 'The viewer did not answer.', true)
+  for (const f of r.files) box.append(fileRow(f, true))
+  if (!r.files.length) box.append(h('div', 'picker-empty', r.denied ? 'This app is not allowed to look in Downloads, Desktop or Documents yet. Allow it in System Settings, Privacy and Security, Files and Folders. Or paste the file\'s path below.' : 'No spreadsheet found in Downloads, Desktop or Documents. Browse folders, or paste the file\'s path below.'))
+}
+async function showFolder(dir) {
+  const box = $('pickerList')
+  const r = await post('browse', { dir })
+  if (!r.ok) return pickerMsg(r.error || 'That folder could not be opened.', true)
+  pickerMsg('')
+  box.textContent = ''
+  const path = $('pickerPath'); path.textContent = ''
+  if (r.parent) { const up = h('button', 'picker-up', '↑ Up'); up.addEventListener('click', () => showFolder(r.parent)); path.append(up) }
+  path.append(h('span', '', r.shown))
+  for (const d of r.folders) { const b = h('button', 'picker-item folder'); b.append(h('span', 'pi-name', d.name), h('span', 'pi-meta', 'folder')); b.addEventListener('click', () => showFolder(d.path)); box.append(b) }
+  for (const f of r.files) box.append(fileRow(f, false))
+  if (!r.folders.length && !r.files.length) box.append(h('div', 'picker-empty', 'Nothing to open in this folder.'))
+  box.scrollTop = 0
+}
+function openPicker() { $('pathInput').value = ''; $('picker').classList.remove('hidden'); setTab('Recent') }
+function closePicker() { $('picker').classList.add('hidden'); pickerMsg('') }
+$('pickBtn').addEventListener('click', openPicker)
+$('pickerClose').addEventListener('click', closePicker)
+$('picker').addEventListener('pointerdown', (e) => { if (e.target === $('picker')) closePicker() })
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('picker').classList.contains('hidden')) closePicker() })
+$('tabRecent').addEventListener('click', () => setTab('Recent'))
+$('tabBrowse').addEventListener('click', () => setTab('Browse'))
+$('tabPaste').addEventListener('click', () => setTab('Paste'))
+$('pathForm').addEventListener('submit', (e) => { e.preventDefault(); const p = $('pathInput').value.trim(); if (p) openPath(p) })
+$('systemPick').addEventListener('click', () => $('fileInput').click())
+$('pasteArea').addEventListener('input', () => { const n = $('pasteArea').value.split('\n').filter((l) => l.trim()).length; $('pasteNote').textContent = n ? `${fmtN(n)} lines` : '' })
+$('pasteUse').addEventListener('click', async () => {
+  const f = pastedFile($('pasteArea').value)
+  if (!f) return pickerMsg('Paste at least two rows first.', true)
+  pickerMsg('Reading the rows…')
+  const r = await sendFile(f.blob, f.name)
+  if (!r?.ok) return pickerMsg(r?.error || 'Those rows could not be read.', true)
+  $('pasteArea').value = ''; $('pasteNote').textContent = ''
+  closePicker()
 })
+$('fileInput').addEventListener('change', async (e) => { const f = e.target.files?.[0]; e.target.value = ''; const r = await sendFile(f); if (r?.ok) closePicker() })
+$('pasteBtn').addEventListener('click', () => { openPicker(); setTab('Paste') })
 window.addEventListener('paste', (e) => {
   if (/^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName ?? '')) return
   const text = e.clipboardData?.getData('text/plain') ?? ''
