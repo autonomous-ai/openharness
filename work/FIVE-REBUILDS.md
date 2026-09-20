@@ -10,9 +10,9 @@ so the user can test it, then move to the next. Do not claim a subjective “wow
 2. **Voxel Worlds — published (#146), normal Store install verified on this Mac.** Named object editing, sculpting, source saves,
    physical walking, VOX import and independent GLB/VOX/offline delivery. See
    [the acceptance evidence](../store/agents/voxel-worlds/test/ACCEPTANCE.md).
-3. **Drone Pilot — in progress.** [Survey planning and post-flight evidence](DRONE-REBUILD.md), with actual inputs and explicit simulation
+3. **Drone Pilot — published (#151), installed readiness verified on this Mac.** [Survey planning and post-flight evidence](DRONE-REBUILD.md), with actual inputs and explicit simulation
    boundaries. No claim that a simulation authorizes or validates a real flight.
-4. **Game Master — pending.** Create and revise original playable games, then deliver working builds.
+4. **Game Master — in progress.** Original board/card games: authored rules, human play, component editing, reproducible playtests and printable kits.
 5. **Lab Bench — pending.** Analyze the person's observations with reproducible methods and outputs.
 
 ## Creative Direction acceptance

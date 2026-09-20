@@ -1,3 +1,6 @@
-#!/usr/bin/env bash
-# Doctor: the game is just a file served by the shared web-viewer; no extra runtime needed.
-exit 0
+#!/bin/sh
+set -eu
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$here"
+bash node.sh --input-type=module -e 'if(Number(process.versions.node.split(".")[0])<20)process.exit(1);await import("esbuild");console.log("ok   Node and offline board-game build tools")'
+bash node.sh browser.mjs --check

@@ -23,6 +23,7 @@ jobs:
         run: |
           sh store/agents/voxel-worlds/toolchain/setup.sh
           sh store/agents/drone-pilot/toolchain/setup.sh
+          sh store/agents/game-master/toolchain/setup.sh
           node store/tools/build-experiences.mjs --check
       - name: Verify packaged branding matches desktop assets
         run: node store/tools/build-experience-branding.mjs --check
@@ -89,6 +90,19 @@ jobs:
           python3 -m venv /tmp/vector-geometry-reader
           /tmp/vector-geometry-reader/bin/pip install shapely==2.0.7 numpy==1.26.4
           /tmp/vector-geometry-reader/bin/python store/agents/drone-pilot/test/verify-delivery.py work/experience-evidence/vector-acceptance
+      - name: Install print verification tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y poppler-utils
+      - name: Create, play, revise and print original tabletop games
+        env:
+          GAME_QA_ROOT: work/experience-evidence/relay-browser
+          GAME_ACCEPTANCE_ROOT: work/experience-evidence/relay-acceptance
+        run: |
+          npm ci --prefix store/agents/game-master/toolchain --ignore-scripts --no-audit --no-fund
+          node store/agents/game-master/test/browser.mjs
+          node store/agents/game-master/test/acceptance.mjs
+          python3 store/agents/game-master/test/verify-delivery.py work/experience-evidence/relay-acceptance
       - name: Verify MIDI and aligned audio with independent readers
         run: |
           python3 -m venv /tmp/music-delivery-reader
@@ -103,7 +117,5 @@ jobs:
         run: python3 store/agents/data-studio/test/verify-exports.py work/data-studio-evidence
       - name: Revise three brand briefs and verify real print deliveries
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y poppler-utils
           node store/agents/creative-direction/test/acceptance.mjs
           python3 store/agents/creative-direction/test/verify-delivery.py work/experience-evidence/forme-acceptance/run-*/acceptance.json

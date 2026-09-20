@@ -1,0 +1,9 @@
+{
+  "name": "relay-game-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "esbuild": "0.27.2",
+    "playwright-core": "1.63.0"
+  }
+}

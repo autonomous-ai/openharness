@@ -342,7 +342,7 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/game-master',
     label: 'Game Master',
     category: 'Games',
-    tagline: 'Design and compare strategies in a seeded arena',
+    tagline: 'Create a game. Play it. Put it on the table.',
     creator: 'Autonomous',
     color: Color(0xffed9075),
     asset: 'assets/engine-icons/game-master.png',

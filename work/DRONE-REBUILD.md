@@ -1,6 +1,6 @@
 # Drone Pilot — field-survey rebuild
 
-The implementation is complete and locally reviewed; publication is the next step. The old
+Published via PR #151 at 8e8d73ba52c789e236409cbc293acc272ec11cc3. CI and Store publisher passed. The public catalog and studio bytes match; the normal installer and doctor passed on this Mac using the explicit repository path because the CLI id lookup retained an older catalog. The old
 canyon implementation remains under `store/tools/experiences/drone-pilot.*`. The rebuilt package
 restores listing only for an editable planning/data/delivery workflow.
 
@@ -22,8 +22,7 @@ page splitting. Original UTF-8 CSV bytes (including BOM) are preserved and verif
 
 The required credit section was restored in Voxel Worlds while running the full Store tests;
 no Voxel runtime change is included here. Source conformance and all 416 CLI Store/check tests pass.
-Existing branding remains, with new actual Store screenshots. Publishing still needs the PR,
-required CI, merge, catalog publication, public byte checks and normal install verification.
+Existing branding remains, with new actual Store screenshots. Public package revision: 0e77a2b9b87d7433f61a921de28c253073dd2ae4. Store catalog snapshot: `/private/tmp/drone-published-catalog.json`.
 
 Next after Drone publication: Game Master, then Lab Bench. Keep each unlisted until its own
 useful workflow and outputs are verified. User has authorized sequential rebuild and publication.
