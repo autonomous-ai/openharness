@@ -19,6 +19,9 @@ a LIST page  →  links to each thing, and a link to the next list page
 a THING page →  the details of one thing
 ```
 
+A search page is a list page, so "search this site for X" is the same job: put the words in
+`"search"` and the harness types them into the site's own search box, then reads the results.
+
 Point `start` at the list. If you point it at one thing's page, that one row is collected and the
 run ends. If the things have no page of their own (everything is on the list), say so to the person:
 this harness collects one row per page, so a list-only site gives one row for the whole list.
@@ -79,6 +82,16 @@ person needs. The honest limit is the **page**. A site that prints its values as
 them behind a click, or loads them after a scroll gives blanks, and the blanks show up as a thin
 column rather than as a wrong answer. That is the tool telling the truth: it would rather leave a
 cell empty than write something the page never said.
+
+## When a site says no
+
+Big shops, marketplaces and social sites mostly block an automated browser. What comes back is a
+wall page: "Sorry, something went wrong", a captcha, or a near-empty page. The harness names it and
+stops, and the verdict carries `run.walled`. That is not a bug to work around, and trying another
+address on the same site is the same wall.
+
+Say it plainly and move: a specialist shop, a maker's own site, a public dataset or an official API.
+Those pages are usually better anyway, because they print the fields a marketplace hides.
 
 ## Never
 

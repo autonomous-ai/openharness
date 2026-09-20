@@ -57,7 +57,7 @@ jobs:
           node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "BROWSER_EXECUTABLE=" + require("./store/tools/experience-tests/node_modules/playwright-core").chromium.executablePath() + "\n")'
       - name: Edit real projects and reopen their exports
         env:
-          EXPERIENCE_IDS: generative-art,music-studio
+          EXPERIENCE_IDS: generative-art,music-studio,creative-direction
         run: node store/tools/experience-tests/browser.mjs
       - name: Verify MIDI and aligned audio with independent readers
         run: |
@@ -71,3 +71,9 @@ jobs:
         run: node store/agents/data-studio/test/browser.mjs
       - name: Independently verify Data Studio exports with Python CSV, Decimal and SQLite
         run: python3 store/agents/data-studio/test/verify-exports.py work/data-studio-evidence
+      - name: Revise three brand briefs and verify real print deliveries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y poppler-utils
+          node store/agents/creative-direction/test/acceptance.mjs
+          python3 store/agents/creative-direction/test/verify-delivery.py work/experience-evidence/forme-acceptance/run-*/acceptance.json

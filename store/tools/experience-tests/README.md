@@ -1,11 +1,15 @@
 # Experience verification
 
-Art and Music have authoring rebuilds listed in the Store for user testing;
+Art, Music and Creative Direction have authoring rebuilds listed in the Store for user testing;
 their source is inside each package's `template/studio/`, with a drawing program/project or an
-editable score. `build-experiences.mjs` delegates to their package builders. The five parked
-packages and the retained original Art/Music models live in `store/tools/experiences/`.
+editable score or brand project. `build-experiences.mjs` delegates to their package builders.
+The four parked packages and the retained original models live in `store/tools/experiences/`.
 See [the product review](../../../work/SUPERPOWERS.md) and
 [current evidence](../../../work/AUTHORING-REBUILD.md). These are technical checks, not product approval.
+
+Creative Direction's [evidence](../../../work/FORME-REBUILD.md) includes three distinct briefs,
+targeted revisions, actual canvas/source saves and independently read print deliveries. Run its
+`test/acceptance.mjs`, then `test/verify-delivery.py PATH_TO_RUN` with Poppler available.
 
 From the repository root:
 

@@ -1,0 +1,16 @@
+[
+  {
+    "family": "DM Sans",
+    "source": "https://raw.githubusercontent.com/google/fonts/5b35b7208dd4100571326fdf37f030b32a524232/ofl/dmsans/DMSans%5Bopsz%2Cwght%5D.ttf",
+    "license": "SIL Open Font License 1.1",
+    "sha256": "8cd08d97e89c24d0aa92edd2f0f4c8ee6195eee9b7c9f154865a58b02f0c1c0d",
+    "licenseFormatting": "License wording unchanged; line endings and trailing whitespace normalized."
+  },
+  {
+    "family": "Fraunces",
+    "source": "https://raw.githubusercontent.com/google/fonts/4024282d9b0cffcdb8e3024560862746178d741f/ofl/fraunces/Fraunces%5BSOFT%2CWONK%2Copsz%2Cwght%5D.ttf",
+    "license": "SIL Open Font License 1.1",
+    "sha256": "177ff6c0f14e5550a3c624247cd1189611d4eb65d000b14944c63d967958abbb",
+    "licenseFormatting": "License wording unchanged; line endings and trailing whitespace normalized."
+  }
+]

@@ -26,6 +26,7 @@ function toast(msg, bad) {
 function renderJob() {
   const box = $('jobBody')
   box.textContent = ''
+  if (!S.fields.length) { box.append(h('div', 'job-task', 'No job yet.'), h('div', 'job-line dim', 'Say what you want in the form on the left, or ask the agent on the right.')); return }
   box.append(h('div', 'job-task', S.task))
   const start = h('div', 'job-line')
   start.append(h('b', '', 'starts at '), h('span', 'mono', S.demoUrl && S.start === S.demoUrl ? 'a made-up job board on this machine' : S.start || 'nowhere yet'))
@@ -112,7 +113,7 @@ function renderFeed() {
     row.append(h('span', 'feed-dot'), h('span', 'feed-text', e.text))
     box.append(row)
   }
-  if (!S.feed.length) box.append(h('div', 'dim small', 'Press Start.'))
+  if (!S.feed.length) box.append(h('div', 'dim small', S.fields.length ? 'Press Start.' : 'Fill in the form on the left and it goes.'))
 }
 
 // ---- the top bar and the state -------------------------------------------------------------------------
@@ -129,17 +130,20 @@ function applyState(s) {
   const first = !S
   const sameFields = S && S.fields.length === s.fields.length && S.fields.every((f, i) => f.id === s.fields[i].id && f.name === s.fields[i].name)
   S = s
-  $('taskLine').textContent = s.task
-  $('cfgError').classList.toggle('hidden', !(s.error || s.jevError))
-  $('cfgError').textContent = s.error || (s.jevError ? `Jev: ${s.jevError}` : '')
+  $('taskLine').textContent = !s.fields.length ? 'no job yet — say what you want below' : s.task
+  const noJobYet = !s.fields.length && !s.rows.length
+  const problem = (noJobYet ? '' : s.error) || (s.jevError ? `Jev: ${s.jevError}` : '')
+  $('cfgError').classList.toggle('hidden', !problem)
+  $('cfgError').textContent = problem
   if (!sameFields) { renderHead(); shownRows = 0; $('resultsBody').textContent = '' }
   renderJob(); renderRows(); renderLinks(); renderFeed(); renderTop()
-  const idle = !s.here.url && !s.rows.length
-  $('screenIdle').classList.toggle('hidden', !idle)
-  $('chromeNote').textContent = !s.chrome.found
+  if (first) showAsk(!s.rows.length && s.phase === 'idle')
+  else if (askOpen && s.phase === 'running') showAsk(false)
+  $('chromeNote').textContent = s.walled ? s.walled + '. This harness does not work around a block. Try a site that allows reading, or open the page yourself in the window and see what it wants.'
+    : !s.chrome.found
     ? 'Google Chrome was not found on this machine. Install it, or set CHROME_PATH to where it is.'
     : s.client === 'mock' ? 'No Jev key yet, so an offline stand-in will answer. It only matches words: good enough to watch, not good enough to act on. Paste a key in the panel on the right.' : ''
-  $('chromeNote').className = 'screen-note' + (!s.chrome.found ? ' bad' : s.client === 'mock' ? ' warn' : '')
+  $('chromeNote').className = 'screen-note' + (!s.chrome.found || s.walled ? ' bad' : s.client === 'mock' ? ' warn' : '')
   if (document.activeElement !== $('urlInput')) $('urlInput').value = s.here.url || ''
   $('urlInput').placeholder = s.chrome.open ? 'where the browser is' : 'the browser is not open yet'
   if (first) $('screen').classList.toggle('hidden', true)
@@ -157,6 +161,50 @@ function step() {
   $('sCost').textContent = fmtCost(tw.cost.v)
   requestAnimationFrame(step)
 }
+
+// ---- the front door -----------------------------------------------------------------------------------------
+// The pane takes the job itself. Before this the only way in was the agent or the JSON file, and a
+// person looking at the pane could not tell what to do.
+let askOpen = false
+function showAsk(on) {
+  askOpen = on
+  $('screenIdle').classList.toggle('hidden', !on)
+  $('screenWrap').classList.toggle('asking', on)
+  document.querySelector('.results-head').classList.toggle('hidden', on && !(S?.rows.length))
+  document.querySelector('.table-wrap').classList.toggle('hidden', on && !(S?.rows.length))
+  if (on) {
+    $('askStart').value = S?.demoUrl && S.start === S.demoUrl ? '' : (S?.start ?? '')
+    $('askSearch').value = S?.search ?? ''
+    $('askItem').value = S?.item && S.item !== 'one of the things to collect' ? S.item : ''
+    $('askColumns').value = (S?.fields ?? []).map((f) => f.ask).join('\n')
+    $('askKeep').value = S?.keep ?? ''
+    $('askMax').value = S?.fields.length ? S.maxItems : 25
+    $('askMsg').textContent = ''
+    setTimeout(() => $('askStart').focus(), 30)
+  }
+}
+async function sendJob(over = {}) {
+  const body = {
+    start: $('askStart').value.trim(), search: $('askSearch').value.trim(), item: $('askItem').value.trim(),
+    columns: $('askColumns').value, keep: $('askKeep').value.trim(), maxItems: Number($('askMax').value) || 25,
+    ...over,
+  }
+  $('askMsg').className = 'ask-msg'
+  $('askMsg').textContent = 'Setting the job…'
+  $('askSubmit').disabled = true
+  const r = await post('setJob', body)
+  $('askSubmit').disabled = false
+  if (!r.ok) { $('askMsg').className = 'ask-msg bad'; $('askMsg').textContent = r.error || 'that did not work'; return }
+  showAsk(false)
+  toast('Off it goes. The browser is opening.')
+}
+$('askForm').addEventListener('submit', (e) => { e.preventDefault(); sendJob() })
+$('askDemo').addEventListener('click', () => sendJob({
+  start: 'demo', search: '', item: 'a job posting',
+  columns: 'the job title\nthe name of the company hiring\nthe pay or salary range\nwhere the job is based\nCan this job be done fully remotely?',
+  keep: '',
+}))
+$('editBtn').addEventListener('click', () => showAsk(!askOpen))
 
 // ---- controls ---------------------------------------------------------------------------------------------
 $('startBtn').addEventListener('click', async () => {
@@ -191,7 +239,7 @@ es.addEventListener('shot', (e) => {
   const img = $('screen')
   img.src = `data:image/jpeg;base64,${s.jpegBase64}`
   img.classList.remove('hidden')
-  $('screenIdle').classList.add('hidden')
+  if (!askOpen) $('screenIdle').classList.add('hidden')   // a live page must not shove the form away mid-typing
 })
 window.addEventListener('jev-connected', () => toast('Connected. The next page is read by the real model.'))
 requestAnimationFrame(step)

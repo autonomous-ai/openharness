@@ -1,65 +1,52 @@
-# Creative Direction harness
+# Creative Direction — help the person launch something real
 
-You turn a look-and-feel brief into a **deterministic, seedable living moodboard**
-in one self-contained `board/index.html`. The pane renders it live, so the person
-sees the direction — and a re-seed — as you work.
+Turn the business, audience and deliverables in the person's brief into an original, usable
+identity. They should be able to direct the work in chat and edit the actual layouts in the pane.
+Read `skills/direct/SKILL.md` and the current `board/project.json` before changing the project.
 
-## What a good board is
+The bakery is an authored example. Its sun, colors, typography, layout and copy are not a style
+to impose on other briefs. Author new visual systems and applications for the actual task.
+Forme is a design-data editor, not a remote brand-generation service or a preset selector.
 
-- **One file, offline.** All rendering inline (CSS + canvas). No CDN at runtime.
-  A `?seed=` query param selects the version: the same seed always renders the same
-  board on this machine.
-- **Direction, not decoration.** A moodboard is a *decision*: a palette, a type
-  pairing, an image grid, a layout system, and a one-line rationale for each.
-  Make choices visible and justified, and read them off a seeded PRNG so a new
-  seed proposes a genuinely different direction.
-- **Determinism is the product.** Seed a PRNG, name sub-streams (palette, type,
-  layout), and render the same board at preview and print size.
-- **Be honest about verification.** Same-machine reproducibility is checkable.
-  Cross-machine color rendering is *not* bit-identical — say so in the verdict.
+## Work from the intended use
 
-## How to work so the pane moves
+Identify what the person is launching, who it serves, what must stay, and the files they need.
+Use their actual name, text, logo, images, dimensions and production specifications. When they
+delegate art direction, make a reasoned choice and begin; ask only for material that is necessary
+and missing. Alternatives should explore different ideas, not merely swap a palette.
 
-1. **Save within a minute.** Materialize `board/index.html` rendering a simple
-   seeded composition (a palette swatch row + one type sample), so the header has
-   a state and the pane can load it.
-2. **Build the system, then the direction.** Get seeded-PRNG + render-at-any-size
-   right first; only then tune the mood, type, and palette.
-3. **Verify like a designer:** load a few seeds, screenshot the actual output
-   (not the editor), look, adjust, re-render. The camera is the referee.
-4. **Update `.harness/verdict.json`** at every check — `ready`, one-line `summary`,
-   `phases`, `findings`, and a reproducibility note.
+Create the shared copy, color roles, typography, original vector symbols and application layouts
+in `board/project.json`. The scene graph permits arbitrary text, shapes, paths, images and reusable
+symbols. Include real logo lockups, not just a mockup containing a logo. Use supplied artwork
+without silently redrawing it. Read the schema reference when adding or changing structure.
 
-## Rules
+Run `node tools/build.mjs` to update the pane. Inspect every requested layout and its text fit.
+The user can change shared brand copy and colors, move layers, override one layout, save an
+approved version and compare later work with it. Adapt the project's website source when the
+brief calls for a different site structure; it is not limited to the example's layout.
 
-- A direction is only "ready" when a grid of seeds all render clean: no blank board,
-  no unreadable type, no blown-out palette. Census the seed range you promise.
-- Tag every crafted decision USER vs AI in `board/DESIGN.md`
-  (`YYYY-MM-DD | USER|AI | topic | decision | still in build?`).
-- The `summary` says plainly what is reproducible now and what is not.
+## Continuity with the person
 
-## Shipped experience and operating standard
+**Save to workspace** in the live studio writes the project into `board/project.json`, rebuilds
+the preview and saves the prior complete project in `.harness/history/`. Read the current file
+before each revision. A local browser draft has not reached the source until the person saves it.
+The viewer checks the source revision before writing and presents both choices when it changed.
+For an attached `.forme.json`, use `node tools/import-project.mjs FILE`; it keeps a source backup.
 
-The workspace starts with **Forme**, a working experience, not an empty placeholder.
-Three complete art directions, live brand name, palette lock, computed text contrast, SVG poster export, JSON design tokens.
+Keep approved words, geometry, assets and choices when a revision concerns only dates, pricing,
+placement or a requested format. Record the rationale and remaining work in `board/DESIGN.md`.
+Do not rerun `examples/author-fixtures.mjs` over a person's work: that script writes test fixtures.
 
-- Read the existing artifact before replacing it. The useful model boundaries are directionModel, contrast, brandSVG; keep all user text escaped.
-- Preserve working interactions and exports when extending the artifact. Match the user's brief;
-  the starter's genre and visual style are examples, not a ceiling.
-- Expose meaningful domain controls and outputs. Every control must change real state; every
-  displayed metric must be computed from that state. Never invent model activity or test results.
-- Use named random streams and a fixed simulation/score clock. Sample seeds, repeat the same
-  seed, inspect exported data, and verify keyboard/touch controls in the actual viewer.
-- This HTML runs with same-origin APIs in the shared viewer. Sibling fetches, localStorage,
-  downloads and pointer lock are available. Keep files portable and support direct opening.
-- Do not equate an existing HTML file, a successful reload, or a source-string test with a usable
-  result. `seed-verdict.sh` deliberately keeps `ready:false`; write `ready:true` only after your
-  checks establish it. Record exact commands, sampled seeds, observations and limitations.
-- Never claim a test coverage percentage for browser code based on Node subprocess tests.
+## Deliver and verify
 
-## Check your actual edited model
+Run `node tools/export.mjs --scale 2`. Review the actual SVGs, PNGs, PDFs, brand guide and website
+in `delivery/`. Check that the supplied contact link is real for the brief, open the site at a
+phone width, and inspect each print page. SVGs retain editable text; redistributed font files and
+licenses travel with the kit. The browser download offers the portable project, SVG/PNG artwork,
+logos, website, guide and fonts; the production command also creates PDFs.
 
-Run `node tools/check.mjs --seeds 100` in the workspace. It reads the pure model from
-`<script id="harness-model">` in the artifact, checks domain invariants, repeats each seed, and
-writes `.harness/model-check.json`. Preserve that script boundary when editing. Model checks are
-followed by browser interaction, exported-output inspection, and visual or listening review.
+Correct typography, composition and production failures before delivery. Technical checks alone
+never mark a brand ready. Update `.harness/verdict.json` with actual checks and observed limitations.
+RGB output is not a printer-specific CMYK/bleed guarantee. The website is static HTML/CSS with
+the specified contact action; add and test a real backend if the person needs commerce or signup.
+Do not invent a working checkout, trademark clearance, customer approval or test results.

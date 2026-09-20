@@ -1,0 +1,732 @@
+{
+  "spec": "forme/1",
+  "id": "vectorial-consulting",
+  "title": "Vectorial — systems consultancy",
+  "brief": "A fictional technical consultancy supplies an approved green monogram. Preserve its exact geometry and color. Build a credible launch for engineering leaders: an identity lockup, service overview, talk announcement, proposal cover and contact card. Avoid fake product dashboards, invented clients and unverifiable performance claims.",
+  "copy": {
+    "name": "Vectorial",
+    "category": "Systems, made legible.",
+    "tagline": "Clarity is an engineering advantage.",
+    "headline": "Make complexity\nlegible.",
+    "description": "We help engineering teams untangle systems, map the decisions that matter, and turn a difficult migration into a workable plan.",
+    "offer": "Architecture review\nMigration planning\nTechnical facilitation",
+    "event": "Designing for the next change",
+    "date": "22 October · 17:00 UTC",
+    "contact": "hello@vectorial.example",
+    "proposal": "Systems review\nScope & approach",
+    "edition": "FIELD NOTES / 001"
+  },
+  "fonts": [
+    {
+      "family": "DM Sans",
+      "file": "fonts/DM Sans.ttf",
+      "licenseFile": "fonts/DM Sans-OFL.txt"
+    },
+    {
+      "family": "Fraunces",
+      "file": "fonts/Fraunces.ttf",
+      "licenseFile": "fonts/Fraunces-OFL.txt"
+    }
+  ],
+  "assets": [
+    {
+      "id": "approved-mark",
+      "name": "Approved monogram — authored input fixture",
+      "file": "assets/approved-mark.svg"
+    }
+  ],
+  "active": "signal",
+  "notes": "Retain the supplied mark byte-for-byte. It is an original fixture made for this acceptance brief, not a client asset.\nVoice: clear, specific and practical. Explain the work instead of claiming guaranteed performance.\nUse a dark technical grid as structure, not as decoration behind body text. Green identifies key decisions; paper-colored type carries detail.\nContact details are fictional and must be replaced for a real launch.",
+  "website": {
+    "title": "{{name}} — {{category}}",
+    "cta": "Start a conversation",
+    "href": "mailto:hello@vectorial.example",
+    "sections": [],
+    "file": "site.html"
+  },
+  "directions": [
+    {
+      "id": "signal",
+      "name": "Signal over noise",
+      "rationale": "An existing mark becomes a complete system: deep blue-black, electric green, precise grid lines and large, direct typography. No fictional product screens or results.",
+      "colors": {
+        "ink": "#EAF2E7",
+        "paper": "#112126",
+        "accent": "#C0F088",
+        "soft": "#334B51"
+      },
+      "fonts": {
+        "display": "DM Sans",
+        "body": "DM Sans"
+      },
+      "symbols": {},
+      "logos": [
+        {
+          "id": "lockup",
+          "board": "identity",
+          "layers": [
+            "approved-mark",
+            "name"
+          ]
+        }
+      ],
+      "boards": [
+        {
+          "id": "identity",
+          "name": "Identity lockup",
+          "width": 1600,
+          "height": 600,
+          "background": "$paper",
+          "layers": [
+            {
+              "id": "approved-mark",
+              "type": "image",
+              "asset": "approved-mark",
+              "x": 80,
+              "y": 130,
+              "width": 230,
+              "height": 230
+            },
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 376,
+              "y": 124,
+              "width": 1120,
+              "height": 210,
+              "size": 178,
+              "minSize": 86,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 600,
+              "tracking": -8
+            },
+            {
+              "id": "rule",
+              "type": "line",
+              "x": 80,
+              "y": 430,
+              "width": 1440,
+              "height": 0,
+              "stroke": "$soft",
+              "strokeWidth": 2
+            },
+            {
+              "id": "tagline",
+              "type": "text",
+              "text": "{{tagline}}",
+              "x": 80,
+              "y": 478,
+              "width": 1410,
+              "height": 54,
+              "size": 28,
+              "minSize": 28,
+              "font": "body",
+              "fill": "$ink"
+            }
+          ],
+          "role": "logo"
+        },
+        {
+          "id": "service-sheet",
+          "name": "Services overview",
+          "width": 1000,
+          "height": 1300,
+          "background": "$paper",
+          "layers": [
+            {
+              "id": "grid-0",
+              "type": "line",
+              "x": 55,
+              "y": 55,
+              "width": 0,
+              "height": 190,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "grid-1",
+              "type": "line",
+              "x": 182.14285714285714,
+              "y": 55,
+              "width": 0,
+              "height": 190,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "grid-2",
+              "type": "line",
+              "x": 309.2857142857143,
+              "y": 55,
+              "width": 0,
+              "height": 190,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "grid-3",
+              "type": "line",
+              "x": 436.42857142857144,
+              "y": 55,
+              "width": 0,
+              "height": 190,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "grid-4",
+              "type": "line",
+              "x": 563.5714285714286,
+              "y": 55,
+              "width": 0,
+              "height": 190,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "grid-5",
+              "type": "line",
+              "x": 690.7142857142857,
+              "y": 55,
+              "width": 0,
+              "height": 190,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "grid-6",
+              "type": "line",
+              "x": 817.8571428571429,
+              "y": 55,
+              "width": 0,
+              "height": 190,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "grid-7",
+              "type": "line",
+              "x": 945,
+              "y": 55,
+              "width": 0,
+              "height": 190,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "approved-mark",
+              "type": "image",
+              "asset": "approved-mark",
+              "x": 70,
+              "y": 68,
+              "width": 90,
+              "height": 90
+            },
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 195,
+              "y": 71,
+              "width": 700,
+              "height": 91,
+              "size": 57,
+              "minSize": 57,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 600
+            },
+            {
+              "id": "headline",
+              "type": "text",
+              "text": "{{headline}}",
+              "x": 70,
+              "y": 347,
+              "width": 850,
+              "height": 235,
+              "size": 89,
+              "minSize": 65,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 600,
+              "leading": 1.05,
+              "tracking": -3
+            },
+            {
+              "id": "description",
+              "type": "text",
+              "text": "{{description}}",
+              "x": 70,
+              "y": 660,
+              "width": 805,
+              "height": 166,
+              "size": 30,
+              "minSize": 25,
+              "font": "body",
+              "fill": "$ink",
+              "leading": 1.45
+            },
+            {
+              "id": "rule",
+              "type": "line",
+              "x": 70,
+              "y": 884,
+              "width": 860,
+              "height": 0,
+              "stroke": "$accent",
+              "strokeWidth": 2
+            },
+            {
+              "id": "services",
+              "type": "text",
+              "text": "{{offer}}",
+              "x": 70,
+              "y": 935,
+              "width": 860,
+              "height": 198,
+              "size": 39,
+              "minSize": 39,
+              "font": "body",
+              "fill": "$ink",
+              "leading": 1.6
+            },
+            {
+              "id": "contact",
+              "type": "text",
+              "text": "{{contact}}",
+              "x": 70,
+              "y": 1195,
+              "width": 850,
+              "height": 52,
+              "size": 23,
+              "minSize": 23,
+              "font": "body",
+              "fill": "$ink"
+            }
+          ],
+          "role": "service",
+          "printMm": [
+            200,
+            260
+          ]
+        },
+        {
+          "id": "talk-announcement",
+          "name": "Talk announcement",
+          "width": 1080,
+          "height": 1080,
+          "background": "$paper",
+          "layers": [
+            {
+              "id": "block",
+              "type": "rect",
+              "x": 56,
+              "y": 55,
+              "width": 970,
+              "height": 77,
+              "fill": "$accent"
+            },
+            {
+              "id": "edition",
+              "type": "text",
+              "text": "{{edition}}",
+              "x": 78,
+              "y": 78,
+              "width": 915,
+              "height": 42,
+              "size": 24,
+              "minSize": 24,
+              "font": "body",
+              "fill": "$paper",
+              "tracking": 4
+            },
+            {
+              "id": "event",
+              "type": "text",
+              "text": "{{event}}",
+              "x": 65,
+              "y": 231,
+              "width": 940,
+              "height": 321,
+              "size": 112,
+              "minSize": 70,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 500,
+              "leading": 1.05,
+              "tracking": -4
+            },
+            {
+              "id": "divider",
+              "type": "line",
+              "x": 70,
+              "y": 688,
+              "width": 940,
+              "height": 0,
+              "stroke": "$soft",
+              "strokeWidth": 2
+            },
+            {
+              "id": "date",
+              "type": "text",
+              "text": "{{date}}",
+              "x": 70,
+              "y": 748,
+              "width": 790,
+              "height": 65,
+              "size": 33,
+              "minSize": 33,
+              "font": "body",
+              "fill": "$ink"
+            },
+            {
+              "id": "approved-mark",
+              "type": "image",
+              "asset": "approved-mark",
+              "x": 793,
+              "y": 836,
+              "width": 203,
+              "height": 203
+            },
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 70,
+              "y": 932,
+              "width": 655,
+              "height": 95,
+              "size": 69,
+              "minSize": 45,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 600,
+              "tracking": -2
+            }
+          ],
+          "role": "social"
+        },
+        {
+          "id": "proposal-cover",
+          "name": "Proposal cover",
+          "width": 1200,
+          "height": 1600,
+          "background": "$paper",
+          "layers": [
+            {
+              "id": "grid-0",
+              "type": "line",
+              "x": 55,
+              "y": 55,
+              "width": 0,
+              "height": 1490,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "grid-1",
+              "type": "line",
+              "x": 210.71428571428572,
+              "y": 55,
+              "width": 0,
+              "height": 1490,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "grid-2",
+              "type": "line",
+              "x": 366.42857142857144,
+              "y": 55,
+              "width": 0,
+              "height": 1490,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "grid-3",
+              "type": "line",
+              "x": 522.1428571428571,
+              "y": 55,
+              "width": 0,
+              "height": 1490,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "grid-4",
+              "type": "line",
+              "x": 677.8571428571429,
+              "y": 55,
+              "width": 0,
+              "height": 1490,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "grid-5",
+              "type": "line",
+              "x": 833.5714285714286,
+              "y": 55,
+              "width": 0,
+              "height": 1490,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "grid-6",
+              "type": "line",
+              "x": 989.2857142857143,
+              "y": 55,
+              "width": 0,
+              "height": 1490,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "grid-7",
+              "type": "line",
+              "x": 1145,
+              "y": 55,
+              "width": 0,
+              "height": 1490,
+              "stroke": "$soft",
+              "strokeWidth": 1
+            },
+            {
+              "id": "panel",
+              "type": "rect",
+              "x": 56,
+              "y": 350,
+              "width": 1088,
+              "height": 833,
+              "fill": "$paper"
+            },
+            {
+              "id": "category",
+              "type": "text",
+              "text": "ENGINEERING ADVISORY",
+              "x": 70,
+              "y": 91,
+              "width": 1020,
+              "height": 62,
+              "size": 26,
+              "minSize": 26,
+              "font": "body",
+              "fill": "$ink",
+              "tracking": 4
+            },
+            {
+              "id": "proposal",
+              "type": "text",
+              "text": "{{proposal}}",
+              "x": 70,
+              "y": 431,
+              "width": 1040,
+              "height": 364,
+              "size": 117,
+              "minSize": 76,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 500,
+              "leading": 1.1,
+              "tracking": -4
+            },
+            {
+              "id": "description",
+              "type": "text",
+              "text": "{{description}}",
+              "x": 70,
+              "y": 909,
+              "width": 972,
+              "height": 207,
+              "size": 33,
+              "minSize": 27,
+              "font": "body",
+              "fill": "$ink",
+              "leading": 1.45
+            },
+            {
+              "id": "approved-mark",
+              "type": "image",
+              "asset": "approved-mark",
+              "x": 70,
+              "y": 1300,
+              "width": 168,
+              "height": 168
+            },
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 281,
+              "y": 1320,
+              "width": 790,
+              "height": 155,
+              "size": 109,
+              "minSize": 61,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 600,
+              "tracking": -5
+            }
+          ],
+          "role": "proposal",
+          "printMm": [
+            210,
+            280
+          ]
+        },
+        {
+          "id": "contact-card",
+          "name": "Contact card",
+          "width": 1050,
+          "height": 600,
+          "background": "$paper",
+          "layers": [
+            {
+              "id": "approved-mark",
+              "type": "image",
+              "asset": "approved-mark",
+              "x": 60,
+              "y": 66,
+              "width": 145,
+              "height": 145
+            },
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 255,
+              "y": 67,
+              "width": 734,
+              "height": 140,
+              "size": 100,
+              "minSize": 60,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 600,
+              "tracking": -4
+            },
+            {
+              "id": "rule",
+              "type": "line",
+              "x": 60,
+              "y": 305,
+              "width": 930,
+              "height": 0,
+              "stroke": "$soft",
+              "strokeWidth": 2
+            },
+            {
+              "id": "category",
+              "type": "text",
+              "text": "{{category}}",
+              "x": 60,
+              "y": 369,
+              "width": 930,
+              "height": 75,
+              "size": 44,
+              "minSize": 30,
+              "font": "body",
+              "fill": "$ink"
+            },
+            {
+              "id": "contact",
+              "type": "text",
+              "text": "{{contact}}",
+              "x": 60,
+              "y": 502,
+              "width": 900,
+              "height": 45,
+              "size": 25,
+              "minSize": 25,
+              "font": "body",
+              "fill": "$ink"
+            }
+          ],
+          "role": "card",
+          "printMm": [
+            85,
+            48.57
+          ]
+        },
+        {
+          "id": "wide-banner",
+          "name": "Event banner",
+          "width": 1800,
+          "height": 700,
+          "background": "$paper",
+          "layers": [
+            {
+              "id": "approved-mark",
+              "type": "image",
+              "asset": "approved-mark",
+              "x": 90,
+              "y": 85,
+              "width": 185,
+              "height": 185
+            },
+            {
+              "id": "name",
+              "type": "text",
+              "text": "{{name}}",
+              "x": 90,
+              "y": 419,
+              "width": 930,
+              "height": 176,
+              "size": 125,
+              "minSize": 80,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 600,
+              "tracking": -5
+            },
+            {
+              "id": "event",
+              "type": "text",
+              "text": "{{event}}",
+              "x": 700,
+              "y": 100,
+              "width": 1000,
+              "height": 260,
+              "size": 88,
+              "minSize": 60,
+              "font": "body",
+              "fill": "$ink",
+              "weight": 500,
+              "leading": 1.1,
+              "tracking": -3
+            },
+            {
+              "id": "rule",
+              "type": "line",
+              "x": 700,
+              "y": 426,
+              "width": 1000,
+              "height": 0,
+              "stroke": "$accent",
+              "strokeWidth": 2
+            },
+            {
+              "id": "date",
+              "type": "text",
+              "text": "{{date}}",
+              "x": 700,
+              "y": 485,
+              "width": 1000,
+              "height": 85,
+              "size": 41,
+              "minSize": 41,
+              "font": "body",
+              "fill": "$ink"
+            }
+          ],
+          "role": "hero"
+        }
+      ]
+    }
+  ]
+}

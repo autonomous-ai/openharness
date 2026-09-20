@@ -2,7 +2,7 @@
   "homepage": "https://typesafe.ai",
   "upstream": "https://typesafe.ai",
   "license": "MIT",
-  "tagline": "Point it at a web page, say what you want, get a spreadsheet",
+  "tagline": "Say what you want off a web page, and get a spreadsheet",
   "examples": [
     {
       "prompt": "Here is the search results page for two-bedroom flats in my area. Get me every listing with its address, monthly rent, how many bedrooms, and whether it says pets are allowed. Then tell me which five are the best value.",
@@ -11,7 +11,8 @@
     },
     {
       "prompt": "Read every product in this category and put the name, price, stock count and product code in a spreadsheet. Stop after 40. Then tell me which ones are out of stock.",
-      "caption": "Every value is text taken off the page, with the confidence Jev had in it"
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-browser/say-what-you-want.jpg",
+      "caption": "Three boxes and a list of columns. No code, no selectors, and nothing to press after Go"
     },
     {
       "prompt": "I have to check these 60 supplier pages every month for their lead times and minimum order. Write me a job I can run again, then run it and tell me what changed.",
