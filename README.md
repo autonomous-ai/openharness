@@ -1,9 +1,9 @@
 # Follow your curiosity. Build across disciplines.
 
-OpenHarness is an open-source workshop for building with coding agents. Use Claude Code, Codex, and
-others to make software, design parts and circuit boards, explore data, and create videos, with your
-agents, domain tools, and live viewers in one place and sessions that persist across every machine
-you own.
+OpenHarness is open-source software and hardware for building with coding agents. Use Claude Code,
+Codex, and others to make software, design parts and circuit boards, explore data, and create videos,
+with your agents, domain tools, and live viewers in one place and sessions that persist across every
+machine you own.
 
 The old rule said ten thousand hours to a craft. That was the tax on curiosity, and most of us could
 only afford to pay it once, so we specialized and called the rest hobbies.
@@ -12,8 +12,9 @@ Coding agents become the specialists, given the tools of a craft and a way to se
 the geometry that becomes a part, the netlist that becomes a circuit board, the script that becomes
 a film. You bring the idea, the taste, and the judgment about what is worth making.
 
-Use the desktop app on its own, or add the optional open-hardware **Harness device** to follow your
-agents, answer their questions, and speak new tasks from your desk.
+Use the desktop app on its own, or add the optional **Harness device** to follow your agents, answer
+their questions, and speak new tasks from your desk. The app, firmware, schematics, PCB layouts, and
+enclosure CAD files are all open source.
 
 [Who it's for](#for-polymaths-in-the-making) · [What you can make](#domain-specific-harnesses-dsh) · [Run it](#run-it) ·
 [Harness device](#harness-device) · [Architecture](docs/architecture.md) · [Contribute](#contributing)
@@ -24,10 +25,15 @@ agents, answer their questions, and speak new tasks from your desk.
 
 ## For polymaths in the making.
 
-Built for technical founders who want their hands on more of what they are making, from the software
-and the physical product to the analysis and the launch video. Engineers, makers, and creators with
-the same curiosity are welcome. You get there by directing a specialist in each craft and judging
-what comes back, not by mastering them all first.
+> “I think that one kind of perspective for a lot of the world-class entrepreneurs is they’re not
+> specialists. They’re something close to polymaths.”
+>
+> — [Peter Thiel](https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s)
+
+Built for the curious engineer who wants to build beyond software. Get your hands on more of what
+you are making, from the physical product to the analysis and the launch video. Makers and creators
+with the same curiosity are welcome. You get there by directing a specialist in each craft and
+judging what comes back, not by mastering them all first.
 
 Monday, a feature. Tuesday, the customer data. Wednesday, an enclosure for the prototype. Thursday,
 the launch video. You already know how to build with code, and Harness brings that way of working to
@@ -66,7 +72,7 @@ and the view. Adding a domain never needs a change to the app or the daemon.
 <!-- store-catalog:start -->
 ### Coding and beyond
 
-Start with a coding agent you already use. Explore 44 domain-specific harnesses when your
+Start with a coding agent you already use. Explore 45 domain-specific harnesses when your
 next idea takes you further.
 
 | Category | Agents and harnesses |
@@ -79,11 +85,11 @@ next idea takes you further.
 | Productivity | [Jev Sheets](store/agents/jev-sheets/), [Marp](store/agents/marp/), [Typst](store/agents/typst/) |
 | Science & Data | [autoresearch-mlx](store/agents/autoresearch-mlx/), [Data Studio](store/agents/data-studio/), [marimo](store/agents/marimo/), [RDKit](store/agents/rdkit/) |
 | Simulation | [DimOS](store/agents/dimos/), [Drone Pilot](store/agents/drone-pilot/), [Foam-Agent](store/agents/foam-agent/), [MuJoCo](store/agents/mujoco/), [SimSkill](store/agents/simskill/) |
-| Games | [Godogen](store/agents/godogen/), [Phaser](store/agents/phaser/), [Voxel Worlds](store/agents/voxel-worlds/) |
+| Games | [Game Master](store/agents/game-master/), [Godogen](store/agents/godogen/), [Phaser](store/agents/phaser/), [Voxel Worlds](store/agents/voxel-worlds/) |
 | Research | [Jev Browser](store/agents/jev-browser/), [Roundtable](store/agents/roundtable/) |
 | Local AI | [Grid](store/agents/autonomous-grid/), [MLX-LM](store/agents/mlx-lm/), [Ollama](store/agents/ollama/), [vLLM](store/agents/vllm/) |
 
-These are the 44 harnesses currently listed in the Store catalog. They combine upstream
+These are the 45 harnesses currently listed in the Store catalog. They combine upstream
 open-source tools and original workflows, with instructions, setup, checks, and live views for each craft.
 
 The 10 [shared viewers](store/viewers/) cover CAD, 3D models, documents, games, film, video,

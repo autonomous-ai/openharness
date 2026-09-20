@@ -337,9 +337,9 @@ languages, history, and security. Frames broad capabilities as preparation for a
 
 Observed counters: 5,580 likes; 307,706 views.
 
-Source limitation: The post quote-shares an aggregator's clip attributed to Peter Thiel. The
-original speech and full context were not verified. This research does not establish a verified
-Thiel quotation or endorsement.
+Initial source limitation: The post quote-shares an aggregator's clip attributed to Peter Thiel.
+The original interview was not checked in that first pass. The follow-up in section 25 records the
+aggregator post and the original publisher's transcript. Neither is an endorsement of Harness.
 
 ## 16. Mustafa — October 14, 2025
 
@@ -473,6 +473,48 @@ about a model-produced formalization. Here Polymath is a collaboration's proper 
 mathematical claims, linked repository, and attribution of results were not independently checked.
 
 Observed counters: 11 replies; 35 reposts; 168 likes; approximately 41K views.
+
+## 25. Founder Mode / Peter Thiel — December 16, 2025; original interview September 12, 2018
+
+Account: @Founder_Mode_\
+Source: <https://x.com/Founder_Mode_/status/2000973572248940648>\
+Attachment: 39-second video clip.\
+Read: original post page in X; original interview publisher's page and exported YouTube transcript.
+
+Full post caption:
+
+> "World-class entrepreneurs are polymaths." - Peter Thiel
+
+Observed counters: 377,556 views; 2,902 likes; 505 reposts; 1,494 bookmarks; 62 replies.
+X displayed December 16, 2025, at 11:57 AM; the displayed time zone was not established.
+
+### Original interview
+
+Publisher: The Rubin Report, verified YouTube channel.\
+Interview: Peter Thiel on entrepreneurship and Silicon Valley.\
+Published: September 12, 2018.\
+Source: <https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s>\
+Relevant passage: approximately 13:31–14:32.
+
+Opening statement from the passage, with spoken repetitions removed:
+
+> I think that one kind of perspective for a lot of the world-class entrepreneurs is they’re not
+> specialists. They’re something close to polymaths.
+
+Verification notes: The original publisher's English auto-generated captions place the excerpt at
+approximately 13:31–13:46. Repeated “I think that” and “one” are omitted. Punctuation, capitalization,
+and the captions' homophone transcription of “they’re” are normalized. The transcript says “close
+to,” not “closer to.” The X caption condenses the argument; it should not be substituted for the
+interview wording inside a direct quotation.
+
+Content notes: Thiel describes the breadth of understanding he sees in entrepreneurs, using Mark
+Zuckerberg as an example. The surrounding discussion covers product details, the psychology and
+culture of social media, company management, and the history of technology. The interview predates
+today's coding-agent products; this passage does not discuss Harness or establish an endorsement.
+
+Discovery trail: a [Startup Archive article](https://www.startuparchive.org/p/peter-thiel-world-class-entrepreneurs-are-typically-polymaths)
+identified the interview, after which the original publisher's page and transcript were checked.
+Only the short excerpt above is retained from the interview.
 
 ## Search and coverage notes
 

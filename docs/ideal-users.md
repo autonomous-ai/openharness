@@ -8,9 +8,9 @@ remain hands-on, and work across product, design, analysis, and marketing. They 
 medium for making things: something expressive that they can inspect, change, reuse, and apply across
 disciplines.
 
-**Follow your curiosity. Build across disciplines.** Harness is an open-source workshop for people who
-build in more than one craft. It gives them a place to direct their agents, use domain tools, and turn
-ideas into work they can inspect, change, and use.
+**Follow your curiosity. Build across disciplines.** Harness is open-source software and hardware
+for people who build in more than one craft. It gives them a place to direct their agents, use domain
+tools, and turn ideas into work they can inspect, change, and use.
 
 ## The ideal user
 
@@ -50,10 +50,11 @@ should guide the first examples and product decisions.
 
 ### The rule: describe the work, never grade the person
 
-Naming research on 2026-09-20 found a clean split in how the word behaves in public. In the third
-person it reads as praise and travels well. Applied to oneself it invites scrutiny instead. The posts
-with the most reach are all invitations toward the identity rather than assertions of it, and that is
-the grammar we borrow. See `reports/Polymath identity market and naming.md`.
+The [X source notes](research/2026-09-20-polymath-x-source-notes.md) include invitations to develop
+breadth, praise for other people, descriptions of models, and criticism of self-applied titles.
+They support an inviting tone grounded in what people want to make. This is a qualitative reading
+of selected posts, not evidence that every use of the word follows one rule or that a particular
+description will convert better.
 
 Words that describe the work are safe. Words that grade the person are not.
 
@@ -67,12 +68,12 @@ Words that describe the work are safe. Words that grade the person are not.
 So:
 
 - **Public promise:** "Follow your curiosity. Build across disciplines."
-- **Audience line:** "For polymaths in the making." The trajectory cannot be falsified; the
-  credential can, so never drop the second half.
+- **Audience line:** "For polymaths in the making." Keep the invitation to explore and learn;
+  readers do not need to claim expertise across several fields to belong.
 - **Third person only:** the brand may call users polymaths. Copy must never ask a user to claim it,
   and no interface string, tagline or product name should require them to.
-- **Essays, not interface:** the word carries enormous pull in long-form writing people opt into
-  reading. It carries risk on a button someone has to press.
+- **Use in audience copy and essays:** explain the aspiration through actual work. Interface labels
+  should name the action the person can take.
 
 ### The voice
 
@@ -138,9 +139,36 @@ projects visible. Device marketing should demonstrate its usefulness during real
 
 ## Positioning and messaging
 
-The shared promise:
+The public audience wording:
 
-> An open-source workshop for technical founders who build across disciplines.
+> Built for the curious engineer who wants to build beyond software.
+
+Use this invitation in the README. Technical founders remain an initial recruiting focus and guide
+the first examples; readers do not need to have founded a company to belong.
+
+The project description:
+
+> Follow your curiosity. Build across disciplines. Open-source software and hardware for polymaths in the making.
+
+Name both software and hardware in the description. The device makes that openness tangible: its
+firmware, schematics, PCB layouts, and enclosure CAD files are available to study, change, and build.
+Show those files and the physical device in the README; keep the short description focused on the
+invitation.
+
+The wording draws on three recurring ideas in the saved research:
+
+- **Multiple interests:** [Dan Koe](https://x.com/thedankoe/status/2010042119121957316) addresses
+  people whose curiosity spans several fields. Invite that curiosity without requiring a title.
+- **Developing breadth:** [Garry Tan](https://x.com/garrytan/status/1728081205810073804) encourages
+  founders to become capable across different kinds of work. Show a path from coding to a new craft.
+- **Understanding the whole product:** [Peter Thiel](https://www.youtube.com/watch?v=h10kXgTdhNU&t=819s)
+  describes entrepreneurs who understand product, people, management, and technology together.
+  Keep human intent and judgment central to the promise.
+
+These are editorial interpretations, not measured effects on signups or purchases. The description
+stays short; examples in the README show what building across disciplines means. The audience section
+quotes Thiel's statement with the subject included and links his name directly to the original
+interview. The source notes retain the 2018 context and transcription details.
 
 The technical thesis:
 
