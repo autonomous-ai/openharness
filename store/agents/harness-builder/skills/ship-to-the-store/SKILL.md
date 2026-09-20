@@ -54,10 +54,15 @@ empty pane. If a proof's final frame is not Store-worthy, the proof did not pass
 
 ## `brand/`
 
-The tile needs a face: `brand/logo.svg`, and `icon.png` at 128 px for the app's picker. Use the
-upstream project's own logo from its repository (check its trademark guidance and keep the file
-untouched); when the project publishes none, the harness draws its initial rather than wearing a mark
-someone invented for it. Note in the README where the logo came from.
+The tile needs a face: `brand/logo.svg`, and `icon.png` at 128 px for the app's picker.
+
+- **A wrapper wears the project's own logo**, taken from its repository, its trademark guidance
+  respected and the file left untouched. If the project publishes none, the tile draws its initial —
+  better than a mark invented for someone else's project and put on their name.
+- **An original workflow gets a mark of its own**, designed for the work it does, as the other
+  Autonomous harnesses have. The tools underneath keep their names in the README, not on the tile.
+
+Either way, say in the README where the mark came from.
 
 ## Credit and licences
 
