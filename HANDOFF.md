@@ -3,6 +3,14 @@
 Work in `/private/tmp/harness-store-voxel`, branch `codex/harness-store-voxel`.
 The main checkout is shared with other sessions; leave it alone.
 
+**Current authoring rebuild:** read [AUTHORING-REBUILD.md](work/AUTHORING-REBUILD.md). Art and Music
+now use source under their own `template/studio/` directories, with real editable projects and
+production exports. `build-experiences.mjs` delegates to their builders. Their original preset
+sources remain under `store/tools/experiences/` for history; they no longer generate these two
+packages. Setup now installs pinned package-local browser tools. Both listings remain withdrawn;
+musical listening and real-user/installed-engine authoring trials are outstanding. The earlier
+seven-starter description below is historical and must not be presented as the new product bar.
+
 **Product reset, 2026-09-20:** the user rejected preset and spectator experiences as the wrong
 product. All seven below are withdrawn from discovery with `listed:false`. Read
 [the new review and return-to-Store gates](work/SUPERPOWERS.md) before continuing. Focus only on

@@ -1,60 +1,48 @@
 # Music Studio — Afterhours
 
-> Withdrawn from Store discovery on 2026-09-20: the current starter does not meet our
-> standard for an open-ended tool that completes real user work. Existing projects and
-> source remain available. See [the product review](../../../work/SUPERPOWERS.md).
+> Unlisted while the authoring rebuild is validated. Code and existing projects remain available.
+> See [the product review](../../../work/SUPERPOWERS.md).
 
 ![Music Studio logo](brand/logo.svg)
 
-Compose a seeded eight-bar track, edit five instrument patterns, shape swing and the mix, listen locally, and export the result as a WAV file.
+Describe a piece you want to make. The agent composes an original arrangement, then you can edit
+notes, timing, sections, instruments and the mix. Bring your own MIDI or recordings. Deliver a
+stereo WAV, separate tracks for a DAW, editable MIDI and a complete project you can reopen.
 
-## Try it
-
-> Build a warm, unhurried eight-bar piece with a syncopated bass line and a sparse melody. Give it a distinct opening and ending.
-
-The starter already works before the first prompt. Change it with the agent, interact with the
-result in the pane, and keep the output. Everything needed at runtime is in `piece/index.html`.
-It works offline and can be opened outside Harness.
+The example is a 48-second documentary cue with five sections. It is a starting piece, not a
+limit on genre or a fixed loop. For a new brief the agent writes a new score.
 
 ## What you can do
 
-Five editable tracks, finite arrangement, tempo/swing, per-track mute and level, waveform transport, reproducible PCM, WAV export.
+- Edit pitches, note lengths, starts and velocities in the piano roll; drag notes and undo/redo.
+- Add instruments, repeat sections, transpose tracks, change tempo, mute/solo and shape the mix.
+- Open MIDI notes and tempo maps, add your own recordings, trim/place clips, or play a recording
+  as a pitched sample. MIDI automation and pitch bends are reported as unsupported on import.
+- Export 48 kHz stereo 16-bit WAV, aligned stems, MIDI, the editable project and portable HTML.
 
-## Build on the starter
+Browser edits autosave locally and stay recoverable when the agent changes the source. Save the
+project to move it between sessions or attach it to the agent; local drafts do not write into the
+source score automatically. The production ZIP contains the exact notes, mix and embedded audio.
 
-The model functions `musicScore`, `scoreEvents`, `renderMusic` and `wavFile` are the starting points for substantive changes. Preserve seed
-reproducibility and user controls while changing the domain behavior. A different brief can replace
-this starter's entire visual language. Keep the artifact self-contained and test the actual result.
+## Authoring and verification
 
-The source checkout builds these starters with `node store/tools/build-experiences.mjs`. Installed
-workspaces are editable HTML; no build tool, network dependency or paid service is required.
+The source score is `piece/session.json`. Build with `node tools/build.mjs`; check source/preview
+agreement with `node tools/check.mjs`; export the actual files with `node tools/export.mjs`.
+`node tools/import-project.mjs FILE` imports a saved project or MIDI and keeps a source backup.
 
-## Verification
+Setup installs pinned browser/MIDI tools locally. Node.js 20+ and npm are required for authoring;
+the exported studio needs only a browser. The harness uses the coding-engine account already
+configured in Harness and no additional remote music-generation service.
 
-Model census: `node --test store/tools/experience-tests/models.test.mjs` from the source checkout.
-Browser interactions, exports, same-origin APIs and manifest routing: see
-[`store/tools/experience-tests`](../../tools/experience-tests/README.md).
-
-`seed-verdict.sh` establishes only artifact presence and keeps `ready:false`. The agent must run
-and record real domain and browser checks before writing a ready verdict. No cross-device pixel or
-audio equality is promised. The research is inspiration; this is original code, not a wrapper of
-any cited third-party engine.
-
-## Check your actual edited model
-
-Run `node tools/check.mjs --seeds 100` in the workspace. It reads the pure model from
-`<script id="harness-model">` in the artifact, checks domain invariants, repeats each seed, and
-writes `.harness/model-check.json`. Preserve that script boundary when editing. Model checks are
-followed by browser interaction, exported-output inspection, and visual or listening review.
-
-## Logo and icon
-
-The original identity ships in `brand/`: [vector icon](brand/icon.svg),
-[256px PNG](brand/icon.png), [light logo](brand/logo.svg) and
-[dark logo](brand/logo-dark.svg). The same mark appears in the starter header,
-its offline favicon and the desktop Store/picker/tabs. MIT, by OpenHarness contributors.
+The renderer measures headroom and timing; the exporter verifies playback and repeatability.
+These checks do not establish musical quality. The complete piece still needs a listening review.
+Synthesized voices are not recorded acoustic instruments or generated singing. MIDI patches may
+sound different in a DAW; use stems for the actual sound. Work is bounded to four minutes, 16
+tracks, 16,000 notes and 28 MB of embedded project data; longer projects can continue in a DAW.
 
 ## Credit and stewardship
 
-Original implementation and visual identity by OpenHarness contributors, maintained by
-Autonomous under the [MIT license](LICENSE). Report issues in the OpenHarness repository.
+Original studio and identity by OpenHarness contributors, maintained by Autonomous under the
+[MIT license](LICENSE). MIDI I/O uses [@tonejs/midi](https://github.com/Tonejs/Midi), midi-file and
+array-flatten; their MIT licenses are retained in `template/studio/vendor/`. Playwright is a
+separate Apache-2.0 dependency by Microsoft. Report issues in the OpenHarness repository.

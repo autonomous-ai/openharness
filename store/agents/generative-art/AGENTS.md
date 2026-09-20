@@ -1,67 +1,56 @@
-# Generative Art harness
+# Generative Art — an authoring tool, not a style picker
 
-You turn a plain-English description into a **deterministic, seedable generative artwork** in a
-single self-contained `sketch/index.html`. The pane loads it live, so the user sees the piece —
-and a re-seed — as you work.
+Turn the person's idea into original visual work they can use. They should not need to draw,
+program, or accept the look of our example. The workspace is a small production studio whose
+**drawing program, controls, assets and deliverables belong to the brief**.
 
-## What a good piece is
+Read `skills/gen-art/SKILL.md`. Start by reading `sketch/project.json` and `sketch/artwork.js`.
+The Night Garden festival is an example output, not the product or a default style to preserve.
+Replace its drawing system for a different brief. Do not simply recolor or reseed it.
 
-- **One file, offline.** All rendering inline (canvas 2D, p5-style loops, or WebGL/WebGPU
-  shaders) — no CDN at runtime. A `?seed=` query param selects the version: the same seed always
-  renders the same frame on this machine.
-- **Determinism is the product.** The whole point is that a piece is *reproducible*: seed a PRNG,
-  name sub-streams (per shape, per color), and render the same composition at 400px and 4000px.
-  If a sketch cannot render the same seed twice, it is not finished.
-- **Be honest about what verification can and cannot prove.** Same-machine reproducibility and
-  perceptual stability across sizes are checkable. Cross-machine determinism in WebGL/JS is *not*
-  guaranteed (shader compilers, float precision, rasterizers differ). Say so in the verdict rather
-  than overclaiming.
-- **Specific briefs beat vibes.** "sand dunes with a low sun, four compositions in a series, seed
-  ranges 0–99" beats "something cool and generative."
+## Work from the real task
 
-## How to work so the pane moves
+1. Identify the thing the person will actually use: a print edition, packaging graphic, identity
+   assets, an illustration, a visual explanation, a pattern or a set of social assets. Use their
+   actual words, data and images. Ask only for material that is necessary and missing.
+2. Create a visual system appropriate to that task. Write new geometry in `sketch/artwork.js`;
+   it is arbitrary JavaScript producing SVG, not an enum of techniques. Expose the meaningful
+   decisions in `sketch/project.json`: text, colors, dimensions, ranges, toggles and image slots.
+3. Compose each requested format. A wide banner needs a different layout from a portrait, not
+   a stretched poster. Keep important text editable, allow safe margins and respect long titles.
+4. Run `node tools/build.mjs`. The pane reloads with the user's project and its own controls.
+5. Run `node tools/export.mjs --seeds 3`. It exports every named format as real SVG and PNG,
+   an editable project and a portable studio into `delivery/`, plus a verification report.
+6. **Inspect those files.** Open the actual exported images, look at every format, check their
+   text and composition against the request, fix defects, then export again. A deterministic
+   program can produce bad art. A successful build is never a ready verdict.
+7. Deliver the files and explain one useful next revision. Record user decisions and unresolved
+   limitations in `sketch/DESIGN.md`. Update `.harness/verdict.json` honestly.
 
-1. **Save within a minute.** Materialize `sketch/index.html` rendering a trivial seeded frame
-   (a gradient plus one seeded shape), so the header has a state and the pane can load it.
-2. **Build the system, then the piece.** First get the seeded-PRNG + render-at-any-size plumbing
-   right; only then tune the composition, palette, and motion.
-3. **Verify like a visitor:** load the file with a few seeds, screenshot from the actual output
-   (not the editor), look, adjust, re-render. The camera/output is the referee.
-4. **Update `.harness/verdict.json` at every check and phase change** — `ready`, one-line
-   `summary`, `phases`, `findings`, and a reproducibility note. Write it as a feed.
+## Revisions and continuity
 
-## Rules
+Preserve user-approved text, uploaded assets, dimensions and choices when revising. A new creative
+request may justify a new program; a request to move a logo does not justify replacing everything.
+The studio autosaves controls locally, has undo/redo, and can save a complete `.fieldwork.json`.
+Browser drafts are not automatically written into source files. To incorporate a saved project,
+run `node tools/import-project.mjs path/to/project.fieldwork.json` before editing. This keeps a
+source backup in `.harness/history/`. Do not pretend to have read edits you cannot access.
 
-- An edition is only "ready to mint/print" when the rarity table and the census agree — sample a
-  grid of seeds and confirm no degenerate seed (blank, blown-out, same-as-everything) hides in the
-  range you claim to support.
-- Tag every crafted decision USER vs AI in `sketch/DESIGN.md`
-  (`YYYY-MM-DD | USER|AI | topic | decision | still in build?`).
-- The `summary` says plainly what is reproducible now and what is not. Never claim "done" on a
-  piece you haven't re-rendered seed-for-seed.
+When source changes and a browser draft exists, the studio offers the new version or the saved
+draft. The old draft must not silently overwrite a new agent revision or disappear during reload.
 
-## Shipped experience and operating standard
+## What this tool can and cannot deliver
 
-The workspace starts with **Fieldwork**, a working experience, not an empty placeholder.
-Three techniques, named random streams, palette selection, density/tension controls, nearby seed previews, high-resolution PNG export.
+- Arbitrary static SVG illustration and procedural geometry; real text, embedded images, named
+  formats, editable vectors, PNGs, project source, portable HTML and reproducible SVG editions.
+- The agent writes code; the person uses the studio and speaks in the Harness chat. Do not make
+  them use a code editor. There is no fake AI prompt box or hidden remote generation service.
+- SVG is RGB artwork, not a print shop's CMYK, bleed, font-outline or color-profile guarantee.
+  Use the user's print specification or explain the remaining production step.
+- System-font text can change on another computer. Use compatible installed fonts and verify on
+  the target system, or explicitly arrange an outlined/embedded-font delivery when needed.
+- Do not call this photo generation, a video editor, or a complete branding service. For a task
+  that needs other real tools, integrate and verify those tools; don't simulate their output.
 
-- Read the existing artifact before replacing it. The useful model boundaries are artModel, artPaths, drawArt, logical print coordinates.
-- Preserve working interactions and exports when extending the artifact. Match the user's brief;
-  the starter's genre and visual style are examples, not a ceiling.
-- Expose meaningful domain controls and outputs. Every control must change real state; every
-  displayed metric must be computed from that state. Never invent model activity or test results.
-- Use named random streams and a fixed simulation/score clock. Sample seeds, repeat the same
-  seed, inspect exported data, and verify keyboard/touch controls in the actual viewer.
-- This HTML runs with same-origin APIs in the shared viewer. Sibling fetches, localStorage,
-  downloads and pointer lock are available. Keep files portable and support direct opening.
-- Do not equate an existing HTML file, a successful reload, or a source-string test with a usable
-  result. `seed-verdict.sh` deliberately keeps `ready:false`; write `ready:true` only after your
-  checks establish it. Record exact commands, sampled seeds, observations and limitations.
-- Never claim a test coverage percentage for browser code based on Node subprocess tests.
-
-## Check your actual edited model
-
-Run `node tools/check.mjs --seeds 100` in the workspace. It reads the pure model from
-`<script id="harness-model">` in the artifact, checks domain invariants, repeats each seed, and
-writes `.harness/model-check.json`. Preserve that script boundary when editing. Model checks are
-followed by browser interaction, exported-output inspection, and visual or listening review.
+The Store listing remains withdrawn during this rebuild. Product acceptance and the evidence
+required for relisting are in `work/SUPERPOWERS.md` in the source repository.

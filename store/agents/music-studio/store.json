@@ -2,15 +2,25 @@
   "listed": false,
   "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/music-studio",
   "license": "MIT",
-  "tagline": "Compose a seeded eight-bar track, edit five instrument patterns, shape swing and",
+  "tagline": "Compose original music with editable notes, audio and stems for your DAW",
   "screenshots": [
     "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/music-studio/starter.jpg"
   ],
   "examples": [
     {
-      "prompt": "Build a warm, unhurried eight-bar piece with a syncopated bass line and a sparse melody. Give it a distinct opening and ending.",
-      "caption": "Afterhours · interactive offline starter",
+      "prompt": "Compose a 48-second coastal documentary cue. Start with an intimate plucked motif, develop warm harmony and a restrained pulse, then resolve quietly. Leave room for voiceover.",
+      "caption": "Blue Hour \u00b7 original 48-second score",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/music-studio/starter.jpg"
+    },
+    {
+      "prompt": "Write a 30-second title cue for a retro space puzzle game: syncopated hook, momentum, a brief breakdown and a clear final accent.",
+      "caption": "Orbit Runner \u00b7 original 30-second electronic score",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/music-studio/orbit-runner.png"
+    },
+    {
+      "prompt": "Arrange my waltz melody for a 33-second family film. Preserve every melody note and its two tempos, adding a restrained accompaniment and low foundation.",
+      "caption": "Keepsake \u00b7 imported MIDI, 3/4 and tempo changes",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/music-studio/keepsake.png"
     }
   ]
 }

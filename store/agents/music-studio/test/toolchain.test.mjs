@@ -28,11 +28,14 @@ test('every script the manifest names is in the folder and executable', () => {
   }
 })
 
-test('setup installs nothing and succeeds quietly', () => {
-  assert.deepEqual(run(manifest.toolchain.setup), { code: 0, stdout: '', stderr: '' })
+test('setup installs local production tools and finds a browser', () => {
+  const result = run(manifest.toolchain.setup)
+  assert.equal(result.code, 0, result.stderr)
+  assert.match(result.stdout, /ok   export browser:/)
+  assert.doesNotThrow(() => accessSync(join(here, 'toolchain/node_modules/playwright-core/index.mjs')))
 })
 
-test('doctor says ok when sh is on PATH', () => {
+test('doctor verifies authoring and production tools', () => {
   assert.equal(run(manifest.toolchain.doctor).code, 0)
 })
 

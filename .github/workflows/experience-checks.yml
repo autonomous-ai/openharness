@@ -31,3 +31,26 @@ jobs:
           store/viewers/web-viewer/test/*.test.mjs
       - name: Validate Store catalog
         run: node store/tools/catalog.mjs
+
+  authoring-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22.23.2'
+      - name: Install pinned browser tools
+        run: |
+          npm ci --prefix store/tools/experience-tests --ignore-scripts --no-audit --no-fund
+          node store/tools/experience-tests/node_modules/playwright-core/cli.js install --with-deps chromium
+          node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "BROWSER_EXECUTABLE=" + require("./store/tools/experience-tests/node_modules/playwright-core").chromium.executablePath() + "\n")'
+      - name: Edit real projects and reopen their exports
+        env:
+          EXPERIENCE_IDS: generative-art,music-studio
+        run: node store/tools/experience-tests/browser.mjs
+      - name: Verify MIDI and aligned audio with independent readers
+        run: |
+          python3 -m venv /tmp/music-delivery-reader
+          /tmp/music-delivery-reader/bin/pip install mido==1.3.3
+          /tmp/music-delivery-reader/bin/python store/tools/experience-tests/verify-music-delivery.py work/experience-evidence/afterhours-production.zip

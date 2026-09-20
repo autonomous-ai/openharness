@@ -79,7 +79,7 @@ try {
     channel: process.env.BROWSER_EXECUTABLE ? undefined : "chrome",
     headless: true,
   });
-  for (const exp of experiences) {
+  for (const exp of experiences.filter(exp => !process.env.EXPERIENCE_IDS || process.env.EXPERIENCE_IDS.split(',').includes(exp.id))) {
     const dsh = "autonomous/" + exp.id;
     assert.ok(
       list.dsh?.find((entry) => entry.id === dsh && entry.installed),
@@ -125,10 +125,8 @@ try {
       );
       assert.equal(verdict.artifact, exp.path + "/index.html");
       assert.equal(verdict.ready, false);
-      assert.match(
-        await readFile(join(workspace, "AGENTS.md"), "utf8"),
-        /Shipped experience/,
-      );
+      const instructions = await readFile(join(repo, 'store/agents', exp.id, 'AGENTS.md'), 'utf8');
+      assert.ok((await readFile(join(workspace, "AGENTS.md"), "utf8")).includes(instructions.trim()), 'Installed authoring instructions must match the package.');
       const actual = await readFile(
         join(workspace, exp.path, "index.html"),
         "utf8",
