@@ -1,5 +1,9 @@
 # Game Master — Relay
 
+> Withdrawn from Store discovery on 2026-09-20: the current starter does not meet our
+> standard for an open-ended tool that completes real user work. Existing projects and
+> source remain available. See [the product review](../../../work/SUPERPOWERS.md).
+
 ![Game Master logo](brand/logo.svg)
 
 Design and compare strategies in a seeded arena. Watch two squads compete for relays, inspect decisions, step and rewind matches, and run a 32-map tournament.
@@ -49,3 +53,8 @@ The original identity ships in `brand/`: [vector icon](brand/icon.svg),
 [256px PNG](brand/icon.png), [light logo](brand/logo.svg) and
 [dark logo](brand/logo-dark.svg). The same mark appears in the starter header,
 its offline favicon and the desktop Store/picker/tabs. MIT, by OpenHarness contributors.
+
+## Credit and stewardship
+
+Original implementation and visual identity by OpenHarness contributors, maintained by
+Autonomous under the [MIT license](LICENSE). Report issues in the OpenHarness repository.

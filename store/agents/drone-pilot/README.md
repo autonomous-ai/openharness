@@ -1,5 +1,9 @@
 # Drone Pilot — Vector
 
+> Withdrawn from Store discovery on 2026-09-20: the current starter does not meet our
+> standard for an open-ended tool that completes real user work. Existing projects and
+> source remain available. See [the product review](../../../work/SUPERPOWERS.md).
+
 ![Drone Pilot logo](brand/logo.svg)
 
 Fly a seeded canyon course in first person. Switch between manual controls and a tracking autopilot, inspect gate results and the flight path, and export telemetry.
@@ -49,3 +53,8 @@ The original identity ships in `brand/`: [vector icon](brand/icon.svg),
 [256px PNG](brand/icon.png), [light logo](brand/logo.svg) and
 [dark logo](brand/logo-dark.svg). The same mark appears in the starter header,
 its offline favicon and the desktop Store/picker/tabs. MIT, by OpenHarness contributors.
+
+## Credit and stewardship
+
+Original implementation and visual identity by OpenHarness contributors, maintained by
+Autonomous under the [MIT license](LICENSE). Report issues in the OpenHarness repository.

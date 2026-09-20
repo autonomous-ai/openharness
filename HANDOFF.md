@@ -3,6 +3,12 @@
 Work in `/private/tmp/harness-store-voxel`, branch `codex/harness-store-voxel`.
 The main checkout is shared with other sessions; leave it alone.
 
+**Product reset, 2026-09-20:** the user rejected preset and spectator experiences as the wrong
+product. All seven below are withdrawn from discovery with `listed:false`. Read
+[the new review and return-to-Store gates](work/SUPERPOWERS.md) before continuing. Focus only on
+Generative Art and Music Studio. The earlier release evidence below describes working controls;
+it does not establish that these tools meet the new product bar.
+
 The branch now contains seven original, offline, editable experiences and an updated shared web
 viewer. These replace the earlier placeholder artifacts. See [verification](work/VERIFICATION.md),
 [performance](work/PERFORMANCE.md) and the [audit](work/REVIEW.md) for the evidence and its limits.
