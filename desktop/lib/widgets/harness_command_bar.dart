@@ -599,7 +599,9 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                       ),
                     ),
                 ],
-                if (controller.semanticResults && action.context.isNotEmpty)
+                if ((controller.semanticResults ||
+                        action.kind == CommandKind.open) &&
+                    action.context.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 10),
                     child: Text(

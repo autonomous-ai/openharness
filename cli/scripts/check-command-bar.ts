@@ -8,14 +8,17 @@ const candidates = [
   { id: 'search', kind: 'search', title: 'Find work by meaning', detail: 'Find sessions by their recent activity, blockers, review readiness or overlapping work.' },
   { id: 'watch', kind: 'watch', title: 'Watch for a change', detail: 'Monitor current sessions for a condition and show notifications in the app.' },
 ]
-const cases: [string, string | null][] = [
-  ['Make the app use a different color theme', 'settings'],
-  ['Take me back to the checkout login bug', 'open-auth'],
-  ['Fix the expired-session redirect in the existing authentication agent', 'send-auth'],
-  ['Create a presentation with our launch plan', 'create-slides'],
-  ['Let me know when the authentication tests have passed', 'watch'],
-  ['Which sessions are ready for review?', 'search'],
-  ['Close every session and delete all my projects', null],
+const cases: [string, string | null, boolean][] = [
+  ['Make the app use a different color theme', 'settings', true],
+  ['Take me back to the checkout login bug', 'open-auth', true],
+  ['Fix the expired-session redirect in the existing authentication agent', 'send-auth', false],
+  ['Create a presentation with our launch plan', 'create-slides', false],
+  ['Let me know when the authentication tests have passed', 'watch', false],
+  ['Which sessions are ready for review?', 'search', true],
+  ['Close every session and delete all my projects', null, false],
+  ['Do not open the authentication agent', null, false],
+  ['Open settings and delete all my projects', null, false],
+  ['Open history and settings', null, false],
 ]
 async function request(body: unknown) {
   const response = await fetch(`${base}/api/command-bar/resolve`, {
@@ -27,14 +30,15 @@ async function request(body: unknown) {
   return json.data!
 }
 let failed = 0
-for (const [prompt, expected] of cases) {
+for (const [prompt, expected, expectedAuto] of cases) {
   try {
     const result = await request({ prompt, candidates })
     // An uncertain match must remain an explicit choice, never an automatic action.
     const suggested = Array.isArray(result.suggestions) ? result.suggestions[0] : null
-    const passed = result.selectedId === expected || (expected !== null && result.selectedId === null && suggested === expected && result.autoExecute === false)
+    const matched = result.selectedId === expected || (expected !== null && result.selectedId === null && suggested === expected && result.autoExecute === false)
+    const passed = matched && result.autoExecute === expectedAuto
     if (!passed) failed++
-    console.log(JSON.stringify({ passed, prompt, expected, selected: result.selectedId, suggested, fit: result.fit, autoExecute: result.autoExecute, elapsedMs: result.elapsedMs }))
+    console.log(JSON.stringify({ passed, prompt, expected, expectedAuto, selected: result.selectedId, suggested, fit: result.fit, autoExecute: result.autoExecute, reviewReason: result.reviewReason, elapsedMs: result.elapsedMs }))
   } catch (e) {
     failed++
     console.log(JSON.stringify({ passed: false, prompt, error: e instanceof Error ? e.message : 'Failed' }))
@@ -50,5 +54,15 @@ try {
   if (!passed) failed++
   console.log(JSON.stringify({ passed, check: 'semantic matches', matches, elapsedMs: result.elapsedMs }))
 } catch (e) { failed++; console.log(JSON.stringify({ passed: false, check: 'semantic matches', error: e instanceof Error ? e.message : 'Failed' })) }
-console.log(`${8 - failed}/8 live checks passed`)
+try {
+  const result = await request({ prompt: 'Open the authentication work', candidates: [
+    { id: 'auth-mac', kind: 'open', title: 'Authentication', detail: 'Mac', context: 'Fixing expired-session redirects in the checkout login flow.' },
+    { id: 'auth-linux', kind: 'open', title: 'Authentication', detail: 'Linux', context: 'Fixing expired-session redirects in the checkout login flow.' },
+  ] })
+  const passed = result.autoExecute === false
+  if (!passed) failed++
+  console.log(JSON.stringify({ passed, check: 'ambiguous targets never auto-run', selected: result.selectedId, autoExecute: result.autoExecute, reviewReason: result.reviewReason, elapsedMs: result.elapsedMs }))
+} catch (e) { failed++; console.log(JSON.stringify({ passed: false, check: 'ambiguous targets', error: e instanceof Error ? e.message : 'Failed' })) }
+const count = cases.length + 2
+console.log(`${count - failed}/${count} live checks passed`)
 process.exitCode = failed ? 1 : 0

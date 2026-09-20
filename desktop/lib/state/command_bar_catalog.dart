@@ -24,6 +24,82 @@ const commandBarCommands = {
   'machines.refresh': 'Refresh the list of machines and running agents.',
 };
 
+// Full phrases only: "open settings and delete my project" cannot match "open settings".
+const _commandPhrases = {
+  'navigation.needs_input': [
+    'needs input',
+    'show pending questions',
+    'which agents need my input',
+  ],
+  'navigation.history': ['history', 'show history', 'open history'],
+  'app.settings': [
+    'settings',
+    'open settings',
+    'show settings',
+    'open preferences',
+  ],
+  'machines.manage': [
+    'show machines',
+    'manage machines',
+    'show connected computers',
+  ],
+  'machine.link': ['link machine', 'connect a computer'],
+  'swarm.new': ['new tab', 'open a new tab', 'open a fresh tab'],
+  'swarm.reopen': ['reopen last harness', 'reopen the last harness'],
+  'agent.add': ['add existing harness', 'add an existing harness'],
+  'project.add': ['add project folder', 'add a project folder'],
+  'pane.layout': [
+    'show layout options',
+    'show me the layout options',
+    'change layout',
+  ],
+  'pane.zoom': ['toggle pane zoom', 'zoom pane'],
+  'pane.split_right': ['split right'],
+  'pane.split_down': ['split down'],
+  'machines.refresh': ['refresh machines', 'refresh agents'],
+};
+
+List<String> _openPhrases(String title) => [
+  'open $title',
+  'go to $title',
+  'switch to $title',
+  'take me back to $title',
+];
+
+Future<String?> Function()? _goBack(AppNotifier app, SwarmDestination target) {
+  final origin = app.activeSwarm;
+  final pane = app.focusedPane;
+  if (target.current || (pane == null && target.swarmId == null)) return null;
+  final machineId = pane?.machineId;
+  final agentId = pane?.agentId;
+  final sessionId = app
+      .stateOf(machineId ?? '')
+      ?.agents
+      .where((a) => a.id == agentId)
+      .firstOrNull
+      ?.sessionId;
+  return () async {
+    if (!app.swarms.contains(origin) ||
+        (pane == null && origin.panes.isNotEmpty) ||
+        (pane != null &&
+            (!origin.panes.contains(pane) ||
+                pane.machineId != machineId ||
+                pane.agentId != agentId ||
+                app
+                        .stateOf(machineId!)
+                        ?.agents
+                        .where((a) => a.id == agentId)
+                        .firstOrNull
+                        ?.sessionId !=
+                    sessionId))) {
+      return 'The previous view changed or was closed.';
+    }
+    app.selectSwarm(origin.id, attachPending: false);
+    if (pane != null) app.focusPane(pane.id, reveal: true);
+    return null;
+  };
+}
+
 List<CommandBarAction> buildCommandBarCatalog(
   AppNotifier app, {
   required List<SwarmDestination> commands,
@@ -62,6 +138,11 @@ List<CommandBarAction> buildCommandBarCatalog(
       title: 'Explore the Harness Store',
       detail: 'Browse specialized harnesses for coding, design, research, slides, 3D, and more.',
       automatic: true,
+      phrases: [
+        'harness store',
+        'open the harness store',
+        'show me the harness store',
+      ],
       perform: (_) async {
         app.openStore();
         return null;
@@ -87,6 +168,7 @@ List<CommandBarAction> buildCommandBarCatalog(
           detail: commandBarCommands[command.commandId]!,
           version: workspace,
           automatic: true,
+          phrases: _commandPhrases[command.commandId] ?? const [],
           perform: (_) async {
             runCommand(command.commandId!);
             return null;
@@ -157,6 +239,8 @@ List<CommandBarAction> buildCommandBarCatalog(
         version: version,
         isSession: true,
         automatic: true,
+        phrases: _openPhrases(d.title),
+        goBack: _goBack(app, d),
         perform: (_) async {
           final live = swarmDestinations(app)
               .where((a) => a.id == d.id)
@@ -204,6 +288,8 @@ List<CommandBarAction> buildCommandBarCatalog(
         title: short(d.title, 140),
         detail: short(d.detail, 200),
         automatic: true,
+        phrases: _openPhrases(d.title),
+        goBack: _goBack(app, d),
         perform: (_) async =>
             await activateSwarmDestination(
               app,

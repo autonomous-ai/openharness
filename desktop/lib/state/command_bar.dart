@@ -26,12 +26,24 @@ class CommandBarAction {
     this.version = '',
     this.isSession = false,
     this.automatic = false,
+    this.phrases = const [],
     this.perform,
+    this.goBack,
   });
   final String id, title, detail, context, version;
   final CommandKind kind;
   final bool isSession, automatic;
+  // Exact, app-owned phrases stay local. Partial or fuzzy matches never auto-run.
+  final List<String> phrases;
   final Future<String?> Function(String prompt)? perform;
+  final Future<String?> Function()? goBack;
+
+  bool get canAutoExecute =>
+      automatic &&
+      switch (kind) {
+        CommandKind.open || CommandKind.command || CommandKind.search => true,
+        _ => false,
+      };
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -53,6 +65,35 @@ class CommandBarAction {
 
 String _clip(String text, int limit) =>
     text.length <= limit ? text : '${text.substring(0, limit - 1)}…';
+
+String _normalizePhrase(String text) => text
+    .trim()
+    .toLowerCase()
+    .replaceAll(RegExp(r'\s+'), ' ')
+    .replaceFirst(RegExp(r'[.!?]+$'), '')
+    .trim();
+
+String _reviewMessage(CommandBarAction action, Object? reason) {
+  if (reason == 'ambiguous_target') {
+    return action.kind == CommandKind.send
+        ? 'Which agent should receive this prompt?'
+        : 'More than one possible match. Which one did you mean?';
+  }
+  if (reason == 'ambiguous_intent') return 'Choose what you would like to do.';
+  if (action.kind == CommandKind.send) {
+    return 'Check the recipient, then send your prompt.';
+  }
+  if (action.kind == CommandKind.create) {
+    return 'Continue to choose the computer and project folder.';
+  }
+  if (action.kind == CommandKind.watch) {
+    return 'Start watching for this condition.';
+  }
+  if (reason == 'uncertain_match' || reason == 'needs_review') {
+    return 'Check this match, or make your command more specific.';
+  }
+  return 'Suggested action — press Enter to continue.';
+}
 
 class CommandWatch {
   CommandWatch(this.prompt, this.scope);
@@ -84,6 +125,7 @@ class CommandBarController extends ChangeNotifier {
   int selected = 0;
   int? elapsedMs;
   bool semanticResults = false;
+  Future<String?> Function()? goBack;
   final List<CommandWatch> watches = [];
   CancelToken? _cancel;
   Timer? _watchTimer;
@@ -108,6 +150,7 @@ class CommandBarController extends ChangeNotifier {
     error = null;
     elapsedMs = null;
     semanticResults = false;
+    goBack = null;
     phase = CommandPhase.idle;
     message = '';
     selected = 0;
@@ -155,6 +198,29 @@ class CommandBarController extends ChangeNotifier {
       return;
     }
     final epoch = _epoch;
+    // Match against the full local catalog, before the provider's transmission budget.
+    // A duplicate phrase is ambiguous even if only one copy would fit in the snapshot.
+    final phrase = _normalizePhrase(query);
+    final exact = catalog()
+        .where(
+          (a) =>
+              a.canAutoExecute &&
+              a.phrases.any(
+                (candidate) => _normalizePhrase(candidate) == phrase,
+              ),
+        )
+        .toList();
+    if (exact.length == 1) {
+      await choose(exact.single);
+      return;
+    }
+    if (exact.length > 1) {
+      phase = CommandPhase.choosing;
+      message = 'More than one match. Which one did you mean?';
+      rows = exact;
+      _publish();
+      return;
+    }
     final actions = snapshot();
     final byId = {for (final action in actions) action.id: action};
     _cancel = CancelToken();
@@ -178,18 +244,18 @@ class CommandBarController extends ChangeNotifier {
       }
       final action = byId[id];
       final alternatives = response['suggestions'];
-      rows = [
+      rows = {
         ?action,
         if (alternatives is List)
           for (final id in alternatives.take(3))
             if (byId[id] != null && id != action?.id) byId[id]!,
-      ];
+      }.toList();
       phase = CommandPhase.choosing;
       message = action == null
           ? 'No clear match. Try a more specific command or choose an action.'
-          : 'Suggested action';
+          : _reviewMessage(action, response['reviewReason']);
       if (action != null &&
-          action.automatic &&
+          action.canAutoExecute &&
           response['autoExecute'] == true) {
         await choose(action);
       } else {
@@ -226,6 +292,7 @@ class CommandBarController extends ChangeNotifier {
     _cancel?.cancel();
     final epoch = _epoch;
     final prompt = query;
+    goBack = null;
     phase = CommandPhase.executing;
     error = null;
     message = current.kind == CommandKind.send
@@ -239,10 +306,12 @@ class CommandBarController extends ChangeNotifier {
       if (!_current(epoch)) return;
       phase = CommandPhase.done;
       error = failure;
+      if (failure == null) goBack = current.goBack;
       message = failure == null
           ? switch (current.kind) {
               CommandKind.send => 'Sent to ${current.title}',
               CommandKind.create => 'Harness setup opened',
+              CommandKind.open => 'Opened ${current.title}',
               _ => current.title,
             }
           : '';

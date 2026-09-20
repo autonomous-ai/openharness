@@ -4,10 +4,116 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/command_bar.dart';
 import 'package:harness/state/command_bar_catalog.dart';
 import 'package:harness/state/pending_question.dart';
+import 'package:harness/state/swarm_navigation.dart';
 
 import 'swarm_state_test.dart' show createApp;
 
 void main() {
+  test(
+    'exact Store and layout requests invoke their own existing controls',
+    () async {
+      final app = createApp();
+      addTearDown(app.dispose);
+      String? command;
+      var calls = 0;
+      final bar = CommandBarController(
+        catalog: () => buildCommandBarCatalog(
+          app,
+          commands: [
+            SwarmDestination(
+              id: 'command:pane.layout',
+              title: 'Choose layout',
+              detail: '',
+              swarmId: null,
+              current: false,
+              commandId: 'pane.layout',
+            ),
+          ],
+          runCommand: (id) => command = id,
+          create: (_, _, _) async {},
+        ),
+        resolve: (_, _) async {
+          calls++;
+          return {};
+        },
+      );
+      addTearDown(bar.dispose);
+      await bar.submit('Show me the layout options');
+      expect(command, 'pane.layout');
+      await bar.submit('Show me the Harness Store');
+      expect(app.activeSwarm.isStore, isTrue);
+      expect(calls, 0);
+    },
+  );
+
+  test(
+    'Go back restores the exact previous pane without closing the opened view',
+    () async {
+      final app = createApp();
+      addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a0');
+      final before = app.focusedPaneId;
+      final bar = CommandBarController(
+        catalog: () => buildCommandBarCatalog(
+          app,
+          commands: [],
+          runCommand: (_) {},
+          create: (_, _, _) async {},
+        ),
+        resolve: (_, _) async =>
+            throw Exception('exact navigation should stay local'),
+      );
+      addTearDown(bar.dispose);
+      await bar.submit('Open Agent 1');
+      expect(app.focusedPane!.agentId, 'a1');
+      expect(bar.goBack, isNotNull);
+      expect(await bar.goBack!(), isNull);
+      expect(app.focusedPaneId, before);
+      expect(app.panes.map((p) => p.agentId), contains('a1'));
+    },
+  );
+
+  test(
+    'Go back cannot recreate a closed pane or follow a replaced session',
+    () async {
+      for (final close in [true, false]) {
+        final app = createApp();
+        addTearDown(app.dispose);
+        await app.addAgentToSwarm('m', 'a0');
+        final before = app.focusedPaneId!;
+        final bar = CommandBarController(
+          catalog: () => buildCommandBarCatalog(
+            app,
+            commands: [],
+            runCommand: (_) {},
+            create: (_, _, _) async {},
+          ),
+          resolve: (_, _) async => {},
+        );
+        addTearDown(bar.dispose);
+        await bar.submit('Open Agent 1');
+        if (close) {
+          await app.closePane(before);
+        } else {
+          app.machineStates['m']!.agents = [
+            for (final a in app.machineStates['m']!.agents)
+              if (a.id == 'a0')
+                const Agent(
+                  id: 'a0',
+                  name: 'Replacement',
+                  sessionId: 'new',
+                  terminalAvailable: true,
+                )
+              else
+                a,
+          ];
+        }
+        expect(await bar.goBack!(), contains('changed or was closed'));
+        expect(app.focusedPane!.agentId, 'a1');
+      }
+    },
+  );
+
   test(
     'plain terminals and shared sessions can open but cannot receive tasks',
     () {

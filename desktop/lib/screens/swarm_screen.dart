@@ -1604,10 +1604,40 @@ class _SwarmScreenState extends State<SwarmScreen> {
         _commandBar.phase == CommandPhase.done) {
       _commandActionInFlight = false;
       final message = _commandBar.error ?? _commandBar.message;
+      final goBack = _commandBar.goBack;
       if (message.isNotEmpty) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(message)));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              message,
+              style: TextStyle(
+                fontFamily: grid.AppFont.sans,
+                fontFamilyFallback: grid.AppFont.sansFallback,
+              ),
+            ),
+            action: goBack == null
+                ? null
+                : SnackBarAction(
+                    label: 'Go back',
+                    onPressed: () => _returnFromCommand(goBack),
+                  ),
+          ),
+        );
       }
+    }
+  }
+
+  Future<void> _returnFromCommand(Future<String?> Function() goBack) async {
+    if (!mounted) return;
+    String? failure;
+    try {
+      failure = await goBack();
+    } catch (_) {
+      failure = 'The previous view is no longer available.';
+    }
+    if (mounted && failure != null) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(failure)));
     }
   }
 

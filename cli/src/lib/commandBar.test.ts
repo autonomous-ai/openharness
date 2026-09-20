@@ -63,6 +63,54 @@ describe('JEV command bar decisions', () => {
     expect(await api.decide(request)).toMatchObject({ selectedId: 'settings', autoExecute: false })
   })
 
+  it.each([0.6, undefined])('uses a clear distribution without double-counting confidence (%s)', async confidence => {
+    // The 0.90 fit is the observed baseline for opening Settings and searching for review-ready work.
+    const { api } = service(choice({ confidence, probabilities: { c0: 0.9, none: 0.1 } }), 0.9)
+    expect(await api.decide(request)).toMatchObject({ selectedId: 'settings', autoExecute: true, reviewReason: null })
+  })
+
+  it('also evaluates intent from its distribution rather than its derived confidence', async () => {
+    const answers = decisions()
+    answers.intent.confidence = 0.6
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(json(answers))
+      .mockResolvedValueOnce(json({ fit: { type: 'noul', noul: 0.9 } }))
+    const api = new CommandBarService({ fetch: fetcher, key: async () => 'fixture-only' })
+    expect(await api.decide(request)).toMatchObject({ autoExecute: true })
+  })
+
+  it('explains an uncertain absolute match and keeps it reviewable', async () => {
+    const { api } = service(choice(), 0.87)
+    expect(await api.decide(request)).toMatchObject({ selectedId: 'settings', autoExecute: false, reviewReason: 'uncertain_match' })
+  })
+
+  it('asks about genuinely competing targets and omits negligible alternatives', async () => {
+    const { api } = service(choice({ probabilities: { c0: 0.52, c1: 0.45, c2: 0.02, none: 0.01 } }), 0.98)
+    const result = await api.decide({ ...request, candidates: [candidate, { ...candidate, id: 'layout' }, { ...candidate, id: 'history' }] })
+    expect(result).toMatchObject({ selectedId: 'settings', autoExecute: false, reviewReason: 'ambiguous_target', suggestions: ['layout'] })
+  })
+
+  it('does not auto-run a clear target when the requested operation is ambiguous', async () => {
+    const answers = decisions()
+    answers.intent = choice({ choice: 'command', probabilities: { command: 0.55, open: 0.44, none: 0.01 } })
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(json(answers))
+      .mockResolvedValueOnce(json({ fit: { type: 'noul', noul: 0.98 } }))
+    const api = new CommandBarService({ fetch: fetcher, key: async () => 'fixture-only' })
+    const result = await api.decide({ ...request, candidates: [candidate, { ...candidate, id: 'session', kind: 'open' }] })
+    expect(result).toMatchObject({ autoExecute: false, reviewReason: 'ambiguous_intent' })
+  })
+
+  it.each([
+    { c0: 0.98 }, // none is missing
+    { c0: 0.98, none: 0.02, invented: 0 },
+    { c0: 0.98, none: 0.98 },
+    { c0: 0.02, none: 0.98 },
+  ])('does not authorize an action with incomplete, invalid or contradictory metadata', async probabilities => {
+    const { api } = service(choice({ probabilities }))
+    expect(await api.decide(request)).toMatchObject({ selectedId: 'settings', autoExecute: false })
+  })
+
   it('rejects duplicate identities, excessive context and unknown fields before any provider call', async () => {
     const { api, fetcher } = service()
     for (const invalid of [
