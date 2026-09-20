@@ -41,6 +41,7 @@ function renderJob() {
     chip.title = f.ask
     fields.append(chip)
   }
+  if (!S.fields.length && S.proposing) fields.append(h('span', 'job-line dim', 'Jev is reading the page to work them out…'))
   box.append(fields)
   if (S.keep) box.append(h('div', 'job-line keep', `keeps only: ${S.keep}`))
   box.append(h('div', 'job-line dim', `at most ${fmtN(S.maxItems)} things from ${fmtN(S.maxPages)} pages`))
@@ -120,7 +121,7 @@ function renderFeed() {
 function renderTop() {
   const p = S.progress
   tw.rows.t = p.rows; tw.pages.t = p.pages; tw.links.t = p.links; tw.rate.t = p.perSec; tw.cost.t = p.costUsd
-  $('phasePill').textContent = S.phase === 'running' ? 'browsing' : S.phase
+  $('phasePill').textContent = S.proposing ? 'reading the page' : S.phase === 'running' ? 'browsing' : S.phase
   $('phasePill').className = 'pill ' + (S.phase === 'running' ? 'ok' : S.phase === 'done' ? 'ok' : S.phase === 'stopped' ? 'warn' : '')
   $('startBtn').classList.toggle('hidden', S.phase === 'running')
   $('stopBtn').classList.toggle('hidden', S.phase !== 'running')
@@ -176,6 +177,7 @@ function showAsk(on) {
     $('askStart').value = S?.demoUrl && S.start === S.demoUrl ? '' : (S?.start ?? '')
     $('askSearch').value = S?.search ?? ''
     $('askItem').value = S?.item && S.item !== 'one of the things to collect' ? S.item : ''
+    $('askWant').value = S?.want ?? ''
     $('askColumns').value = (S?.fields ?? []).map((f) => f.ask).join('\n')
     $('askKeep').value = S?.keep ?? ''
     $('askMax').value = S?.fields.length ? S.maxItems : 25
@@ -185,12 +187,12 @@ function showAsk(on) {
 }
 async function sendJob(over = {}) {
   const body = {
-    start: $('askStart').value.trim(), search: $('askSearch').value.trim(), item: $('askItem').value.trim(),
+    start: $('askStart').value.trim(), search: $('askSearch').value.trim(), item: $('askItem').value.trim(), want: $('askWant').value.trim(),
     columns: $('askColumns').value, keep: $('askKeep').value.trim(), maxItems: Number($('askMax').value) || 25,
     ...over,
   }
   $('askMsg').className = 'ask-msg'
-  $('askMsg').textContent = 'Setting the job…'
+  $('askMsg').textContent = body.columns.trim() ? 'Setting the job…' : 'Reading the page to work out the columns…'
   $('askSubmit').disabled = true
   const r = await post('setJob', body)
   $('askSubmit').disabled = false
@@ -200,9 +202,7 @@ async function sendJob(over = {}) {
 }
 $('askForm').addEventListener('submit', (e) => { e.preventDefault(); sendJob() })
 $('askDemo').addEventListener('click', () => sendJob({
-  start: 'demo', search: '', item: 'a job posting',
-  columns: 'the job title\nthe name of the company hiring\nthe pay or salary range\nwhere the job is based\nCan this job be done fully remotely?',
-  keep: '',
+  start: 'demo', search: '', item: '', want: 'what each role pays and where it is', columns: '', keep: '',
 }))
 $('editBtn').addEventListener('click', () => showAsk(!askOpen))
 

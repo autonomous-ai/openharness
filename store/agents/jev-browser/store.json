@@ -2,17 +2,17 @@
   "homepage": "https://typesafe.ai",
   "upstream": "https://typesafe.ai",
   "license": "MIT",
-  "tagline": "Say what you want off a web page, and get a spreadsheet",
+  "tagline": "An address and a sentence. Jev works out the columns and fills the sheet",
   "examples": [
     {
       "prompt": "Here is the search results page for two-bedroom flats in my area. Get me every listing with its address, monthly rent, how many bedrooms, and whether it says pets are allowed. Then tell me which five are the best value.",
-      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-browser/reads-real-pages.jpg",
-      "caption": "One call judged all 16 links: the twelve real roles at 76-88%, the menu at 2%"
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-browser/jev-picks-the-columns.jpg",
+      "caption": "No columns were typed. Jev read one page and chose them in about a second"
     },
     {
       "prompt": "Read every product in this category and put the name, price, stock count and product code in a spreadsheet. Stop after 40. Then tell me which ones are out of stock.",
-      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-browser/say-what-you-want.jpg",
-      "caption": "Three boxes and a list of columns. No code, no selectors, and nothing to press after Go"
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-browser/reads-real-pages.jpg",
+      "caption": "One call judged all 16 links: the real items at 76-88%, the site menu at 2%"
     },
     {
       "prompt": "I have to check these 60 supplier pages every month for their lead times and minimum order. Write me a job I can run again, then run it and tell me what changed.",

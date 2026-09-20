@@ -26,6 +26,17 @@ Point `start` at the list. If you point it at one thing's page, that one row is 
 run ends. If the things have no page of their own (everything is on the list), say so to the person:
 this harness collects one row per page, so a list-only site gives one row for the whole list.
 
+## Letting Jev write the fields
+
+Put the person's sentence in `want`, leave `fields` out, and two Jev calls decide it: one asks what
+the page lists and which links are the things, the other asks of every piece of text on one of them
+"is that a fact about this one, worth a column?" and "what kind of value is it?". About a second,
+and the names come off the page's own labels.
+
+Do that first. Read what it proposed, then add or reword. What it cannot propose is a judgement:
+"is this remote?", "how urgent is this". Those are yours to write, and they are where the tool earns
+its keep, because no page prints them.
+
 ## Writing the fields
 
 A field is what to look for, in the words a person would use.
