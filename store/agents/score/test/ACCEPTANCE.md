@@ -4,6 +4,22 @@ Validated 2026-09-20, macOS Intel, Node 22.23.2 and official LilyPond 2.26.0.
 No physical instruments or real-player evaluation were used. This is software
 validation of a composition/edit/export workflow, not a musical-quality rating.
 
+## Managed installation regression — 2026-09-20
+
+A Store first-run failure on an Intel Mac exposed that setup only checked for LilyPond.
+Setup now installs the pinned official 2.26.0 archive when needed, verifies its official
+SHA-256, checks the extracted executable and reuses the managed runtime. Doctor only checks;
+the renderer resolves the same binary. No Homebrew, administrator access or PATH edit is needed.
+
+Verified a fresh real download/install under `/private/tmp/score-native-setup-proof`, then ran
+the normal `render-score.sh` without `LILYPOND_BIN`: 55 checks passed and four PDF documents
+were produced in `/private/tmp/score-managed-build-HlLWW6`. The full suite passed **19/19**,
+including the four native tests and four installer regressions for clean/repeated installs,
+failed downloads/extraction, retained old cache, explicit overrides and platform handling.
+The retained native fixtures are under `/private/tmp/score-installer-native/`.
+CI now performs a clean Linux x86-64 install and real engraving through the managed resolver.
+Apple Silicon uses its separately pinned official archive; it was not executed on this Intel Mac.
+
 ## Two complete briefs
 
 | Job | Requirements and substantive revision | Evidence |

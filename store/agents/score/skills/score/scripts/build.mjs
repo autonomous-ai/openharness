@@ -6,6 +6,7 @@ import {createHash} from 'node:crypto';
 import {parseMidi,writePracticeMidi} from './midi.mjs';
 import {validateEnsemble,validateMusicSources,makeWrapper,checkEnsemble,sameNotes} from './ensemble.mjs';
 import {zip} from './archive.mjs';
+import {resolveLilypond} from './lilypond.mjs';
 
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const json=value=>JSON.stringify(value,null,2)+'\n';
@@ -56,7 +57,7 @@ async function publish(workspace,state,stage,names) {
     throw error;
   }
 }
-export async function build(workspace,{bin=process.env.LILYPOND_BIN||'lilypond'}={}) {
+export async function build(workspace,{bin}={}) {
   workspace=resolve(workspace);
   const meta=join(workspace,'.harness');
   if (await exists(meta) && (await lstat(meta)).isSymbolicLink()) throw new Error('.harness must not be a symlink.');
@@ -72,6 +73,7 @@ export async function build(workspace,{bin=process.env.LILYPOND_BIN||'lilypond'}
   try {
     await writeFile(join(lock,'owner.json'),json({pid:process.pid,startedAt:new Date().toISOString()}));
     await verdict(false,'Engraving fresh music, checking the player brief and preparing practice files');
+    bin??=await resolveLilypond();
     const contract=await exists(join(workspace,'ensemble.json')) ? await regularSource(workspace,'ensemble.json') : null;
     const spec=contract?validateEnsemble(JSON.parse(contract)):null;
     const files=await snapshotSources(workspace,spec||{sourceFiles:['score.ly']});
@@ -169,8 +171,8 @@ export async function build(workspace,{bin=process.env.LILYPOND_BIN||'lilypond'}
     const outputs=['score.pdf','score.midi','score.html','score-assets'];
     if (spec) {
       const bundle=[...files];
-      for (const name of ['build.mjs','ensemble.mjs','archive.mjs','midi.mjs','preview.html','preview.js','LICENSE']) bundle.push({name:'rebuild/'+name,bytes:await readFile(new URL(name,import.meta.url))});
-      bundle.push({name:'REBUILD.md',bytes:Buffer.from('# '+spec.title+'\n\nInstall Node 20+ and LilyPond (tested '+version+'). From this extracted folder run:\n\n    node rebuild/build.mjs .\n\nSet LILYPOND_BIN if LilyPond is not on PATH. No Harness account or npm packages required.\nEdit ensemble.json for the saved brief, players and checks; edit score.ly for concert-pitch music variables. Only compile trusted LilyPond: it can execute Scheme.\n\nOpen score.html in a browser. The PDF, MIDI, player parts and practice files work outside Harness. Checks and source hashes are in score-assets/checks.json. A checked export is not a real-player endorsement.\n\nPractice exports use '+spec.practice.speed+'x tempo and '+spec.practice.countInBars+' count-in bar(s). These are note-only synthetic sketches, not recordings. Files in rebuild/ are MIT-licensed tools; see rebuild/LICENSE. Composition credit: '+spec.composer+'. Source permissions remain the creator’s responsibility.\n')});
+      for (const name of ['build.mjs','lilypond.mjs','ensemble.mjs','archive.mjs','midi.mjs','preview.html','preview.js','LICENSE']) bundle.push({name:'rebuild/'+name,bytes:await readFile(new URL(name,import.meta.url))});
+      bundle.push({name:'REBUILD.md',bytes:Buffer.from('# '+spec.title+'\n\nInstall Node 20+. On supported macOS/Linux x86-64, download the managed LilyPond runtime with `node rebuild/lilypond.mjs --install`, or use your own LilyPond (tested '+version+'). From this extracted folder run:\n\n    node rebuild/build.mjs .\n\nSet LILYPOND_BIN if LilyPond is not on PATH. No Harness account or npm packages required.\nEdit ensemble.json for the saved brief, players and checks; edit score.ly for concert-pitch music variables. Only compile trusted LilyPond: it can execute Scheme.\n\nOpen score.html in a browser. The PDF, MIDI, player parts and practice files work outside Harness. Checks and source hashes are in score-assets/checks.json. A checked export is not a real-player endorsement.\n\nPractice exports use '+spec.practice.speed+'x tempo and '+spec.practice.countInBars+' count-in bar(s). These are note-only synthetic sketches, not recordings. Files in rebuild/ are MIT-licensed tools; see rebuild/LICENSE. Composition credit: '+spec.composer+'. Source permissions remain the creator’s responsibility.\n')});
       for (const name of outputs.filter(name=>name!=='score-assets')) bundle.push({name,bytes:await readFile(join(stage,name))});
       for (const name of await readdir(assets)) bundle.push({name:'score-assets/'+name,bytes:await readFile(join(assets,name))});
       await writeFile(join(stage,'score-project.zip'),zip(bundle)); outputs.push('score-project.zip');
