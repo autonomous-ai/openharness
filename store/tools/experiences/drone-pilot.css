@@ -6,10 +6,6 @@
   --line: #66838744;
   --accent: #c7e39b;
 }
-.mark {
-  border-radius: 50%;
-  color: var(--accent);
-}
 .flight-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 240px;

@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark light"><title>AFTERHOURS — Music Studio</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%2096%2096%22%3E%0A%20%20%3Ctitle%3EMusic%20Studio%20%E2%80%94%20five%20tracks%20after%20dark%3C%2Ftitle%3E%0A%20%20%3Crect%20x%3D%224%22%20y%3D%224%22%20width%3D%2288%22%20height%3D%2288%22%20rx%3D%2223%22%20fill%3D%22%23272537%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M67%2017a15%2015%200%201%200%2012%2024%2016%2016%200%200%201-12-24Z%22%20fill%3D%22%23edbfa9%22%2F%3E%0A%20%20%3Cg%20fill%3D%22%23d6c7e9%22%3E%0A%20%20%20%20%3Crect%20x%3D%2219%22%20y%3D%2247%22%20width%3D%228%22%20height%3D%2221%22%20rx%3D%224%22%2F%3E%0A%20%20%20%20%3Crect%20x%3D%2232%22%20y%3D%2231%22%20width%3D%228%22%20height%3D%2245%22%20rx%3D%224%22%2F%3E%0A%20%20%20%20%3Crect%20x%3D%2245%22%20y%3D%2242%22%20width%3D%228%22%20height%3D%2226%22%20rx%3D%224%22%2F%3E%0A%20%20%20%20%3Crect%20x%3D%2258%22%20y%3D%2253%22%20width%3D%228%22%20height%3D%2223%22%20rx%3D%224%22%2F%3E%0A%20%20%20%20%3Crect%20x%3D%2271%22%20y%3D%2253%22%20width%3D%228%22%20height%3D%2215%22%20rx%3D%224%22%2F%3E%0A%20%20%3C%2Fg%3E%0A%3C%2Fsvg%3E">
 <!-- Built by store/tools/build-experiences.mjs. Edit this file freely in your workspace. -->
 <style>:root {
   color-scheme: dark;
@@ -147,12 +148,16 @@ h3 {
   letter-spacing: 0.04em;
 }
 .mark {
-  width: 25px;
-  height: 25px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   display: grid;
   place-items: center;
-  border: 1px solid currentColor;
-  font-size: 17px;
+}
+.mark svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 .seed-form {
   display: flex;
@@ -591,7 +596,18 @@ canvas {
   }
 }
 </style></head><body>
-<header class="masthead"><div class="identity"><span class="mark" aria-hidden="true">Ⅱ</span>AFTERHOURS</div>
+<header class="masthead"><div class="identity"><span class="mark" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 96 96">
+  <title>Music Studio — five tracks after dark</title>
+  <rect x="4" y="4" width="88" height="88" rx="23" fill="#272537"/>
+  <path d="M67 17a15 15 0 1 0 12 24 16 16 0 0 1-12-24Z" fill="#edbfa9"/>
+  <g fill="#d6c7e9">
+    <rect x="19" y="47" width="8" height="21" rx="4"/>
+    <rect x="32" y="31" width="8" height="45" rx="4"/>
+    <rect x="45" y="42" width="8" height="26" rx="4"/>
+    <rect x="58" y="53" width="8" height="23" rx="4"/>
+    <rect x="71" y="53" width="8" height="15" rx="4"/>
+  </g>
+</svg></span>AFTERHOURS</div>
 <form class="seed-form" id="seed-form"><label for="seed">Seed</label><input id="seed" aria-label="Seed" maxlength="128" autocomplete="off" spellcheck="false"><button type="submit">Apply</button><button id="next-seed" type="button" title="Next seed">↗ Next</button></form></header>
 <section class="intro">
   <div>

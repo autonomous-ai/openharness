@@ -6,10 +6,6 @@
   --line: #7c90a42b;
   --accent: #aadad1;
 }
-.mark {
-  border: 0;
-  font-size: 30px;
-}
 .workspace {
   grid-template-columns: minmax(0, 1fr) 235px;
   gap: 26px;

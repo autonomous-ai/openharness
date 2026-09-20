@@ -9,6 +9,7 @@ From the repository root:
 ```sh
 node store/tools/build-experiences.mjs
 node store/tools/build-experiences.mjs --check
+node store/tools/build-experience-branding.mjs --check
 node --test store/tools/experience-tests/models.test.mjs
 node --test store/viewers/web-viewer/test/*.test.mjs
 ```
@@ -58,3 +59,24 @@ this checkout, run `HARNESS_MACHINE_ID=<local machine id> node daemon.mjs`. It c
 idle Claude sessions through the desktop's loopback protocol, checks engine readiness, framework
 materialization, instructions, initial verdicts, installed viewer routing and a browser file reload.
 It sends no prompts and deletes only its own temporary sessions and workspaces in cleanup.
+
+## Original harness identities
+
+Each package's `brand/icon.svg` is the source for its mark. The experience builder embeds it into
+the workspace header and a data-URL favicon so both work offline. The desktop's shared
+`EngineIdentity` mapping uses the corresponding `assets/engine-icons/<id>.png` for Store cards,
+the picker, pane headers and native tabs. Those bundled icons arrive with a desktop build;
+publishing a Store package cannot replace an already-running desktop binary's assets.
+
+After editing a source vector, use the same Chrome/Playwright setup as the browser suite:
+
+```sh
+node store/tools/build-experience-branding.mjs
+node store/tools/build-experiences.mjs
+```
+
+The branding builder renders 256px PNGs, creates light/dark SVG logo lockups and a visual proof
+sheet at 16/24/48px. `--check` needs no browser: it verifies source hashes, logo generation, PNG
+dimensions and byte-for-byte agreement between package and desktop assets. The original marks
+are MIT-licensed work by OpenHarness contributors; they represent these harnesses, not third-party
+products. The brand assets are available from each package README.

@@ -10,11 +10,6 @@
 button.primary {
   color: #eeeae2;
 }
-.mark {
-  background: var(--ink);
-  color: var(--bg);
-  border: 0;
-}
 .intro {
   padding-bottom: 28px;
 }

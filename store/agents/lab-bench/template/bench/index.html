@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark light"><title>SIGNAL — Lab Bench</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%2096%2096%22%3E%0A%20%20%3Ctitle%3ELab%20Bench%20%E2%80%94%20signal%20in%20a%20flask%3C%2Ftitle%3E%0A%20%20%3Crect%20x%3D%224%22%20y%3D%224%22%20width%3D%2288%22%20height%3D%2288%22%20rx%3D%2223%22%20fill%3D%22%23143740%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M36%2020h24M40%2021v22L24%2069q-4%207%205%207h38q9%200%205-7L56%2043V21%22%20fill%3D%22none%22%20stroke%3D%22%23f2ca7d%22%20stroke-width%3D%225%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%0A%20%20%3Cpath%20d%3D%22m32%2063%208-7%208%208%209-15%208%2014%22%20fill%3D%22none%22%20stroke%3D%22%2389c7bd%22%20stroke-width%3D%225%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%0A%20%20%3Ccircle%20cx%3D%2270%22%20cy%3D%2230%22%20r%3D%225%22%20fill%3D%22%2389c7bd%22%2F%3E%0A%3C%2Fsvg%3E">
 <!-- Built by store/tools/build-experiences.mjs. Edit this file freely in your workspace. -->
 <style>:root {
   color-scheme: dark;
@@ -147,12 +148,16 @@ h3 {
   letter-spacing: 0.04em;
 }
 .mark {
-  width: 25px;
-  height: 25px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   display: grid;
   place-items: center;
-  border: 1px solid currentColor;
-  font-size: 17px;
+}
+.mark svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 .seed-form {
   display: flex;
@@ -398,10 +403,6 @@ canvas {
 .intro h1 {
   font-weight: 450;
 }
-.mark {
-  border-radius: 50%;
-  color: var(--accent);
-}
 .workspace {
   grid-template-columns: minmax(0, 1fr) 240px;
   gap: 28px;
@@ -510,7 +511,13 @@ th {
   }
 }
 </style></head><body>
-<header class="masthead"><div class="identity"><span class="mark" aria-hidden="true">∿</span>SIGNAL / LAB</div>
+<header class="masthead"><div class="identity"><span class="mark" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 96 96">
+  <title>Lab Bench — signal in a flask</title>
+  <rect x="4" y="4" width="88" height="88" rx="23" fill="#143740"/>
+  <path d="M36 20h24M40 21v22L24 69q-4 7 5 7h38q9 0 5-7L56 43V21" fill="none" stroke="#f2ca7d" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m32 63 8-7 8 8 9-15 8 14" fill="none" stroke="#89c7bd" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="70" cy="30" r="5" fill="#89c7bd"/>
+</svg></span>SIGNAL / LAB</div>
 <form class="seed-form" id="seed-form"><label for="seed">Seed</label><input id="seed" aria-label="Seed" maxlength="128" autocomplete="off" spellcheck="false"><button type="submit">Apply</button><button id="next-seed" type="button" title="Next seed">↗ Next</button></form></header>
 <section class="intro">
   <div>
