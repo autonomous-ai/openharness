@@ -191,6 +191,15 @@ export async function runJob({ chrome, job, ask, onEvent, stopped = () => false 
       } catch (e) { out.errors.push({ url: link.url, message: String(e.message ?? e) }); say('trouble', { url: link.url, message: String(e.message ?? e) }); continue }
       out.pagesRead++
       say('read', { url: itemPage.url, title: itemPage.title, links: itemPage.links.length, blocks: itemPage.blocks.length })
+      // A site can serve its list happily and then challenge every page under it. Without this the
+      // challenge page's words become a blank row and the run looks like it worked.
+      const itemWall = wallReason(itemPage)
+      if (itemWall) {
+        out.walled = `${new URL(itemPage.url).hostname}: ${itemWall}`
+        out.errors.push({ url: itemPage.url, message: out.walled })
+        say('walled', { url: itemPage.url, message: out.walled })
+        break
+      }
       const row = await collect(itemPage, link.label)
       if (row) say('row', { row, of: out.rows.length })
     }

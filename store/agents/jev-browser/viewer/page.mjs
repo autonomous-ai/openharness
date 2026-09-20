@@ -73,26 +73,38 @@ export const READER = `(() => {
   const FURNITURE = 'header, footer, nav, aside, [role="banner"], [role="contentinfo"], [role="navigation"], [role="search"]'
   const LABELLED = /^(dt|th)$/i          // a label whose value sits in the element next to it
   const SPLIT = /\\s+[·|•\\u2014\\u2013\\u2022]\\s+/
-  const blocks = [], sawText = new Set(), consumed = new Set()
+  const MAIN = 'main, article, [role="main"], #main, #content, .content'
+  const found = [], sawText = new Set(), consumed = new Set()
   const ownText = (e) => tidy(Array.from(e.childNodes).filter((c) => c.nodeType === 3).map((c) => c.textContent).join(' '), MAX_BLOCK)
+  const allText = (e) => tidy(e.innerText || e.textContent, MAX_BLOCK + 1)
+  /** Does a child element carry text of its own? Then that child is the block, not this one. */
+  const hasTextChild = (e) => { for (const kid of e.children) if (allText(kid).length >= 2) return true; return false }
   // Numbers a person would want on their own: "In stock (19 available)" also offers "19".
   const numbersIn = (t) => (t.match(/\\d[\\d,.]*/g) || []).map((x) => x.replace(/[.,]$/, '')).filter((x) => x.length && x !== t).slice(0, 2)
+  const main = document.querySelector(MAIN)
+  let scanned = 0
   const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT)
-  for (let e = walker.currentNode; e && blocks.length < MAX_BLOCKS; e = walker.nextNode()) {
-    if (/^(script|style|noscript|svg|head|meta|link)$/i.test(e.tagName)) continue
+  for (let e = walker.currentNode; e && scanned < 6000; e = walker.nextNode()) {
+    scanned++
+    if (/^(script|style|noscript|svg|head|meta|link|template)$/i.test(e.tagName)) continue
     if (consumed.has(e)) continue
-    let text = ownText(e)
-    let label = ''
-    // A label and its value belong together, or the value gets dropped as a repeat of one further up
-    // and the label is left looking like an empty promise.
+    if (e.closest(FURNITURE)) continue
+    let text = '', label = ''
+    // A label and its value belong together, or the value gets dropped as a repeat of one further
+    // up and the label is left looking like an empty promise.
     if (LABELLED.test(e.tagName)) {
       const next = e.nextElementSibling
-      const value = next && /^(dd|td)$/i.test(next.tagName) ? ownText(next) : ''
-      if (text && value) { consumed.add(next); label = text; text = tidy(text.replace(/:\\s*$/, '') + ': ' + value, MAX_BLOCK) }
+      const mine = allText(e), value = next && /^(dd|td)$/i.test(next.tagName) ? allText(next) : ''
+      if (mine && value) { consumed.add(next); label = mine; text = tidy(mine.replace(/:\\s*$/, '') + ': ' + value, MAX_BLOCK) }
     }
-    if (text.length < 2) continue
+    // Otherwise: the innermost element that carries text. A modern page wraps its words several
+    // elements deep, so this is the only place the value really is.
+    if (!text) {
+      if (hasTextChild(e)) continue
+      text = ownText(e) || allText(e)
+    }
+    if (text.length < 2 || text.length > MAX_BLOCK) continue
     if (!vis(e)) continue
-    if (e.closest(FURNITURE)) continue
     const key = text.toLowerCase()
     if (sawText.has(key)) continue
     sawText.add(key)
@@ -100,8 +112,13 @@ export const READER = `(() => {
     if (label) parts = [text.slice(label.replace(/:\\s*$/, '').length + 2)]
     parts = parts.map((p) => p.trim()).filter((p) => p.length > 1 && p.length < 80)
     for (const p of [...parts, text]) for (const num of numbersIn(p)) if (!parts.includes(num)) parts.push(num)
-    blocks.push({ n: mark(e), text, tag: e.tagName.toLowerCase(), parts: parts.slice(0, 5) })
+    found.push({ e, text, tag: e.tagName.toLowerCase(), parts: parts.slice(0, 5), inMain: !!main && main.contains(e) })
   }
+  // What the page is about comes before the furniture the site puts round it.
+  found.sort((a, b) => (b.inMain ? 1 : 0) - (a.inMain ? 1 : 0))
+  const blocks = found.slice(0, MAX_BLOCKS).map((b) => ({ n: mark(b.e), text: b.text, tag: b.tag, parts: b.parts }))
+  blocks.sort((a, b) => a.n - b.n)
+
 
   const heads = Array.from(document.querySelectorAll('h1, h2')).map((h) => tidy(h.innerText, 120)).filter(Boolean).slice(0, 6)
   return {
@@ -112,10 +129,19 @@ export const READER = `(() => {
   }
 })()`
 
-/** Read the live page. Returns the shape above, with `path` selectors ready for a click. */
-export async function readPage(chrome) {
-  const page = await chrome.evaluate(READER)
+/**
+ * Read the live page. A page that builds itself in the browser can look finished while it is still
+ * filling in, and a read a moment too early comes back nearly empty. So a thin first read is given
+ * one more second and tried again, which is the difference between a column and a blank column.
+ */
+export async function readPage(chrome, { retry = true } = {}) {
+  let page = await chrome.evaluate(READER)
   if (!page) throw new Error('the page could not be read')
+  if (retry && page.blocks.length < 8 && page.links.length < 8) {
+    await chrome.settle(4000)
+    const again = await chrome.evaluate(READER)
+    if (again && again.blocks.length + again.links.length > page.blocks.length + page.links.length) page = again
+  }
   for (const list of [page.links, page.controls, page.blocks]) for (const row of list) row.css = `[data-jev-n="${row.n}"]`
   return page
 }
