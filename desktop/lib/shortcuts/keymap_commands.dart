@@ -304,9 +304,10 @@ final harnessCommands = <HarnessCommand>[
     action: ShortcutAction.newTerminal,
     nativeAction: 'newTerminal',
   ),
+  // The id is a user's keybinding and does not move; the label is the app's name.
   const HarnessCommand(
     'machines.manage',
-    'Manage Machines',
+    'Open Machine Monitor',
     ShortcutGroup.actions,
     nativeAction: 'manageMachines',
   ),

@@ -12,7 +12,7 @@ const commandBarCommands = {
   'app.settings':
       'Change preferences, appearance, account or connection settings.',
   'machines.manage':
-      'Open Machines, the harness that links, names and retires your computers.',
+      'Open Machine Monitor, the harness that links, names and retires your computers.',
   'machines.list': 'See connected computers and their link state.',
   'machine.link': 'Open the setup dialog to connect another computer.',
   'swarm.new': 'Choose an existing agent or create one in a new tab.',
@@ -41,7 +41,7 @@ const _commandPhrases = {
     'show settings',
     'open preferences',
   ],
-  'machines.manage': ['manage machines', 'open machines'],
+  'machines.manage': ['manage machines', 'open machine monitor'],
   'machines.list': [
     'show machines',
     'machine list',

@@ -55,7 +55,9 @@ class _GridApp extends AppNotifier {
       if (installed != null)
         DshEntry(
           id: harness,
-          name: harness == AppNotifier.machinesHarness ? 'Machines' : 'Grid',
+          name: harness == AppNotifier.machinesHarness
+              ? 'Machine Monitor'
+              : 'Grid',
           engine: 'codex',
           description: 'Talk to your fleet.',
           installed: installed,
@@ -387,7 +389,7 @@ void main() {
   for (final (command, harness, stem, machineId) in [
     ('runLocalModel', AppNotifier.gridHarness, 'grid', null),
     ('runLocalModel', AppNotifier.gridHarness, 'grid', 'other'),
-    ('manageMachines', AppNotifier.machinesHarness, 'machines', null),
+    ('manageMachines', AppNotifier.machinesHarness, 'machine-monitor', null),
   ]) {
     testWidgets('native $command opens the product dock on $machineId', (
       tester,
@@ -420,7 +422,7 @@ void main() {
         await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
-          '> manage machines',
+          '> machine monitor',
         );
         await tester.pump();
         await key(tester, LogicalKeyboardKey.enter);

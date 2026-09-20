@@ -690,7 +690,7 @@ private extension SwarmTitlebar {
     let machineMenu = main.item(withTitle: "Machines")!.submenu!
     let manage = machineMenu.items[0]
     let manager = machineMenu.items[1]
-    try checkTitlebar(manage.title == "Manage Machines…" && manage.representedObject as? String == "manageMachines" &&
+    try checkTitlebar(manage.title == "Open Machine Monitor…" && manage.representedObject as? String == "manageMachines" &&
       manager.title == "Open Machines Manager" && manager.representedObject as? String == "machineList" && machineMenu.items[2].isSeparatorItem,
       "The Machines harness and existing manager lead the linked computers")
     menuAction(manage)

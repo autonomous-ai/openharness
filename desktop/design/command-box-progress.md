@@ -1,8 +1,8 @@
 # Command box continuation — 2026-09-20
 
-Branch: `worktree-command-box`, based on fetched `origin/main` at `eb35e248`
-(PR #136). The earlier local focus/JEV commits are now included through merged
-PR #132. The terminal UI, creation, and onboarding changes remain uncommitted.
+Branch: `worktree-command-box`. The desktop overhaul is committed as `f2ff876b`;
+integration now includes `main` through `60764ba9` (PR #164). The earlier sections
+below are a historical record; the current PR checkpoint is at the end.
 
 ## Direction carried forward
 
