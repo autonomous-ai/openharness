@@ -22,3 +22,27 @@ To regenerate the renders:
 ```
 
 Store tabs use `desktop/assets/app_icon.png`, the same icon as the app.
+
+## Exploration previews
+
+`projects/` contains unaltered copies of the repository's showcase outputs.
+Discovery and category pages use these; individual harness pages keep their existing artwork.
+
+| Bundled image | Source under `store/showcase/` |
+| --- | --- |
+| `projects/blender.jpg` | `blender/cozy-reading-nook.jpg` |
+| `projects/cad.jpg` | `text-to-cad/planetary-gear-set.jpg` |
+| `projects/circuit.jpg` | `autonomous-circuit/six-key-macropad.jpg` |
+| `projects/robot.jpg` | `mujoco/g1-humanoid-hello.jpg` |
+| `projects/game.jpg` | `godogen/neon-drift.jpg` |
+| `projects/music.jpg` | `score/ensemble.jpg` |
+| `projects/data.jpg` | `marimo/lorenz-butterfly.jpg` |
+| `projects/film.jpg` | `remotion/harness-store-launch.jpg` |
+| `projects/research.jpg` | `roundtable/windows-port-room.jpg` |
+| `projects/slides.jpg` | `marp/deep-sea-keynote.jpg` |
+| `projects/circuitjs.jpg` | `circuitjs/555-led-flasher.jpg` |
+| `projects/yosys.jpg` | `yosys/fibonacci-cpu.jpg` |
+| `projects/orca-slicer.jpg` | `orca-slicer/spacer.jpg` |
+
+New packages can supply example images in their Store metadata. If no preview is available,
+the card displays the package mark. Shared viewers never appear as creative projects.

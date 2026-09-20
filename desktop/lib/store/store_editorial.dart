@@ -1,5 +1,6 @@
 import '../core/dsh_catalog.dart';
 import 'store_categories.g.dart';
+import 'store_project_examples.dart';
 export 'store_categories.g.dart';
 
 String storeCategoryFor(DshEntry entry) {
@@ -183,101 +184,6 @@ const storeStories = <String, StoreStory>{
   ),
 };
 
-class StoreCollection {
-  const StoreCollection({
-    required this.id,
-    required this.title,
-    required this.subtitle,
-    required this.categories,
-    required this.featuredIds,
-  });
-
-  final String id;
-  final String title;
-  final String subtitle;
-  final Set<String> categories;
-  final List<String> featuredIds;
-
-  bool includes(DshEntry entry) =>
-      !entry.isEngine &&
-      !entry.isViewerPackage &&
-      (categories.contains(storeCategoryFor(entry)) ||
-          featuredIds.contains(entry.id));
-}
-
-const storeCollections = [
-  StoreCollection(
-    id: 'shape',
-    title: 'Give your ideas shape.',
-    subtitle: 'Scenes, parts, architecture, and original art.',
-    categories: {'Design'},
-    featuredIds: [
-      'autonomous/blender',
-      'autonomous/freecad',
-      'autonomous/creative-direction',
-    ],
-  ),
-  StoreCollection(
-    id: 'hardware',
-    title: 'Build something real.',
-    subtitle: 'Circuits, fabrication, robotics, and simulation.',
-    categories: {'Engineering', 'Simulation'},
-    featuredIds: [
-      'autonomous/copper',
-      'autonomous/autonomous-circuit',
-      'autonomous/circuitjs',
-      'autonomous/kicad',
-      'autonomous/mujoco',
-    ],
-  ),
-  StoreCollection(
-    id: 'play',
-    title: 'Make something play.',
-    subtitle: 'Invent a game. Compose a piece. Build a world.',
-    categories: {'Games', 'Music'},
-    featuredIds: [
-      'autonomous/phaser',
-      'autonomous/strudel',
-      'autonomous/music-studio',
-      'autonomous/voxel-worlds',
-    ],
-  ),
-  StoreCollection(
-    id: 'tell',
-    title: 'Tell your story.',
-    subtitle: 'Films, generated images, slides, and documents.',
-    categories: {'Media', 'Productivity'},
-    featuredIds: [
-      'autonomous/openmontage',
-      'autonomous/remotion',
-      'autonomous/marp',
-    ],
-  ),
-  StoreCollection(
-    id: 'explore',
-    title: 'Follow a question.',
-    subtitle: 'Explore data, run experiments, and weigh a decision.',
-    categories: {'Science & Data', 'Research'},
-    featuredIds: [
-      'autonomous/data-studio',
-      'autonomous/roundtable',
-      'autonomous/marimo',
-    ],
-  ),
-  StoreCollection(
-    id: 'local',
-    title: 'Make AI your own.',
-    subtitle: 'Run, compare, and manage models on your machines.',
-    categories: {'Local AI'},
-    featuredIds: [
-      'autonomous/autonomous-grid',
-      'autonomous/ollama',
-      'autonomous/mlx-lm',
-      'autonomous/vllm',
-    ],
-  ),
-];
-
 String storeBenefit(DshEntry entry) =>
     storeStories[entry.id]?.benefit ??
     entry.description ??
@@ -293,7 +199,32 @@ bool storeMatches(DshEntry entry, String query) {
     entry.category,
     storeCategoryFor(entry),
     entry.description,
+    entry.tagline,
     storeBenefit(entry),
+    ...?storeStories[entry.id]?.prompts,
+    storeProjectExamples[entry.id]?.prompt,
+    storeProjectExamples[entry.id]?.title,
+    ...entry.examples.map((example) => example.prompt),
   ].join(' ').toLowerCase();
   return terms.every(text.contains);
+}
+
+/// A named tool comes before incidental mentions in another tool's prompts.
+List<DshEntry> storeSearch(Iterable<DshEntry> entries, String query) {
+  final needle = query.trim().toLowerCase();
+  int relevance(DshEntry entry) {
+    final name = entry.name.toLowerCase();
+    if (name == needle) return 0;
+    if (name.startsWith(needle)) return 1;
+    if (name.contains(needle)) return 2;
+    return 3;
+  }
+
+  return entries.where((entry) => storeMatches(entry, query)).toList()
+    ..sort((a, b) {
+      final order = relevance(a).compareTo(relevance(b));
+      return order != 0
+          ? order
+          : a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
 }
