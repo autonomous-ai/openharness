@@ -150,20 +150,26 @@ export async function findThePage({ chrome, ask, start, want, search = '', maxSt
     for (const l of links) {
       q[`g${l.n}`] = jev.noul(`The person asked for: "${asked}". This page has a link reading "${l.label}" going to ${l.path}. Would following it get closer to what they asked for?`,
         { true: 'it leads towards what they asked for', false: 'it leads away: an unrelated section, a login, a legal page, or an advert' })
+      // The difference between "Travel" and "It's Only the Himalayas": one is a shelf, one is a book.
+      q[`s${l.n}`] = jev.noul(`Is the link "${l.label}" (${l.path}) a section, category or search that would show MANY of them, rather than one single one?`,
+        { true: 'it opens a page listing many of them', false: 'it opens one single one, in detail' })
     }
     if (box && !searched && search) q.usesearch = jev.noul(`This page has a search box. The person asked for: "${asked}". Is searching this site the best way to find them, rather than following a link?`)
     const res = await ask({ state: pageState(page, { what_they_want: asked }), questions: q })
 
     const here = res.answers.here?.noul ?? 0
     const one = res.answers.one?.noul ?? 0
-    const ranked = links.map((l) => ({ l, p: res.answers[`g${l.n}`]?.noul ?? 0 })).sort((a, b) => b.p - a.p)
+    const ranked = links.map((l) => ({ l, p: res.answers[`g${l.n}`]?.noul ?? 0, section: res.answers[`s${l.n}`]?.noul ?? 0 })).sort((a, b) => b.p - a.p)
     const best = ranked[0]
+    // On a page that already lists them, only a NARROWER section is worth following. Following an
+    // individual one from here lands on a single product with nothing left to collect.
+    const narrower = ranked.find((r) => r.p >= 0.7 && r.section >= 0.6)
     say('judged', { url: page.url, judged: links.length, found: 0, latencyMs: res.latencyMs,
       links: ranked.map(({ l, p }) => ({ n: l.n, label: l.label, p })).slice(0, 40) })
     // A front page of a bookshop IS a list of books, so "does this page show them" says yes and the
     // walk stops one click short of the travel section. A link the person's own words point
     // straight at beats a page that merely qualifies.
-    const obvious = best && best.p >= 0.75 && here < 0.85
+    const obvious = !!narrower && here < 0.85
     if ((here >= 0.5 && !obvious) || one >= 0.6) { say('arrived', { url: page.url, listing: here >= 0.5, steps: step + 1 }); return { url: page.url, page, steps: step + 1, isOne: one >= 0.6 && here < 0.5 } }
 
     if (search && box && !searched && (res.answers.usesearch?.noul ?? 0) >= 0.5) {
@@ -173,13 +179,14 @@ export async function findThePage({ chrome, ask, start, want, search = '', maxSt
       url = await chrome.url()
       continue
     }
-    if (!best || best.p < 0.5) {
+    const go = here >= 0.5 ? narrower : (narrower ?? best)
+    if (!go || go.p < 0.5) {
       // Nothing points onward. If this page at least shows the right sort of thing, work from it.
       if (here >= 0.5) { say('arrived', { url: page.url, listing: true, steps: step + 1 }); return { url: page.url, page, steps: step + 1 } }
       return { url: page.url, page, steps: step + 1, gaveUp: 'no link on this page looked like the way to it' }
     }
-    say('step', { label: best.l.label, p: best.p })
-    url = best.l.url
+    say('step', { label: go.l.label, p: go.p })
+    url = go.l.url
   }
   return { url, page, steps: maxSteps, gaveUp: `it was still looking after ${maxSteps} pages` }
 }
@@ -230,7 +237,10 @@ export async function proposeJob({ chrome, ask, start, want = '', search = '', p
   // CALL 1 — what does this page list, and which of its links are the things?
   const wanted = want ? ` The person asked for: "${want}".` : ''
   const links = list.links.slice(0, LIMITS.linksPerCall)
-  const q1 = { kind: jev.choice(THINGS, `This page may list many of one kind of thing.${wanted} What is it listing?`) }
+  const q1 = {
+    kind: jev.choice(THINGS, `This page may list many of one kind of thing.${wanted} What is it listing?`),
+    single: jev.noul(`${wanted} Is THIS page one single one of those, shown in detail, rather than a list of many of them?`),
+  }
   for (const l of links) {
     q1[`l${l.n}`] = jev.noul(`"${l.label}" is the text of a link on this page, pointing at ${l.path}. Is "${l.label}" the title of one of the things this page lists, rather than part of the site's own menu?`)
   }
@@ -242,14 +252,20 @@ export async function proposeJob({ chrome, ask, start, want = '', search = '', p
   const surest = [...items].sort((a, b) => b.p - a.p)[0]
   const item = ITEM_WORDS[kind] ?? ITEM_WORDS.other
   say('judged', { url: list.url, kind, judged: links.length, found: items.length, latencyMs: r1.latencyMs, links: links.map((l) => ({ n: l.n, label: l.label, p: r1.answers[`l${l.n}`]?.noul ?? 0 })).sort((a, b) => b.p - a.p).slice(0, 40) })
-  if (!items.length) return { kind, item, columns: [], from: list.url, none: 'no link on this page looks like one of the things' }
+  const single = (r1.answers.single?.noul ?? 0) >= 0.6
+  if (!items.length && !single) return { kind, item, columns: [], from: list.url, none: 'no link on this page looks like one of the things' }
 
-  // CALL 2 — on one of them, which pieces of text deserve a column, and what is each one?
-  say('going', { url: surest.url, what: `one ${item}, to see what it says` })
-  await chrome.go(surest.url)
-  const one = await readPage(chrome)
-  const itemWall = wallReason(one)
-  if (itemWall) return { kind, item, columns: [], from: one.url, walled: `${new URL(one.url).hostname}: ${itemWall}` }
+  // CALL 2 — which pieces of text deserve a column. Usually on one of the things this page links
+  // to; but a walk can land ON one of them, and then this page is the one to read.
+  let one = list, onlyThis = true
+  if (items.length) {
+    onlyThis = false
+    say('going', { url: surest.url, what: `one ${item}, to see what it says` })
+    await chrome.go(surest.url)
+    one = await readPage(chrome)
+    const itemWall = wallReason(one)
+    if (itemWall) return { kind, item, columns: [], from: one.url, walled: `${new URL(one.url).hostname}: ${itemWall}` }
+  } else say('judged', { url: list.url, kind, judged: 0, found: 1, latencyMs: r1.latencyMs, links: [] })
   const q2 = {}
   for (const b of one.blocks) {
     const text = b.text.slice(0, 140)
@@ -296,7 +312,7 @@ export async function proposeJob({ chrome, ask, start, want = '', search = '', p
   }
   columns.sort((a, b) => b.p - a.p)
   say('proposed', { columns: columns.length, latencyMs: r1.latencyMs + r2.latencyMs })
-  return { kind, item, columns: columns.slice(0, LIMITS.fields), from: one.url, ms: Math.round(r1.latencyMs + r2.latencyMs) }
+  return { kind, item, columns: columns.slice(0, LIMITS.fields), from: one.url, onlyThis, ms: Math.round(r1.latencyMs + r2.latencyMs) }
 }
 
 /**
