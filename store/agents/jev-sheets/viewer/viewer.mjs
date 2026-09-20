@@ -7,7 +7,7 @@
 // Answers are cached by row text plus column definition, so only missing cells are ever computed.
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { evaluate, jev, toWire, PRICE_PER_MTOK } from '../toolchain/jev.mjs'
+import { evaluate, jev, toWire, PRICE_PER_MTOK, resolveCredentials } from '../toolchain/jev.mjs'
 import { serveViewer, writeVerdict, watchConfig, mulberry32, clean } from './kit.mjs'
 import { parseHeader, normalizeSheet, columnKey, judge, confidenceOf, levelOf, describeColumn, LIMITS } from './grammar.mjs'
 import { sheetMock } from './mock.mjs'
@@ -38,7 +38,9 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
   let patches = [], patchTimer = null, verdictTimer = null, retryTimer = null, ghostTimer = null
   let ghost = { enabled: true, phase: 'idle', header: '', typeMs: 0, startedAt: 0, nextAt: 0, removeAt: 0, pausedUntil: 0, cursor: 0, watching: false }
   const rng = mulberry32(20260919)
-  const mockMode = !process.env.TYPESAFE_API_KEY
+  // Which live route is active (typesafe, cloudflare, openrouter), or null for the offline stand-in.
+  // Asked each time, because a key can arrive in the credentials file while the viewer runs.
+  const liveRoute = () => resolveCredentials()?.provider ?? null
   const colById = (id) => columns.find((c) => c.id === id)
   const mock = sheetMock(colById)
 
@@ -175,7 +177,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
       cellsOut[row.id] = o
     }
     return {
-      title: sheet.title, description: sheet.description, textLabel: sheet.textLabel, client: mockMode ? 'mock' : 'typesafe',
+      title: sheet.title, description: sheet.description, textLabel: sheet.textLabel, client: liveRoute() ?? 'mock',
       source: sourceInfo, // set when the rows come from the person's own file
       concurrency: sheet.concurrency, limits: LIMITS,
       suggestions: sheet.suggestions.length ? sheet.suggestions : FALLBACK_SUGGESTIONS,
@@ -231,7 +233,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
         { id: 'fill', name: 'Cells filled', state: full ? 'done' : stats.cellsTotal ? 'active' : 'pending' },
         { id: 'review', name: 'Review', state: !full ? 'pending' : stats.flagged ? 'active' : 'done' },
       ],
-      sheet: { client: mockMode ? 'mock' : 'typesafe', reviewBelow, rows: stats.rows, cellsFilled: stats.cellsFilled, cellsTotal: stats.cellsTotal, flagged: stats.flagged, costUsd: stats.costUsd, groups, columns: report },
+      sheet: { client: liveRoute() ?? 'mock', reviewBelow, rows: stats.rows, cellsFilled: stats.cellsFilled, cellsTotal: stats.cellsTotal, flagged: stats.flagged, costUsd: stats.costUsd, groups, columns: report },
     }
   }
   function shown(col, a) {
@@ -298,7 +300,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     try {
       // Offline, a call returns in under a millisecond. Pace it like the live model (about 100 ms)
       // so the wave is visible. `tick` and `drain` skip the pacing.
-      if (!fast && mockMode && paceMs > 0) await sleep(paceMs * (0.7 + 0.6 * rng()))
+      if (!fast && !liveRoute() && paceMs > 0) await sleep(paceMs * (0.7 + 0.6 * rng()))
       const questions = Object.fromEntries(need.map((c) => [c.id, questionFor(c)]))
       const res = await evaluate({ state, questions, salt: 1, mock, model: process.env.JEV_MODEL || 'jev-latest' })
       if (stopped || myEpoch !== epoch || rowById.get(row.id) !== row || JSON.stringify(rowState(row)) !== key) return

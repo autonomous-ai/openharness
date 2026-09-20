@@ -640,7 +640,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 // you happen to have open. Two live routes are supported, both speaking the same question format:
 //   TypeSafe direct         TYPESAFE_API_KEY                               (api.typesafe.ai)
 //   Cloudflare Workers AI   CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN   (no TypeSafe waitlist)
-//   OpenRouter              OPENROUTER_API_KEY                             (no waitlist; alpha endpoint, ~2 s a call)
+//   OpenRouter              OPENROUTER_API_KEY                             (no waitlist; alpha endpoint, ~0.45 s a call measured)
 // When several are present the fastest wins: TypeSafe, then Cloudflare, then OpenRouter.
 // The file is ~/.config/typesafe/credentials (or $TYPESAFE_CREDENTIALS). Keep it chmod 600.
 // ---------------------------------------------------------------------------
@@ -685,7 +685,7 @@ export function resolveCredentials(explicitKey) {
 export function describeCredentials() {
   const c = resolveCredentials()
   if (!c) return `offline stand-in (no key found in the environment or in ${credentialsPath()})`
-  if (c.provider === 'openrouter') return `live Jev through OpenRouter (${c.model}; alpha endpoint, about 2 s a call: fine for batch work, slow for the real-time games)`
+  if (c.provider === 'openrouter') return `live Jev through OpenRouter (${c.model}; alpha endpoint, about half a second a call: great for batch work, and the real-time games run at about two decisions a second)`
   return c.provider === 'cloudflare' ? 'live Jev through Cloudflare Workers AI' : 'live Jev through the TypeSafe API'
 }
 

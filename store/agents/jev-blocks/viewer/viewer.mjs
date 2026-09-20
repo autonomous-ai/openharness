@@ -217,7 +217,7 @@ export async function startBlocksViewer({ workspace, port = 0 } = {}) {
         if (stopped || piece !== p || game !== g) return
         jevErr = null
         p.answer = res
-        const cost = Math.max(val('decisionMs'), res.client === 'typesafe' ? res.latencyMs : 0)
+        const cost = Math.max(val('decisionMs'), res.client !== 'mock' ? res.latencyMs : 0)
         p.answerAt = free ? g.now : Math.max(p.spawnAt + cost, g.now)
       } catch (e) {
         if (stopped || piece !== p) return

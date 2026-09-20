@@ -78,6 +78,14 @@ the plumbing. It is not Jev's judgement.
 The arena, the demons and the numbers are made up. This shows decision rate and calibration on a
 synthetic game. It is not a benchmark of any real game or product.
 
+## Measured with the real model
+
+One short run on 2026-09-20 with live Jev (`typesafe/jev-1.13`) through OpenRouter, about 0.45 s a call once warm. Small samples on made-up data: a sanity check, not a benchmark.
+
+60 seconds at the default level: 130 decisions, 5 kills, no deaths, every shot on target, $0.0044.
+Through OpenRouter the fight runs at about two decisions a second instead of nine, so it plays in
+slow motion. The native API or Cloudflare route is the one for full speed.
+
 ## Credit and stewardship
 
 - **Jev** is the work of **TypeSafe AI** (typesafe.ai). This harness is an OpenHarness wrapper that

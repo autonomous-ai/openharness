@@ -81,6 +81,18 @@ plumbing. It is not Jev's judgement.
 The site, the flights, the prices and the people are made up. Nothing is booked anywhere and no real
 website is touched. The times shown are this demo's pace, not a benchmark of any product.
 
+## Measured with the real model
+
+One short run on 2026-09-20 with live Jev (`typesafe/jev-1.13`) through OpenRouter, about 0.45 s a call once warm. Small samples on made-up data: a sanity check, not a benchmark.
+
+| `distraction` | bookings | exactly right | steps each | clicks lost to layout shifts | cost |
+|---|---|---|---|---|---|
+| 0 | 6 | 6 of 6 | 9.8 | 0 | $0.0017 |
+| 0.6 | 6 | 6 of 6 | 15.0 | 12 | $0.0032 |
+
+At distraction 0.6 the real model lost 12 clicks to layout shifts and still got every booking right:
+it noticed the wrong flight on the next page and went back. The offline stand-in scores about 92% there.
+
 ## Credit and stewardship
 
 - **Jev** is the work of **TypeSafe AI** (typesafe.ai). This harness is an OpenHarness wrapper that
