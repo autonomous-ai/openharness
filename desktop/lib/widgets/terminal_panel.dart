@@ -426,7 +426,14 @@ class _TerminalPanelState extends State<TerminalPanel>
     CellOffset location(CellOffset old) =>
         CellOffset(old.x.clamp(0, terminal.viewWidth - 1), row(old.y));
     final wasFinding = _find != null;
-    _closeFind(restore: false, focus: false, rebuild: false);
+    // A screen refresh replaces the search model in place. Keep its editor's
+    // input connection (and any active composition) if it owns the keyboard.
+    _closeFind(
+      restore: false,
+      focus: false,
+      rebuild: false,
+      releaseFocus: false,
+    );
     _clearLastFind();
     // Selection anchors belong to a specific circular buffer. Detach them
     // before the TerminalView starts laying out the replacement terminal.
@@ -483,7 +490,10 @@ class _TerminalPanelState extends State<TerminalPanel>
       _find!.setQuery(_lastFindQuery, caseSensitive: _lastFindCaseSensitive);
     }
     _followTail = atEnd;
-    _afterTerminalMounted(scrollToEnd: atEnd);
+    // Resizes and resyncs are output updates, not requests to enter this pane.
+    // Its retained renderer/editor keeps its current focus; a command bar or
+    // other control must keep any keyboard ownership it already has.
+    _afterTerminalMounted(scrollToEnd: atEnd, claimFocus: false);
   }
 
   /// Typing in the composer focuses the tile, exactly like clicking into the terminal does.
@@ -794,6 +804,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     bool restore = true,
     bool focus = true,
     bool rebuild = true,
+    bool releaseFocus = true,
   }) {
     final search = _find;
     if (search == null) return;
@@ -806,7 +817,7 @@ class _TerminalPanelState extends State<TerminalPanel>
       _lastFindBuffer = _viewTerminal.buffer;
     }
     _find = null;
-    _findBarKey.currentState?.releaseSearchFocus();
+    if (releaseFocus) _findBarKey.currentState?.releaseSearchFocus();
     search.removeListener(_onFindChanged);
     search.dispose();
     _clearFindHighlight();
