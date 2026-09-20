@@ -19,8 +19,8 @@ const examples = shots.map(shot => {
   const manifest = JSON.parse(readFileSync(resolve(root, `store/agents/${shot.id}/harness.json`), 'utf8'));
   const example = facts.examples.find(e => e.image?.endsWith(`/${shot.id}/${shot.image}`));
   if (!example) throw Error(`No original prompt for ${path}`);
-  // Longer prompts get more reading time; every slide stays for at least 6 seconds.
-  const seconds = Math.max(6, Math.ceil(example.prompt.split(/\s+/).length / 4.5));
+  // Keep the showcase moving; the README links still images and full prompts.
+  const seconds = 3;
   return {...shot, name: manifest.name, path, prompt: example.prompt, seconds};
 });
 execFileSync(process.env.FLUTTER_BIN || 'flutter', ['test', '--no-pub', 'tool/render_readme_showcase.dart'], {

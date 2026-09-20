@@ -98,38 +98,32 @@ function mark(id, label, x, y, size) {
 }
 const columns = 5, cardWidth = 230, gap = 16, margin = 33;
 const rows = Math.ceil(groups.length / columns);
-const craftY = 456;
-const height = craftY + rows * 198 + 18;
+const craftY = 286, cardHeight = 158, rowStep = cardHeight + gap;
+const height = craftY + rows * rowStep + 8;
 const parts = [
   `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="${height}" viewBox="0 0 1280 ${height}" role="img" aria-labelledby="title desc">`,
   `<title id="title">OpenHarness: coding first, then ${agents.length} harnesses across ${groups.length} more categories</title>`,
   '<desc id="desc">Coding is the main category, with fourteen supported agents. Below it, harnesses for Design, Engineering, Media, Music, Productivity, Science and Data, Simulation, Games, Research, and Local AI. The full catalog is in the README table.</desc>',
-  '<style>text{font-family:Inter,Arial,sans-serif;fill:#172a24}.muted{fill:#5a6962}</style>',
+  '<style>text{font-family:Inter,Arial,sans-serif;fill:#172a24}</style>',
   `<rect width="1280" height="${height}" rx="26" fill="#f3f2ec"/>`,
-  '<text x="34" y="39" font-size="13" font-weight="700" letter-spacing="2" class="muted">OPENHARNESS</text>',
-  '<text x="32" y="85" font-size="39" font-weight="700" letter-spacing="-1">Start with code. Build across disciplines.</text>',
-  `<text x="34" y="118" font-size="18" class="muted">${engines.length} coding agents · ${agents.length} harnesses · one open-source workshop</text>`,
-  '<rect x="33" y="148" width="1214" height="264" rx="18" fill="#e4ede7" stroke="#b5c8b9"/>',
-  '<text x="57" y="190" font-size="28" font-weight="700">Coding</text>',
-  '<text x="175" y="187" font-size="17" class="muted">The agents you already use, together across your machines.</text>',
+  '<rect x="33" y="24" width="1214" height="246" rx="18" fill="#e4ede7" stroke="#b5c8b9"/>',
+  '<text x="57" y="63" font-size="28" font-weight="700">Coding</text>',
 ];
 engines.forEach(([id,name],i) => {
-  const x = 57 + (i % 7) * 169, y = 214 + Math.floor(i / 7) * 92;
+  const x = 57 + (i % 7) * 169, y = 84 + Math.floor(i / 7) * 90;
   parts.push(mark(id,name,x+53,y,52));
   parts.push(`<text x="${x+79}" y="${y+73}" text-anchor="middle" font-size="14">${escape(name)}</text>`);
 });
-parts.push('<text x="34" y="443" font-size="18" font-weight="700">Then follow your curiosity.</text>');
 groups.forEach((c, i) => {
-  const x = margin + (i % columns) * (cardWidth + gap), y = craftY + Math.floor(i / columns) * 198;
-  parts.push(`<rect x="${x}" y="${y}" width="${cardWidth}" height="182" rx="16" fill="#fff" stroke="#dddeda"/>`);
+  const x = margin + (i % columns) * (cardWidth + gap), y = craftY + Math.floor(i / columns) * rowStep;
+  parts.push(`<rect x="${x}" y="${y}" width="${cardWidth}" height="${cardHeight}" rx="16" fill="#fff" stroke="#dddeda"/>`);
   parts.push(`<text x="${x+16}" y="${y+31}" font-size="19" font-weight="700">${escape(c.name)}</text>`);
-  parts.push(`<text x="${x+16}" y="${y+54}" font-size="13" class="muted">${c.entries.length} harness${c.entries.length===1?'':'es'}</text>`);
   const selected = c.featured.map(id => c.entries.find(e => e.id === `autonomous/${id}`)).filter(Boolean);
   selected.forEach((e, j) => {
     const cellX = x + 16 + j * 68;
-    parts.push(mark(e.id, e.name, cellX+6, y+72, 54));
+    parts.push(mark(e.id, e.name, cellX+6, y+53, 54));
     const labels = e.name.length > 12 ? e.name.split(' ') : [e.name];
-    labels.slice(0, 2).forEach((line,k) => parts.push(`<text x="${cellX+33}" y="${y+147+k*15}" text-anchor="middle" font-size="11">${escape(line)}</text>`));
+    labels.slice(0, 2).forEach((line,k) => parts.push(`<text x="${cellX+33}" y="${y+128+k*15}" text-anchor="middle" font-size="11">${escape(line)}</text>`));
   });
 });
 parts.push('</svg>\n');

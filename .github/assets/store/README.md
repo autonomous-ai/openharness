@@ -2,7 +2,8 @@
 
 `workshop-overview.svg` presents Coding first, with all fourteen supported agents. The remaining
 cards follow the shared taxonomy in `store/browse-categories.json` and show a selection of the
-listed harnesses. Counts exclude packages whose `store.json` sets `listed: false`.
+listed harnesses. Visible text is limited to category names and logo labels; the README carries
+the explanation and catalog counts. Packages whose `store.json` sets `listed: false` are excluded.
 
 Run `node store/tools/presentation.mjs` from the repository root to regenerate the overview,
 README catalog, and desktop category mapping. `--check` detects stale output.
@@ -15,8 +16,8 @@ must have actual artwork; the generator fails rather than showing a letter place
 
 `showcase.gif` shows six real outputs, one screenshot per slide, at 1600 × 1260. The original
 1600 × 1000 screenshot is kept whole, with a caption panel below it. Each caption includes the
-harness name and complete original prompt from its package's `store.json`. Slides stay for
-6–10 seconds according to prompt length; the current loop is 45 seconds. `showcase-poster.png`
+harness name and complete original prompt from its package's `store.json`. Each slide stays for
+3 seconds; the full loop is 18 seconds. `showcase-poster.png`
 is the first slide as a still image. Individual source screenshots and prompts are also linked
 in the README for readers who prefer a static view.
 
