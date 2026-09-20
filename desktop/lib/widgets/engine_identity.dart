@@ -333,7 +333,7 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/drone-pilot',
     label: 'Drone Pilot',
     category: 'Simulation',
-    tagline: 'Plan your survey. Inspect the evidence. Keep the work.',
+    tagline: 'Turn your site into a survey plan you can inspect and keep',
     creator: 'Autonomous',
     color: Color(0xffd3eb9c),
     asset: 'assets/engine-icons/drone-pilot.png',
@@ -549,12 +549,39 @@ const _harnesses = <String, EngineIdentity>{
     color: Color(0xffe8894a),
     asset: 'assets/engine-icons/openmontage.png',
   ),
+  // Original Harness package marks; Godogen's upstream publishes no logo.
+  'autonomous/roundtable': EngineIdentity(
+    id: 'autonomous/roundtable',
+    label: 'Roundtable',
+    category: 'Decisions',
+    creator: 'Autonomous',
+    color: Color(0xff94b9a5),
+    asset: 'assets/engine-icons/roundtable.png',
+  ),
+  'autonomous/jev-browser': EngineIdentity(
+    id: 'autonomous/jev-browser',
+    label: 'Jev Browser',
+    category: 'Research',
+    tagline: 'Name a site, say what you want, and get a spreadsheet',
+    creator: 'Autonomous',
+    color: Color(0xff8bd3cc),
+    asset: 'assets/engine-icons/jev-browser.png',
+  ),
+  'autonomous/godogen': EngineIdentity(
+    id: 'autonomous/godogen',
+    label: 'Godogen',
+    category: 'Games',
+    tagline: 'Autonomous game development',
+    creator: 'Alex Ermolov',
+    color: Color(0xffb5d9ae),
+    asset: 'assets/engine-icons/godogen.png',
+  ),
   // Of the eight studios of 2026-09-18, three wear their project's own mark —
   // Comfy's `assets/logo.svg`, Dimensional's favicon, Bonsai's desktop icon
   // from IfcOpenShell. The other five (Ableton AI, autoresearch-mlx,
   // Foam-Agent, JUCE Agent Toolkit, SimSkill) publish no logo of their own,
   // and the marks they sit beside (Ableton, JUCE, OpenFOAM, SUMO) are other
-  // companies' trademarks — so, like Godogen, they are not here and draw their
+  // companies' trademarks — so they are not here and draw their
   // initial; their words come from the Store's catalog.
   'autonomous/comfy-mcp': EngineIdentity(
     id: 'autonomous/comfy-mcp',
@@ -599,7 +626,7 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/data-studio',
     label: "Data Studio",
     category: "Data",
-    tagline: "Explore CSV data with live charts, filters and exact values",
+    tagline: "Turn your files into answers you can trace, revise and reuse",
     creator: "OpenHarness contributors",
     color: Color(0xff4987ca),
     asset: 'assets/engine-icons/data-studio.png',
@@ -700,6 +727,9 @@ const _harnesses = <String, EngineIdentity>{
 /// say "Runs on Claude Code" — and send the right `engine` — before the machine
 /// has answered `dsh_list`. The daemon's catalog is authoritative when present.
 const knownHarnessBase = <String, String>{
+  'autonomous/roundtable': 'claude',
+  'autonomous/jev-browser': 'claude',
+  'autonomous/godogen': 'claude',
   'autonomous/ollama': 'codex',
   'autonomous/mlx-lm': 'codex',
   'autonomous/vllm': 'codex',
@@ -883,7 +913,31 @@ class EngineMark extends StatelessWidget {
             identity: identity,
             size: size,
           );
-    return Opacity(opacity: enabled ? 1 : 0.45, child: mark);
+    // These vendor assets use near-white ink. Give them a stable dark ground
+    // so their original shapes stay visible on both light and dark surfaces.
+    final needsDarkTile = const {
+      'cursor',
+      'opencode',
+      'autonomous/kicad',
+    }.contains(identity.id);
+    return Opacity(
+      opacity: enabled ? 1 : 0.45,
+      child: needsDarkTile
+          ? SizedBox.square(
+              dimension: size,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: const Color(0xff29322f),
+                  borderRadius: BorderRadius.circular(size * .2),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.all(size * .08),
+                  child: mark,
+                ),
+              ),
+            )
+          : mark,
+    );
   }
 }
 

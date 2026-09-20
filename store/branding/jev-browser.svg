@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Jev Browser — read the web, find the evidence</title>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="#203e49"/>
+  <rect x="12" y="12" width="37" height="34" rx="5" fill="none" stroke="#8bd3cc" stroke-width="3.5"/>
+  <path d="M13 23h35M20 31h15M20 37h9" stroke="#8bd3cc" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="19" cy="18" r="1.5" fill="#8bd3cc"/>
+  <circle cx="25" cy="18" r="1.5" fill="#8bd3cc"/>
+  <circle cx="43" cy="42" r="10" fill="#203e49" stroke="#edc581" stroke-width="4"/>
+  <path d="M50 50l6 6" stroke="#edc581" stroke-width="5" stroke-linecap="round"/>
+</svg>

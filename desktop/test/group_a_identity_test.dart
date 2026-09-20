@@ -18,43 +18,40 @@ final _marks = (jsonDecode(
 void main() {
   setUpAll(loadRealFonts);
 
-  test(
-    'all twelve release harnesses have their own exact catalog identity',
-    () {
-      expect(_marks, hasLength(12));
-      for (final mark in _marks) {
-        final id = mark['id'] as String;
-        final name = id.split('/').last;
-        final manifest = jsonDecode(
-          File('../store/agents/$name/harness.json').readAsStringSync(),
-        ) as Map<String, dynamic>;
-        final facts = jsonDecode(
-          File('../store/agents/$name/store.json').readAsStringSync(),
-        ) as Map<String, dynamic>;
-        final identity = engineIdentity(id);
-        expect(identity.label, manifest['name'], reason: id);
-        expect(identity.category, manifest['category'], reason: id);
-        expect(identity.creator, manifest['author'], reason: id);
-        expect(identity.tagline, facts['tagline'], reason: id);
-        expect(knownHarnessBase[id], manifest['engine'], reason: id);
-        expect(identity.asset, 'assets/engine-icons/$name.png');
-        expect(
-          identity.color,
-          Color(
-            int.parse(
-              (mark['color'] as String).replaceFirst('#', 'ff'),
-              radix: 16,
-            ),
+  test('every registered package mark has its exact catalog identity', () {
+    expect(_marks, isNotEmpty);
+    for (final mark in _marks) {
+      final id = mark['id'] as String;
+      final name = id.split('/').last;
+      final manifest = jsonDecode(
+        File('../store/agents/$name/harness.json').readAsStringSync(),
+      ) as Map<String, dynamic>;
+      final facts = jsonDecode(
+        File('../store/agents/$name/store.json').readAsStringSync(),
+      ) as Map<String, dynamic>;
+      final identity = engineIdentity(id);
+      expect(identity.label, manifest['name'], reason: id);
+      expect(identity.category, manifest['category'], reason: id);
+      expect(identity.creator, manifest['author'], reason: id);
+      expect(identity.tagline, facts['tagline'], reason: id);
+      expect(knownHarnessBase[id], manifest['engine'], reason: id);
+      expect(identity.asset, 'assets/engine-icons/$name.png');
+      expect(
+        identity.color,
+        Color(
+          int.parse(
+            (mark['color'] as String).replaceFirst('#', 'ff'),
+            radix: 16,
           ),
-          reason: '$id brand color',
-        );
-        expect(allEngines.any((engine) => engine.id == id), isFalse);
-        final agent = Agent(id: name, name: name, engine: 'claude', dsh: id);
-        expect(agentIdentity(agent).asset, identity.asset);
-        expect(EngineMark.forAgent(agent).engine, id);
-      }
-    },
-  );
+        ),
+        reason: '$id brand color',
+      );
+      expect(allEngines.any((engine) => engine.id == id), isFalse);
+      final agent = Agent(id: name, name: name, engine: 'claude', dsh: id);
+      expect(agentIdentity(agent).asset, identity.asset);
+      expect(EngineMark.forAgent(agent).engine, id);
+    }
+  });
 
   test(
     'artwork attribution and licenses are included in the app bundle',
@@ -99,7 +96,10 @@ void main() {
       'release marks render at tab and Store sizes on ${brightness.name}',
       (tester) async {
         tester.view.devicePixelRatio = 1;
-        tester.view.physicalSize = const Size(1200, 780);
+        tester.view.physicalSize = Size(
+          1200,
+          (_marks.length / 4).ceil() * 248 + 48,
+        );
         addTearDown(tester.view.reset);
         final boundaryKey = GlobalKey();
         final background = brightness == Brightness.dark

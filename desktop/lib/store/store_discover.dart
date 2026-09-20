@@ -53,6 +53,15 @@ class StoreDiscover extends StatelessWidget {
         .where((e) => !e.isEngine && !e.isViewerPackage)
         .toList();
     const picks = [
+      'autonomous/openmontage',
+      'autonomous/music-studio',
+      'autonomous/data-studio',
+      'autonomous/roundtable',
+      'autonomous/freecad',
+      'autonomous/ollama',
+      'autonomous/jev-sheets',
+      'autonomous/drone-pilot',
+      'autonomous/generative-art',
       'autonomous/text-to-cad',
       'autonomous/strudel',
       'autonomous/marp',
@@ -68,7 +77,7 @@ class StoreDiscover extends StatelessWidget {
       return (ai < 0 ? 999 : ai).compareTo(bi < 0 ? 999 : bi);
     });
     final engines = [
-      for (final id in ['codex', 'claude', 'opencode']) ?byId[id],
+      for (final id in ['claude', 'codex', 'cursor']) ?byId[id],
     ];
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -93,13 +102,41 @@ class StoreDiscover extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Your next superpower starts here.',
+                    'Start with code. Follow your curiosity.',
                     style: TextStyle(
                       fontSize: 14,
                       color: grid.AppPalette.textSecondary,
                     ),
                   ),
                   const SizedBox(height: 24),
+                  if (engines.isNotEmpty) ...[
+                    _Heading('Coding', action: 'See all', onTap: onEngines),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Build software with the agents you already use, across all your machines.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: grid.AppPalette.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    StoreListing(
+                      entries: engines,
+                      ratingFor: ratingFor,
+                      installed: installed,
+                      onOpen: onOpen,
+                      onAction: onAction,
+                    ),
+                  ],
+                  if (crafts.isNotEmpty) ...[
+                    const SizedBox(height: 30),
+                    _Heading(
+                      'Build across disciplines',
+                      action: 'See all',
+                      onTap: onAll,
+                    ),
+                    const SizedBox(height: 14),
+                  ],
                   if (featured.isNotEmpty)
                     _Feature(
                       entry: featured.first,
@@ -149,31 +186,7 @@ class StoreDiscover extends StatelessWidget {
                     ),
                     const SizedBox(height: 10),
                     StoreListing(
-                      entries: crafts.take(9).toList(),
-                      ratingFor: ratingFor,
-                      installed: installed,
-                      onOpen: onOpen,
-                      onAction: onAction,
-                    ),
-                  ],
-                  if (engines.isNotEmpty) ...[
-                    const SizedBox(height: 30),
-                    _Heading(
-                      'Coding engines',
-                      action: 'See all',
-                      onTap: onEngines,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Your everyday companions for building software.',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: grid.AppPalette.textSecondary,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    StoreListing(
-                      entries: engines,
+                      entries: crafts.take(12).toList(),
                       ratingFor: ratingFor,
                       installed: installed,
                       onOpen: onOpen,
@@ -246,7 +259,7 @@ class _Feature extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 const Text(
-                  'YOUR NEXT SUPERPOWER',
+                  'FOLLOW YOUR CURIOSITY',
                   style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w700,

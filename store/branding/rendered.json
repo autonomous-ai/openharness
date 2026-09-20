@@ -58,5 +58,23 @@
     "id": "autonomous/sheet-docs",
     "sourceSha256": "524c5ab52d59ebd034ff85b584a35c6c48b94fc5c495cd0fd60a4f20d26b68e5",
     "pngSha256": "acfa469526b155815f8bf802bc5cc167a4e1e1810264f43e9d3fc5fe0c6c9a24"
+  },
+  {
+    "id": "autonomous/roundtable",
+    "sourceSha256": "7ae7cae5725cbc305875a40ea98087eea86bd8e5846508986679ae9fb6f1c0da",
+    "pngSha256": "adc9c425003372247f95f61890fbbe35cd25d591474f7c077bc681f2bc0ec01f",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/jev-browser",
+    "sourceSha256": "c171c81c07449d2a69419b896a837007c2df6afafd3138baa9e6665c0d37b23a",
+    "pngSha256": "245ccc97c17a1443ddefd6e3758a33583e72597aab9a4d0016ba140a937835a0",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/godogen",
+    "sourceSha256": "47070987c9b643b2385032d7097ca12c5469d06aa0c8d3ac08d88912b0d3287b",
+    "pngSha256": "bb978c3cc63c329bb264db308056446c2f8424566c2424d8808e776a648ae549",
+    "renderer": "AppKit"
   }
 ]

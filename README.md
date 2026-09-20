@@ -1,6 +1,4 @@
-# OpenHarness
-
-**Follow your curiosity. Build across disciplines.**
+# Follow your curiosity. Build across disciplines.
 
 OpenHarness is an open-source workshop for building with coding agents. Use Claude Code, Codex, and
 others to make software, design parts and circuit boards, explore data, and create videos, with your
@@ -17,16 +15,14 @@ a film. You bring the idea, the taste, and the judgment about what is worth maki
 Use the desktop app on its own, or add the optional open-hardware **Harness device** to follow your
 agents, answer their questions, and speak new tasks from your desk.
 
-[Who it's for](#who-its-for) · [What you can make](#domain-specific-harnesses-dsh) · [Run it](#run-it) ·
+[Who it's for](#for-polymaths-in-the-making) · [What you can make](#domain-specific-harnesses-dsh) · [Run it](#run-it) ·
 [Harness device](#harness-device) · [Architecture](docs/architecture.md) · [Contribute](#contributing)
 
 <p align="center">
-  <img src=".github/assets/hardware/desk-agents.jpg" width="960" alt="The Harness device on a desk beside a keyboard, with the coding agents it runs: Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build and Kilo Code">
+  <a href=".github/assets/store/workshop-overview.svg"><img src=".github/assets/store/workshop-overview.svg" width="1280" alt="Start with Coding: 14 agents including Claude Code, Codex, and Cursor. Then explore Design, Engineering, Media, Music, Productivity, Science and Data, Simulation, Games, Research, and Local AI."></a>
 </p>
 
-## Who it's for
-
-**For polymaths in the making.**
+## For polymaths in the making.
 
 Built for technical founders who want their hands on more of what they are making, from the software
 and the physical product to the analysis and the launch video. Engineers, makers, and creators with
@@ -67,60 +63,75 @@ game takes shape on the other, and stays interactive after the agent is done.
 A DSH is a folder with a `harness.json`. The agent does the reasoning; the harness brings the tools
 and the view. Adding a domain never needs a change to the app or the daemon.
 
-### 19 harnesses today
+<!-- store-catalog:start -->
+### Coding and beyond
 
-Start with one. The rest are waiting for the week your curiosity goes somewhere new.
+Start with a coding agent you already use. Explore 44 domain-specific harnesses when your
+next idea takes you further.
 
-
-| Domain | Harnesses |
+| Category | Agents and harnesses |
 |---|---|
-| CAD | [Autonomous Workshop](store/agents/autonomous-workshop/), [text-to-cad](store/agents/text-to-cad/) |
-| 3D | [Blender](store/agents/blender/) |
-| Electronics | [Autonomous Circuit](store/agents/autonomous-circuit/), [CircuitJS](store/agents/circuitjs/), [Yosys](store/agents/yosys/) |
-| Games | [Godogen](store/agents/godogen/), [Phaser](store/agents/phaser/) |
-| Documents and diagrams | [Marp](store/agents/marp/), [Typst](store/agents/typst/), [Excalidraw](store/agents/excalidraw/) |
-| Video and music | [OpenMontage](store/agents/openmontage/), [Remotion](store/agents/remotion/), [Manim](store/agents/manim/), [Strudel](store/agents/strudel/) |
-| Simulation and analysis | [MuJoCo](store/agents/mujoco/), [RDKit](store/agents/rdkit/), [marimo](store/agents/marimo/) |
-| Decisions | [Roundtable](store/agents/roundtable/) |
+| **Coding** | [Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build, Kilo Code](docs/engines.md) |
+| Design | [Autonomous Workshop](store/agents/autonomous-workshop/), [Blender](store/agents/blender/), [Bonsai MCP](store/agents/bonsai-mcp/), [Creative Direction](store/agents/creative-direction/), [Excalidraw](store/agents/excalidraw/), [FreeCAD](store/agents/freecad/), [Generative Art](store/agents/generative-art/), [OpenSCAD](store/agents/openscad/), [text-to-cad](store/agents/text-to-cad/) |
+| Engineering | [Autonomous Circuit](store/agents/autonomous-circuit/), [CircuitJS](store/agents/circuitjs/), [KiCad](store/agents/kicad/), [Orca Slicer](store/agents/orca-slicer/), [Yosys](store/agents/yosys/) |
+| Media | [Comfy MCP](store/agents/comfy-mcp/), [Manim](store/agents/manim/), [OpenMontage](store/agents/openmontage/), [Remotion](store/agents/remotion/) |
+| Music | [Ableton AI](store/agents/ableton-ai/), [JUCE Agent Toolkit](store/agents/juce-agent-toolkit/), [Music Studio](store/agents/music-studio/), [Score](store/agents/score/), [Strudel](store/agents/strudel/) |
+| Productivity | [Jev Sheets](store/agents/jev-sheets/), [Marp](store/agents/marp/), [Typst](store/agents/typst/) |
+| Science & Data | [autoresearch-mlx](store/agents/autoresearch-mlx/), [Data Studio](store/agents/data-studio/), [marimo](store/agents/marimo/), [RDKit](store/agents/rdkit/) |
+| Simulation | [DimOS](store/agents/dimos/), [Drone Pilot](store/agents/drone-pilot/), [Foam-Agent](store/agents/foam-agent/), [MuJoCo](store/agents/mujoco/), [SimSkill](store/agents/simskill/) |
+| Games | [Godogen](store/agents/godogen/), [Phaser](store/agents/phaser/), [Voxel Worlds](store/agents/voxel-worlds/) |
+| Research | [Jev Browser](store/agents/jev-browser/), [Roundtable](store/agents/roundtable/) |
+| Local AI | [Grid](store/agents/autonomous-grid/), [MLX-LM](store/agents/mlx-lm/), [Ollama](store/agents/ollama/), [vLLM](store/agents/vllm/) |
 
-Each one wraps an open-source project under its own name, credits it, pins its toolchain, and installs
-on a fresh machine from the Harness Store. Eight [shared viewers](store/viewers/) (CAD, 3D models,
-documents, games, film, video, MuJoCo, web) mean a new harness rarely needs to write its own.
+These are the 44 harnesses currently listed in the Store catalog. They combine upstream
+open-source tools and original workflows, with instructions, setup, checks, and live views for each craft.
 
-**The harness we'd love to see next is the one for the tool you use.** KiCad, FreeCAD, OpenSCAD, Godot,
-Jupyter, QGIS, Home Assistant, LilyPond, Inkscape — or your own company's toolchain. A harness can live
-in this repository or in yours.
+The 10 [shared viewers](store/viewers/) cover CAD, 3D models, documents, games, film, video,
+MuJoCo, web pages, isolated web previews, and studios. Viewer packages install alongside the
+harnesses that need them. Experimental packages marked unlisted are not included above.
+<!-- store-catalog:end -->
 
-<table>
-  <tr>
-    <td width="33%" valign="top">
-      <a href="store/agents/autonomous-circuit/"><img src="store/showcase/autonomous-circuit/six-key-macropad.jpg" alt="A six-key USB macropad PCB in 3D"></a>
-      <b>Autonomous Circuit</b><br/><sub><i>“Design a six-key USB macropad. Start with the schematic.”</i> A fab-ready board: RP2040, 43 parts.</sub>
-    </td>
-    <td width="33%" valign="top">
-      <a href="store/agents/text-to-cad/"><img src="store/showcase/text-to-cad/planetary-gear-set.jpg" alt="A planetary gear set in the CAD viewer"></a>
-      <b>text-to-cad</b><br/><sub><i>“Design a 3D-printable planetary gear set: a 12-tooth sun, three 18-tooth planets…”</i> Nine parts, zero interference.</sub>
-    </td>
-    <td width="33%" valign="top">
-      <a href="store/agents/mujoco/"><img src="store/showcase/mujoco/g1-humanoid-hello.jpg" alt="A Unitree G1 humanoid waving in MuJoCo"></a>
-      <b>MuJoCo</b><br/><sub><i>“Make the Unitree G1 humanoid say hello: stand, raise its right hand and wave…”</i> A 29-servo rollout.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td width="33%" valign="top">
-      <a href="store/agents/blender/"><img src="store/showcase/blender/cozy-reading-nook.jpg" alt="An isometric reading nook rendered in Blender"></a>
-      <b>Blender</b><br/><sub><i>“Make a cozy isometric reading nook: a cut-away corner of a room with an armchair…”</i> 122 named objects.</sub>
-    </td>
-    <td width="33%" valign="top">
-      <a href="store/agents/godogen/"><img src="store/showcase/godogen/neon-drift.jpg" alt="A synthwave hoverbike racing game"></a>
-      <b>Godogen</b><br/><sub><i>“Make a synthwave hoverbike racer: ride down a neon grid canyon toward a striped setting sun…”</i> Playable in the pane.</sub>
-    </td>
-    <td width="33%" valign="top">
-      <a href="store/agents/manim/"><img src="store/showcase/manim/fourier-knight.jpg" alt="A chess knight traced by Fourier epicycles"></a>
-      <b>Manim</b><br/><sub><i>“Draw a chess knight using nothing but spinning circles…”</i> 120 epicycles in gold.</sub>
-    </td>
-  </tr>
-</table>
+**The harness we'd love to see next is the one for your craft.** Bring an open-source tool you use,
+a workflow you know well, or your own company's toolchain. A harness can live in this repository or
+in yours.
+
+<!-- store-showcase:start -->
+<p align="center">
+  <a href=".github/assets/store/showcase.gif"><img src=".github/assets/store/showcase.gif" width="1280" alt="Six real harness outputs, shown one at a time with their harness name and complete prompt: Autonomous Circuit, text-to-cad, MuJoCo, Blender, Godogen, and Manim."></a>
+</p>
+
+Six real outputs, one at a time. Each slide includes the harness and the original prompt.
+[Still preview](.github/assets/store/showcase-poster.png) · Individual images and prompts below.
+
+<details>
+<summary>Read the prompts and open individual images</summary>
+
+**[Autonomous Circuit](store/showcase/autonomous-circuit/six-key-macropad.jpg)** · [Open harness](store/agents/autonomous-circuit/)
+
+> Design a six-key USB macropad. Start with the schematic.
+
+**[text-to-cad](store/showcase/text-to-cad/planetary-gear-set.jpg)** · [Open harness](store/agents/text-to-cad/)
+
+> Design a 3D-printable planetary gear set: a 12-tooth sun, three 18-tooth planets and a 48-tooth ring gear with mounting lugs, module 1.5 and 8 mm thick, plus a carrier on steel pins. Give each part its own colour.
+
+**[MuJoCo](store/showcase/mujoco/g1-humanoid-hello.jpg)** · [Open harness](store/agents/mujoco/)
+
+> Make the Unitree G1 humanoid say hello: stand, raise its right hand and wave three times, then lower it and take a small bow. Record it.
+
+**[Blender](store/showcase/blender/cozy-reading-nook.jpg)** · [Open harness](store/agents/blender/)
+
+> Make a cozy isometric reading nook: a cut-away corner of a room with an armchair, a floor lamp glowing warm, a bookshelf full of colourful books, a round rug and a monstera, with evening sun through the window and a cat asleep on the rug.
+
+**[Godogen](store/showcase/godogen/neon-drift.jpg)** · [Open harness](store/agents/godogen/)
+
+> Make a synthwave hoverbike racer: ride down a neon grid canyon toward a striped setting sun, weave between glowing pylons, hop barriers and collect energy cores, with a boost and three shields.
+
+**[Manim](store/showcase/manim/fourier-knight.jpg)** · [Open harness](store/agents/manim/)
+
+> Draw a chess knight using nothing but spinning circles: a Fourier series of 120 epicycles, tip to tail, tracing its silhouette in gold.
+
+</details>
+<!-- store-showcase:end -->
 
 Every picture is real output from the harness's own toolchain, and the prompt is the one that made it.
 

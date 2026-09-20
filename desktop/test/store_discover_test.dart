@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -12,6 +13,7 @@ import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/widgets/agent_picker.dart';
+import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/store/store_controller.dart';
 import 'package:harness/store/store_editorial.dart';
@@ -65,6 +67,18 @@ final _catalog = [
       kind: 'viewer',
       installed: true,
     ),
+];
+
+List<DshEntry> _listedCatalog() => [
+  for (final directory in Directory(
+    '../store/agents',
+  ).listSync().whereType<Directory>())
+    if ((jsonDecode(File('${directory.path}/store.json').readAsStringSync())
+            as Map)['listed'] !=
+        false)
+      DshEntry.fromJson(
+        jsonDecode(File('${directory.path}/harness.json').readAsStringSync()),
+      )!,
 ];
 
 class _App extends AppNotifier {
@@ -170,6 +184,15 @@ Future<(_App, GlobalKey)> _open(
   await tester.pumpAndSettle();
   await tester.runAsync(() async {
     final context = tester.element(find.byType(StoreTab));
+    for (final asset in {
+      for (final identity in [
+        ...allEngines,
+        for (final entry in entries ?? _catalog) engineIdentity(entry.id),
+      ])
+        ?identity.asset,
+    }) {
+      await precacheImage(AssetImage(asset), context);
+    }
     for (final asset in [
       'blender-studio.png',
       'copper-board.png',
@@ -197,6 +220,37 @@ Future<void> _capture(WidgetTester tester, GlobalKey key, String name) async {
 }
 
 void main() {
+  test(
+    'every listed harness has a browsing category and a discovery collection',
+    () {
+      final entries = _listedCatalog();
+      expect(entries, isNotEmpty);
+      for (final entry in entries) {
+        expect(
+          storeCategoryFor(entry),
+          isNot('Other'),
+          reason: '${entry.id}: ${entry.category}',
+        );
+        expect(
+          storeCollections.where((collection) => collection.includes(entry)),
+          isNotEmpty,
+          reason: '${entry.id} must be discoverable beyond search',
+        );
+      }
+      expect(
+        storeCategoryFor(
+          const DshEntry(
+            id: 'community/new-craft',
+            name: 'New craft',
+            engine: 'claude',
+            category: 'Uncharted',
+          ),
+        ),
+        'Other',
+      );
+    },
+  );
+
   test('Local AI groups Grid and current and future local runtimes', () {
     for (final (id, domain) in [
       ('autonomous/autonomous-grid', 'Compute'),
@@ -222,7 +276,7 @@ void main() {
           category: 'Code',
         ),
       ),
-      'Code',
+      'Coding',
     );
   });
 
@@ -268,14 +322,42 @@ void main() {
       expect(find.byKey(const ValueKey('store-shelf-all')), findsNothing);
       expect(find.byKey(const ValueKey('store-shelf-installed')), findsNothing);
       expect(find.text('Harness Store'), findsNothing);
+      expect(
+        tester.getTopLeft(find.byKey(const ValueKey('store-card:codex'))).dy,
+        lessThan(
+          tester
+              .getTopLeft(
+                find.byKey(const ValueKey('store-feature:autonomous/blender')),
+              )
+              .dy,
+        ),
+        reason: 'Coding is the starting point before the other disciplines',
+      );
+      expect(
+        tester
+            .getTopLeft(
+              find.byKey(const ValueKey('store-shelf-category:Coding')),
+            )
+            .dy,
+        lessThan(
+          tester
+              .getTopLeft(
+                find.byKey(const ValueKey('store-shelf-category:Design')),
+              )
+              .dy,
+        ),
+      );
       for (final category in [
         'Design',
         'Engineering',
         'Media',
-        'Science',
+        'Music',
+        'Productivity',
+        'Science & Data',
+        'Simulation',
         'Games',
         'Local AI',
-        'Code',
+        'Coding',
       ]) {
         expect(
           find.byKey(ValueKey('store-shelf-category:$category')),
@@ -299,6 +381,40 @@ void main() {
       );
     });
   }
+
+  testWidgets(
+    'the complete listed catalog browses every craft without an Other bucket',
+    (tester) async {
+      final entries = _listedCatalog();
+      final (_, key) = await _open(tester, entries: entries);
+      expect(
+        find.byKey(const ValueKey('store-shelf-category:Other')),
+        findsNothing,
+      );
+      await _capture(tester, key, 'discover-full-catalog');
+      for (final category in storeCategoryDomains.keys) {
+        final matches =
+            entries.where((e) => storeCategoryFor(e) == category).toList()
+              ..sort(
+                (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+              );
+        if (matches.isEmpty) continue;
+        final tab = find.byKey(ValueKey('store-shelf-category:$category'));
+        await tester.ensureVisible(tab);
+        await tester.tap(tab);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(ValueKey('store-card:${matches.first.id}')),
+          findsOneWidget,
+          reason: '$category must show its actual catalog entries',
+        );
+        expect(tester.takeException(), isNull);
+        if (category == 'Research' || category == 'Music') {
+          await _capture(tester, key, 'category-${category.toLowerCase()}');
+        }
+      }
+    },
+  );
 
   testWidgets(
     'categories group domains, collections open and search finds capabilities',
@@ -426,7 +542,7 @@ void main() {
       find.byKey(const ValueKey('store-collection:hardware')),
       findsNothing,
     );
-    expect(find.text('Coding engines'), findsOneWidget);
+    expect(find.text('Coding'), findsNWidgets(2));
     expect(find.byKey(const ValueKey('store-card:codex')), findsOneWidget);
   });
 
