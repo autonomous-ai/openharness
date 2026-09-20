@@ -157,7 +157,7 @@ export function blockText(page, pick) {
   return m[2] === undefined ? block.text : block.parts?.[Number(m[2])] ?? block.text
 }
 
-const WALL = /sorry[!,. ]{0,3}something went wrong|are you a (robot|human)|unusual traffic|access denied|permission denied|request blocked|captcha|verify (you are|your) human|enable javascript|checking your browser|rate limit|too many requests|403 forbidden|pardon our interruption/i
+const WALL = /sorry[!,. ]{0,3}something went wrong|are you a (robot|human)|unusual traffic|access denied|permission denied|request blocked|captcha|verify (you are|your) human|enable javascript|checking your browser|rate limit|too many requests|40[139] (forbidden|error)|pardon our interruption|robots?\.txt|robot policy|automated (access|traffic|requests?)|bot (detection|protection)|client challenge|just a moment|attention required|ddos protection|please enable cookies|unsupported browser|your (request|activity) (has been|was) (blocked|flagged)/i
 /**
  * Did the site serve its page, or a wall? A bot wall has almost nothing on it, or says so outright.
  * Worth naming: a run that quietly collects nothing looks like a broken tool, and it is not.
@@ -165,7 +165,12 @@ const WALL = /sorry[!,. ]{0,3}something went wrong|are you a (robot|human)|unusu
  */
 export function wallReason(page) {
   const hit = `${page.title} ${page.text.slice(0, 600)}`.match(WALL)
-  if (hit) return `the site answered with a block page ("${hit[0]}") instead of its own`
+  if (hit) return `the site answered with a block page ("${hit[0].trim()}") instead of its own`
+  // An error page carries plenty of text, so the emptiness test below never catches it, and its
+  // words would otherwise be collected as if they were values.
+  if (/^(error|wikimedia error|access denied|forbidden|blocked|not acceptable|service unavailable|too many requests)\b/i.test(page.title.trim())) {
+    return `the site answered with an error page ("${page.title.trim().slice(0, 40)}") instead of its own`
+  }
   if (page.links.length < 3 && page.blocks.length < 4) return 'the page came back nearly empty, which usually means the site refused an automated browser or needs a sign-in'
   return null
 }
