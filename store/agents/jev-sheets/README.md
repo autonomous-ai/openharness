@@ -16,9 +16,13 @@ findings.
 
 ## Bring your file
 
-- **Drop it on the pane.** An Excel `.xlsx` file (its first sheet), or `.csv`, `.tsv`, `.json` or
-  `.jsonl`, up to 32 MB and 10,000 rows.
-- **Paste rows** copied from Excel or Google Sheets, anywhere on the pane.
+- **Choose a file.** The pane has its own chooser, because the Harness desktop pane is a web view
+  that never opens the system file dialog. It lists your newest spreadsheets from Downloads, Desktop
+  and Documents, lets you browse your home folder, and takes a pasted path like
+  `~/Downloads/reviews.xlsx`. An Excel `.xlsx` file (its first sheet), or `.csv`, `.tsv`, `.json` or
+  `.jsonl`, up to 32 MB and 10,000 rows. macOS may ask once whether Harness may read those folders.
+- **Paste rows** copied from Excel or Google Sheets into the chooser's paste box.
+- In an ordinary browser you can also drop a file on the page.
 - **Tell the agent where it is.** It copies the file in. It can also turn a PDF, a chat export or a
   folder of notes into rows for you.
 
@@ -102,8 +106,9 @@ connect, every cell is asked again, for real.
   question, not a finding. Reword it.
 - Read the rows behind a number before you act on it. One click on the count shows them.
 - It finds, counts and sorts. It is not legal, medical, financial or hiring advice.
-- The pane only accepts requests from itself: a web page on another site cannot upload a file, press
-  a control or set a key.
+- The pane only accepts requests from itself: a web page on another site cannot upload a file, list
+  your folders, press a control or set a key. The chooser stays inside your home folder, never enters
+  a hidden folder such as `~/.ssh`, and reads nothing until you pick it.
 
 ## The sample, and the honest dial
 
@@ -130,13 +135,14 @@ jev-sheets/
     viewer.sh setup.sh doctor.sh init-workspace.sh
   viewer/
     viewer.mjs               the server: the sheet, uploads, the call pool, the cache, answers.csv, the verdict
+    picker.mjs               the pane's own file chooser: recent files, folders, open by path, home folder only
     source.mjs               reads the person's file: Excel, CSV, TSV, JSON, JSONL
     xlsx.mjs                 a small Excel reader: zip directory, shared strings, the first sheet
     grammar.mjs              the header parser, shared with the pane and check.mjs
     mock.mjs                 the offline stand-in (reads only the row text and the question)
     kit.mjs                  loopback server, same-origin guard, upload, download, key connect, SSE
     index.html studio.css studio.js base.css jev-hud.js     the pane
-  test/viewer.test.mjs own-file.test.mjs xlsx.test.mjs count.test.mjs
+  test/viewer.test.mjs own-file.test.mjs picker.test.mjs xlsx.test.mjs count.test.mjs
 ```
 
 ## How it runs
