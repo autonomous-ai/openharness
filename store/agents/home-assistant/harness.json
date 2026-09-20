@@ -4,7 +4,7 @@
   "name": "Home Assistant",
   "category": "Automation",
   "author": "OpenHarness contributors",
-  "description": "Describe an automation; get real, well-formed YAML for Home Assistant \u2014 automations you can paste or load, a dashboard that shows every rule, and a verdict that proves the YAML is valid.",
+  "description": "Turn a home-automation idea into editable YAML tested by the real Home Assistant engine. Explore what-if scenarios, follow native traces, and export a reviewed installation kit—no devices required to start.",
   "engine": "claude",
   "workspace": {
     "template": "template",
@@ -16,7 +16,8 @@
     "skills": ["skills"],
     "env": {
       "HA_TOOLCHAIN": "${dsh}/toolchain",
-      "HA_SKILLS": "${dsh}/skills"
+      "HA_SKILLS": "${dsh}/skills",
+      "HA_DSH_DIR": "${dsh}"
     }
   },
   "toolchain": {
@@ -24,7 +25,8 @@
     "doctor": "toolchain/doctor.sh"
   },
   "viewer": {
-    "use": "autonomous/isolated-web-viewer",
+    "command": "toolchain/viewer.sh",
+    "url": "http://127.0.0.1:${port}/",
     "artifactExtensions": [".html"]
   },
   "verdict": ".harness/verdict.json"

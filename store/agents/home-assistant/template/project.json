@@ -1,0 +1,439 @@
+{
+  "spec": 1,
+  "title": "A hallway that works around you",
+  "brief": "Turn on the hallway after two seconds of motion when it is dark. Use 12% brightness in quiet hours and 45% otherwise. Keep the light on while people return, then turn it off after two clear minutes. A manual-hold helper must prevent automatic on and off actions. Reject brief motion glitches and unknown light readings.",
+  "example": true,
+  "timezone": "Europe/London",
+  "latitude": 51.5074,
+  "longitude": -0.1278,
+  "entities": [
+    {
+      "id": "binary_sensor.example_hall_motion",
+      "name": "Hallway motion",
+      "kind": "state",
+      "state": "off",
+      "attributes": {
+        "device_class": "motion"
+      }
+    },
+    {
+      "id": "sensor.example_hall_lux",
+      "name": "Hallway illuminance",
+      "kind": "state",
+      "state": "12",
+      "attributes": {
+        "unit_of_measurement": "lx"
+      }
+    },
+    {
+      "id": "input_boolean.example_quiet_hours",
+      "name": "Quiet hours",
+      "kind": "input_boolean",
+      "state": "off",
+      "attributes": {}
+    },
+    {
+      "id": "input_boolean.example_manual_hold",
+      "name": "Manual hold",
+      "kind": "input_boolean",
+      "state": "off",
+      "attributes": {}
+    },
+    {
+      "id": "light.example_hall",
+      "name": "Hallway light",
+      "kind": "light",
+      "state": "off",
+      "attributes": {}
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "normal-evening",
+      "name": "An ordinary evening",
+      "why": "Complete on → clear for two minutes → off lifecycle.",
+      "start": "2026-04-06T20:00:00Z",
+      "initial": {},
+      "steps": [
+        {
+          "at": 0,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "on"
+        },
+        {
+          "at": 10,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "off"
+        }
+      ],
+      "until": 140,
+      "expect": {
+        "calls": [
+          {
+            "service": "light.turn_on",
+            "entities": [
+              "light.example_hall"
+            ],
+            "data": {
+              "brightness_pct": 45,
+              "transition": 1
+            },
+            "between": [
+              2,
+              2.1
+            ]
+          },
+          {
+            "service": "light.turn_off",
+            "entities": [
+              "light.example_hall"
+            ],
+            "data": {
+              "transition": 1
+            },
+            "between": [
+              130,
+              130.1
+            ]
+          }
+        ],
+        "states": {
+          "light.example_hall": {
+            "state": "off",
+            "attributes": {}
+          }
+        },
+        "pending": 0
+      }
+    },
+    {
+      "id": "quiet-hours",
+      "name": "Someone is sleeping",
+      "why": "Quiet hours select the dim branch.",
+      "start": "2026-04-06T20:00:00Z",
+      "initial": {
+        "input_boolean.example_quiet_hours": {
+          "state": "on"
+        }
+      },
+      "steps": [
+        {
+          "at": 0,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "on"
+        },
+        {
+          "at": 10,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "off"
+        }
+      ],
+      "until": 140,
+      "expect": {
+        "calls": [
+          {
+            "service": "light.turn_on",
+            "entities": [
+              "light.example_hall"
+            ],
+            "data": {
+              "brightness_pct": 12,
+              "transition": 1
+            },
+            "between": [
+              2,
+              2.1
+            ]
+          },
+          {
+            "service": "light.turn_off",
+            "entities": [
+              "light.example_hall"
+            ],
+            "data": {
+              "transition": 1
+            },
+            "between": [
+              130,
+              130.1
+            ]
+          }
+        ],
+        "states": {
+          "light.example_hall": {
+            "state": "off",
+            "attributes": {}
+          }
+        },
+        "pending": 0
+      }
+    },
+    {
+      "id": "daylight",
+      "name": "Already bright enough",
+      "why": "Daylight must not turn on the light.",
+      "start": "2026-04-06T20:00:00Z",
+      "initial": {
+        "sensor.example_hall_lux": {
+          "state": "180"
+        }
+      },
+      "steps": [
+        {
+          "at": 0,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "on"
+        },
+        {
+          "at": 10,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "off"
+        }
+      ],
+      "until": 140,
+      "expect": {
+        "calls": [],
+        "states": {
+          "light.example_hall": {
+            "state": "off",
+            "attributes": {}
+          }
+        },
+        "pending": 0
+      }
+    },
+    {
+      "id": "manual-hold",
+      "name": "Leave my light alone",
+      "why": "A manual hold blocks automatic activation.",
+      "start": "2026-04-06T20:00:00Z",
+      "initial": {
+        "input_boolean.example_manual_hold": {
+          "state": "on"
+        }
+      },
+      "steps": [
+        {
+          "at": 0,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "on"
+        },
+        {
+          "at": 10,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "off"
+        }
+      ],
+      "until": 140,
+      "expect": {
+        "calls": [],
+        "states": {
+          "light.example_hall": {
+            "state": "off",
+            "attributes": {}
+          }
+        },
+        "pending": 0
+      }
+    },
+    {
+      "id": "people-return",
+      "name": "Someone comes back",
+      "why": "A returning person restarts the automation and cancels the earlier shutoff.",
+      "start": "2026-04-06T20:00:00Z",
+      "initial": {},
+      "steps": [
+        {
+          "at": 0,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "on"
+        },
+        {
+          "at": 10,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "off"
+        },
+        {
+          "at": 80,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "on"
+        },
+        {
+          "at": 100,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "off"
+        }
+      ],
+      "until": 230,
+      "expect": {
+        "calls": [
+          {
+            "service": "light.turn_on",
+            "entities": [
+              "light.example_hall"
+            ],
+            "data": {
+              "brightness_pct": 45,
+              "transition": 1
+            },
+            "between": [
+              2,
+              2.1
+            ]
+          },
+          {
+            "service": "light.turn_on",
+            "entities": [
+              "light.example_hall"
+            ],
+            "data": {
+              "brightness_pct": 45,
+              "transition": 1
+            },
+            "between": [
+              82,
+              82.1
+            ]
+          },
+          {
+            "service": "light.turn_off",
+            "entities": [
+              "light.example_hall"
+            ],
+            "data": {
+              "transition": 1
+            },
+            "between": [
+              220,
+              220.1
+            ]
+          }
+        ],
+        "states": {
+          "light.example_hall": {
+            "state": "off",
+            "attributes": {}
+          }
+        },
+        "pending": 0
+      }
+    },
+    {
+      "id": "take-over",
+      "name": "Take over while it is on",
+      "why": "Enabling manual hold during the wait must preserve the lit hallway.",
+      "start": "2026-04-06T20:00:00Z",
+      "initial": {},
+      "steps": [
+        {
+          "at": 0,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "on"
+        },
+        {
+          "at": 10,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "off"
+        },
+        {
+          "at": 40,
+          "entity": "input_boolean.example_manual_hold",
+          "state": "on"
+        }
+      ],
+      "until": 140,
+      "expect": {
+        "calls": [
+          {
+            "service": "light.turn_on",
+            "entities": [
+              "light.example_hall"
+            ],
+            "data": {
+              "brightness_pct": 45,
+              "transition": 1
+            },
+            "between": [
+              2,
+              2.1
+            ]
+          }
+        ],
+        "states": {
+          "light.example_hall": {
+            "state": "on",
+            "attributes": {
+              "brightness": 115
+            }
+          }
+        },
+        "pending": 0
+      }
+    },
+    {
+      "id": "motion-glitch",
+      "name": "One-second motion glitch",
+      "why": "The two-second trigger hold rejects a transient sensor event.",
+      "start": "2026-04-06T20:00:00Z",
+      "initial": {},
+      "steps": [
+        {
+          "at": 0,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "on"
+        },
+        {
+          "at": 1,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "off"
+        }
+      ],
+      "until": 10,
+      "expect": {
+        "calls": [],
+        "states": {
+          "light.example_hall": {
+            "state": "off",
+            "attributes": {}
+          }
+        },
+        "pending": 0
+      }
+    },
+    {
+      "id": "missing-light-level",
+      "name": "Light sensor unavailable",
+      "why": "An unavailable illuminance reading is not treated as zero/darkness.",
+      "start": "2026-04-06T20:00:00Z",
+      "initial": {
+        "sensor.example_hall_lux": {
+          "state": "unavailable"
+        }
+      },
+      "steps": [
+        {
+          "at": 0,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "on"
+        },
+        {
+          "at": 10,
+          "entity": "binary_sensor.example_hall_motion",
+          "state": "off"
+        }
+      ],
+      "until": 140,
+      "expect": {
+        "calls": [],
+        "states": {
+          "light.example_hall": {
+            "state": "off",
+            "attributes": {}
+          }
+        },
+        "pending": 0
+      }
+    }
+  ],
+  "notes": "Clearly labelled example devices. No hardware, home network or live installation is connected. Test timing does not certify a physical sensor or dimmer. Imports remain disabled until reviewed."
+}

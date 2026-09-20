@@ -22,15 +22,15 @@ catalog workflow and verify the live catalog after each accepted release.
 | 3 | openscad | Dimensions and fabrication constraints → parametric parts, verified variants and usable exports | Implemented and validated; relisted in this change. See [acceptance evidence](../agents/openscad/test/ACCEPTANCE.md). |
 | 4 | orca-slicer | User mesh and explicit machine/material profiles → compared slicing options and reviewed toolpath handoff | Implemented and validated; relisted in this change. See [acceptance evidence](../agents/orca-slicer/test/ACCEPTANCE.md). |
 | 5 | data-studio | User data and a question → saved analysis, source-linked results and repeatable report | Implemented and validated; relisted in this change. See [acceptance evidence](../agents/data-studio/test/ACCEPTANCE.md). |
-| 6 | gis | User geographic data and a decision → reproducible spatial analysis and exported results | Not started; unlisted |
-| 7 | web-studio | User application brief → useful app with durable data and a runnable handoff | Not started; unlisted |
-| 8 | sheet-docs | User document/data requirements → editable, recalculated and reconciled deliverables | Not started; unlisted |
-| 9 | godot-studio | Original game brief → revised gameplay, verified playable build and distributable project | Not started; unlisted |
-| 10 | quantum-studio | User circuit/experiment question → reproducible experiment, quantitative checks and portable program | Not started; unlisted |
-| 11 | firmware-studio | Target device and behavior → tested logic, compiled firmware and explicit hardware-test handoff | Not started; unlisted |
-| 12 | home-assistant | Actual entities and desired behavior → engine-validated automation and approved installation workflow | Not started; unlisted |
+| 6 | home-assistant | Desired behavior and entity inventory → actual Core-engine tests, understandable traces, editable automations and reviewed installation handoff | Implemented and validated with example devices; relisted in this change. See [acceptance evidence](../agents/home-assistant/test/ACCEPTANCE.md). No real installation or hardware was accessed. |
+| 7 | gis | User geographic data and a decision → reproducible spatial analysis and exported results | Not started; unlisted |
+| 8 | web-studio | User application brief → useful app with durable data and a runnable handoff | Not started; unlisted |
+| 9 | sheet-docs | User document/data requirements → editable, recalculated and reconciled deliverables | Not started; unlisted |
+| 10 | godot-studio | Original game brief → revised gameplay, verified playable build and distributable project | Not started; unlisted |
+| 11 | quantum-studio | User circuit/experiment question → reproducible experiment, quantitative checks and portable program | Not started; unlisted |
+| 12 | firmware-studio | Target device and behavior → tested logic, compiled firmware and explicit hardware-test handoff | Not started; unlisted |
 
-The final two require special care: a simulated device is not tested hardware,
+Home Assistant and Firmware require special care: a simulated device is not tested hardware,
 and local YAML parsing is not a real Home Assistant run. Obtain authorization
 before accessing a user's physical device or live installation. Missing access
 must be reported rather than converted into a passing release claim.
