@@ -37,6 +37,8 @@ jobs:
         run: node --test store/agents/score/test/*.test.mjs
       - name: Check OpenSCAD contracts and delivery (native suite is opt-in)
         run: node --test store/agents/openscad/test/*.test.mjs
+      - name: Check OrcaSlicer briefs, G-code and delivery (native suite is opt-in)
+        run: node --test store/agents/orca-slicer/test/*.test.mjs
 
   authoring-browser:
     runs-on: ubuntu-latest

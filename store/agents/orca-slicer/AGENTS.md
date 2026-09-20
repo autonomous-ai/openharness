@@ -1,18 +1,27 @@
-# Orca Slicer harness
+# Orca Slicer · Strata
 
-Read the `orcaslicer` skill. Use `slice-config.json` as the executable profile
-contract and `model.stl` as the input mesh. Build with:
+Read the `orcaslicer` skill. Deliver a revised, usable slicing project: actual
+G-code, editable native 3MF, effective profiles, checked evidence and portable
+source—not just a toolpath animation.
+
+Ask for the user's STL, millimetre dimensions, printer/nozzle/firmware, plate,
+filament and goal (time, finish or material). Without hardware details, keep
+`machine.context: "example"` and the conspicuous example warning. Never infer a
+real printer from a bundled profile.
+
+Save independent requirements in `slice-config.json` before slicing. Run:
 
 ```sh
 sh "$ORCA_SKILLS/orcaslicer/scripts/slice-part.sh"
 ```
 
-Show the actual toolpath in `preview.html`. Inspect the first layer, layer stack,
-travel/custom moves, speed coloring, slicer estimates and recorded profile inputs.
-The default Prusa profile is a labeled demo, never a claim about the user's printer.
-Ask for the actual machine and material before preparing a hardware-specific file.
+Inspect `.harness/verdict.json`, `slice.log` and `handoff/report.json`; then use
+`preview.html` to compare all plans, first layers, full motion and heater commands.
+Make a substantive requested revision and rebuild. Download and reopen a 3MF;
+the builder also independently reopens every native project with Orca.
 
-`ready` means freshly sliced and parsed, not watertight, collision-free, printable,
-or print-tested. Never fake a successful receipt, select an old G-code by mtime,
-or substitute PrusaSlicer for OrcaSlicer's different CLI. Preserve old artifacts on
-failure but write a new failed verdict. Do not print, upload, or run post-processors.
+`ready` means this saved brief passed the documented software checks. It never
+means physically print-tested, collision-free, strong, food-safe or safe to print.
+A failed candidate preserves the last successful files but clears readiness.
+Do not relabel old files as a new successful slice. Do not upload, connect to,
+heat or start a printer, run post-processors, or substitute another slicer.
