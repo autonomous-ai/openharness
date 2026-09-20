@@ -260,6 +260,28 @@ HARNESS_STORE_REF=my-branch harness start                     # the shelf from a
 A package that outgrows its folder, or whose upstream maintainers want it, moves to a repository of
 its own and gets an entry in `registry/` instead. Nothing changes for the people who installed it.
 
+### Unlisting a package
+
+A package that is not ready for people, or no longer meets the bar, is unlisted, not deleted. One
+flag in its `store.json` does it:
+
+```json
+{ "tagline": "…", "listed": false }
+```
+
+```sh
+node store/tools/listing.mjs                       # every package, listed or UNLISTED
+node store/tools/listing.mjs unlist jev-pong       # take it off the shelf
+node store/tools/listing.mjs list jev-pong         # put it back (the flag is removed)
+```
+
+An unlisted package keeps its folder, its history and its tests, and the rules above still hold for
+it, so it does not rot. It is left out of the registry the CLI bakes in and of the catalog the Store
+publishes, so nobody is offered it and `harness dsh install autonomous/<name>` no longer finds it.
+Someone who already installed it keeps their copy. It still installs from a working tree with
+`harness dsh install "$PWD/store/agents/<name>" --link`. The change goes live like any other: merge
+to `main` and the catalog is published again.
+
 ## The store in the app
 
 The app's start page has a door to the store: every harness as a card, and a page per harness — its

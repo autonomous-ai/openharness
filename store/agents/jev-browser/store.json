@@ -14,5 +14,6 @@
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-browser/pick-the-flight.jpg",
       "caption": "Step mode: the page text Jev reads on the right, its chosen element ringed on the page"
     }
-  ]
+  ],
+  "listed": false
 }

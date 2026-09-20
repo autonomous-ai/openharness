@@ -13,5 +13,6 @@
       "prompt": "Draw a custom starting board in blocks.json that is one I piece away from clearing four lines, keep gravity low, and tell Jev to go for four. Report whether it takes the four-line clear.",
       "caption": "A hand-drawn board to test whether Jev sees the four-line clear"
     }
-  ]
+  ],
+  "listed": false
 }

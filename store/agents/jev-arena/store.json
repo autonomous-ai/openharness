@@ -9,5 +9,6 @@
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-arena/grid-world.jpg",
       "caption": "The Vault Heist · a tight maze where Jev's probability bars visibly shift at each turn"
     }
-  ]
+  ],
+  "listed": false
 }
