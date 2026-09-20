@@ -182,6 +182,13 @@ const storeStories = <String, StoreStory>{
     benefit: 'Find a model that fits your machine and put it to work.',
     prompts: ['Show which local models fit this machine and help me try one.'],
   ),
+  'autonomous/machine-monitor': StoreStory(
+    benefit: 'See every computer you own, and say what should change.',
+    prompts: [
+      'Show my machines and link the one that is waiting.',
+      'I am setting up a new computer. Walk me through bringing it in.',
+    ],
+  ),
 };
 
 String storeBenefit(DshEntry entry) =>
