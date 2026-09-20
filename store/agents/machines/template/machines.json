@@ -1,0 +1,10 @@
+{
+  "spec": 1,
+  "nicknames": {},
+  "groups": {},
+  "notes": {},
+  "preferences": {
+    "confirmBeforeRemoving": true,
+    "watchForNewMachinesSeconds": 300
+  }
+}

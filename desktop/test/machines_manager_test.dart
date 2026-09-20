@@ -56,7 +56,8 @@ void main() {
         final input = <TerminalBinaryFrame>[];
         app.adoptSessionForTest(terminal('a0', input));
         await mount(tester, app, nativeTabs: true);
-        final opened = native(tester, 'manageMachines');
+        // 'manageMachines' now opens the Machines harness; the plain list is 'machineList'.
+        final opened = native(tester, 'machineList');
         await tester.pumpAndSettle();
         await opened;
         expect(find.text('Machines Manager'), findsOneWidget);
