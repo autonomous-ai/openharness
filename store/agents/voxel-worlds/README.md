@@ -53,3 +53,8 @@ The original identity ships in `brand/`: [vector icon](brand/icon.svg),
 [256px PNG](brand/icon.png), [light logo](brand/logo.svg) and
 [dark logo](brand/logo-dark.svg). The same mark appears in the starter header,
 its offline favicon and the desktop Store/picker/tabs. MIT, by OpenHarness contributors.
+
+## Credit and stewardship
+
+Original implementation and visual identity by OpenHarness contributors, maintained by
+Autonomous under the [MIT license](LICENSE). Report issues in the OpenHarness repository.
