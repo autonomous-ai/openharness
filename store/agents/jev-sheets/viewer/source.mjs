@@ -8,7 +8,7 @@
 import { readFileSync, statSync } from 'node:fs'
 import { resolve, sep, extname } from 'node:path'
 
-export const SOURCE_LIMITS = { bytes: 8 * 1024 * 1024, field: 300, fields: 24 }
+export const SOURCE_LIMITS = { bytes: 32 * 1024 * 1024, field: 300, fields: 24 }
 const TEXT_NAMES = ['text', 'message', 'body', 'content', 'description', 'comment', 'note', 'notes', 'review', 'subject', 'title', 'summary']
 
 /** A small RFC 4180 reader: quoted fields, doubled quotes, CRLF, and a guessed delimiter. */
@@ -58,7 +58,7 @@ function tidyValue(v) {
  * @param {string} workspace  absolute workspace path
  * @param {string} name       the file, relative to the workspace
  */
-export function loadSource(workspace, name, { textColumn, limit = 2000 } = {}) {
+export function loadSource(workspace, name, { textColumn, limit = 10000 } = {}) {
   const root = resolve(workspace)
   const file = resolve(root, String(name))
   const fail = (error) => ({ rows: [], error, file: null, info: null })

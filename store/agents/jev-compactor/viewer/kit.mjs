@@ -4,7 +4,7 @@
 import { createServer } from 'node:http'
 import { watch, readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs'
 import { join, extname } from 'node:path'
-import { snapshot as jevSnapshot } from '../toolchain/jev.mjs'
+import { snapshot as jevSnapshot, connectKey } from '../toolchain/jev.mjs'
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml' }
 
@@ -28,8 +28,13 @@ export function mulberry32(a) {
  * @param {string[]} [o.files]   static file names served from `here` ('index.html' is also '/')
  * @param {function} o.state     () => JSON-safe full state (GET /state, and the first SSE frame)
  * @param {function} [o.control] async (cmd, body) => optional JSON-safe reply (POST /control)
+ * @param {function} [o.upload]  async (name, buffer) => JSON-safe reply. Turns on POST /upload?name=<file name>: the person
+ *                               drops their own file on the pane. The handler must sanitise the name itself.
+ * @param {number}   [o.maxUpload] largest upload in bytes (default 32 MB)
+ * @param {function} [o.downloads] () => ({ 'answers.csv': '/abs/path' }). Turns on GET /download/<name> for those files.
+ * @param {function} [o.onConnect] called after a person connects a key in the pane (POST /connect)
  */
-export async function serveViewer({ here, port = 0, files = ['index.html', 'base.css', 'studio.css', 'studio.js', 'jev-hud.js'], state, control }) {
+export async function serveViewer({ here, port = 0, files = ['index.html', 'base.css', 'studio.css', 'studio.js', 'jev-hud.js'], state, control, upload, maxUpload = 32 * 1024 * 1024, downloads, onConnect }) {
   const clients = new Set()
   const allowed = new Set(files)
 
@@ -40,12 +45,27 @@ export async function serveViewer({ here, port = 0, files = ['index.html', 'base
     if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(req.headers.host ?? '')) { res.writeHead(403); return res.end('Loopback only') }
     const url = new URL(req.url, 'http://127.0.0.1')
     const path = url.pathname
+    // Anything that changes state must come from this pane. A web page on another site can reach
+    // 127.0.0.1 from the person's browser, so a POST with a foreign Origin is refused.
+    if (req.method !== 'GET') {
+      const origin = req.headers.origin
+      if ((origin && !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)) || req.headers['sec-fetch-site'] === 'cross-site') { res.writeHead(403); return res.end('Same origin only') }
+    }
     try {
       if (req.method === 'GET') {
+        if (downloads && path.startsWith('/download/')) {
+          const name = decodeURIComponent(path.slice('/download/'.length))
+          const list = downloads() ?? {}
+          const file = Object.prototype.hasOwnProperty.call(list, name) ? list[name] : null
+          if (!file || !existsSync(file)) { res.writeHead(404); return res.end('Not found') }
+          res.writeHead(200, { 'content-type': TYPES[extname(name)] ?? 'application/octet-stream', 'content-disposition': `attachment; filename="${name.replace(/[^\w.-]/g, '_')}"` })
+          return res.end(readFileSync(file))
+        }
         const name = path === '/' ? 'index.html' : path.slice(1)
         if (allowed.has(name)) { res.writeHead(200, { 'content-type': TYPES[extname(name)] ?? 'application/octet-stream' }); return res.end(readFileSync(join(here, name))) }
         if (path === '/state') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify(state())) }
-        if (path === '/jev') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify(jevSnapshot())) }
+        // canConnect tells the live panel that this server takes a pasted key (POST /connect).
+        if (path === '/jev') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ ...jevSnapshot(), canConnect: true })) }
         if (path === '/events') {
           res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'keep-alive' })
           res.write(`event: state\ndata: ${JSON.stringify(state())}\n\n`)
@@ -60,6 +80,27 @@ export async function serveViewer({ here, port = 0, files = ['index.html', 'base
         let j
         try { j = JSON.parse(body || '{}') } catch { res.writeHead(400); return res.end('Bad JSON') }
         const reply = control ? await control(String(j.cmd ?? ''), j) : null
+        res.writeHead(200, { 'content-type': 'application/json' })
+        return res.end(JSON.stringify({ ok: true, ...(reply && typeof reply === 'object' ? reply : {}) }))
+      }
+      // The person pastes a Jev key in the pane. It goes to the credentials file (chmod 600) and is
+      // proven with one tiny call. The key is never echoed back, logged or kept in the page.
+      if (req.method === 'POST' && path === '/connect') {
+        let body = ''
+        for await (const c of req) { body += c; if (body.length > 4096) { res.writeHead(413); return res.end('Too large') } }
+        let j
+        try { j = JSON.parse(body || '{}') } catch { res.writeHead(400); return res.end('Bad JSON') }
+        const out = await connectKey(j.key)
+        if (out.ok) { try { await onConnect?.(out) } catch { /* the pane still learns the key is in */ } }
+        res.writeHead(200, { 'content-type': 'application/json' })
+        return res.end(JSON.stringify(out))
+      }
+      // The person drops their own file on the pane. The raw bytes are the body.
+      if (req.method === 'POST' && path === '/upload' && upload) {
+        const chunks = []
+        let size = 0
+        for await (const c of req) { size += c.length; if (size > maxUpload) { res.writeHead(413, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ ok: false, error: `that file is over ${Math.round(maxUpload / 1024 / 1024)} MB` })) } chunks.push(c) }
+        const reply = await upload(String(url.searchParams.get('name') ?? ''), Buffer.concat(chunks))
         res.writeHead(200, { 'content-type': 'application/json' })
         return res.end(JSON.stringify({ ok: true, ...(reply && typeof reply === 'object' ? reply : {}) }))
       }

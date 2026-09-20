@@ -23,7 +23,8 @@ try {
 if (!sheet || typeof sheet !== 'object' || Array.isArray(sheet)) { console.log('error  sheet.json must be a JSON object'); process.exit(1) }
 
 if (!sheet.title || typeof sheet.title !== 'string') warn('no title')
-if (!sheet.description || !/made.?up|synthetic|fictional|not real/i.test(String(sheet.description))) warn('say in "description" that the data is made up')
+// Rows the agent wrote are made up and must say so. Rows from the person's own file are what they are.
+if (sheet.source === undefined && (!sheet.description || !/made.?up|synthetic|fictional|not real/i.test(String(sheet.description)))) warn('say in "description" that the data is made up')
 
 // ---- columns: 0 to 12 valid headers ------------------------------------------------------------
 const columns = new Map()

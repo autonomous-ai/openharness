@@ -4,7 +4,7 @@
   "name": "Jev Sheets",
   "category": "Productivity",
   "author": "Autonomous",
-  "description": "A live spreadsheet where a column header is a question. Type \"Urgent?\" and Jev, TypeSafe's System One model, answers it for every row: one call per row, all columns at once, each cell shaded by confidence and flagged for review when unsure. Made-up data. Runs offline on a mock.",
+  "description": "Ask your spreadsheet anything. Drop in reviews, survey answers, tickets or leads, type a question in plain words, and Jev, TypeSafe's System One model, answers it for every row in seconds for cents, with a confidence on each. Take away a coded file and a findings report.",
   "engine": "claude",
   "workspace": {
     "template": "template",

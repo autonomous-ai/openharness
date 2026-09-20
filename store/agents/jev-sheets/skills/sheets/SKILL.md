@@ -1,8 +1,9 @@
 # Craft: Jev Sheets
 
 Jev Sheets is a spreadsheet where a column header is a typed question and Jev answers it for every
-row. The craft has two halves: writing rows that feel real, and wording questions so the answers
-are right and the confidence is honest. All rows are made up. Say so in `description`.
+row. The person brings a file they could never read in full. The craft is wording questions so the
+answers are right and the confidence is honest, then turning the answers into findings a person can
+act on. A made-up sheet is only the fallback when they have no file at hand.
 
 ## How one row is judged
 
@@ -34,7 +35,32 @@ Urgency                                          score       (bare word: low < m
 In `sheet.json` a column is a header string or `{ "id": "team", "header": "Team: ..." }`. Use an
 `id` whenever rows carry `truth`, so rewording the header does not orphan the labels.
 
-## Building a sheet on a new topic
+## Working on the person's own file (the main job)
+
+1. **Get it in.** They drop it on the pane or paste rows, and `"source"` appears in `sheet.json` by
+   itself. Or they give you a path: copy it into the workspace and set `"source"`. An `.xlsx`, a PDF,
+   a chat export or a folder of notes: convert it to a `.csv` or `.jsonl` in the workspace, one row
+   per item, keeping a column that says where each row came from. Long documents: one row per
+   paragraph or clause.
+2. **Look.** Read the header and about twenty rows. Say in two lines what is in it. Set `context`
+   to one sentence about what a row is, and `textColumn` if the guess was wrong.
+3. **Ask what they are trying to decide**, then write three to five questions aimed at that. Mix the
+   types: one yes or no, one choice with a meaning for every option and an `other`, one score. The
+   other columns are part of what Jev reads, so a question can lean on them ("Worth a call today?"
+   can use a `seats` column).
+4. **Read the answers.** `answers.csv` has every row, its columns, and each answer with a
+   confidence. There are no truth labels, so judge a question by how many cells sit under the review
+   line and by reading the rows behind the numbers.
+5. **Write `report.md`.** What was asked and of how many rows. For each question the count and share
+   of every answer. For each finding that matters, three to five word-for-word quotes with row
+   numbers. A cross-cut or two when it says something ("of the 212 crash reports, 61% also say they
+   may leave"). What Jev was unsure about. The next question worth asking. Count from `answers.csv`
+   with a small script, never by eye.
+6. **Sharpen and repeat.** Split a fat `other`. Reword a column whose answers sit near 50%.
+
+Keep their data in the workspace. Quote only what the report needs.
+
+## Building a made-up sheet (when they have no file)
 
 1. Pick the unit of a row (a message, a review, an application, a bug report) and write `context`
    in one sentence.
@@ -48,14 +74,6 @@ In `sheet.json` a column is a header string or `{ "id": "team", "header": "Team:
    request.
 6. Add six to ten `suggestions`: more headers a person could try on the same rows.
 7. Run `node "$JEV_DSH/toolchain/check.mjs"`.
-
-## Working on the person's own file
-
-Set `"source": "<file in the workspace>"` (csv, tsv, jsonl or json) and optionally `"textColumn"`.
-Read the file's header and a few rows first. Write columns about what is really there. The other
-columns are part of what Jev reads for each row, so questions can lean on them ("Worth a call
-today?" can use a `seats` column). There are no truth labels, so judge the questions by the review
-count and by reading the flagged rows in the verdict.
 
 ## Reading the verdict
 
@@ -81,7 +99,8 @@ Change one column at a time, save, and read the verdict again. Report what moved
 
 ## The offline mock
 
-Without `TYPESAFE_API_KEY`, a local mock answers. It counts word cues: the words of the header, the
+Without a Jev key, a local mock answers. On a person's own data it is not good enough to act on: the
+pane says so, and the fix is a key pasted into the pane's live panel, never into the chat. It counts word cues: the words of the header, the
 option names and their meanings, plus a small built-in list for common ideas (urgency, anger,
 billing, bugs, sales, refunds, churn, sentiment, spam, security). It knows nothing else. On the
 mock, a column only works if the rows use words that the option meanings also use. So write
@@ -89,6 +108,11 @@ meanings with the words a row would really contain. The pane badges the mock as 
 accuracy says nothing about live Jev.
 
 ## Definition of done
+
+On the person's own file: `sheet.json` passes `check.mjs`, `context` is set, every choice option has
+a meaning, you read `answers.csv` and the rows behind the main numbers, and `report.md` is written.
+
+On a made-up sheet:
 
 - `sheet.json` passes `check.mjs`.
 - Made-up rows on the asked topic, with a mixed-signal block and truth labels.
