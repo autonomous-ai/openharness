@@ -1,17 +1,29 @@
 {
-  "listed": false,
+  "listed": true,
   "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/data-studio",
   "upstream": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/data-studio",
   "license": "MIT",
-  "tagline": "Explore CSV data with live charts, filters and exact values",
+  "tagline": "Turn your files into answers you can trace, revise and reuse",
   "screenshots": [
-    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/data-studio/starter.jpg"
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/data-studio/starter.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/data-studio/evidence.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/data-studio/delivery.jpg"
   ],
   "examples": [
     {
-      "prompt": "Explore the included sample data, filter a region, compare metrics, and export the selected rows.",
+      "prompt": "Join transaction and product CSVs. Explain which categories contributed to the change in net sales, show the source records, and save an analysis I can rerun next month.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/data-studio/starter.jpg",
-      "caption": "Synthetic data · working filters, charts and CSV export"
+      "caption": "Synthetic sales example · checked joins, exact money and reusable analysis"
+    },
+    {
+      "prompt": "Show the transactions behind the Outdoor category change. Let me inspect the original records, replace a source file and export the revised project.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/data-studio/evidence.jpg",
+      "caption": "Original source records · explicit types, editable queries and portable exports"
+    },
+    {
+      "prompt": "Which routes missed promised delivery, and which shipments are still open? Keep missing delivery dates distinct from zero and give me a reusable report.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/data-studio/delivery.jpg",
+      "caption": "Independent delivery example · as-of controls, correct denominators and missing values"
     }
   ]
 }

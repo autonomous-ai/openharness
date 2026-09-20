@@ -48,6 +48,8 @@ jobs:
         run: node --test store/agents/openscad/test/*.test.mjs
       - name: Check OrcaSlicer briefs, G-code and delivery (native suite is opt-in)
         run: node --test store/agents/orca-slicer/test/*.test.mjs
+      - name: Check Data Studio imports, SQL, real SQLite delivery and failure guards
+        run: node --test store/agents/data-studio/test/*.test.mjs
 
   authoring-browser:
     runs-on: ubuntu-latest
@@ -71,6 +73,13 @@ jobs:
           python3 -m venv /tmp/music-delivery-reader
           /tmp/music-delivery-reader/bin/pip install mido==1.3.3
           /tmp/music-delivery-reader/bin/python store/tools/experience-tests/verify-music-delivery.py work/experience-evidence/afterhours-production.zip
+      - name: Revise and reopen real Data Studio projects in the sandboxed browser
+        env:
+          PLAYWRIGHT_MODULE: store/tools/experience-tests/node_modules/playwright-core/index.mjs
+          DATA_EVIDENCE_DIR: work/data-studio-evidence
+        run: node store/agents/data-studio/test/browser.mjs
+      - name: Independently verify Data Studio exports with Python CSV, Decimal and SQLite
+        run: python3 store/agents/data-studio/test/verify-exports.py work/data-studio-evidence
       - name: Revise three brand briefs and verify real print deliveries
         run: |
           sudo apt-get update -qq

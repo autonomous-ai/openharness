@@ -85,13 +85,18 @@ cell empty than write something the page never said.
 
 ## When a site says no
 
-Big shops, marketplaces and social sites mostly block an automated browser. What comes back is a
-wall page: "Sorry, something went wrong", a captcha, or a near-empty page. The harness names it and
-stops, and the verdict carries `run.walled`. That is not a bug to work around, and trying another
-address on the same site is the same wall.
+A site that runs bot protection answers with a wall: "Just a moment…", "Sorry, something went
+wrong", a captcha, a 403, or a robot-policy page. The harness names it, stops, and puts it in
+`run.walled`. Trying another address on the same site is the same wall. Do not work around it.
 
-Say it plainly and move: a specialist shop, a maker's own site, a public dataset or an official API.
-Those pages are usually better anyway, because they print the fields a marketplace hides.
+**Do not guess which sites will block.** Measured on 2026-09-20: Hacker News, arXiv, gov.uk,
+data.gov.uk, GitHub, We Work Remotely and shop.bbc.com all read. Amazon, Wikipedia, Rightmove and
+three specialist fencing retailers all blocked. Small does not mean open, and big does not mean
+shut: it is whether the site runs a challenge. Point the job at the page and let the pane tell you
+in ten seconds, rather than promising a person it will work.
+
+When it walls, say so plainly and offer a different source: a public dataset, an official API, a
+government or reference site, or the maker's own pages. Do not re-run it hoping.
 
 ## Never
 

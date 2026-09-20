@@ -72,7 +72,7 @@ python3 store/agents/creative-direction/test/verify-delivery.py PATH_TO_RUN
 Browser/export checks require Chrome/Chromium; independent PDF inspection requires Poppler.
 Technical tools retain `ready:false` until the agent has inspected the actual delivered work.
 
-## Identity and stewardship
+## Credit and stewardship
 
 The original [icon](brand/icon.svg), [PNG](brand/icon.png), [light logo](brand/logo.svg) and
 [dark logo](brand/logo-dark.svg) appear in the studio and desktop identity system.

@@ -1,8 +1,60 @@
 {
   "actions": [
-    { "selector": "#bars", "click": true },
-    { "selector": "#bars", "attribute": { "name": "aria-pressed", "value": "true" } },
-    { "selector": "#trend", "click": true },
-    { "selector": "#trend", "attribute": { "name": "aria-pressed", "value": "true" } }
+    {
+      "selector": "body[data-ready=true]",
+      "attribute": {
+        "name": "data-ready",
+        "value": "true"
+      }
+    },
+    {
+      "selector": "[data-query=\"monthly\"]",
+      "click": true
+    },
+    {
+      "selector": "#result-table[data-query=\"monthly\"]",
+      "attribute": {
+        "name": "data-query",
+        "value": "monthly"
+      }
+    },
+    {
+      "selector": "[data-query=\"contribution\"]",
+      "click": true
+    },
+    {
+      "selector": "[data-category=\"Outdoor\"]",
+      "click": true
+    },
+    {
+      "selector": "#result-table[data-query=\"transactions_detail\"]",
+      "attribute": {
+        "name": "data-query",
+        "value": "transactions_detail"
+      }
+    },
+    {
+      "selector": "#row-count[data-count=\"8\"]",
+      "text": "1–8 of 8 exact result rows"
+    },
+    {
+      "selector": "#reset-trace",
+      "click": true
+    },
+    {
+      "selector": "#row-count[data-count=\"24\"]",
+      "text": "1–24 of 24 exact result rows"
+    },
+    {
+      "selector": "[data-query=\"contribution\"]",
+      "click": true
+    },
+    {
+      "selector": "#result-table[data-query=\"contribution\"]",
+      "attribute": {
+        "name": "data-query",
+        "value": "contribution"
+      }
+    }
   ]
 }
