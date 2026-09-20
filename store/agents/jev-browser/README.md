@@ -112,14 +112,26 @@ about being a stand-in, but its rows are not worth acting on. Paste an OpenRoute
 into the **Jev · live mind** panel in the pane. It is saved on your machine in
 `~/.config/typesafe/credentials` and checked with one tiny call.
 
-## When a site says no
+## Which sites let it read
 
-Big shops, marketplaces and social sites mostly block an automated browser. What comes back is a
-wall: "Sorry, something went wrong", a captcha, or a near-empty page. The harness recognises that,
-says which site did it, and stops. It will not work around a block, and neither should the agent.
+Checked on 2026-09-20, one page each, with the headless browser the tests use.
 
-A specialist shop, a maker's own site or a public dataset usually reads perfectly, and its pages
-often print the fields a marketplace hides.
+| Reads | Blocks |
+|---|---|
+| news.ycombinator.com, arxiv.org, gov.uk, data.gov.uk, github.com, weworkremotely.com, shop.bbc.com, books.toscrape.com | amazon.com, en.wikipedia.org, rightmove.co.uk, and three fencing retailers (absolutefencinggear.com, blue-gauntlet.com, leonpaul.com) |
+
+The pattern is not "big versus small". It is whether the site runs bot protection. Cloudflare's
+"Just a moment…", Amazon's "Sorry! Something went wrong", Rightmove's "Client Challenge" and
+Wikipedia's robot-policy page are all the same answer: no. Plenty of small specialist shops sit
+behind Cloudflare, and a large shop like shop.bbc.com does not.
+
+Public, reference, government, open-data, code, papers, forums and job boards mostly read. Consumer
+retail and property mostly do not. There is no way to know but to try, which takes about ten
+seconds: point it at the page and the pane tells you straight away.
+
+When a site says no, that is the end of it. The harness names the site and stops. It will not
+change what it looks like to get past a challenge, and neither should the agent. Where a site sells
+an API for the same data, that is the route they want you to use.
 
 ## The honest limit
 

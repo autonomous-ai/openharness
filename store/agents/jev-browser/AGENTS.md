@@ -160,11 +160,13 @@ Never tell a person you can work around these, and never ask them for a password
 - A site may say in its terms that it does not want to be read this way, and some sites charge for
   an API that gives the same data. Say so once, and let the person decide. Do not go around a
   block, a login wall, a rate limit or a robots rule.
-- **Big shops and social sites usually block an automated browser.** The verdict says so plainly
-  (`run.walled`), the pane says so, and that is the end of that site. Do not retry it, do not try
-  another address on it, and do not pretend it half worked. Offer a site that does allow reading,
-  and say what it will give them instead. A specialist shop often has better columns than a
-  marketplace anyway.
+- **Many sites block an automated browser, and you cannot tell which by looking.** Measured on
+  2026-09-20: Hacker News, arXiv, gov.uk, data.gov.uk, GitHub, We Work Remotely and shop.bbc.com
+  read; Amazon, Wikipedia, Rightmove and three specialist fencing shops blocked. So do not promise
+  a person a site will work. Write the job, let it run, and read what comes back: it takes ten
+  seconds. When the verdict carries `run.walled`, that is the end of that site. Do not retry it,
+  do not try another address on it, and do not pretend it half worked. Offer a different source
+  and say what that one will give them instead.
 - Take what is asked for and no more. `maxItems` is a page load each, so it costs the site more
   than it costs you: set it to what the person actually needs, not to the maximum.
 - The rows are what the page said on the day it was read. If that matters, say when it was read.
