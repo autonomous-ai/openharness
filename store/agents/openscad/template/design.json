@@ -1,0 +1,253 @@
+{
+  "spec": 1,
+  "title": "Drawer Grid",
+  "brief": "A three-compartment organizer, sized to your drawer. Compare three widths, keep the pocket spaces and floor intact, then take the editable design and individual STLs to your slicer.",
+  "assumptions": [
+    "Example dimensions, not measurements of your drawer: confirm clear internal width, depth and usable height before printing.",
+    "Allow additional clearance for drawer taper, seams and printer dimensional error; the outside dimensions are the requested part envelope.",
+    "Dry desk/craft storage only. No food contact, load-bearing or liquid-tightness claim."
+  ],
+  "assembly": [
+    "Print a small fit sample or the narrow version first; measure the finished result.",
+    "Use one chosen size per drawer. The three variants are alternatives, not a three-piece assembly."
+  ],
+  "sourceFiles": [
+    "model.scad",
+    "design.json"
+  ],
+  "parameters": {
+    "width": {
+      "value": 180,
+      "min": 80,
+      "max": 220,
+      "unit": "mm",
+      "label": "Outside width"
+    },
+    "depth": {
+      "value": 96,
+      "min": 40,
+      "max": 180,
+      "unit": "mm",
+      "label": "Outside depth"
+    },
+    "height": {
+      "value": 40,
+      "min": 12,
+      "max": 80,
+      "unit": "mm",
+      "label": "Outside height"
+    },
+    "wall": {
+      "value": 2.4,
+      "min": 1.6,
+      "max": 4,
+      "unit": "mm",
+      "label": "Walls / dividers"
+    },
+    "floor": {
+      "value": 2.4,
+      "min": 1.6,
+      "max": 4,
+      "unit": "mm",
+      "label": "Floor thickness"
+    },
+    "columns": {
+      "value": 3,
+      "min": 2,
+      "max": 5,
+      "unit": "count",
+      "label": "Compartments"
+    }
+  },
+  "variants": [
+    {
+      "id": "compact",
+      "label": "Compact",
+      "values": {
+        "width": 150
+      },
+      "notes": [
+        "150 mm wide for a smaller drawer or a second organizer beside it."
+      ]
+    },
+    {
+      "id": "everyday",
+      "label": "Everyday",
+      "values": {},
+      "notes": [
+        "180 mm wide. Confirm the real drawer allows clearance around the part."
+      ]
+    },
+    {
+      "id": "wide",
+      "label": "Wide",
+      "values": {
+        "width": 210
+      },
+      "notes": [
+        "210 mm wide; each compartment is wider while the wall and floor targets stay unchanged."
+      ]
+    }
+  ],
+  "parts": [
+    {
+      "id": "tray",
+      "label": "Compartment tray",
+      "quantity": 1,
+      "printRotation": [
+        0,
+        0,
+        0
+      ],
+      "shells": 1,
+      "views": {
+        "top": {
+          "at": "height/2"
+        },
+        "front": {
+          "at": "depth/2"
+        },
+        "side": {
+          "at": "wall+1"
+        }
+      },
+      "notes": [
+        "Open top, continuous floor, full-height dividers. The top and front sections reveal all three pockets.",
+        "Print with the continuous floor on the bed. Review slicing, material, shrinkage and edge lifting for your machine."
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "envelope",
+      "label": "Outside dimensions match the saved drawer envelope",
+      "kind": "bounds",
+      "part": "tray",
+      "size": [
+        "width",
+        "depth",
+        "height"
+      ],
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "tolerance": 0.02
+    },
+    {
+      "id": "pockets",
+      "label": "Every compartment has the required clear interior",
+      "kind": "empty",
+      "part": "tray",
+      "region": {
+        "shape": "box",
+        "origin": [
+          "wall+0.04",
+          "wall+0.04",
+          "floor+0.04"
+        ],
+        "size": [
+          "(width-(columns+1)*wall)/columns-0.08",
+          "depth-2*wall-0.08",
+          "height-floor"
+        ],
+        "repeat": [
+          {
+            "count": "columns",
+            "step": [
+              "(width-(columns+1)*wall)/columns+wall",
+              0,
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "floor",
+      "label": "The specified floor is present under the entire tray",
+      "kind": "contains",
+      "part": "tray",
+      "region": {
+        "shape": "box",
+        "origin": [
+          0.04,
+          0.04,
+          0.04
+        ],
+        "size": [
+          "width-0.08",
+          "depth-0.08",
+          "floor-0.08"
+        ]
+      }
+    },
+    {
+      "id": "dividers",
+      "label": "Every interior divider retains the requested material",
+      "kind": "contains",
+      "part": "tray",
+      "region": {
+        "shape": "box",
+        "origin": [
+          "wall+(width-(columns+1)*wall)/columns+0.04",
+          "wall+0.04",
+          "floor+0.04"
+        ],
+        "size": [
+          "wall-0.08",
+          "depth-2*wall-0.08",
+          "height-floor-0.08"
+        ],
+        "repeat": [
+          {
+            "count": "columns-1",
+            "step": [
+              "(width-(columns+1)*wall)/columns+wall",
+              0,
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "back-wall",
+      "label": "The back wall is continuous above the floor",
+      "kind": "contains",
+      "part": "tray",
+      "region": {
+        "shape": "box",
+        "origin": [
+          0.04,
+          "depth-wall+0.04",
+          "floor+0.04"
+        ],
+        "size": [
+          "width-0.08",
+          "wall-0.08",
+          "height-floor-0.08"
+        ]
+      }
+    }
+  ],
+  "process": {
+    "material": "PLA",
+    "bedMM": [
+      235,
+      235,
+      250
+    ],
+    "edgeMarginMM": 5,
+    "nozzleMM": 0.4,
+    "notes": [
+      "Declared example process: 0.4 mm nozzle, 235 × 235 × 250 mm printer. Change these to your machine.",
+      "The checks do not generate G-code or validate supports, extrusion settings or actual layer bonding."
+    ]
+  },
+  "preview": {
+    "variant": "everyday",
+    "part": "tray"
+  }
+}

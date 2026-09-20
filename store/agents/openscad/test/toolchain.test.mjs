@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { after, test } from 'node:test'
+import { compiler } from './fixture.mjs'
 
 const here = fileURLToPath(new URL('..', import.meta.url))
 const manifest = JSON.parse(readFileSync(join(here, 'harness.json'), 'utf8'))
@@ -23,6 +24,8 @@ function tempDir() {
 
 function run(script, { cwd = here, env = {} } = {}) {
   const merged = { ...process.env }
+  delete merged.OPENSCAD_BIN
+  delete merged.OPENSCAD_TOOLCHAIN
   for (const [key, value] of Object.entries(env)) if (value === null) delete merged[key]; else merged[key] = value
   const result = spawnSync(join(here, script), { cwd, env: merged, encoding: 'utf8' })
   return { code: result.status, stdout: result.stdout, stderr: result.stderr }
@@ -35,7 +38,7 @@ function fakeOpenscad() {
   const faces = [[[0,0,0],[0,1,0],[1,0,0]],[[0,0,0],[1,0,0],[0,0,1]],[[0,0,0],[0,0,1],[0,1,0]],[[1,0,0],[0,1,0],[0,0,1]]]
   const mesh = 'solid tetra\n' + faces.map(face => 'facet normal 0 0 0\nouter loop\n' + face.map(v => 'vertex '+v.join(' ')).join('\n') + '\nendloop\nendfacet').join('\n') + '\nendsolid tetra\n'
   writeFileSync(join(dir,'fixture.stl'), mesh)
-  writeFileSync(bin, '#!/bin/sh\n[ "$1" = "-o" ] || exit 0\ncp "'+join(dir,'fixture.stl')+'" "$2"\n')
+  writeFileSync(bin, compiler(join(dir,'fixture.stl')).replace('import {copyFileSync,writeFileSync} from "node:fs";', 'const {copyFileSync,writeFileSync}=require("node:fs");'))
   chmodSync(bin, 0o755)
   return { dir, bin }
 }
@@ -48,7 +51,9 @@ test('every script the manifest names is in the folder and executable', () => {
 
 test('setup finds an openscad CLI on PATH and says ok', () => {
   const { dir, bin } = fakeOpenscad()
-  const { code, stdout } = run(manifest.toolchain.setup, { env: { PATH: `${dir}:/usr/bin:/bin` } })
+  const install = tempDir()
+  mkdirSync(join(install, 'toolchain'))
+  const { code, stdout } = run(manifest.toolchain.setup, { env: { PATH: `${dir}:/usr/bin:/bin`, HARNESS_DSH_DIR: install } })
   assert.equal(code, 0)
   assert.match(stdout, /ok   openscad/)
 })
@@ -76,7 +81,7 @@ test('init seeds the first verdict and the initialized marker', () => {
   assert.match(readFileSync(join(workspace, '.harness-initialized'), 'utf8'), new RegExp(manifest.id.replace('/', '/')))
 })
 
-test('render-part.sh renders an artifact and flips the verdict, exactly as SKILL.md writes it', () => {
+test('render-part.sh exports a legacy preview without claiming checked readiness', () => {
   const skill = readFileSync(join(here, 'skills/openscad/SKILL.md'), 'utf8')
   const command = 'sh "$OPENSCAD_SKILLS/openscad/scripts/render-part.sh"'
   assert.ok(skill.includes(command), 'SKILL.md should document the one-stop render command')
@@ -88,12 +93,12 @@ test('render-part.sh renders an artifact and flips the verdict, exactly as SKILL
   writeFileSync(join(workspace, 'model.scad'), 'cube(10);\n')
   const result = spawnSync('/bin/sh', ['-c', command], {
     cwd: workspace,
-    env: { ...process.env, OPENSCAD_SKILLS: join(here, 'skills'), PATH: `${dir}:${dirname(process.execPath)}:/usr/bin:/bin`, HARNESS_WORKSPACE: workspace },
+    env: { ...process.env, OPENSCAD_BIN: bin, OPENSCAD_SKILLS: join(here, 'skills'), PATH: `${dir}:${dirname(process.execPath)}:/usr/bin:/bin`, HARNESS_WORKSPACE: workspace },
     encoding: 'utf8',
   })
   assert.equal(result.status, 0, result.stderr)
   assert.equal(existsSync(join(workspace, 'part.stl')), true)
   const verdict = JSON.parse(readFileSync(join(workspace, '.harness/verdict.json'), 'utf8'))
-  assert.equal(verdict.ready, true)
+  assert.equal(verdict.ready, false)
   assert.equal(verdict.artifact, 'part.stl')
 })
