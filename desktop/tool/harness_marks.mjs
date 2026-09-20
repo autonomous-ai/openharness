@@ -47,7 +47,7 @@ for (const mark of marks) {
     mark.id,
     mark.credit,
     `License: ${mark.license}`,
-    `Source: ${mark.source ?? `${sourceUrl}/${mark.file}`}`,
+    `Source: ${mark.source ?? `${sourceUrl.replace('/tree/', '/blob/')}/${mark.file}`}`,
   ].join('\n'));
 }
 for (const file of new Set(marks.map(mark => mark.licenseFile))) {

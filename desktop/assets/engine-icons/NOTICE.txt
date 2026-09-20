@@ -14,22 +14,22 @@ not the Home Assistant logo or a mark of the Open Home Foundation.
 autonomous/web-studio
 © 2026 OpenHarness contributors
 License: MIT
-Source: https://github.com/autonomous-ai/openharness/tree/main/store/branding/web-studio.svg
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/web-studio.svg
 
 autonomous/data-studio
 © 2026 OpenHarness contributors
 License: MIT
-Source: https://github.com/autonomous-ai/openharness/tree/main/store/branding/data-studio.svg
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/data-studio.svg
 
 autonomous/quantum-studio
 © 2026 OpenHarness contributors
 License: MIT
-Source: https://github.com/autonomous-ai/openharness/tree/main/store/branding/quantum-studio.svg
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/quantum-studio.svg
 
 autonomous/gis
 © 2026 OpenHarness contributors
 License: MIT
-Source: https://github.com/autonomous-ai/openharness/tree/main/store/branding/gis.svg
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/gis.svg
 
 autonomous/openscad
 OpenSCAD contributors
@@ -49,7 +49,7 @@ Source: https://raw.githubusercontent.com/OrcaSlicer/OrcaSlicer/8500fcdccaa10b50
 autonomous/firmware-studio
 © 2026 OpenHarness contributors
 License: MIT
-Source: https://github.com/autonomous-ai/openharness/tree/main/store/branding/firmware-studio.svg
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/firmware-studio.svg
 
 autonomous/godot-studio
 Godot Engine logo © 2017 Andrea Calabró
@@ -59,17 +59,17 @@ Source: https://godotengine.org/assets/press/icon_color.svg
 autonomous/home-assistant
 © 2026 OpenHarness contributors
 License: MIT
-Source: https://github.com/autonomous-ai/openharness/tree/main/store/branding/home-assistant.svg
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/home-assistant.svg
 
 autonomous/score
 © 2026 OpenHarness contributors
 License: MIT
-Source: https://github.com/autonomous-ai/openharness/tree/main/store/branding/score.svg
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/score.svg
 
 autonomous/sheet-docs
 © 2026 OpenHarness contributors
 License: MIT
-Source: https://github.com/autonomous-ai/openharness/tree/main/store/branding/sheet-docs.svg
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/sheet-docs.svg
 
 licenses/original.txt
 
