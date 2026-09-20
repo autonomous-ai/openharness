@@ -52,5 +52,5 @@ draft. The old draft must not silently overwrite a new agent revision or disappe
 - Do not call this photo generation, a video editor, or a complete branding service. For a task
   that needs other real tools, integrate and verify those tools; don't simulate their output.
 
-The Store listing remains withdrawn during this rebuild. Product acceptance and the evidence
-required for relisting are in `work/SUPERPOWERS.md` in the source repository.
+The authoring rebuild is listed in the Store for user testing. Remaining product validation is
+recorded in `work/SUPERPOWERS.md` in the source repository; listing does not mark any artifact ready.

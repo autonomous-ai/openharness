@@ -1,9 +1,10 @@
 # Art and Music authoring rebuild · 2026-09-20
 
-The seven earlier harnesses are withdrawn. Their source and identities remain in the repository.
-Generative Art and Music Studio now have authoring implementations; both **remain unlisted**.
-This report establishes working tools and reproducible fixtures, not completion of the product
-acceptance gates in [SUPERPOWERS.md](SUPERPOWERS.md).
+Generative Art and Music Studio have authoring implementations and are **listed for user testing**.
+The user explicitly requested access through the Harness Store after finding both missing. The
+other five earlier harnesses remain unlisted, with their source and identities in the repository.
+This report establishes working tools and reproducible fixtures; the remaining product validation
+in [SUPERPOWERS.md](SUPERPOWERS.md) is still outstanding.
 
 ## What changed
 
@@ -73,13 +74,13 @@ Large transient WAV/ZIP/browser captures belong in ignored evidence folders, not
 
 The full music listening pass has **not happened**. Musical transitions, sound quality and fit to a
 real user's brief remain unverified. The scenarios also do not replace end-to-end authoring trials
-with the installed coding engine and real user inputs. Keep both `listed:false` until that evidence
-exists; do not relist because CI passed or call this an “iPhone moment.”
+with the installed coding engine and real user inputs. The user's subsequent request to test both
+through the Store supersedes the earlier decision to withhold their listings. Publication makes
+the rebuilt tools accessible for that testing; it does not establish that these reviews passed.
 
-People can test the source packages through a local install (`harness dsh install <package> --link`).
-The existing links in this worktree already point at the rebuild; create a **new workspace** to use
-it. Existing workspaces retain their own files. A public Store catalog refresh does not overwrite
-them, and an unlisted harness is not discoverable or installable by its catalog ID.
+Install **Generative Art** or **Music Studio** from the Harness Store and create a **new workspace**
+to try the rebuild. Existing local links also point at it. Existing workspaces retain their own
+files; a package update or public Store catalog refresh does not overwrite them.
 
 Practical limits: static RGB artwork with editable system-font text, not press certification;
 four-minute instrumental scores with 16 tracks and 28 MB embedded data, not generated singing or
