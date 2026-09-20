@@ -1,6 +1,6 @@
 # Experience verification
 
-All seven packages are withdrawn from public discovery. Art and Music have authoring rebuilds;
+Art and Music have authoring rebuilds listed in the Store for user testing;
 their source is inside each package's `template/studio/`, with a drawing program/project or an
 editable score. `build-experiences.mjs` delegates to their package builders. The five parked
 packages and the retained original Art/Music models live in `store/tools/experiences/`.

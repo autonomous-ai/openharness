@@ -51,5 +51,6 @@ render of it when that performance data matters. Never silently call it a lossle
 - Do not promise a mastered commercial release from headroom measurements. Listening, musical
   judgment and the intended use decide readiness. Keep `ready:false` until that review is real.
 
-The Store listing remains withdrawn during validation. The original simpler sequencer source is
-preserved under `store/tools/experiences/` in the repository, along with the other parked harnesses.
+The authoring rebuild is listed in the Store for user testing; listening review remains required.
+The original simpler sequencer source is preserved under `store/tools/experiences/` in the
+repository, along with the other parked harnesses.

@@ -1,7 +1,7 @@
 # Music Studio — Afterhours
 
-> Unlisted while the authoring rebuild is validated. Code and existing projects remain available.
-> See [the product review](../../../work/SUPERPOWERS.md).
+Install **Music Studio** from the Harness Store, then create a new workspace to try the rebuild.
+See [the product review](../../../work/SUPERPOWERS.md) for validation progress.
 
 ![Music Studio logo](brand/logo.svg)
 

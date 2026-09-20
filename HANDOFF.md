@@ -7,13 +7,15 @@ The main checkout is shared with other sessions; leave it alone.
 now use source under their own `template/studio/` directories, with real editable projects and
 production exports. `build-experiences.mjs` delegates to their builders. Their original preset
 sources remain under `store/tools/experiences/` for history; they no longer generate these two
-packages. Setup now installs pinned package-local browser tools. Both listings remain withdrawn;
-musical listening and real-user/installed-engine authoring trials are outstanding. The earlier
+packages. Setup now installs pinned package-local browser tools. Both are listed for user testing,
+as explicitly requested after the user found them missing from the Store. Musical listening and
+real-user/installed-engine authoring trials are outstanding. The earlier
 seven-starter description below is historical and must not be presented as the new product bar.
 
 **Product reset, 2026-09-20:** the user rejected preset and spectator experiences as the wrong
-product. All seven below are withdrawn from discovery with `listed:false`. Read
-[the new review and return-to-Store gates](work/SUPERPOWERS.md) before continuing. Focus only on
+product. All seven below were initially withdrawn with `listed:false`; the five outside Art and
+Music remain unlisted. Read [the review and remaining product validation](work/SUPERPOWERS.md)
+before continuing. Focus only on
 Generative Art and Music Studio. The earlier release evidence below describes working controls;
 it does not establish that these tools meet the new product bar.
 

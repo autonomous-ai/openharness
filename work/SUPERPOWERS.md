@@ -6,10 +6,11 @@ does not pass. Our previous release verified its controls, but chose the wrong a
 The prior verification reports remain technical evidence, not evidence that these are good products.
 
 **Rebuild progress:** [AUTHORING-REBUILD.md](AUTHORING-REBUILD.md) records the new Art/Music tools,
-six distinct authored fixtures, revisions and real export checks. Both remain unlisted. Music
-listening and installed-engine trials with real user briefs are still outstanding.
+six distinct authored fixtures, revisions and real export checks. Both are now listed at the
+user's explicit request to test them through the Harness Store. Music listening and installed-engine
+trials with real user briefs are still outstanding; listing does not claim those reviews passed.
 
-## Review of our seven
+## Original review of our seven
 
 | Harness | What it actually enables today | Why it falls short | Decision |
 |---|---|---|---|
@@ -21,15 +22,16 @@ listening and installed-engine trials with real user briefs are still outstandin
 | Game Master | Watch fixed heuristic teams and compare policies | Cannot create and ship an original playable game | Withdraw; stop parallel development |
 | Lab Bench | Inspect one synthetic experiment | Cannot do useful analysis on the person's own observations | Withdraw; stop parallel development |
 
-All seven receive `listed:false`. The source, logos, tests and installed workspaces stay intact.
+All seven initially received `listed:false`. Art and Music have since been rebuilt and relisted
+for user testing; the other five remain unlisted. Source, logos, tests and workspaces stay intact.
 The shared web viewer remains available: it is infrastructure used by other harnesses.
 Other sessions' harnesses are outside this withdrawal.
 
 ## Focus
 
 Choose Generative Art and Music Studio. They share a clear path from a person's idea to an
-original, editable asset they can use. Keep both unlisted during development. Do not relist merely
-because a template gained more buttons, styles or a prettier screenshot.
+original, editable asset they can use. They are now available for the user's Store testing.
+More buttons, styles or a prettier screenshot do not by themselves meet the product bar.
 
 For visual work, the agent must be able to build a new visual system from a brief, use the person's
 text and assets, revise it without losing their choices, and deliver editable vectors, production
@@ -39,7 +41,7 @@ For music, the agent must compose and arrange a complete brief, work with the pe
 material, let them hear and revise sections, and deliver audio plus an editable handoff into a DAW.
 Changing a seed in the existing lo-fi loop does not pass.
 
-## Gates before either returns to the Store
+## Product validation still required
 
 1. Three materially different real briefs, completed through the actual agent workflow. No preset
    selection masquerading as generation, fake model messages, or a prompt box with no backend.
@@ -50,5 +52,6 @@ Changing a seed in the existing lo-fi loop does not pass.
 4. Cold workspace install, dependency setup/doctor, actual viewer interaction and honest verdicts.
 5. Store examples must show the brief and its actual result; document limits and any paid service.
 
-This is a withdrawal and a change of focus. It is not a claim that the replacement tools already
-achieve an “iPhone moment.” Reintroduction requires the evidence above.
+The original withdrawal changed our focus. The user has since requested Store access to test the
+replacements. This availability is not a claim that they achieve an “iPhone moment”; evaluate them
+against the evidence above and record remaining gaps honestly.

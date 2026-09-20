@@ -1,7 +1,7 @@
 # Generative Art — Fieldwork
 
-> Unlisted while the authoring rebuild is validated. Code and existing projects remain available.
-> See [the product review](../../../work/SUPERPOWERS.md).
+Install **Generative Art** from the Harness Store, then create a new workspace to try the rebuild.
+See [the product review](../../../work/SUPERPOWERS.md) for validation progress.
 
 ![Generative Art logo](brand/logo.svg)
 
