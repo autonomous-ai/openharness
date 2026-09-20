@@ -6,6 +6,11 @@ uses them in Store listings, New Harness, pane headers, history and native tabs.
 These are desktop assets, not remote catalog fields: publishing the Store alone
 does not update the icons in an installed app. A desktop release is required.
 
+The real Flutter `EngineMark` widget, rendered at 96, 16, 24 and 32 px:
+
+![Harness marks on a light surface](previews/icons-light.png)
+![Harness marks on a dark surface](previews/icons-dark.png)
+
 ## Artwork and provenance
 
 | Harness | Mark | Artwork license |
@@ -75,4 +80,5 @@ The dedicated test checks all twelve identities against their actual package
 metadata, decodes every PNG, and renders each mark at 16, 24, 32 and 96 px in both
 themes. With `HARNESS_ICON_QA_DIR` set, it writes `icons-light.png` and
 `icons-dark.png` for visual inspection. Test captures are review evidence, not
-new source artwork.
+new source artwork. To refresh the previews above, set the output directory to
+`../store/branding/previews` when running the dedicated test from `desktop/`.
