@@ -6,18 +6,30 @@ watch. No code, no selectors, no copy and paste.
 
 ## How you use it
 
-The pane asks you three questions and then goes. There is nothing to press afterwards.
+A site and a sentence is the whole job.
 
 | | |
 |---|---|
-| **Start on** | `books.toscrape.com/catalogue/category/books/travel_2/index.html` |
-| **Search for** | leave it empty, or put words to type into the site's own search box |
-| **Each one is** | `a book for sale` |
-| **Columns** | `the title` · `the price` · `how many copies are available` · `Is it in stock?` |
+| **Start on** | `books.toscrape.com` |
+| **What you want** | `travel books, with the price and whether they are in stock` |
 
-Press **Go**. The browser opens, the rows land, and `results.csv` is in your project folder. A line
-that reads like a question ("Is it in stock?") becomes a yes-or-no column; everything else is taken
-off the page word for word.
+Press **Go**. Jev walks the site to the page you meant, reads it, works out the columns, and
+starts collecting. There is nothing else to press.
+
+**It finds its own way.** The address does not have to be the list you want. Each step is one Jev
+call: does this page already show what was asked for, and if not, which link goes towards it? On
+that example it scores the "Travel" link at 0.97 out of the 62 links on the front page, follows it,
+and works from there. Give it the exact page if you have it and it starts there instead.
+
+**Jev picks the columns, it does not write them.** It is shown every piece of text on one of the
+pages and asked, for each, whether that is a fact about this thing worth a column. The column's
+name comes from the page's own label where there is one, so a spreadsheet of books comes out with
+Price, Availability, UPC and Number of reviews on it. Your sentence is never parsed into a config;
+it is given to Jev as context while it decides what matters.
+
+Name the columns yourself if you would rather: put them in the **Columns** box, one per line. A
+line that reads like a question ("Is it in stock?") becomes a yes-or-no column, and everything else
+is taken off the page word for word.
 
 The agent on the right is for the rest: a site that fights back, a column that comes back empty,
 and reading what you collected. You do not need it to run a job. Ask it in plain words and it
@@ -101,6 +113,11 @@ On 2026-09-20 with live Jev (`typesafe/jev-1.13`) through OpenRouter.
 |---|---|---|---|---|
 | The built-in job board, 36 roles | 24 | 33 s | $0.0023 | 144 of 144 cells exactly matched the site's own data, no repeats, nothing skipped |
 | `books.toscrape.com`, a public sandbox | 8 | 21 s | $0.0018 | every title, price, stock count and UPC code right |
+
+Working out the job from scratch, on the same site: two Jev calls, 61 questions then 33, **1.2
+seconds** to decide the page lists products and to propose columns named Price, Availability, UPC
+and Number of reviews. No language model is involved at any point, in setting the job up or in
+running it.
 
 The product codes matter: `a22124811bfa8350` is not something a model could write from memory. It
 came off the page, which is the whole point. Small runs are a sanity check, not a benchmark.

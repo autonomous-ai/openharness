@@ -22,9 +22,24 @@ a THING page →  the details of one thing
 A search page is a list page, so "search this site for X" is the same job: put the words in
 `"search"` and the harness types them into the site's own search box, then reads the results.
 
-Point `start` at the list. If you point it at one thing's page, that one row is collected and the
+`start` does not have to be the list. Give it the site and Jev walks there: each step is one call
+asking whether this page is already the one, and if not which link goes towards it, up to five
+pages. Where a person gave you the exact page, use it and skip the walking.
+
+Point `start` at the list where you have it. If you point it at one thing's page, that one row is collected and the
 run ends. If the things have no page of their own (everything is on the list), say so to the person:
 this harness collects one row per page, so a list-only site gives one row for the whole list.
+
+## Letting Jev write the fields
+
+Put the person's sentence in `want`, leave `fields` out, and two Jev calls decide it: one asks what
+the page lists and which links are the things, the other asks of every piece of text on one of them
+"is that a fact about this one, worth a column?" and "what kind of value is it?". About a second,
+and the names come off the page's own labels.
+
+Do that first. Read what it proposed, then add or reword. What it cannot propose is a judgement:
+"is this remote?", "how urgent is this". Those are yours to write, and they are where the tool earns
+its keep, because no page prints them.
 
 ## Writing the fields
 
