@@ -24,9 +24,10 @@ agents, answer their questions, and speak new tasks from your desk.
 
 ## For polymaths in the making.
 
-> “World-class entrepreneurs are polymaths.”
+> “I think that one kind of perspective for a lot of the world-class entrepreneurs is they’re not
+> specialists. They’re something close to polymaths.”
 >
-> — [Founder Mode](https://x.com/Founder_Mode_/status/2000973572248940648), summarizing Peter Thiel
+> — [Peter Thiel](https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s)
 
 Built for technical founders who want their hands on more of what they are making, from the software
 and the physical product to the analysis and the launch video. Engineers, makers, and creators with

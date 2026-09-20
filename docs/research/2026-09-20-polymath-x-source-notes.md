@@ -493,17 +493,19 @@ X displayed December 16, 2025, at 11:57 AM; the displayed time zone was not esta
 Publisher: The Rubin Report, verified YouTube channel.\
 Interview: Peter Thiel on entrepreneurship and Silicon Valley.\
 Published: September 12, 2018.\
-Source: <https://www.youtube.com/watch?v=h10kXgTdhNU&t=819s>\
-Relevant passage: approximately 13:35–14:32.
+Source: <https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s>\
+Relevant passage: approximately 13:31–14:32.
 
-Short excerpt, referring to world-class entrepreneurs:
+Opening statement from the passage, with spoken repetitions removed:
 
-> They’re not specialists. They’re something close to polymaths.
+> I think that one kind of perspective for a lot of the world-class entrepreneurs is they’re not
+> specialists. They’re something close to polymaths.
 
 Verification notes: The original publisher's English auto-generated captions place the excerpt at
-approximately 13:41–13:46. Punctuation, capitalization, and the captions' homophone transcription
-of “they’re” are normalized. The transcript says “close to,” not “closer to.” The X caption condenses
-the argument; it should not be substituted for the interview wording inside a direct quotation.
+approximately 13:31–13:46. Repeated “I think that” and “one” are omitted. Punctuation, capitalization,
+and the captions' homophone transcription of “they’re” are normalized. The transcript says “close
+to,” not “closer to.” The X caption condenses the argument; it should not be substituted for the
+interview wording inside a direct quotation.
 
 Content notes: Thiel describes the breadth of understanding he sees in entrepreneurs, using Mark
 Zuckerberg as an example. The surrounding discussion covers product details, the psychology and
