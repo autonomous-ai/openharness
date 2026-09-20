@@ -3988,11 +3988,12 @@ class AppNotifier extends ChangeNotifier {
     await openStoreAgent(context, this, gridHarness, machineId);
   }
 
-  /// The Store harness the Machines menu opens: the fleet itself, managed by
-  /// talking to it, with the live map of every machine beside the terminal.
-  static const machinesHarness = 'autonomous/machines';
+  /// The Store harness the Machines menu opens: Machine Monitor, the fleet
+  /// itself, managed by talking to it, with the live map of every machine
+  /// beside the terminal.
+  static const machinesHarness = 'autonomous/machine-monitor';
 
-  /// Open Machines, the same way [runLocalModel] opens Grid.
+  /// Open Machine Monitor, the same way [runLocalModel] opens Grid.
   ///
   /// It belongs on THIS computer and nowhere else: everything it reads — the
   /// machine list, each machine's roster — it reads through the local daemon,
@@ -4002,7 +4003,7 @@ class AppNotifier extends ChangeNotifier {
   Future<void> manageMachines(BuildContext context) async {
     final machine = _localModelMachine();
     if (machine == null) {
-      _lastError = 'Connect a machine before opening Machines.';
+      _lastError = 'Connect a machine before opening Machine Monitor.';
       _lastErrorRetryable = false;
       notifyListeners();
       return;

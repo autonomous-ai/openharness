@@ -797,8 +797,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       case 'linkMachine':
         await _dialog(() => showSwarmLinkDialog(context, app));
       case 'manageMachines':
-        // The Machines harness: the fleet managed by talking to it, with the
-        // live map beside the terminal. Wrapped like Open Grid because the
+        // Machine Monitor: the fleet managed by talking to it, with the live
+        // map beside the terminal. Wrapped like Open Grid because the
         // notifier opens New Harness here and the tab it makes takes focus.
         await _dialog(() => app.manageMachines(context));
       // BRIDGE, until the Machines menu goes: the old list, so nothing is lost
