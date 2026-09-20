@@ -1,5 +1,7 @@
 # Voxel Worlds — Tidelands
 
+![Voxel Worlds logo](brand/logo.svg)
+
 Build and walk a seeded voxel island. Sculpt terrain, place and break blocks, explore a cabin and lighthouse, change the light, and save your world.
 
 ## Try it
@@ -40,3 +42,10 @@ Run `node tools/check.mjs --seeds 100` in the workspace. It reads the pure model
 `<script id="harness-model">` in the artifact, checks domain invariants, repeats each seed, and
 writes `.harness/model-check.json`. Preserve that script boundary when editing. Model checks are
 followed by browser interaction, exported-output inspection, and visual or listening review.
+
+## Logo and icon
+
+The original identity ships in `brand/`: [vector icon](brand/icon.svg),
+[256px PNG](brand/icon.png), [light logo](brand/logo.svg) and
+[dark logo](brand/logo-dark.svg). The same mark appears in the starter header,
+its offline favicon and the desktop Store/picker/tabs. MIT, by OpenHarness contributors.

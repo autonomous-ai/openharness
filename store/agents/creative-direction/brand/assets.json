@@ -1,0 +1,10 @@
+{
+  "source": "icon.svg",
+  "license": "MIT",
+  "sha256": {
+    "icon.svg": "6e443cc2cdf0e220f3899460ee32438a78155ac2ba24746e5b41f0d7fef5319f",
+    "logo.svg": "e9255ab3cb3a97371a5f91218e3d6990e9a4b4537ac6dedede0716b657a31dfe",
+    "logo-dark.svg": "da01c2147c417d30734cef7f61c595af376cbf1595486e3c63cc09301a4d9ff6",
+    "icon.png": "4d7fec9af9e1bbfae76821ff1e3fe2eb1dbf26ab9d696ca23c19165acc451997"
+  }
+}

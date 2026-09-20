@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark light"><title>FORME — Creative Direction</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%2096%2096%22%3E%0A%20%20%3Ctitle%3ECreative%20Direction%20%E2%80%94%20Forme%20monogram%3C%2Ftitle%3E%0A%20%20%3Crect%20x%3D%224%22%20y%3D%224%22%20width%3D%2288%22%20height%3D%2288%22%20rx%3D%2223%22%20fill%3D%22%23edc0ac%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M21%2021h53v15H37v40H21Z%22%20fill%3D%22%2349333b%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M43%2043h23v15H43Z%22%20fill%3D%22%2349333b%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M60%2064h16v12H60Z%22%20fill%3D%22%23ad614f%22%2F%3E%0A%3C%2Fsvg%3E">
 <!-- Built by store/tools/build-experiences.mjs. Edit this file freely in your workspace. -->
 <style>:root {
   color-scheme: dark;
@@ -147,12 +148,16 @@ h3 {
   letter-spacing: 0.04em;
 }
 .mark {
-  width: 25px;
-  height: 25px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   display: grid;
   place-items: center;
-  border: 1px solid currentColor;
-  font-size: 17px;
+}
+.mark svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 .seed-form {
   display: flex;
@@ -399,11 +404,6 @@ canvas {
 button.primary {
   color: #eeeae2;
 }
-.mark {
-  background: var(--ink);
-  color: var(--bg);
-  border: 0;
-}
 .intro {
   padding-bottom: 28px;
 }
@@ -585,7 +585,13 @@ button.primary {
   }
 }
 </style></head><body>
-<header class="masthead"><div class="identity"><span class="mark" aria-hidden="true">F</span>FORME</div>
+<header class="masthead"><div class="identity"><span class="mark" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 96 96">
+  <title>Creative Direction — Forme monogram</title>
+  <rect x="4" y="4" width="88" height="88" rx="23" fill="#edc0ac"/>
+  <path d="M21 21h53v15H37v40H21Z" fill="#49333b"/>
+  <path d="M43 43h23v15H43Z" fill="#49333b"/>
+  <path d="M60 64h16v12H60Z" fill="#ad614f"/>
+</svg></span>FORME</div>
 <form class="seed-form" id="seed-form"><label for="seed">Seed</label><input id="seed" aria-label="Seed" maxlength="128" autocomplete="off" spellcheck="false"><button type="submit">Apply</button><button id="next-seed" type="button" title="Next seed">↗ Next</button></form></header>
 <section class="intro">
   <div>

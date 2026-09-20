@@ -222,6 +222,71 @@ const _engines = <String, EngineIdentity>{
 /// own. It is only a face. A harness absent here still draws — the daemon
 /// sends its name, and [engineIdentity] falls back to an initial.
 const _harnesses = <String, EngineIdentity>{
+  // Original creative identities; source vectors ship in each package under brand/.
+  'autonomous/voxel-worlds': EngineIdentity(
+    id: 'autonomous/voxel-worlds',
+    label: 'Voxel Worlds',
+    category: 'Games',
+    tagline: 'Build and walk a seeded voxel island',
+    creator: 'Autonomous',
+    color: Color(0xffaac785),
+    asset: 'assets/engine-icons/voxel-worlds.png',
+  ),
+  'autonomous/generative-art': EngineIdentity(
+    id: 'autonomous/generative-art',
+    label: 'Generative Art',
+    category: 'Original art',
+    tagline: 'Design reproducible generative editions',
+    creator: 'Autonomous',
+    color: Color(0xffce7645),
+    asset: 'assets/engine-icons/generative-art.png',
+  ),
+  'autonomous/music-studio': EngineIdentity(
+    id: 'autonomous/music-studio',
+    label: 'Music Studio',
+    category: 'Audio',
+    tagline: 'Compose a seeded eight-bar track, edit five instrument patterns, shape swing and',
+    creator: 'Autonomous',
+    color: Color(0xffd6c7e9),
+    asset: 'assets/engine-icons/music-studio.png',
+  ),
+  'autonomous/creative-direction': EngineIdentity(
+    id: 'autonomous/creative-direction',
+    label: 'Creative Direction',
+    category: 'Design',
+    tagline: 'Build a coherent visual identity with coordinated posters, typography and palett',
+    creator: 'Autonomous',
+    color: Color(0xffd89478),
+    asset: 'assets/engine-icons/creative-direction.png',
+  ),
+  'autonomous/drone-pilot': EngineIdentity(
+    id: 'autonomous/drone-pilot',
+    label: 'Drone Pilot',
+    category: 'Simulation',
+    tagline: 'Fly a seeded canyon course in first person',
+    creator: 'Autonomous',
+    color: Color(0xffd3eb9c),
+    asset: 'assets/engine-icons/drone-pilot.png',
+  ),
+  'autonomous/game-master': EngineIdentity(
+    id: 'autonomous/game-master',
+    label: 'Game Master',
+    category: 'Games',
+    tagline: 'Design and compare strategies in a seeded arena',
+    creator: 'Autonomous',
+    color: Color(0xffed9075),
+    asset: 'assets/engine-icons/game-master.png',
+  ),
+  'autonomous/lab-bench': EngineIdentity(
+    id: 'autonomous/lab-bench',
+    label: 'Lab Bench',
+    category: 'Science',
+    tagline: 'Explore an experiment with reproducible synthetic data',
+    creator: 'Autonomous',
+    color: Color(0xfff2ca7d),
+    asset: 'assets/engine-icons/lab-bench.png',
+  ),
+
   'autonomous/autonomous-circuit': EngineIdentity(
     id: 'autonomous/autonomous-circuit',
     label: 'Autonomous Circuit',
@@ -443,6 +508,14 @@ const _harnesses = <String, EngineIdentity>{
 /// say "Runs on Claude Code" — and send the right `engine` — before the machine
 /// has answered `dsh_list`. The daemon's catalog is authoritative when present.
 const knownHarnessBase = <String, String>{
+  'autonomous/voxel-worlds': 'claude',
+  'autonomous/generative-art': 'claude',
+  'autonomous/music-studio': 'claude',
+  'autonomous/creative-direction': 'claude',
+  'autonomous/drone-pilot': 'claude',
+  'autonomous/game-master': 'claude',
+  'autonomous/lab-bench': 'claude',
+
   'autonomous/autonomous-circuit': 'claude',
   'autonomous/kicad': 'claude',
   'autonomous/autonomous-grid': 'codex',

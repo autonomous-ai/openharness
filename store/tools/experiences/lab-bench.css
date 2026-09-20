@@ -9,10 +9,6 @@
 .intro h1 {
   font-weight: 450;
 }
-.mark {
-  border-radius: 50%;
-  color: var(--accent);
-}
 .workspace {
   grid-template-columns: minmax(0, 1fr) 240px;
   gap: 28px;

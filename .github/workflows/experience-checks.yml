@@ -2,10 +2,10 @@ name: Experience checks
 
 on:
   pull_request:
-    paths: ['store/**', '.github/workflows/experience-checks.yml']
+    paths: ['store/**', 'desktop/assets/engine-icons/**', '.github/workflows/experience-checks.yml']
   push:
     branches: [main]
-    paths: ['store/**', '.github/workflows/experience-checks.yml']
+    paths: ['store/**', 'desktop/assets/engine-icons/**', '.github/workflows/experience-checks.yml']
 
 permissions:
   contents: read
@@ -21,6 +21,8 @@ jobs:
           node-version: '22.23.2'
       - name: Verify generated artifacts match reviewed sources
         run: node store/tools/build-experiences.mjs --check
+      - name: Verify packaged branding matches desktop assets
+        run: node store/tools/build-experience-branding.mjs --check
       - name: Check models, packages and viewer behavior
         run: >-
           node --test

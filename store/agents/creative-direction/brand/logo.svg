@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="112" viewBox="0 0 480 112">
+  <title>Creative Direction logo</title>
+  <rect width="480" height="112" rx="24" fill="#f5f2e9"/>
+  <g transform="translate(8 8)"><rect x="4" y="4" width="88" height="88" rx="23" fill="#edc0ac"/>
+  <path d="M21 21h53v15H37v40H21Z" fill="#49333b"/>
+  <path d="M43 43h23v15H43Z" fill="#49333b"/>
+  <path d="M60 64h16v12H60Z" fill="#ad614f"/></g>
+  <text x="120" y="53" fill="#243732" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="600" letter-spacing="-.8">Creative Direction</text>
+  <text x="121" y="76" fill="#63746b" font-family="Arial, Helvetica, sans-serif" font-size="10" font-weight="600" letter-spacing="2.1">FORME · AUTONOMOUS</text>
+</svg>

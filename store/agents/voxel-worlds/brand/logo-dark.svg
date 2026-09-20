@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="112" viewBox="0 0 480 112">
+  <title>Voxel Worlds logo</title>
+  <rect width="480" height="112" rx="24" fill="#18252b"/>
+  <g transform="translate(8 8)"><rect x="4" y="4" width="88" height="88" rx="23" fill="#183e36"/>
+  <path d="M20 58 48 74 76 58v10L48 84 20 68Z" fill="#619e9d"/>
+  <path d="m20 42 14-8 14 8-14 8Z" fill="#d8e9a6"/>
+  <path d="m20 42 14 8v20l-14-8Z" fill="#71936a"/>
+  <path d="m34 50 14-8v20l-14 8Z" fill="#aac785"/>
+  <path d="m48 42 14-8 14 8-14 8Z" fill="#d8e9a6"/>
+  <path d="m48 42 14 8v20l-14-8Z" fill="#71936a"/>
+  <path d="m62 50 14-8v20l-14 8Z" fill="#aac785"/>
+  <path d="m34 24 14-8 14 8-14 8Z" fill="#f4efce"/>
+  <path d="m34 24 14 8v30l-14-8Z" fill="#99b878"/>
+  <path d="m48 32 14-8v30l-14 8Z" fill="#d8e9a6"/></g>
+  <text x="120" y="53" fill="#f4f0e4" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="600" letter-spacing="-.8">Voxel Worlds</text>
+  <text x="121" y="76" fill="#a7bbb7" font-family="Arial, Helvetica, sans-serif" font-size="10" font-weight="600" letter-spacing="2.1">TIDELANDS · AUTONOMOUS</text>
+</svg>
