@@ -801,6 +801,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
         // live map beside the terminal. Wrapped like Open Grid because the
         // notifier opens New Harness here and the tab it makes takes focus.
         await _dialog(() => app.manageMachines(context));
+      // BRIDGE, until the Machines menu goes: the old list, so nothing is lost
+      // between this release and that one. When the menu is removed, delete
+      // this case, `machines.list` below, machines_manager.dart and its test,
+      // and the `machineList` action in SwarmTitlebar.swift + keymap_commands.
       case 'machineList':
         unawaited(_dialog(() => showMachinesManager(context, app)));
       case 'refreshMachines':

@@ -324,8 +324,9 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
        $0.count.isEmpty ? $0.status : $0.count)
     })
     let trailingEdge = ceil((compactEdge + 62) * 1.2) - 62
-    // Two doors, in the order people reach for them: the Machines harness, which manages the fleet
-    // by conversation and draws it, and the plain list that renames and refreshes without one.
+    // Two doors for one release: the Machines harness, which manages the fleet by conversation and
+    // draws it, and the plain list beneath it. The second is a bridge — it goes when this menu does,
+    // along with machines_manager.dart and the "machineList" action.
     let manage = NSMenuItem(title: "Manage Machines…", action: #selector(menuAction(_:)), keyEquivalent: "")
     manage.target = self
     manage.representedObject = "manageMachines"
