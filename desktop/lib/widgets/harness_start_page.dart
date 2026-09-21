@@ -54,7 +54,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
     canRequestFocus: false,
   );
   final _searchGroup = Object();
-  final _customizeButtonFocus = FocusNode(debugLabel: 'Customize OpenHarness');
+  final _customizeButtonFocus = FocusNode(debugLabel: 'Customize Harness');
   bool _customizing = false;
   SwarmSearchController? _search;
   SwarmSearchDraft? _draft;
@@ -372,7 +372,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
                             key: const ValueKey('harness-customize-button'),
                             focusNode: _customizeButtonFocus,
                             onPressed: onPressed,
-                            tooltip: 'Customize OpenHarness',
+                            tooltip: 'Customize Harness',
                             icon: const Icon(Icons.edit_outlined, size: 18),
                             style: IconButton.styleFrom(
                               backgroundColor: grid.AppPalette.swarmAccent,
@@ -387,7 +387,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
                           focusNode: _customizeButtonFocus,
                           onPressed: onPressed,
                           icon: const Icon(Icons.edit_outlined, size: 16),
-                          label: const Text('Customize OpenHarness'),
+                          label: const Text('Customize Harness'),
                           style: FilledButton.styleFrom(
                             backgroundColor: grid.AppPalette.swarmAccent,
                             foregroundColor: grid.AppPalette.swarmTabBar,

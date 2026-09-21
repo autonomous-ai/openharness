@@ -464,6 +464,10 @@ export class BackendSocket {
     this.orchestratorService?.delivery(event)
   }
   private orchestratorService: OrchestratorService | null = null
+  /** The commander asks this for every turn that ends — see OrchestratorService.roleOf. */
+  orchestratorRoleOf(agentId: string): ReturnType<OrchestratorService['roleOf']> {
+    return this.orchestration().roleOf(agentId)
+  }
   private orchestration(): OrchestratorService {
     return this.orchestratorService ??= new OrchestratorService({
       stateDir: join(env.ADAPTER_DATA_DIR, 'orchestrator'),

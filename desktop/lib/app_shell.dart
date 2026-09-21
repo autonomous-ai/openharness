@@ -114,7 +114,7 @@ class HarnessApp extends StatelessWidget {
       codeSize: grid.AppFont.codeSize,
     );
     return MaterialApp(
-      title: 'OpenHarness',
+      title: 'Harness',
       // Flutter's DEBUG ribbon stays on a debug build: it is how a locally built
       // app is told apart from the installed release at a glance (owner,
       // 2026-09-16). It never appears in a release build whatever this says.

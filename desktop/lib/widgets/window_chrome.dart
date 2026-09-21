@@ -58,7 +58,7 @@ class HarnessTopBar extends StatelessWidget {
         padding: EdgeInsets.only(left: trafficLightClearance),
         alignment: Alignment.centerLeft,
         child: Text(
-          'OpenHarness',
+          'Harness',
           style: TextStyle(
             fontSize: 12.5,
             fontWeight: FontWeight.w600,

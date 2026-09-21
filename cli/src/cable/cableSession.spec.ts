@@ -397,6 +397,23 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it('hands an open to the host with why the dial sent it — a tap says nothing, a question says so', async () => {
+    // A question screen that came up on its own opens with reason 'question'; the window then only brings
+    // the agent forward. A tap carries no reason, and so does anything the daemon does not know.
+    const host = makeHost()
+    const { session, port } = await connect(host)
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await settle()
+
+    port.say({ t: 'agent.open', agentId: 'a2' })
+    port.say({ t: 'agent.open', agentId: 'a2', reason: 'question' })
+    port.say({ t: 'agent.open', agentId: 'a2', reason: 'whim' })
+    await settle()
+
+    expect(vi.mocked(host.openAgent).mock.calls).toEqual([['a2', undefined], ['a2', 'question'], ['a2', undefined]])
+    await session.stop()
+  })
+
   it("never echoes the dial's own move back at it", async () => {
     // THE RING: the dial's carousel reports `focus` up, the daemon hands that to the window, the window
     // opens that agent's terminal, and a window opening a terminal is exactly what calls followApp. Left
@@ -977,6 +994,12 @@ describe('cable session', () => {
     expect(sent.find((m) => m.agentId === 'a1')).not.toHaveProperty('quiet')
     // The recap still travels — the tile draws it either way. Only the beep and the drawer are withheld.
     expect(sent.find((m) => m.agentId === 'a2')).toMatchObject({ quiet: true, recap: 'recap two' })
+
+    // A sub-agent's turn: silent — no beep, no drawer row — and the recap still travels.
+    await session.summary('a1', 'recap three', 'body three', false, true)
+    const silent = port.sent.filter((m) => m.t === 'summary' && m.agentId === 'a1').pop()
+    expect(silent).toMatchObject({ silent: true, recap: 'recap three' })
+    expect(silent).not.toHaveProperty('quiet')
   })
 
   it('redraws a reattached dial with what each agent was last doing', async () => {

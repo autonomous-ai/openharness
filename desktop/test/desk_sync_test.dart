@@ -1,11 +1,15 @@
 // The desk: the account's tabs, the same on every computer. The pure half
 // (diff and replay) and the window's half (a document becomes `swarms`, an
 // edit becomes ops, and what a window keeps for itself stays put).
+import 'dart:ui' show Rect;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/state/desk_sync.dart';
+import 'package:harness/state/pane_arrangement.dart';
+import 'package:harness/state/terminal_pane.dart';
 
 import 'swarm_state_test.dart' show createApp;
 
@@ -335,6 +339,160 @@ void main() {
         reason: 'applying the desk sends nothing back',
       );
     });
+
+    test('a document that did not move a tab\'s order leaves this window\'s tiles, sizes and pins alone', () async {
+      final api = _DeskApi()
+        ..doc = DeskDoc(
+          revision: 1,
+          tabs: [
+            tab('d1', name: 'One', custom: true, agents: ['a1', 'a2']),
+          ],
+        );
+      final app = createApp()..api = api;
+      addTearDown(app.dispose);
+      await app.deskStartForTest();
+      app.selectSwarm('d1');
+      final d1 = app.activeSwarm;
+      // This window's own furniture: a viewer between the two agents, a size the
+      // person dragged, a pin on the second agent.
+      final viewer = TerminalPane(
+        id: 900,
+        machineId: 'm',
+        kind: PaneKind.web,
+        ownerAgentId: 'a1',
+        url: 'http://127.0.0.1:1/',
+      );
+      d1.panes.insert(1, viewer);
+      final sizes = PaneArrangement([
+        Rect.fromLTWH(0, 0, 0.5, 1),
+        Rect.fromLTWH(0.5, 0, 0.5, 0.5),
+        Rect.fromLTWH(0.5, 0.5, 0.5, 0.5),
+      ]);
+      d1.savePaneSizes('3:manual', sizes);
+      app.togglePinPane(d1.panes[2].id);
+      await Future<void>.delayed(Duration.zero);
+      api.batches.clear();
+
+      // The 15 s poll, and a push about another tab: the same order for this one.
+      api.doc = DeskDoc(
+        revision: 5,
+        tabs: [
+          tab('d1', name: 'One', custom: true, agents: ['a1', 'a2']),
+          tab('d2', name: 'Two', custom: true, agents: ['a3']),
+        ],
+      );
+      await app.deskFetchForTest();
+      await app.handleEventForTest('m', {
+        'type': 'desk_changed',
+        'payload': {'revision': 6},
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(d1.panes.map((p) => p.agentId ?? 'viewer'), [
+        'a1',
+        'viewer',
+        'a2',
+      ]);
+      expect(identical(d1.paneSizes['3:manual'], sizes), isTrue);
+      expect(d1.pinnedSlots, {d1.panes[2].id: 2});
+      expect(api.batches, isEmpty, reason: 'nothing to say back');
+    });
+
+    test('a reorder made elsewhere moves the agent panes into their slots and nothing else', () async {
+      final api = _DeskApi()
+        ..doc = DeskDoc(
+          revision: 1,
+          tabs: [
+            tab('d1', name: 'One', custom: true, agents: ['a1', 'a2', 'a3']),
+          ],
+        );
+      final app = createApp()..api = api;
+      addTearDown(app.dispose);
+      await app.deskStartForTest();
+      app.selectSwarm('d1');
+      final d1 = app.activeSwarm;
+      final viewer = TerminalPane(
+        id: 900,
+        machineId: 'm',
+        kind: PaneKind.web,
+        ownerAgentId: 'a1',
+        url: 'http://127.0.0.1:1/',
+      );
+      d1.panes.insert(1, viewer);
+      final sizes = PaneArrangement([
+        Rect.fromLTWH(0, 0, 0.5, 1),
+        Rect.fromLTWH(0.5, 0, 0.5, 0.5),
+        Rect.fromLTWH(0.5, 0.5, 0.25, 0.5),
+        Rect.fromLTWH(0.75, 0.5, 0.25, 0.5),
+      ]);
+      d1.savePaneSizes('4:manual', sizes);
+      final a3 = d1.panes[3];
+      app.togglePinPane(a3.id); // pinned in slot 3
+      await Future<void>.delayed(Duration.zero);
+      api.batches.clear();
+
+      // The other Mac dragged a3 to the front.
+      api.doc = DeskDoc(
+        revision: 7,
+        tabs: [
+          tab('d1', name: 'One', custom: true, agents: ['a3', 'a1', 'a2']),
+        ],
+      );
+      await app.handleEventForTest('m', {
+        'type': 'desk_changed',
+        'payload': {'revision': 7},
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      // Agent panes take the agent slots (0, 2, 3) in the desk's order; the
+      // viewer keeps slot 1; the size arrangement is untouched; the pin
+      // followed a3 to its new slot.
+      expect(d1.panes.map((p) => p.agentId ?? 'viewer'), [
+        'a3',
+        'viewer',
+        'a1',
+        'a2',
+      ]);
+      expect(identical(d1.paneSizes['4:manual'], sizes), isTrue);
+      expect(d1.pinnedSlots, {a3.id: 0});
+      expect(app.deskSyncForTest.pending, isEmpty);
+      expect(
+        api.batches,
+        isEmpty,
+        reason: 'the order came from the desk; nothing to send back',
+      );
+    });
+
+    test(
+      'at the join the desk\'s order wins over the layout this window restored',
+      () async {
+        final id = newDeskId();
+        final api = _DeskApi()
+          ..doc = DeskDoc(
+            revision: 3,
+            tabs: [
+              tab(id, name: 'One', custom: true, agents: ['a2', 'a1']),
+            ],
+          );
+        final app = createApp()..api = api;
+        addTearDown(app.dispose);
+        // Restored from before: the same tab, the other way round.
+        app.newSwarm(name: 'One');
+        final local = app.activeSwarm..id = id;
+        await app.addAgentToSwarm('m', 'a1', swarmId: id);
+        await app.addAgentToSwarm('m', 'a2', swarmId: id);
+        expect(local.panes.map((p) => p.agentId), ['a1', 'a2']);
+
+        await app.deskStartForTest();
+        expect(app.swarms.where((s) => s.id == id).length, 1);
+        expect(local.panes.map((p) => p.agentId), ['a2', 'a1']);
+        expect(
+          api.batches.expand((b) => b).where((o) => o['op'] == 'pane.move'),
+          isEmpty,
+          reason: 'this window changed nothing',
+        );
+      },
+    );
 
     test('keeps its ops while the backend is unreachable and sends them once it is back', () async {
       final api = _DeskApi();

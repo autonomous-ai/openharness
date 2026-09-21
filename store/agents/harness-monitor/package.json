@@ -1,0 +1,12 @@
+{
+  "name": "@autonomous/harness-monitor-harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --import ./test/setup.mjs --test test/*.test.mjs",
+    "start": "./viewer.sh"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

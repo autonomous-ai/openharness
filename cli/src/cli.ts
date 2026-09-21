@@ -150,7 +150,7 @@ import { RemoteRelayPool } from './lib/remoteRelay.js'
 import { TERMINAL_BINARY_VERSION } from './lib/terminalBinary.js'
 import { foldTranscript, lastTurnTextFromRawLines, lineToEvents, newTurnState, type LiveEvent, type TurnState } from './lib/normalize.js'
 import { AskQuestionController, pollsQuestions, QuestionWatcher } from './lib/askQuestion.js'
-import { CommanderMirror, type CommanderMirrorOpts } from './lib/commander.js'
+import { CommanderMirror, SUBAGENT_IDLE_MS, type CommanderMirrorOpts } from './lib/commander.js'
 import {
   setSummaryPoolDeviceConnected,
   shutdownSummaryPool,
@@ -2375,6 +2375,25 @@ async function runForeground(session: AuthSession): Promise<void> {
     ...summarizer,
     nameFor: (sessionId) => { const s = registry.bySession(sessionId); return s ? projectDisplayName(s) : undefined },
     agentIdFor: (sessionId) => registry.bySession(sessionId)?.agentId,
+    // An Orchestrator specialist's turn end, or the Director's while specialists are still out, is not
+    // announced: the person asked to hear from the main agent once, not from every sub-agent.
+    isSubagent: (sessionId) => {
+      const agentId = registry.bySession(sessionId)?.agentId
+      if (!agentId) return false
+      const role = backend.orchestratorRoleOf(agentId)
+      return role?.role === 'worker' || (role?.role === 'director' && role.busy)
+    },
+    // A claude sub-agent still at work is one whose transcript is still growing:
+    // `<session>/subagents/agent-<id>.jsonl` beside the parent's (the same file enrichSubagentStats
+    // reads). Written in the last SUBAGENT_IDLE_MS = alive; the held turn end waits for it.
+    subagentActive: (sessionId, agentId) => {
+      const transcriptPath = registry.bySession(sessionId)?.transcriptPath
+      if (!transcriptPath) return false
+      try {
+        const at = statSync(join(transcriptPath.replace(/\.jsonl$/, ''), 'subagents', `agent-${agentId}.jsonl`)).mtimeMs
+        return Date.now() - at < SUBAGENT_IDLE_MS
+      } catch { return false }
+    },
     readLastTurn: async (sessionId) => {
       const s = registry.bySession(sessionId)
       if (!s) return null
@@ -3783,6 +3802,10 @@ async function runForeground(session: AuthSession): Promise<void> {
     backend,
     relayPool,
     autonomousEnv: readAuthSession()?.autonomousEnv ?? session.autonomousEnv,
+    // A window from before it introduced itself still gets named on the far side's "took control"
+    // banner: the relay knows it is this machine's desktop. Same source as `describeClient` above.
+    // Cut to the wire's limit here rather than let the far daemon drop the whole claim over a long name.
+    localClient: () => ({ kind: 'desktop', name: terminalHintMachineName().slice(0, 64), machineId: backend.machineId }),
   })
   // Install both CLI hooks with the port the local server actually bound.
   if (!env.DISABLE_HOOK_INSTALL) {
@@ -5312,8 +5335,11 @@ async function runForeground(session: AuthSession): Promise<void> {
     // Both of these are LOCAL-ONLY on purpose (backend.sendLocal, not backend.send): they describe a hand
     // at this desk, not a change in what the machine is doing, and the cloud web audience may be sitting
     // at another computer entirely.
-    // A notification tap, which asks for a tile of its OWN — see CableHost.openAgent.
-    opened: (machineId, agentId) => backend.sendLocal({ type: 'dial_open', payload: { machineId, agentId } }),
+    // A notification tap, which asks for a tile of its OWN — see CableHost.openAgent. `reason` rides
+    // along only when the dial gave one ('question'): the window then brings the agent forward rather
+    // than opening a tab, and an older window that does not know the field opens one as before.
+    opened: (machineId, agentId, reason) =>
+      backend.sendLocal({ type: 'dial_open', payload: { machineId, agentId, ...(reason ? { reason } : {}) } }),
     forked: (machineId, agentId, sourceAgentId) => backend.sendLocal({ type: 'dial_forked', payload: { machineId, agentId, sourceAgentId } }),
     // The dial's Fork: the same path the window's `agent_fork` takes, then `forked` above lands on it.
     forkAgent: async (agentId) => {
@@ -5406,10 +5432,10 @@ async function runForeground(session: AuthSession): Promise<void> {
     if (event.kind === 'processing') void cable.turnStarted(event.agentId, event.text)
     else if (event.kind === 'done') void cable.turnDone(event.agentId)
     else if (event.kind === 'summary') {
-      // Quiet when the window already has this agent on screen. The tile still
-      // updates — the recap is what it draws — only the beep and the drawer
-      // entry are withheld, because they exist for a turn nobody is watching.
-      void cable.summary(event.agentId, event.recap || event.text, event.text, openPaneAgents.has(event.agentId))
+      // Quiet when the window already has this agent on screen; silent when the
+      // turn was a sub-agent's. The tile still updates — the recap is what it
+      // draws — only the beep and the drawer entry are withheld.
+      void cable.summary(event.agentId, event.recap || event.text, event.text, openPaneAgents.has(event.agentId), event.subagent)
     }
     else void cable.turnError(event.agentId, event.text)
   }
@@ -5432,10 +5458,11 @@ async function runForeground(session: AuthSession): Promise<void> {
     if (event.kind === 'processing') void cable.turnStarted(event.agentId, event.text)
     else if (event.kind === 'done') void cable.turnDone(event.agentId)
     else if (event.kind === 'summary') {
-      // Quiet when the window already has this agent on screen. The tile still
+      // Quiet when the window already has this agent on screen; silent when the
+      // turn was a sub-agent's (decided on its own machine). The tile still
       // updates — the recap is what it draws — only the beep and the drawer
-      // entry are withheld, because they exist for a turn nobody is watching.
-      void cable.summary(event.agentId, event.recap || event.text, event.text, openPaneAgents.has(event.agentId))
+      // entry are withheld.
+      void cable.summary(event.agentId, event.recap || event.text, event.text, openPaneAgents.has(event.agentId), event.subagent === true)
     }
     else void cable.turnError(event.agentId, event.text)
   })

@@ -3066,18 +3066,18 @@ class AppNotifier extends ChangeNotifier {
       final staged = await updater.downloadAndStage(info);
       if (staged == null) {
         updateError =
-            'Could not download and verify OpenHarness ${info.version}.';
+            'Could not download and verify Harness ${info.version}.';
         return false;
       }
       final applied = await updater.applyStaged(staged, selfPid: pid);
       if (!applied) {
         updateError =
-            'This copy of OpenHarness cannot install updates automatically.';
+            'This copy of Harness cannot install updates automatically.';
         return false;
       }
       exit(0);
     } catch (error) {
-      updateError = 'Could not install OpenHarness ${info.version}: $error';
+      updateError = 'Could not install Harness ${info.version}: $error';
       return false;
     } finally {
       isInstallingUpdate = false;
@@ -7799,10 +7799,28 @@ class AppNotifier extends ChangeNotifier {
     return known();
   }
 
-  Future<void> openAgentFromDial(String machineId, String agentId) async {
+  /// The dial asked for this agent on screen. A tap (a notification, the
+  /// question's eyebrow, the carousel) gets a tile of its own when none shows
+  /// the agent. A question screen that came up on its own ([fromQuestion])
+  /// only brings the agent forward when it is already on screen: every
+  /// unanswered question is re-shown on each reconnect, and a blink in the
+  /// link used to open a row of tabs — on every Mac, once tabs were shared
+  /// (owner, 2026-09-21).
+  Future<void> openAgentFromDial(
+    String machineId,
+    String agentId, {
+    bool fromQuestion = false,
+  }) async {
     if (revealAgentView(machineId, agentId)) {
       selectedMachineId = machineId;
       notifyListeners();
+      return;
+    }
+    if (fromQuestion) {
+      appLog.debug(
+        'dial',
+        'question for $agentId not on screen — tabs left as they are',
+      );
       return;
     }
     // Its own tab. newSwarm reuses an unused start page when there is one, and
@@ -8668,7 +8686,10 @@ class AppNotifier extends ChangeNotifier {
         .where((t) => !doc.tabs.any((d) => d.id == t.id))
         .toList();
     _desk.revision = doc.revision;
-    _desk.synced = doc.tabs;
+    // What this window believes at the join is its own layout: the desk's
+    // order then wins where the two differ (it moved while this window was
+    // away), and the seed is the desk learning the rest.
+    _desk.synced = own;
     if (unknown.isNotEmpty) {
       _desk.pending.add({
         'op': 'seed',
@@ -8681,6 +8702,14 @@ class AppNotifier extends ChangeNotifier {
     );
     _deskApply(doc);
     await _deskFlush();
+  }
+
+  static bool _sameKeys(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   /// Called from [_persistLayout]: whatever just changed, said to the desk as ops.
@@ -8772,8 +8801,9 @@ class AppNotifier extends ChangeNotifier {
     if (doc.revision < _desk.revision) return;
     _desk.revision = doc.revision;
     final target = applyDeskOps(doc.tabs, _desk.pending);
+    final believed = _desk.synced;
     _desk.synced = target;
-    _deskReconcile(target);
+    _deskReconcile(target, believed: believed);
   }
 
   /// Make `swarms` say what [target] says, and no more: tabs the desk closed go
@@ -8781,8 +8811,19 @@ class AppNotifier extends ChangeNotifier {
   /// opened arrive as intent and attach as their machines answer, names the
   /// person chose follow, order follows. Focus, zoom, sizes, pins, viewers and
   /// this window's own local-only tabs are left exactly where they were.
-  void _deskReconcile(List<DeskTab> target) {
+  ///
+  /// [believed] is the desk as this window last knew it. A tab's pane order is
+  /// touched only where the desk's order MOVED since then — a drag on another
+  /// Mac — and then only among the agent panes, each keeping its slot's size
+  /// and its pin, the way a local drag does. Rebuilding the order from every
+  /// document that arrived (the 15 s poll included) was what shuffled tiles
+  /// and their sizes under a person's hands (owner, 2026-09-21).
+  void _deskReconcile(
+    List<DeskTab> target, {
+    List<DeskTab> believed = const [],
+  }) {
     final targetById = {for (final t in target) t.id: t};
+    final believedById = {for (final t in believed) t.id: t};
     final before = _deskProjection();
     final released = <TerminalPane>[];
 
@@ -8828,14 +8869,10 @@ class AppNotifier extends ChangeNotifier {
           }
         }
       }
+      String keyOf(TerminalPane p) => '${p.machineId}\u0000${p.agentId}';
       for (var i = 0; i < tab.panes.length; i++) {
         final ref = tab.panes[i];
-        final existing = swarm.panes
-            .where(
-              (p) => p.machineId == ref.machineId && p.agentId == ref.agentId,
-            )
-            .firstOrNull;
-        if (existing != null) continue;
+        if (swarm.panes.any((p) => keyOf(p) == ref.key)) continue;
         // One TerminalPane per (machine, agent) across tabs — the same rule the
         // restore keeps — so a second tab showing an agent reuses its stream.
         final pane =
@@ -8850,38 +8887,58 @@ class AppNotifier extends ChangeNotifier {
               machineId: ref.machineId,
               agentId: ref.agentId,
             );
-        swarm.panes.insert(i.clamp(0, swarm.panes.length), pane);
+        // After the agent pane the desk lists before it, whatever else (a
+        // viewer, an empty tile) sits between; at the end when it is first.
+        final after = i == 0
+            ? -1
+            : swarm.panes.indexWhere((p) => keyOf(p) == tab.panes[i - 1].key);
+        swarm.panes.insert(
+          after < 0 && i > 0 ? swarm.panes.length : after + 1,
+          pane,
+        );
         swarm.focusedPaneId ??= pane.id;
       }
-      // Order among agent panes, viewers riding beside their owners.
-      final agentOrder = {
-        for (var i = 0; i < tab.panes.length; i++) tab.panes[i].key: i,
-      };
-      final ordered = swarm.panes.where((p) => p.agentId != null).toList()
-        ..sort(
-          (a, b) => (agentOrder['${a.machineId}\u0000${a.agentId}'] ?? 0)
-              .compareTo(agentOrder['${b.machineId}\u0000${b.agentId}'] ?? 0),
-        );
-      final rebuilt = <TerminalPane>[];
-      for (final pane in ordered) {
-        rebuilt.add(pane);
-        rebuilt.addAll(
-          swarm.panes.where(
-            (v) =>
-                v.isWeb &&
-                v.machineId == pane.machineId &&
-                v.ownerAgentId == pane.agentId,
-          ),
-        );
-      }
-      for (final pane in swarm.panes) {
-        if (!rebuilt.contains(pane)) {
-          rebuilt.add(pane);
+      // Order among the agent panes: the desk's, but only where the desk's own
+      // order moved since this window last agreed with it. The panes keep
+      // their slots (so their sizes) and everything that is not an agent pane
+      // stays exactly where it was; a pin follows its pane, as it does on a
+      // local drag.
+      final wantedOrder = [
+        for (final ref in tab.panes)
+          if (swarm.panes.any((p) => keyOf(p) == ref.key)) ref.key,
+      ];
+      final known = believedById[tab.id]?.panes.map((p) => p.key).toSet();
+      final knownOrder = known == null
+          ? null
+          : [
+              for (final ref in believedById[tab.id]!.panes)
+                if (wantedOrder.contains(ref.key)) ref.key,
+            ];
+      final moved =
+          knownOrder == null ||
+          !_sameKeys(knownOrder, wantedOrder.where(known!.contains).toList());
+      if (moved) {
+        final slots = <int>[];
+        for (var i = 0; i < swarm.panes.length; i++) {
+          if (swarm.panes[i].agentId != null) slots.add(i);
+        }
+        final byKey = {for (final p in swarm.panes) keyOf(p): p};
+        final inOrder = [for (final k in wantedOrder) byKey[k]!];
+        if (slots.length == inOrder.length) {
+          final pinnedAt = <TerminalPane, int>{};
+          for (var j = 0; j < slots.length; j++) {
+            final pane = inOrder[j];
+            final was = swarm.panes.indexOf(pane);
+            final slot = swarm.pinnedSlots[pane.id] ?? pane.pinnedSlot;
+            if (slot != null && slot == was) pinnedAt[pane] = slots[j];
+            swarm.panes[slots[j]] = pane;
+          }
+          for (final entry in pinnedAt.entries) {
+            swarm.pinnedSlots[entry.key.id] = entry.value;
+            if (hasNavigationRail) entry.key.pinnedSlot = entry.value;
+          }
         }
       }
-      swarm.panes
-        ..clear()
-        ..addAll(rebuilt);
       if (!swarm.nameIsCustom &&
           swarm.titleAgentId == null &&
           swarm.panes.isNotEmpty) {
@@ -9406,7 +9463,13 @@ class AppNotifier extends ChangeNotifier {
         if (openId is String && openId.isNotEmpty) {
           final targetMachineId = _dialFocusMachine(payload, openId);
           if (targetMachineId != null) {
-            unawaited(openAgentFromDial(targetMachineId, openId));
+            unawaited(
+              openAgentFromDial(
+                targetMachineId,
+                openId,
+                fromQuestion: payload['reason'] == 'question',
+              ),
+            );
           }
         }
         break;

@@ -5,6 +5,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:harness_mobile/core/app_version.dart';
+import 'package:harness_mobile/core/device_name.dart';
+import 'package:harness_mobile/shared/widgets/app_dialog.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/appearance_prefs_store.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
@@ -13,6 +15,7 @@ import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 
 import 'phone_header.dart';
+import 'phone_name_store.dart';
 import 'phone_sheet.dart';
 import 'settings_row.dart';
 import 'stats_entry.dart';
@@ -142,6 +145,7 @@ class _Body extends StatelessWidget {
           // are untouched and still work; this is the only thing that was
           // drawing them.
           if (_showVoiceLanguage) _VoiceLanguageRow(),
+          _PhoneNameRow(notifier: notifier),
           _FontRow(),
           _SizeRow(),
           _TerminalThemeRow(),
@@ -226,6 +230,101 @@ class _VoiceLanguageRow extends StatelessWidget {
       );
     },
   );
+}
+
+/// What this phone is called on another screen's "took control" banner —
+/// the name the OS gives it until the person types their own here.
+class _PhoneNameRow extends StatelessWidget {
+  const _PhoneNameRow({required this.notifier});
+
+  final AppNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder(
+    valueListenable: phoneNameStore,
+    builder: (context, override, _) {
+      AppTheme.watch(context);
+      return SettingsRow(
+        key: const ValueKey('settings-phone-name'),
+        title: 'This phone',
+        detail: 'How a desktop names this phone when it takes a terminal',
+        value: notifier.phoneClientDescriptor().name,
+        onTap: () => unawaited(
+          showAppDialog<void>(
+            context: context,
+            builder: (_) => _PhoneNameDialog(
+              current: override ?? '',
+              placeholder: composePhoneName(
+                device: NativeDeviceInfo.cached,
+                userName: notifier.currentUser?.isLocalSession == true
+                    ? null
+                    : notifier.currentUser?.name,
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+/// Owns its controller for the reason `widgets/rename_agent_dialog.dart` gives:
+/// a controller disposed while the route is still animating out is a red screen.
+class _PhoneNameDialog extends StatefulWidget {
+  const _PhoneNameDialog({required this.current, required this.placeholder});
+
+  /// The override on file, or empty for "the OS's name".
+  final String current;
+
+  /// What the phone is called with no override — shown as the field's hint.
+  final String placeholder;
+
+  @override
+  State<_PhoneNameDialog> createState() => _PhoneNameDialogState();
+}
+
+class _PhoneNameDialogState extends State<_PhoneNameDialog> {
+  late final _controller = TextEditingController(text: widget.current);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    unawaited(phoneNameStore.rename(_controller.text));
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return AlertDialog(
+      title: const Text('This phone'),
+      content: SizedBox(
+        width: 360,
+        child: TextField(
+          key: const ValueKey('settings-phone-name-field'),
+          controller: _controller,
+          autofocus: true,
+          maxLength: phoneNameMax,
+          decoration: InputDecoration(
+            hintText: widget.placeholder,
+            helperText: 'Leave empty to use the name above.',
+          ),
+          onSubmitted: (_) => _submit(),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Save')),
+      ],
+    );
+  }
 }
 
 /// The terminal typeface. A sheet rather than a dropdown: a phone has room for the whole list.

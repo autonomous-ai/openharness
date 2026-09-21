@@ -112,7 +112,7 @@ class _LoopbackCallback {
       ..headers.contentType = ContentType.html
       ..write(
         _page(
-          signedIn ? 'Signed in to OpenHarness' : 'OpenHarness sign-in failed',
+          signedIn ? 'Signed in to Harness' : 'Harness sign-in failed',
         ),
       );
     await response.close();
@@ -140,4 +140,4 @@ String _page(String title) =>
     '<!doctype html><meta charset="utf-8"><title>$title</title>'
     '<body style="font:16px system-ui,sans-serif;text-align:center;padding:4em 1em">'
     '<h1 style="font-weight:600">$title</h1>'
-    '<p>You can close this window and go back to OpenHarness.</p></body>';
+    '<p>You can close this window and go back to Harness.</p></body>';

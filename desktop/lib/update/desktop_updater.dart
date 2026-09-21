@@ -36,7 +36,7 @@ String _currentArchitecture() => switch (Abi.current()) {
   Abi.linuxArm64 || Abi.macosArm64 || Abi.windowsArm64 => 'arm64',
   Abi.linuxX64 || Abi.macosX64 || Abi.windowsX64 => 'x64',
   _ => throw UnsupportedError(
-    'OpenHarness updates do not support ${Abi.current()}',
+    'Harness updates do not support ${Abi.current()}',
   ),
 };
 

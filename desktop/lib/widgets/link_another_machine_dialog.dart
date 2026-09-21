@@ -572,7 +572,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
           ),
         ] else ...[
           Text(
-            '1. Install OpenHarness for macOS or Linux.',
+            '1. Install Harness for macOS or Linux.',
             style: boxMonoStyle(size: 12),
           ),
           const SizedBox(height: 4),
@@ -584,7 +584,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
             spacing: 8,
             children: [
               _button(
-                'Download OpenHarness',
+                'Download Harness',
                 () => unawaited(_download()),
                 focus: _guideFocus,
               ),

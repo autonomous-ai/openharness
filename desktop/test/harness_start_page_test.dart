@@ -230,8 +230,8 @@ void main() {
       await tester.pump();
       final button = find.byKey(const ValueKey('harness-customize-button'));
       expect(tester.widget(button), isA<IconButton>());
-      expect(find.byTooltip('Customize OpenHarness'), findsOneWidget);
-      expect(find.text('Customize OpenHarness'), findsNothing, reason: 'no label over the picture');
+      expect(find.byTooltip('Customize Harness'), findsOneWidget);
+      expect(find.text('Customize Harness'), findsNothing, reason: 'no label over the picture');
       await tester.tap(button);
       await tester.pumpAndSettle();
       final pane = find.byKey(const ValueKey('harness-customize-pane'));

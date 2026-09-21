@@ -4,10 +4,10 @@ import '../../shared/theme/app_theme.dart' as grid;
 import '../appearance/typography_section.dart';
 import '../appearance/palette_section.dart';
 
-/// Customize OpenHarness ▸ Appearance: how the app looks on this Mac.
+/// Customize Harness ▸ Appearance: how the app looks on this Mac.
 ///
 /// Palettes coordinate the workspace and terminal defaults. UI typography stays
-/// separate from the agent terminal's font and size in Customize OpenHarness ▸ Terminal.
+/// separate from the agent terminal's font and size in Customize Harness ▸ Terminal.
 class AppearanceSection extends StatelessWidget {
   const AppearanceSection({super.key});
 

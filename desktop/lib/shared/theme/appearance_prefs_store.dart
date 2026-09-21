@@ -13,7 +13,7 @@ import 'prompt_style.dart';
 ///
 /// This does not change the terminal's type. The terminal renders a grid a remote
 /// program draws into, so it keeps its own face and its own size in
-/// [TerminalFontStore], reached from Customize OpenHarness ▸ Terminal — and the app's UI
+/// [TerminalFontStore], reached from Customize Harness ▸ Terminal — and the app's UI
 /// scale is fenced out of it at five seams (see the notes in
 /// `terminal_panel.dart` and `terminal_composer.dart`, and the regression test
 /// in `test/terminal_ui_scale_isolation_test.dart`).

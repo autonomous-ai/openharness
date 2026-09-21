@@ -527,8 +527,8 @@ void main() {
     // covered as well as the standalone screen's presentation tests.
     expect(find.byType(BootstrappingScreen), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
-    expect(find.text('Getting OpenHarness ready'), findsOneWidget);
-    expect(find.text('Opening OpenHarness…'), findsOneWidget);
+    expect(find.text('Getting Harness ready'), findsOneWidget);
+    expect(find.text('Opening Harness…'), findsOneWidget);
     expect(find.text('Sign in'), findsNothing);
   });
 
@@ -611,7 +611,7 @@ void main() {
       expect(find.text('Finish setup in Terminal'), findsOneWidget);
       expect(find.text('Managed Node 20+ & Harness CLI'), findsOneWidget);
       expect(find.text('Recheck now'), findsOneWidget);
-      expect(find.text('OpenHarness cannot see your password'), findsOneWidget);
+      expect(find.text('Harness cannot see your password'), findsOneWidget);
     },
   );
 
@@ -918,7 +918,7 @@ void main() {
     // Endless animation on the sign-in screen underneath; pump instead.
     await tester.pump(const Duration(milliseconds: 200));
 
-    expect(find.text('OpenHarness 1.2.3 is available'), findsOneWidget);
+    expect(find.text('Harness 1.2.3 is available'), findsOneWidget);
     expect(find.byKey(const Key('install-update-button')), findsOneWidget);
     expect(find.byKey(const Key('skip-update-button')), findsOneWidget);
   });
