@@ -547,6 +547,33 @@ exec /bin/sh -c "$script" "$@"
   return shell
 }
 
+/** The real zsh, if this machine has one. macOS always does; a Linux CI box may not. */
+const ZSH = ['/bin/zsh', '/usr/bin/zsh'].find((path) => existsSync(path)) ?? null
+
+/**
+ * A probe shell that hands the script to the REAL zsh. `bashProbeShell` runs everything through
+ * `/bin/sh` and so cannot see a zsh-only parse rule — and zsh is what macOS defaults $SHELL to,
+ * i.e. the shell the capability probe actually runs under for most users. Plain `-c` rather than
+ * zsh's interactive form keeps the case hermetic: no developer's rc file gets a say in the result.
+ */
+function zshProbeShell(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'harness-engine-zsh-shell-'))
+  dirs.push(dir)
+  // Named `zsh` so interactiveEngineShell hands it zsh's own `-lic`, exactly as it would $SHELL.
+  const shell = join(dir, 'zsh')
+  writeFileSync(shell, `#!/bin/sh
+[ "$1" = '-lic' ] || exit 97
+shift
+script="$1"
+shift
+PATH="$HARNESS_ENGINE_TEST_PATH"
+export PATH
+exec ${ZSH} -c "$script" "$@"
+`)
+  chmodSync(shell, 0o700)
+  return shell
+}
+
 describe('commandAvailableInInteractiveShell', () => {
   it('uses the same bash interactive PATH that launches a new engine', async () => {
     const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-bin-'))
@@ -611,6 +638,34 @@ describe('commandSupportsFlagInInteractiveShell', () => {
     await expect(
       commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', bashProbeShell()),
     ).resolves.toBe('unknown')
+  })
+
+  // zsh makes `status` a read-only alias of `$?`, so a bare `status=$?` in the probe script is a
+  // fatal error there: the shell dies with exit 1, which this function reads as `unsupported`.
+  // macOS defaults $SHELL to zsh, so that one name turned every Codex Auto launch on a Mac into
+  // "your installed Codex CLI does not support --approve-for-me" whatever version was installed.
+  it.skipIf(!ZSH)('answers from zsh too, where `status` is a read-only parameter', async () => {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-capability-zsh-'))
+    dirs.push(binDir)
+    const codex = join(binDir, 'codex')
+    writeFileSync(
+      codex,
+      '#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" "--approve-for-me"; exit 0; fi\nexit 2\n',
+    )
+    chmodSync(codex, 0o700)
+    process.env.HARNESS_ENGINE_TEST_PATH = binDir
+
+    await expect(
+      commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', zshProbeShell()),
+    ).resolves.toBe('supported')
+
+    writeFileSync(
+      codex,
+      '#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" "--sandbox"; exit 0; fi\nexit 2\n',
+    )
+    await expect(
+      commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', zshProbeShell()),
+    ).resolves.toBe('unsupported')
   })
 })
 
