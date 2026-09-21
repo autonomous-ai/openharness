@@ -43,7 +43,7 @@ import { DaemonCableHost, cableEventFor, cableQuestionFor, cableQuestionCloseFor
 import { MachineListCache, machineListCachePath, withStaleMarker } from './device/machineList.js'
 import { DeviceLink } from './device/deviceLink.js'
 import { DeviceFleet } from './device/deviceFleet.js'
-import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from './lib/registry.js'
+import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
 import { engineSessionTitle } from './lib/sessionTitle.js'
 import { installAmpPlugin, installCodexHooks, installCommandCodeHooks, installCursorHooks, installDevinHooks, installGrokHooks, installAgyHooks, installCopilotHooks, installHermesHooks, installKiloPlugin, installOpencodePlugin, installPiExtension, installSessionHooks } from './lib/hooks.js'
 import { PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
@@ -85,7 +85,8 @@ import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
-import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed } from './lib/resumeStoppedAgent.js'
+import { createStopAgentService } from './lib/stopAgentService.js'
+import { createResumeAgentService } from './lib/resumeAgentService.js'
 import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from './lib/launchOverrides.js'
 import { prepareCodexResume } from './engines/codex/portableHistory.js'
 import { buildHarnessSessionLabel } from './lib/harnessSessionLabel.js'
@@ -4514,7 +4515,6 @@ async function runForeground(session: AuthSession): Promise<void> {
    * half that drifts is the half nobody ran today.
    */
   const restartJobs = new AgentRestartCoordinator()
-  const resumeConversations = new Set<string>()
   const sameRestartTarget = (session: RegisteredSession): boolean => {
     const current = registry.byAgent(session.agentId)
     return !!current && current.registeredAt === session.registeredAt
@@ -4799,194 +4799,16 @@ async function runForeground(session: AuthSession): Promise<void> {
    * SIGTERM/SIGKILL fallback. Engine conversation files, recaps and the Harness name remain on disk.
    */
   const stopJobs = new Map<string, Promise<void>>()
-  backend.onDeleteAgent = (target) => {
-    const sessionId = registry.resolve(target)?.agentId ?? target
-    const existing = stopJobs.get(sessionId)
-    if (existing) return existing
-    restartJobs.cancel(sessionId)
-    const job = Promise.resolve().then(async () => {
-      const s = registry.resolve(sessionId)
-      if (!s) return
-      // Saving precedes every mutation. A storage failure leaves the live agent alone.
-      stoppedAgents.save(s)
-      markDeleted(sessionId)
-      if (s.sessionId) markDeleted(s.sessionId)
-      if (s.processIdentity) agentReconciler.suppress(s)
-      forgetSession(sessionId, { force: true })
-      const paneStop = tmuxBackend
-        ? Promise.all(s.runtimes.filter((runtime): runtime is TmuxRuntimeRef => runtime.backend === 'tmux')
-          .map(runtime => tmuxBackend!.kill(runtime)))
-        : Promise.resolve([])
-      const processStop = isTerminalEngine(s.engine) ? Promise.resolve('gone' as const)
-        : terminateDeletedAgent(s, {
-          checkRuntime: checkPidRuntime,
-          kill: (pid, signal) => process.kill(pid, signal),
-          sleep: ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() }),
-          log: message => console.log(message),
-        }, 0)
-      const [paneOutcomes, outcome] = await Promise.all([paneStop, processStop])
-      if (outcome !== 'failed') {
-        if (paneOutcomes.every(result => result.state === 'succeeded')) stoppedAgents.finishResume(sessionId)
-        clearDeleted(sessionId)
-        if (s.sessionId) clearDeleted(s.sessionId)
-      }
-      void agentReconciler.trigger()
-    }).finally(() => {
-      if (stopJobs.get(sessionId) === job) stopJobs.delete(sessionId)
-    })
-    stopJobs.set(sessionId, job)
-    return job
-  }
-
-  const waitForResume = async (saved: RegisteredSession, current: () => boolean) => {
-    const result = await waitForResumedAgent(saved, {
-      current: () => current() && registry.byAgent(saved.agentId)?.tmuxPane === saved.tmuxPane,
-      session: () => registry.byAgent(saved.agentId),
-      process: () => resolvePaneEngineProcess(saved.tmuxPane, saved.engine),
-      pane: () => tmuxPaneState(saved.tmuxPane),
-      sleep: ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() }),
-    })
-    if (!current()) return resumeChanged
-    if (result.ok) {
-      await clearPaneRemainOnExit(saved.tmuxPane)
-      if (!current()) return resumeChanged
-      stoppedAgents.finishResume(saved.agentId)
-      announceSession(result.session)
-    } else if (result.error !== 'AGENT_CHANGED') {
-      const row = registry.byAgent(saved.agentId)
-      if (row && row.tmuxPane === saved.tmuxPane) {
-        const failed = registry.setLaunch(row.agentId, { state: 'failed', error: result.error, detail: result.detail })
-        if (failed) announceSession(failed)
-        // A verified exit releases the reservation and keeps the shell/output. Unknown startup
-        // keeps both runtime and reservation; another Enter cannot launch a duplicate process.
-        if (result.error === 'RESUME_FAILED' && (await checkPidRuntime(row)).state === 'gone') {
-          if (!current()) return resumeChanged
-          const pane = await tmuxPaneState(saved.tmuxPane)
-          if (!current()) return resumeChanged
-          retainExitedSession(row, !!pane && !pane.dead)
-          stoppedAgents.finishResume(saved.agentId)
-        }
-      }
-    }
-    return result
-  }
-
-  const resumeStopped = (agentId: string, current: () => boolean) => resumeStoppedAgent({
-    live: () => registry.byAgent(agentId),
-    saved: () => stoppedAgents.get(agentId),
-    current,
-    checkLive: async entry => {
-      if (!entry.tmuxPane) return { state: 'unknown', reason: 'Only tmux resume is supported.' }
-      const inventory = await listTmuxPanes()
-      if (!inventory.ok) return { state: 'unknown', reason: 'Terminal inventory is unavailable.' }
-      const paneAlive = inventory.panes.some(pane => pane.tmuxPane === entry.tmuxPane)
-      if (isTerminalEngine(entry.engine)) return paneAlive ? { state: 'alive' } : { state: 'gone', reason: 'Shell pane is gone.' }
-      const process = await checkPidRuntime(entry)
-      if (process.state !== 'gone') {
-        if (!paneAlive || process.state === 'unknown') return { state: 'unknown', reason: 'The previous process is not available through its saved terminal.' }
-        return checkSessionRuntime(entry)
-      }
-      if (!entry.processIdentity && paneAlive) return { state: 'unknown', reason: 'The engine has not been identified yet.' }
-      return process
-    },
-    retain: async entry => {
-      const inventory = await listTmuxPanes()
-      if (!inventory.ok) throw new Error('Could not verify the previous terminal. Try again.')
-      if (!current()) return
-      retainExitedSession(entry, inventory.panes.some(pane => pane.tmuxPane === entry.tmuxPane))
-    },
-    waitForReady: saved => waitForResume(saved, current),
-    canLaunch: async saved => {
-      await stopJobs.get(agentId)
-      return !registry.bySession(saved.sessionId) && (await checkPidRuntime(saved)).state === 'gone'
-    },
-    launch: async (saved, resumeSessionId) => {
-      if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
-      if (saved.grid && !saved.gridLaunch) return { ok: false, error: 'GRID_CREDENTIAL_REQUIRED', detail: 'The saved provider configuration is unavailable.' }
-      if (saved.dsh && !installedDsh(saved.dsh)) return { ok: false, error: 'INVALID_DSH', detail: 'Install this harness from the Harness Store before resuming it.' }
-      try {
-        if (!saved.cwd || !statSync(saved.cwd).isDirectory()) return { ok: false, error: 'CWD_NOT_FOUND', detail: 'The saved project folder is no longer available.' }
-      } catch { return { ok: false, error: 'CWD_NOT_FOUND', detail: 'The saved project folder is no longer available.' } }
-      if (resumeSessionId && (!saved.transcriptPath || !validTranscriptPath(saved.engine, saved.transcriptPath, saved.codexHome ?? undefined))) {
-        return { ok: false, error: 'RESUME_UNAVAILABLE', detail: 'The saved conversation file is unavailable. Start a new conversation separately.' }
-      }
-      // Match the registry's globally unique conversation index, including aliases/profiles.
-      const key = saved.sessionId || saved.agentId
-      if (resumeConversations.has(key)) return { ok: false, error: 'AGENT_BUSY' }
-      resumeConversations.add(key)
-      let token: string | null = null
-      let allocationAttempted = false
-      try {
-        // Reserve before preparing history or rewriting launch configuration: an unknown previous
-        // allocation may still have a writer using those files.
-        token = stoppedAgents.beginResume(agentId)
-        if (!token) return resumeUnconfirmed
-        const built = await relaunchOverrides(saved)
-        if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
-        if (!current()) return resumeChanged
-        if (resumeSessionId) {
-          try { prepareSessionResume(saved) } catch {
-            return { ok: false, error: 'RESUME_PREPARATION_FAILED', detail: 'Could not prepare the saved conversation. Its history has been retained.' }
-          }
-        }
-        if (saved.sessionId && registry.bySession(saved.sessionId)) return { ok: false, error: 'AGENT_BUSY' }
-        const { env: launchEnv, extraArgs, clearEnv } = built.overrides
-        const options = {
-          resumeSessionId,
-          bypassPermission: saved.bypassPermission === true,
-          ...(saved.permissionMode ? { permissionMode: saved.permissionMode } : {}),
-          ...(saved.cwd ? { cwd: saved.cwd } : {}),
-          ...(extraArgs.length ? { extraArgs } : {}),
-          ...(clearEnv.length ? { clearEnv } : {}),
-          ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
-          installIfMissing: enginePathOverride(saved.engine) ? undefined : engineInstallRecipe(saved.engine),
-        }
-        clearDeleted(agentId)
-        if (saved.sessionId) clearDeleted(saved.sessionId)
-        allocationAttempted = true
-        const result = await createAndRegisterPane({
-          tmuxBackend,
-          registry: { openPendingAgent: input => current() ? registry.resumePendingAgent(saved, input.runtimes) : null },
-          maxAttempts: 1,
-          engine: saved.engine,
-          sessionLabel: buildHarnessSessionLabel(saved.engine),
-          argv: buildEngineLaunchArgv(saved.engine, options),
-          ...(Object.keys(launchEnv).length ? { env: launchEnv } : {}),
-        })
-        if (!result.ok) {
-          if (result.error === 'TMUX_UNAVAILABLE') {
-            stoppedAgents.finishResume(agentId, token)
-            return { ok: false, error: result.error, detail: result.detail }
-          }
-          return resumeUnconfirmed
-        }
-        if (!current()) return resumeChanged
-        const { pending, spawned } = result
-        refreshGridWebSearch(pending.agentId, built.overrides)
-        announceSession(pending)
-        if (isTerminalEngine(saved.engine)) {
-          await clearPaneRemainOnExit(spawned.runtime.paneId)
-          if (!current()) return resumeChanged
-          const ready = registry.setLaunch(pending.agentId, { state: 'ready' })!
-          stoppedAgents.finishResume(agentId, token)
-          announceSession(ready)
-          return { ok: true, session: ready, resumed: true }
-        }
-        if (pending.dsh) attachDsh(pending)
-        return await waitForResume(pending, current)
-      } finally {
-        if (token && !allocationAttempted) stoppedAgents.finishResume(agentId, token)
-        resumeConversations.delete(key)
-      }
-    },
+  backend.onDeleteAgent = createStopAgentService({
+    registry, stoppedAgents, restartJobs, stopJobs, tmuxBackend, agentReconciler,
+    forgetSession, markDeleted, clearDeleted,
   })
 
-  backend.onResumeAgent = agentId => restartJobs.run(agentId, async current => {
-    await stopJobs.get(agentId)
-    if (!current()) return resumeChanged
-    if (pinnedControls.has(agentId)) return { ok: false, error: 'AGENT_BUSY' }
-    return resumeStopped(agentId, current)
-  }, 'resume')
+  backend.onResumeAgent = createResumeAgentService({
+    registry, stoppedAgents, tmuxBackend, restartJobs, stopJobs, pinnedControls,
+    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
+    refreshGridWebSearch, clearDeleted, attachDsh,
+  })
 
   /**
    * Web or device restarted an agent (`agent_restart`): exit the live engine process and relaunch it in
