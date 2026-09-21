@@ -103,8 +103,12 @@ export class TcpLink {
   close(why = 'closed'): Promise<void> {
     if (this.closePromise) return this.closePromise
     this.closed = true
-    this.closePromise = new Promise((resolve) => {
-      this.sock.end(() => resolve())
+    // destroy() is what frees the socket; end() on its own waits for a peer that, on this path, has
+    // usually gone already. Resolving synchronously rather than from end()'s callback is deliberate:
+    // that callback cannot be relied on once destroy() has torn the stream down, and it was dead code
+    // anyway because the resolve below always won.
+    this.closePromise = new Promise<void>((resolve) => {
+      this.sock.end()
       this.sock.destroy()
       resolve()
     }).then(() => this.onClosed(why))
