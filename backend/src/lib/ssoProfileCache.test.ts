@@ -167,6 +167,22 @@ describe('SSO profile cache', () => {
     expect(state.calls).toBe(1)
   })
 
+  it('does not wait for the shared store to save what it just validated', async () => {
+    const stalled: SharedProfileStore = { get: async () => null, set: () => new Promise<void>(() => {}) }
+    const cache = createSsoProfileCache({ ttlMs: 60_000, shared: () => stalled })
+
+    await expect(cache.resolve('opaque-token', 'prod', loader().load)).resolves.toEqual(profile)
+  })
+
+  it('treats a shared store that does not answer promptly as a miss', async () => {
+    const hung: SharedProfileStore = { get: () => new Promise<string | null>(() => {}), set: async () => {} }
+    const cache = createSsoProfileCache({ ttlMs: 60_000, shared: () => hung, sharedReadTimeoutMs: 10 })
+    const { state, load } = loader()
+
+    await expect(cache.resolve('opaque-token', 'prod', load)).resolves.toEqual(profile)
+    expect(state.calls).toBe(1)
+  })
+
   it('ignores a shared entry that is not a profile', async () => {
     const now = () => 1_000_000
     const shared = memoryStore(now)

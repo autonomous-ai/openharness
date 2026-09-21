@@ -3842,23 +3842,33 @@ class AppNotifier extends ChangeNotifier {
     final discoveryRevision = _authRevision;
     _sharingDiscoveryBusy = true;
     try {
-      // A read the person started may predate this push too: let it finish
-      // (its outcome is its own to report), then read again.
-      final manual = _retryInFlight;
-      if (manual != null) {
-        try {
-          await manual;
-        } catch (_) {}
-      }
-      do {
-        _sharingDiscoveryAgain = false;
+      // This call owes one read; every push that lands while we are busy owes
+      // one more (collapsed into a single follow-up by the flag).
+      var owed = true;
+      while (owed || _sharingDiscoveryAgain) {
+        // Still ours? Checked BEFORE the flag is cleared: a run left over from
+        // a session that has since signed out must not eat the dirty flag that
+        // belongs to the new session's run.
         if (_disposed ||
             status != AppStatus.authenticated ||
             !_authWorkCurrent(discoveryRevision)) {
           return;
         }
+        // A reload (the person's, or recovery's) that is open right now: let it
+        // finish first, on EVERY pass. Its read may predate this push, and
+        // starting ours beside it would supersede its request — it would then
+        // give up before clearing its error and reloading the open machines.
+        final reload = _retryInFlight;
+        if (reload != null) {
+          try {
+            await reload;
+          } catch (_) {}
+          continue;
+        }
+        owed = false;
+        _sharingDiscoveryAgain = false;
         await refreshMachines();
-      } while (_sharingDiscoveryAgain);
+      }
     } catch (error) {
       if (_authWorkCurrent(discoveryRevision)) {
         _reportMachineLoadError(error, automatic: true);

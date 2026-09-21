@@ -55,8 +55,14 @@ export function useSharedSsoProfileStore(store: SharedProfileStore | null): void
   sharedProfileStore = store
 }
 
+// A BFF that predates the identity route answers it 404 every time. Remember that per account plane
+// for a few minutes rather than asking twice before every validation.
+const IDENTITY_MISSING_TTL_MS = 5 * 60_000
+const identityMissingUntil = new Map<AutonomousEnvironment, number>()
+
 export function clearSsoProfileCache(): void {
   profileCache.clear()
+  identityMissingUntil.clear()
 }
 
 /** Validate the SSO access token against the Autonomous profile service. */
@@ -88,10 +94,19 @@ export async function fetchSsoProfile(
   }
 
   // The identity endpoint answers from the token alone; the profile endpoint costs the storefront a
-  // customer read and a cart read per call. Same envelope, same two fields. A 404 means the BFF in
-  // front of us predates the identity route — and ONLY a 404 falls back: a 401 there is the answer.
-  let res = await ask(ssoIdentityUrl ?? ssoProfileUrl)
-  if (ssoIdentityUrl && res.status === 404) res = await ask(ssoProfileUrl)
+  // customer read and a cart read per call. Same envelope, same two fields.
+  //
+  // Identity is an optimisation, never a dependency: whenever it cannot give an ANSWER — not deployed
+  // (404), failing (5xx), unreachable — the profile URL is asked instead, exactly as before it existed.
+  // A 401/403 is an answer, and is final.
+  const useIdentity = !!ssoIdentityUrl && (identityMissingUntil.get(autonomousEnv) ?? 0) <= Date.now()
+  let res: Response | undefined
+  if (useIdentity) {
+    res = await ask(ssoIdentityUrl!).catch(() => undefined)
+    if (res?.status === 404) identityMissingUntil.set(autonomousEnv, Date.now() + IDENTITY_MISSING_TTL_MS)
+    if (res && (res.status === 404 || res.status >= 500)) res = undefined
+  }
+  res ??= await ask(ssoProfileUrl)
 
   if (res.status === 401 || res.status === 403) {
     throw new SsoAuthError('Invalid or expired SSO access token', 'INVALID_TOKEN')

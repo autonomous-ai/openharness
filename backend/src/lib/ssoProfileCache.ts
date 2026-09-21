@@ -43,6 +43,9 @@ interface Options {
   now?: () => number
   /** Read on every miss rather than captured once, so the store can be attached after startup. */
   shared?: () => SharedProfileStore | null
+  /** How long a shared read may take before it counts as a miss. The store's own command timeout is
+   *  seconds; nobody signing in should wait that long for a cache. */
+  sharedReadTimeoutMs?: number
   maxEntries?: number
 }
 
@@ -76,7 +79,16 @@ function parseEntry(raw: string | null): Entry | undefined {
   }
 }
 
-export function createSsoProfileCache({ ttlMs, now = Date.now, shared = () => null, maxEntries = 50_000 }: Options): SsoProfileCache {
+/** `work`'s value if it settles within `ms`, else null. A rejection is null too. */
+function promptly<T>(work: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms)
+    timer.unref?.()
+    work.then((value) => { clearTimeout(timer); resolve(value) }, () => { clearTimeout(timer); resolve(null) })
+  })
+}
+
+export function createSsoProfileCache({ ttlMs, now = Date.now, shared = () => null, sharedReadTimeoutMs = 250, maxEntries = 50_000 }: Options): SsoProfileCache {
   const entries = new Map<string, Entry>()
   const inFlight = new Map<string, Promise<CachedSsoProfile>>()
 
@@ -95,8 +107,8 @@ export function createSsoProfileCache({ ttlMs, now = Date.now, shared = () => nu
   const fill = async (key: string, expiresAt: number, load: () => Promise<CachedSsoProfile>): Promise<CachedSsoProfile> => {
     const store = shared()
     if (store) {
-      // A store that is down is a cache miss, not an authentication failure.
-      const hit = parseEntry(await store.get(key).catch(() => null))
+      // A store that is down — or merely slow — is a cache miss, not an authentication failure.
+      const hit = parseEntry(await promptly(store.get(key), sharedReadTimeoutMs))
       if (hit && hit.expiresAt > now()) {
         remember(key, hit.profile, Math.min(hit.expiresAt, expiresAt))
         return hit.profile
@@ -104,7 +116,8 @@ export function createSsoProfileCache({ ttlMs, now = Date.now, shared = () => nu
     }
     const profile = await load()
     remember(key, profile, expiresAt)
-    if (store) await store.set(key, JSON.stringify({ ...profile, expiresAt }), expiresAt - now()).catch(() => { /* best effort */ })
+    // Not awaited: the token is already proved, and a hung store must not hold the answer hostage.
+    if (store) void Promise.resolve().then(() => store.set(key, JSON.stringify({ ...profile, expiresAt }), expiresAt - now())).catch(() => { /* best effort */ })
     return profile
   }
 

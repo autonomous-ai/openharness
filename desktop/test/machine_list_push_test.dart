@@ -24,6 +24,10 @@ class _Api extends ApiClient {
   int reads = 0;
   Completer<void>? hold;
 
+  /// When set, every read waits on a gate of its own, so a test can finish
+  /// them in the order it chooses.
+  List<Completer<void>>? gates;
+
   @override
   Future<Map<String, dynamic>?> me() async => null;
 
@@ -34,7 +38,10 @@ class _Api extends ApiClient {
   @override
   Future<List<Machine>> machines() async {
     reads++;
+    final gate = gates == null ? null : Completer<void>();
+    if (gate != null) gates!.add(gate);
     await hold?.future;
+    await gate?.future;
     return const [_localMachine];
   }
 }
@@ -196,6 +203,40 @@ void main() {
 
       // The open read may predate the change, so the push still gets its own.
       expect(api.reads, 2);
+      app.dispose();
+    },
+  );
+
+  testWidgets(
+    'a follow-up read waits for a reload that started meanwhile, instead of superseding it',
+    (tester) async {
+      final api = _Api()..gates = [];
+      final app = _signedIn(api);
+
+      // Read #1 is ours; a second push asks for a follow-up once it is done.
+      await app.handleEventForTest('local-machine', _push);
+      await tester.pump();
+      await app.handleEventForTest('local-machine', _push);
+      // The person presses Reload while #1 is still open: read #2 is theirs.
+      final manual = app.retryMachines();
+      await tester.pump();
+      expect(api.reads, 2);
+
+      // #1 finishes. Starting the follow-up NOW would supersede the reload's
+      // request, and the reload would give up before finishing its own work.
+      api.gates![0].complete();
+      await tester.pump();
+      await tester.pump();
+      expect(api.reads, 2, reason: 'the follow-up waits for the reload');
+
+      api.gates![1].complete();
+      await tester.pump();
+      await manual;
+      await tester.pump();
+      expect(api.reads, 3, reason: 'then the follow-up read happens');
+      api.gates![2].complete();
+      await tester.pump();
+      await tester.pump();
       app.dispose();
     },
   );
