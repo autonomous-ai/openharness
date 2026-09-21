@@ -25,7 +25,8 @@ existing toolchains and authoring workflows; extend the place where people inspe
    is the missing interaction. Implemented and verified below.
 2. **Godogen / Phaser / Voxel Worlds / Game Master:** play, inspect a particular moment, and turn
    discoveries into precise revisions of an original game or world. Inspect existing version,
-   input, and export paths before choosing implementation.
+   input, and export paths before choosing implementation. Godogen/Game Viewer improvement
+   implemented and verified below; the other three received source review in this pass.
 3. **Blender / CAD / Generative Art / Creative Direction:** make direct exploration useful to
    the next authored revision; preserve approved versions and deliver usable assets.
 4. **Music Studio / Strudel / Score / sound studios:** help people hear, shape and retain a musical
@@ -92,5 +93,66 @@ export also reproduces without an external
 model path. Visual evidence: [robot comparison](../docs/images/mujoco-what-if-robot.png) and
 [narrow layout](../docs/images/mujoco-what-if-mobile.png).
 
-No catalog publication or installed app update has been performed. Next: review Game Viewer and
-Godogen's actual authoring/play loop, then implement the highest-value missing interaction.
+No catalog publication or installed app update has been performed.
+
+## Second improvement: rewind, retry, and keep a playtest moment
+
+Reviewed Godogen/Game Viewer, Phaser, Voxel Worlds, and Game Master's current interaction paths.
+Voxel Worlds already has direct object/voxel authoring, undo, source conflict handling, and useful
+3D exports. Game Master already has authored tabletop rules and deterministic playtest replays.
+Phaser retains scene context across edits, but that is not a complete game-state rewind. Game
+Viewer's existing version isolation protects an ongoing run; a specific moment within that run
+was the most useful missing feedback loop to implement first.
+
+Implemented in Game Viewer and demonstrated by Godogen's Alpine Drift starter:
+
+- **Rewind** the recent run, inspect a recorded frame, return to the exact live moment, or
+  **Try from here** with a different move. The studio restores positions, velocity, jumps,
+  collected gates, score, timer, and camera, instead of replaying keyboard events.
+- **Pin moment** with Keep/Change/Explore feedback, a real canvas image, complete JSON state,
+  and a frozen copy of the selected compiled game. Saved moments are ordinary workspace files
+  in `out/playtests/` and reopen after later source edits and a complete viewer restart.
+- Preserve Explore versus Play separately from game state. An agent build waits while the user
+  is inspecting a rewind or writing a note, including in Explore mode.
+- An optional, documented snapshot contract works for other games; games without it keep their
+  existing controls. Bounded history, explicit state validation, atomic saved folders, original
+  build retention, and archive isolation keep the current build verdict truthful.
+- The completed run stops filling its history with duplicate finish-screen frames. Resuming
+  waits for the game's acknowledgement before handing input back. The first Play frame now
+  frames the rider immediately, so even the earliest rewind frame is useful.
+- Agent instructions explain how to read moment notes and preserve Keep feedback. The original
+  editable project remains the source; archived `game/` folders are compiled builds.
+
+Verified:
+
+- All 13 viewer tests pass, including original readiness/failure/retention/export behavior,
+  snapshot bounds and legacy compatibility, rejected-state rollback, terminal-frame retention,
+  persistent moments, traversal rejection, and saved-build/current-verdict isolation.
+- The original Chrome suite passes all eight checks: keyboard/jump/pause/restart, live builds,
+  syntax and runtime failures, version retention, a complete course, standalone export, and
+  a narrow layout. TypeScript and both package conformance checks pass.
+- Seven new real-browser scenarios pass: gates and score rewind, exact mid-jump return,
+  alternate steering after resume, persisted note/image/state/build, saved games after source
+  changes and restart, Explore capture across an agent edit, and legacy games. Invalid states
+  leave the world unchanged. No uncaught browser exceptions were observed.
+- Desktop and 390px screenshots were visually reviewed. The new timing checks exposed and
+  corrected the input-resume race; visual review exposed the unusable early camera position.
+- A 20-second demonstration was recorded in Chrome using the Apple M2 Max Metal renderer,
+  showing play, rewind, a different move, a note, and reopening the saved moment.
+
+Evidence: `/private/tmp/openharness-harness-improvements-evidence/game-moments-final/` and
+`game-demo/`. The repeatable tests are `store/viewers/game-viewer/test/` and
+`store/agents/godogen/test/playtest.e2e.mjs`. These are mechanical and visual checks of the
+implemented workflow, not a claim of independent human playtesting or universal game determinism.
+Snapshot hooks remain the game's responsibility; screenshots capture the canvas rather than its
+HTML overlays, and externally hosted assets still depend on their URLs.
+
+Checked-in evidence: [rewind](../docs/images/godogen-rewind.png),
+[pin a moment](../docs/images/godogen-moment.png),
+[390px saved moment](../docs/images/godogen-moments-mobile.png), and
+[20-second demonstration](../docs/images/godogen-rewind-demo.mp4).
+
+Next: continue the 3D/CAD authoring review, beginning with Blender, Autonomous Workshop, and their
+shared viewers. Initial README review confirms Generative Art, Creative Direction, and Music
+Studio already have substantial original authoring and export workflows; preserve those rather
+than replacing them with cosmetic presets. The full catalog goal remains active.

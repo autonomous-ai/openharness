@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { get } from "node:http";
 import { startGameViewer } from "../viewer.mjs";
+import { playtestStore } from "../playtests.mjs";
 
 const until = async (predicate) => {
   for (let i = 0; i < 120; i++) {
@@ -32,7 +33,7 @@ async function fixture(t) {
     mkdirSync(options.build.outDir, { recursive: true });
     writeFileSync(
       join(options.build.outDir, "index.html"),
-      "<h1>A playable fixture</h1>",
+      `<script>${options.plugins[0].transformIndexHtml.handler()[0].children}</script><h1>A playable fixture</h1>`,
     );
     writeFileSync(
       join(options.build.outDir, "version.js"),
@@ -224,4 +225,104 @@ test("studio metadata updates without rebuilding the game or clearing readiness"
     verdict.phases.find((phase) => phase.id === "play").state,
     "active",
   );
+});
+
+test("saved moments preserve the chosen build and reopen without changing the live verdict", async (t) => {
+  const { viewer, workspace, ready, post } = await fixture(t);
+  const id = await ready();
+  const snapshot = {
+    mode: "play",
+    state: { schema: "fixture/1", score: 4, gates: [true, false] },
+    stats: { time: 3, score: 4 },
+  };
+  const response = await post("/api/playtests", {
+    id,
+    kind: "change",
+    note: "Make this jump longer",
+    snapshot,
+  });
+  assert.equal(response.status, 200);
+  const saved = await response.json();
+  const record = JSON.parse(readFileSync(join(workspace, saved.path), "utf8"));
+  assert.deepEqual(record.snapshot, snapshot);
+  assert.equal(record.revision.id, id);
+  assert.equal(record.revision.project.title, "Fixture world");
+  assert.equal(
+    readFileSync(
+      join(workspace, "out/playtests", saved.id, "game/version.js"),
+      "utf8",
+    ),
+    "export const ready=true;",
+  );
+  // A fresh store reads ordinary workspace files; no server-memory dependency.
+  assert.equal(
+    playtestStore(workspace).list()[0].note,
+    "Make this jump longer",
+  );
+  await viewer.rebuild();
+  const latest = await ready();
+  const before = readFileSync(join(workspace, ".harness/verdict.json"), "utf8");
+  const opened = await (
+    await post("/api/playtests/open", { id: saved.id })
+  ).json();
+  assert.deepEqual(opened.snapshot, snapshot);
+  const html = await (await fetch(viewer.url + opened.revision.url)).text();
+  assert.ok(html.includes(`window.__studioRevision="moment-${saved.id}";`));
+  await post("/api/report", { id: opened.revision.id, type: "ready" });
+  await post("/api/report", {
+    id: opened.revision.id,
+    type: "error",
+    message: "Old saved game error",
+  });
+  assert.equal(viewer.state.latest.id, latest);
+  assert.equal(viewer.state.history.length, 2);
+  assert.equal(
+    readFileSync(join(workspace, ".harness/verdict.json"), "utf8"),
+    before,
+  );
+  // Pruning old previews must never delete saved moments.
+  for (let i = 0; i < 11; i++) {
+    await viewer.rebuild();
+    await ready();
+  }
+  assert.equal(existsSync(join(workspace, saved.path)), true);
+  assert.equal((await fetch(viewer.url + "/api/playtests")).status, 200);
+});
+
+test("moment validation rejects oversized states, missing builds, and escaping folders before saving", async (t) => {
+  const { viewer, workspace, ready, post } = await fixture(t);
+  const id = await ready();
+  const valid = {
+    id,
+    kind: "keep",
+    note: "",
+    snapshot: { state: { score: 1 } },
+  };
+  assert.equal(
+    (await post("/api/playtests", { ...valid, id: "missing" })).status,
+    409,
+  );
+  for (const patch of [
+    { kind: "unknown" },
+    { note: "x".repeat(2001) },
+    { snapshot: { state: { data: "x".repeat(65536) } } },
+    { snapshot: { state: null } },
+    { image: "data:image/jpeg;base64,YWJj" },
+  ])
+    assert.equal(
+      (await post("/api/playtests", { ...valid, ...patch })).status,
+      400,
+    );
+  assert.equal(existsSync(join(workspace, "out")), false);
+  assert.equal(
+    (await post("/api/playtests/open", { id: "../../elsewhere" })).status,
+    400,
+  );
+  const outside = mkdtempSync(join(tmpdir(), "game-playtest-outside-"));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  mkdirSync(join(workspace, "out"));
+  symlinkSync(outside, join(workspace, "out/playtests"), "dir");
+  const rejected = await post("/api/playtests", valid);
+  assert.equal(rejected.status, 400);
+  assert.match((await rejected.json()).error, /stay in the project/);
 });
