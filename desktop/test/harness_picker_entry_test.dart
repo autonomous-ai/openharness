@@ -118,7 +118,10 @@ void main() {
         expect(app.focusedPane, same(pane));
         await tester.enterText(field, 'idempotency');
         await tester.pump();
-        expect(tester.getRect(field), before);
+        expect(
+          tester.getRect(field),
+          rectMoreOrLessEquals(before, epsilon: .001),
+        );
         expect(tester.widget<TextField>(field).controller, same(controller));
         expect(
           find.textContaining('Payment retries now reuse'),

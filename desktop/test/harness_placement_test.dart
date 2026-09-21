@@ -891,7 +891,7 @@ void main() {
           .controller;
       expect(box.task, isEmpty);
       expect(box.checking, isTrue);
-      expect(find.text('pending harness'), findsOneWidget);
+      expect(find.text('pending harness'), findsNothing);
       expect(
         find.textContaining('check status', findRichText: true),
         findsOneWidget,
@@ -952,7 +952,7 @@ void main() {
         await tester.pump();
         expect(app.swarms, contains(original));
         expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);
-        expect(find.text('New Pane'), findsWidgets);
+        expect(find.text(placement.title), findsNothing);
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pump();
         expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);

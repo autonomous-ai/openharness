@@ -118,7 +118,7 @@ class _PreviewConnection extends WsConn {
 ///
 ///     BOX_RENDER_DIR=/tmp/box flutter test --update-goldens \\
 ///         test/box_render_preview_test.dart
-Future<void> _loadFonts() async {
+Future<void> loadPreviewFonts() async {
   Future<void> load(String family, List<String> files) async {
     final loader = FontLoader(family);
     var any = false;
@@ -178,7 +178,7 @@ void main() {
     skip: dir == null,
     variant: TargetPlatformVariant.only(TargetPlatform.macOS),
     (tester) async {
-      await tester.runAsync(_loadFonts);
+      await tester.runAsync(loadPreviewFonts);
       // Tests draw shadows as solid black slabs; a picture wants the real thing.
       debugDisableShadows = false;
       newHarnessOpensInBox = true;
@@ -247,7 +247,7 @@ void main() {
       await shot('06-launch-large-text');
       tester.view.physicalSize = const Size(1280, 800);
       tester.platformDispatcher.clearTextScaleFactorTestValue();
-      await openLaunchRow(tester, 'task');
+      await openLegacyTaskEditor(tester);
       await tester.pump();
       await type(line, '');
       await shot('07-new-tab-task-empty');
@@ -413,7 +413,7 @@ void main() {
           .controller;
       largeBox.setFolder('/work/payments');
       await shot('15-create-large-text');
-      await openLaunchRow(tester, 'task');
+      await openLegacyTaskEditor(tester);
       await tester.pump();
       await shot('15-task-large-text');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);

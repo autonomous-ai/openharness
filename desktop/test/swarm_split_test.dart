@@ -383,6 +383,7 @@ void main() {
       addTearDown(() => newHarnessOpensInBox = false);
       final connection = _Creation();
       final app = createApp(connectionForTest: (_) => connection);
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
       final machine = app.machineStates['m']!;
       machine.nodeOnline = true;
       machine.localOnly = true;

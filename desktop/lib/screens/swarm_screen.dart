@@ -2078,31 +2078,32 @@ class _SwarmScreenState extends State<SwarmScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 9, 14, 2),
-              child: Row(
-                children: [
-                  Text(search.title, style: boxMonoStyle(color: kBoxFaint)),
-                  if (search.placement == HarnessPlacement.currentTab ||
-                      search.split != null)
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        child: Text(
-                          '· ${search.targetName}',
-                          key: const ValueKey('swarm-search-target'),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: boxMonoStyle(color: kBoxFaint),
+            if (search.title != search.placement?.title)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 9, 14, 2),
+                child: Row(
+                  children: [
+                    Text(search.title, style: boxMonoStyle(color: kBoxFaint)),
+                    if (search.placement == HarnessPlacement.currentTab ||
+                        search.split != null)
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Text(
+                            '· ${search.targetName}',
+                            key: const ValueKey('swarm-search-target'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: boxMonoStyle(color: kBoxFaint),
+                          ),
                         ),
-                      ),
-                    )
-                  else
-                    const Spacer(),
-                  SwarmSearchCount(search: search, terminal: true),
-                ],
+                      )
+                    else
+                      const Spacer(),
+                    SwarmSearchCount(search: search, terminal: true),
+                  ],
+                ),
               ),
-            ),
             Flexible(
               child: ordered(
                 2,
@@ -2194,11 +2195,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       ConstrainedBox(
                         constraints: BoxConstraints(
                           maxHeight:
-                              constraints.maxHeight *
-                              (.65 * terminalFontStore.size / 13).clamp(
-                                .65,
-                                1.0,
-                              ),
+                              (constraints.maxHeight -
+                                  (_native ? 0 : _tabBarHeight)) *
+                              (.65 * terminalFontStore.size / terminalFontSize)
+                                  .clamp(.65, 1.0),
                         ),
                         child: contents,
                       ),

@@ -3,27 +3,57 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import 'repository_clone.dart';
+import 'git_worktree.dart';
 
 /// Folder preparation is explicit and runs only when New Agent is submitted.
 /// Existing folders continue to use the ordinary agent_create cwd payload.
 class ProjectFolderRequest {
   const ProjectFolderRequest.newProject({this.name})
-    : repository = null,
+    : gitSource = null,
+      branchRef = null,
+      createsWorktree = false,
+      repository = null,
       generatedLabel = null,
       generatedAt = null;
   ProjectFolderRequest.generated({
     required String label,
     required DateTime at,
     String? name,
-  }) : repository = null,
+  }) : gitSource = null,
+       branchRef = null,
+       createsWorktree = false,
+       repository = null,
        generatedLabel = label,
        generatedAt = at,
        name = name ?? _suggestedFolderName(label, at);
   const ProjectFolderRequest.remote(GitHubRepository value)
-    : repository = value,
+    : gitSource = null,
+      branchRef = null,
+      createsWorktree = false,
+      repository = value,
       name = null,
       generatedLabel = null,
       generatedAt = null;
+
+  const ProjectFolderRequest.worktree(String source, {this.branchRef})
+    : gitSource = source,
+      createsWorktree = true,
+      repository = null,
+      name = null,
+      generatedLabel = null,
+      generatedAt = null;
+
+  const ProjectFolderRequest.branch(String source, String ref)
+    : gitSource = source,
+      branchRef = ref,
+      createsWorktree = false,
+      repository = null,
+      name = null,
+      generatedLabel = null,
+      generatedAt = null;
+
+  final String? gitSource, branchRef;
+  final bool createsWorktree;
 
   final GitHubRepository? repository;
 
@@ -76,7 +106,13 @@ class ProjectFolderRequest {
   String? get folderName => name == null ? null : projectFolderSlug(name!);
 
   Map<String, String> get payload => {
-    'projectSource': repository == null ? 'new' : 'remote',
+    'projectSource': gitSource != null
+        ? (createsWorktree ? 'worktree' : 'branch')
+        : repository == null
+        ? 'new'
+        : 'remote',
+    'gitSource': ?gitSource,
+    'branchRef': ?branchRef,
     if (repository != null) 'repositoryUrl': repository!.url,
     // A daemon that predates the field ignores it and names the folder itself.
     if (repository == null && folderName != null) 'projectName': folderName!,
@@ -102,6 +138,16 @@ class ProjectFolderRequest {
     }
     final root = Directory(projectHome ?? p.join(home!, 'harnesses'));
     try {
+      if (gitSource case final source?) {
+        return await prepareGitProject(
+          source,
+          root.path,
+          worktree: createsWorktree,
+          branchRef: branchRef,
+          label: label,
+          now: now,
+        );
+      }
       await root.create(recursive: true);
       if (repository case final repo?) {
         return await (createClone?.call() ?? RepositoryClone()).run(

@@ -2,8 +2,13 @@
 
 Startup and Cmd-T show the same quiet welcome page. Cmd-T creates a blank tab;
 Escape leaves that tab open. The command dock opens only after an explicit
-Cmd-N, Cmd-O, or Cmd-P action. Start submits the values in the reviewed draft;
+Cmd-N, Cmd-O, or Cmd-P action. Start Harness submits the reviewed draft;
 opening or cancelling the dock never starts a harness.
+
+The launch form starts with Agent, Machine, and Project, followed by Start
+Harness, which is selected initially. There is no heading, Task row, or Open In
+row. Cmd-O and Cmd-P pickers also omit their heading and result-count row.
+Tasks carried from search or Store examples remain part of the draft.
 
 | Entry | Initial values | Destination after a successful start |
 | --- | --- | --- |
@@ -24,6 +29,24 @@ Cmd-O and Cmd-P open the same picker. Repeating either shortcut preserves the
 query, selection, highlighted result, and filters, then refocuses the input.
 Cmd-T closes the dock and opens a quiet blank tab. Creation remains blocked
 while a pending start needs confirmation.
+
+## Git projects
+
+Git projects show Branch and Worktree. Worktree defaults to `[x]` for each new
+project context; Enter, Space, or a click toggles `[x]` and `[ ]`. Folders without
+Git show neither row. Discovery runs on the selected machine without fetching,
+switching branches, or creating a worktree. A failed discovery offers Retry and
+blocks starting until the result is known.
+
+Branch selects the starting local or remote ref. With `[x]`, Start Harness
+creates a unique worktree and branch under `~/harnesses/worktrees`, keeping
+uncommitted source files intact. With `[ ]`, only local branches are selectable;
+Start Harness switches the existing folder using Git's normal protections.
+No changes are forced, stashed, or discarded. A selected subfolder follows into
+the new worktree only if it exists in that commit.
+
+Drafts and advanced options preserve these choices. A lost start reply reuses
+its receipt, and retrying a confirmed launch failure reuses its prepared folder.
 
 ## Draft ownership
 
@@ -58,6 +81,10 @@ never silently renamed, and existing files are never overwritten.
 
 ## Regression coverage
 
+- `test/new_harness_git_test.dart`, `test/git_worktree_test.dart`, and
+  `test/git_worktree_failures_test.dart`: Git defaults, hidden non-Git rows,
+  keyboard/click toggles, branch search, stale replies, retries, actual Git
+  worktrees and branch safety, process deadlines, and bounded output.
 - `test/new_harness_entry_rules_test.dart`: product changes with an open or
   dismissed dock, Open/Try, edited names, machine changes, explicit agent
   precedence, search isolation, exact launch payloads, pending receipts, source

@@ -1303,6 +1303,7 @@ void main() {
     ) async {
       final connection = _CreationConnection();
       final app = createApp(connectionForTest: (_) => connection);
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
       seedMixedAgents(app);
       app.machineStates['m']!
         ..localOnly = true
@@ -1329,8 +1330,9 @@ void main() {
       await tester.enterText(search, 'Check retargeted keyboard input');
       await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      final destination = app.activeSwarm;
       expect(find.text('Check retargeted keyboard input'), findsWidgets);
-      expect(find.text('New Pane'), findsOneWidget);
+      expect(find.text('New Pane'), findsNothing);
       await key(tester, LogicalKeyboardKey.enter);
       expect(find.byType(NewHarnessBox), findsOneWidget);
       expect(
@@ -1344,7 +1346,13 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump();
       expect(find.byType(NewHarnessBox), findsNothing);
-      expect(app.activeSwarm == source, label == 'New Pane');
+      expect(app.activeSwarm, same(destination));
+      expect(
+        app.activeSwarm,
+        shortcut == LogicalKeyboardKey.keyT
+            ? isNot(same(source))
+            : same(source),
+      );
       final session = app.focusedPane!.session!;
       final view = tester.widget<TerminalView>(
         find.byWidgetPredicate(
@@ -1522,7 +1530,9 @@ void main() {
       expect(prompt().engine, 'codex');
       expect(prompt().machineId, 'm');
       expect(prompt().project.folder, '/work/openharness');
-      expect(app.swarms, [source]);
+      expect(app.swarms, hasLength(2));
+      expect(app.swarms.first, same(source));
+      expect(app.activeSwarm.isBlankNewTab, true);
       expect(prompt().field, NewHarnessField.launch);
       await key(tester, LogicalKeyboardKey.arrowDown);
       await key(tester, LogicalKeyboardKey.arrowDown);
@@ -1535,7 +1545,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.enter);
       expect(prompt().project.folder, '/work/openharness');
       expect(prompt().field, NewHarnessField.launch);
-      await openLaunchRow(tester, 'task');
+      await openLegacyTaskEditor(tester);
       await tester.enterText(line, 'Refine terminal workspace');
       await key(tester, LogicalKeyboardKey.enter, alt: true);
       expect(
@@ -1601,7 +1611,7 @@ void main() {
       expect(connection.creates, isEmpty);
 
       // Reopen from the same source, this time choosing a pane. Escape kept
-      // both the task and edited defaults without allocating an empty tab.
+      // both the task and edited defaults after removing the temporary tab.
       await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       await key(tester, LogicalKeyboardKey.enter);
       await tester.pump(const Duration(milliseconds: 80));
