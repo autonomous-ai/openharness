@@ -20,8 +20,16 @@ cmake_minimum_required(VERSION 3.16)
 set(_sdkcfg "${CMAKE_CURRENT_LIST_DIR}/sdkconfig")
 set(_defaults "${CMAKE_CURRENT_LIST_DIR}/sdkconfig.defaults")
 set(_stamp "${CMAKE_CURRENT_LIST_DIR}/sdkconfig.defaults.stamp")
+# The board overlay counts as "the defaults" for this purpose. Hashing only the shared file meant a fix
+# to sdkconfig.defaults.cores3 -- the file that carries CoreS3's quad-PSRAM setting -- left a stale
+# sdkconfig in place, which is the precise shape of the bug that overlay exists to prevent.
+set(_defaults_cores3 "${CMAKE_CURRENT_LIST_DIR}/sdkconfig.defaults.cores3")
 if(EXISTS "${_defaults}")
     file(SHA256 "${_defaults}" _defaults_hash)
+    if(EXISTS "${_defaults_cores3}")
+        file(SHA256 "${_defaults_cores3}" _cores3_hash)
+        string(APPEND _defaults_hash "-${_cores3_hash}")
+    endif()
     set(_prev_hash "")
     if(EXISTS "${_stamp}")
         file(READ "${_stamp}" _prev_hash)

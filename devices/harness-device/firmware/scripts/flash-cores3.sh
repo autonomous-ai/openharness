@@ -37,7 +37,12 @@ fi
 # whatever build-cores3 contains — stale bins were silently flashed before this).
 export IDF_PATH="${IDF_PATH:-$HOME/esp/esp-idf}"
 . "$IDF_PATH/export.sh" > /dev/null
-idf.py -B build-cores3 -DDEVICE_BOARD_M5CORES3=1 build || { echo "build failed" >&2; exit 1; }
+# Same pinning as scripts/build-cores3.sh — a flash that built against the dial's octal-PSRAM
+# defaults writes an image that reset-loops, which on this board is indistinguishable from a brick.
+idf.py -B build-cores3 -DDEVICE_BOARD_M5CORES3=1 \
+       -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.cores3" \
+       -DSDKCONFIG=build-cores3/sdkconfig \
+       build || { echo "build failed" >&2; exit 1; }
 
 FILES=(0x0 build-cores3/bootloader/bootloader.bin 0x8000 build-cores3/partition_table/partition-table.bin 0x20000 build-cores3/interns_commander.bin)
 for i in $(seq 1 $ATTEMPTS); do

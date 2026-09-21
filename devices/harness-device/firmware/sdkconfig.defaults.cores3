@@ -1,0 +1,32 @@
+# M5Stack CoreS3 overrides, layered ON TOP of sdkconfig.defaults.
+#
+# It exists because the two boards this repo builds disagree about one setting that is fatal to get
+# wrong, and the shared defaults can only name one of them:
+#
+#   dial board  → octal PSRAM   (sdkconfig.defaults, CONFIG_SPIRAM_MODE_OCT)
+#   CoreS3      → QUAD  PSRAM   (here)
+#
+# Build CoreS3 against the shared defaults alone and the image does not merely misbehave, it never
+# reaches app_main: the PSRAM probe fails, cpu_start aborts, and the board sits in a reset loop with
+# nothing on screen and nothing on the cable to say why —
+#
+#   E octal_psram: PSRAM chip is not connected, or wrong PSRAM line mode
+#   E cpu_start: Failed to init external RAM!
+#   abort() was called at PC 0x42003dbb on core 0
+#
+# That state reads exactly like dead hardware. It had been survivable only because a working `sdkconfig`
+# happened to exist on one developer's machine, and `sdkconfig` is generated and gitignored — so a clean
+# clone, a fresh build directory, or a release built by upload-firmware.sh (which regenerates config from
+# the tracked defaults on purpose) all produced a bricked image. The setting has to be tracked to be real.
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_MODE_OCT=n
+
+# Quad PSRAM does not carry code or constants here; both stay in flash, as the known-good image had them.
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=n
+CONFIG_SPIRAM_RODATA=n
+
+# Halt on panic rather than reboot. A dial that reboots out of a crash erases the evidence and presents
+# as "it flickered"; halting leaves the backtrace on the wire, and last_words still carries the ring into
+# the next boot when someone resets it by hand.
+CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT=y
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=n
