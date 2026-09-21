@@ -13,6 +13,8 @@ import 'agent_index.dart';
 import 'agent_swipe.dart';
 import 'agent_swipe_list.dart';
 import 'agents_page.dart' show openNewAgent;
+import 'desk_groups.dart';
+import 'desk_tab_strip.dart';
 import 'machines_tab.dart';
 import 'phone_fab.dart';
 import 'phone_header.dart';
@@ -504,27 +506,61 @@ class _AgentHomeState extends State<AgentHome> {
         return _AgentHomeEmpty(notifier: widget.notifier);
       }
       var chosen = (machineId: target.machineId, agentId: target.agent.id);
+      // ⚠️ **A swipe stays inside one tab, and this is where that happens.** The
+      // account's tabs are the desk's (`state/phone_desk.dart`); [deskGroups]
+      // fills each one with the agents of it this phone can reach, and the tab
+      // the agent about to be shown belongs to is the one the screen is in. The
+      // pager is given THAT tab's agents and nothing else — so a tab of four is
+      // four swipes, and the other tabs are a tap on the strip away.
+      //
+      // Derived from the agent rather than held as state on purpose: an agent
+      // can arrive from search, from a notification or from the record of last
+      // time, none of which know about tabs, and the strip still lights the tab
+      // it belongs to. An account with no tabs gets one group over everything,
+      // which is the phone exactly as it was.
+      final groups = deskGroups(widget.notifier, entries);
+      var group = activeDeskGroup(widget.notifier, groups, chosen);
       // ⚠️ **The swipe list is a snapshot, so it is retaken when the SET of agents changes.** It is
       // taken as the pager opens, and on launch that is as soon as one machine answers — a second
       // machine's agents arriving a moment later never reached it, and a pager built around one
       // agent has no neighbours: nothing to swipe to until the app was restarted. Order changes do
       // not count (see [_neighbours] for why they must not), only agents joining or leaving.
       //
+      // ⚠️ The set is the TAB's now, so a tab changing on another computer
+      // retakes it too — an agent added to this tab in a window is one swipe
+      // away here a moment later, and one closed there stops being reachable.
+      //
       // Rebuilt around the agent ON SCREEN, not the one the pager opened on — the person stays
-      // where they are, now with every agent beside them.
+      // where they are, now with every agent of the tab beside them.
       final snapshot = _neighbours;
       if (snapshot != null &&
-          _neighboursFor != null &&
-          !_sameAgents(snapshot, entries)) {
+          // ⚠️ **Only while the pager is STAYING where it is.** `target` is the
+          // agent the pager opened on for as long as that agent is openable, so
+          // anything else means the screen is being moved on purpose — a tab
+          // tapped on the strip, an agent picked in search, a machine just
+          // unlocked. The set of agents differs from the snapshot then by
+          // definition (it is another tab's), and holding onto the agent on
+          // screen below would quietly undo the move: the tab would light for
+          // a frame and the terminal would stay where it was.
+          _neighboursFor == chosen &&
+          !_sameAgents(snapshot, group.entries)) {
         final showing = _showing;
         final onScreen = showing == null ? null : _entryFor(entries, showing);
         if (onScreen != null) {
           chosen = (machineId: onScreen.machineId, agentId: onScreen.agent.id);
+          // The agent held onto may be in a different tab than the one the
+          // target named — a tab closed on another computer moves what is on
+          // screen into another group, or into "Other".
+          group = activeDeskGroup(widget.notifier, groups, chosen);
         }
         _neighboursFor = null;
         _neighbours = null;
         _pagerGeneration++;
       }
+      // What the phone is in, recorded for the paths that cannot derive it: an
+      // agent created here joins this tab (`PhoneDesk.adopt`), and coming back
+      // to a tab returns to the agent it was left on.
+      widget.notifier.noteDeskTab(group.id, showing: chosen);
       // A pager already up for this agent is LEFT ALONE — same key, same snapshot, so it keeps the
       // page it is on, and [_showing] keeps naming whatever it has been swiped to. A pager is built
       // here only when there is none, or when the one there opened on an agent that can no longer be
@@ -536,7 +572,7 @@ class _AgentHomeState extends State<AgentHome> {
       // every swipe the pager reported, one frame after it reported it.
       if (_neighboursFor != chosen) {
         _neighboursFor = chosen;
-        _neighbours = AgentSwipeList(entries);
+        _neighbours = AgentSwipeList(group.entries);
         _showing = chosen;
         // ⚠️ **The attach, which nothing else makes for the page this screen opens on.** A pager
         // pushed from a list got it from `openAgent`, which starts `selectAgent` beside the push;
@@ -577,12 +613,23 @@ class _AgentHomeState extends State<AgentHome> {
         notifier: widget.notifier,
         machineId: opened.machineId,
         agentId: opened.agentId,
-        // The whole reachable list, so a swipe walks every agent on the account. There is no list
-        // screen to go back to any more, which makes this the only way to another agent.
+        // The tab's agents, so a swipe walks the tab and stops at its ends —
+        // see the note above [groups].
         neighbours: _neighbours,
         // Told where it has swiped to, so [_showing] follows the pager rather than the pager being
         // dragged back to where this screen last put it.
         onAgentChanged: _onAgentChanged,
+        // The way to the other tabs, now that a swipe is not one. Left off
+        // where there is nothing to choose between — one tab, or an account
+        // with no tabs at all — so a phone that has never seen a desk keeps the
+        // header it always had.
+        tabStrip: groups.length < 2
+            ? null
+            : DeskTabStrip(
+                notifier: widget.notifier,
+                groups: groups,
+                active: group,
+              ),
       );
     },
   );

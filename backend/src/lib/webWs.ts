@@ -23,7 +23,7 @@ import { createWss, WS_LIMITS } from './wsServer.js'
 import { extractKey } from '../utils/crypto.js'
 import { machineIdFromKey } from '../utils/crypto.js'
 import { prisma, machineAlive } from './prisma.js'
-import { getAgentPresence, getAgentPresenceMany, subscribeStatus, getDevicePresence, subscribeDeviceStatus, subscribeDeviceMachineListChanged, subscribeDeviceE2eePair } from './bus.js'
+import { getAgentPresence, getAgentPresenceMany, subscribeStatus, getDevicePresence, subscribeDeviceStatus, subscribeDeviceMachineListChanged, subscribeDeviceE2eePair, subscribeDeskChanged } from './bus.js'
 import { attachHubClient, trackSocketLiveness, type HubClient } from './hub.js'
 import { authenticateAccessToken, SsoAuthError, type AuthUser } from './ssoAuth.js'
 import type { Frame } from './tunnel.js'
@@ -259,6 +259,22 @@ function attachUserClient(ws: WebSocket, user: AuthUser): void {
     })
     if (closed) { machineListUnsub(); machineListUnsub = null }
   })().catch((err) => logger.warn('web-ws machine-list watch failed', { userId: user.sub, error: String(err) }))
+
+  // ── The account's desk: its tabs changed somewhere ───────────────────────────────────────────
+  // The same `desk:{userId}` invalidation every adapter socket hears (lib/adapterWs.ts), forwarded
+  // to the clients that have no daemon to relay it — the phone. One frame carrying the revision;
+  // the document itself is re-read over REST, so a burst of edits collapses into one GET.
+  //
+  // ⚠️ A phone holds one of these sockets PER MACHINE, so it hears this once per machine. The
+  // revision is what makes that harmless: an app already at that revision fetches nothing.
+  let deskUnsub: (() => void) | null = null
+  void (async () => {
+    deskUnsub = await subscribeDeskChanged(user.sub, (msg) => {
+      if (ws.readyState !== WebSocket.OPEN) return
+      send({ type: 'desk_changed', payload: { revision: msg.revision } })
+    })
+    if (closed) { deskUnsub(); deskUnsub = null }
+  })().catch((err) => logger.warn('web-ws desk watch failed', { userId: user.sub, error: String(err) }))
 
   // ── User-level E2EE device-pair requests ─────────────────────────────────────────────────────
   // Not tied to current machine selection: any logged-in page can receive the notice, then the frontend
@@ -523,6 +539,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser): void {
     if (deviceStatusUnsub) { deviceStatusUnsub(); deviceStatusUnsub = null }
     if (machineListUnsub) { machineListUnsub(); machineListUnsub = null }
     if (deviceE2eePairUnsub) { deviceE2eePairUnsub(); deviceE2eePairUnsub = null }
+    if (deskUnsub) { deskUnsub(); deskUnsub = null }
     logger.info('web user disconnected', { userId: user.sub, machineId: currentAgentId ?? undefined })
   }
   ws.on('close', cleanup)

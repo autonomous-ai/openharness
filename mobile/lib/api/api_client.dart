@@ -85,6 +85,30 @@ class ApiClient {
     unwrapApiResponse(res);
   }
 
+  // -- the desk: the account's tabs, the same on every computer --
+
+  /// `{revision, tabs}` as the backend holds it (its `routes/desk.ts`); null on
+  /// a backend that predates the desk (404) or a session it will not take
+  /// (401) — the phone then has no tabs to show and swipes the whole account,
+  /// as it did before the desk existed.
+  Future<Map<String, dynamic>?> desk() async {
+    final res = await _dio.get('/api/desk');
+    if (res.statusCode == 404 || res.statusCode == 401) return null;
+    return unwrapApiResponse(res) as Map<String, dynamic>?;
+  }
+
+  /// Apply [ops] to the desk; answers the desk as it is afterwards. Null under
+  /// the same two conditions as [desk].
+  Future<Map<String, dynamic>?> deskOps(List<Map<String, dynamic>> ops) async {
+    final res = await _dio.post(
+      '/api/desk/ops',
+      data: {'ops': ops},
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    if (res.statusCode == 404 || res.statusCode == 401) return null;
+    return unwrapApiResponse(res) as Map<String, dynamic>?;
+  }
+
   // -- voice (backend only: the viewer's own SSO session signs it) --
 
   /// The words in one WAV recording, in [lang] — `POST /api/voice/stt`, the

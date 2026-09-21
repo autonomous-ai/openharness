@@ -51,6 +51,7 @@ class TerminalPage extends StatefulWidget {
     required this.agentId,
     required this.voice,
     this.isActive = true,
+    this.tabStrip,
   });
 
   final AppNotifier notifier;
@@ -72,6 +73,19 @@ class TerminalPage extends StatefulWidget {
   /// a page that has slid away — three terminals all resizing themselves to the layout would send
   /// SIGWINCH to three remote shells at once.
   final bool isActive;
+
+  /// The account's tabs, drawn under the header — see [DeskTabStrip], which is
+  /// what this always is. Null on every terminal that is not the home screen's,
+  /// and the header is then the row it has always been.
+  ///
+  /// ⚠️ **Handed in, not built here, and the reason is [_PageFacts].** This page
+  /// only rebuilds itself when its OWN facts move (see [_onNotifier]) — a
+  /// notifier tick that changed nothing about this agent is dropped, tabs
+  /// included. A strip built in this build would therefore go stale the moment
+  /// somebody changed the tabs on a computer. Built by [AgentHome], which does
+  /// rebuild for the account, it arrives as a new widget and simply replaces
+  /// the old one.
+  final Widget? tabStrip;
 
   @override
   State<TerminalPage> createState() => _TerminalPageState();
@@ -1189,6 +1203,12 @@ class _TerminalPageState extends State<TerminalPage>
                             ),
                         ],
                       ),
+                      // Under the names and above the divider: one bar, which
+                      // slides away as one. Which tab the phone is in is part
+                      // of where this terminal IS — the swipe either side of it
+                      // stays inside that tab — so it belongs with the identity
+                      // rather than beside the floating buttons.
+                      ?widget.tabStrip,
                       Divider(height: 1, color: AppGlass.hair),
                       // ⚠️ Inside the header's own slide, not under it: the two are one bar as far
                       // as a scroll is concerned, and a band left behind while the header left

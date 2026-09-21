@@ -40,6 +40,8 @@ import 'dial_status.dart';
 import 'pane_layout_store.dart';
 import 'session_preview.dart';
 import 'terminal_pane.dart';
+import 'desk_sync.dart';
+import 'phone_desk.dart';
 import 'swarm.dart';
 import '../terminal/terminal_binary.dart';
 import '../update/desktop_updater.dart';
@@ -515,6 +517,44 @@ class AppNotifier extends ChangeNotifier {
   final Map<String, MachineState> machineStates = {};
   final Set<String> expandedMachines = {};
   String? selectedMachineId;
+
+  // ── the desk: the account's tabs, the same on every computer ─────────────
+  //
+  // `phone_desk.dart` holds the whole of it, including why a phone follows the
+  // desk instead of projecting itself onto it the way a window does. Everything
+  // here is a hand-off: the closures read `api` LAZILY, because signing in
+  // replaces that client and a tear-off taken now would go on talking to the
+  // old one.
+  late final PhoneDesk _desk = PhoneDesk(
+    read: () => api.desk(),
+    write: (ops) => api.deskOps(ops),
+    onChanged: notifyListeners,
+  );
+
+  /// The account's tabs, in the desk's order. Empty where the desk has nothing
+  /// or has not answered — the phone then swipes the whole account, as it did
+  /// before the desk existed.
+  List<DeskTab> get deskTabs => _desk.tabs;
+
+  /// The tab the phone is in, or null for the agents no tab holds.
+  String? get activeDeskTabId => _desk.activeTabId;
+
+  /// A tab picked by hand, in the strip. The screen answers by opening an agent
+  /// of that tab.
+  void selectDeskTab(String? tabId) => _desk.select(tabId);
+
+  /// The tab the screen has worked out it is showing, and the agent of it on
+  /// screen — see [PhoneDesk.note].
+  void noteDeskTab(String? tabId, {AgentRef? showing}) =>
+      _desk.note(tabId, showing: showing);
+
+  /// Where this phone was in [tabId] last time it was in it.
+  AgentRef? deskLastAgentIn(String? tabId) => _desk.lastAgentIn(tabId);
+
+  /// Read the desk now, and wait for it — what a sign-in and the app coming
+  /// back to the foreground both start without waiting.
+  @visibleForTesting
+  Future<void> deskSyncForTest() => _desk.refresh();
 
   /// Swarms own arrangements; a shared pane owns one live terminal controller.
   final List<Swarm> swarms = [Swarm(id: 'swarm-1')];
@@ -2239,6 +2279,10 @@ class AppNotifier extends ChangeNotifier {
     // The CLI has confirmed sign-in and daemon readiness. Display-name/avatar
     // metadata is independent of machine discovery and must not delay work.
     unawaited(_loadProfile());
+    // The desk too: its tabs are what a swipe stays inside, and they are read
+    // over REST rather than from any machine — so they can land before the
+    // first machine has finished dialling.
+    _desk.ensure();
     try {
       // The request a viewer already has in flight (above), or a fresh one where
       // there is none — a desktop, whose machine list is served by a daemon that
@@ -2427,6 +2471,7 @@ class AppNotifier extends ChangeNotifier {
     signingIn = false;
     pendingAuthorizeUrl = null;
     _awaitingFirstMessage = null;
+    _desk.reset();
     analyticsAccount.clear();
     _daemonSupervisionTimer?.cancel();
     _daemonSupervisionTimer = null;
@@ -2687,6 +2732,9 @@ class AppNotifier extends ChangeNotifier {
     _daemonSupervisionTimer = null;
     _daemonGateFailed = false;
     _clearAllTurnActivity();
+    // The desk belongs to the account, not to the phone: its tabs go with the
+    // session, writes this phone never managed to send included.
+    _desk.reset();
     currentUser = null;
     machines = [];
     machineStates.clear();
@@ -3401,6 +3449,9 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     if (currentUser == null) unawaited(_loadProfile());
+    // A boot that found the daemon still connecting finishes THROUGH here, so
+    // the desk is joined here as well — [PhoneDesk.ensure] makes that once.
+    _desk.ensure();
     try {
       await refreshMachines();
       if (!_authWorkCurrent(revision)) return;
@@ -4792,6 +4843,10 @@ class AppNotifier extends ChangeNotifier {
       notifyListeners();
       return null;
     }
+    // Created HERE, so it joins the tab this phone is in — the way an agent
+    // created in a window joins that window's tab. See [PhoneDesk.adopt] for
+    // what happens when the phone is in no tab.
+    _desk.adopt((machineId: machineId, agentId: agent.id));
     await assignAgentToPane(
       null,
       machineId,
@@ -4891,6 +4946,9 @@ class AppNotifier extends ChangeNotifier {
     final error = result['error'];
     if (error is String) return 'Delete failed: $error';
     await _removeAgent(machine, agentId);
+    // Gone from the machine, so gone from the desk: a tab left holding it would
+    // keep a pane no computer can ever attach. See [PhoneDesk.drop].
+    _desk.drop((machineId: machineId, agentId: agentId));
     notifyListeners();
     return null;
   }
@@ -6306,6 +6364,17 @@ class AppNotifier extends ChangeNotifier {
           }
         }
         break;
+      case 'desk_changed':
+        // The account's tabs changed — in a window on some computer, or on
+        // another phone. The frame carries only the revision; the document
+        // itself is fetched, so a burst of edits collapses into one read.
+        //
+        // ⚠️ It arrives once per MACHINE this phone is connected to (the backend
+        // has no per-phone socket to send it on, so it rides each machine's —
+        // `lib/webWs.ts`). [PhoneDesk.noticeRevision] is what makes four
+        // machines mean one GET.
+        _desk.noticeRevision(payload['revision']);
+        return;
       case 'node_status':
         final online = payload['online'] == true;
         await _applyNodeStatus(machine, online);
@@ -6518,7 +6587,15 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// Safe to call on every resume. [WsPool.reconnectAll] skips connections that are already open
   /// and connections somebody closed on purpose, so a tab switch that cost nothing costs nothing.
-  void handleAppResumed() => _pool?.reconnectAll();
+  void handleAppResumed() {
+    _pool?.reconnectAll();
+    // ⚠️ **The desk is re-read here and not only on a push.** A backgrounded
+    // phone runs no code, so every `desk_changed` sent while it was away
+    // reached a socket nobody was listening on: without this the tabs would be
+    // whatever they were when the phone went into a pocket, until something
+    // else happened to change them.
+    unawaited(_desk.refresh());
+  }
 
   /// What the local CLI closing this machine's socket with [code] does to the
   /// model — the `WsPool.onLocalFailure` path, without a socket.
@@ -6548,6 +6625,7 @@ class AppNotifier extends ChangeNotifier {
     }
     unawaited(_spokenTasks.close());
     sessionPreviews.dispose();
+    _desk.dispose();
     super.dispose();
   }
 }
