@@ -11,7 +11,6 @@ vi.mock('../services/UserService.js', () => ({
 }))
 
 import { authenticateAccessToken, clearSsoProfileCache, fetchSsoProfile, SsoAuthError } from './ssoAuth.js'
-import { ssoIdentityUrlFor } from './autonomousEnvironment.js'
 
 function response(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -88,14 +87,12 @@ describe('which endpoint proves a token', () => {
     expect(fetchMock).toHaveBeenCalledOnce()
   })
 
-  it('derives the identity endpoint from a stock profile URL and from nothing else', () => {
-    expect(ssoIdentityUrlFor('https://apiv2.autonomous.ai/api/v1/me/profile')).toBe('https://apiv2.autonomous.ai/api/v1/me/identity')
-    expect(ssoIdentityUrlFor('https://apiv2.staging.autonomousdev.xyz/api/v1/me/profile')).toBe('https://apiv2.staging.autonomousdev.xyz/api/v1/me/identity')
-    // A test rig's stand-in (scripts point SSO_PROFILE_URL at a local mock) has no identity sibling.
-    expect(ssoIdentityUrlFor('http://127.0.0.1:4010/profile')).toBeUndefined()
-    // An explicit URL wins; an explicit empty string turns the identity endpoint off.
-    expect(ssoIdentityUrlFor('https://apiv2.autonomous.ai/api/v1/me/profile', 'https://id.example/me')).toBe('https://id.example/me')
-    expect(ssoIdentityUrlFor('https://apiv2.autonomous.ai/api/v1/me/profile', '')).toBeUndefined()
+  it('asks the staging identity endpoint for a staging sign-in', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => ok())
+
+    await fetchSsoProfile('token', 'stag', fetchMock)
+
+    expect(calledUrls(fetchMock)).toEqual(['https://apiv2.staging.autonomousdev.xyz/api/v1/me/identity'])
   })
 })
 

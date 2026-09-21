@@ -6,7 +6,6 @@ import {
 } from '../services/UserService.js'
 import {
   autonomousEnvironmentConfig,
-  ssoIdentityUrlFor,
   storedAutonomousEnvironment,
   type AutonomousEnvironment,
 } from './autonomousEnvironment.js'
@@ -70,8 +69,7 @@ export async function fetchSsoProfile(
   // always supplies the environment explicitly.
   const autonomousEnv = typeof autonomousEnvOrFetch === 'function' ? 'prod' : autonomousEnvOrFetch
   const fetchImpl = typeof autonomousEnvOrFetch === 'function' ? autonomousEnvOrFetch : (fetchOverride ?? fetch)
-  const { ssoProfileUrl, ssoIdentityUrlOverride } = autonomousEnvironmentConfig(autonomousEnv)
-  const ssoIdentityUrl = ssoIdentityUrlFor(ssoProfileUrl, ssoIdentityUrlOverride)
+  const { ssoProfileUrl, ssoIdentityUrl } = autonomousEnvironmentConfig(autonomousEnv)
   const ask = async (url: string): Promise<Response> => {
     try {
       return await fetchImpl(url, {
