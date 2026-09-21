@@ -7745,10 +7745,28 @@ class AppNotifier extends ChangeNotifier {
     return known();
   }
 
-  Future<void> openAgentFromDial(String machineId, String agentId) async {
+  /// The dial asked for this agent on screen. A tap (a notification, the
+  /// question's eyebrow, the carousel) gets a tile of its own when none shows
+  /// the agent. A question screen that came up on its own ([fromQuestion])
+  /// only brings the agent forward when it is already on screen: every
+  /// unanswered question is re-shown on each reconnect, and a blink in the
+  /// link used to open a row of tabs — on every Mac, once tabs were shared
+  /// (owner, 2026-09-21).
+  Future<void> openAgentFromDial(
+    String machineId,
+    String agentId, {
+    bool fromQuestion = false,
+  }) async {
     if (revealAgentView(machineId, agentId)) {
       selectedMachineId = machineId;
       notifyListeners();
+      return;
+    }
+    if (fromQuestion) {
+      appLog.debug(
+        'dial',
+        'question for $agentId not on screen — tabs left as they are',
+      );
       return;
     }
     // Its own tab. newSwarm reuses an unused start page when there is one, and
@@ -9325,7 +9343,13 @@ class AppNotifier extends ChangeNotifier {
         if (openId is String && openId.isNotEmpty) {
           final targetMachineId = _dialFocusMachine(payload, openId);
           if (targetMachineId != null) {
-            unawaited(openAgentFromDial(targetMachineId, openId));
+            unawaited(
+              openAgentFromDial(
+                targetMachineId,
+                openId,
+                fromQuestion: payload['reason'] == 'question',
+              ),
+            );
           }
         }
         break;

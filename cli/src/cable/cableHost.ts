@@ -16,7 +16,7 @@ import { fetchRelease, loadImage, shouldOffer } from './fwPush.js'
 import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
 import { env } from '../config/env.js'
 
-import type { AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, DialStatus, RouteDecision } from './cableSession.js'
+import type { AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import { FleetError, type FleetMachine, type MachineFleet } from './machineFleet.js'
 
@@ -50,8 +50,11 @@ export interface CableHostWiring {
   listModels?: (agentId: string) => Promise<Array<{ id: string }>>
   /** The dial moved to another agent — the desktop window should show that agent on its own machine. */
   focused?: (machineId: string, agentId: string) => void
-  /** A notification was tapped: the window gives that agent a tile of its own. */
-  opened?: (machineId: string, agentId: string) => void
+  /**
+   * A notification was tapped: the window gives that agent a tile of its own. With `reason`
+   * `'question'` it was a question screen instead, and the window only brings the agent forward.
+   */
+  opened?: (machineId: string, agentId: string, reason?: OpenReason) => void
   /** A fork the dial asked for is open: the window puts it beside its source and focuses it. */
   forked?: (machineId: string, agentId: string, sourceAgentId: string) => void
   /** The dial asked for a fork of a LOCAL agent — see lib/forkAgent.ts. Resolves to the new agent's id. */
@@ -533,7 +536,7 @@ export class DaemonCableHost implements CableHost {
     return this.agentMachine.get(agentId) ?? this.seenOn.get(agentId) ?? ''
   }
 
-  openAgent(agentId: string): void {
+  openAgent(agentId: string, reason?: OpenReason): void {
     const machineId = this.machineOf(agentId)
     if (!machineId) {
       // Same rule as focus: an agent id without its machine is not routable, and guessing is how a
@@ -541,8 +544,8 @@ export class DaemonCableHost implements CableHost {
       this.wiring.log(`cable: ignored open for unknown agent ${agentId}`)
       return
     }
-    this.wiring.log(`cable: open ${machineId}/${agentId} (notification)`)
-    this.wiring.opened?.(machineId, agentId)
+    this.wiring.log(`cable: open ${machineId}/${agentId} (${reason ?? 'notification'})`)
+    this.wiring.opened?.(machineId, agentId, reason)
   }
 
   /**

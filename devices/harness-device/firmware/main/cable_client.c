@@ -176,12 +176,14 @@ void cable_client_send_focus(const char *agent_id)
     send_json(root);
 }
 
-void cable_client_send_open(const char *agent_id)
+void cable_client_send_open(const char *agent_id, const char *reason)
 {
     if (!agent_id || !agent_id[0]) return;
     cJSON *root = msg("agent.open");
     if (!root) return;
     cJSON_AddStringToObject(root, "agentId", agent_id);
+    // Absent for a tap: an older daemon reads the frame exactly as before.
+    if (reason && reason[0]) cJSON_AddStringToObject(root, "reason", reason);
     send_json(root);
 }
 

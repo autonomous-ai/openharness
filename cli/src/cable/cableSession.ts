@@ -185,6 +185,8 @@ export interface AppSwarms {
 
 /** Why the list is as short as it is. The dial renders this, instead of drawing an empty wheel. */
 export type CableMachineSource = 'backend' | 'local' | 'signed-out'
+/** Why the dial sent an `agent.open`: a tap (absent) or a question screen that came up on its own. */
+export type OpenReason = 'question'
 
 export type { WindowRoute } from './windowRoute.js'
 import type { WindowRoute } from './windowRoute.js'
@@ -243,8 +245,12 @@ export interface CableHost {
    * says where the eye is and the window moves a tile to match, while this asks
    * for a tile of its own. A turn that just finished is a new thing to look at,
    * not a replacement for whatever the person was already watching.
+   *
+   * `reason` is why the dial sent it: absent for a person's tap; `'question'` when a question screen
+   * came up on its own — the window then only brings the agent forward if it is already on screen,
+   * because a reconnect re-shows every unanswered question and each used to open a tab.
    */
-  openAgent(agentId: string): void
+  openAgent(agentId: string, reason?: OpenReason): void
   /** The dial asked for a fork of this agent — a second one with its history, opened in the window. */
   forkAgent(agentId: string): Promise<{ ok: true; agentId: string } | { ok: false; error: string; detail?: string }>
   /**
@@ -815,7 +821,8 @@ export class CableSession {
         }
         return
       case 'agent.open':
-        if (str('agentId')) this.host.openAgent(str('agentId')!)
+        // Only the one reason the window knows; anything else reads as a tap, the older frame's meaning.
+        if (str('agentId')) this.host.openAgent(str('agentId')!, str('reason') === 'question' ? 'question' : undefined)
         return
       case 'agent.fork': {
         // The dial's Fork action. The host opens the new agent in the window itself; the dial only needs

@@ -370,7 +370,10 @@ describe('DaemonCableHost.listAgentsFlat across machines, and the tab the dial g
     host.noteAgent('other', 'r9')
     expect(host.describe('r9')).toEqual({ name: '', engine: '', machine: 'office-imac' })
     host.openAgent('r9')
-    expect(opened).toHaveBeenCalledWith('other', 'r9')
+    expect(opened).toHaveBeenCalledWith('other', 'r9', undefined)
+    // A question screen's own open says so, and the window hears it.
+    host.openAgent('r9', 'question')
+    expect(opened).toHaveBeenLastCalledWith('other', 'r9', 'question')
   })
 
   it('forks a local agent through the daemon and opens the fork in the window', async () => {

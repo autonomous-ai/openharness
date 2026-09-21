@@ -5301,8 +5301,11 @@ async function runForeground(session: AuthSession): Promise<void> {
     // Both of these are LOCAL-ONLY on purpose (backend.sendLocal, not backend.send): they describe a hand
     // at this desk, not a change in what the machine is doing, and the cloud web audience may be sitting
     // at another computer entirely.
-    // A notification tap, which asks for a tile of its OWN — see CableHost.openAgent.
-    opened: (machineId, agentId) => backend.sendLocal({ type: 'dial_open', payload: { machineId, agentId } }),
+    // A notification tap, which asks for a tile of its OWN — see CableHost.openAgent. `reason` rides
+    // along only when the dial gave one ('question'): the window then brings the agent forward rather
+    // than opening a tab, and an older window that does not know the field opens one as before.
+    opened: (machineId, agentId, reason) =>
+      backend.sendLocal({ type: 'dial_open', payload: { machineId, agentId, ...(reason ? { reason } : {}) } }),
     forked: (machineId, agentId, sourceAgentId) => backend.sendLocal({ type: 'dial_forked', payload: { machineId, agentId, sourceAgentId } }),
     // The dial's Fork: the same path the window's `agent_fork` takes, then `forked` above lands on it.
     forkAgent: async (agentId) => {

@@ -747,7 +747,7 @@ void ui_report_active_agent(void)
     if (!s_proj[s_active_idx].id[0]) return;
     if (s_notif_open_pending) {
         s_notif_open_pending = false;
-        cable_client_send_open(s_proj[s_active_idx].id);
+        cable_client_send_open(s_proj[s_active_idx].id, NULL);
     } else {
         cable_client_send_focus(s_proj[s_active_idx].id);
     }
@@ -5822,7 +5822,7 @@ static void notif_row_tap(lv_event_t *e)
     // rarely the one the notification was about.
     if (id[0]) {
         s_notif_open_pending = false;
-        cable_client_send_open(id);
+        cable_client_send_open(id, NULL);
         open_agent_detail(id);   // held until the list arrives when the agent is off this tab
         return;
     }
@@ -7014,7 +7014,7 @@ static void q_open_tap(lv_event_t *e)
 {
     (void)e;
     if (!s_q.project[0]) return;
-    cable_client_send_open(s_q.project);
+    cable_client_send_open(s_q.project, NULL);
     machine_toast("Opening in the app");
 }
 
@@ -7243,9 +7243,11 @@ void ui_question_show(const char *project_id, const char *agent_name, const char
     display_unlock();
     audio_notify_done();   // audible alert so the user notices a question is waiting
     // …and bring the window to the same agent, so the question can be judged against what it is doing.
-    // The same `open` a notification tap sends: the window finds the tab that holds the agent — the
-    // current one first — or opens one for it (owner, 2026-09-15, "rule vẫn như cũ").
-    if (s_q.project[0]) cable_client_send_open(s_q.project);
+    // Said as a "question" open: the window brings the agent forward when it is on screen and does
+    // nothing when it is not. It used to be the same `open` a tap sends, which opened a tab — and a
+    // reconnect re-shows every unanswered question, so a blink in the link opened a row of tabs
+    // (owner, 2026-09-21). A tap on the eyebrow (q_open_tap) still opens one.
+    if (s_q.project[0]) cable_client_send_open(s_q.project, "question");
 }
 
 // ── Machine picker (Settings → Machines) ──────────────────────────────────────────────────────────────
