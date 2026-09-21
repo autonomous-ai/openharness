@@ -53,7 +53,10 @@ class Swarm {
       ? defaultName
       : name;
 
-  final String id;
+  /// Mutable for one reason: a tab from before the desk (`swarm-N`, this
+  /// window's numbering) is given a desk id on the first sync
+  /// (`AppNotifier._deskStart`). Nothing else ever writes it.
+  String id;
   String name;
   bool nameIsCustom;
   String? titleMachineId, titleAgentId;

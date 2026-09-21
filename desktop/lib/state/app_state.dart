@@ -48,6 +48,7 @@ import '../widgets/engine_identity.dart'
 import '../store/store_screen.dart' show openStoreAgent;
 import 'dial_status.dart';
 import 'harness_placement.dart';
+import 'desk_sync.dart';
 import 'pane_layout_store.dart';
 import 'terminal_pane.dart';
 import 'swarm.dart';
@@ -661,6 +662,27 @@ class AppNotifier extends ChangeNotifier {
 
   /// Swarms own arrangements; a shared pane owns one live terminal controller.
   final List<Swarm> swarms = [Swarm(id: 'swarm-1')];
+
+  // ── the desk: the account's tabs, the same on every computer ─────────────
+  //
+  // `desk_sync.dart` has the shape and the rules; this is the window's half.
+  // Every layout change funnels through [_persistLayout], which diffs the
+  // desk-shaped projection of `swarms` against what the desk last agreed to
+  // and sends the difference as ops. A `desk_changed` push (backend → daemon →
+  // here) or the 15 s poll fetches the document, and [_deskApply] reconciles
+  // `swarms` to it — creating, closing, renaming and reordering tabs and their
+  // panes, and touching nothing a window keeps for itself.
+  final DeskSyncState _desk = DeskSyncState();
+  Timer? _deskRetry;
+  Future<void>? _deskJoining;
+  @visibleForTesting
+  DeskSyncState get deskSyncForTest => _desk;
+  @visibleForTesting
+  Future<void> deskStartForTest() => _deskStart(_authRevision);
+  @visibleForTesting
+  Future<void> deskFetchForTest() => _deskFetch();
+  @visibleForTesting
+  Future<void> deskFlushForTest() => _deskFlush();
   String _activeSwarmId = 'swarm-1';
   int _nextSwarmId = 2;
   // No tab cap, as in Chrome: only the visible tab's panes are built, so a background tab costs its
@@ -836,8 +858,10 @@ class AppNotifier extends ChangeNotifier {
     while (swarms.any((s) => s.id == 'swarm-$_nextSwarmId')) {
       _nextSwarmId++;
     }
+    // A desk id from the start when the desk is on: the tab will be everyone's
+    // the moment it holds something.
     final swarm = Swarm(
-      id: 'swarm-${_nextSwarmId++}',
+      id: _desk.enabled ? newDeskId() : 'swarm-${_nextSwarmId++}',
       name: name,
       isNewTabPage: newTabPage,
     );
@@ -2610,6 +2634,9 @@ class AppNotifier extends ChangeNotifier {
     // The CLI has confirmed sign-in and daemon readiness. Display-name/avatar
     // metadata is independent of machine discovery and must not delay work.
     unawaited(_loadProfile());
+    // The desk too: tabs from the other computers appear as intent, like the
+    // restored ones, and attach as their machines answer.
+    _deskEnsure(revision);
     try {
       await refreshMachines();
     } catch (error) {
@@ -2734,6 +2761,7 @@ class AppNotifier extends ChangeNotifier {
     if (online && wasOffline && status == AppStatus.authenticated) {
       if (refetch && !machinesRefreshing) unawaited(retryMachines());
       if (currentUser == null) unawaited(_loadProfile());
+      _deskEnsure(_authRevision);
     }
     notifyListeners();
   }
@@ -2839,6 +2867,11 @@ class AppNotifier extends ChangeNotifier {
   /// In particular, multiple emptied tabs must not prevent the next restore.
   void _clearAccountWorkspace() {
     ++_layoutRevision;
+    // Sign-out sends the desk nothing: the tabs closing here are this window
+    // leaving the account, not the person closing them.
+    _deskRetry?.cancel();
+    _deskRetry = null;
+    _desk.reset();
     _stopAllOfflineRetries();
     _stopAllLinkRetries();
     _stopAllAgentSyncTimers();
@@ -3775,6 +3808,9 @@ class AppNotifier extends ChangeNotifier {
       }
       final discoveryRevision = _authRevision;
       _sharingDiscoveryBusy = true;
+      // A push that was missed is caught here: the desk read is one small
+      // GET, and an unchanged revision applies nothing.
+      if (_desk.enabled && _desk.pending.isEmpty) unawaited(_deskFetch());
       try {
         await refreshMachines();
       } catch (error) {
@@ -4365,6 +4401,9 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     if (currentUser == null) unawaited(_loadProfile());
+    // A boot that found the daemon still connecting finishes THROUGH here (see
+    // `_loadProfile`), so the desk is joined here as well — once.
+    _deskEnsure(revision);
     try {
       if (!await refreshMachines() || !_authWorkCurrent(revision)) return;
       if (!automatic) _lastError = null;
@@ -6135,47 +6174,50 @@ class AppNotifier extends ChangeNotifier {
     return null;
   }
 
-  String _creationFailureMessage(String code, String? detail, String machine) =>
-      switch (code) {
-        'INVALID_PROJECT_SOURCE' ||
-        'INVALID_REPOSITORY' ||
-        'PROJECT_PREPARATION_FAILED' ||
-        'PROJECT_EXISTS' ||
-        'CLONE_FAILED' ||
-        'CLONE_TIMEOUT' ||
-        'GIT_UNAVAILABLE' =>
-          detail ?? 'Could not prepare the project folder on $machine.',
-        'CWD_NOT_FOUND' || 'INVALID_CWD' =>
-          'The project folder is unavailable on $machine. '
-              'Choose another folder and try again.',
-        'TMUX_UNAVAILABLE' =>
-          'Harness needs tmux to start harnesses on $machine. '
-              'Install tmux there, then try again.',
-        'CODEX_CLI_TOO_OLD' =>
-          detail ??
-              'The installed Codex CLI on $machine is too old for Auto approvals. '
-                  'Update Codex, or choose Ask permissions.',
-        'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
-          'Update the harness CLI on this machine to start a harness',
-        'INVALID_DSH' =>
-          'This harness is not installed on $machine. '
-              '${detail ?? 'Install it there, then try again.'}',
-        'PROMPT_UNSUPPORTED' =>
-          'This engine cannot be opened with a first message on $machine.',
-        'PROMPT_TOO_LONG' =>
-          'This first task is too long for $machine. Shorten it and try again.',
-        'AGENT_UNSUPPORTED' =>
-          'This engine cannot be opened as a named agent on $machine.',
-        'INVALID_AGENT' =>
-          'This engine cannot be opened as that named agent on $machine.',
-        'INVALID_PERMISSION_MODE' =>
-          'This engine has no such permission mode on $machine.',
-        // A daemon that predates the terminal engine refuses it by name; the
-        // fix is the same one the other UNSUPPORTED codes ask for.
-        'INVALID_ENGINE' =>
-          'Update the harness CLI on $machine to open this kind of pane.',
-        _ => 'Could not start harness: ${detail ?? code}',
-      };
+  String _creationFailureMessage(
+    String code,
+    String? detail,
+    String machine,
+  ) => switch (code) {
+    'INVALID_PROJECT_SOURCE' ||
+    'INVALID_REPOSITORY' ||
+    'PROJECT_PREPARATION_FAILED' ||
+    'PROJECT_EXISTS' ||
+    'CLONE_FAILED' ||
+    'CLONE_TIMEOUT' ||
+    'GIT_UNAVAILABLE' =>
+      detail ?? 'Could not prepare the project folder on $machine.',
+    'CWD_NOT_FOUND' || 'INVALID_CWD' =>
+      'The project folder is unavailable on $machine. '
+          'Choose another folder and try again.',
+    'TMUX_UNAVAILABLE' =>
+      'Harness needs tmux to start harnesses on $machine. '
+          'Install tmux there, then try again.',
+    'CODEX_CLI_TOO_OLD' =>
+      detail ??
+          'The installed Codex CLI on $machine is too old for Auto approvals. '
+              'Update Codex, or choose Ask permissions.',
+    'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
+      'Update the harness CLI on this machine to start a harness',
+    'INVALID_DSH' =>
+      'This harness is not installed on $machine. '
+          '${detail ?? 'Install it there, then try again.'}',
+    'PROMPT_UNSUPPORTED' =>
+      'This engine cannot be opened with a first message on $machine.',
+    'PROMPT_TOO_LONG' =>
+      'This first task is too long for $machine. Shorten it and try again.',
+    'AGENT_UNSUPPORTED' =>
+      'This engine cannot be opened as a named agent on $machine.',
+    'INVALID_AGENT' =>
+      'This engine cannot be opened as that named agent on $machine.',
+    'INVALID_PERMISSION_MODE' =>
+      'This engine has no such permission mode on $machine.',
+    // A daemon that predates the terminal engine refuses it by name; the
+    // fix is the same one the other UNSUPPORTED codes ask for.
+    'INVALID_ENGINE' =>
+      'Update the harness CLI on $machine to open this kind of pane.',
+    _ => 'Could not start harness: ${detail ?? code}',
+  };
 
   /// A confirmed name collision happens before any process starts. Only then
   /// may an automatic suggestion advance to another name with a fresh receipt.
@@ -8469,6 +8511,352 @@ class AppNotifier extends ChangeNotifier {
   Future<void> flushPaneLayout() =>
       _paneLayout?.flushSwarms() ?? Future<void>.value();
 
+  // ── desk sync ────────────────────────────────────────────────────────────
+
+  /// Which tabs are the desk's business: harness tabs that are not drafts. The
+  /// Store tab, orchestrator tabs and an untouched New Tab are this window's.
+  bool _deskTracks(Swarm swarm) =>
+      swarm.kind == 'harness' && !isDraftSwarm(swarm.id);
+
+  /// `swarms` as the desk would hold them.
+  List<DeskTab> _deskProjection() => [
+    for (final swarm in swarms)
+      if (_deskTracks(swarm))
+        DeskTab(
+          id: swarm.id,
+          name: swarm.name,
+          nameIsCustom: swarm.nameIsCustom,
+          panes: [
+            for (final pane in swarm.panes)
+              if (pane.agentId != null)
+                DeskPaneRef(machineId: pane.machineId, agentId: pane.agentId!),
+          ],
+        ),
+  ];
+
+  /// First contact with the desk after sign-in. A daemon that predates the
+  /// desk, or a signed-out one, answers null and this window keeps its tabs to
+  /// itself. Otherwise the desk is read, this computer's own tabs from before
+  /// the desk are given desk ids and seeded (every machine's tabs land; the
+  /// person closes the extras), and the merged desk is applied.
+  Future<void> _deskStart(int authRevision) async {
+    if (_deskJoining != null) return _deskJoining;
+    final run = _deskJoin(authRevision);
+    _deskJoining = run;
+    try {
+      await run;
+    } finally {
+      if (identical(_deskJoining, run)) _deskJoining = null;
+    }
+  }
+
+  /// Join the desk unless this window already has (or is joining now). Every
+  /// path that finishes a sign-in calls this — the boot, the retry the boot
+  /// hands over to when the daemon is still connecting, and the daemon's
+  /// backend link coming back — because a daemon whose backend was offline
+  /// answered the first read with an error, not with a desk.
+  void _deskEnsure(int authRevision) {
+    if (_desk.enabled || _deskJoining != null) return;
+    unawaited(_deskStart(authRevision));
+  }
+
+  Future<void> _deskJoin(int authRevision) async {
+    Map<String, dynamic>? raw;
+    try {
+      raw = await api.desk();
+    } catch (error) {
+      appLog.warn('desk', 'first read failed: $error');
+      return;
+    }
+    if (_disposed || !_authWorkCurrent(authRevision)) return;
+    final doc = DeskDoc.fromJson(raw);
+    if (doc == null) {
+      appLog.info('desk', 'not available here — tabs stay local');
+      return;
+    }
+    _desk.enabled = true;
+    // Tabs from before the desk carry per-window ids (`swarm-N`) two computers
+    // would both mint. Give them desk ids once; the layout store keys by the
+    // same string, so it follows on the next save.
+    for (final swarm in swarms) {
+      if (_deskTracks(swarm) && !isDeskId(swarm.id)) {
+        final was = swarm.id;
+        swarm.id = newDeskId();
+        if (_activeSwarmId == was) _activeSwarmId = swarm.id;
+        for (final entry in _draftSwarmReturns.entries.toList()) {
+          if (entry.value == was) _draftSwarmReturns[entry.key] = swarm.id;
+        }
+      }
+    }
+    final own = _deskProjection();
+    final unknown = own
+        .where((t) => !doc.tabs.any((d) => d.id == t.id))
+        .toList();
+    _desk.revision = doc.revision;
+    _desk.synced = doc.tabs;
+    if (unknown.isNotEmpty) {
+      _desk.pending.add({
+        'op': 'seed',
+        'tabs': [for (final t in unknown) t.toJson()],
+      });
+    }
+    appLog.info(
+      'desk',
+      'joined at rev ${doc.revision} · ${doc.tabs.length} on the desk · ${unknown.length} of ours to seed',
+    );
+    _deskApply(doc);
+    await _deskFlush();
+  }
+
+  /// Called from [_persistLayout]: whatever just changed, said to the desk as ops.
+  void _deskQueueDiff() {
+    if (!_desk.enabled) return;
+    final projection = _deskProjection();
+    final ops = deskDiff(_desk.synced, projection);
+    if (ops.isEmpty) return;
+    // Optimistic: this window believes its own edit. The desk's answer (or a
+    // document from elsewhere) is applied over it, with the pending ops laid
+    // back on top until they are acknowledged.
+    _desk.synced = projection;
+    _desk.pending.addAll(ops);
+    appLog.debug('desk', 'queued ${ops.map((o) => o['op']).join(' ')}');
+    unawaited(_deskFlush());
+  }
+
+  Future<void> _deskFlush() async {
+    if (!_desk.enabled ||
+        _desk.inFlight ||
+        _desk.pending.isEmpty ||
+        _disposed) {
+      return;
+    }
+    _desk.inFlight = true;
+    final authRevision = _authRevision;
+    final batch = List<Map<String, dynamic>>.from(_desk.pending);
+    Map<String, dynamic>? raw;
+    try {
+      raw = await api.deskOps(batch);
+    } catch (error) {
+      _desk.inFlight = false;
+      if (_disposed || !_authWorkCurrent(authRevision)) return;
+      // Kept, not dropped: a tab closed while the backend was unreachable is
+      // still closed everywhere once it is back. Backoff, capped at a minute.
+      _desk.failures++;
+      final wait = Duration(
+        seconds: (5 * (1 << (_desk.failures - 1).clamp(0, 4))).clamp(5, 60),
+      );
+      appLog.warn(
+        'desk',
+        'write failed (${batch.length} ops, retry in ${wait.inSeconds}s): $error',
+      );
+      _deskRetry?.cancel();
+      _deskRetry = Timer(wait, () => unawaited(_deskFlush()));
+      return;
+    }
+    _desk.inFlight = false;
+    if (_disposed || !_authWorkCurrent(authRevision)) return;
+    _desk.failures = 0;
+    _deskRetry?.cancel();
+    _deskRetry = null;
+    // Acknowledged (or, on null, refused for good — the daemon lost its
+    // session): these ops are no longer pending either way.
+    _desk.pending.removeRange(0, batch.length.clamp(0, _desk.pending.length));
+    final doc = DeskDoc.fromJson(raw);
+    if (doc == null) {
+      appLog.info(
+        'desk',
+        'write not accepted — tabs stay local until the next sign-in',
+      );
+      _desk.enabled = false;
+      _desk.pending.clear();
+      return;
+    }
+    _deskApply(doc);
+    if (_desk.pending.isNotEmpty) unawaited(_deskFlush());
+  }
+
+  Future<void> _deskFetch() async {
+    if (!_desk.enabled || _disposed) return;
+    final authRevision = _authRevision;
+    Map<String, dynamic>? raw;
+    try {
+      raw = await api.desk();
+    } catch (error) {
+      appLog.warn('desk', 'read failed: $error');
+      return;
+    }
+    if (_disposed || !_authWorkCurrent(authRevision)) return;
+    final doc = DeskDoc.fromJson(raw);
+    if (doc == null) return;
+    _deskApply(doc);
+  }
+
+  /// Reconcile `swarms` to [doc], with this window's unacknowledged ops laid
+  /// over it. Ignores a document older than one already applied.
+  void _deskApply(DeskDoc doc) {
+    if (doc.revision < _desk.revision) return;
+    _desk.revision = doc.revision;
+    final target = applyDeskOps(doc.tabs, _desk.pending);
+    _desk.synced = target;
+    _deskReconcile(target);
+  }
+
+  /// Make `swarms` say what [target] says, and no more: tabs the desk closed go
+  /// (their streams released unless another tab still shows them), tabs it
+  /// opened arrive as intent and attach as their machines answer, names the
+  /// person chose follow, order follows. Focus, zoom, sizes, pins, viewers and
+  /// this window's own local-only tabs are left exactly where they were.
+  void _deskReconcile(List<DeskTab> target) {
+    final targetById = {for (final t in target) t.id: t};
+    final before = _deskProjection();
+    final released = <TerminalPane>[];
+
+    // Tabs the desk no longer has.
+    final kept = <Swarm>[];
+    for (final swarm in swarms) {
+      if (_deskTracks(swarm) && !targetById.containsKey(swarm.id)) {
+        released.addAll(swarm.panes);
+        continue;
+      }
+      kept.add(swarm);
+    }
+    swarms
+      ..clear()
+      ..addAll(kept);
+
+    // Tabs, names and panes.
+    for (final tab in target) {
+      var swarm = swarms.where((s) => s.id == tab.id).firstOrNull;
+      if (swarm == null) {
+        swarm = Swarm(
+          id: tab.id,
+          name: tab.name,
+          nameIsCustom: tab.nameIsCustom,
+        );
+        swarms.add(swarm);
+      } else if (tab.nameIsCustom &&
+          (swarm.name != tab.name || !swarm.nameIsCustom)) {
+        swarm.name = tab.name;
+        swarm.nameIsCustom = true;
+      }
+      final wanted = {for (final p in tab.panes) p.key};
+      for (final pane in swarm.panes.toList()) {
+        if (pane.agentId == null) continue;
+        if (wanted.contains('${pane.machineId}\u0000${pane.agentId}')) continue;
+        swarm.remove(pane);
+        released.add(pane);
+        for (final viewer in swarm.panes.toList()) {
+          if (viewer.isWeb &&
+              viewer.machineId == pane.machineId &&
+              viewer.ownerAgentId == pane.agentId) {
+            swarm.remove(viewer);
+          }
+        }
+      }
+      for (var i = 0; i < tab.panes.length; i++) {
+        final ref = tab.panes[i];
+        final existing = swarm.panes
+            .where(
+              (p) => p.machineId == ref.machineId && p.agentId == ref.agentId,
+            )
+            .firstOrNull;
+        if (existing != null) continue;
+        // One TerminalPane per (machine, agent) across tabs — the same rule the
+        // restore keeps — so a second tab showing an agent reuses its stream.
+        final pane =
+            allPanes
+                .where(
+                  (p) =>
+                      p.machineId == ref.machineId && p.agentId == ref.agentId,
+                )
+                .firstOrNull ??
+            TerminalPane(
+              id: _nextPaneId++,
+              machineId: ref.machineId,
+              agentId: ref.agentId,
+            );
+        swarm.panes.insert(i.clamp(0, swarm.panes.length), pane);
+        swarm.focusedPaneId ??= pane.id;
+      }
+      // Order among agent panes, viewers riding beside their owners.
+      final agentOrder = {
+        for (var i = 0; i < tab.panes.length; i++) tab.panes[i].key: i,
+      };
+      final ordered = swarm.panes.where((p) => p.agentId != null).toList()
+        ..sort(
+          (a, b) => (agentOrder['${a.machineId}\u0000${a.agentId}'] ?? 0)
+              .compareTo(agentOrder['${b.machineId}\u0000${b.agentId}'] ?? 0),
+        );
+      final rebuilt = <TerminalPane>[];
+      for (final pane in ordered) {
+        rebuilt.add(pane);
+        rebuilt.addAll(
+          swarm.panes.where(
+            (v) =>
+                v.isWeb &&
+                v.machineId == pane.machineId &&
+                v.ownerAgentId == pane.agentId,
+          ),
+        );
+      }
+      for (final pane in swarm.panes) {
+        if (!rebuilt.contains(pane)) {
+          rebuilt.add(pane);
+        }
+      }
+      swarm.panes
+        ..clear()
+        ..addAll(rebuilt);
+      if (!swarm.nameIsCustom &&
+          swarm.titleAgentId == null &&
+          swarm.panes.isNotEmpty) {
+        swarm.titleMachineId = swarm.panes.first.machineId;
+        swarm.titleAgentId = swarm.panes.first.agentId;
+      }
+    }
+
+    // Tab order: the desk's, with this window's local-only tabs where they were.
+    final localOnly = <(int, Swarm)>[];
+    for (var i = 0; i < kept.length; i++) {
+      if (!_deskTracks(kept[i])) localOnly.add((i, kept[i]));
+    }
+    final ordered = <Swarm>[
+      for (final tab in target) swarms.firstWhere((s) => s.id == tab.id),
+    ];
+    for (final (index, swarm) in localOnly) {
+      ordered.insert(index.clamp(0, ordered.length), swarm);
+    }
+    swarms
+      ..clear()
+      ..addAll(ordered);
+    if (swarms.isEmpty) swarms.add(Swarm(id: 'swarm-${_nextSwarmId++}'));
+    if (!swarms.any((s) => s.id == _activeSwarmId)) {
+      _activeSwarmId = swarms.first.id;
+      selectedMachineId = focusedPane?.machineId;
+    }
+
+    // Streams nobody shows any more.
+    for (final pane in released.toSet()) {
+      if (!allPanes.contains(pane)) {
+        unawaited(_detachSession(pane, sendClose: true));
+      }
+    }
+    _settlePins();
+    final after = _deskProjection();
+    if (deskDiff(before, after).isNotEmpty) {
+      appLog.debug(
+        'desk',
+        'applied rev ${_desk.revision} · ${swarms.length} tabs',
+      );
+    }
+    _persistLayout();
+    for (final machine in machineStates.values) {
+      _attachPendingPanes(machine, retryExisting: false);
+    }
+    _announceAppFocus();
+    notifyListeners();
+  }
+
   void _persistLayout() {
     _draftSwarmReturns.removeWhere((id, _) {
       final swarm = swarms.where((swarm) => swarm.id == id).firstOrNull;
@@ -8479,6 +8867,7 @@ class AppNotifier extends ChangeNotifier {
     });
     _layoutRevision++;
     _announceOpenPanesToDial();
+    _deskQueueDiff();
     final saved = swarms.where((swarm) => !isDraftSwarm(swarm.id)).toList();
     if (saved.isEmpty) return;
     final savedActive = isDraftSwarm(activeSwarmId)
@@ -8919,6 +9308,14 @@ class AppNotifier extends ChangeNotifier {
               ),
             );
           }
+        }
+        break;
+      case 'desk_changed':
+        // Another window — on another computer, or this one — changed the
+        // tabs. The payload is only the revision; the document is fetched.
+        final deskRevision = payload['revision'];
+        if (deskRevision is! int || deskRevision > _desk.revision) {
+          unawaited(_deskFetch());
         }
         break;
       case 'dial_open':

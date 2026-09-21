@@ -1248,6 +1248,30 @@ describe('BackendSocket outbound queue', () => {
   })
 })
 
+describe('desk_changed relay', () => {
+  afterEach(() => {
+    wsMock.instances.length = 0
+    vi.restoreAllMocks()
+  })
+
+  it('hands the backend\'s desk_changed to the window, and only the backend\'s', async () => {
+    const socket = new BackendSocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:desk', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: 'desk_changed', payload: { revision: 9 } } })
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'desk_changed', payload: { revision: 9 } }))
+    // A local client saying it is not the backend: nothing is relayed.
+    socket.handleLocalFrame('local:desk', { type: 'desk_changed', payload: { revision: 99 } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(frames.filter((f) => f.type === 'desk_changed')).toHaveLength(1)
+    await socket.unregisterLocalClient('local:desk')
+    await socket.stop()
+  })
+})
+
 describe('agent_fork RPC', () => {
   afterEach(() => {
     wsMock.instances.length = 0

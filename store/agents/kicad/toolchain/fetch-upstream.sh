@@ -8,7 +8,20 @@ if [ -f upstream/.harness-commit ] && [ "$(cat upstream/.harness-commit)" = "${U
   echo "ok   ${UPSTREAM_NAME} @ ${UPSTREAM_COMMIT:0:12} already fetched"
   exit 0
 fi
-command -v git >/dev/null 2>&1 || { echo "miss git on PATH"; exit 1; }
+if ! command -v git >/dev/null 2>&1; then
+  # A new Mac has no git until Xcode's command line tools are installed (a dialog, not a script).
+  # GitHub serves the pinned commit as a tarball; the sparse patterns become tar excludes.
+  echo "     no git on PATH — fetching ${UPSTREAM_NAME} @ ${UPSTREAM_COMMIT:0:12} as a tarball"
+  archive="${UPSTREAM_REPO%.git}/archive/${UPSTREAM_COMMIT}.tar.gz"
+  rm -rf upstream.partial && mkdir upstream.partial
+  curl -fsSL --retry 3 "$archive" | tar -xzf - -C upstream.partial --strip-components 1 \
+    --exclude '*/products/*' --exclude '*/examples/*' \
+    || { rm -rf upstream.partial; echo "miss could not fetch $archive"; exit 1; }
+  echo "${UPSTREAM_COMMIT}" > upstream.partial/.harness-commit
+  rm -rf upstream && mv upstream.partial upstream
+  echo "ok   ${UPSTREAM_NAME} @ ${UPSTREAM_COMMIT:0:12} fetched as a tarball ($(du -sh upstream | cut -f1))"
+  exit 0
+fi
 echo "     fetching ${UPSTREAM_REPO} @ ${UPSTREAM_COMMIT:0:12} (${UPSTREAM_SPARSE_MODE} sparse: ${UPSTREAM_SPARSE})"
 # The copy in upstream/ stays until the new one is complete: a fetch that fails (offline, a bad pin)
 # leaves the install that worked.

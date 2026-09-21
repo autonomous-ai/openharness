@@ -186,6 +186,30 @@ describe('process-owned hook server', () => {
   })
 })
 
+describe('the desk proxy', () => {
+  it('reads the desk ungated and writes its ops only with the local header, body passed through', async () => {
+    const ops = vi.fn(async (body: unknown) => ({ status: 200, body: { success: true, data: { revision: 2, tabs: [], echo: body } } }))
+    const { base } = await start({
+      onDeskRead: async () => ({ status: 200, body: { success: true, data: { revision: 1, tabs: [] } } }),
+      onDeskOps: ops,
+    })
+    const read = await fetch(`${base}/api/desk`)
+    expect(await read.json()).toEqual({ success: true, data: { revision: 1, tabs: [] } })
+
+    const refused = await fetch(`${base}/api/desk/ops`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"ops":[]}' })
+    expect(refused.status).toBe(403)
+    expect(ops).not.toHaveBeenCalled()
+
+    const body = { ops: [{ op: 'tab.create', id: 'a', name: 'Local' }] }
+    const written = await fetch(`${base}/api/desk/ops`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: JSON.stringify(body) })
+    expect(((await written.json()) as { data: unknown }).data).toMatchObject({ revision: 2, echo: body })
+    expect(ops).toHaveBeenCalledWith(body)
+
+    const bad = await fetch(`${base}/api/desk/ops`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{nope' })
+    expect(bad.status).toBe(400)
+  })
+})
+
 describe('the Harness Store proxy', () => {
   it('forwards a store read with its path and query, and a store write only with the local header', async () => {
     const calls: Array<[string, string, unknown]> = []

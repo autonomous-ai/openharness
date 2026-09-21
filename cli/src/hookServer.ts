@@ -125,6 +125,11 @@ export interface HookServerHandlers {
   /** GET /api/auth/me — proxy the signed-in user's profile from backend. */
   onAuthMe?: () => Promise<PairOutcome>
   onSharedHarnesses?: () => Promise<PairOutcome>
+  /** GET /api/desk — the account's tabs, the same on every computer; proxied like the machine list. */
+  onDeskRead?: () => Promise<PairOutcome>
+  /** POST /api/desk/ops — the window's tab edits, applied on the backend (its routes/desk.ts); a
+   *  local write, so CSRF-guarded like a rename. */
+  onDeskOps?: (body: unknown) => Promise<PairOutcome>
   /** /api/store/* — proxy the Harness Store's ratings and reviews to backend the same way: reads
    *  ungated like the machine list, writes (PUT/DELETE) CSRF-guarded like a rename. See storeProxy.ts. */
   onStore?: StoreHandler
@@ -617,6 +622,17 @@ export function startHookServer(
       if (req.method === 'GET' && url === '/api/harness-shares') {
         if (!handlers.onSharedHarnesses) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(handlers.onSharedHarnesses); return
+      }
+      if (req.method === 'GET' && url === '/api/desk') {
+        if (!handlers.onDeskRead) { json(503, { error: 'UNAVAILABLE' }); return }
+        await proxied(handlers.onDeskRead); return
+      }
+      if (req.method === 'POST' && url === '/api/desk/ops') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onDeskOps) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: unknown
+        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
+        await proxied(() => handlers.onDeskOps!(body)); return
       }
       if (req.method === 'GET' && url === '/api/auth/me') {
         const me = handlers.onAuthMe
