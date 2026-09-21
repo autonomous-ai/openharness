@@ -7,6 +7,19 @@ the MuJoCo Viewer pane runs it — MuJoCo's own WebAssembly build, live in the b
 frame by frame. Menagerie robots (Unitree Go2, G1, H1, Berkeley Humanoid, Booster T1) come with it;
 MJX and MuJoCo Playground are one script away for training. Runs on Claude Code.
 
+**Try another future.** Open **What if…**, pin any moment and try lunar gravity, a slippery surface,
+or a sideways shove. The pane runs both futures from the same state and overlays the original as
+a wireframe. Scrub time, inspect the paths and body-height chart, and compare measured separation.
+The controls work on the agent's model and on MJCF you bring yourself. On a narrow pane, the lab
+docks below the scene so you can still see both outcomes.
+
+Save the experiment to keep the model and assets, full starting state, control tape, changed
+conditions and both measured trajectories. The agent can reproduce that file with native MuJoCo
+using `toolchain/experiments.py`, even after the workspace changes, then use your finding to improve
+the next controller. CSV exports give you the followed body's positions, separation and contact
+counts. These comparisons use recorded controls or held actuator values; they do not rerun a
+Python feedback controller or train a policy in the browser.
+
 - `harness.json` — engine, template, skill, toolchain, `viewer.use: autonomous/mujoco-viewer`.
 - `toolchain/setup.sh` — one venv on Python 3.12 (uv brings it when the machine has none) with the
   pinned MuJoCo (`VERSIONS`), which has no Intel Mac build — Apple Silicon Macs and Linux — and a sparse
