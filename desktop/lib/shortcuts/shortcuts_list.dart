@@ -86,7 +86,11 @@ class ShortcutsDeck extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = math.min(constraints.maxWidth, maxWidth);
-        final columns = ((width + _gap) / (minCardWidth + _gap)).floor().clamp(
+        // Preserve room for the label as its keycaps grow. Otherwise large
+        // text keeps three narrow lanes and leaves only a word per line.
+        final textScale = MediaQuery.textScalerOf(context).scale(12.5) / 12.5;
+        final minWidth = minCardWidth * math.max(1.0, textScale);
+        final columns = ((width + _gap) / (minWidth + _gap)).floor().clamp(
           1,
           _maxColumns,
         );

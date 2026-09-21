@@ -14,6 +14,7 @@ import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/widgets/agent_picker.dart';
 import 'package:harness/widgets/new_agent_dialog.dart';
@@ -111,6 +112,7 @@ class _Notifier extends AppNotifier {
     String? swarmId,
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
+    HarnessPlacement? placement,
   }) async {
     launches.add({
       'machine': machineId,

@@ -72,10 +72,12 @@ void main() {
       expect(search.rows, isEmpty);
       app.sessionPreviews.warm([key]);
       await tester.pump(const Duration(milliseconds: 80));
-      expect(search.rows.single.agentId, 'a0');
+      // ⌘O's list ends in the row that makes a harness; it is not a match.
+      expect(search.rows.where((row) => !row.isCreate).single.agentId, 'a0');
       expect(catalog.read(app, []), same(metadata));
       search.setQuery('DESIGN HOVER');
-      expect(search.rows.single.agentId, 'a0');
+      // ⌘O's list ends in the row that makes a harness; it is not a match.
+      expect(search.rows.where((row) => !row.isCreate).single.agentId, 'a0');
       search.setQuery('skylark');
       expect(search.rows.map((row) => row.agentId), ['a1', 'a0']);
       search.setQuery(
@@ -94,7 +96,8 @@ void main() {
       expect(resultChanges, 0);
       expect(search.selected?.agentId, 'a0');
       search.setQuery('progress 99');
-      expect(search.rows.single.agentId, 'a0');
+      // ⌘O's list ends in the row that makes a harness; it is not a match.
+      expect(search.rows.where((row) => !row.isCreate).single.agentId, 'a0');
       machine.agents = [
         const Agent(
           id: 'a0',
@@ -145,7 +148,8 @@ void main() {
         'content': 'Changed topic',
       });
       await tester.pump(const Duration(milliseconds: 80));
-      expect(search.rows.single.agentId, 'a0');
+      // ⌘O's list ends in the row that makes a harness; it is not a match.
+      expect(search.rows.where((row) => !row.isCreate).single.agentId, 'a0');
       search.dispose();
       app.dispose();
     },
@@ -160,7 +164,7 @@ void main() {
       app.adoptSessionForTest(terminal('a69', []));
       app.newSwarm();
       await mount(tester, app);
-      if (!inline) await chord(tester, LogicalKeyboardKey.keyO);
+      if (!inline) await chord(tester, LogicalKeyboardKey.keyP);
       final field = find.byKey(
         ValueKey(inline ? 'harness-start-search' : 'swarm-search-input'),
       );
@@ -169,7 +173,8 @@ void main() {
       final search = tester
           .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
           .search;
-      expect(search.rows.single.agentId, 'a0');
+      // ⌘O's list ends in the row that makes a harness; it is not a match.
+      expect(search.rows.where((row) => !row.isCreate).single.agentId, 'a0');
       expect(find.textContaining('Payment retries now reuse'), findsOneWidget);
       expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
       await tester.pumpWidget(const SizedBox());

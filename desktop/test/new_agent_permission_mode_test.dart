@@ -10,6 +10,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/core/permission_modes.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/widgets/new_agent_dialog.dart';
 
@@ -61,6 +62,7 @@ class _Notifier extends AppNotifier {
     String? swarmId,
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
+    HarnessPlacement? placement,
   }) async {
     launches.add({
       'engine': engine,
@@ -146,19 +148,21 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('Auto-approve is the default', (tester) async {
-    final app = await open(tester);
-    expect(
-      find.descendant(of: field, matching: find.text('Auto-approve')),
-      findsOneWidget,
-    );
-    await create(tester);
-    expect(app.launches.single, {
-      'engine': 'claude',
-      'mode': 'auto',
-      'bypass': true,
+  for (final engine in ['claude', 'codex']) {
+    testWidgets('Auto-approve is the default for $engine', (tester) async {
+      final app = await open(tester, engine: engine);
+      expect(
+        find.descendant(of: field, matching: find.text('Auto-approve')),
+        findsOneWidget,
+      );
+      await create(tester);
+      expect(app.launches.single, {
+        'engine': engine,
+        'mode': 'auto',
+        'bypass': true,
+      });
     });
-  });
+  }
 
   testWidgets('the menu says what each Claude Code mode does', (tester) async {
     await open(tester);
@@ -246,10 +250,14 @@ void main() {
     });
   });
 
-  test('every engine with modes starts on Auto-approve and can ask', () {
+  test('every engine with modes offers Auto-approve and Ask first', () {
     for (final MapEntry(key: engine, value: modes)
         in kEnginePermissionModes.entries) {
-      expect(modes.first.id, kDefaultPermissionMode, reason: engine);
+      expect(
+        modes.map((mode) => mode.id),
+        contains(kDefaultPermissionMode),
+        reason: engine,
+      );
       expect(modes.map((mode) => mode.id), contains('ask'), reason: engine);
       expect(
         modes.map((mode) => mode.id).toSet(),

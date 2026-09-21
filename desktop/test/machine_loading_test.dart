@@ -8,6 +8,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/terminal_pane.dart';
+import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/terminal/terminal_theme_store.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -38,8 +39,8 @@ const _capabilities = {
   'available': true,
 };
 
-class _Connection extends WsConn {
-  _Connection()
+class DiscoveryConnection extends WsConn {
+  DiscoveryConnection()
     : super(
         wsBaseUrl: 'ws://fixture.invalid',
         autonomousEnv: 'test',
@@ -57,6 +58,7 @@ class _Connection extends WsConn {
   bool refuseTheme = false;
   final timeouts = <String, Duration>{};
   final sent = <String>[];
+  final frames = <({String type, Map<String, dynamic> payload})>[];
   Completer<void>? readiness;
 
   @override
@@ -97,6 +99,7 @@ class _Connection extends WsConn {
     Map<String, dynamic> payload,
   ) async {
     sent.add(type);
+    frames.add((type: type, payload: Map.of(payload)));
     return true;
   }
 }
@@ -107,10 +110,12 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late AppNotifier app;
   late MachineState machine;
-  late _Connection connection;
+  late DiscoveryConnection connection;
+  late bool disposed;
 
   setUp(() {
-    connection = _Connection();
+    disposed = false;
+    connection = DiscoveryConnection();
     app = AppNotifier(
       config: AppConfig.dev,
       authSession: AuthSession(),
@@ -120,7 +125,9 @@ void main() {
     app.machines = [_machine];
     app.machineStates['m'] = machine;
   });
-  tearDown(() => app.dispose());
+  tearDown(() {
+    if (!disposed) app.dispose();
+  });
 
   test('agent inventory and capabilities are requested together', () async {
     final load = app.reloadMachineData('m');
@@ -270,6 +277,166 @@ void main() {
     expect(connection.calls, isEmpty);
     expect(app.panes, isEmpty);
   });
+
+  for (final oldFails in [false, true]) {
+    test(
+      'reconnect replaces pending capability discovery (old failure=$oldFails)',
+      () async {
+        final old = app.reloadMachineData('m');
+        await _tick();
+        connection.agents.single.complete(_agents);
+        await _tick();
+        app.onMachineConnectedForTest('m');
+        await _tick();
+        expect(connection.agents, hasLength(2));
+        expect(connection.capabilities, hasLength(2));
+        connection.agents.last.complete(_agents);
+        connection.capabilities.last.complete({
+          ..._capabilities,
+          'features': {'imagePaste': true},
+        });
+        await machine.agentsLoadInFlight;
+        if (oldFails) {
+          connection.capabilities.first.completeError(StateError('old daemon'));
+        } else {
+          connection.capabilities.first.complete({'available': false});
+        }
+        await old;
+        expect(machine.terminalCapabilityAvailable, isTrue);
+        expect(machine.terminalImagePasteAvailable, isTrue);
+        expect(machine.terminalCapabilityError, isNull);
+        expect(machine.agentsLoadError, isNull);
+      },
+    );
+  }
+
+  test(
+    'an old inventory timeout cannot mark a reconnected machine offline',
+    () async {
+      final old = app.reloadMachineData('m');
+      await _tick();
+      app.onMachineConnectedForTest('m');
+      await _tick();
+      connection.agents.first.completeError(
+        const WsRequestTimeout('agents_list'),
+      );
+      connection.capabilities.first.complete(_capabilities);
+      await old;
+      await _tick();
+      expect(machine.nodeOnline, isTrue);
+      expect(machine.agentsLoadError, isNull);
+      expect(
+        machine.agentsRefreshing ||
+            machine.agentLoadStatus == AgentLoadStatus.loading,
+        isTrue,
+      );
+    },
+  );
+
+  test('an offline transition invalidates a pending agent inventory', () async {
+    final old = app.reloadMachineData('m');
+    await _tick();
+    await app.handleEventForTest('m', {
+      'type': 'node_status',
+      'payload': {'online': false},
+    });
+    connection.agents.first.complete(_agents);
+    connection.capabilities.first.complete(_capabilities);
+    await old;
+    expect(machine.nodeOnline, isFalse);
+    expect(machine.agents, isEmpty);
+    expect(machine.terminalCapabilityAvailable, isFalse);
+    expect(machine.agentsRefreshing, isFalse);
+  });
+
+  testWidgets(
+    'an old background inventory cannot overwrite reconnect discovery',
+    (tester) async {
+      try {
+        app.onMachineConnectedForTest('m');
+        await tester.pump();
+        connection.agents.single.complete(_agents);
+        connection.capabilities.single.complete(_capabilities);
+        await tester.pump();
+        await tester.pump(AppNotifier.agentSyncInterval);
+        expect(connection.agents, hasLength(2));
+        final oldPoll = connection.agents.last;
+        app.onMachineConnectedForTest('m');
+        await tester.pump();
+        connection.agents.last.complete({
+          'agents': [
+            {'id': 'new-agent', 'name': 'New agent', 'engine': 'codex'},
+          ],
+        });
+        connection.capabilities.last.complete(_capabilities);
+        await tester.pump();
+        expect(machine.agents.single.id, 'new-agent');
+        oldPoll.complete(_agents);
+        await tester.pump();
+        expect(machine.agents.single.id, 'new-agent');
+      } finally {
+        app.dispose();
+        disposed = true;
+      }
+    },
+  );
+
+  test(
+    'a replacement connection releases its old terminal stream immediately',
+    () async {
+      final session =
+          TerminalSession(
+              machineId: 'm',
+              agentId: 'a',
+              agentName: 'Fixture',
+              engineId: 'codex',
+              send: connection.sendTerminalFrame,
+              sendBinary: (_) async => true,
+            )
+            ..status = TerminalSessionStatus.controlling
+            ..streamId = 'old-stream';
+      session.terminal.write('Keep this output');
+      final renderer = session.terminal;
+      final pane = app.adoptSessionForTest(session);
+      app.onMachineConnectedForTest('m');
+      await _tick();
+      expect(pane.session, same(session));
+      expect(session.terminal, same(renderer));
+      expect(session.terminal.buffer.getText(), contains('Keep this output'));
+      expect(session.streamId, isNull);
+      expect(session.status, TerminalSessionStatus.error);
+    },
+  );
+
+  test(
+    'a second reconnect does not wait for the first pending recovery',
+    () async {
+      machine.nodeOnline = false;
+      machine.pendingOfflineAgentId = 'a';
+      Future<void> online(bool value) => app.handleEventForTest('m', {
+        'type': 'node_status',
+        'payload': {'online': value},
+      });
+      await online(true);
+      await _tick();
+      expect(connection.agents, hasLength(1));
+      await online(false);
+      await online(true);
+      await _tick();
+      expect(connection.agents, hasLength(2));
+      expect(connection.capabilities, hasLength(2));
+      connection.agents.last.complete(_agents);
+      connection.capabilities.last.complete(_capabilities);
+      await _tick();
+      expect(machine.pendingOfflineAgentId, isNull);
+      connection.agents.first.complete({'agents': []});
+      connection.capabilities.first.complete({'available': false});
+      await _tick();
+      expect(machine.agents.single.id, 'a');
+      expect(machine.terminalCapabilityAvailable, isTrue);
+      expect(machine.pendingOfflineAgentId, isNull);
+    },
+  );
 
   group('pane colours reach the daemon', () {
     tearDown(() {

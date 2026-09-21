@@ -101,6 +101,14 @@ class _KeymapHostState extends State<KeymapHost> with WidgetsBindingObserver {
     }
     final focus = FocusManager.instance.primaryFocus;
     final context = focus?.context;
+    // A self-contained surface (such as shortcut practice) owns its dispatch.
+    // Flutter calls every early handler even after one handles the event.
+    final owner = context?.findAncestorStateOfType<_KeymapHostState>();
+    if (owner != null && !identical(owner, this)) {
+      _dispatch.cancel();
+      _notifyPending();
+      return KeyEventResult.ignored;
+    }
     if (context == null ||
         KeymapTheme.of(context, listen: false) != widget.keymap) {
       _dispatch.cancel();

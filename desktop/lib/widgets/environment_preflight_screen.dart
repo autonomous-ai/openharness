@@ -19,6 +19,7 @@ class EnvironmentPreflightScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final ready = readiness.isReady;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
 
     return Scaffold(
       backgroundColor: grid.AppPalette.panelBg,
@@ -38,15 +39,23 @@ class EnvironmentPreflightScreen extends StatelessWidget {
                     borderRadius: BorderRadius.circular(14),
                     boxShadow: grid.AppCard.shadow,
                   ),
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 180),
-                    child: ready
-                        ? const _ReadyContent(
-                            key: ValueKey('environment-ready'),
-                          )
-                        : const _CheckingContent(
-                            key: ValueKey('environment-checking'),
-                          ),
+                  child: Semantics(
+                    key: const Key('environment-status'),
+                    container: true,
+                    liveRegion: true,
+                    label: 'OpenHarness setup status',
+                    child: AnimatedSwitcher(
+                      duration: reduceMotion
+                          ? Duration.zero
+                          : const Duration(milliseconds: 180),
+                      child: ready
+                          ? const _ReadyContent(
+                              key: ValueKey('environment-ready'),
+                            )
+                          : const _CheckingContent(
+                              key: ValueKey('environment-checking'),
+                            ),
+                    ),
                   ),
                 ),
               ),
@@ -65,10 +74,16 @@ class _CheckingContent extends StatelessWidget {
   Widget build(BuildContext context) => Column(
     mainAxisSize: MainAxisSize.min,
     children: [
-      const SizedBox(
+      SizedBox(
         width: 34,
         height: 34,
-        child: CircularProgressIndicator(strokeWidth: 2.5),
+        child: MediaQuery.disableAnimationsOf(context)
+            ? Icon(
+                Icons.hourglass_empty_rounded,
+                size: 34,
+                color: Theme.of(context).colorScheme.primary,
+              )
+            : const CircularProgressIndicator(strokeWidth: 2.5),
       ),
       const SizedBox(height: 24),
       Text(

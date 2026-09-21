@@ -285,7 +285,9 @@ class LedgerDay {
 /// `UsageStatus.signedOut` is kept apart from `UsageStatus.failed` — a machine
 /// with no OpenCode installed will never be fixed by retrying, and offering a
 /// Retry there fails identically forever.
-enum LedgerStatus { disabled, scanning, ok, unavailable, failed }
+/// [partial] keeps readable figures with a visible warning when another source
+/// could not be read. It never represents a complete total or fresh cache.
+enum LedgerStatus { disabled, scanning, ok, partial, unavailable, failed }
 
 /// Where one provider's scan stands.
 class LedgerScanState {
@@ -305,12 +307,16 @@ class LedgerScanState {
   /// switching it off must not be mistaken for it having nothing to say.
   final bool enabled;
 
-  /// When the last successful scan finished. Null until one has.
+  /// When the last complete or partial scan finished. Null until one has.
   final DateTime? lastScanAt;
 
-  /// Why there are no figures — set for [LedgerStatus.unavailable] and
-  /// [LedgerStatus.failed], null otherwise.
+  /// Why figures are missing or incomplete — set for unavailable, failed, and
+  /// partial scans, null otherwise.
   final String? message;
+
+  bool get hasIncompleteFigures =>
+      status == LedgerStatus.partial ||
+      (status == LedgerStatus.scanning && message != null);
 
   LedgerScanState copyWith({
     LedgerStatus? status,

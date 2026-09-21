@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
 
 export type AgentCreationOutcome =
-  | { state: 'created'; agentId: string }
+  | { state: 'created'; agentId: string; level?: 'native' | 'handoff'; resumed?: boolean }
   | { state: 'failed'; error: string; detail?: string; preparedFolder?: string }
   | { state: 'unconfirmed' }
 
@@ -115,7 +115,9 @@ export class AgentCreationReceipts {
       const outcome = value.outcome
       if (value.version !== 1 || !/^[a-f0-9]{64}$/.test(value.fingerprint ?? '') || !outcome ||
           !['pending', 'unconfirmed', 'created', 'failed'].includes(outcome.state) ||
-          (outcome.state === 'created' && (typeof outcome.agentId !== 'string' || !outcome.agentId)) ||
+          (outcome.state === 'created' && (typeof outcome.agentId !== 'string' || !outcome.agentId ||
+            (outcome.level !== undefined && outcome.level !== 'native' && outcome.level !== 'handoff') ||
+            (outcome.resumed !== undefined && typeof outcome.resumed !== 'boolean'))) ||
           (outcome.state === 'failed' && typeof outcome.error !== 'string')) {
         throw new Error('Invalid creation receipt')
       }

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../terminal/terminal_font_store.dart';
 import '../terminal/terminal_search.dart';
+import 'box_chrome.dart';
+import 'pane_menu.dart';
 
 class TerminalFindBar extends StatefulWidget {
   const TerminalFindBar({
@@ -39,6 +42,7 @@ class TerminalFindBarState extends State<TerminalFindBar> {
   );
   // Keys can arrive before the widget receives the newly opened search.
   TerminalSearch? _activeSearch;
+  VoidCallback? _closeMenu;
 
   @override
   void initState() {
@@ -70,6 +74,7 @@ class TerminalFindBarState extends State<TerminalFindBar> {
   void releaseSearchFocus() {
     _activeSearch = null;
     _setActive(false);
+    _closeMenu?.call();
   }
 
   void _onFocus() {
@@ -105,6 +110,9 @@ class TerminalFindBarState extends State<TerminalFindBar> {
         event.logicalKey == LogicalKeyboardKey.escape &&
         !keyboard.isShiftPressed;
     if (!enter && !escape) return KeyEventResult.ignored;
+    // Enter on a keyboard-focused control activates that control. It steps
+    // through matches only while the query editor owns focus.
+    if (enter && !_focus.hasFocus) return KeyEventResult.ignored;
     final composing = _text.value.composing;
     if (composing.isValid && !composing.isCollapsed) {
       // Let the platform commit/cancel composition without a later shortcut
@@ -121,6 +129,7 @@ class TerminalFindBarState extends State<TerminalFindBar> {
 
   @override
   void dispose() {
+    _closeMenu?.call();
     _focus.removeListener(_onFocus);
     _focus.dispose();
     _scope.dispose();
@@ -128,16 +137,77 @@ class TerminalFindBarState extends State<TerminalFindBar> {
     super.dispose();
   }
 
+  void _toggleCase() {
+    widget.onQuery(
+      _text.text,
+      !(_activeSearch?.caseSensitive ?? widget.initialCaseSensitive),
+    );
+    _focus.requestFocus();
+  }
+
+  Future<void> _openOptions(BuildContext context) async {
+    final anchor = context.findRenderObject()! as RenderBox;
+    final overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final rect =
+        anchor.localToGlobal(Offset.zero, ancestor: overlay) & anchor.size;
+    final choice = await showPaneMenu<VoidCallback>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(rect.left, rect.bottom + 4, rect.width, 0),
+        Offset.zero & overlay.size,
+      ),
+      minWidth: 230,
+      maxWidth: 360,
+      onOpen: (_, close) => _closeMenu = close,
+      onClose: () => _closeMenu = null,
+      children: (close) {
+        Widget option(String label, String hint, VoidCallback action) =>
+            paneMenuItem(
+              onTap: () => close(action),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(child: Text(label, style: boxMonoStyle(size: 12))),
+                    const SizedBox(width: 16),
+                    Text(hint, style: boxMonoStyle(size: 11, color: kBoxFaint)),
+                  ],
+                ),
+              ),
+            );
+        return [
+          option(
+            'Match case',
+            _activeSearch?.caseSensitive == true ? 'on' : 'off',
+            _toggleCase,
+          ),
+          if ((_activeSearch?.count ?? 0) > 0) ...[
+            option('Next match', 'enter', () => widget.onStep(1)),
+            option('Previous match', 'shift-enter', () => widget.onStep(-1)),
+          ],
+        ];
+      },
+    );
+    if (choice != null && mounted && _activeSearch != null) {
+      choice();
+      _focus.requestFocus();
+    }
+  }
+
   @override
-  Widget build(BuildContext context) => FocusScope(
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: terminalFontStore,
+    builder: (context, _) => _buildBar(context),
+  );
+
+  Widget _buildBar(BuildContext context) => FocusScope(
     node: _scope,
     onKeyEvent: _onKeyEvent,
-    child: Material(
-      color: const Color(0xff272727),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: const BorderSide(color: Colors.white24),
-      ),
+    child: TerminalBox(
       child: Padding(
         padding: const EdgeInsets.only(left: 10, right: 4, top: 2, bottom: 2),
         child: ListenableBuilder(
@@ -146,31 +216,34 @@ class TerminalFindBarState extends State<TerminalFindBar> {
           // editor. Keep its widget stable while the search index refreshes.
           child: Expanded(
             key: const ValueKey('terminal-find-editor'),
-            child: TextField(
+            child: ReadlineKeys(
               controller: _text,
-              focusNode: _focus,
-              autofocus: widget.search != null,
-              textAlignVertical: TextAlignVertical.center,
-              style: const TextStyle(
-                fontSize: 13,
-                height: 1,
-                color: Colors.white,
-              ),
-              decoration: const InputDecoration(
-                hintText: 'Find in terminal…',
-                hintStyle: TextStyle(color: Colors.white54),
-                isDense: true,
-                isCollapsed: true,
-                constraints: BoxConstraints(),
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                filled: false,
-                contentPadding: EdgeInsets.zero,
-              ),
               onChanged: (value) => widget.onQuery(
                 value,
                 _activeSearch?.caseSensitive ?? widget.initialCaseSensitive,
+              ),
+              child: TextField(
+                controller: _text,
+                focusNode: _focus,
+                autofocus: widget.search != null,
+                textAlignVertical: TextAlignVertical.center,
+                style: boxMonoStyle().copyWith(height: 1),
+                decoration: const InputDecoration(
+                  hintText: 'Find in terminal…',
+                  hintStyle: TextStyle(color: Colors.white54),
+                  isDense: true,
+                  isCollapsed: true,
+                  constraints: BoxConstraints(),
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  filled: false,
+                  contentPadding: EdgeInsets.zero,
+                ),
+                onChanged: (value) => widget.onQuery(
+                  value,
+                  _activeSearch?.caseSensitive ?? widget.initialCaseSensitive,
+                ),
               ),
             ),
           ),
@@ -211,98 +284,118 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                 icon: icon,
               ),
             );
-            return Row(
-              children: [
-                if (widget.readOnly) ...[
-                  const Tooltip(
-                    message: 'This terminal is read only',
-                    child: Icon(
-                      Icons.lock_outline,
-                      size: 14,
-                      color: Colors.white54,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                ],
-                editor!,
-                const SizedBox(width: 6),
-                Semantics(
-                  liveRegion: true,
-                  label: searching && !hasSnapshot
-                      ? 'Searching terminal'
-                      : query.isEmpty
-                      ? 'Find in terminal'
-                      : count == 0
-                      ? 'No matches'
-                      : 'Match $selected of $count',
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 56),
-                    child: ExcludeSemantics(
-                      child: Text(
-                        status,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 11,
-                          height: 1,
-                          color: count == 0 && query.isNotEmpty && !searching
-                              ? const Color(0xffffb4a9)
-                              : Colors.white54,
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                // Keep room to edit at narrow pane widths and larger text sizes.
+                // The same actions remain available in a small keyboard menu.
+                final compact =
+                    constraints.maxWidth <
+                    200 + MediaQuery.textScalerOf(context).scale(120);
+                return Row(
+                  children: [
+                    if (widget.readOnly) ...[
+                      const Tooltip(
+                        message: 'This terminal is read only',
+                        child: Icon(
+                          Icons.lock_outline,
+                          size: 14,
+                          color: Colors.white54,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ExcludeSemantics(
+                        child: Text(
+                          '/',
+                          style: boxMonoStyle(color: Colors.white70),
                         ),
                       ),
                     ),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                button(
-                  'Match case',
-                  Text(
-                    'Aa',
-                    style: TextStyle(
-                      fontSize: 12,
-                      height: 1,
-                      color: sensitive ? Colors.white : Colors.white54,
-                      fontWeight: sensitive
-                          ? FontWeight.w700
-                          : FontWeight.normal,
+                    editor!,
+                    const SizedBox(width: 6),
+                    Semantics(
+                      liveRegion: true,
+                      label: searching && !hasSnapshot
+                          ? 'Searching terminal'
+                          : query.isEmpty
+                          ? 'Find in terminal'
+                          : count == 0
+                          ? 'No matches'
+                          : 'Match $selected of $count',
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 56),
+                        child: ExcludeSemantics(
+                          child: Text(
+                            status,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: boxMonoStyle(
+                              size: 11,
+                              color:
+                                  count == 0 && query.isNotEmpty && !searching
+                                  ? const Color(0xffffb4a9)
+                                  : Colors.white54,
+                            ).copyWith(height: 1),
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
-                  () {
-                    widget.onQuery(
-                      _text.text,
-                      !(_activeSearch?.caseSensitive ??
-                          widget.initialCaseSensitive),
-                    );
-                    _focus.requestFocus();
-                  },
-                  selected: sensitive,
-                ),
-                button(
-                  'Previous match (⇧⌘G)',
-                  const Icon(Icons.keyboard_arrow_up),
-                  count > 0
-                      ? () {
-                          widget.onStep(-1);
-                          _focus.requestFocus();
-                        }
-                      : null,
-                ),
-                button(
-                  'Next match (⌘G)',
-                  const Icon(Icons.keyboard_arrow_down),
-                  count > 0
-                      ? () {
-                          widget.onStep(1);
-                          _focus.requestFocus();
-                        }
-                      : null,
-                ),
-                button(
-                  'Close find (Esc)',
-                  const Icon(Icons.close),
-                  widget.onClose,
-                ),
-              ],
+                    const SizedBox(width: 4),
+                    if (compact)
+                      Builder(
+                        builder: (context) => button(
+                          'Find options',
+                          const Icon(Icons.more_horiz),
+                          () => _openOptions(context),
+                        ),
+                      )
+                    else ...[
+                      button(
+                        'Match case',
+                        Text(
+                          'Aa',
+                          style: boxMonoStyle(
+                            size: 12,
+                            color: sensitive ? Colors.white : Colors.white54,
+                            weight: sensitive
+                                ? FontWeight.w700
+                                : FontWeight.normal,
+                          ).copyWith(height: 1),
+                        ),
+                        _toggleCase,
+                        selected: sensitive,
+                      ),
+                      button(
+                        'Previous match (Shift-Enter)',
+                        const Icon(Icons.keyboard_arrow_up),
+                        count > 0
+                            ? () {
+                                widget.onStep(-1);
+                                _focus.requestFocus();
+                              }
+                            : null,
+                      ),
+                      button(
+                        'Next match (Enter)',
+                        const Icon(Icons.keyboard_arrow_down),
+                        count > 0
+                            ? () {
+                                widget.onStep(1);
+                                _focus.requestFocus();
+                              }
+                            : null,
+                      ),
+                    ],
+                    button(
+                      'Close find (Esc)',
+                      const Icon(Icons.close),
+                      widget.onClose,
+                    ),
+                  ],
+                );
+              },
             );
           },
         ),

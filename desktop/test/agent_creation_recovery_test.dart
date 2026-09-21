@@ -90,7 +90,7 @@ Future<void> _timeOut(
 }
 
 void main() {
-  for (final entry in ['header', 'shortcut', 'search shortcut', 'start page']) {
+  for (final entry in ['new pane', 'shortcut', 'search shortcut', 'new tab']) {
     for (final dismissal in ['outside', 'escape']) {
       testWidgets('$entry creation dismisses once on $dismissal', (
         tester,
@@ -104,15 +104,15 @@ void main() {
         final keymap = AppKeymap();
         await runtime.mount(tester, app, keymap);
         switch (entry) {
-          case 'header':
-            await tester.tap(
-              find.byKey(const ValueKey('swarm-new-agent-button')),
-            );
-          case 'start page':
+          case 'new pane':
+            await chord(tester, LogicalKeyboardKey.keyP);
+            await tester.pump();
+            await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+          case 'new tab':
             await chord(tester, LogicalKeyboardKey.keyT);
-            await tester.tap(find.byKey(const ValueKey('harness-start-new')));
+            await tester.sendKeyEvent(LogicalKeyboardKey.enter);
           case 'search shortcut':
-            await chord(tester, LogicalKeyboardKey.keyO);
+            await chord(tester, LogicalKeyboardKey.keyP);
             await tester.enterText(
               find.byKey(const ValueKey('swarm-search-input')),
               'Agent 12',
@@ -133,17 +133,8 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byType(AlertDialog), findsNothing);
         expect(find.byType(SwarmSearchResults), findsNothing);
-        if (entry == 'start page') {
-          expect(app.swarms, hasLength(2));
-          expect(app.activeSwarmId, isNot(original));
-          final field = tester.widget<TextField>(
-            find.byKey(const ValueKey('harness-start-search')),
-          );
-          expect(field.focusNode!.hasFocus, isFalse);
-          // The unused page remains usable and closes without a history entry.
-          await chord(tester, LogicalKeyboardKey.keyW);
-        }
         expect(app.focusedPane, same(pane));
+        expect(app.activeSwarmId, original);
         expect(app.swarms, hasLength(1));
         expect(app.closedHistory, isEmpty);
         expect(connection.calls, isEmpty);
@@ -225,7 +216,7 @@ void main() {
         await mount(tester, app);
         final field = find.byKey(const ValueKey('swarm-search-input'));
         if (entry == 'Open') {
-          await chord(tester, LogicalKeyboardKey.keyO);
+          await chord(tester, LogicalKeyboardKey.keyP);
         } else {
           await chord(tester, LogicalKeyboardKey.keyP, shift: true);
           await tester.enterText(field, '> $entry');
@@ -342,7 +333,7 @@ void main() {
       expect(app.activeSwarmId, current);
       if (change == 'closed' || change == 'stale split') {
         expect(app.allPanes.any((p) => p.agentId == 'created'), isFalse);
-        expect(app.lastError, contains('Open Harness'));
+        expect(app.lastError, contains('New Pane'));
       } else {
         expect(original.panes.first, same(originalPane));
         expect(original.panes.last.agentId, 'created');
@@ -369,7 +360,7 @@ void main() {
     final input = <TerminalBinaryFrame>[];
     final pane = app.adoptSessionForTest(terminal('a0', input));
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     await chord(tester, LogicalKeyboardKey.keyN);
     await tester.pumpAndSettle();
     await browseNewAgentProject(tester);
@@ -395,7 +386,7 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     expect(input.single.bytes, [27, 91, 66]);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     expect(find.byType(SwarmSearchResults), findsOneWidget);
     expect(find.byKey(const ValueKey('create-agent-submit')), findsNothing);
     expect(connection.calls, hasLength(1));
@@ -615,7 +606,7 @@ void main() {
       app.stateOf('m')!.agents.any((agent) => agent.id == 'created'),
       isTrue,
     );
-    expect(app.lastError, contains('Open Harness'));
+    expect(app.lastError, contains('New Pane'));
   });
 
   testWidgets(

@@ -119,15 +119,17 @@ void main() {
     );
   }
 
-  test('Cmd-P is two keys and leaves Cmd-B and Shift-Cmd-P distinct', () {
-    final shortcut = kAppShortcuts
-        .singleWhere((s) => s.action == ShortcutAction.orchestrate)
+  test('Cmd-P opens a pane and the orchestrator remains a palette command', () {
+    final shortcut = appShortcuts()
+        .singleWhere((s) => s.action == ShortcutAction.addAgent)
         .activator;
     expect(shortcut.trigger, LogicalKeyboardKey.keyP);
     expect(shortcut.meta, isTrue);
     expect(shortcut.shift, isFalse);
-    expect(shortcut.control, isFalse);
-    expect(shortcut.alt, isFalse);
+    expect(
+      kAppShortcuts.where((s) => s.action == ShortcutAction.orchestrate),
+      isEmpty,
+    );
     expect(
       kAppShortcuts
           .singleWhere((s) => s.action == ShortcutAction.routeTask)

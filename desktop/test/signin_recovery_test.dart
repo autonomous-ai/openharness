@@ -65,6 +65,65 @@ const _platform = SystemChannels.platform;
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  for (final hasUrl in [false, true]) {
+    testWidgets(
+      'Escape cancels sign-in ${hasUrl ? 'after' : 'before'} the browser link and restores Enter',
+      (tester) async {
+        final cli = _Cli();
+        final app = _app(cli);
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          _browser,
+          (_) async => true,
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            _browser,
+            null,
+          ),
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: ListenableBuilder(
+              listenable: app,
+              builder: (_, _) => LoginScreen(notifier: app),
+            ),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(cli.attempts, hasLength(1));
+        if (hasUrl) {
+          cli.attempts.single.authorize('https://auth.example/fixture');
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(find.text('Waiting for your browser'), findsOneWidget);
+        }
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(app.signingIn, isFalse);
+        expect(cli.cancellations, 1);
+        expect(app.pendingAuthorizeUrl, isNull);
+        expect(app.lastError, isNull);
+        expect(find.text('Sign in'), findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        expect(cli.cancellations, 1);
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(cli.attempts, hasLength(2));
+        cli.attempts.first.done.complete();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(app.signingIn, isTrue);
+        expect(app.daemonChecks, 0);
+        app.cancelLogin();
+        cli.attempts.last.done.complete();
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
   testWidgets(
     'keyboard sign-in can reopen and copy its link without restarting login',
     (tester) async {

@@ -1,6 +1,9 @@
 // The pane header's model picker: two sections, the way back always offered, and a tick that says
 // where the agent actually is.
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:harness/widgets/box_chrome.dart';
+import 'package:harness/widgets/transient_menus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
@@ -150,6 +153,72 @@ void main() {
     // thing is called, and it carries that menu's status text beside it.
     expect(find.text('Anthropic'), findsOneWidget);
     expect(find.textContaining('usage'), findsOneWidget);
+  });
+
+  testWidgets('compact model menu stays on screen and is keyboard navigable', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(380, 300);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 1.7;
+    addTearDown(tester.view.reset);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    var ownLogin = 0;
+    var manage = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.topLeft,
+            child: GridModelPicker(
+              notifier: notifier,
+              machineId: 'local',
+              compact: true,
+              currentModel: 'fixture-model',
+              engineLabel: 'claude',
+              onUseOwnLogin: () => ownLogin++,
+              onRunLocalModel: () => manage++,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final trigger = Focus.of(tester.element(find.byIcon(Icons.tune)));
+    trigger.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.text('Subscription'), findsOneWidget);
+    final bounds = tester.getRect(find.byType(TerminalBox));
+    expect(bounds.left, greaterThanOrEqualTo(8));
+    expect(bounds.right, lessThanOrEqualTo(372));
+    expect(bounds.bottom, lessThanOrEqualTo(292));
+    expect(tester.takeException(), isNull);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(ownLogin, 1);
+    expect(trigger.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(manage, 1);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.text('Subscription'), findsNothing);
+    expect(trigger.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    dismissTransientMenus();
+    await tester.pumpAndSettle();
+    expect(find.text('Subscription'), findsNothing);
+    expect(ownLogin, 1);
+    expect(manage, 1);
   });
 
   // THREE situations, two sentences and one silence, one test each — a single test cannot cover

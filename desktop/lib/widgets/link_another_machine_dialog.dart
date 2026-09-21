@@ -1,1080 +1,841 @@
 import 'dart:async';
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../core/test_run.dart';
-import '../shared/theme/app_theme.dart' as grid;
+import '../core/fuzzy_match.dart';
 import '../shared/widgets/app_dialog.dart';
+import '../shortcuts/app_keymap.dart';
+import '../shortcuts/keymap.dart';
+import '../shortcuts/keymap_commands.dart' show describeKeyBinding;
 import '../state/app_state.dart';
+import '../terminal/terminal_font_store.dart';
+import 'box_chrome.dart';
 import 'link_machine_dialog.dart';
 import 'link_machine_screen.dart';
 
-/// The one-liner a server runs to get the CLI. The same script the app's own
-/// first-run setup drives (`environment_provisioner.dart`), without the
-/// `--desktop` half: a server has no app to set up around it.
+/// Commands run on the OTHER machine. Copying never executes them locally.
 const String kLinkServerInstallCommand =
     'curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | bash';
 const String kLinkServerLoginCommand = 'harness login';
 const String kLinkServerStartCommand =
     'harness start && harness remote-password set';
-
-/// Where the app is downloaded from, for the other computer.
 final Uri kHarnessDownloadUrl = Uri.parse('https://www.autonomous.ai/harness');
 
-/// Link another machine — reach its agents from here.
-///
-/// The old dialog said "on the other machine, sign in to Harness and start
-/// the daemon" and printed two commands. It never said WHICH machine, HOW
-/// Harness gets onto it, or that a third step — the remote password — is what
-/// actually makes the link; people read it as one obscure instruction.
-///
-/// This one leads with the question that decides every step after it: is the
-/// other machine a computer with a screen, or a server reached over SSH? Then
-/// it shows the steps for that answer only — install, sign in as THIS
-/// account, set a remote password — each something the person does, in order,
-/// with a copy button wherever there is a command. The list at the bottom is
-/// live: the moment the other machine signs in it appears, and the row itself
-/// carries the last step (Enter password → [showLinkMachineScreenDialog]).
 Future<void> showLinkAnotherMachineDialog(
   BuildContext context,
-  AppNotifier notifier,
-) {
+  AppNotifier notifier, {
+  AppKeymap? keymap,
+}) {
+  final activeKeymap = keymap ?? KeymapTheme.of(context, listen: false);
   return showAppDialog<void>(
     context: context,
-    builder: (_) => _LinkAnotherMachineDialog(notifier: notifier),
+    transitionDuration: Duration.zero,
+    veilBlur: 0,
+    veilTint: Colors.transparent,
+    builder: (_) {
+      final dialog = _LinkAnotherMachineDialog(notifier: notifier);
+      return activeKeymap == null
+          ? dialog
+          : KeymapProvider(keymap: activeKeymap, child: dialog);
+    },
   );
 }
 
-enum _Where { computer, server }
+enum _Guide { desktop, server }
+
+class _LinkEntry {
+  const _LinkEntry(this.id, this.name, this.detail, {this.machine});
+  final String id, name, detail;
+  final MachineState? machine;
+  bool get enabled => machine == null || machine!.needsLink;
+}
 
 class _LinkAnotherMachineDialog extends StatefulWidget {
   const _LinkAnotherMachineDialog({required this.notifier});
-
   final AppNotifier notifier;
-
   @override
   State<_LinkAnotherMachineDialog> createState() =>
       _LinkAnotherMachineDialogState();
 }
 
 class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
-  AppNotifier get notifier => widget.notifier;
+  AppNotifier get app => widget.notifier;
+  final _query = TextEditingController();
+  final _inputFocus = FocusNode(debugLabel: 'Find a machine to link');
+  final _guideFocus = FocusNode(debugLabel: 'Machine setup first action');
+  final _announcer = BoxAnnouncer();
+  final _rowKeys = <String, GlobalKey>{};
+  _Guide? _guide;
+  String? _selectedId;
+  String? _message;
+  bool _error = false;
+  bool _refreshing = false;
+  bool _nested = false;
+  int _copyRevision = 0;
+  Timer? _messageTimer;
 
-  _Where _where = _Where.computer;
+  bool get _composing =>
+      _query.value.composing.isValid && !_query.value.composing.isCollapsed;
+  bool get _mac => Theme.of(context).platform == TargetPlatform.macOS;
 
-  /// The remote machines on the list when the dialog opened. A machine not in
-  /// this set is the one the person is linking right now: its arrival is what
-  /// collapses the steps and puts the row in front of them.
-  late final Set<String> _known = _remoteIds();
+  String _hint(String command, String fallback) {
+    final map = KeymapTheme.of(context);
+    if (map == null) return fallback;
+    final bindings = map
+        .bindings(command, context: KeymapContext.picker)
+        .toList();
+    final preferred =
+        bindings.where((binding) => binding.custom).firstOrNull ??
+        (command == 'picker.refresh' && !_mac
+            ? bindings
+                  .where(
+                    (binding) =>
+                        binding.keys.length == 1 && binding.keys.first.control,
+                  )
+                  .firstOrNull
+            : null) ??
+        bindings.firstOrNull;
+    return preferred == null ? 'click' : describeKeyBinding(preferred);
+  }
 
-  /// Steps hidden behind "Show the steps again" once a machine has appeared.
-  bool _stepsCollapsed = false;
+  void _accept() {
+    if (_nested || _composing) return;
+    if (_guide == null && _inputFocus.hasFocus) {
+      unawaited(_open(_selected));
+    } else if (FocusManager.instance.primaryFocus?.context case final target?) {
+      Actions.maybeInvoke(target, const ActivateIntent());
+    }
+  }
 
-  /// The command most recently copied, for the button to say so.
-  String? _copied;
-  Timer? _copiedTimer;
+  Widget _keys(Widget child) {
+    if (KeymapTheme.of(context) == null) return child;
+    return KeymapRegion(
+      contextKind: KeymapContext.picker,
+      composing: () => _composing,
+      actions: {
+        'picker.accept': _accept,
+        'picker.add_here': _accept,
+        'picker.next': () => _guide == null && _inputFocus.hasFocus
+            ? _move(1)
+            : FocusManager.instance.primaryFocus?.nextFocus(),
+        'picker.previous': () => _guide == null && _inputFocus.hasFocus
+            ? _move(-1)
+            : FocusManager.instance.primaryFocus?.previousFocus(),
+        'picker.cancel': _back,
+        'picker.refresh': () => unawaited(_refresh()),
+        'picker.complete': () =>
+            FocusManager.instance.primaryFocus?.nextFocus(),
+        'picker.complete_back': () =>
+            FocusManager.instance.primaryFocus?.previousFocus(),
+      },
+      // A deliberately unbound Escape must not dismiss via the route's
+      // fallback shortcut. Configured cancel keys own this prompt.
+      child: Actions(
+        actions: {
+          DismissIntent: CallbackAction<DismissIntent>(onInvoke: (_) => null),
+        },
+        child: child,
+      ),
+    );
+  }
+
+  List<MachineState> get _remotes =>
+      app.machineStates.values.where((state) => !state.isLocalMachine).toList()
+        ..sort((a, b) {
+          if (a.needsLink != b.needsLink) return a.needsLink ? -1 : 1;
+          return a.machine.displayName.toLowerCase().compareTo(
+            b.machine.displayName.toLowerCase(),
+          );
+        });
+
+  List<_LinkEntry> get _entries {
+    final rows = [
+      for (final state in _remotes)
+        _LinkEntry(
+          'machine:${state.machine.machineId}',
+          state.machine.displayName,
+          '${state.nodeOnline == false
+                  ? 'offline'
+                  : state.nodeOnline == true
+                  ? 'online'
+                  : 'checking'}'
+              ' · ${state.needsLink ? 'enter remote password' : 'already linked'}',
+          machine: state,
+        ),
+      const _LinkEntry(
+        'desktop',
+        'Set up a desktop',
+        'macOS or Linux · install the app',
+      ),
+      const _LinkEntry(
+        'server',
+        'Set up a server over SSH',
+        'install the CLI on the other machine',
+      ),
+      const _LinkEntry(
+        'password',
+        'This computer’s password',
+        'let another machine connect here',
+      ),
+    ];
+    final query = _query.text.trim().toLowerCase();
+    if (query.isEmpty) return rows;
+    final words = query.split(RegExp(r'\s+'));
+    final ranked = <(int, int, _LinkEntry)>[];
+    for (final (index, entry) in rows.indexed) {
+      final text = '${entry.name} ${entry.detail}'.toLowerCase();
+      var score = 0;
+      var matches = true;
+      for (final word in words) {
+        final literal = text.indexOf(word);
+        if (literal >= 0) {
+          score += literal;
+        } else {
+          final spread = subsequenceSpread(text, word);
+          if (spread == null) {
+            matches = false;
+            break;
+          }
+          score += 1000 + spread;
+        }
+      }
+      if (matches) ranked.add((score, index, entry));
+    }
+    ranked.sort((a, b) {
+      final score = a.$1.compareTo(b.$1);
+      return score == 0 ? a.$2.compareTo(b.$2) : score;
+    });
+    return ranked.map((rank) => rank.$3).toList();
+  }
+
+  _LinkEntry? get _selected {
+    final rows = _entries;
+    return rows.where((row) => row.id == _selectedId).firstOrNull ??
+        rows.firstOrNull;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedId = _entries.where((entry) => entry.enabled).firstOrNull?.id;
+    _focusInput();
+  }
 
   @override
   void dispose() {
-    _copiedTimer?.cancel();
+    _messageTimer?.cancel();
+    _query.dispose();
+    _inputFocus.dispose();
+    _guideFocus.dispose();
     super.dispose();
   }
 
-  Set<String> _remoteIds() => {
-    for (final state in notifier.machineStates.values)
-      if (!state.isLocalMachine) state.machine.machineId,
-  };
-
-  List<MachineState> _remotes() =>
-      notifier.machineStates.values.where((m) => !m.isLocalMachine).toList();
-
-  MachineState? _arrived() {
-    for (final state in _remotes()) {
-      if (!_known.contains(state.machine.machineId)) return state;
-    }
-    return null;
-  }
-
-  Future<void> _copy(String text) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: text));
-    } catch (_) {
-      return; // no clipboard here; the text is on screen to select
-    }
-    if (!mounted) return;
-    _copiedTimer?.cancel();
-    setState(() => _copied = text);
-    _copiedTimer = Timer(const Duration(milliseconds: 1600), () {
-      if (mounted) setState(() => _copied = null);
+  void _focusInput() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && ModalRoute.of(context)?.isCurrent != false) {
+        _inputFocus.requestFocus();
+        _reveal();
+      }
     });
   }
 
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    return ListenableBuilder(
-      listenable: notifier,
-      builder: (context, _) {
-        final arrived = _arrived();
-        // A machine just signed in: the steps have done their job, and the
-        // row that finishes the link takes their room. Only ever collapses
-        // on its own — the person reopens them with the link below.
-        if (arrived != null && !_stepsCollapsed && !_reopenedSteps) {
-          _stepsCollapsed = true;
+  void _reveal() {
+    final row = _selected;
+    if (row == null || _guide != null) return;
+    final rowContext = _rowKeys[row.id]?.currentContext;
+    if (rowContext != null) Scrollable.ensureVisible(rowContext, alignment: .5);
+  }
+
+  void _changed(String _) {
+    setState(
+      () => _selectedId =
+          (_query.text.trim().isEmpty
+                  ? _entries.where((entry) => entry.enabled)
+                  : _entries)
+              .firstOrNull
+              ?.id,
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _reveal();
+    });
+  }
+
+  void _move(int step) {
+    final rows = _entries;
+    if (rows.isEmpty) return;
+    final at = rows.indexWhere((row) => row.id == _selected?.id);
+    final next = (at + step).clamp(0, rows.length - 1);
+    setState(() => _selectedId = rows[next].id);
+    _announcer.row(context, '${rows[next].name}, ${rows[next].detail}');
+    _reveal();
+  }
+
+  void _say(String message, {bool error = false, bool transient = false}) {
+    if (!mounted) return;
+    _messageTimer?.cancel();
+    setState(() {
+      _message = message;
+      _error = error;
+    });
+    _announcer.row(context, message);
+    if (transient) {
+      _messageTimer = Timer(const Duration(seconds: 3), () {
+        if (mounted) setState(() => _message = null);
+      });
+    }
+  }
+
+  Future<void> _copy(String text, {bool command = true}) async {
+    final revision = ++_copyRevision;
+    try {
+      await Clipboard.setData(ClipboardData(text: text));
+      if (mounted && revision == _copyRevision) {
+        _say(
+          command
+              ? 'Copied. Run on the other machine.'
+              : 'Download link copied.',
+          transient: true,
+        );
+      }
+    } catch (_) {
+      if (mounted && revision == _copyRevision) {
+        _say(
+          'Could not copy. Select the text to copy it, or try again.',
+          error: true,
+        );
+      }
+    }
+  }
+
+  Future<void> _refresh() async {
+    if (_refreshing || app.machinesRefreshing) return;
+    setState(() => _refreshing = true);
+    try {
+      await app.retryMachines();
+      if (!mounted) return;
+      final error = app.machineListError ?? app.lastError;
+      if (error != null) {
+        _say(error, error: true);
+      } else {
+        _say('Machine list refreshed.', transient: true);
+      }
+    } catch (_) {
+      _say('Could not refresh machines. Try again.', error: true);
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  Future<void> _download() async {
+    try {
+      if (await launchUrl(
+        kHarnessDownloadUrl,
+        mode: LaunchMode.externalApplication,
+      )) {
+        return;
+      }
+    } catch (_) {
+      // Keep recovery in the guide if the platform has no browser handler.
+    }
+    _say(
+      'Could not open the browser. Copy the download link instead.',
+      error: true,
+    );
+  }
+
+  void _back() {
+    if (_guide == null) {
+      Navigator.of(context).pop();
+    } else {
+      setState(() => _guide = null);
+      _focusInput();
+    }
+  }
+
+  void _openGuide(_Guide guide) {
+    setState(() => _guide = guide);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && ModalRoute.of(context)?.isCurrent != false) {
+        _guideFocus.requestFocus();
+      }
+    });
+  }
+
+  Future<void> _open(_LinkEntry? entry) async {
+    if (entry == null || !entry.enabled || _nested || _composing) return;
+    setState(() => _selectedId = entry.id);
+    if (entry.id == 'desktop' || entry.id == 'server') {
+      _openGuide(entry.id == 'desktop' ? _Guide.desktop : _Guide.server);
+      return;
+    }
+    setState(() => _nested = true);
+    final previous = FocusManager.instance.primaryFocus;
+    try {
+      if (entry.machine case final state?) {
+        final id = state.machine.machineId;
+        if (app.stateOf(id)?.needsLink != true) return;
+        await showLinkMachineScreenDialog(context, app, id);
+        if (mounted && app.stateOf(id)?.needsLink == false) {
+          _say('${state.machine.displayName} is linked.', transient: true);
         }
-        final remotes = _remotes();
-        final email = notifier.currentUser?.email;
-        return Dialog(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+      } else {
+        await showLinkMachineDialog(context, app);
+      }
+    } finally {
+      if (mounted) setState(() => _nested = false);
+      if (mounted && ModalRoute.of(context)?.isCurrent != false) {
+        if (_guide == null) {
+          _focusInput();
+        } else if (previous?.context != null && previous!.canRequestFocus) {
+          previous.requestFocus();
+        } else {
+          _guideFocus.requestFocus();
+        }
+      }
+    }
+  }
+
+  KeyEventResult _key(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (_nested) return KeyEventResult.ignored;
+    final keys = HardwareKeyboard.instance;
+    final key = event.logicalKey;
+    final plain =
+        !keys.isControlPressed &&
+        !keys.isMetaPressed &&
+        !keys.isAltPressed &&
+        !keys.isShiftPressed;
+    final ctrl =
+        keys.isControlPressed &&
+        !keys.isMetaPressed &&
+        !keys.isAltPressed &&
+        !keys.isShiftPressed;
+    final refresh =
+        key == LogicalKeyboardKey.keyR &&
+        (_mac
+            ? keys.isMetaPressed && !keys.isControlPressed
+            : keys.isControlPressed && !keys.isMetaPressed) &&
+        !keys.isAltPressed &&
+        !keys.isShiftPressed;
+    final escape = plain && key == LogicalKeyboardKey.escape;
+    final enter =
+        plain &&
+        (key == LogicalKeyboardKey.enter ||
+            key == LogicalKeyboardKey.numpadEnter);
+    final down =
+        (plain && key == LogicalKeyboardKey.arrowDown) ||
+        (ctrl &&
+            (key == LogicalKeyboardKey.keyN || key == LogicalKeyboardKey.keyJ));
+    final up =
+        (plain && key == LogicalKeyboardKey.arrowUp) ||
+        (ctrl &&
+            (key == LogicalKeyboardKey.keyP || key == LogicalKeyboardKey.keyK));
+    if (_composing && (escape || enter || up || down || refresh)) {
+      return KeyEventResult.skipRemainingHandlers;
+    }
+    if (KeymapTheme.of(context, listen: false) != null) {
+      // The host already had first use of configured keys. Don't turn an
+      // unbound physical Enter into EditableText's native submit action.
+      return enter && _inputFocus.hasFocus
+          ? KeyEventResult.handled
+          : KeyEventResult.ignored;
+    }
+    if (escape) {
+      _back();
+    } else if (refresh) {
+      unawaited(_refresh());
+    } else if (_guide == null && _inputFocus.hasFocus && (up || down)) {
+      _move(down ? 1 : -1);
+    } else if (_guide == null && _inputFocus.hasFocus && enter) {
+      unawaited(_open(_selected));
+    } else {
+      return KeyEventResult.ignored;
+    }
+    return KeyEventResult.handled;
+  }
+
+  Widget _button(
+    String label,
+    VoidCallback action, {
+    FocusNode? focus,
+    Key? key,
+  }) => TextButton(
+    key: key,
+    focusNode: focus,
+    onPressed: action,
+    style: TextButton.styleFrom(
+      foregroundColor: Colors.white70,
+      textStyle: boxMonoStyle(size: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+      minimumSize: const Size(0, 28),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(2)),
+    ),
+    child: Text(label),
+  );
+
+  Widget _machineRow(_LinkEntry entry, {bool picker = false}) {
+    final selected = picker && entry.id == _selected?.id;
+    return Semantics(
+      selected: selected,
+      button: entry.enabled,
+      enabled: entry.enabled,
+      child: InkWell(
+        key: picker
+            ? _rowKeys.putIfAbsent(entry.id, GlobalKey.new)
+            : ValueKey('link-row-${entry.machine?.machine.machineId}'),
+        canRequestFocus: !picker,
+        onTap: entry.enabled ? () => unawaited(_open(entry)) : null,
+        child: BoxRowHighlight(
+          highlighted: selected,
+          accent: Colors.white70,
+          terminal: true,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(22, 20, 22, 0),
+                SizedBox(
+                  width: 20,
+                  child: Text(
+                    selected ? '>' : ' ',
+                    style: boxMonoStyle(color: Colors.white70),
+                  ),
+                ),
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Link another machine',
-                        style: TextStyle(
-                          color: grid.AppPalette.textPrimary,
-                          fontSize: 16,
-                          fontWeight: grid.AppFont.semibold,
+                        entry.name,
+                        style: boxMonoStyle(
+                          weight: selected ? FontWeight.w600 : null,
                         ),
                       ),
-                      const SizedBox(height: 4),
                       Text(
-                        _stepsCollapsed
-                            ? 'Reach its agents from here, end-to-end encrypted.'
-                            : 'Reach its agents from here, end-to-end encrypted. '
-                                  'Where does it live?',
-                        style: TextStyle(
-                          color: grid.AppPalette.textFaint,
-                          fontSize: 12.5,
-                        ),
+                        entry.detail,
+                        style: boxMonoStyle(size: 11, color: kBoxFaint),
                       ),
                     ],
                   ),
                 ),
-                Flexible(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(22, 16, 22, 18),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (_stepsCollapsed) ...[
-                          _ArrivedSummary(machine: arrived),
-                        ] else ...[
-                          _WhereChooser(
-                            where: _where,
-                            onChanged: (w) => setState(() => _where = w),
-                          ),
-                          const SizedBox(height: 16),
-                          if (_where == _Where.computer)
-                            _ComputerSteps(email: email)
-                          else
-                            _ServerSteps(
-                              email: email,
-                              copied: _copied,
-                              onCopy: _copy,
-                            ),
-                        ],
-                        const SizedBox(height: 16),
-                        if (remotes.isEmpty)
-                          const _WaitingStrip()
-                        else
-                          _MachineList(
-                            machines: remotes,
-                            arrivedId: arrived?.machine.machineId,
-                            onEnterPassword: (id) =>
-                                showLinkMachineScreenDialog(
-                                  context,
-                                  notifier,
-                                  id,
-                                ),
-                          ),
-                        if (_stepsCollapsed) ...[
-                          const SizedBox(height: 12),
-                          _NotSeeingIt(
-                            email: email,
-                            onShowSteps: () => setState(() {
-                              _stepsCollapsed = false;
-                              _reopenedSteps = true;
-                            }),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-                _Footer(
-                  linked: remotes.where((m) => !m.needsLink).length,
-                  showCopyAll: !_stepsCollapsed && _where == _Where.server,
-                  copiedAll: _copied == _allServerCommands,
-                  onCopyAll: () => _copy(_allServerCommands),
-                  onRefresh: _stepsCollapsed ? notifier.refreshMachines : null,
-                  onThisMachine: () =>
-                      unawaited(showLinkMachineDialog(context, notifier)),
-                  onClose: () => Navigator.of(context).pop(),
-                ),
               ],
             ),
           ),
-        );
-      },
-    );
-  }
-
-  /// Once the person asked for the steps back, an arrival must not fold them
-  /// away again under their eyes.
-  bool _reopenedSteps = false;
-
-  static const String _allServerCommands =
-      '$kLinkServerInstallCommand\n$kLinkServerLoginCommand\n$kLinkServerStartCommand';
-}
-
-// ── the fork ────────────────────────────────────────────────────────────────
-
-class _WhereChooser extends StatelessWidget {
-  const _WhereChooser({required this.where, required this.onChanged});
-
-  final _Where where;
-  final ValueChanged<_Where> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: _WhereCard(
-            icon: LucideIcons.monitor300,
-            title: 'A computer with a screen',
-            detail: 'Mac or Linux desktop. Install the OpenHarness app there.',
-            selected: where == _Where.computer,
-            onTap: () => onChanged(_Where.computer),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _WhereCard(
-            icon: LucideIcons.server300,
-            title: 'A server over SSH',
-            detail: 'Headless box. Install the CLI with one command.',
-            selected: where == _Where.server,
-            onTap: () => onChanged(_Where.server),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _WhereCard extends StatelessWidget {
-  const _WhereCard({
-    required this.icon,
-    required this.title,
-    required this.detail,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String title;
-  final String detail;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final accent = grid.AppPalette.accentOnSurface;
-    return Semantics(
-      button: true,
-      selected: selected,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
-          decoration: BoxDecoration(
-            color: selected
-                ? accent.withValues(alpha: 0.08)
-                : grid.AppCard.inset,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: selected ? accent : grid.AppPalette.divider,
-              width: selected ? 1.5 : 1,
-            ),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  color: selected
-                      ? accent.withValues(alpha: 0.16)
-                      : grid.AppSurface.recess,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                alignment: Alignment.center,
-                child: Icon(
-                  icon,
-                  size: 16,
-                  color: selected ? accent : grid.AppPalette.textSecondary,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: TextStyle(
-                        color: grid.AppPalette.textPrimary,
-                        fontSize: 13,
-                        fontWeight: grid.AppFont.semibold,
-                        height: 1.3,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      detail,
-                      style: TextStyle(
-                        color: grid.AppPalette.textFaint,
-                        fontSize: 11.5,
-                        height: 1.35,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
         ),
       ),
     );
   }
-}
 
-// ── the steps ───────────────────────────────────────────────────────────────
-
-class _ComputerSteps extends StatelessWidget {
-  const _ComputerSteps({required this.email});
-
-  final String? email;
-
-  @override
-  Widget build(BuildContext context) {
-    final who = email ?? 'the same account';
+  Widget _guideBody() {
+    final server = _guide == _Guide.server;
+    final email = app.currentUser?.email ?? 'the same account as this computer';
+    final remotes = _remotes.where((state) => state.needsLink).toList();
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _Step(
-          number: 1,
-          title: 'Install OpenHarness on that computer',
-          detail: TextSpan(
-            children: [
-              const TextSpan(text: 'Download from '),
-              _linkSpan(context, 'autonomous.ai/harness', kHarnessDownloadUrl),
-              const TextSpan(text: ' — macOS and Linux.'),
-            ],
-          ),
+        Text(
+          'On the other ${server ? 'machine, over SSH' : 'computer'}:',
+          style: boxMonoStyle(weight: FontWeight.w600),
         ),
-        _Step(
-          number: 2,
-          title: 'Sign in with the same account',
-          detail: TextSpan(
+        const SizedBox(height: 12),
+        if (server) ...[
+          _command(
+            '1. Install the CLI (skip if installed)',
+            kLinkServerInstallCommand,
+            first: true,
+          ),
+          _command('2. Sign in as $email', kLinkServerLoginCommand),
+          Text(
+            'Open the printed sign-in link in a browser on any device.',
+            style: boxMonoStyle(size: 11, color: kBoxFaint),
+          ),
+          _command(
+            '3. Start Harness and set a remote password',
+            kLinkServerStartCommand,
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: _button(
+              'Copy all three commands',
+              () => unawaited(
+                _copy(
+                  '$kLinkServerInstallCommand\n$kLinkServerLoginCommand\n$kLinkServerStartCommand',
+                ),
+              ),
+              key: const Key('link-copy-all'),
+            ),
+          ),
+        ] else ...[
+          Text(
+            '1. Install OpenHarness for macOS or Linux.',
+            style: boxMonoStyle(size: 12),
+          ),
+          const SizedBox(height: 4),
+          SelectableText(
+            kHarnessDownloadUrl.toString(),
+            style: boxMonoStyle(size: 12, color: Colors.white70),
+          ),
+          Wrap(
+            spacing: 8,
             children: [
-              const TextSpan(text: 'You are '),
-              _strongSpan(who),
-              const TextSpan(
-                text:
-                    ' here. The other computer must sign in as the same '
-                    'person — that is what puts it on your list.',
+              _button(
+                'Download OpenHarness',
+                () => unawaited(_download()),
+                focus: _guideFocus,
+              ),
+              _button(
+                'Copy download link',
+                () => unawaited(
+                  _copy(kHarnessDownloadUrl.toString(), command: false),
+                ),
               ),
             ],
           ),
-        ),
-        _Step(
-          number: 3,
-          title: 'Set a remote password there',
-          detail: TextSpan(
-            children: [
-              const TextSpan(
-                text: 'In that app: account menu (bottom of the rail) → ',
-              ),
-              _strongSpan('Remote into another machine…'),
-              const TextSpan(text: ' → '),
-              _strongSpan('Set password'),
-              const TextSpan(
-                text:
-                    '. You will type it here, once, when the machine appears '
-                    'below.',
-              ),
-            ],
+          const SizedBox(height: 10),
+          Text('2. Sign in as $email.', style: boxMonoStyle(size: 12)),
+          const SizedBox(height: 10),
+          Text(
+            '3. Open commands → Link machine → This computer’s password.',
+            style: boxMonoStyle(size: 12),
           ),
+          const SizedBox(height: 4),
+          Text(
+            'Set a remote password there, then enter it here.',
+            style: boxMonoStyle(size: 11, color: kBoxFaint),
+          ),
+        ],
+        const SizedBox(height: 16),
+        Text(
+          remotes.isEmpty
+              ? 'After sign-in, the machine appears here. Refresh to check now.'
+              : 'Available to link',
+          style: boxMonoStyle(size: 12, color: kBoxFaint),
         ),
+        for (final state in remotes)
+          _machineRow(
+            _LinkEntry(
+              'machine:${state.machine.machineId}',
+              state.machine.displayName,
+              'Enter remote password',
+              machine: state,
+            ),
+          ),
       ],
     );
   }
-}
 
-class _ServerSteps extends StatelessWidget {
-  const _ServerSteps({
-    required this.email,
-    required this.copied,
-    required this.onCopy,
-  });
-
-  final String? email;
-  final String? copied;
-  final ValueChanged<String> onCopy;
-
-  @override
-  Widget build(BuildContext context) {
-    final who = email ?? 'the same account';
-    return Column(
-      children: [
-        _Step(
-          number: 1,
-          title: 'Install the Harness CLI',
-          detail: TextSpan(
-            children: [
-              const TextSpan(
-                text: 'Run this on the server. Installs Node, tmux and ',
-              ),
-              _codeSpan('harness'),
-              const TextSpan(text: ' under '),
-              _codeSpan('~/.harness'),
-              const TextSpan(text: '; nothing system-wide.'),
-            ],
-          ),
-          command: kLinkServerInstallCommand,
-          copied: copied == kLinkServerInstallCommand,
-          onCopy: () => onCopy(kLinkServerInstallCommand),
-        ),
-        _Step(
-          number: 2,
-          title: 'Sign in as $who',
-          detail: TextSpan(
-            children: [
-              const TextSpan(text: 'Prints a link — open it in a browser on '),
-              _strongSpan('any'),
-              const TextSpan(
-                text: ' device, sign in, and the server picks it up.',
-              ),
-            ],
-          ),
-          command: kLinkServerLoginCommand,
-          copied: copied == kLinkServerLoginCommand,
-          onCopy: () => onCopy(kLinkServerLoginCommand),
-        ),
-        _Step(
-          number: 3,
-          title: 'Start it, and set a remote password',
-          detail: const TextSpan(
-            text:
-                'The password is what this computer will type, once, to open '
-                'the encrypted link. Choose any; it stays on the server.',
-          ),
-          command: kLinkServerStartCommand,
-          copied: copied == kLinkServerStartCommand,
-          onCopy: () => onCopy(kLinkServerStartCommand),
-        ),
-      ],
-    );
-  }
-}
-
-TextSpan _strongSpan(String text) => TextSpan(
-  text: text,
-  style: TextStyle(
-    color: grid.AppPalette.textSecondary,
-    fontWeight: grid.AppFont.medium,
-  ),
-);
-
-TextSpan _codeSpan(String text) => TextSpan(
-  text: text,
-  style: TextStyle(
-    fontFamily: grid.AppFont.mono,
-    fontFamilyFallback: grid.AppFont.monoFallback,
-    fontSize: 11.5,
-    color: grid.AppPalette.textSecondary,
-  ),
-);
-
-TextSpan _linkSpan(BuildContext context, String text, Uri url) => TextSpan(
-  text: text,
-  style: TextStyle(
-    color: grid.AppPalette.accentOnSurface,
-    decoration: TextDecoration.underline,
-    decorationColor: grid.AppPalette.accentOnSurface.withValues(alpha: 0.4),
-  ),
-  recognizer: TapGestureRecognizer()
-    ..onTap = () =>
-        unawaited(launchUrl(url, mode: LaunchMode.externalApplication)),
-);
-
-/// One numbered step: a title, a line under it, and — for a server — the
-/// command with its own copy button.
-class _Step extends StatelessWidget {
-  const _Step({
-    required this.number,
-    required this.title,
-    required this.detail,
-    this.command,
-    this.copied = false,
-    this.onCopy,
-    this.done = false,
-  });
-
-  final int number;
-  final String title;
-  final InlineSpan detail;
-  final String? command;
-  final bool copied;
-  final VoidCallback? onCopy;
-  final bool done;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.fromLTRB(0, number == 1 ? 2 : 10, 0, 10),
-      decoration: number == 1
-          ? null
-          : BoxDecoration(
-              border: Border(top: BorderSide(color: grid.AppCard.insetHair)),
-            ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _StepNumber(number: number, done: done),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    color: grid.AppPalette.textPrimary,
-                    fontSize: 13,
-                    fontWeight: grid.AppFont.medium,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text.rich(
-                  detail,
-                  style: TextStyle(
-                    color: grid.AppPalette.textFaint,
-                    fontSize: 12,
-                    height: 1.45,
-                  ),
-                ),
-                if (command != null) ...[
-                  const SizedBox(height: 8),
-                  _CommandLine(
-                    command: command!,
-                    copied: copied,
-                    onCopy: onCopy,
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _StepNumber extends StatelessWidget {
-  const _StepNumber({required this.number, required this.done});
-
-  final int number;
-  final bool done;
-
-  @override
-  Widget build(BuildContext context) {
-    final ok = grid.AppPalette.online;
-    return Container(
-      width: 22,
-      height: 22,
-      margin: const EdgeInsets.only(top: 1),
-      decoration: BoxDecoration(
-        color: done ? ok.withValues(alpha: 0.15) : grid.AppSurface.recess,
-        shape: BoxShape.circle,
-      ),
-      alignment: Alignment.center,
-      child: done
-          ? Icon(LucideIcons.check300, size: 13, color: ok)
-          : Text(
-              '$number',
-              style: TextStyle(
-                color: grid.AppPalette.textSecondary,
-                fontSize: 11.5,
-                fontWeight: grid.AppFont.semibold,
-              ),
-            ),
-    );
-  }
-}
-
-/// A command the person copies. The whole line is selectable too, for the
-/// person who would rather drag than click.
-class _CommandLine extends StatelessWidget {
-  const _CommandLine({
-    required this.command,
-    required this.copied,
-    required this.onCopy,
-  });
-
-  final String command;
-  final bool copied;
-  final VoidCallback? onCopy;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-      decoration: BoxDecoration(
-        color: grid.AppCard.inset,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: grid.AppCard.insetHair),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: SelectableText.rich(
-              TextSpan(
-                children: [
-                  TextSpan(
-                    text: r'$ ',
-                    style: TextStyle(color: grid.AppPalette.textFaint),
-                  ),
-                  TextSpan(text: command),
-                ],
-              ),
-              style: TextStyle(
-                fontFamily: grid.AppFont.mono,
-                fontFamilyFallback: grid.AppFont.monoFallback,
-                fontSize: 12,
-                height: 1.5,
-                color: grid.AppPalette.textPrimary,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          _SmallButton(
-            label: copied ? 'Copied' : 'Copy',
-            icon: copied ? LucideIcons.check300 : LucideIcons.copy300,
-            onPressed: onCopy,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ── the list ────────────────────────────────────────────────────────────────
-
-class _WaitingStrip extends StatelessWidget {
-  const _WaitingStrip();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: grid.AppPalette.divider),
-      ),
-      child: Row(
-        children: [
-          // Still under test: a spinner that never stops is a pumpAndSettle
-          // that never settles, the same reason the install panel's clock
-          // holds still there.
-          SizedBox(
-            width: 14,
-            height: 14,
-            child: kUnderTest
-                ? DecoratedBox(
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: grid.AppPalette.accentOnSurface,
-                        width: 2,
-                      ),
-                    ),
-                  )
-                : CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: grid.AppPalette.accentOnSurface,
-                  ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Waiting for a new machine to sign in… it appears here on its own.',
-              style: TextStyle(
-                color: grid.AppPalette.textFaint,
-                fontSize: 12.5,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ArrivedSummary extends StatelessWidget {
-  const _ArrivedSummary({required this.machine});
-
-  final MachineState? machine;
-
-  @override
-  Widget build(BuildContext context) {
-    final name = machine?.machine.displayName ?? 'A machine';
-    return _Step(
-      number: 1,
-      done: true,
-      title: '$name signed in just now',
-      detail: const TextSpan(
-        text:
-            'Set a remote password on it if you have not, then enter it here.',
-      ),
-    );
-  }
-}
-
-class _MachineList extends StatelessWidget {
-  const _MachineList({
-    required this.machines,
-    required this.arrivedId,
-    required this.onEnterPassword,
-  });
-
-  final List<MachineState> machines;
-  final String? arrivedId;
-  final ValueChanged<String> onEnterPassword;
-
-  @override
-  Widget build(BuildContext context) {
-    // The one just linked first, then unlinked, then the rest as listed.
-    final rows = [...machines]
-      ..sort((a, b) {
-        int rank(MachineState m) => m.machine.machineId == arrivedId
-            ? 0
-            : m.needsLink
-            ? 1
-            : 2;
-        return rank(a).compareTo(rank(b));
-      });
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        decoration: BoxDecoration(
-          border: Border.all(color: grid.AppCard.insetHair),
-          borderRadius: BorderRadius.circular(10),
-        ),
+  Widget _command(String title, String command, {bool first = false}) =>
+      Padding(
+        padding: const EdgeInsets.only(bottom: 8, top: 8),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            for (var i = 0; i < rows.length; i++)
-              _MachineRow(
-                machine: rows[i],
-                first: i == 0,
-                onEnterPassword: () =>
-                    onEnterPassword(rows[i].machine.machineId),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MachineRow extends StatelessWidget {
-  const _MachineRow({
-    required this.machine,
-    required this.first,
-    required this.onEnterPassword,
-  });
-
-  final MachineState machine;
-  final bool first;
-  final VoidCallback onEnterPassword;
-
-  @override
-  Widget build(BuildContext context) {
-    final online = machine.nodeOnline;
-    final presence = online == true
-        ? 'Online'
-        : online == false
-        ? 'Offline'
-        : 'Connecting…';
-    final needsLink = machine.needsLink;
-    // The row is the target as well as the button: the old list opened the
-    // password screen from a tap on the name, and hands still go there.
-    return InkWell(
-      key: ValueKey('link-row-${machine.machine.machineId}'),
-      onTap: needsLink ? onEnterPassword : null,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-        decoration: BoxDecoration(
-          color: grid.AppCard.inset,
-          border: first
-              ? null
-              : Border(top: BorderSide(color: grid.AppCard.insetHair)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(
-                color: grid.AppSurface.recess,
-                borderRadius: BorderRadius.circular(7),
-              ),
-              alignment: Alignment.center,
-              child: Icon(
-                LucideIcons.server300,
-                size: 15,
-                color: grid.AppPalette.textSecondary,
+            Text(title, style: boxMonoStyle(size: 12)),
+            const SizedBox(height: 4),
+            SelectableText(
+              command,
+              style: boxMonoStyle(size: 12, color: Colors.white70),
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: _button(
+                'Copy command',
+                () => unawaited(_copy(command)),
+                focus: first ? _guideFocus : null,
+                key: ValueKey('copy-$command'),
               ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    machine.machine.displayName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: grid.AppPalette.textPrimary,
-                      fontSize: 13,
-                      fontWeight: grid.AppFont.medium,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Row(
+          ],
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: Listenable.merge([app, terminalFontStore]),
+    builder: (context, _) {
+      final rows = _entries;
+      final selected = _selected;
+      final message = _message ?? app.machineListError;
+      return Offstage(
+        offstage: _nested,
+        child: Dialog(
+          alignment: Alignment.topCenter,
+          insetPadding: const EdgeInsets.fromLTRB(16, 56, 16, 18),
+          elevation: 0,
+          backgroundColor: Colors.transparent,
+          child: _keys(
+            Focus(
+              onKeyEvent: _key,
+              child: SizedBox(
+                width: 760,
+                child: TerminalBox(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Container(
-                        width: 7,
-                        height: 7,
-                        decoration: BoxDecoration(
-                          color: online == true
-                              ? grid.AppPalette.online
-                              : grid.AppPalette.textFaint,
-                          shape: BoxShape.circle,
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'Link another machine${_guide == null
+                                    ? ''
+                                    : _guide == _Guide.server
+                                    ? ' / SSH'
+                                    : ' / desktop'}',
+                                style: boxMonoStyle(size: 12, color: kBoxFaint),
+                              ),
+                            ),
+                            if (_guide == null)
+                              Text(
+                                '${rows.length}/${_remotes.length + 3}',
+                                style: boxMonoStyle(size: 11, color: kBoxFaint),
+                              ),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text.rich(
-                          TextSpan(
-                            children: [
-                              TextSpan(text: '$presence · '),
-                              TextSpan(
-                                text: needsLink ? 'Not linked yet' : 'Linked',
-                                style: TextStyle(
-                                  color: needsLink
-                                      ? grid.AppPalette.warn
-                                      : grid.AppPalette.online,
-                                  fontSize: 11,
+                      if (_guide == null)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          child: ReadlineKeys(
+                            controller: _query,
+                            onChanged: _changed,
+                            child: TextField(
+                              key: const Key('link-machine-search'),
+                              controller: _query,
+                              focusNode: _inputFocus,
+                              autofocus: true,
+                              style: boxMonoStyle(),
+                              textAlignVertical: TextAlignVertical.center,
+                              decoration: InputDecoration(
+                                hintText: 'find a machine / desktop / SSH',
+                                hintStyle: boxMonoStyle(color: kBoxFaint),
+                                border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                filled: false,
+                                isDense: true,
+                                prefixIcon: Padding(
+                                  padding: const EdgeInsets.only(right: 10),
+                                  child: Center(
+                                    widthFactor: 1,
+                                    heightFactor: 1,
+                                    child: Text(
+                                      'machine >',
+                                      style: boxMonoStyle(
+                                        color: Colors.white70,
+                                      ),
+                                    ),
+                                  ),
                                 ),
+                                prefixIconConstraints: const BoxConstraints(
+                                  minHeight: 36,
+                                ),
+                                contentPadding: EdgeInsets.zero,
                               ),
-                            ],
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: grid.AppPalette.textFaint,
-                            fontSize: 11.5,
+                              onChanged: _changed,
+                              onEditingComplete: () {},
+                              onSubmitted: (_) => unawaited(_open(_selected)),
+                            ),
                           ),
                         ),
+                      Flexible(
+                        child: SingleChildScrollView(
+                          key: ValueKey(_guide),
+                          padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
+                          child: _guide != null
+                              ? Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                  ),
+                                  child: _guideBody(),
+                                )
+                              : Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    if (rows.isEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.all(8),
+                                        child: Text(
+                                          'No matching machines. Clear the search to see setup options.',
+                                          style: boxMonoStyle(
+                                            size: 12,
+                                            color: kBoxFaint,
+                                          ),
+                                        ),
+                                      ),
+                                    for (final entry in rows)
+                                      _machineRow(entry, picker: true),
+                                    if (selected != null && !selected.enabled)
+                                      Padding(
+                                        padding: const EdgeInsets.all(8),
+                                        child: Text(
+                                          'Already linked. Open its agents from New Tab or New Pane.',
+                                          style: boxMonoStyle(
+                                            size: 11,
+                                            color: kBoxFaint,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                        ),
+                      ),
+                      BoxHintStrip(
+                        message: _refreshing || app.machinesRefreshing
+                            ? 'Refreshing machines…'
+                            : message,
+                        isError:
+                            !_refreshing &&
+                            !app.machinesRefreshing &&
+                            (_error ||
+                                (_message == null &&
+                                    app.machineListError != null)),
+                        hints: [
+                          if (_guide == null)
+                            BoxHint(
+                              '${_hint('picker.previous', '↑')}/${_hint('picker.next', '↓')}',
+                              'select',
+                            ),
+                          if (_guide == null && selected?.enabled == true)
+                            BoxHint(
+                              _hint('picker.accept', 'enter'),
+                              'open',
+                              onTap: () => unawaited(_open(selected)),
+                            ),
+                          if (_guide != null)
+                            BoxHint(
+                              _hint('picker.complete', 'tab'),
+                              'controls',
+                            ),
+                          BoxHint(
+                            _hint('picker.refresh', _mac ? 'cmd-r' : 'ctrl-r'),
+                            'refresh',
+                            onTap: () => unawaited(_refresh()),
+                          ),
+                          BoxHint(
+                            _hint('picker.cancel', 'esc'),
+                            _guide == null ? 'close' : 'back',
+                            onTap: _back,
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                ],
-              ),
-            ),
-            if (needsLink) ...[
-              const SizedBox(width: 12),
-              FilledButton(
-                key: ValueKey('link-enter-${machine.machine.machineId}'),
-                onPressed: onEnterPassword,
-                style: FilledButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  textStyle: const TextStyle(fontSize: 11.5),
                 ),
-                child: const Text('Enter password'),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _NotSeeingIt extends StatelessWidget {
-  const _NotSeeingIt({required this.email, required this.onShowSteps});
-
-  final String? email;
-  final VoidCallback onShowSteps;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text.rich(
-      TextSpan(
-        children: [
-          const TextSpan(text: 'Not seeing it? It signs in as '),
-          _strongSpan(email ?? 'the same account'),
-          const TextSpan(text: ' and needs '),
-          _codeSpan('harness start'),
-          const TextSpan(text: ' running. '),
-          TextSpan(
-            text: 'Show the steps again',
-            style: TextStyle(
-              color: grid.AppPalette.accentOnSurface,
-              decoration: TextDecoration.underline,
-              decorationColor: grid.AppPalette.accentOnSurface.withValues(
-                alpha: 0.4,
               ),
             ),
-            recognizer: TapGestureRecognizer()..onTap = onShowSteps,
           ),
-        ],
-      ),
-      style: TextStyle(
-        color: grid.AppPalette.textFaint,
-        fontSize: 12,
-        height: 1.45,
-      ),
-    );
-  }
-}
-
-// ── the footer ──────────────────────────────────────────────────────────────
-
-class _Footer extends StatelessWidget {
-  const _Footer({
-    required this.linked,
-    required this.showCopyAll,
-    required this.copiedAll,
-    required this.onCopyAll,
-    required this.onRefresh,
-    required this.onThisMachine,
-    required this.onClose,
-  });
-
-  final int linked;
-  final bool showCopyAll;
-  final bool copiedAll;
-  final VoidCallback onCopyAll;
-  final VoidCallback? onRefresh;
-  final VoidCallback onThisMachine;
-  final VoidCallback onClose;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(22, 12, 22, 16),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: grid.AppCard.insetHair)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: showCopyAll
-                  ? _SmallButton(
-                      label: copiedAll
-                          ? 'Copied all three'
-                          : 'Copy all three commands',
-                      icon: copiedAll
-                          ? LucideIcons.check300
-                          : LucideIcons.copy300,
-                      tinted: true,
-                      onPressed: onCopyAll,
-                    )
-                  : onRefresh != null
-                  ? TextButton(
-                      onPressed: onRefresh,
-                      child: const Text('Refresh'),
-                    )
-                  : linked > 0
-                  ? Text(
-                      '$linked machine${linked == 1 ? '' : 's'} already linked',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: grid.AppPalette.textFaint,
-                        fontSize: 11.5,
-                      ),
-                    )
-                  : const SizedBox.shrink(),
-            ),
-          ),
-          const SizedBox(width: 8),
-          TextButton(
-            onPressed: onThisMachine,
-            style: TextButton.styleFrom(
-              foregroundColor: grid.AppPalette.textSecondary,
-            ),
-            child: const Text('This computer’s password'),
-          ),
-          const SizedBox(width: 4),
-          OutlinedButton(onPressed: onClose, child: const Text('Close')),
-        ],
-      ),
-    );
-  }
-}
-
-class _SmallButton extends StatelessWidget {
-  const _SmallButton({
-    required this.label,
-    required this.icon,
-    required this.onPressed,
-    this.tinted = false,
-  });
-
-  final String label;
-  final IconData icon;
-  final VoidCallback? onPressed;
-  final bool tinted;
-
-  @override
-  Widget build(BuildContext context) {
-    final accent = grid.AppPalette.accentOnSurface;
-    return OutlinedButton.icon(
-      onPressed: onPressed,
-      style: OutlinedButton.styleFrom(
-        visualDensity: VisualDensity.compact,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        textStyle: const TextStyle(fontSize: 11.5),
-        foregroundColor: tinted ? accent : grid.AppPalette.textPrimary,
-        backgroundColor: tinted ? accent.withValues(alpha: 0.14) : null,
-        side: BorderSide(
-          color: tinted ? Colors.transparent : grid.AppPalette.divider,
         ),
-      ),
-      icon: Icon(icon, size: 13),
-      label: Text(label),
-    );
-  }
+      );
+    },
+  );
 }

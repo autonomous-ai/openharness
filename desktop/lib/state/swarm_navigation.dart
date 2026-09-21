@@ -1,9 +1,17 @@
+import '../shared/theme/prompt_style.dart';
+
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:collection/collection.dart' show compareNatural;
 import 'package:flutter/foundation.dart' show listEquals, setEquals;
 
 import '../core/fuzzy_match.dart';
+import '../core/local_key_value_store.dart';
 import '../core/models.dart';
 import '../widgets/engine_identity.dart';
 import 'app_state.dart';
+import 'harness_placement.dart';
 import 'pane_arrangement.dart';
 import 'session_preview.dart';
 import 'swarm.dart';
@@ -19,6 +27,85 @@ String agentLocationId(String swarmId, int paneId) =>
 /// Session-local history contains identities only, never terminal buffers or
 /// controllers. Repeated discovery/output notifications do not reorder it.
 class SwarmNavigationHistory {
+  SwarmNavigationHistory({this.storage});
+
+  /// Where the recently used harnesses are kept between launches, or null to
+  /// keep them for this session only (tests).
+  ///
+  /// A quick-open earns its keep in the first three rows, before anything is
+  /// typed. Session-only memory meant every launch opened the box on an
+  /// alphabetical list: the harness from an hour ago was no nearer than one
+  /// from last month. Only harnesses are kept — their ids outlive a restart,
+  /// and a tab's does not have to.
+  final LocalKeyValueStore? storage;
+  static const _storageKey = 'swarm_recent_v1';
+  static const _commandsKey = 'swarm_recent_commands_v1';
+
+  /// The commands run from the palette, most recent first. A palette that
+  /// opens A–Z makes you type three letters for the command you ran a minute
+  /// ago; an editor's opens on it.
+  final _commands = <String>[];
+  List<String> get recentCommands => List.unmodifiable(_commands);
+  void rememberCommand(String id) {
+    _commands.remove(id);
+    _commands.insert(0, id);
+    if (_commands.length > _kept) _commands.removeLast();
+    _save();
+  }
+
+  static const _kept = 32;
+  Timer? _saving;
+  bool _disposed = false;
+
+  /// Fold what the last session remembered in BEHIND what this one has already
+  /// visited: a load that lands late must not reorder the present.
+  Future<void> load() async {
+    try {
+      final raw = await storage?.read(_storageKey);
+      if (raw == null || _disposed) return;
+      final ids = jsonDecode(raw);
+      if (ids is! List) return;
+      for (final id in ids.take(_kept)) {
+        if (id is String && id.startsWith('agent:') && !_recent.contains(id)) {
+          _recent.add(id);
+        }
+      }
+      _revision++;
+      final commands = await storage?.read(_commandsKey);
+      final ran = commands == null ? null : jsonDecode(commands);
+      if (ran is List && !_disposed) {
+        for (final id in ran.take(_kept)) {
+          if (id is String && !_commands.contains(id)) _commands.add(id);
+        }
+      }
+    } catch (_) {
+      // A damaged list is an empty one; the next visit writes a good one.
+    }
+  }
+
+  void _save() {
+    if (storage == null || _disposed) return;
+    // Focus moves in bursts; one write after it settles is enough.
+    _saving?.cancel();
+    _saving = Timer(const Duration(milliseconds: 600), () {
+      final ids = [
+        for (final id in _recent)
+          if (id.startsWith('agent:')) id,
+      ].take(_kept).toList();
+      unawaited(
+        storage!.write(_storageKey, jsonEncode(ids)).catchError((_) {}),
+      );
+      unawaited(
+        storage!.write(_commandsKey, jsonEncode(_commands)).catchError((_) {}),
+      );
+    });
+  }
+
+  void dispose() {
+    _disposed = true;
+    _saving?.cancel();
+  }
+
   static const capacity = 64;
   final _recent = <String>[];
   final _recentLocations = <String>[];
@@ -100,6 +187,7 @@ class SwarmNavigationHistory {
     _recent.remove(id);
     _recent.insert(0, id);
     if (_recent.length > capacity) _recent.removeLast();
+    _save();
   }
 
   /// Native menus are ready before opening. Ordinary terminal output reuses
@@ -158,6 +246,8 @@ class SwarmDestination {
     required this.title,
     required this.detail,
     this.detailBranchOffset,
+    this.terminalDetail,
+    this.promptContext,
     required this.swarmId,
     required this.current,
     this.machineId,
@@ -166,6 +256,7 @@ class SwarmDestination {
     this.engine,
     this.closedId,
     this.commandId,
+    this.pickerQuery,
     this.shortcut,
     this.paneId,
     this.swarmName = '',
@@ -173,6 +264,8 @@ class SwarmDestination {
     this.previewKey,
     this.members = const {},
     this.isStore = false,
+    this.isCreate = false,
+    this.task,
     Iterable<String?> searchFields = const [],
     int titleFields = 1,
   }) : fields = [
@@ -190,9 +283,18 @@ class SwarmDestination {
 
   /// The branch's start in the readable metadata, for its decorative glyph.
   final int? detailBranchOffset;
+
+  /// Plain-text identity for results without a provider mark. Put the agent
+  /// and machine before paths and branches, which are more likely to truncate.
+  final String? terminalDetail;
+  final PromptContext? promptContext;
   final String? swarmId, machineId, agentId, engine;
   final String? closedId;
   final String? commandId, shortcut;
+
+  /// A Quick Access help row changes the query in place, keeping the picker,
+  /// its destination tab, and keyboard focus rather than running a command.
+  final String? pickerQuery;
 
   /// An exact navigation location. Never fall back to a different swarm.
   final int? paneId;
@@ -205,29 +307,49 @@ class SwarmDestination {
   /// The Harness Store's tab, open or recently closed. It holds no agents, so
   /// without this it would be drawn as an empty group; it wears the app icon.
   final bool isStore;
+
+  /// The box's last row: make what was typed instead of finding it, the way a
+  /// browser's address bar offers to search for what is not a page.
+  final bool isCreate;
+
+  /// What the create row would start the new harness on: what was typed.
+  final String? task;
   final bool current;
   final List<String> fields;
   bool get isProject => projectId != null;
   bool get isMachine => agentId == null && machineId != null && !isProject;
   bool get isGroup => isProject || isMachine;
-  bool get isSwarm => agentId == null && !isGroup && !isCommand;
+  bool get isSwarm =>
+      agentId == null &&
+      !isGroup &&
+      !isCommand &&
+      !isCreate &&
+      pickerQuery == null;
   bool get hasView => swarmId != null;
 }
 
 enum SwarmSearchAction { open, addHere }
 
-({String text, int? branchOffset}) _harnessDetail(
+({String text, String terminalText, int? branchOffset}) _harnessDetail(
   String? type,
   AgentProject? project,
   String machine,
-  bool offline,
-) {
+  bool offline, {
+  required String agentLabel,
+}) {
   final prefix = [
     type,
     project?.name,
   ].whereType<String>().where((part) => part.isNotEmpty).join(' · ');
   final branch = project?.branch;
   return (
+    terminalText: [
+      agentLabel,
+      machine,
+      if (offline) 'Offline',
+      project?.name,
+      branch,
+    ].whereType<String>().where((part) => part.isNotEmpty).join(' · '),
     text: [
       prefix,
       branch,
@@ -243,6 +365,12 @@ enum SwarmSearchAction { open, addHere }
 String? _harnessType(MachineState? machine, String? engine) =>
     (engine == null ? null : machine?.dsh[engine]?.category) ??
     engineIdentity(engine).category;
+
+String _harnessLabel(MachineState? machine, String? engine, String? name) =>
+    engineIdentity(
+      engine,
+      displayName: (engine == null ? null : machine?.dsh[engine]?.name) ?? name,
+    ).label;
 
 class SwarmSearchSelection {
   const SwarmSearchSelection(
@@ -452,17 +580,27 @@ class SwarmLocationCatalog {
     final project = agent == null ? null : machine?.projectOf(agent);
     final machineLabel = machine?.machine.displayName ?? pane.machineId;
     final engine = agent?.identityEngine ?? pane.session?.engineId;
+    final label = _harnessLabel(machine, engine, agent?.identityDisplayName);
     final detail = _harnessDetail(
       _harnessType(machine, engine),
       project,
       machineLabel,
       machine?.nodeOnline == false,
+      agentLabel: label,
     );
     return SwarmDestination(
       id: agentLocationId(swarm.id, pane.id),
-      title: agent?.name ?? pane.session?.agentName ?? pane.agentId!,
+      title: agent?.displayName ?? pane.session?.agentName ?? pane.agentId!,
       detail: detail.text,
       detailBranchOffset: detail.branchOffset,
+      terminalDetail: detail.terminalText,
+      promptContext: PromptContext(
+        harness: label,
+        machine: machineLabel,
+        project: project?.name,
+        branch: project?.branch,
+        leading: machine?.nodeOnline == false ? 'Offline' : null,
+      ),
       swarmId: swarm.id,
       swarmName: swarm.name,
       paneId: pane.id,
@@ -474,7 +612,14 @@ class SwarmLocationCatalog {
       current: swarm.id == app.activeSwarmId && pane.id == app.focusedPaneId,
       // The agent's own title first, ranked like the name: "board fab check"
       // finds the agent whose work that is, not whichever recap mentions fab.
-      searchFields: [agent?.title, detail.text, project?.cwd, engine, swarm.name],
+      searchFields: [
+        agent?.title,
+        detail.text,
+        project?.cwd,
+        engine,
+        label,
+        swarm.name,
+      ],
       titleFields: agent?.title == null ? 1 : 2,
     );
   }
@@ -516,8 +661,57 @@ Future<bool> activateSwarmSearchSelection(
   required String destinationSwarmId,
   List<SavedSwarmProject> projects = const [],
   PaneSplitRequest? split,
+  HarnessPlacement? placement,
 }) async {
   final destination = selection.destination;
+  if (placement != null) {
+    final machineId = destination.machineId;
+    final agentId = destination.agentId;
+    if (machineId == null || agentId == null || destination.isCommand) {
+      return false;
+    }
+    final agent = app
+        .stateOf(machineId)
+        ?.agents
+        .where((agent) => agent.id == agentId)
+        .firstOrNull;
+    final hasView = app.allPanes.any(
+      (pane) => pane.machineId == machineId && pane.agentId == agentId,
+    );
+    if (agent == null || (!agent.terminalAvailable && !hasView)) return false;
+    var target = app.swarms
+        .where((tab) => tab.id == destinationSwarmId)
+        .firstOrNull;
+    if (placement == HarnessPlacement.currentTab) {
+      if (target == null || target.isStore || target.isOrchestrator) {
+        return false;
+      }
+      final existing = target.panes.any(
+        (pane) => pane.machineId == machineId && pane.agentId == agentId,
+      );
+      if (!existing && target.panes.length >= AppNotifier.maxPanes) {
+        return false;
+      }
+    } else {
+      // Validation precedes allocation, and allocation precedes the first
+      // network wait. A stale row cannot leave an empty tab behind.
+      app.newSwarm();
+      target = app.activeSwarm;
+    }
+    await app.assignAgentToPane(
+      null,
+      machineId,
+      agentId,
+      swarmId: target.id,
+      autoTile: true,
+    );
+    if (app.activeSwarmId == target.id) {
+      app.revealAgentView(machineId, agentId, preferredSwarmId: target.id);
+    }
+    return target.panes.any(
+      (pane) => pane.machineId == machineId && pane.agentId == agentId,
+    );
+  }
   if (selection.agents.isNotEmpty) {
     final target = app.swarms
         .where((swarm) => swarm.id == destinationSwarmId)
@@ -846,6 +1040,9 @@ List<SwarmDestination> swarmDestinations(
             : null,
         machineLabel: _swarmMachineLabel(app, machines),
         detail: [
+          // Project and machine rows name their kind; a tab beside them
+          // without one read as some fourth, unnamed thing.
+          if (!swarm.isStore) 'Tab',
           _countLabel(members.length, 'harness'),
           if (projects.isNotEmpty) _countLabel(projects.length, 'project'),
           if (machines.isNotEmpty) _countLabel(machines.length, 'machine'),
@@ -890,11 +1087,13 @@ List<SwarmDestination> swarmDestinations(
     final machineName = machine?.machine.displayName ?? machineId;
     final engine = row?.$2.identityEngine ?? pane?.session?.engineId;
     final type = _harnessType(machine, engine);
+    final label = _harnessLabel(machine, engine, row?.$2.identityDisplayName);
     final detail = _harnessDetail(
       type,
       project,
       machineName,
       machine?.nodeOnline == false,
+      agentLabel: label,
     );
     result.add(
       SwarmDestination(
@@ -902,6 +1101,14 @@ List<SwarmDestination> swarmDestinations(
         title: row?.$2.name ?? pane?.session?.agentName ?? agentId,
         detail: detail.text,
         detailBranchOffset: detail.branchOffset,
+        terminalDetail: detail.terminalText,
+        promptContext: PromptContext(
+          harness: label,
+          machine: machineName,
+          project: project?.name,
+          branch: project?.branch,
+          leading: machine?.nodeOnline == false ? 'Offline' : null,
+        ),
         swarmId: owner?.id,
         machineId: machineId,
         machineLabel: machineName,
@@ -921,6 +1128,7 @@ List<SwarmDestination> swarmDestinations(
           project?.branch,
           project?.cwd,
           engine,
+          label,
           ...memberships.map((s) => s.name),
         ],
         titleFields: row?.$2.title == null ? 1 : 2,
@@ -1028,7 +1236,7 @@ List<SwarmDestination> rankSwarmDestinations(
       );
     }
     if (order == 0) {
-      order = a.entry.fields.first.compareTo(b.entry.fields.first);
+      order = compareNatural(a.entry.fields.first, b.entry.fields.first);
     }
     return order == 0 ? a.entry.id.compareTo(b.entry.id) : order;
   });

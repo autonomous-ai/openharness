@@ -1,23 +1,18 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../shared/theme/app_theme.dart' as grid;
-import '../shared/widgets/app_dialog.dart';
+import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
+import '../terminal/terminal_font_store.dart';
+import 'box_chrome.dart';
+import 'terminal_prompt.dart';
 
-/// The default name for a fork of [name] — the owner's spelling.
 String forkNameFor(String name) =>
     '${name.trim().isEmpty ? 'Agent' : name.trim()} - fork';
 
-/// The engines that can fork a session outright. Fork is only OFFERED for an
-/// agent that can fork at all ([Agent.canFork]); among those, this sets the
-/// words the dialog opens with, so a person is told before the round trip
-/// whether the fork will carry the whole context or a handoff.
-const _nativeForkEngines = {'claude', 'codex'};
-
-/// Fork a harness: open the dialog, then a second agent with the first one's
-/// history, placed beside it and focused. Errors land as a snackbar; a fork
-/// that could only hand off (no native fork on that engine) says so once.
+/// The model retains the draft, receipt and destination across dismissal.
 Future<void> forkHarness(
   BuildContext context,
   AppNotifier notifier,
@@ -25,34 +20,24 @@ Future<void> forkHarness(
   String agentId,
   String name, {
   String? engine,
+  AppKeymap? keymap,
 }) async {
-  if (notifier.agentIsProcessing(machineId, agentId)) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'This harness is in the middle of a turn. Wait for it to finish, then fork.',
-        ),
-      ),
-    );
-    return;
-  }
-  final choice = await showForkAgentDialogForTest(
+  final result = await showTerminalPrompt<ForkAgentResult>(
     context,
-    name,
-    engine: engine,
+    keymap: keymap,
+    builder: (_) => _ForkAgentPrompt(
+      notifier: notifier,
+      machineId: machineId,
+      agentId: agentId,
+      sourceName: name,
+      engine: engine,
+    ),
   );
-  if (choice == null || !context.mounted) return;
-  final result = await notifier.forkAgent(
-    machineId,
-    agentId,
-    name: choice.name,
-    prompt: choice.task,
-  );
-  if (!context.mounted) return;
+  if (result == null || !context.mounted) return;
   final message =
-      result.error ??
+      result.notice ??
       (result.level == 'handoff'
-          ? 'Forked with a handoff: this engine cannot copy a session, so the fork opened with a summary of what “$name” had done.'
+          ? 'Fork opened with a handoff summary of the source conversation.'
           : null);
   if (message != null) {
     ScaffoldMessenger.of(context)
@@ -60,190 +45,406 @@ Future<void> forkHarness(
   }
 }
 
-/// The dialog alone — name and first task, or null on cancel. Public for the
-/// widget test; [forkHarness] is what the app calls.
-@visibleForTesting
-Future<({String name, String task})?> showForkAgentDialogForTest(
-  BuildContext context,
-  String sourceName, {
-  String? engine,
-}) => showAppDialog<({String name, String task})>(
-  context: context,
-  transitionDuration: Duration.zero,
-  veilBlur: 0,
-  veilTint: const Color(0x99000000),
-  builder: (_) => _ForkAgentDialog(sourceName: sourceName, engine: engine),
-);
-
-class _ForkAgentDialog extends StatefulWidget {
-  const _ForkAgentDialog({required this.sourceName, this.engine});
-  final String sourceName;
+class _ForkAgentPrompt extends StatefulWidget {
+  const _ForkAgentPrompt({
+    required this.notifier,
+    required this.machineId,
+    required this.agentId,
+    required this.sourceName,
+    this.engine,
+  });
+  final AppNotifier notifier;
+  final String machineId, agentId, sourceName;
   final String? engine;
   @override
-  State<_ForkAgentDialog> createState() => _ForkAgentDialogState();
+  State<_ForkAgentPrompt> createState() => _ForkAgentPromptState();
 }
 
-class _ForkAgentDialogState extends State<_ForkAgentDialog> {
-  late final _name = TextEditingController(
-    text: forkNameFor(widget.sourceName),
-  );
+class _ForkAgentPromptState extends State<_ForkAgentPrompt> {
+  late AgentForkAttempt _attempt;
+  final _name = TextEditingController();
   final _task = TextEditingController();
   final _nameFocus = FocusNode(debugLabel: 'Fork name');
-  final _taskFocus = FocusNode(debugLabel: 'Fork first task');
+  final _taskFocus = FocusNode(debugLabel: 'Fork task');
+  final _body = ScrollController();
+  final _announcer = BoxAnnouncer();
+  bool _busy = false;
+  String? _error;
+  bool get _locked => _busy || _attempt.awaitingConfirmation;
+  bool get _composing => [_name, _task].any(
+    (controller) =>
+        controller.value.composing.isValid &&
+        !controller.value.composing.isCollapsed,
+  );
 
   @override
   void initState() {
     super.initState();
+    _attempt = widget.notifier.forkAttempt(
+      widget.machineId,
+      widget.agentId,
+      name: forkNameFor(widget.sourceName),
+    );
+    _name.text = _attempt.name;
+    _task.text = _attempt.prompt;
+    _error = _attempt.result?.error;
+    _nameFocus.addListener(_focusChanged);
+    _taskFocus.addListener(_focusChanged);
+    if (_attempt.pending case final pending?) {
+      _busy = true;
+      unawaited(_finish(pending));
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && ModalRoute.isCurrentOf(context) != false) {
+      if (mounted && ModalRoute.of(context)?.isCurrent != false) {
         _taskFocus.requestFocus();
       }
     });
   }
 
+  void _focusChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
+    _nameFocus.removeListener(_focusChanged);
+    _taskFocus.removeListener(_focusChanged);
     _nameFocus.dispose();
     _taskFocus.dispose();
     _name.dispose();
     _task.dispose();
+    _body.dispose();
     super.dispose();
   }
 
-  void _fork() {
-    final name = _name.text.trim();
-    if (name.isEmpty) return;
-    Navigator.pop(context, (name: name, task: _task.text.trim()));
+  void _changed(String _) {
+    if (_locked) return;
+    _attempt.name = _name.text;
+    _attempt.prompt = _task.text;
+    _attempt.result = null;
+    setState(() => _error = null);
   }
 
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    final accent = grid.AppPalette.accentOnSurface;
-    final border = OutlineInputBorder(
-      borderRadius: BorderRadius.circular(10),
-      borderSide: BorderSide.none,
-    );
-    InputDecoration decoration(String hint) => InputDecoration(
-      filled: true,
-      fillColor: grid.AppSurface.recess,
-      isDense: true,
-      hintText: hint,
-      hintStyle: TextStyle(fontSize: 14, color: grid.AppPalette.textSecondary),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      border: border,
-      enabledBorder: border,
-      focusedBorder: border.copyWith(borderSide: BorderSide(color: accent)),
-      counterText: '',
-    );
-    final native =
-        widget.engine == null || _nativeForkEngines.contains(widget.engine);
-    final what = native
-        ? 'The fork starts with everything “${widget.sourceName}” knows, in the same folder. Both keep running on their own.'
-        : 'This engine cannot copy a session: the fork opens with a summary of what “${widget.sourceName}” has done, in the same folder.';
-    Widget label(String text) => Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: grid.AppPalette.textSecondary,
+  void _close() {
+    if (!_composing) Navigator.pop(context);
+  }
+
+  void _accept() {
+    if (_composing) return;
+    if (_nameFocus.hasFocus) {
+      _taskFocus.requestFocus();
+      return;
+    }
+    if (_taskFocus.hasFocus) {
+      _submit();
+      return;
+    }
+    activatePromptControl();
+  }
+
+  void _submit() {
+    if (_busy || _composing) return;
+    if (!_attempt.awaitingConfirmation && _name.text.trim().isEmpty) {
+      setState(() => _error = 'Name cannot be empty');
+      _nameFocus.requestFocus();
+      return;
+    }
+    if (!_attempt.awaitingConfirmation && _name.text.characters.length > 80) {
+      setState(() => _error = 'Use at most 80 characters for the name.');
+      _nameFocus.requestFocus();
+      return;
+    }
+    _taskFocus.requestFocus();
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    unawaited(
+      _finish(
+        widget.notifier.forkAgent(
+          widget.machineId,
+          widget.agentId,
+          attempt: _attempt,
         ),
       ),
     );
-    return ListenableBuilder(
-      listenable: _name,
-      builder: (context, _) => AlertDialog(
-        title: const Text('Fork Harness'),
-        titleTextStyle: Theme.of(context).textTheme.titleMedium,
-        content: SizedBox(
-          width: 400,
+  }
+
+  Future<void> _finish(Future<ForkAgentResult> request) async {
+    ForkAgentResult result;
+    try {
+      result = await request;
+    } catch (_) {
+      result = const ForkAgentResult(
+        error:
+            'Could not confirm the fork. Check agents before starting another.',
+      );
+    }
+    if (!mounted) return;
+    if (result.error == null) {
+      Navigator.pop(context, result);
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _error = result.error;
+    });
+    _taskFocus.requestFocus();
+    _announcer.row(context, result.error!);
+  }
+
+  void _startAnother() {
+    if (!widget.notifier.discardForkAttempt(
+      widget.machineId,
+      widget.agentId,
+      _attempt,
+    )) {
+      return;
+    }
+    _attempt = widget.notifier.forkAttempt(
+      widget.machineId,
+      widget.agentId,
+      name: _name.text,
+      prompt: _task.text,
+    );
+    setState(
+      () => _error =
+          'The previous fork may already exist. Confirm to start another.',
+    );
+    _taskFocus.requestFocus();
+  }
+
+  void _newline() {
+    if (_locked || _composing || !_taskFocus.hasFocus) return;
+    final value = _task.value;
+    if (!value.selection.isValid) return;
+    _task.value = TextEditingValue(
+      text: value.text.replaceRange(
+        value.selection.start,
+        value.selection.end,
+        '\n',
+      ),
+      selection: TextSelection.collapsed(offset: value.selection.start + 1),
+    );
+    _changed(_task.text);
+  }
+
+  void _page(int direction) {
+    if (!_body.hasClients) return;
+    final position = _body.position;
+    _body.jumpTo(
+      (position.pixels + direction * position.viewportDimension * .8).clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
+      ),
+    );
+  }
+
+  void _vertical(int direction) {
+    final input = _nameFocus.hasFocus ? _nameFocus : _taskFocus;
+    if (input.hasFocus && input.context != null) {
+      Actions.maybeInvoke(
+        input.context!,
+        ExtendSelectionVerticallyToAdjacentLineIntent(
+          forward: direction > 0,
+          collapseSelection: true,
+        ),
+      );
+    } else if (direction > 0) {
+      FocusManager.instance.primaryFocus?.nextFocus();
+    } else {
+      FocusManager.instance.primaryFocus?.previousFocus();
+    }
+  }
+
+  Widget _input(
+    String label,
+    TextEditingController controller,
+    FocusNode focus, {
+    bool task = false,
+  }) => Semantics(
+    label: task ? 'Fork first task, optional' : 'Fork name',
+    child: ReadlineKeys(
+      controller: controller,
+      enabled: !_locked,
+      onChanged: _changed,
+      child: TextField(
+        key: ValueKey(task ? 'fork-task' : 'fork-name'),
+        controller: controller,
+        focusNode: focus,
+        readOnly: _locked,
+        style: boxMonoStyle(),
+        textAlignVertical: TextAlignVertical.center,
+        minLines: 1,
+        maxLines: task ? 6 : 1,
+        textInputAction: task ? TextInputAction.done : TextInputAction.next,
+        decoration: InputDecoration(
+          hintText: task ? 'first task (optional)' : 'name',
+          hintStyle: boxMonoStyle(color: kBoxFaint),
+          isDense: true,
+          filled: false,
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          contentPadding: EdgeInsets.zero,
+          prefixIcon: Padding(
+            padding: const EdgeInsets.only(right: 10),
+            child: Center(
+              widthFactor: 1,
+              heightFactor: 1,
+              child: Text(
+                '$label >',
+                style: boxMonoStyle(color: Colors.white70),
+              ),
+            ),
+          ),
+          prefixIconConstraints: const BoxConstraints(minHeight: 38),
+        ),
+        onChanged: _changed,
+        onEditingComplete: () {},
+        onSubmitted: (_) {
+          if (task) {
+            _submit();
+          } else {
+            _taskFocus.requestFocus();
+          }
+        },
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: terminalFontStore,
+    builder: (context, _) => TerminalPromptKeys(
+      composing: () => _composing,
+      inputFocus: _nameFocus.hasFocus ? _nameFocus : _taskFocus,
+      cancel: _close,
+      accept: _accept,
+      submit: _submit,
+      next: () => _vertical(1),
+      previous: () => _vertical(-1),
+      pageDown: () => _page(1),
+      pageUp: () => _page(-1),
+      child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.enter, alt: true): _newline,
+          if (KeymapTheme.of(context) == null)
+            const SingleActivator(LogicalKeyboardKey.enter, meta: true):
+                _submit,
+        },
+        child: TerminalPrompt(
+          width: 760,
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                what,
-                style: TextStyle(
-                  fontFamily: grid.AppFont.sans,
-                  fontSize: 13,
-                  height: 1.4,
-                  color: grid.AppPalette.textSecondary,
+              Flexible(
+                child: SingleChildScrollView(
+                  controller: _body,
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Fork Agent',
+                        style: boxMonoStyle(size: 12, color: kBoxFaint),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'from  ${_attempt.source?.name ?? widget.sourceName}',
+                        style: boxMonoStyle(),
+                      ),
+                      if (widget.notifier
+                              .stateOf(widget.machineId)
+                              ?.machine
+                              .displayName
+                          case final machine?)
+                        Text(
+                          [
+                            machine,
+                            if (_attempt.source?.project?.cwd case final cwd?
+                                when cwd.isNotEmpty)
+                              cwd,
+                          ].join('  '),
+                          style: boxMonoStyle(size: 11, color: kBoxFaint),
+                        ),
+                      const SizedBox(height: 6),
+                      Text(
+                        widget.engine == 'opencode'
+                            ? 'Starts from a handoff summary, in the same project folder.'
+                            : 'Continues the conversation in the same project folder.',
+                        style: boxMonoStyle(size: 11, color: kBoxFaint),
+                      ),
+                      const SizedBox(height: 8),
+                      _input('name', _name, _nameFocus),
+                      _input('task', _task, _taskFocus, task: true),
+                      if (_error case final error?) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          error,
+                          style: boxMonoStyle(
+                            size: 12,
+                            color: Colors.orangeAccent,
+                          ),
+                        ),
+                      ],
+                      if (_busy)
+                        Text(
+                          'Forking continues if you close this prompt.',
+                          style: boxMonoStyle(size: 11, color: kBoxFaint),
+                        ),
+                    ],
+                  ),
                 ),
               ),
-              const SizedBox(height: 16),
-              label('Name'),
-              TextField(
-                key: const ValueKey('fork-name'),
-                controller: _name,
-                focusNode: _nameFocus,
-                maxLength: 80,
-                cursorColor: accent,
-                textInputAction: TextInputAction.next,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: grid.AppPalette.textPrimary,
-                ),
-                decoration: decoration(''),
-                onSubmitted: (_) => _taskFocus.requestFocus(),
-              ),
-              const SizedBox(height: 14),
-              label('First task (optional)'),
-              // Return adds a line; ⌘Return forks — the New Harness field's
-              // own contract, so the two forms answer the keyboard alike.
-              CallbackShortcuts(
-                bindings: {
-                  const SingleActivator(LogicalKeyboardKey.enter, meta: true):
-                      _fork,
-                },
-                child: TextField(
-                  key: const ValueKey('fork-task'),
-                  controller: _task,
-                  focusNode: _taskFocus,
-                  minLines: 2,
-                  maxLines: 6,
-                  maxLength: 2000,
-                  cursorColor: accent,
-                  style: TextStyle(
-                    fontSize: 14,
-                    height: 1.4,
-                    color: grid.AppPalette.textPrimary,
-                  ),
-                  decoration: decoration(
-                    'What should the fork work on? Sent as its first message, exactly as written.',
+              if (_attempt.awaitingConfirmation && !_busy)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: terminalPromptButton(
+                      'Start another fork',
+                      _startAnother,
+                      key: const Key('fork-start-another'),
+                    ),
                   ),
                 ),
+              BoxHintStrip(
+                message: _busy
+                    ? 'Waiting for fork…'
+                    : (_attempt.awaitingConfirmation
+                          ? 'Fork may already exist.'
+                          : null),
+                isError: !_busy && _attempt.awaitingConfirmation,
+                hints: [
+                  if (!_busy)
+                    BoxHint(
+                      terminalPromptHint(context, 'picker.accept', 'enter'),
+                      _attempt.awaitingConfirmation
+                          ? 'check status'
+                          : (_nameFocus.hasFocus ? 'edit task' : 'fork'),
+                      onTap: _nameFocus.hasFocus
+                          ? _taskFocus.requestFocus
+                          : _submit,
+                    ),
+                  if (!_locked)
+                    BoxHint(
+                      terminalPromptHint(context, 'picker.complete', 'tab'),
+                      'fields',
+                    ),
+                  if (!_locked) const BoxHint('alt-enter', 'newline'),
+                  BoxHint(
+                    terminalPromptHint(context, 'picker.cancel', 'esc'),
+                    'close',
+                    onTap: _close,
+                  ),
+                ],
               ),
             ],
           ),
         ),
-        actions: [
-          OutlinedButton(
-            onPressed: () => Navigator.pop(context),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: grid.AppPalette.textSecondary,
-              minimumSize: const Size(88, 38),
-              padding: const EdgeInsets.symmetric(horizontal: 18),
-              side: const BorderSide(color: Colors.white24),
-              shape: const StadiumBorder(),
-            ),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            key: const ValueKey('fork-submit'),
-            onPressed: _name.text.trim().isEmpty ? null : _fork,
-            style: FilledButton.styleFrom(
-              backgroundColor: grid.AppPalette.swarmAccent,
-              foregroundColor: grid.AppPalette.swarmTabBar,
-              minimumSize: const Size(88, 38),
-              padding: const EdgeInsets.symmetric(horizontal: 18),
-              shape: const StadiumBorder(),
-            ),
-            child: const Text('Fork'),
-          ),
-        ],
       ),
-    );
-  }
+    ),
+  );
 }

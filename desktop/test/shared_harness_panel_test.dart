@@ -205,8 +205,15 @@ void main() {
         await settleNetwork(() => find.text('Live').evaluate().isNotEmpty);
         expect(requests.first['payload'], containsPair('shareId', 'grant'));
         expect(find.text('View only'), findsOneWidget);
+        // Receiving the request on the server does not mean its reply has
+        // reached the UI yet. Wait for the response we are about to inspect.
         await settleNetwork(
-          () => requests.any((r) => r['type'] == 'observer_viewer'),
+          () =>
+              requests.any((r) => r['type'] == 'observer_viewer') &&
+              find
+                  .textContaining('The viewer will appear', skipOffstage: false)
+                  .evaluate()
+                  .isNotEmpty,
         );
         // Narrow: the terminal is in front and the viewer waits behind its tab —
         // until the first frame lands, which brings it forward by itself (below).

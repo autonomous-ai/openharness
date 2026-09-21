@@ -15,9 +15,10 @@ const commandBarCommands = {
       'Open Machine Monitor, the harness that links, names and retires your computers.',
   'machines.list': 'See connected computers and their link state.',
   'machine.link': 'Open the setup dialog to connect another computer.',
-  'swarm.new': 'Open a fresh empty tab.',
+  'swarm.new': 'Choose an existing agent or create one in a new tab.',
   'swarm.reopen': 'Reopen the most recently closed harness.',
-  'agent.add': 'Browse existing harnesses and add one to this workspace.',
+  'agent.add':
+      'Choose an existing agent or create one in a new pane in this tab.',
   'project.add': 'Choose a project folder to add to the workspace.',
   'pane.layout': 'Open the workspace layout chooser.',
   'pane.zoom': 'Toggle the focused pane between full size and the grid.',

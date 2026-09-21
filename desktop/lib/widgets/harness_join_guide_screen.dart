@@ -42,7 +42,7 @@ class _HarnessJoinGuideScreenState extends State<HarnessJoinGuideScreen> {
   @override
   Widget build(BuildContext context) {
     final isLocal = widget.machineState.isLocalMachine;
-    return Center(
+    final content = Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 460),
         child: Container(
@@ -114,6 +114,20 @@ class _HarnessJoinGuideScreenState extends State<HarnessJoinGuideScreen> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+    // The compact tab bar can expose this card near its size breakpoint.
+    // Keep its instructions and Retry reachable when text needs more height.
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            minHeight: constraints.maxHeight.isFinite
+                ? constraints.maxHeight
+                : 0,
+          ),
+          child: content,
         ),
       ),
     );

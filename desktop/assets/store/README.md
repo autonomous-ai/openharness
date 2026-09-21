@@ -21,8 +21,10 @@ To regenerate the renders:
   --pcb-glb <copper>/examples/terminal-keyboard/boards/main_fab/board.glb
 ```
 
-Store tabs use `desktop/assets/app_icon.png`, the same icon as the app.
-
+`polymath.png` is the original Harness Store mark: six colorful branches meeting
+at one center. The Store button, tabs, and History use the same asset. Its vector
+source is `desktop/tool/render_store_mark.swift`; regenerate from `desktop/` with
+`swift tool/render_store_mark.swift`.
 ## Exploration previews
 
 `projects/` contains unaltered copies of the repository's showcase outputs.

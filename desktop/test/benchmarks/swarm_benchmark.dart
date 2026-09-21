@@ -1,6 +1,9 @@
 // Run explicitly: flutter test test/benchmarks/swarm_benchmark.dart --reporter expanded
 // These are headless CPU measurements, not network or display latency claims.
+// Optional dock CPU samples: set HARNESS_DOCK_CPU_PROFILE to a temporary file
+// prefix and pass --enable-vmservice --name 'command dock widget benchmark'.
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,6 +21,8 @@ import 'package:harness/widgets/terminal_panel.dart';
 
 import '../swarm_screen_test.dart' show mount;
 import '../swarm_state_test.dart' show createApp;
+import '../keymap_host_test.dart' show key;
+import '../support/cpu_profile.dart';
 
 Map<String, num> distribution(List<int> microseconds) {
   microseconds.sort();
@@ -45,6 +50,122 @@ Map<String, num> measure(void Function() operation, {void Function()? setup}) {
 }
 
 void main() {
+  for (final agentCount in [2000, 10000]) {
+    testWidgets('command dock widget benchmark with $agentCount harnesses', (
+      tester,
+    ) async {
+      var usedTransport = false;
+      final app = createApp(
+        connectionForTest: (_) {
+          usedTransport = true;
+          throw StateError('The offline benchmark must not contact a machine');
+        },
+      );
+      app.machineStates['m']!.agents = [
+        for (var i = 0; i < agentCount; i++)
+          Agent(
+            id: 'a$i',
+            name: 'Harness Task $i',
+            engine: 'codex',
+            terminalAvailable: true,
+            project: AgentProject(
+              name: 'Project ${i % 50}',
+              cwd: '/work/project-${i % 50}',
+              branch: 'main',
+            ),
+          ),
+      ];
+      app.adoptSessionForTest(
+        TerminalSession(
+          machineId: 'm',
+          agentId: 'a0',
+          agentName: 'Harness Task 0',
+          engineId: 'codex',
+          send: (_, _) async => true,
+          sendBinary: (_) async => true,
+        )..status = TerminalSessionStatus.controlling,
+      );
+      await mount(tester, app);
+      final field = find.byKey(const ValueKey('swarm-search-input'));
+      final profilePath = Platform.environment['HARNESS_DOCK_CPU_PROFILE'];
+      final profile = profilePath == null
+          ? null
+          : await tester.runAsync(BenchmarkCpuProfile.start);
+      if (profile != null) {
+        addTearDown(() => tester.runAsync(profile.close));
+      }
+      Future<Map<String, num>> timed(
+        Future<void> Function() operation, {
+        Future<void> Function()? setup,
+      }) async {
+        for (var i = 0; i < 8; i++) {
+          await setup?.call();
+          await operation();
+        }
+        final samples = <int>[];
+        for (var i = 0; i < 50; i++) {
+          await setup?.call();
+          final watch = Stopwatch()..start();
+          await operation();
+          samples.add(watch.elapsedMicroseconds);
+        }
+        return distribution(samples);
+      }
+
+      Future<void> type(String query) async {
+        await tester.enterText(field, query);
+        await tester.pump();
+      }
+
+      final reopen = await timed(
+        () async {
+          await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+          await tester.pump();
+          expect(field, findsOneWidget);
+        },
+        setup: () async {
+          if (field.evaluate().isNotEmpty) {
+            await key(tester, LogicalKeyboardKey.escape);
+            await tester.pump();
+          }
+        },
+      );
+      final query = await timed(() => type('harness'), setup: () => type(''));
+      final queryGrowth = await timed(
+        () => type('harness'),
+        setup: () => type('harnes'),
+      );
+      final narrow = await timed(
+        () => type('harness 12'),
+        setup: () => type('harness'),
+      );
+      await type('harness');
+      final move = await timed(() async {
+        await key(tester, LogicalKeyboardKey.arrowUp);
+        await tester.pump();
+      });
+      final retarget = await timed(() async {
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await tester.pump();
+        await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+        await tester.pump();
+      });
+      expect(tester.widget<TextField>(field).controller!.text, 'harness');
+      expect(usedTransport, isFalse);
+      expect(tester.takeException(), isNull);
+      debugPrint(
+        'SWARM_BENCH ${jsonEncode({'kind': 'headless_debug_widget_elapsed', 'operation': 'command_dock', 'agents': agentCount, 'reopen': reopen, 'broadQuery': query, 'queryGrowth': queryGrowth, 'narrowQuery': narrow, 'arrow': move, 'cmdPThenCmdT': retarget})}',
+      );
+      if (profile != null) {
+        await tester.runAsync(
+          () => profile.save('$profilePath-$agentCount.json'),
+        );
+      }
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    });
+  }
+
   for (final sampleText in ['abcd', '界 ']) {
     test(
       'terminal output CPU benchmark for ${sampleText == 'abcd' ? 'ASCII' : 'Unicode'}',

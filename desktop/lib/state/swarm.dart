@@ -1,5 +1,6 @@
 import 'dart:ui' show Size;
 
+import '../core/models.dart' show isAutomaticHarnessName;
 import 'pane_preset.dart';
 import 'pane_arrangement.dart';
 import 'terminal_pane.dart';
@@ -8,8 +9,13 @@ import 'terminal_pane.dart';
 /// Shared agents reuse the same pane/session across swarms, so the daemon has
 /// exactly one controller and switching tabs cannot take over our own stream.
 class Swarm {
-  Swarm({required this.id, String name = defaultName, this.kind = 'harness'})
-    : name = normalizeName(name);
+  Swarm({
+    required this.id,
+    String name = defaultName,
+    this.kind = 'harness',
+    bool? nameIsCustom,
+  }) : name = nameIsCustom == true ? name : normalizeName(name),
+       nameIsCustom = nameIsCustom ?? (normalizeName(name) != defaultName);
 
   /// What the tab holds: `harness` — panes of agents (the default); `store` —
   /// the Harness Store, no panes. A store tab is a tab like any other —
@@ -25,23 +31,26 @@ class Swarm {
   String? orchestratorId, orchestratorMachineId;
   static const storeName = 'Harness Store';
 
-  static const defaultName = 'New Tab';
+  static const defaultName = 'Untitled Tab';
   // 'New Harness' was the default until 2026-09-15 and 'New Agent' for a day
   // after; a layout saved then still carries one, and it must read as the same
   // fresh tab.
   static String normalizeName(String name) =>
       const {
-        'New swarm',
-        'New tab',
-        'New Tab',
-        'New Harness',
-        'New Agent',
-      }.contains(name)
+            'New swarm',
+            'New tab',
+            'New Tab',
+            'New Harness',
+            'New Agent',
+          }.contains(name) ||
+          isAutomaticHarnessName(name)
       ? defaultName
       : name;
 
   final String id;
   String name;
+  bool nameIsCustom;
+  String? titleMachineId, titleAgentId;
   final List<TerminalPane> panes = [];
   final Map<int, PanePreset> presets = {};
   final Map<String, PaneArrangement> paneSizes = {};
@@ -108,6 +117,9 @@ class Swarm {
     return {
       'id': id,
       'name': name,
+      if (nameIsCustom) 'nameIsCustom': true,
+      if (titleMachineId != null) 'titleMachineId': titleMachineId,
+      if (titleAgentId != null) 'titleAgentId': titleAgentId,
       if (kind != 'harness') 'kind': kind,
       if (isOrchestrator) 'orchestratorId': orchestratorId,
       if (isOrchestrator) 'orchestratorMachineId': orchestratorMachineId,
@@ -180,6 +192,9 @@ class ClosedSwarm extends ClosedWork {
     this.engine,
   }) : id = swarm.id,
        name = swarm.name,
+       nameIsCustom = swarm.nameIsCustom,
+       titleMachineId = swarm.titleMachineId,
+       titleAgentId = swarm.titleAgentId,
        kind = swarm.kind,
        orchestratorId = swarm.orchestratorId,
        orchestratorMachineId = swarm.orchestratorMachineId,
@@ -204,6 +219,8 @@ class ClosedSwarm extends ClosedWork {
 
   final String id;
   final String name;
+  final bool nameIsCustom;
+  final String? titleMachineId, titleAgentId;
 
   /// So a closed store tab reopens as the store, not as an empty harness tab.
   final String kind;

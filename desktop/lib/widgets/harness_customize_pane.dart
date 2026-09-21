@@ -9,6 +9,8 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/harness_background.dart';
 import 'swarm_wallpaper.dart';
+import 'box_chrome.dart';
+import 'prompt_customize.dart';
 
 /// Page-local customization. Appearance and Terminal use their existing stores
 /// and controls, so moving them here keeps the user's saved choices intact.
@@ -28,7 +30,7 @@ class HarnessCustomizePane extends StatelessWidget {
         child: CallbackShortcuts(
           bindings: {const SingleActivator(LogicalKeyboardKey.escape): onClose},
           child: DefaultTabController(
-            length: 3,
+            length: 4,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -39,8 +41,11 @@ class HarnessCustomizePane extends StatelessWidget {
                       Expanded(
                         child: Text(
                           'Customize OpenHarness',
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w600),
+                          style: boxMonoStyle(
+                            size: 14,
+                            color: grid.AppPalette.textPrimary,
+                            weight: FontWeight.w600,
+                          ),
                         ),
                       ),
                       IconButton(
@@ -60,7 +65,9 @@ class HarnessCustomizePane extends StatelessWidget {
                   unselectedLabelColor: grid.AppPalette.textSecondary,
                   indicatorColor: grid.AppPalette.swarmAccent,
                   dividerColor: grid.AppPalette.divider,
+                  labelStyle: boxMonoStyle(size: 12),
                   tabs: const [
+                    Tab(key: ValueKey('customize-prompt'), text: 'Prompt'),
                     Tab(
                       key: ValueKey('customize-background'),
                       text: 'Wallpaper',
@@ -75,6 +82,7 @@ class HarnessCustomizePane extends StatelessWidget {
                 Expanded(
                   child: TabBarView(
                     children: [
+                      PromptCustomize(store: store ?? appearancePrefsStore),
                       _Backgrounds(store: store ?? appearancePrefsStore),
                       const AppearanceSection(),
                       const TerminalSection(),

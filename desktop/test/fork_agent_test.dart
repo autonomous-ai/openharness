@@ -104,6 +104,7 @@ void main() {
       'agentId': 'a0',
       'name': 'Agent 0 - fork',
       'prompt': 'ship it',
+      'creationId': isA<String>(),
     });
 
     // Beside the source, in the tab that was open, focused, and known to the machine.
@@ -160,17 +161,28 @@ void main() {
     expect(app.focusedPane?.agentId, 'a0-fork');
   });
 
-  testWidgets(
-    'the dialog opens named "X - fork", takes a task, and ⌘Return forks',
-    (tester) async {
-      ({String name, String task})? picked;
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Builder(
+  testWidgets('the prompt opens with a name and submits the exact first task', (
+    tester,
+  ) async {
+    final connection = _Connection();
+    connection.answer = (type, payload) async => {
+      'agent': _agentJson('forked'),
+      'level': 'native',
+    };
+    final app = createApp(connectionForTest: (_) => connection);
+    addTearDown(app.dispose);
+    app.stateOf('m')!.nodeOnline = true;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
             builder: (context) => TextButton(
               onPressed: () async {
-                picked = await showForkAgentDialogForTest(
+                await forkHarness(
                   context,
+                  app,
+                  'm',
+                  'a0',
                   'Kinh Te',
                   engine: 'claude',
                 );
@@ -179,24 +191,28 @@ void main() {
             ),
           ),
         ),
-      );
-      await tester.tap(find.text('open'));
-      await tester.pumpAndSettle();
-      expect(find.text('Fork Harness'), findsOneWidget);
-      expect(find.textContaining('everything “Kinh Te” knows'), findsOneWidget);
-      final name = tester.widget<TextField>(
-        find.byKey(const ValueKey('fork-name')),
-      );
-      expect(name.controller!.text, 'Kinh Te - fork');
-      await tester.enterText(
-        find.byKey(const ValueKey('fork-task')),
-        'ship it',
-      );
-      await tester.tap(find.byKey(const ValueKey('fork-submit')));
-      await tester.pumpAndSettle();
-      expect(picked, (name: 'Kinh Te - fork', task: 'ship it'));
-    },
-  );
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Fork Agent'), findsOneWidget);
+    expect(find.textContaining('same project folder'), findsOneWidget);
+    final name = tester.widget<TextField>(
+      find.byKey(const ValueKey('fork-name')),
+    );
+    expect(name.controller!.text, 'Kinh Te - fork');
+    await tester.enterText(find.byKey(const ValueKey('fork-task')), 'ship it');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(
+      connection.calls.firstWhere((call) => call.$1 == 'agent_fork').$2,
+      containsPair('prompt', 'ship it'),
+    );
+    expect(
+      app.stateOf('m')!.agents.any((agent) => agent.id == 'forked'),
+      isTrue,
+    );
+  });
 
   test('Fork is offered only where the daemon (or the engine) can fork', () {
     expect(

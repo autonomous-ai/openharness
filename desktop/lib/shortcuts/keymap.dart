@@ -1,6 +1,16 @@
 import 'dart:convert';
 
-enum KeymapContext { workspace, terminal, picker }
+enum KeymapContext {
+  workspace,
+  terminal,
+  picker,
+
+  /// Project-menu bindings layer over picker bindings (for example, o opens
+  /// a folder here and advanced options in the parent launch menu).
+  project;
+
+  bool get isPicker => this == picker || this == project;
+}
 
 /// A canonical logical key name and exact modifier set. Parsing happens on reload,
 /// never on the input path. The Flutter adapter supplies the same canonical keys.
@@ -274,9 +284,15 @@ class ResolvedKeymap {
       if (context != KeymapContext.workspace) {
         apply(defaults, KeymapContext.workspace);
       }
+      if (context == KeymapContext.project) {
+        apply(defaults, KeymapContext.picker);
+      }
       apply(defaults, context);
       if (context != KeymapContext.workspace) {
         apply(config.bindings, KeymapContext.workspace);
+      }
+      if (context == KeymapContext.project) {
+        apply(config.bindings, KeymapContext.picker);
       }
       apply(config.bindings, context);
       _bindings[context] = List.unmodifiable(effective.values);

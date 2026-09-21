@@ -698,7 +698,7 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/home-assistant',
     label: "Home Assistant",
     category: "Automation",
-    tagline: "Open-source home automation that puts local control first",
+    tagline: "Home automation ideas → tested YAML, native traces and a real handoff",
     creator: "OpenHarness contributors",
     color: Color(0xffb88159),
     asset: 'assets/engine-icons/home-assistant.png',

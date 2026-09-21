@@ -58,8 +58,13 @@ class WsPool {
         !current.isClosed) {
       return current;
     }
+    // Stop accepting callbacks before close yields. Its final disconnected
+    // event must not mark a replacement connection offline.
+    _conns.remove(machineId);
     if (current != null) unawaited(current.close());
-    final conn = WsConn(
+    late final WsConn conn;
+    bool ownsMachine() => identical(_conns[machineId], conn);
+    conn = WsConn(
       wsBaseUrl: wsBaseUrl,
       autonomousEnv: autonomousEnv,
       relayCodecs: transportKind == WsTransportKind.cloudE2ee
@@ -70,12 +75,20 @@ class WsPool {
           : null,
       machineId: machineId,
       accessTokenProvider: accessTokenProvider,
-      onAuthFailure: onAuthFailure,
+      onAuthFailure: (message) {
+        if (ownsMachine()) onAuthFailure(message);
+      },
       onLocalFailure: onLocalFailure == null
           ? null
-          : (code, reason) => onLocalFailure!(machineId, code, reason),
-      onEvent: (event) => onEvent(machineId, event),
-      onStatus: (status) => onStatus(machineId, status),
+          : (code, reason) {
+              if (ownsMachine()) onLocalFailure!(machineId, code, reason);
+            },
+      onEvent: (event) {
+        if (ownsMachine()) return onEvent(machineId, event);
+      },
+      onStatus: (status) {
+        if (ownsMachine()) onStatus(machineId, status);
+      },
       transportKind: transportKind,
       localWsUri: localWsUri,
       localApiKey: localApiKey,
@@ -98,8 +111,7 @@ class WsPool {
   Future<void> closeAll() async {
     final all = _conns.values.toList();
     _conns.clear();
-    for (final conn in all) {
-      await conn.close();
-    }
+    // A failed close must not leave the other transports connected.
+    await Future.wait(all.map((conn) => conn.close()));
   }
 }

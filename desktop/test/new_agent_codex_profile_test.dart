@@ -11,6 +11,7 @@ import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_placement.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/pane_layout_store.dart';
@@ -138,6 +139,7 @@ class _Notifier extends AppNotifier {
     String? swarmId,
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
+    HarnessPlacement? placement,
   }) async {
     calls.add({'engine': engine, 'codexHome': codexHome, 'folder': folder});
     return null;

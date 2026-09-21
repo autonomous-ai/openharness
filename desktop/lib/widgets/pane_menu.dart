@@ -1,6 +1,12 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../shortcuts/app_keymap.dart';
+import '../shortcuts/keymap.dart';
+import 'box_chrome.dart';
 
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
@@ -33,6 +39,7 @@ Future<T?> showPaneMenu<T>({
 }) {
   final overlayState = Overlay.of(context);
   final completer = Completer<T?>();
+  final previousFocus = FocusManager.instance.primaryFocus;
   late final OverlayEntry entry;
   late final void Function() deregister;
   var closed = false;
@@ -43,6 +50,7 @@ Future<T?> showPaneMenu<T>({
     closed = true;
     deregister();
     entry.remove();
+    if (previousFocus?.context?.mounted == true) previousFocus!.requestFocus();
     onClose?.call();
     if (!completer.isCompleted) completer.complete(choice);
   }
@@ -62,32 +70,20 @@ Future<T?> showPaneMenu<T>({
             child: const SizedBox.expand(),
           ),
         ),
-        Positioned(
-          // Right-aligned to the control, which sits at the right end of a pane header — anchoring
-          // the left edge would push a wide menu off-screen.
-          right: position.right,
-          top: position.top,
-          child: ConstrainedBox(
-            // Wide enough that a status can sit right-aligned against a model id without the two
-            // meeting, and for a full GGUF-style model id beside its node without either cut.
-            constraints: BoxConstraints(minWidth: minWidth, maxWidth: maxWidth),
-            // ⚠️ IntrinsicWidth, or the menu is ALWAYS [maxWidth] wide. `Positioned` hands down
-            // unbounded width, the ConstrainedBox turns that into "up to maxWidth", and a
-            // stretching Column takes all of it — so a two-line menu wore the width of the longest
-            // model id it could ever hold. This measures the rows and the clamp then applies to
-            // what they actually need.
+        CustomSingleChildLayout(
+          delegate: _PaneMenuPosition(position, minWidth, maxWidth),
+          child: _PaneMenuFocus(
+            close: () => close(null),
             child: IntrinsicWidth(
-              child: Material(
-                color: AppColors.surface,
-                elevation: 8,
-                borderRadius: BorderRadius.circular(8),
-                clipBehavior: Clip.antiAlias,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: children(close),
+              child: TerminalBox(
+                child: SingleChildScrollView(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: children(close),
+                    ),
                   ),
                 ),
               ),
@@ -100,6 +96,100 @@ Future<T?> showPaneMenu<T>({
   onOpen?.call(entry, () => close(null));
   overlayState.insert(entry);
   return completer.future;
+}
+
+/// Position against the actual overlay, including panes beside the left edge
+/// and short windows. Long model catalogs scroll inside the available height.
+class _PaneMenuPosition extends SingleChildLayoutDelegate {
+  const _PaneMenuPosition(this.position, this.minWidth, this.maxWidth);
+  final RelativeRect position;
+  final double minWidth, maxWidth;
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) {
+    final width = math.max(0.0, constraints.maxWidth - 16);
+    return BoxConstraints(
+      minWidth: math.min(minWidth, width),
+      maxWidth: math.min(maxWidth, width),
+      maxHeight: math.max(0, constraints.maxHeight - 16),
+    );
+  }
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) => Offset(
+    (size.width - position.right - childSize.width).clamp(
+      8,
+      math.max(8, size.width - childSize.width - 8),
+    ),
+    position.top.clamp(8, math.max(8, size.height - childSize.height - 8)),
+  );
+
+  @override
+  bool shouldRelayout(_PaneMenuPosition oldDelegate) =>
+      position != oldDelegate.position ||
+      minWidth != oldDelegate.minWidth ||
+      maxWidth != oldDelegate.maxWidth;
+}
+
+class _PaneMenuFocus extends StatefulWidget {
+  const _PaneMenuFocus({required this.close, required this.child});
+  final VoidCallback close;
+  final Widget child;
+
+  @override
+  State<_PaneMenuFocus> createState() => _PaneMenuFocusState();
+}
+
+class _PaneMenuFocusState extends State<_PaneMenuFocus> {
+  final _scope = FocusScopeNode(debugLabel: 'Pane model menu');
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scope.nextFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _scope.dispose();
+    super.dispose();
+  }
+
+  KeyEventResult _key(FocusNode node, KeyEvent event) {
+    if (event is KeyUpEvent) return KeyEventResult.ignored;
+    final keyboard = HardwareKeyboard.instance;
+    if (keyboard.isMetaPressed ||
+        keyboard.isAltPressed ||
+        keyboard.isControlPressed) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      widget.close();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _scope.nextFocus();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _scope.previousFocus();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  @override
+  Widget build(BuildContext context) => KeymapRegion(
+    contextKind: KeymapContext.picker,
+    child: FocusScope(
+      node: _scope,
+      autofocus: true,
+      onKeyEvent: _key,
+      child: FocusTraversalGroup(child: widget.child),
+    ),
+  );
 }
 
 /// One selectable row of a pane menu.

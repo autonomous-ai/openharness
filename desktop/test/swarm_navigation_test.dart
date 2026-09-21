@@ -7,6 +7,37 @@ import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
 
 void main() {
+  test('numbered results sort naturally without overriding recency or match strength', () {
+    final rows = [
+      for (final name in ['Feature 10', 'Feature 2', 'Feature 1', 'Feature 02'])
+        SwarmDestination(
+          id: name,
+          title: name,
+          detail: '',
+          swarmId: null,
+          current: false,
+        ),
+    ];
+    expect(rankSwarmDestinations(rows, '').map((row) => row.title), [
+      'Feature 1',
+      'Feature 2',
+      'Feature 02',
+      'Feature 10',
+    ]);
+    expect(
+      rankSwarmDestinations(rows, '', recent: ['Feature 10']).first.title,
+      'Feature 10',
+    );
+    expect(
+      rankSwarmDestinations(
+        rows,
+        'Feature 2',
+        recent: ['Feature 10'],
+      ).first.title,
+      'Feature 2',
+    );
+  });
+
   test('search prioritizes title matches without losing better metadata matches', () {
     SwarmDestination row(String id, String title, List<String?> fields) =>
         SwarmDestination(

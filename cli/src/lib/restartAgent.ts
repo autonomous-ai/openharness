@@ -10,14 +10,47 @@
  */
 
 import type { AgentEngine } from '../engines/types.js'
-import type { ProcessIdentity } from './registry.js'
+import type { RegisteredSession, ProcessIdentity } from './registry.js'
 import type { TerminateOutcome } from './deleteAgentFallback.js'
 
 export type RestartOutcome =
   | { ok: true; processIdentity: ProcessIdentity; resumed: boolean }
   | { ok: false; detail: string }
 
+export type RestartAgentReply =
+  | { ok: true; session: RegisteredSession; resumed: boolean }
+  | { ok: false; error: string; detail?: string }
+
+/** One process replacement per agent, even across clients and different receipt
+ * IDs. Stop cancels the work before its next process-changing step. */
+export class AgentRestartCoordinator {
+  private readonly jobs = new Map<string, { cancelled: boolean; result: Promise<RestartAgentReply> }>()
+
+  run(agentId: string, restart: (current: () => boolean) => Promise<RestartAgentReply>): Promise<RestartAgentReply> {
+    const existing = this.jobs.get(agentId)
+    if (existing) return existing.result
+    const job = { cancelled: false, result: null! as Promise<RestartAgentReply> }
+    const current = () => !job.cancelled && this.jobs.get(agentId) === job
+    job.result = Promise.resolve().then(async () => {
+      if (!current()) return { ok: false, error: 'AGENT_CHANGED' } as const
+      const result = await restart(current)
+      return current() ? result : { ok: false, error: 'AGENT_CHANGED' } as const
+    }).finally(() => {
+      if (this.jobs.get(agentId) === job) this.jobs.delete(agentId)
+    })
+    this.jobs.set(agentId, job)
+    return job.result
+  }
+
+  cancel(agentId: string): void {
+    const job = this.jobs.get(agentId)
+    if (job) job.cancelled = true
+  }
+}
+
 export interface RestartAgentDeps {
+  /** False after Stop, replacement, or removal. Checked across every await. */
+  isCurrent?: () => boolean
   /** Re-arm `remain-on-exit` before anything is killed — see `tmuxBackend.ts`'s `holdOpen`. Without
    *  this, tmux tears the pane (and, being its only pane, the whole session) down the instant the old
    *  process exits. */
@@ -44,12 +77,17 @@ export async function restartAgent(
   bypassPermission: boolean,
   deps: RestartAgentDeps,
 ): Promise<RestartOutcome> {
+  const changed = { ok: false, detail: 'the agent changed or stopped during restart' } as const
+  const current = () => deps.isCurrent?.() !== false
+  if (!current()) return changed
   const armed = await deps.holdOpen()
+  if (!current()) return changed
   if (!armed.ok) {
     return { ok: false, detail: armed.reason ?? 'could not re-arm the pane before restart' }
   }
 
   const outcome = await deps.terminate()
+  if (!current()) return changed
   if (!KILL_CONFIRMED.has(outcome)) {
     return { ok: false, detail: `could not confirm the running ${session.engine} process was stopped (${outcome})` }
   }
@@ -60,12 +98,15 @@ export async function restartAgent(
       return { ok: false, detail: `could not prepare ${session.engine} session for resume: ${error instanceof Error ? error.message : error}` }
     }
   }
+  if (!current()) return changed
   const spawnAndWait = async (withResume: boolean): Promise<ProcessIdentity | null> => {
+    if (!current()) return null
     const argv = deps.buildArgv({
       bypassPermission,
       ...(withResume && resumeSessionId ? { resumeSessionId } : {}),
     })
     const spawned = await deps.respawn(argv)
+    if (!current()) return null
     if (!spawned.ok) {
       deps.log(`[restart] ${session.engine} respawn-pane failed: ${spawned.reason ?? 'unknown reason'}`)
       return null
@@ -79,6 +120,7 @@ export async function restartAgent(
   // when LAUNCH_RESUME_FLAG has no entry for the engine), so `resumed` still degrades correctly.
   let resumed = !!resumeSessionId
   let identity = await spawnAndWait(resumed)
+  if (!current()) return changed
   if (!identity && resumed) {
     // Safe degradation: a working agent with a FRESH session under the same agentId/pane beats a dead
     // pane. Retry once with no resume attempt before giving up entirely.
@@ -86,6 +128,7 @@ export async function restartAgent(
     resumed = false
     identity = await spawnAndWait(false)
   }
+  if (!current()) return changed
   if (!identity) {
     return { ok: false, detail: `${session.engine} did not come back up after restart` }
   }

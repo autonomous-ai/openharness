@@ -54,5 +54,16 @@ Engines report in over HTTP on the same port: `POST /api/hook/session-start`, `s
 `turn-start`, `turn-stop`, `tool-start`, authenticated by a per-install token the daemon writes into
 the hook it installs.
 
-There is no `harness new` or `harness split` today. Sessions are created and arranged through the app,
-the web client, or this socket.
+`harness new` makes a session from a shell, in the words the app's box uses, over this same socket:
+
+```
+harness new                          claude, in the current directory
+harness new codex @mini ~/code/auth  codex, on the machine called mini, in that folder
+harness new codex my-game            codex, in a new project ~/harnesses/my-game
+harness new --plan --prompt "fix the flaky login test"
+```
+
+Words may come in any order: `@` marks the machine (id, name, or an unambiguous start of a word in
+it), a path looks like a path, the first other word is the agent and a second names a new project.
+`--mode auto|ask|plan|full`, `--name`, `--new [name]` and `--json` are the rest. There is still no
+`harness split`: panes are arranged in the app.

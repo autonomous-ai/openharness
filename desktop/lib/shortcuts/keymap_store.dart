@@ -1,4 +1,5 @@
 import '../core/host_platform.dart';
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -60,16 +61,19 @@ class KeymapStore extends ChangeNotifier {
     return p.join(root, 'harness', 'keybindings.jsonc');
   }
 
-  Future<void> start() async {
-    if (watchFiles && !_disposed) await _refreshWatches(_generation);
-    await reload();
-  }
+  Future<void> start() => reload();
 
   Future<void> reload({bool fromWatcher = false}) async {
     if (_disposed) return;
     if (!fromWatcher) _watchFailures = 0;
     final generation = ++_generation;
     final priorError = error;
+    // Establish watches before reading or publishing the new map. Retargeting
+    // a dotfile symlink can move it to a directory we do not watch yet; a save
+    // between publication and subscription would otherwise be missed. Reading
+    // after subscription also includes edits made during target discovery.
+    if (watchFiles) await _refreshWatches(generation);
+    if (_disposed || generation != _generation) return;
     var changed = false;
     try {
       String source;
@@ -109,11 +113,6 @@ class KeymapStore extends ChangeNotifier {
     if (!_disposed &&
         generation == _generation &&
         (changed || priorError != error)) {
-      notifyListeners();
-    }
-    final priorWatchError = error;
-    if (watchFiles && !_disposed) await _refreshWatches(generation);
-    if (!_disposed && generation == _generation && priorWatchError != error) {
       notifyListeners();
     }
   }
@@ -275,13 +274,13 @@ class KeymapStore extends ChangeNotifier {
           '''// Harness keyboard overrides. Defaults are inherited.
 // Save this file to apply changes. Invalid edits keep the last working keys.
 // A null command unbinds a key or a sequence prefix.
-// "when" can be "workspace" (default), "terminal", or "picker".
-// Workspace bindings are inherited by the other two contexts.
+// "when" can be "workspace" (default), "terminal", "picker", or "project".
+// Workspace bindings are inherited by the other contexts.
 {
   "version": 1,
   "bindings": [
-    // Example: move search from Command-P to Command-O.
-    // { "keys": "cmd+p", "command": null },
+    // Example: move New Tab from Command-T to Command-O.
+    // { "keys": "cmd+t", "command": null },
     // { "keys": "cmd+o", "command": "swarm.new" },
   ],
 }

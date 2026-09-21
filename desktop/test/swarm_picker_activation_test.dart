@@ -16,7 +16,7 @@ void main() {
     final input = <TerminalBinaryFrame>[];
     final pane = app.adoptSessionForTest(terminal('a0', input));
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     final field = find.byKey(const ValueKey('swarm-search-input'));
     final results = find.byKey(const ValueKey('swarm-search-results'));
     expect(field, findsOneWidget);
@@ -56,20 +56,15 @@ void main() {
       app.newSwarm();
       final target = app.activeSwarm;
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       final field = find.byKey(const ValueKey('swarm-search-input'));
-      if (activate == 'click') {
-        await tester.enterText(field, 'Agent 0');
-      }
+      await tester.enterText(field, 'Agent 0');
       await tester.pump();
       expect(find.byType(Checkbox), findsNothing);
       expect(app.panes, isEmpty);
       expect(find.byKey(const ValueKey('swarm-row-action')), findsOneWidget);
       expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('swarm-row-action')),
-          matching: find.text('Open Harness'),
-        ),
+        find.textContaining('enter  open', findRichText: true),
         findsOneWidget,
       );
       expect(find.byKey(const ValueKey('swarm-search-accept')), findsNothing);

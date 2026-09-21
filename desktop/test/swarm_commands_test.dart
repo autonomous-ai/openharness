@@ -117,7 +117,7 @@ void main() {
       final app = createApp();
       await mount(tester, app);
       final input = find.byKey(const ValueKey('swarm-search-input'));
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
       await tester.enterText(input, '> rename');
       await tester.pump();
       expect(

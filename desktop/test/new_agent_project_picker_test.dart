@@ -7,7 +7,9 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/project_folder.dart';
+import 'package:harness/core/repository_clone.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/widgets/new_agent_dialog.dart';
 import 'package:harness/shared/widgets/app_choice_picker.dart';
@@ -74,6 +76,7 @@ class _App extends AppNotifier {
     String? name,
     String? agent,
     AgentCreationAttempt? attempt,
+    HarnessPlacement? placement,
   }) async {
     calls.add({
       'machine': machineId,
@@ -87,7 +90,12 @@ class _App extends AppNotifier {
 
 void main() {
   late _App app;
-  Future<void> mount(WidgetTester tester, {String? rememberedProject}) async {
+  Future<void> mount(
+    WidgetTester tester, {
+    String? rememberedProject,
+    String? initialFolder,
+    ProjectFolderRequest? initialProject,
+  }) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(1280, 1000);
     addTearDown(tester.view.reset);
@@ -105,8 +113,14 @@ void main() {
         home: Scaffold(
           body: Builder(
             builder: (context) => TextButton(
-              onPressed: () =>
-                  showNewAgentDialog(context, app, 'local', source: 'test'),
+              onPressed: () => showNewAgentDialog(
+                context,
+                app,
+                'local',
+                source: 'test',
+                initialFolder: initialFolder,
+                initialProjectFolder: initialProject,
+              ),
               child: const Text('Open'),
             ),
           ),
@@ -131,6 +145,41 @@ void main() {
     await tester.ensureVisible(button);
     await tester.tap(button);
     await tester.pumpAndSettle();
+  }
+
+  for (final (folder, project, label) in [
+    ('/local/context', null, 'context'),
+    (
+      null,
+      const ProjectFolderRequest.newProject(name: 'Careful work'),
+      'Careful-work',
+    ),
+    (
+      null,
+      ProjectFolderRequest.remote(GitHubRepository.parse('owner/context')!),
+      'context',
+    ),
+  ]) {
+    testWidgets(
+      'an inherited project survives switching machines: ${folder ?? project?.payload}',
+      (tester) async {
+        await mount(tester, initialFolder: folder, initialProject: project);
+        expect(find.text(label), findsOneWidget);
+        await tester.tap(
+          find.byKey(const ValueKey('new-agent-machine-remote')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text(label), findsNothing);
+        await tester.tap(find.byKey(const ValueKey('new-agent-machine-local')));
+        await tester.pumpAndSettle();
+        expect(find.text(label), findsOneWidget);
+        await tester.tap(find.byKey(const Key('create-agent-submit')));
+        await tester.pumpAndSettle();
+        expect(app.calls.single['machine'], 'local');
+        expect(app.calls.single['folder'], folder ?? '');
+        expect(app.calls.single['project'], project?.payload);
+      },
+    );
   }
 
   testWidgets('every new dialog starts with New and leaves history in Recent', (

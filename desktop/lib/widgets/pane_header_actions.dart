@@ -3,6 +3,10 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../theme/app_theme.dart';
+import '../shortcuts/keymap.dart';
+import '../shortcuts/app_keymap.dart';
+import 'box_chrome.dart';
+import 'transient_menus.dart';
 
 /// Direct pane controls, in a stable order even when an action is unavailable.
 class PaneHeaderActions extends StatelessWidget {
@@ -23,13 +27,15 @@ class PaneHeaderActions extends StatelessWidget {
     this.details,
     this.modelPicker,
     this.terminal = false,
+    this.compact = false,
   });
 
   final bool zoomed, composerVisible;
 
   /// The pane is a shell, not a harness: Restart and Stop say so, because
-  /// "Stop Harness" over a terminal reads as a button for something else.
+  /// "Stop Agent" over a terminal reads as a button for something else.
   final bool terminal;
+  final bool compact;
   final VoidCallback? onShare;
   final VoidCallback? onZoom,
       onRestart,
@@ -75,7 +81,9 @@ class PaneHeaderActions extends StatelessWidget {
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             visualDensity: VisualDensity.standard,
             shape: WidgetStatePropertyAll(
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(kTerminalCornerRadius),
+              ),
             ),
             foregroundColor: WidgetStateProperty.resolveWith((states) {
               if (states.contains(WidgetState.disabled)) {
@@ -103,7 +111,7 @@ class PaneHeaderActions extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (onShare != null) ...[
+            if (!compact && onShare != null) ...[
               action('Share harness', Icons.person_add_alt_1_outlined, onShare),
               const SizedBox(width: 2),
             ],
@@ -111,48 +119,80 @@ class PaneHeaderActions extends StatelessWidget {
               modelPicker!,
               const SizedBox(width: 4),
             ],
-            if (onToggleViewer != null) ...[
-              _ViewerToggle(
-                key: const ValueKey('pane-viewer-toggle'),
-                on: viewerVisible,
-                color: viewerColor ?? AppColors.text,
-                onPressed: onToggleViewer,
-              ),
-              const SizedBox(width: 2),
-            ],
-            if (onToggleComposer != null) ...[
+            if (compact)
+              _CompactPaneActions(
+                items: [
+                  (label: 'Zoom Pane', callback: onZoom),
+                  if (onToggleViewer != null)
+                    (
+                      label: viewerVisible ? 'Hide viewer' : 'Show viewer',
+                      callback: onToggleViewer,
+                    ),
+                  if (onToggleComposer != null)
+                    (
+                      label: composerVisible
+                          ? 'Hide message composer'
+                          : 'Show message composer',
+                      callback: onToggleComposer,
+                    ),
+                  if (onShare != null)
+                    (label: 'Share harness', callback: onShare),
+                  (
+                    label: terminal ? 'Restart Terminal' : 'Restart Agent',
+                    callback: onRestart,
+                  ),
+                  if (onFork != null) (label: 'Fork Agent', callback: onFork),
+                  (label: 'Close Pane', callback: onClose),
+                  (
+                    label: terminal ? 'Stop Terminal' : 'Stop Agent',
+                    callback: onDelete,
+                  ),
+                ],
+              )
+            else ...[
+              if (onToggleViewer != null) ...[
+                _ViewerToggle(
+                  key: const ValueKey('pane-viewer-toggle'),
+                  on: viewerVisible,
+                  color: viewerColor ?? AppColors.text,
+                  onPressed: onToggleViewer,
+                ),
+                const SizedBox(width: 2),
+              ],
+              if (onToggleComposer != null) ...[
+                action(
+                  composerVisible
+                      ? 'Hide message composer'
+                      : 'Show message composer',
+                  LucideIcons.keyboard,
+                  onToggleComposer,
+                ),
+                const SizedBox(width: 2),
+              ],
               action(
-                composerVisible
-                    ? 'Hide message composer'
-                    : 'Show message composer',
-                LucideIcons.keyboard,
-                onToggleComposer,
+                'Zoom Pane',
+                zoomed ? LucideIcons.minimize : LucideIcons.maximize,
+                onZoom,
               ),
               const SizedBox(width: 2),
-            ],
-            action(
-              'Zoom Pane',
-              zoomed ? LucideIcons.minimize : LucideIcons.maximize,
-              onZoom,
-            ),
-            const SizedBox(width: 2),
-            action(
-              terminal ? 'Restart Terminal' : 'Restart Harness',
-              LucideIcons.refreshCw,
-              onRestart,
-            ),
-            const SizedBox(width: 2),
-            if (onFork != null) ...[
-              action('Fork Harness', LucideIcons.gitFork, onFork),
+              action(
+                terminal ? 'Restart Terminal' : 'Restart Agent',
+                LucideIcons.refreshCw,
+                onRestart,
+              ),
               const SizedBox(width: 2),
+              if (onFork != null) ...[
+                action('Fork Agent', LucideIcons.gitFork, onFork),
+                const SizedBox(width: 2),
+              ],
+              action(
+                terminal ? 'Stop Terminal' : 'Stop Agent',
+                Icons.stop_rounded,
+                onDelete,
+              ),
+              const SizedBox(width: 2),
+              action('Close Pane', LucideIcons.x, onClose),
             ],
-            action(
-              terminal ? 'Stop Terminal' : 'Stop Harness',
-              Icons.stop_rounded,
-              onDelete,
-            ),
-            const SizedBox(width: 2),
-            action('Close Pane', LucideIcons.x, onClose),
           ],
         ),
       ),
@@ -174,6 +214,99 @@ class PaneHeaderActions extends StatelessWidget {
         ),
         controls,
       ],
+    );
+  }
+}
+
+/// A small pane keeps the same actions in a keyboard-navigable menu, leaving
+/// room for its title. Native titlebar actions dismiss this menu too.
+class _CompactPaneActions extends StatefulWidget {
+  const _CompactPaneActions({required this.items});
+  final List<({String label, VoidCallback? callback})> items;
+
+  @override
+  State<_CompactPaneActions> createState() => _CompactPaneActionsState();
+}
+
+class _CompactPaneActionsState extends State<_CompactPaneActions> {
+  final _controller = MenuController();
+  final _triggerFocus = FocusNode(debugLabel: 'Pane actions');
+  final _firstFocus = FocusNode(debugLabel: 'First pane action');
+  VoidCallback? _unregister;
+
+  @override
+  void dispose() {
+    _unregister?.call();
+    _triggerFocus.dispose();
+    _firstFocus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.items
+        .where((item) => item.callback != null)
+        .toList();
+    return MenuAnchor(
+      controller: _controller,
+      childFocusNode: _triggerFocus,
+      onOpen: () {
+        _unregister = registerTransientMenu(_controller.close);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _controller.isOpen) _firstFocus.requestFocus();
+        });
+      },
+      onClose: () {
+        _unregister?.call();
+        _unregister = null;
+      },
+      style: grid.AppMenu.style(maxHeight: double.infinity).copyWith(
+        shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(3),
+            side: BorderSide(color: AppColors.border),
+          ),
+        ),
+        padding: const WidgetStatePropertyAll(EdgeInsets.all(4)),
+      ),
+      menuChildren: [
+        for (var i = 0; i < enabled.length; i++)
+          KeymapRegion(
+            contextKind: KeymapContext.picker,
+            child: MenuItemButton(
+              focusNode: i == 0 ? _firstFocus : null,
+              onPressed: enabled[i].callback,
+              style: ButtonStyle(
+                textStyle: WidgetStatePropertyAll(boxMonoStyle(size: 12)),
+                foregroundColor: WidgetStatePropertyAll(AppColors.text),
+                minimumSize: const WidgetStatePropertyAll(Size(180, 30)),
+                shape: const WidgetStatePropertyAll(RoundedRectangleBorder()),
+              ),
+              child: Text(enabled[i].label),
+            ),
+          ),
+      ],
+      builder: (context, controller, _) => IconButton(
+        focusNode: _triggerFocus,
+        tooltip: 'Pane actions',
+        onPressed: enabled.isEmpty
+            ? null
+            : () {
+                if (controller.isOpen) {
+                  controller.close();
+                } else {
+                  controller.open();
+                }
+              },
+        icon: const Icon(Icons.more_horiz, size: 16),
+        style: IconButton.styleFrom(
+          foregroundColor: AppColors.mutedStrong,
+          fixedSize: const Size(28, 28),
+          minimumSize: const Size(28, 28),
+          padding: EdgeInsets.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+      ),
     );
   }
 }
@@ -268,7 +401,9 @@ class _ViewerToggle extends StatelessWidget {
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         visualDensity: VisualDensity.standard,
         shape: WidgetStatePropertyAll(
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+          RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(kTerminalCornerRadius),
+          ),
         ),
         overlayColor: WidgetStatePropertyAll(grid.AppSurface.hoverFill),
       ),

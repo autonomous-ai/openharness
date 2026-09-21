@@ -4,6 +4,8 @@
 // A screen that renders "nothing switched on" and "nothing spent" the same is
 // the screen that sends somebody looking for a bug in the scanners.
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/settings/sections/usage_detail_panels.dart';
@@ -13,11 +15,15 @@ import 'package:harness/settings/sections/usage_section.dart';
 import 'package:harness/stats/harness_stats.dart';
 import 'package:harness/shared/theme/app_theme.dart';
 import 'package:harness/shared/widgets/app_menu.dart';
+import 'package:harness/shared/widgets/app_select_field.dart';
 import 'package:harness/usage/ledger/ledger_scanner.dart';
 import 'package:harness/core/snapshot_store.dart';
 import 'package:harness/usage/ledger/ledger_types.dart';
 import 'package:harness/usage/ledger/usage_ledger_controller.dart';
 import 'package:harness/usage/ledger/usage_ledger_store.dart';
+import 'package:harness/usage/ledger/usage_report.dart';
+
+import 'support/real_fonts.dart';
 
 class _MemorySettings implements LocalKeyValueStore {
   final values = <String, String>{};
@@ -88,6 +94,8 @@ Future<void> _pickLens(WidgetTester tester, String label) async {
 }
 
 void main() {
+  setUpAll(loadRealFonts);
+
   /// A controller over fake scanners and in-memory storage — never a real
   /// `~/.claude` or a real `~/.harness`, and never real disk.
   UsageLedgerController controllerWith(
@@ -113,14 +121,21 @@ void main() {
     WidgetTester tester,
     UsageLedgerController controller, {
     HarnessStats? stats,
+    Size size = const Size(1000, 900),
+    double textScale = 1,
   }) async {
-    tester.view.physicalSize = const Size(1000 * 2, 900 * 2);
+    tester.view.physicalSize = size * 2;
     tester.view.devicePixelRatio = 2;
     addTearDown(tester.view.reset);
     addTearDown(controller.dispose);
     await tester.pumpWidget(
       MaterialApp(
         theme: buildAppTheme(brightness: Brightness.light),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: TextScaler.linear(textScale)),
+          child: child!,
+        ),
         home: Builder(
           builder: (context) {
             AppTheme.brightness.value = Brightness.light;
@@ -141,6 +156,63 @@ void main() {
     );
     await tester.pumpAndSettle();
   }
+
+  testWidgets(
+    'overview and provider ranges stay readable and keyboard operable at large text',
+    (tester) async {
+      final controller = controllerWith(const {});
+      await controller.load();
+      await controller.storeFor(LedgerProvider.claude).setEnabled(true);
+      await pumpUsage(
+        tester,
+        controller,
+        size: const Size(620, 800),
+        textScale: 1.8,
+      );
+
+      for (final provider in [null, 'Claude']) {
+        if (provider != null) {
+          await tester.scrollUntilVisible(_lensField, -250);
+          await _pickLens(tester, provider);
+        }
+        await tester.ensureVisible(_rangeField);
+        await tester.pumpAndSettle();
+        final label = tester.renderObject<RenderParagraph>(
+          find.descendant(of: _rangeField, matching: find.text('Last 30 days')),
+        );
+        expect(
+          label.getMaxIntrinsicWidth(double.infinity),
+          lessThanOrEqualTo(label.size.width + 0.1),
+        );
+        final anchor = tester.widget<InkWell>(
+          find.descendant(of: _rangeField, matching: find.byType(InkWell)),
+        );
+        anchor.focusNode!.requestFocus();
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<AppSelectField<UsageRange>>(_rangeField).value,
+          UsageRange.d90,
+        );
+        expect(anchor.focusNode!.hasPrimaryFocus, isTrue);
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(find.byType(AppMenuItem), findsNothing);
+        expect(
+          tester.widget<AppSelectField<UsageRange>>(_rangeField).value,
+          UsageRange.d90,
+        );
+        expect(anchor.focusNode!.hasPrimaryFocus, isTrue);
+        expect(tester.takeException(), isNull);
+      }
+    },
+  );
 
   testWidgets('rests with nothing switched on, and offers the switches', (
     tester,
@@ -539,6 +611,39 @@ void main() {
       find.textContaining('some model prices are unavailable'),
       findsOneWidget,
     );
+  });
+
+  testWidgets(
+    'an incomplete empty scan does not claim zero sessions or tokens',
+    (tester) async {
+      final controller = controllerWith({
+        LedgerProvider.claude: const LedgerScanResult(
+          status: LedgerStatus.partial,
+          message:
+              'Some transcripts could not be read. Figures are incomplete.',
+        ),
+      });
+      await controller.load();
+      await controller.storeFor(LedgerProvider.claude).setEnabled(true);
+      await pumpUsage(tester, controller);
+      expect(find.text('Incomplete'), findsOneWidget);
+      expect(find.text('No figures available.'), findsOneWidget);
+      expect(find.text('0 sessions'), findsNothing);
+      expect(find.text('0 tokens'), findsNothing);
+      expect(find.textContaining('0 with data'), findsNothing);
+    },
+  );
+
+  testWidgets('a complete empty scan can report zero sessions', (tester) async {
+    final controller = controllerWith({
+      LedgerProvider.claude: const LedgerScanResult(),
+    });
+    await controller.load();
+    await controller.storeFor(LedgerProvider.claude).setEnabled(true);
+    await pumpUsage(tester, controller);
+    expect(find.text('0 sessions'), findsOneWidget);
+    expect(find.text('0 tokens'), findsOneWidget);
+    expect(find.text('Incomplete'), findsNothing);
   });
 
   testWidgets('an absent CLI reads as not found, never as nothing spent', (

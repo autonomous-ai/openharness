@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -22,6 +23,9 @@ class EnvironmentSetupScreen extends StatefulWidget {
 
 class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
   String? _copied;
+  String? _copyError;
+  var _copyRevision = 0;
+  Timer? _copyTimer;
   final _scroll = ScrollController();
   final _primaryFocus = FocusNode(debugLabel: 'Setup action');
   final _bodyFocus = FocusNode(
@@ -35,6 +39,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
 
   @override
   void dispose() {
+    _copyTimer?.cancel();
     _scroll.dispose();
     _primaryFocus.dispose();
     _bodyFocus.dispose();
@@ -43,12 +48,28 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
   }
 
   Future<void> _copy(String value) async {
-    await Clipboard.setData(ClipboardData(text: value));
-    if (!mounted) return;
-    setState(() => _copied = value);
-    Future<void>.delayed(const Duration(milliseconds: 1400), () {
-      if (mounted && _copied == value) setState(() => _copied = null);
-    });
+    final revision = ++_copyRevision;
+    _copyTimer?.cancel();
+    try {
+      await Clipboard.setData(ClipboardData(text: value));
+      if (!mounted || revision != _copyRevision) return;
+      setState(() {
+        _copied = value;
+        _copyError = null;
+      });
+      _copyTimer = Timer(const Duration(milliseconds: 1400), () {
+        if (mounted && revision == _copyRevision) {
+          setState(() => _copied = null);
+        }
+      });
+    } catch (_) {
+      if (!mounted || revision != _copyRevision) return;
+      setState(() {
+        _copied = null;
+        _copyError =
+            'Could not copy. Select the text to copy it, or try again.';
+      });
+    }
   }
 
   @override
@@ -183,8 +204,8 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
           count == 0
               ? 'Your tools are ready. Verify them to continue.'
               : count == 1
-              ? 'Install this tool, then sign in to start your first agent.'
-              : 'Install these $countLabel, then sign in to start your first agent.',
+              ? 'Install this tool, then sign in to start your first harness.'
+              : 'Install these $countLabel, then sign in to start your first harness.',
         ),
         Row(
           children: [
@@ -365,6 +386,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
               leading: CircleAvatar(
                 radius: 14,
                 backgroundColor: AppColors.hover,
+                foregroundColor: AppColors.text,
                 child: Text(
                   '${index + 1}',
                   style: const TextStyle(fontSize: 11),
@@ -554,7 +576,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
             : widget.notifier.startEnvironmentSetup;
       case EnvironmentSetupPhase.failed:
         label = 'Retry';
-        action = manual
+        action = manual || !widget.notifier.environmentInstallRequested
             ? widget.notifier.retryEnvironmentSetup
             : widget.notifier.startEnvironmentSetup;
       case EnvironmentSetupPhase.ready:
@@ -607,9 +629,15 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
           ),
       ],
     );
-    final next = Text(
-      'Next: sign in and start a harness.',
-      style: TextStyle(color: AppColors.textSoft, fontSize: 11),
+    final next = Semantics(
+      liveRegion: _copyError != null,
+      child: Text(
+        _copyError ?? 'Next: sign in and start a harness.',
+        style: TextStyle(
+          color: _copyError == null ? AppColors.textSoft : AppColors.danger,
+          fontSize: 11,
+        ),
+      ),
     );
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),

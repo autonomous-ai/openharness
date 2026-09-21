@@ -1,7 +1,9 @@
 import '../core/host_platform.dart';
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../core/harness_cli_runner.dart';
 
@@ -189,10 +191,15 @@ class EnvironmentReadiness {
     },
   );
 
-  bool get isReady => steps.values.every(
-    (status) =>
-        status == EnvironmentStepStatus.ready ||
-        status == EnvironmentStepStatus.notApplicable,
+  bool get isReady =>
+      phase == EnvironmentSetupPhase.ready &&
+      failure == null &&
+      _requiredStepsReady;
+
+  bool get _requiredStepsReady => EnvironmentStep.values.every(
+    (step) =>
+        steps[step] == EnvironmentStepStatus.ready ||
+        steps[step] == EnvironmentStepStatus.notApplicable,
   );
 
   /// Every step but the Harness CLI itself is satisfied — the point at which
@@ -265,6 +272,15 @@ typedef ProcessStarter = Future<Process> Function(
   Map<String, String>? environment,
 });
 
+class _EnvironmentProbeTimeout implements Exception {
+  const _EnvironmentProbeTimeout(this.label, this.step);
+  final String label;
+  final EnvironmentStep? step;
+
+  @override
+  String toString() => 'The check for $label did not finish.';
+}
+
 /// The progress callback `ensureReady` builds for itself, named so the per-host paths below can be
 /// separate methods rather than one very long function.
 typedef EmitStep = void Function({
@@ -328,6 +344,7 @@ class EnvironmentProvisioner {
   final bool _isLinux;
   final bool _isWindows;
   final Map<String, String> _platformEnvironment;
+  final Duration probeTimeout;
 
   EnvironmentProvisioner({
     Directory? harnessHome,
@@ -338,6 +355,7 @@ class EnvironmentProvisioner {
     bool? isLinux,
     bool? isWindows,
     Map<String, String>? platformEnvironment,
+    this.probeTimeout = const Duration(seconds: 10),
   }) : harnessHome = harnessHome ?? Directory(_defaultHarnessHome()),
        _run = run ?? _defaultRun,
        _start = start ?? (run == null ? _defaultStart : null),
@@ -472,112 +490,121 @@ class EnvironmentProvisioner {
       return probe;
     }
 
-    final previousTerminalLog = state.terminalLogPath;
-    var previousTerminalLogText = '';
-    EnvironmentTerminalSetup? completedTerminalSetup;
-    if (previousTerminalLog != null) {
-      try {
-        final text = await File(previousTerminalLog).readAsString();
-        previousTerminalLogText = text;
-        final snapshot = 'Terminal log:\n${text.trim()}';
-        if (text.trim().isNotEmpty && !state.output.contains(snapshot)) {
-          emit(output: snapshot);
+    try {
+      final previousTerminalLog = state.terminalLogPath;
+      var previousTerminalLogText = '';
+      EnvironmentTerminalSetup? completedTerminalSetup;
+      if (previousTerminalLog != null) {
+        try {
+          final recent = await _readTerminalLogTail(previousTerminalLog);
+          previousTerminalLogText = recent.text;
+          final snapshot =
+              'Terminal log:\n'
+              '${recent.truncated ? '[Earlier output omitted. Full log: $previousTerminalLog]\n' : ''}'
+              '${recent.text.trim()}';
+          if (recent.text.trim().isNotEmpty &&
+              !state.output.contains(snapshot)) {
+            emit(output: snapshot);
+          }
+        } on FileSystemException {
+          // The terminal may not have created its log yet.
         }
-      } on FileSystemException {
-        // The terminal may not have created its log yet.
       }
-    }
-    final previousTerminalResult = state.terminalResultPath;
-    var terminalResultPending = false;
-    if (previousTerminalResult != null) {
-      if (!await File(previousTerminalResult).exists()) {
+      final previousTerminalResult = state.terminalResultPath;
+      var terminalResultPending = false;
+      if (previousTerminalResult != null) {
+        // Missing, unreadable, or partially written results are still pending.
+        // Only a complete exit code can finish the handoff; live probes below
+        // can independently establish that the required tools are ready.
         terminalResultPending = true;
-        // `terminal.exit` is a handoff hint, not the source of truth. Some
-        // Linux terminal emulators keep the launched shell/window alive after
-        // apt has already finished, and an interrupted EXIT trap can omit the
-        // file entirely. Continue into the read-only command probes below so
-        // the 5-second poll (and the user's Recheck button) can observe that
-        // the host is actually ready instead of waiting forever for a file a
-        // cold app launch does not need either.
-        emit(
-          message: state.message ?? 'Complete the visible prompts in Terminal.',
-          phase: EnvironmentSetupPhase.waitingForTerminal,
-        );
-      }
-      try {
-        final exitCode = int.tryParse(
-          (await File(previousTerminalResult).readAsString()).trim(),
-        );
-        if (exitCode != null && exitCode != 0) {
-          // The only Terminal handoff left is Linux's apt transaction.
-          final clipboardFailed =
-              state.steps[EnvironmentStep.clipboard] ==
-              EnvironmentStepStatus.needsTerminal;
-          final tmuxFailed =
-              state.steps[EnvironmentStep.tmux] ==
-              EnvironmentStepStatus.needsTerminal;
-          if (clipboardFailed) {
-            emit(
-              step: EnvironmentStep.clipboard,
-              status: EnvironmentStepStatus.failed,
-            );
-          }
-          if (tmuxFailed) {
-            emit(
-              step: EnvironmentStep.tmux,
-              status: EnvironmentStepStatus.failed,
-            );
-          }
-          final classifiedFailure = _classifiedLinuxPackageFailure(
-            exitCode,
-            previousTerminalLogText,
-          );
+        if (!await File(previousTerminalResult).exists()) {
+          // `terminal.exit` is a handoff hint, not the source of truth. Some
+          // Linux terminal emulators keep the launched shell/window alive after
+          // apt has already finished, and an interrupted EXIT trap can omit the
+          // file entirely. Continue into the read-only command probes below so
+          // the 5-second poll (and the user's Recheck button) can observe that
+          // the host is actually ready instead of waiting forever for a file a
+          // cold app launch does not need either.
           emit(
-            message: 'The Terminal setup exited with code $exitCode.',
-            phase: EnvironmentSetupPhase.failed,
-            failure: EnvironmentFailure(
-              step: clipboardFailed
-                  ? EnvironmentStep.clipboard
-                  : tmuxFailed
-                  ? EnvironmentStep.tmux
-                  : null,
-              title:
-                  classifiedFailure?.title ??
-                  'System package installation failed',
-              detail:
-                  classifiedFailure?.detail ??
-                  'Terminal exited with code $exitCode. Review the complete log below.',
-              command:
-                  classifiedFailure?.command ??
-                  await _linuxHostManualCommand(_aptPackagesOf(state.plan)),
-              exitCode: exitCode,
-            ),
+            message:
+                state.message ?? 'Complete the visible prompts in Terminal.',
+            phase: EnvironmentSetupPhase.waitingForTerminal,
           );
+        }
+        try {
+          final exitCode = int.tryParse(
+            (await File(previousTerminalResult).readAsString()).trim(),
+          );
+          if (exitCode != null) terminalResultPending = false;
+          if (exitCode != null && exitCode != 0) {
+            // The only Terminal handoff left is Linux's apt transaction.
+            final clipboardFailed =
+                state.steps[EnvironmentStep.clipboard] ==
+                EnvironmentStepStatus.needsTerminal;
+            final tmuxFailed =
+                state.steps[EnvironmentStep.tmux] ==
+                EnvironmentStepStatus.needsTerminal;
+            if (clipboardFailed) {
+              emit(
+                step: EnvironmentStep.clipboard,
+                status: EnvironmentStepStatus.failed,
+              );
+            }
+            if (tmuxFailed) {
+              emit(
+                step: EnvironmentStep.tmux,
+                status: EnvironmentStepStatus.failed,
+              );
+            }
+            final classifiedFailure = _classifiedLinuxPackageFailure(
+              exitCode,
+              previousTerminalLogText,
+            );
+            emit(
+              message: 'The Terminal setup exited with code $exitCode.',
+              phase: EnvironmentSetupPhase.failed,
+              failure: EnvironmentFailure(
+                step: clipboardFailed
+                    ? EnvironmentStep.clipboard
+                    : tmuxFailed
+                    ? EnvironmentStep.tmux
+                    : null,
+                title:
+                    classifiedFailure?.title ??
+                    'System package installation failed',
+                detail:
+                    classifiedFailure?.detail ??
+                    'Terminal exited with code $exitCode. Review the setup details below.',
+                command:
+                    classifiedFailure?.command ??
+                    await _linuxHostManualCommand(_aptPackagesOf(state.plan)),
+                exitCode: exitCode,
+              ),
+            );
+            return state;
+          }
+          if (exitCode == 0) completedTerminalSetup = state.terminalSetup;
+        } on FileSystemException {
+          // The result can disappear between exists() and readAsString(). The
+          // live dependency probes below remain the authoritative fallback.
+        }
+      }
+      onProgress(state);
+
+      if (!_isMacOS && !_isLinux) {
+        if (_isWindows) {
+          await _verifyWindows(emit);
           return state;
         }
-        if (exitCode == 0) completedTerminalSetup = state.terminalSetup;
-      } on FileSystemException {
-        // The result can disappear between exists() and readAsString(). The
-        // live dependency probes below remain the authoritative fallback.
-      }
-    }
-    onProgress(state);
-
-    if (!_isMacOS && !_isLinux) {
-      if (_isWindows) {
-        await _verifyWindows(emit);
+        emit(
+          step: EnvironmentStep.harness,
+          status: EnvironmentStepStatus.failed,
+          message: 'Automatic environment setup is currently available on macOS and Linux only.',
+          phase: EnvironmentSetupPhase.failed,
+        );
         return state;
       }
-      emit(
-        step: EnvironmentStep.harness,
-        status: EnvironmentStepStatus.failed,
-        message: 'Automatic environment setup is currently available on macOS and Linux only.',
-        phase: EnvironmentSetupPhase.failed,
-      );
-      return state;
-    }
 
-    try {
       // The one thing every step needs and no plan can install.
       if (!await _hasWritableHome()) {
         const failure = EnvironmentFailure(
@@ -593,7 +620,7 @@ class EnvironmentProvisioner {
       }
 
       var probe = await probeAndReport();
-      if (state.isReady) {
+      if (state._requiredStepsReady) {
         emit(
           message: 'All required tools passed verification.',
           phase: EnvironmentSetupPhase.ready,
@@ -807,7 +834,7 @@ class EnvironmentProvisioner {
         phase: EnvironmentSetupPhase.verifying,
       );
       await probeAndReport();
-      if (!state.isReady) {
+      if (!state._requiredStepsReady) {
         final failed = state.steps.entries
             .where((entry) => entry.value == EnvironmentStepStatus.failed)
             .map((entry) => entry.key)
@@ -819,7 +846,9 @@ class EnvironmentProvisioner {
       emit(message: 'Environment ready.', phase: EnvironmentSetupPhase.ready);
       return state;
     } catch (error) {
+      final probeTimeout = error is _EnvironmentProbeTimeout ? error : null;
       final failed =
+          probeTimeout?.step ??
           state.steps.entries
               .where((entry) => entry.value == EnvironmentStepStatus.running)
               .map((entry) => entry.key)
@@ -831,16 +860,63 @@ class EnvironmentProvisioner {
       emit(
         step: failed,
         status: EnvironmentStepStatus.failed,
-        message: 'Environment setup failed: $error',
+        message: install
+            ? 'Environment setup failed: $error'
+            : 'Computer check failed: $error',
         phase: EnvironmentSetupPhase.failed,
         failure: EnvironmentFailure(
           step: failed,
-          title: 'Setup could not finish',
-          detail: '$error',
-          command: failed == null ? null : _manualCommandFor(failed),
+          title: probeTimeout != null
+              ? 'Checking this computer took too long'
+              : install
+              ? 'Setup could not finish'
+              : 'Could not check this computer',
+          detail: probeTimeout != null
+              ? '$error Retry to check again.'
+              : '$error',
+          command: probeTimeout != null || !install || failed == null
+              ? null
+              : _manualCommandFor(failed),
         ),
       );
       return state;
+    }
+  }
+
+  /// Polling a long-running installer must not reread and lay out its complete
+  /// log every five seconds. Preserve the original file for troubleshooting.
+  Future<({String text, bool truncated})> _readTerminalLogTail(
+    String path,
+  ) async {
+    const maxBytes = 64 * 1024;
+    const maxLines = 200;
+    final file = await File(path).open();
+    try {
+      final length = await file.length();
+      final offset = length > maxBytes ? length - maxBytes : 0;
+      await file.setPosition(offset);
+      var text = utf8.decode(
+        await file.read(length - offset),
+        allowMalformed: true,
+      );
+      var truncated = offset > 0;
+      if (truncated) {
+        // The byte limit may cut a UTF-8 character or a line. Prefer complete
+        // lines, but keep the tail if the whole chunk is one long line.
+        final firstNewline = text.indexOf('\n');
+        if (firstNewline >= 0 &&
+            text.substring(firstNewline + 1).trim().isNotEmpty) {
+          text = text.substring(firstNewline + 1);
+        }
+      }
+      final lines = const LineSplitter().convert(text);
+      if (lines.length > maxLines) {
+        text = lines.skip(lines.length - maxLines).join('\n');
+        truncated = true;
+      }
+      return (text: text, truncated: truncated);
+    } finally {
+      await file.close();
     }
   }
 
@@ -944,7 +1020,7 @@ class EnvironmentProvisioner {
     try {
       final runner = HarnessCliRunner(
         harnessHome: harnessHome,
-        runProcess: _run,
+        runProcess: _probeHarnessCommand,
       );
       final status = await runner.run(['auth', 'status', '--json']);
       harnessReady =
@@ -981,20 +1057,27 @@ class EnvironmentProvisioner {
   }
 
   Future<bool> _hasWritableHome() async {
-    final writable = await _shell('test -w "\$HOME"');
+    final writable = await _probeShell(
+      'test -w "\$HOME"',
+      'your home directory',
+    );
     return writable.exitCode == 0;
   }
 
   Future<bool> _hasCommand(String command) async {
-    final probe = await _shell('command -v $command >/dev/null 2>&1');
+    final probe = await _probeShell(
+      'command -v $command >/dev/null 2>&1',
+      command,
+    );
     return probe.exitCode == 0;
   }
 
   /// All of [commands] resolve. One shell for the lot: `command -v a b`
   /// answers "any" in bash, so it is a loop rather than a list.
   Future<bool> _hasCommands(Iterable<String> commands) async {
-    final probe = await _shell(
+    final probe = await _probeShell(
       'for c in ${commands.join(' ')}; do command -v "\$c" >/dev/null 2>&1 || exit 1; done',
+      commands.join(', '),
     );
     return probe.exitCode == 0;
   }
@@ -1032,15 +1115,19 @@ class EnvironmentProvisioner {
       plan.expand((item) => item.packages).toSet().toList();
 
   Future<bool> _hasAptGet() async {
-    final result = await _shell('command -v apt-get >/dev/null 2>&1');
+    final result = await _probeShell(
+      'command -v apt-get >/dev/null 2>&1',
+      'apt-get',
+    );
     return result.exitCode == 0;
   }
 
   Future<bool> _canInstallAptUnattended() async {
-    final user = await _shell('id -u');
+    final user = await _probeShell('id -u', 'your user account');
     if (user.exitCode == 0 && '${user.stdout}'.trim() == '0') return true;
-    final sudo = await _shell(
+    final sudo = await _probeShell(
       'command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1',
+      'sudo access',
     );
     return sudo.exitCode == 0;
   }
@@ -1195,14 +1282,22 @@ fi''';
     if (nodePath.isEmpty || !File(nodePath).existsSync()) return false;
     final runtimeRoot = '${harnessHome.absolute.path}/runtime/';
     if (!File(nodePath).absolute.path.startsWith(runtimeRoot)) return false;
-    final node = await _run(nodePath, ['--version']);
+    final node = await _runProbe(
+      nodePath,
+      ['--version'],
+      label: 'the managed Node runtime',
+      step: EnvironmentStep.harness,
+    );
     if (node.exitCode != 0) return false;
     final match = RegExp(r'^v?(\d+)').firstMatch('${node.stdout}'.trim());
     if (match == null || int.parse(match.group(1)!) < 20) return false;
     try {
       final cli = File('${harnessHome.path}/cli/cli.js');
       if (!await cli.exists()) return false;
-      final version = await _run(nodePath, [cli.path, 'version']);
+      final version = await _probeHarnessCommand(nodePath, [
+        cli.path,
+        'version',
+      ]);
       return version.exitCode == 0;
     } on ProcessException {
       return false;
@@ -1212,7 +1307,10 @@ fi''';
   }
 
   Future<void> _ensureHarness(void Function(String line) onOutput) async {
-    final runner = HarnessCliRunner(harnessHome: harnessHome, runProcess: _run);
+    final runner = HarnessCliRunner(
+      harnessHome: harnessHome,
+      runProcess: _probeHarnessCommand,
+    );
     if (await _hasHarness()) return;
     // No interpreter is named here. install.sh provisions the same
     // checksum-verified Node under `~/.harness/runtime` when the computer has
@@ -1266,12 +1364,20 @@ fi''';
   }
 
   Future<bool> _hasTmux() async {
-    final result = await _shell('command -v tmux >/dev/null && tmux -V');
+    final result = await _probeShell(
+      'command -v tmux >/dev/null && tmux -V',
+      'tmux',
+      step: EnvironmentStep.tmux,
+    );
     return result.exitCode == 0;
   }
 
   Future<bool> _hasHomebrew() async {
-    final result = await _shell('command -v brew >/dev/null && brew --version');
+    final result = await _probeShell(
+      'command -v brew >/dev/null && brew --version',
+      'Homebrew',
+      step: EnvironmentStep.tmux,
+    );
     return result.exitCode == 0;
   }
 
@@ -1350,28 +1456,176 @@ fi
     return script;
   }
 
+  List<String> _shellArguments(String command) => [
+    '-l',
+    '-c',
+    // The Homebrew prefixes are named rather than trusted to be on PATH:
+    // `-l` is a LOGIN shell but not an interactive one, so it reads
+    // `~/.zprofile` and never `~/.zshrc`
+    // — which is where `brew shellenv` sits on plenty of machines. A Finder
+    // launch then starts from launchd's bare `/usr/bin:/bin:/usr/sbin:/sbin`
+    // and this probe reports tmux missing on a computer that has it, then
+    // "installs" it through whichever `brew` it can see. Measured: an Apple
+    // Silicon Mac with both Homebrews picked up Intel `/usr/local/bin/brew`
+    // and built openssl@3 from source under Rosetta, holding the boot open
+    // on "Checking tmux…" for as long as that took. Apple Silicon first, so
+    // a machine with both never installs through the Intel one. The CLI
+    // closed the same gap in `lib/tmuxOnPath.ts`.
+    'export PATH="\$HOME/.local/bin${_isMacOS ? ':/opt/homebrew/bin:/usr/local/bin' : ''}:\$PATH"; $command',
+  ];
+
+  Future<ProcessResult> _probeShell(
+    String command,
+    String label, {
+    EnvironmentStep? step,
+  }) => _runProbe(
+    _isMacOS ? '/bin/zsh' : '/bin/bash',
+    _shellArguments(command),
+    label: label,
+    step: step,
+  );
+
+  Future<ProcessResult> _probeHarnessCommand(
+    String executable,
+    List<String> arguments, {
+    Map<String, String>? environment,
+  }) => _runProbe(
+    executable,
+    arguments,
+    environment: environment,
+    label: 'the Harness CLI',
+    step: EnvironmentStep.harness,
+  );
+
+  /// A check owns its process and waits for at most one short deadline,
+  /// including process startup and output-pipe closure. Installers use the
+  /// separate streaming path: a slow version check must never look like a
+  /// missing tool or leave another check running every time Retry is pressed.
+  Future<ProcessResult> _runProbe(
+    String executable,
+    List<String> arguments, {
+    required String label,
+    EnvironmentStep? step,
+    Map<String, String>? environment,
+  }) async {
+    final timeout = _EnvironmentProbeTimeout(label, step);
+    final start = _start;
+    if (start == null) {
+      // Existing run-only test doubles do not own operating-system processes.
+      return _run(
+        executable,
+        arguments,
+        environment: environment,
+      ).timeout(probeTimeout, onTimeout: () => throw timeout);
+    }
+    final result = Completer<ProcessResult>();
+    Process? process;
+    StreamSubscription<List<int>>? output;
+    StreamSubscription<List<int>>? errors;
+    final stdout = BytesBuilder();
+    final stderr = BytesBuilder();
+    int? exitCode;
+    var exited = false;
+    var outputClosed = false;
+    var errorsClosed = false;
+
+    void fail(Object error, StackTrace stack) {
+      if (!result.isCompleted) result.completeError(error, stack);
+    }
+
+    void collect(BytesBuilder buffer, List<int> bytes) {
+      const maxOutputBytes = 64 * 1024;
+      final available = maxOutputBytes - buffer.length;
+      if (available > 0) {
+        buffer.add(
+          bytes.length > available ? bytes.sublist(0, available) : bytes,
+        );
+      }
+    }
+
+    void finish() {
+      if (result.isCompleted || !exited || !outputClosed || !errorsClosed) {
+        return;
+      }
+      result.complete(
+        ProcessResult(
+          process!.pid,
+          exitCode!,
+          utf8.decode(stdout.takeBytes(), allowMalformed: true),
+          utf8.decode(stderr.takeBytes(), allowMalformed: true),
+        ),
+      );
+    }
+
+    final timer = Timer(probeTimeout, () => fail(timeout, StackTrace.current));
+    unawaited(() async {
+      try {
+        final child = await start(
+          executable,
+          arguments,
+          environment: environment,
+        );
+        // A late launch must also be stopped; the timeout may have already
+        // returned control to the user and allowed a replacement check.
+        if (result.isCompleted) {
+          child.kill(ProcessSignal.sigkill);
+          await child.stdout.listen(null, onError: (Object _) {}).cancel();
+          await child.stderr.listen(null, onError: (Object _) {}).cancel();
+          await child.stdin.close();
+          return;
+        }
+        process = child;
+        // Probes never ask for input, including through shell startup files.
+        unawaited(
+          child.stdin.close().then<void>((_) {}, onError: (Object _) {}),
+        );
+        output = child.stdout.listen(
+          (bytes) => collect(stdout, bytes),
+          onError: fail,
+          onDone: () {
+            outputClosed = true;
+            finish();
+          },
+        );
+        errors = child.stderr.listen(
+          (bytes) => collect(stderr, bytes),
+          onError: fail,
+          onDone: () {
+            errorsClosed = true;
+            finish();
+          },
+        );
+        unawaited(
+          child.exitCode.then<void>((value) {
+            exited = true;
+            exitCode = value;
+            finish();
+          }, onError: fail),
+        );
+      } catch (error, stack) {
+        fail(error, stack);
+      }
+    }());
+    try {
+      return await result.future;
+    } finally {
+      timer.cancel();
+      if (!exited) process?.kill(ProcessSignal.sigkill);
+      await output?.cancel();
+      await errors?.cancel();
+    }
+  }
+
   Future<ProcessResult> _shell(
     String command, {
     Map<String, String>? environment,
     Duration? timeout,
   }) {
-    final run = _run(_isMacOS ? '/bin/zsh' : '/bin/bash', [
-      '-l',
-      '-c',
-      // The Homebrew prefixes are named rather than trusted to be on PATH:
-      // `-l` is a LOGIN shell but not an interactive one, so it reads
-      // `~/.zprofile` and never `~/.zshrc`
-      // — which is where `brew shellenv` sits on plenty of machines. A Finder
-      // launch then starts from launchd's bare `/usr/bin:/bin:/usr/sbin:/sbin`
-      // and this probe reports tmux missing on a computer that has it, then
-      // "installs" it through whichever `brew` it can see. Measured: an Apple
-      // Silicon Mac with both Homebrews picked up Intel `/usr/local/bin/brew`
-      // and built openssl@3 from source under Rosetta, holding the boot open
-      // on "Checking tmux…" for as long as that took. Apple Silicon first, so
-      // a machine with both never installs through the Intel one. The CLI
-      // closed the same gap in `lib/tmuxOnPath.ts`.
-      'export PATH="\$HOME/.local/bin${_isMacOS ? ':/opt/homebrew/bin:/usr/local/bin' : ''}:\$PATH"; $command',
-    ], environment: environment);
+    final run = _run(
+      _isMacOS ? '/bin/zsh' : '/bin/bash',
+      _shellArguments(command),
+      environment: environment,
+    );
     if (timeout == null) return run;
     // The child keeps running — Process.run gives us no handle to kill. That is
     // the intent: a slow install finishes in the background and the next launch
@@ -1388,8 +1642,6 @@ fi
     Duration? timeout,
   }) async {
     final shell = _isMacOS ? '/bin/zsh' : '/bin/bash';
-    final wrapped =
-        'export PATH="\$HOME/.local/bin${_isMacOS ? ':/opt/homebrew/bin:/usr/local/bin' : ''}:\$PATH"; $command';
     if (_start == null) {
       final result = await _shell(command, timeout: timeout);
       for (final line in '${result.stdout}\n${result.stderr}'.split('\n')) {
@@ -1398,7 +1650,7 @@ fi
       return result;
     }
 
-    final process = await _start(shell, ['-l', '-c', wrapped]);
+    final process = await _start(shell, _shellArguments(command));
     final stdoutLines = <String>[];
     final stderrLines = <String>[];
     final stdoutSubscription = process.stdout

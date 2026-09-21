@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shortcuts/keymap_commands.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
-import 'package:harness/orchestrator/orchestrator_launcher.dart';
 
 import 'keymap_runtime_test.dart' show native;
 import 'swarm_interactions_test.dart' show chord;
@@ -43,12 +42,11 @@ void main() {
           isFalse,
         );
         await chord(tester, LogicalKeyboardKey.keyP);
-        expect(find.byType(OrchestratorLauncher), findsOneWidget);
-        expect(jumpField, findsNothing);
+        expect(jumpField, findsOneWidget);
         expect(app.swarms, [original]);
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
-        expect(find.byType(OrchestratorLauncher), findsNothing);
+        expect(jumpField, findsNothing);
         if (nativeTabs) {
           await native(tester, 'jump');
           expect(jumpField, findsNothing);
@@ -59,19 +57,16 @@ void main() {
           await tester.tap(find.byKey(const ValueKey('swarm-new-tab-button')));
           await tester.pump();
         }
-        final opened = app.activeSwarm;
-        expect(opened, isNot(same(original)));
-        expect(opened.name, 'New Tab');
-        expect(opened.panes, isEmpty);
+        expect(app.activeSwarm, same(original));
         expect(find.byType(AlertDialog), findsNothing);
-        await chord(tester, LogicalKeyboardKey.keyO);
         final field = find.byKey(const ValueKey('swarm-search-input'));
         expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
         await tester.enterText(field, 'Agent 0');
         await tester.pump();
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
-        expect(app.activeSwarm, same(opened));
+        final opened = app.activeSwarm;
+        expect(opened, isNot(same(original)));
         expect(opened.panes, [pane]);
         expect(original.panes, [pane]);
         expect(app.focusedPane, same(pane));
@@ -85,7 +80,7 @@ void main() {
     );
   }
 
-  testWidgets('command search stays commands-only and can open New Harness', (
+  testWidgets('command prefix switches lists and can open New Harness', (
     tester,
   ) async {
     final app = createApp();
@@ -94,7 +89,7 @@ void main() {
     await mount(tester, app);
     await chord(tester, LogicalKeyboardKey.keyP, shift: true);
     final field = find.byKey(const ValueKey('swarm-search-input'));
-    for (final query in ['', 'Agent 0', '> ', 'new']) {
+    for (final query in ['> ', '> Agent 0', '>', '> new']) {
       await tester.enterText(field, query);
       await tester.pump();
       final search = tester
@@ -109,13 +104,32 @@ void main() {
       );
       expect(find.byKey(const ValueKey('swarm-search-preview')), findsNothing);
     }
+    await tester.enterText(field, '');
+    await tester.pump();
+    final agents = tester
+        .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+        .search;
+    expect(agents.isCommandMode, isFalse);
+    expect(
+      agents.rows
+          .where((row) => !row.isCreate)
+          .every((row) => row.agentId != null),
+      isTrue,
+    );
     expect(harnessCommandById['agent.new']!.label, 'New Harness');
+    await tester.enterText(field, '> new');
+    await tester.pump();
     await tester.tap(find.byKey(const ValueKey('command:swarm.new')));
     await tester.pump();
-    expect(app.activeSwarm.name, 'New Tab');
-    expect(app.panes, isEmpty);
+    expect(app.panes, [pane]);
+    expect(app.swarms, hasLength(1));
     expect(app.allPanes, contains(pane));
-    expect(find.byKey(const ValueKey('harness-start-search')), findsOneWidget);
+    expect(jumpField, findsOneWidget);
+    final search = tester
+        .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+        .search;
+    expect(search.isCommandMode, isFalse);
+    expect(search.selected!.isCreate, isTrue);
     expect(frames, isEmpty);
     await tester.pumpWidget(const SizedBox());
     app.dispose();

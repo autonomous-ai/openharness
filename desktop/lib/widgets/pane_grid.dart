@@ -10,7 +10,7 @@ import 'window_chrome.dart';
 
 import '../clipboard/image_bytes.dart';
 import '../core/dsh_catalog.dart' show DshEntry;
-import '../core/models.dart' show Agent;
+import '../core/models.dart' show Agent, kUntitledPane;
 import '../clipboard/native_clipboard.dart';
 import '../shared/theme/app_theme.dart' as grid;
 // `hide TerminalKey`: this file's own shortcut-label class, unused here, collides with xterm's
@@ -33,6 +33,7 @@ import 'restart_agent_action.dart';
 import 'terminal_panel.dart';
 import 'web_pane_panel.dart';
 import 'pane_resize_handle.dart';
+import 'box_chrome.dart';
 import 'pane_split_edges.dart';
 
 /// Terminal views arranged by the chosen preset. Swarms keep each view under
@@ -568,18 +569,44 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
         right: 24,
         child: IgnorePointer(
           child: Center(
-            child: Container(
+            child: TerminalBox(
               key: const ValueKey('pane-resize-hint'),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                border: Border.all(color: AppColors.borderStrong),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                'Arrow keys resize · Shift for larger steps · Tab next divider · Esc done',
-                style: TextStyle(fontSize: 13, color: AppColors.textSoft),
-                textAlign: TextAlign.center,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                child: Wrap(
+                  spacing: 18,
+                  runSpacing: 6,
+                  children: [
+                    Text(
+                      'resize >',
+                      style: boxMonoStyle(
+                        size: 12,
+                        color: grid.AppPalette.swarmAccent,
+                      ),
+                    ),
+                    for (final (key, action) in const [
+                      ('arrows', 'resize'),
+                      ('shift', 'larger steps'),
+                      ('tab', 'next divider'),
+                      ('esc', 'done'),
+                    ])
+                      Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(
+                              text: '$key  ',
+                              style: const TextStyle(color: Colors.white70),
+                            ),
+                            TextSpan(text: action),
+                          ],
+                        ),
+                        style: boxMonoStyle(size: 12, color: kBoxFaint),
+                      ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -1081,7 +1108,7 @@ class _Gap extends StatelessWidget {
 
 /// How round a card's corners are — a pane, and the rail beside it. Public for the same reason
 /// [kPaneGap] is: the rail is a card now, and two places typing 10 is how they drift apart.
-const double kPaneRadius = 10;
+const double kPaneRadius = kTerminalCornerRadius;
 
 /// How round a pane's corners are — the shared card radius, so a terminal does not read as a different
 /// KIND of surface from the rail beside it.
@@ -1133,28 +1160,39 @@ class _PaneCell extends StatelessWidget {
       onPointerDown: (_) => notifier.focusPane(pane.id),
       child: ValueListenableBuilder<PaneDragRef?>(
         valueListenable: paneDragging,
-        builder: (context, inFlight, child) => PaneSplitEdges(
-          enabled:
-              swarmMode &&
-              visible &&
-              agentId != null &&
-              (onSplit != null || onNewSplit != null) &&
-              notifier.zoomedPaneId == null &&
-              notifier.canAddPane &&
-              dragging == null &&
-              inFlight == null,
-          canSplitRight:
-              notifier.preparePaneSplit(PaneResizeAxis.x, paneId: pane.id) !=
-              null,
-          canSplitDown:
-              notifier.preparePaneSplit(PaneResizeAxis.y, paneId: pane.id) !=
-              null,
-          onSplit: onSplit == null ? null : (axis) => onSplit!(pane.id, axis),
-          onNewSplit: onNewSplit == null
-              ? null
-              : (axis) => onNewSplit!(pane.id, axis),
-          child: child!,
-        ),
+        builder: (context, inFlight, child) =>
+            onSplit == null && onNewSplit == null
+            ? child!
+            : PaneSplitEdges(
+                enabled:
+                    swarmMode &&
+                    visible &&
+                    agentId != null &&
+                    (onSplit != null || onNewSplit != null) &&
+                    notifier.zoomedPaneId == null &&
+                    notifier.canAddPane &&
+                    dragging == null &&
+                    inFlight == null,
+                canSplitRight:
+                    notifier.preparePaneSplit(
+                      PaneResizeAxis.x,
+                      paneId: pane.id,
+                    ) !=
+                    null,
+                canSplitDown:
+                    notifier.preparePaneSplit(
+                      PaneResizeAxis.y,
+                      paneId: pane.id,
+                    ) !=
+                    null,
+                onSplit: onSplit == null
+                    ? null
+                    : (axis) => onSplit!(pane.id, axis),
+                onNewSplit: onNewSplit == null
+                    ? null
+                    : (axis) => onNewSplit!(pane.id, axis),
+                child: child!,
+              ),
         child: Container(
           decoration: BoxDecoration(
             // UNCHANGED, and deliberately: the terminal renders its own background
@@ -1318,7 +1356,7 @@ class _PaneContent extends StatelessWidget {
     final agent = machine?.agents
         .where((agent) => agent.id == wantedAgentId)
         .firstOrNull;
-    final agentName = agent?.name;
+    final agentName = agent?.displayName;
     final needsLink =
         machine != null &&
         machine.isRemote &&
@@ -1351,7 +1389,9 @@ class _PaneContent extends StatelessWidget {
         notice = (
           label: 'Unavailable',
           icon: Icons.cloud_off,
-          detail: 'Waiting for this machine. Retained output is read only.',
+          detail: notifier.machineInventoryLoaded
+              ? 'This machine isn’t available. Retained output is read only.'
+              : 'Waiting for this machine. Retained output is read only.',
         );
       } else if (needsLink) {
         notice = (
@@ -1422,7 +1462,7 @@ class _PaneContent extends StatelessWidget {
                   notifier,
                   pane.machineId,
                   agent.id,
-                  agent.name,
+                  agent.displayName,
                   engine: agent.engine,
                 ),
           // The same confirmation the rail's row menu opens. Only for an
@@ -1435,7 +1475,7 @@ class _PaneContent extends StatelessWidget {
                   notifier,
                   pane.machineId,
                   agent.id,
-                  agent.name,
+                  agent.displayName,
                   engine: agent.engine,
                 ),
           zoomed: notifier.zoomedPaneId == pane.id,
@@ -1459,24 +1499,27 @@ class _PaneContent extends StatelessWidget {
 
     // A never-attached view has no output to preserve: keep its setup guidance.
     if (machine == null) {
-      // "Waiting" is only honest while there is still something to wait FOR. When the machine list
-      // itself could not be read, this machine is not slow — it is unknown, and a spinner that never
-      // ends is the wrong answer. Keyed off `machineListError`, not `lastError`: that slot is shared
-      // with agent-launch failures and is cleared by `dismissError`.
+      // Waiting ends once the inventory has answered, even when it has no row
+      // for this saved pane. Keep Retry mounted during refresh so keyboard focus
+      // survives. Repeated activation joins the same retry in AppNotifier.
       final listFailed = notifier.machineListError != null;
       final retrying = notifier.machinesRefreshing;
+      final waiting = !listFailed && !notifier.machineInventoryLoaded;
+      final stale = notifier.machinesAreStale;
       return _PaneStatus(
-        title: wantedAgentId ?? pane.machineId,
-        icon: listFailed ? Icons.cloud_off : Icons.hourglass_empty,
+        title: wantedAgentId == null ? 'Machine' : kUntitledPane,
+        icon: listFailed || stale ? Icons.cloud_off : Icons.link_off,
         message: listFailed
-            ? 'Could not reach the Harness backend, so this machine is unknown right now.'
-            : 'Waiting for this machine to answer…',
+            ? 'Could not load machines. Retry to reconnect.'
+            : waiting
+            ? 'Waiting for this machine to answer…'
+            : stale
+            ? 'Could not confirm this machine’s status. Retry to reconnect.'
+            : 'This machine isn’t available. Check that it’s still linked to your account.',
         onClose: single && !swarmMode ? null : close,
-        busy: !listFailed || retrying,
-        // The automatic recovery is already retrying in the background; this is for someone who does not
-        // want to wait for the next tick. `retryMachines` coalesces, so pressing it during a run joins it.
-        actionLabel: listFailed && !retrying ? 'RETRY' : null,
-        onAction: listFailed ? notifier.retryMachines : null,
+        busy: waiting || retrying,
+        actionLabel: waiting ? null : 'Retry',
+        onAction: waiting ? null : notifier.retryMachines,
       );
     }
     if (needsLink) {
@@ -1982,14 +2025,19 @@ class _PaneStatus extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (busy)
-                    const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  else
-                    Icon(icon, size: 26, color: AppColors.mutedStrong),
+                  SizedBox(
+                    width: 26,
+                    height: 26,
+                    child: busy
+                        ? const Center(
+                            child: SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        : Icon(icon, size: 26, color: AppColors.mutedStrong),
+                  ),
                   const SizedBox(height: 10),
                   Text(
                     message,

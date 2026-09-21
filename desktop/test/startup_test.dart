@@ -167,6 +167,7 @@ void main() {
           'app_ui_font_size',
           'app_color_palette',
           'harness_start_background',
+          'workspace_prompt_v1',
         },
       ]);
       expect(counters.requested, isTrue);

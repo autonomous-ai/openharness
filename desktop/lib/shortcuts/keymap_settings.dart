@@ -47,7 +47,9 @@ class KeymapSettings extends StatelessWidget {
           children: [
             AppSelectField<KeymapContext>(
               value: contextKind,
-              width: 160,
+              // Keep the context readable when the user enlarges text. The
+              // surrounding Wrap still limits the field to the pane width.
+              width: 160 * MediaQuery.textScalerOf(context).scale(13.5) / 13.5,
               options: const [
                 SelectOption(
                   value: KeymapContext.workspace,
@@ -58,6 +60,10 @@ class KeymapSettings extends StatelessWidget {
                   label: 'Agent input',
                 ),
                 SelectOption(value: KeymapContext.picker, label: 'Search'),
+                SelectOption(
+                  value: KeymapContext.project,
+                  label: 'Project menu',
+                ),
               ],
               onChanged: onContextChanged,
             ),

@@ -130,8 +130,8 @@ class CliLink implements PeerLinkClient {
     );
   }
 
-  /// Clears this machine's remote password, revoking remote access for anyone who knew it. Null
-  /// on success.
+  /// Clears this machine's remote password, preventing new password-based links.
+  /// Existing trust and sessions are separate. Null on success.
   Future<String?> clearRemotePassword() async {
     final invocation = await _runJson([
       'remote-password',

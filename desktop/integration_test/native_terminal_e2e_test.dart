@@ -8,12 +8,16 @@ import 'package:xterm/xterm.dart';
 
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/core/test_run.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 
 void main() {
+  if (!kUnderTest) {
+    throw StateError('Native terminal fixtures require FLUTTER_TEST=1');
+  }
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('native terminal replaces keyframes without stale render state', (

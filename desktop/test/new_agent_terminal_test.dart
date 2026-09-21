@@ -2,10 +2,10 @@
 // no task or permission mode, a Home tile in place of New project and no Git —
 // and a create that names the terminal engine with no folder at all (the daemon
 // opens it at home) or with the folder that was picked.
-import 'dart:async';
 
 import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
@@ -13,6 +13,7 @@ import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/widgets/agent_picker.dart';
 import 'package:harness/widgets/engine_identity.dart';
@@ -69,6 +70,7 @@ class _Notifier extends AppNotifier {
     String? swarmId,
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
+    HarnessPlacement? placement,
   }) async {
     launches.add({
       'machine': machineId,
@@ -160,6 +162,10 @@ void main() {
         greaterThan(rows.indexOf('claude')),
       );
       await tester.enterText(agentSearch, 'Terminal');
+      await tester.pumpAndSettle();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.slash);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
       await tester.pumpAndSettle();
       // The preview of the top match says the shell is simply there.
       expect(find.text('Your shell on harness-remote-box'), findsOneWidget);

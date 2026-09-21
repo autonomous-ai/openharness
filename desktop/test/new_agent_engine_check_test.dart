@@ -20,6 +20,7 @@ import 'package:harness/core/config.dart';
 import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_placement.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/shared/widgets/app_choice_picker.dart';
@@ -96,7 +97,7 @@ void main() {
     // be attempted and troubleshooting stays in the optional details.
     expect(find.textContaining('Couldn’t check whether'), findsOneWidget);
     expect(
-      find.textContaining('You can still try creating the harness.'),
+      find.textContaining('You can still try starting the harness.'),
       findsOneWidget,
     );
     expect(find.textContaining('uses an older Harness CLI'), findsNothing);
@@ -311,6 +312,7 @@ class _RetryNotifier extends AppNotifier {
     String? swarmId,
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
+    HarnessPlacement? placement,
   }) async {
     launches.add({
       'machine': machineId,

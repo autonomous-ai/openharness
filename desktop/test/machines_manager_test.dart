@@ -8,6 +8,7 @@ import 'package:harness/terminal/terminal_binary.dart';
 import 'package:xterm/xterm.dart';
 
 import 'keymap_runtime_test.dart' show native;
+import 'keymap_host_test.dart' show key;
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 
@@ -61,6 +62,8 @@ void main() {
         await tester.pumpAndSettle();
         await opened;
         expect(find.text('Machines Manager'), findsOneWidget);
+        await key(tester, LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
         await tester.tap(find.text('Rename'));
         await tester.pumpAndSettle();
         expect(find.text('Rename Machine'), findsOneWidget);
@@ -72,17 +75,19 @@ void main() {
         expect(api.calls, isEmpty);
         await tester.enterText(field, '  Office Mac  ');
         if (fail) api.error = 'Connection unavailable';
-        await tester.tap(find.text('Save'));
+        await key(tester, LogicalKeyboardKey.enter);
         await tester.pumpAndSettle();
         expect(api.calls, [('m', 'Office Mac')]);
         if (fail) {
           expect(find.textContaining('Connection unavailable'), findsOneWidget);
           expect(app.stateOf('m')!.machine.displayName, isNot('Office Mac'));
           api.error = null;
-          await tester.tap(find.text('Save'));
+          await key(tester, LogicalKeyboardKey.enter);
           await tester.pumpAndSettle();
         }
         expect(find.text('Rename Machine'), findsNothing);
+        await key(tester, LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
         expect(
           find.descendant(
             of: find.byKey(const ValueKey('managed-machine-m')),
@@ -92,7 +97,7 @@ void main() {
         );
         expect(app.machines.single.displayName, 'Office Mac');
         expect((updates.last['machines'] as List).single['name'], 'Office Mac');
-        await tester.tap(find.text('Done'));
+        await key(tester, LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
         expect(find.text('Machines Manager'), findsNothing);
         expect(

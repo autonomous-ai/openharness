@@ -235,7 +235,7 @@ void main() {
       var rows = cache.read(app, []);
       expect(
         rows.singleWhere((row) => row.isSwarm).detail,
-        '2 harnesses · 1 project · 2 machines',
+        'Tab · 2 harnesses · 1 project · 2 machines',
       );
       expect(rows.where((row) => row.agentId == 'a0'), hasLength(2));
       expect(rows.singleWhere((row) => row.isSwarm).title, 'Release work');
@@ -243,7 +243,7 @@ void main() {
       rows = cache.read(app, []);
       expect(
         rows.singleWhere((row) => row.isSwarm).detail,
-        '3 harnesses · 2 projects · 2 machines',
+        'Tab · 3 harnesses · 2 projects · 2 machines',
       );
 
       app.newSwarm();
@@ -291,11 +291,11 @@ void main() {
       final cache = SwarmSearchCatalog();
       expect(
         cache.read(app, projects).singleWhere((row) => row.isSwarm).detail,
-        '2 harnesses · 1 project · 1 machine',
+        'Tab · 2 harnesses · 1 project · 1 machine',
       );
       expect(
         cache.read(app, []).singleWhere((row) => row.isSwarm).detail,
-        '2 harnesses · 1 machine',
+        'Tab · 2 harnesses · 1 machine',
       );
     },
   );
@@ -319,7 +319,7 @@ void main() {
   );
 
   testWidgets(
-    'Cmd O renders one harness result and opens it from a tab-name alias',
+    'Cmd P renders one harness result and opens it from a tab-name alias',
     (tester) async {
       final app = createApp();
       final machine = app.machineStates['m']!..nodeOnline = true;
@@ -343,29 +343,38 @@ void main() {
       app.newSwarm();
       final target = app.activeSwarm;
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       final input = find.byKey(const ValueKey('swarm-search-input'));
       expect(
         tester.widget<TextField>(input).decoration!.hintText,
-        'Find a harness',
+        kHarnessPickerHint,
       );
       await tester.enterText(input, 'extensibility');
       await tester.pump();
-      expect(find.byType(ListTile), findsOneWidget);
-      final result = tester.widget<ListTile>(find.byType(ListTile));
-      final subtitle = result.subtitle! as SearchResultText;
-      expect(subtitle.text, 'Code · autonomous-harness · main · Test host');
-      expect(subtitle.iconOffset, subtitle.text.indexOf('main'));
+      // One harness, then the row that makes what was typed instead.
+      expect(find.byType(ListTile), findsNWidgets(2));
+      expect(find.byKey(const ValueKey(kSwarmCreateRowId)), findsOneWidget);
+      // Context remains visible and searchable when drawn as separate segments.
+      for (final value in [
+        'Claude',
+        'Test host',
+        'autonomous-harness',
+        'main',
+      ]) {
+        expect(
+          find.byWidgetPredicate(
+            (widget) => widget is SearchResultText && widget.text == value,
+          ),
+          findsOneWidget,
+        );
+      }
       expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('swarm-row-action')),
-          matching: find.text('Open Harness'),
-        ),
+        find.textContaining('enter  open', findRichText: true),
         findsOneWidget,
       );
       await tester.enterText(input, 'Architecture review');
       await tester.pump();
-      expect(find.byType(ListTile), findsOneWidget);
+      expect(find.byType(ListTile), findsNWidgets(2));
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       expect(app.activeSwarm, same(target));

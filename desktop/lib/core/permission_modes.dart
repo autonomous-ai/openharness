@@ -54,16 +54,16 @@ const Map<String, List<PermissionMode>> kEnginePermissionModes = {
   ],
   'codex': [
     PermissionMode(
-      _auto,
-      'Auto-approve',
-      'Reviews each approval automatically, in the sandbox',
-    ),
-    PermissionMode(
       'readOnly',
       'Read only',
       'Reads and suggests, asks before any change',
     ),
     PermissionMode(_ask, 'Ask first', 'Asks before acting, as Codex does'),
+    PermissionMode(
+      _auto,
+      'Auto-approve',
+      'Approves routine actions in the sandbox',
+    ),
     PermissionMode(
       'full',
       'Full access',

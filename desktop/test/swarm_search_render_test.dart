@@ -10,6 +10,7 @@ import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/swarm_search_input.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
+import 'package:harness/widgets/search_result_text.dart';
 import 'package:xterm/xterm.dart';
 
 import 'swarm_interactions_test.dart' show chord;
@@ -58,10 +59,7 @@ void main() {
         final target = app.activeSwarm;
         await mount(tester, app);
         final field = find.byKey(const ValueKey('swarm-search-input'));
-        Future<void> open() => chord(
-          tester,
-          add ? LogicalKeyboardKey.keyO : LogicalKeyboardKey.keyP,
-        );
+        Future<void> open() => chord(tester, LogicalKeyboardKey.keyP);
         SwarmSearchKeys keys() => tester.widget<SwarmSearchKeys>(
           find.ancestor(of: field, matching: find.byType(SwarmSearchKeys)),
         );
@@ -104,7 +102,8 @@ void main() {
         expect(search.targetId, target.id);
         if (add) {
           expect(search.alreadyHere(rows.single), isTrue);
-          expect(search.canSubmit(rows.single), isFalse);
+          expect(search.canSubmit(rows.single), isTrue);
+          expect(search.actionLabel(rows.single), 'Focus pane');
         } else {
           expect(rows.map((row) => row.swarmId).toSet(), {
             source.id,
@@ -144,7 +143,7 @@ void main() {
       SwarmSearchInput inputWidget() => tester.widget<SwarmSearchInput>(
         find.ancestor(of: field, matching: find.byType(SwarmSearchInput)),
       );
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.enterText(field, 'Agent 0');
       await tester.pump();
       final first = inputWidget().search!;
@@ -159,7 +158,7 @@ void main() {
       await tester.pump();
       session.terminal.write('Newest useful output.\r\n');
       machine.projectReads = 0;
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       expect(tester.widget<TextField>(field).controller!.text, isEmpty);
       await tester.enterText(field, 'Agent 0');
       await tester.pump();
@@ -198,11 +197,7 @@ void main() {
             if (element.widget is SwarmScreen) canvasBuilds++;
           };
           try {
-            await chord(
-              tester,
-              add ? LogicalKeyboardKey.keyO : LogicalKeyboardKey.keyP,
-              shift: !add,
-            );
+            await chord(tester, LogicalKeyboardKey.keyP, shift: !add);
             expect(
               tester
                   .widget<TextField>(
@@ -242,7 +237,7 @@ void main() {
     final input = <TerminalBinaryFrame>[];
     app.adoptSessionForTest(terminal('a69', input));
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     final field = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(field, 'Agent');
     await tester.pump(const Duration(milliseconds: 200));
@@ -260,7 +255,7 @@ void main() {
       if (element.widget is ListTile && visibleRows.contains(element)) rows++;
     };
     try {
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.pump();
     } finally {
       debugOnRebuildDirtyWidget = null;
@@ -284,6 +279,53 @@ void main() {
   });
 
   testWidgets(
+    'query edits update match text without rebuilding unchanged row controls',
+    (tester) async {
+      final app = createApp();
+      final input = <TerminalBinaryFrame>[];
+      app.adoptSessionForTest(terminal('a69', input));
+      await mount(tester, app);
+      await chord(tester, LogicalKeyboardKey.keyP);
+      final field = find.byKey(const ValueKey('swarm-search-input'));
+      await tester.enterText(field, 'Agent');
+      await tester.pump(const Duration(milliseconds: 200));
+      final visibleRows = find.byType(ListTile).evaluate().where((element) {
+        final key = element.widget.key;
+        return key is ValueKey<String> && key.value.startsWith('agent:');
+      }).toSet();
+      expect(visibleRows, isNotEmpty);
+      var rowBuilds = 0;
+      debugOnRebuildDirtyWidget = (element, _) {
+        if (element.widget is ListTile && visibleRows.contains(element)) {
+          rowBuilds++;
+        }
+      };
+      try {
+        await tester.enterText(field, 'Agen');
+        await tester.pump();
+      } finally {
+        debugOnRebuildDirtyWidget = null;
+      }
+      expect(
+        rowBuilds,
+        0,
+        reason: 'Only match text changed on these same result rows',
+      );
+      final matches = tester
+          .widgetList<SearchResultText>(find.byType(SearchResultText))
+          .where((widget) => widget.text.startsWith('Agent '))
+          .expand((widget) => widget.matches.where((match) => match.title))
+          .map((match) => match.term)
+          .toSet();
+      expect(matches, {'agen'});
+      expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
+      expect(input, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
+
+  testWidgets(
     'cached Add rows keep selection through palette and text changes',
     (tester) async {
       final app = createApp();
@@ -303,7 +345,7 @@ void main() {
           ),
         ),
       );
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       final field = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(field, 'Agent');
       await tester.pump();
@@ -338,7 +380,7 @@ void main() {
     final input = <TerminalBinaryFrame>[];
     app.adoptSessionForTest(terminal('a69', input));
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     final field = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(field, 'Agent');
     await tester.pump();
@@ -349,10 +391,10 @@ void main() {
     app.dismissError(); // Publish the sessions assembled through the test seam.
     await tester.pump();
     final row = find.byKey(ValueKey(agentDestinationId('m', 'a0')));
-    expect(tester.widget<ListTile>(row).enabled, isFalse);
+    expect(tester.widget<ListTile>(row).enabled, isTrue);
     expect(
       find.descendant(of: row, matching: find.text('Already added')),
-      findsOneWidget,
+      findsNothing,
     );
     await app.closePane(app.panes.last.id);
     await tester.pump();
@@ -375,7 +417,7 @@ void main() {
     app.adoptSessionForTest(terminal('a69', input));
     final target = app.activeSwarm;
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     final field = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(field, 'Agent');
     await tester.pump();
@@ -388,7 +430,7 @@ void main() {
         )
         .search!;
     final previous = search.selected!.id;
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.pump();
     expect(search.selected!.id, isNot(previous));
     expect(input, isEmpty);

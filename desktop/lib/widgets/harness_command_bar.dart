@@ -180,7 +180,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                         itemBuilder: (_) => const [
                           PopupMenuItem(
                             value: 'new',
-                            child: Text('New harness'),
+                            child: Text('New Harness'),
                           ),
                           PopupMenuItem(
                             value: 'store',
@@ -485,7 +485,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                   ),
                   TextButton(
                     onPressed: widget.onNew,
-                    child: const Text('New harness'),
+                    child: const Text('New Harness'),
                   ),
                 ],
               ),

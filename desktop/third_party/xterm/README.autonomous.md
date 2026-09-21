@@ -13,6 +13,17 @@ fix and the regression in `test/terminal_session_test.dart` passes against it.
 
 ## Local patches
 
+- **Linux clipboard and Meta keys leave shell editing intact**
+  (`lib/src/ui/shortcut/shortcuts.dart`, `lib/src/terminal_view.dart`,
+  `lib/src/core/input/handler.dart`). Linux uses Ctrl-Shift-C/V/A for clipboard
+  copy/paste/select-all, preserving Ctrl-A and Ctrl-V for the program in the
+  terminal. Left-Alt printable keys send an escape prefix with the actual
+  keyboard-layout character, preserving case and punctuation; AltGr and macOS
+  Option remain native text composition. The fallback letter handler respects
+  Shift and emits lowercase otherwise. Desktop creates Linux-target terminals
+  on Linux. Regressions: `test/terminal_clipboard_test.dart`, with existing IME
+  coverage in `test/terminal_view_interaction_test.dart`.
+
 - **Remote grids survive viewport resizing** (`lib/src/terminal_view.dart`,
   `lib/src/ui/render.dart`). `TerminalView.resizeBuffer` defaults to true;
   Harness sets it to false so a smaller local pane reports its desired size

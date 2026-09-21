@@ -111,8 +111,7 @@ ProviderUsage? _readingFor(
   UsageProvider provider,
 ) => _firstWhereOrNull(readings, (reading) => reading.provider == provider);
 
-/// A plain loop rather than `firstWhereOrNull`: `package:collection` is not a
-/// dependency of this project, and a three-line lookup is not worth adding one.
+/// The first matching reading, or null when this provider has no reading.
 T? _firstWhereOrNull<T>(Iterable<T> items, bool Function(T) test) {
   for (final item in items) {
     if (test(item)) return item;

@@ -202,6 +202,15 @@ class ForkedFrom {
   }
 }
 
+/// Display-only fallbacks; never send these to a CLI as a user rename.
+const kUntitledPane = 'Untitled Pane';
+final _automaticHarnessName = RegExp(
+  r'^(?:(?:harness|agent)-[1-9]\d*|.+ harness \d{1,2}-\d{1,2} \d{1,2}:\d{2}(?::\d{2})?)$',
+);
+
+bool isAutomaticHarnessName(String name) =>
+    _automaticHarnessName.hasMatch(name);
+
 class Agent {
   final String id;
   final String? sessionId;
@@ -299,6 +308,11 @@ class Agent {
     this.forkedFrom,
     this.forkable,
   });
+
+  /// Explicit names win. An automatic CLI label gives way to its session title.
+  String get displayName => _automaticHarnessName.hasMatch(name)
+      ? (title?.trim().isNotEmpty == true ? title!.trim() : kUntitledPane)
+      : name;
 
   /// The engines whose sessions can be forked — natively (Claude Code's
   /// `--fork-session`, `codex fork`) or by a handoff message (OpenCode takes a
