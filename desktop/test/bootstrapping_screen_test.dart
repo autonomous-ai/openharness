@@ -33,8 +33,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.byType(LoginAurora), findsOneWidget);
-    expect(find.text('Getting OpenHarness ready'), findsOneWidget);
-    expect(find.text('Opening OpenHarness…'), findsOneWidget);
+    expect(find.text('Getting Harness ready'), findsOneWidget);
+    expect(find.text('Opening Harness…'), findsOneWidget);
     expect(find.textContaining('few seconds'), findsOneWidget);
 
     final logo = tester.widget<Image>(find.byType(Image));
@@ -50,7 +50,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('Starting local service…'), findsOneWidget);
-    expect(find.bySemanticsLabel('OpenHarness startup status'), findsOneWidget);
+    expect(find.bySemanticsLabel('Harness startup status'), findsOneWidget);
     final node = tester.getSemantics(find.byKey(const Key('boot-status')));
     expect(node.value, 'Starting local service…');
     semantics.dispose();
@@ -80,7 +80,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(tester.takeException(), isNull);
-    expect(find.text('Getting OpenHarness ready'), findsOneWidget);
-    expect(find.text('Opening OpenHarness…'), findsOneWidget);
+    expect(find.text('Getting Harness ready'), findsOneWidget);
+    expect(find.text('Opening Harness…'), findsOneWidget);
   });
 }

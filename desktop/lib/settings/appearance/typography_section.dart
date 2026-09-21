@@ -53,10 +53,10 @@ class _SelectSkeleton extends StatelessWidget {
   }
 }
 
-/// Customize OpenHarness ▸ Appearance ▸ Typography — the face the app is set in, and how big.
+/// Customize Harness ▸ Appearance ▸ Typography — the face the app is set in, and how big.
 ///
 /// ⚠️ The APP's type, not the terminal's. The terminal keeps its own face and
-/// size in Customize OpenHarness ▸ Terminal, because what it renders is a grid a remote
+/// size in Customize Harness ▸ Terminal, because what it renders is a grid a remote
 /// program draws into rather than a label this app writes — and the UI scale is
 /// fenced out of it at five seams, guarded by
 /// `test/terminal_ui_scale_isolation_test.dart`.

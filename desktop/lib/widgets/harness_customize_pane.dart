@@ -57,7 +57,7 @@ class HarnessCustomizePane extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          'Customize OpenHarness',
+                          'Customize Harness',
                           style: boxMonoStyle(
                             size: 14,
                             color: grid.AppPalette.textPrimary,

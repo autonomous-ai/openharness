@@ -99,7 +99,7 @@ void main() {
         final open = find.byKey(const ValueKey('harness-start-new-tab'));
         final device = find.byKey(const ValueKey('harness-device-link'));
         final store = find.byKey(const ValueKey('harness-store-link'));
-        expect(find.text('OpenHarness'), findsNothing);
+        expect(find.text('Harness'), findsNothing);
         expect(
           tester.widget<TextField>(field).decoration!.hintText,
           kHarnessPickerHint,

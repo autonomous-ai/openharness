@@ -14,10 +14,11 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
-	<!-- What people see is OpenHarness; the bundle, its executable, its identifier and every path
-	     the updater and the scripts rely on stay Harness. The Dock and Finder show a name other than
-	     the file's only as a LOCALIZED display name: this non-localized one must match the file name
-	     (Harness.app), and en.lproj/InfoPlist.strings supplies "OpenHarness". -->
+	<!-- What people see, the bundle, its executable, its identifier and every path the updater and
+	     the scripts rely on are all Harness now, so nothing below overrides anything. The pair is
+	     kept rather than deleted because it is the only seam for showing a name other than the file
+	     name (Harness.app): the Dock and Finder honour that only as a LOCALIZED display name, so it
+	     would have to come back through en.lproj/InfoPlist.strings, never through this key. -->
 	<key>CFBundleDisplayName</key>
 	<string>$(PRODUCT_NAME)</string>
 	<key>LSHasLocalizedDisplayName</key>
