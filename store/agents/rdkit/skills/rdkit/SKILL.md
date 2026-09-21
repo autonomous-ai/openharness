@@ -53,6 +53,25 @@ left out, the parent is inferred as the earlier molecule this one is the smalles
 `parent=False` says there is none. Design the lead first, then its analogues, so the series reads in
 order.
 
+## A shape the user kept
+
+The pane can scan a non-ring single bond with native MMFF94, with the other internal coordinates
+fixed. The user chooses four connected atoms, moves along the energy curve, and keeps a pose and
+note in `out/torsions/<id>/`. This is a rigid, vacuum, single-bond experiment, not a geometry
+optimization or a free-energy calculation. Do not infer populations, kinetics, activity or binding.
+The input must have explicit hydrogen atoms, 3D coordinates, 4–200 atoms, one connected component
+and MMFF94 parameters. It uses 10°, 15° or 30° spacing and never silently falls back to UFF.
+
+When continuing the user's experiment, read `study.json` for the method, selected angle, atom
+indices, full-precision coordinates and note. Load `selected.sdf` with
+`Chem.SDMolSupplier(path, removeHs=False)[0]`, then author the requested follow-up under a new name.
+Keep the original study unchanged. `source.mol` is the exact input conformer; `scan.sdf` contains
+every sampled angle; `energies.csv` gives absolute and within-scan relative energies in kcal/mol.
+`study.zip` includes these files and standalone `reproduce.py`/`harness_torsion.py`; the recorded
+RDKit version is required to verify the calculation. JSON coordinates preserve full precision;
+MOL/SDF exchange files round them to four decimals. Unsaved pane scans are not files: ask the user
+to **Keep study** only when their chosen pose or note is needed for the next step.
+
 ## SMILES, the parts that matter
 
 - Atoms are bare symbols; lowercase is aromatic (`c1ccccc1` benzene). Bonds: `-` single (implicit),

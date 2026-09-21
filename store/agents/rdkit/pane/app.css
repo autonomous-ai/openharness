@@ -14,6 +14,7 @@
 [hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 12.5px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow: hidden; }
 body { display: flex; flex-direction: column; }
+.btn:disabled { opacity: .45; cursor: default; }
 button { font: inherit; color: inherit; }
 svg { display: block; }
 .grow { flex: 1; }
@@ -23,7 +24,7 @@ svg { display: block; }
 .btn svg, .tb svg, .menu svg, .mini svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ---- header ---- */
-#top { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--bg); min-height: 50px; flex: none; position: relative; z-index: 20; }
+#top { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--bg); min-height: 50px; flex: none; position: relative; z-index: 20; }
 .ident { min-width: 0; }
 .title-row { display: flex; align-items: baseline; gap: 10px; min-width: 0; overflow: hidden; }
 h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 70px; }
@@ -106,6 +107,53 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.01em; white
   #side { flex-direction: column; height: 52%; }
   .depict { width: auto; height: 190px; border-right: 0; border-bottom: 1px solid var(--line); }
   #top .btn span { display: none; }
+  #status { display: none; }
+  #top .chips { display: none; }
+  #top { grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 7px; padding: 8px 10px; }
+}
+
+/* Native bond experiments keep the existing molecule view, with a focused energy panel. */
+body.scan-tab .depict-body { height: 165px; }
+body.scan-tab #side { width: 420px; }
+#panel-scan { padding: 12px 14px 18px; }
+.scan-intro { margin: 0 0 10px; font-size: 13px; color: var(--ink); }
+.scan-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin: 8px 0; }
+.scan-row .primary { background: var(--accent); border-color: var(--accent); color: white; }
+.scan-label { display: block; margin: 10px 0 4px; color: var(--ink-2); font-size: 11px; }
+#scanStatus { color: var(--ink-2); font-size: 11.5px; margin: 9px 0; overflow-wrap: anywhere; }
+#scanStatus.error { color: var(--bad); }
+#panel-scan select, #scanTitle, #scanNote { min-width: 0; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px; padding: 6px 7px; }
+#scanBond, #scanTitle, #scanNote { width: 100%; }
+#scanNote { margin-top: 7px; resize: vertical; }
+#scanStep { margin-left: auto; }
+.scan-numbers { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin: 14px 0 0; }
+.scan-numbers strong { font-size: 22px; font-weight: 550; font-variant-numeric: tabular-nums; }
+.scan-numbers span { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+#scanPlot { display: block; width: 100%; height: 160px; cursor: crosshair; touch-action: none; }
+#scanScrub { width: 100%; accent-color: var(--accent); margin: 2px 0; }
+.scan-ghost { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #7156b3; }
+.scan-method { color: var(--ink-3); font-size: 11px; line-height: 1.5; margin: 10px 0; }
+.scan-pending { padding: 8px; background: var(--warn-soft); color: var(--warn); border-radius: 6px; font-size: 11.5px; }
+.scan-shelf-title { margin: 18px 0 8px; border-top: 1px solid var(--line); padding-top: 12px; display: flex; align-items: center; justify-content: space-between; font-weight: 600; }
+.scan-shelf-title .btn { font-weight: 400; height: 24px; }
+.scan-study { padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); margin: 7px 0; }
+.scan-open { border: 0; background: none; color: var(--ink); font-weight: 600; padding: 0; cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+.scan-open:hover { color: var(--accent); }
+.scan-study p { margin: 3px 0 6px; color: var(--ink-2); font-size: 11px; }
+.scan-links { display: flex; gap: 12px; font-size: 11px; }
+.scan-links a, #scanKept a { color: var(--accent); text-decoration: none; }
+.scan-pose { left: 12px; top: 12px; max-width: calc(100% - 220px); padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.94); color: #2f5bea; font-size: 12px; box-shadow: var(--shadow); pointer-events: none; }
+@media (max-width: 1000px) {
+  body.scan-tab #side { width: auto; height: 48%; }
+  body.scan-tab .depict { width: 30%; }
+  .tabbar { overflow-x: auto; }
+  .tabbar button { padding: 7px 8px 8px; }
+}
+@media (max-width: 600px) {
+  body.scan-tab .depict { display: none; }
+  body.scan-tab #side { height: 53%; }
+  .scan-pose { max-width: calc(100% - 24px); top: 6px; font-size: 11px; }
+  body.scan-preview .measures { top: 42px; width: 160px; }
 }
 
 /* ---- toolbar ---- */

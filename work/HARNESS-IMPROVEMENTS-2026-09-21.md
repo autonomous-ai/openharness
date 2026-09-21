@@ -296,3 +296,92 @@ a 390px viewport is a layout check, not a claim of testing mobile Safari or ever
 
 The full catalog review and improvement goal remains active. All implementation, demo artifacts
 and tests stayed in the improvement worktree and disposable evidence directories.
+
+## Science and engineering review, then RDKit bond studies
+
+Reviewed the science/data packages and the shared Studio Viewer bridges, with selected source paths
+and authoring contracts checked in addition to their READMEs. This is source review unless native
+verification is listed below:
+
+- **Data Studio** already supports original CSV input, SQLite joins and queries, traceable source,
+  browser recomputation and a portable report/database/source bundle. **Lab Bench** already supports
+  authored experimental designs, editable protocols, real observations, fit diagnostics and separate
+  confirmation runs with frozen forecasts. Preserve those complete loops.
+- **marimo** uses the upstream reactive notebook editor and runner; it can author arbitrary Python
+  notebooks. **Quantum Studio** is an unlisted 1–8-qubit statevector editor; **GIS** is an unlisted,
+  bounded local GeoJSON explorer. Their existing interactive capabilities and limits matter more
+  than adding a new preset chooser.
+- Reviewed **autoresearch-mlx**, **Foam-Agent**, **SimSkill**, **DimOS**, **Comfy MCP** and **Bonsai MCP**
+  with the shared **Studio Viewer**. Several bridges have useful native paths but narrow starter
+  models: the four-way SUMO intersection, coarse 2D LBM flow and office navigation are not arbitrary
+  general simulators. The CPU character-transition experiment is not an MLX transformer training
+  run, and the procedural SVG path is not diffusion image generation. Preserve those distinctions;
+  this review does not claim native acceptance of every optional runtime. Foam-Agent and SimSkill
+  are not installed in this environment.
+- Reviewed the **Home Assistant**, **KiCad**, **Yosys** and **Orca Slicer** package contracts. Home
+  Assistant's actual Core automation tests and trace export, and Orca's native slicing and portable
+  rerun files, are substantial existing workflows. Avoid replacing those with superficial demos.
+
+Selected **RDKit** next: its existing viewer exposes conformers and measurements, but a person
+could not directly turn a chosen bond into a computed experiment and a reusable result.
+
+Implemented:
+
+- A native **Bond scan** from the current 3D conformer. Choose an eligible chain or pick four atoms
+  directly in 2D/3D and use the measured dihedral. The unmodified RDKit rotates a non-ring single
+  bond and computes MMFF94 energy at 13, 25 or 37 angles. This is a rigid scan, with the other
+  internal coordinates fixed; the UI and exports say so explicitly.
+- Drag the energy curve or scrub its keyboard-accessible slider to inspect the actual calculated
+  3D coordinates. Play the scan, jump to its lowest sampled point and overlay the starting pose.
+  Invalid chains, rings, missing hydrogens or unavailable force-field parameters leave the last
+  valid study available. Scans accept one connected 3D MOL/SDF molecule with 4–200 explicit atoms;
+  no model templates or synthetic energies substitute for the input molecule.
+- **Keep study** preserves a title, note, exact input conformer, selected SDF, every pose, energy
+  CSV and full-precision coordinates in `out/torsions/<id>/`. The server recomputes and checks the
+  calculation fingerprint before publishing an atomic save. Its ZIP includes a standalone Python
+  reproducer, calculation source and license. The original molecule stays unchanged.
+- Studies reopen after changes, server restart or removal of the original molecule. Incoming agent
+  output waits while an experiment is open; returning loads the revised source. Failed saves retain
+  the current browser study for retry, including refreshing a restarted server's token. Write
+  endpoints require the pane token and same origin, bound request sizes, and reject escaping output
+  symlinks. Incomplete saves are not published in the study library. Kept structures do not enter
+  the live molecule picker or the verdict's newest-artifact search. Pose controls are locked while
+  saving the selected point.
+- Updated the package description, README and authoring guidance so an agent can continue from the
+  user's chosen SDF and note while preserving the original study. Added an authored butane and
+  phenethyl-acetate example script; the calculation accepts other compatible molecules too.
+
+Verified:
+
+- 27 Node checks pass, covering existing viewer behavior, atomic persistence, native failure
+  cleanup, concurrent request rejection, symlink boundaries, token/origin checks and both declared
+  and chunked upload bounds. Native chemistry checks validate independently reconstructed MMFF94
+  energies, bond-length preservation, measured angles, periodic endpoints, V3000 input, rejected
+  rings/multiple bonds and a stale calculation fingerprint that writes nothing.
+- All 138 Python checks passed across the full suite and targeted follow-ups. The two optional
+  native setup/initialization checks were run separately with `RDKIT_PYTHON` enabled; the final
+  verdict test also confirms a saved scan cannot become the live artifact.
+- Seven real Chrome workflows use RDKit 2026.03.6 and unmodified 3Dmol 2.5.5: curve/play/ghost/save;
+  deferred changes; failed-save/restart retry; saved/mobile reopen; an independently authored
+  aromatic ester; real four-atom picking and ring rejection; and a library with no original files.
+  No browser page errors. Screenshots were visually checked at 1280×960 and 390×844; these are
+  Chrome layout checks, not a claim of testing every mobile browser.
+- A downloaded/extracted study recomputes in a separate directory using only its bundled source
+  and RDKit. Maximum energy difference is **0 kcal/mol** and coordinate difference is **0 Å** in
+  the tested environment. Displayed MOL coordinates agree with calculation coordinates within
+  **0.000047 Å**, the expected four-decimal MOL rounding; full precision remains in JSON.
+- The separately recorded walkthrough uses an authored ester, turns its chosen chain through the
+  energy curve, and keeps a 60° pose with a note. The portable study and raw video remain under
+  `/private/tmp/openharness-harness-improvements-evidence/rdkit-demo/`; the repeatable acceptance
+  script and JSON results are under `store/agents/rdkit/test/torsion-browser.mjs` and the evidence
+  `rdkit-final/` directory. Package conformance and generated catalog checks pass.
+
+Evidence: [desktop](../docs/images/rdkit-bond-scan.png),
+[mobile](../docs/images/rdkit-bond-scan-mobile.png), and
+[16.84-second native walkthrough](../docs/images/rdkit-bond-scan-demo.mp4).
+
+Scientific limits: compare relative energies only within the same rigid scan. These are not relaxed
+barriers, free energies, solution populations, kinetics or activity predictions. Unsaved studies
+live in the current tab; a reload discards them. No installed package or existing user molecule was
+changed. The full catalog goal remains active; remaining detailed review includes productivity,
+research/browser, monitoring, local AI and the unlisted Jev experiments.
