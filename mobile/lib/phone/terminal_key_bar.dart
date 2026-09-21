@@ -4,52 +4,60 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:xterm/xterm.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+
 import 'phone_sheet.dart';
 
 /// The keys a phone keyboard does not have, in a strip above the one it does.
 ///
-/// A pane is driven by `esc`, `tab`, the arrows and `ctrl` far more than by
-/// anything the alphabet offers — interrupting Claude Code, cycling its modes,
-/// walking shell history, `^C`. None of them exist on a software keyboard, so
+/// A pane is driven by `esc` and the arrows far more than by anything the
+/// alphabet offers — interrupting Claude Code, walking shell history, moving
+/// through a menu. None of them exist on a software keyboard, so
 /// until this strip a phone could type at an agent but could not DRIVE one.
 ///
 /// It appears with the keyboard and goes away with it: the terminal is short
-/// enough on a phone that two rows of chrome are worth their height only while
-/// someone is actually typing.
+/// enough on a phone that chrome is worth its height only while someone is
+/// actually typing.
 ///
-/// ⚠️ **Two FIXED rows, and nothing scrolls.** A horizontal scroller was tried
-/// and reverted: at a comfortable key width only four keys fit a 393pt phone, so
-/// the arrows and `ctrl` — the two most-pressed things here — ended up behind a
-/// swipe, and a `»` key had to exist to reach the digits. Every key being in the
-/// same place every time is worth more than any of them being bigger: this strip
-/// is used while looking at the TERMINAL, not at the strip.
+/// ⚠️ **ONE row, fixed, and nothing scrolls.** It used to be two — `↵`, `⇧tab`,
+/// `ctrl` and a row of digits beside what is here now — and the second row cost
+/// the terminal a line of output for keys the system keyboard below already
+/// types (the digits) or that were rarely reached for. What is left is what a
+/// phone keyboard cannot produce, or buries, and a pane is driven by:
 ///
-/// `~ | / -` are deliberately gone from this row. The system keyboard one row
-/// below types all four, which is exactly what the row above it should not spend
-/// space on — unlike `↵` and `⇧tab`, which it cannot produce at all.
+/// ```
+/// esc tab clear ← ↑ ↓ → /  │  🖼 ⌄
+/// ```
+///
+/// Every key stays in the same place every time; this strip is used while
+/// looking at the TERMINAL, not at the strip.
 class TerminalKeyBar extends StatelessWidget {
   const TerminalKeyBar({
     super.key,
     required this.terminal,
     required this.enabled,
-    required this.controlArmed,
-    required this.onControlToggle,
     required this.onDismissKeyboard,
+    this.onClearPrompt,
+    this.onPromptEdited,
     this.onPickImage,
     this.onTakePhoto,
   });
 
   final Terminal terminal;
 
+  /// The `clear` key: empties the prompt being typed into. Null leaves the key
+  /// out.
+  final VoidCallback? onClearPrompt;
+
+  /// Called after `tab` or `/` changed the prompt without the software
+  /// keyboard knowing — so its buffer can be emptied before it edits words the
+  /// prompt no longer holds.
+  final VoidCallback? onPromptEdited;
+
   /// False while the stream is not accepting input — the strip stays visible
   /// (it moves with the keyboard, and a row that vanished would take the
   /// keyboard's place with it) but dims and stops answering.
   final bool enabled;
 
-  /// Whether the next character typed leaves as a control chord. Owned by the
-  /// session, which is also what spends it — see `TerminalSession.armControl`.
-  final bool controlArmed;
-  final ValueChanged<bool> onControlToggle;
   final VoidCallback onDismissKeyboard;
 
   /// Sending a picture. Null on a pane that cannot take one — an older CLI that
@@ -60,13 +68,6 @@ class TerminalKeyBar extends StatelessWidget {
   final VoidCallback? onTakePhoto;
 
   bool get _canSendImage => onPickImage != null || onTakePhoto != null;
-
-  /// The width of a key that sits OUTSIDE the grid — see `apart` in [build].
-  ///
-  /// Square, and stated rather than shared with the grid on purpose: the grid
-  /// keys stretch to fill whatever the row leaves them, and these must not move
-  /// when a digit is added or the image key is absent.
-  static const double _apartKeyWidth = 34;
 
   void _send(void Function() action) {
     if (!enabled) return;
@@ -111,25 +112,20 @@ class TerminalKeyBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    // Row one is what drives an engine: leave a mode, complete a path, send,
-    // cycle Claude Code's modes, walk history. The image key ends it because
-    // sending a picture is a deliberate act, not something done mid-sentence —
-    // but it is still HERE, on screen, not behind anything.
-    final top = <Widget>[
+    // What drives an engine and a phone keyboard lacks: leave a mode, walk
+    // history, move through a menu.
+    final onClearPrompt = this.onClearPrompt;
+    final keys = <Widget>[
       _key(label: 'esc', onTap: () => terminal.keyInput(TerminalKey.escape)),
-      _key(label: 'tab', onTap: () => terminal.keyInput(TerminalKey.tab)),
+      // Completes a path or a command, and moves through Claude Code's menus.
       _key(
-        icon: LucideIcons.cornerDownLeft300,
-        semanticLabel: 'Enter',
-        onTap: () => terminal.keyInput(TerminalKey.enter),
+        label: 'tab',
+        onTap: () {
+          terminal.keyInput(TerminalKey.tab);
+          onPromptEdited?.call();
+        },
       ),
-      // Shift+Tab is CSI Z, and xterm builds it from the modifier rather than
-      // from a key of its own — which is why this passes `shift` instead of
-      // looking for a `TerminalKey.shiftTab` that does not exist.
-      _key(
-        label: '⇧tab',
-        onTap: () => terminal.keyInput(TerminalKey.tab, shift: true),
-      ),
+      if (onClearPrompt != null) _key(label: 'clear', onTap: onClearPrompt),
       _key(
         icon: LucideIcons.arrowLeft300,
         semanticLabel: 'Left',
@@ -150,15 +146,15 @@ class TerminalKeyBar extends StatelessWidget {
         semanticLabel: 'Right',
         onTap: () => terminal.keyInput(TerminalKey.arrowRight),
       ),
-    ];
-    final bottom = <Widget>[
+      // Last before the rule, beside the image key: how a slash command
+      // starts, and a phone keyboard buries `/` a layer down.
       _key(
-        label: 'ctrl',
-        held: controlArmed,
-        onTap: () => onControlToggle(!controlArmed),
+        label: '/',
+        onTap: () {
+          terminal.textInput('/');
+          onPromptEdited?.call();
+        },
       ),
-      for (final digit in const ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'])
-        _key(label: digit, onTap: () => terminal.textInput(digit)),
     ];
     // ⚠️ **Neither of these sends a byte anywhere**, and that is why they sit
     // apart from the grid rather than in it. Every key to the left of the rule
@@ -196,38 +192,24 @@ class TerminalKeyBar extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.all(6),
           // Held out of the app-wide text scale like the composer's own type:
-          // at a large scale twelve keys across a phone stop fitting the row.
+          // at a large scale the keys stop fitting the row.
           child: MediaQuery.withNoTextScaling(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+            // Every key the same width, the two apart ones included — they are
+            // separated by the rule, not by being a different size.
+            child: Row(
               children: [
-                // The pair sits beside the SHORTER row, and the arithmetic is
-                // the whole reason: row one carries eight keys and row two
-                // eleven, so taking ~85pt out of row two would squeeze the
-                // digits to 23pt — narrower than the system keyboard's own keys
-                // right below them. Beside row one they cost it 44pt → 33pt,
-                // which is where the old bar's keys already were.
-                Row(
-                  children: [
-                    Expanded(child: _row(top)),
-                    const SizedBox(width: 8),
-                    // The rule earns its place only when there are two kinds of
-                    // thing to separate. Against an older CLI the image key is
-                    // absent and `⌄` is all that is left — it lived inside the
-                    // grid before this, so a rule drawn for it alone would be
-                    // marking a distinction that is no longer being made.
-                    if (_canSendImage) ...[
-                      Container(width: 1, height: 22, color: AppGlass.hair),
-                      const SizedBox(width: 8),
-                    ],
-                    for (var index = 0; index < apart.length; index++) ...[
-                      if (index > 0) const SizedBox(width: 4),
-                      SizedBox(width: _apartKeyWidth, child: apart[index]),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 6),
-                _row(bottom),
+                ..._row(keys),
+                // The rule earns its place only when there are two kinds of
+                // thing to separate. Against an older CLI the image key is
+                // absent and `⌄` is all that is left, so a rule drawn for it
+                // alone would be marking a distinction that is no longer made.
+                if (_canSendImage) ...[
+                  const SizedBox(width: 8),
+                  Container(width: 1, height: 22, color: AppGlass.hair),
+                  const SizedBox(width: 8),
+                ] else
+                  const SizedBox(width: 4),
+                ..._row(apart),
               ],
             ),
           ),
@@ -236,36 +218,26 @@ class TerminalKeyBar extends StatelessWidget {
     );
   }
 
-  /// One row, every key sharing the width equally.
-  ///
-  /// `Expanded` rather than a fixed width: the keys then land on the same grid
-  /// the system keyboard below uses, which is what lets a thumb find one without
-  /// looking. It also means a row of nine and a row of twelve both fill the
-  /// phone rather than ending in a ragged gap.
-  Widget _row(List<Widget> keys) => Row(
-    children: [
-      for (var index = 0; index < keys.length; index++) ...[
-        if (index > 0) const SizedBox(width: 4),
-        Expanded(child: keys[index]),
-      ],
+  /// A run of keys for the strip's one [Row], each `Expanded` with the same
+  /// flex — so every key on the strip, on either side of the rule, gets the
+  /// same width, and the row fills the phone rather than ending in a gap.
+  List<Widget> _row(List<Widget> keys) => [
+    for (var index = 0; index < keys.length; index++) ...[
+      if (index > 0) const SizedBox(width: 4),
+      Expanded(child: keys[index]),
     ],
-  );
+  ];
 
   Widget _key({
     String? label,
     IconData? icon,
     String? semanticLabel,
-    bool held = false,
     bool alwaysEnabled = false,
     required VoidCallback onTap,
   }) {
     assert((label == null) != (icon == null), 'a key carries one of the two');
     final live = enabled || alwaysEnabled;
-    final foreground = held
-        ? AppPalette.accentOnSurface
-        : live
-        ? AppPalette.textPrimary
-        : AppPalette.textFaint;
+    final foreground = live ? AppPalette.textPrimary : AppPalette.textFaint;
     return Semantics(
       button: true,
       label: semanticLabel ?? label,
@@ -280,22 +252,28 @@ class TerminalKeyBar extends StatelessWidget {
           height: 34,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: held ? AppSurface.accentWash : AppGlass.surfaceFill,
+            color: AppGlass.surfaceFill,
             borderRadius: BorderRadius.circular(7),
-            border: Border.all(
-              color: held ? AppPalette.accentOnSurface : AppGlass.lift,
-            ),
+            border: Border.all(color: AppGlass.lift),
           ),
           child: icon != null
               ? Icon(icon, size: 16, color: foreground)
-              : Text(
-                  label!,
-                  maxLines: 1,
-                  style: TextStyle(
-                    fontSize: 13,
-                    height: 1,
-                    color: foreground,
-                    fontWeight: FontWeight.w500,
+              // Shrinks rather than clips: ten keys share a phone's width, and
+              // `clear` is the widest word among them.
+              : Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      label!,
+                      maxLines: 1,
+                      style: TextStyle(
+                        fontSize: 13,
+                        height: 1,
+                        color: foreground,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
                   ),
                 ),
         ),

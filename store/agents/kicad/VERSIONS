@@ -4,7 +4,13 @@
 # commit on that branch. The fetch is by commit, so an unmerged branch is fine.
 UPSTREAM_NAME="autonomous-circuit"
 UPSTREAM_REPO="https://github.com/autonomous-ai/autonomous-circuit.git"
-UPSTREAM_COMMIT="9293ee1d9064146d2d2303a7d3653d1f046ac985"
+UPSTREAM_COMMIT="9f85566c85e912ddf28b265f45f592c36e37de3c"
 # Everything but its product library and examples (118 MB a board build never reads).
 UPSTREAM_SPARSE_MODE="no-cone"
 UPSTREAM_SPARSE="/* !/products/ !/examples/"
+# KiCad itself, vendored by toolchain/kicad.sh on macOS: the official unified DMG (the artifact
+# Homebrew's cask installs), copied into <install>/kicad/KiCad.app without 3D models and help.
+KICAD_VERSION="10.0.6"
+KICAD_DMG_URL="https://github.com/KiCad/kicad-source-mirror/releases/download/10.0.6/kicad-unified-universal-10.0.6.dmg"
+KICAD_DMG_SHA256="ef4dcd4278c46d3efcd28c8db273d5957d68efda028f6bf79b4811fc5302dc68"
+KICAD_DMG_BYTES="1404303659"

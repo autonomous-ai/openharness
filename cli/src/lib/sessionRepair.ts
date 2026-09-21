@@ -252,8 +252,12 @@ export async function findLiveSession(
   const dirs = real === cwd ? [cwd] : [cwd, real]
   const dirList = dirs.map(quote).join(', ')
   switch (engine) {
-    case 'claude':
-      return fileEngineSession(env.CLAUDE_PROJECTS_DIR, cwd, startedAtMs, readTranscriptMeta, opts)
+    case 'claude': {
+      // Native Claude publishes a PID-to-conversation record even before a hook binds it.
+      // Unlike a directory scan this also identifies an old process in a busy project.
+      const exact = opts?.pid ? await claudeProcessSession(opts.pid, cwd, startedAtMs) : null
+      return exact ?? fileEngineSession(env.CLAUDE_PROJECTS_DIR, cwd, startedAtMs, readTranscriptMeta, opts)
+    }
     case 'codex':
       // Codex writes no `cwd` on line one; its rollout meta carries it — and says whether the rollout
       // belongs to a subagent, which must never become an agent of its own.
@@ -460,4 +464,20 @@ export async function findResumedTranscript(
     } catch { /* not this project */ }
   }
   return null
+}
+
+/** Claude's native process record is removed at exit; capture it before Stop signals the engine. */
+export async function claudeProcessSession(pid: number, cwd: string, startedAtMs: number): Promise<RepairedSession | null> {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isFinite(startedAtMs)) return null
+  try {
+    const record = JSON.parse(await readFile(join(dirname(env.CLAUDE_PROJECTS_DIR), 'sessions', `${pid}.json`), 'utf8'))
+    // procStart is UTC in current Claude, while older builds used the host's local ps format.
+    // Both represent the exact second, not the metadata file's modification time or a recycled PID.
+    if (record.pid !== pid || typeof record.procStart !== 'string'
+      || ![Date.parse(record.procStart), Date.parse(`${record.procStart} UTC`)].includes(startedAtMs)
+      || typeof record.cwd !== 'string' || !await sameDir(record.cwd, cwd)
+      || typeof record.sessionId !== 'string') return null
+    const transcriptPath = await findResumedTranscript('claude', record.sessionId)
+    return transcriptPath ? { sessionId: record.sessionId, transcriptPath } : null
+  } catch { return null }
 }

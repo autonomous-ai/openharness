@@ -168,10 +168,45 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   KeyEventResult _onKeyEvent(FocusNode focusNode, KeyEvent event) {
     if (_currentEditingState.composing.isCollapsed) {
+      if (_isBufferBackspace(event)) {
+        _cancelPendingDeletes();
+        _applyNativeBackspace();
+        return KeyEventResult.handled;
+      }
       return widget.onKeyEvent(focusNode, event);
     }
 
     return KeyEventResult.skipRemainingHandlers;
+  }
+
+  /// A plain Backspace from a phone keyboard, arriving as a KEY while the native buffer still holds
+  /// text this side has mirrored to the pty.
+  ///
+  /// ⚠️ **Gboard sends Backspace as a key event, not as an edit to its buffer** — and a key the
+  /// terminal consumes deletes on the pty while the buffer the keyboard edits keeps the letter. The
+  /// two then disagree about what is on the line: after "xin chào" and four Backspaces the keyboard
+  /// still holds "xin chào", appends the next word to it ("xin chàochao"), and when Telex re-marks
+  /// that run the diff against it deletes and retypes characters that were already gone — "chào"
+  /// typed again came out as "xiaochaof".
+  ///
+  /// So the deletion is made IN the buffer and the buffer handed back to the keyboard; the pty gets
+  /// the same one delete through [_syncTerminalText]. An empty buffer (a fresh prompt) still sends
+  /// the delete straight on — see [_applyNativeBackspace].
+  ///
+  /// Only without modifiers: Ctrl/Alt+Backspace mean something else to a shell, and only on a phone,
+  /// where the software keyboard is the input method. A desktop IME reaches Backspace through
+  /// `performSelector` instead, which already edits the buffer.
+  bool _isBufferBackspace(KeyEvent event) {
+    if (!_composesThroughSoftwareKeyboard) return false;
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return false;
+    if (event.logicalKey != LogicalKeyboardKey.backspace) return false;
+    final keyboard = HardwareKeyboard.instance;
+    if (keyboard.isControlPressed ||
+        keyboard.isAltPressed ||
+        keyboard.isMetaPressed) {
+      return false;
+    }
+    return _currentEditingState.text != _initEditingState.text;
   }
 
   void _openOrCloseInputConnectionIfNeeded() {
@@ -330,7 +365,11 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     if (submitted == null) return false;
     // The newline either lands on the buffer the action was performed on, or
     // after this side's reset has already emptied it — whichever wins the race.
-    if (value.text != '$submitted\n' && value.text != '\n') return false;
+    // "Emptied" is the delete-detection padding when that is on.
+    if (value.text != '$submitted\n' &&
+        value.text != '${_initEditingState.text}\n') {
+      return false;
+    }
     _connection?.setEditingState(_currentEditingState);
     return true;
   }
@@ -387,6 +426,13 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       widget.onInsert(edit.inserted);
     }
     _terminalText = value;
+    // ⚠️ The padding is spent one space per Backspace past the typed text, and
+    // the buffer is kept between keys (Telex needs it), so nothing else puts it
+    // back: two deletes into a line the keyboard never typed — a voice
+    // transcript, a recalled command — and Backspace goes dead again.
+    if (widget.deleteDetection && !value.startsWith(_initEditingState.text)) {
+      resetEditingState();
+    }
   }
 
   int _composingBacktrackCells(int composingStart) {

@@ -1,8 +1,8 @@
-# Releasing the iOS app
+# Releasing the mobile app
 
 The App Store record is **Autonomous Harness** (`ai.autonomous.harness.ios`, team 54DJVWMJCC —
-Autonomous Inc.). Everything below is the iOS side only; the desktop app ships from
-`desktop/RELEASE.md` on its own tags and shares nothing with this.
+Autonomous Inc.). Everything up to [Android](#android--google-play) is the iOS side; the desktop app
+ships from `desktop/RELEASE.md` on its own tags and shares nothing with this.
 
 ## The two numbers that decide whether an upload is visible at all
 
@@ -54,8 +54,23 @@ icon size in thirty seconds instead of in an email twenty minutes later.
 | `1.0.0 (2)` | 2026-09-16 | TestFlight. Universal (iPhone + iPad) — superseded |
 | `1.0.0 (3)` | 2026-09-16 | TestFlight. **iPhone only** |
 | `1.0.0 (4)` | 2026-09-16 | TestFlight. Adds agent/machine search (`feat/mobile-search`) |
+| `1.0.0 (5)` | 2026-09-16 | TestFlight. Agent creation flow; Machines tab pairs/unpairs |
+| `1.0.0 (6)` | 2026-09-16 | TestFlight. Custom voice input on a terminal tap — misheard Vietnamese, removed for the keyboard's own dictation |
+| `1.0.0 (7)` | 2026-09-17 | TestFlight. Voice input back, transcribed by the backend (`/api/voice/stt`); opens on the last agent's terminal |
+| `1.0.0 (8)` | 2026-09-17 | TestFlight. Search grouped by folder, most recent first, one-bar field; keyboard only from a tap on the prompt; hold-to-talk mic; slimmer terminal chrome |
+| `1.0.0 (9)` | 2026-09-17 | TestFlight. Terminal chrome rebuilt around a search bar, header folds away on scroll, ⋯ sheet grouped into Agent / Machines / App |
+| `1.0.0 (10)` | 2026-09-17 | TestFlight. Smoother swipes and scrolling: parked and keyboard-sliding terminals keep painting; the header folds over the terminal instead of resizing it |
+| `1.0.0 (11)` | 2026-09-17 | TestFlight. Agents either side of the one on screen open in advance, so a swipe lands on output instead of "Attaching…" |
+| `1.0.0 (12)` | 2026-09-18 | TestFlight. Named OpenHarness on the home screen and in the app; Backspace on the phone erases text typed on the desktop; Machines moved into the ⋯ sheet; hold-to-talk hardened |
+| `1.0.0 (13)` | 2026-09-18 | TestFlight. Search reads what agents said (the desktop's content index), recent first; Vietnamese Telex in the search field; terminal search has no Cancel, and the terminal holds still as it closes |
+| `1.0.0 (14)` | 2026-09-18 | TestFlight. Voice sends on the second tap again — as a composer turn, not keystrokes Codex read as a paste and left unsent; the terminal scrolls again after New Agent → back |
+| `1.0.0 (15)` | 2026-09-18 | TestFlight. The floating mic, Search and + are always there, on a see-through background |
+| `1.0.0 (17)` | 2026-09-18 | TestFlight. The terminal holds still as the keyboard opens. (16 went to Play only) |
+| `1.0.0 (18)` | 2026-09-18 | TestFlight. Tab, clear and `/` on the terminal's key bar; account-wide agents list in the terminal sheet; the phone sheet no longer cuts off its last rows |
+| `1.0.0 (19)` | 2026-09-18 | TestFlight. The floating mic, Search and + sit on frosted glass, so they stand out from the output under them |
+| `1.0.0 (20)` | 2026-09-21 | TestFlight. The phone holds only the agent on screen: the two beside it are no longer opened in advance, and the one swiped away from is closed — each hands its terminal back to the desktop. Voice keeps the audio at both ends of a take |
 
-`pubspec.yaml` is therefore at `1.0.0+5`: the repo always holds the NEXT build number, so a release
+`pubspec.yaml` is therefore at `1.0.0+21`: the repo always holds the NEXT build number, so a release
 runs clean without anyone having to remember the last one.
 
 ### Why the app is iPhone-only
@@ -181,6 +196,10 @@ owned by the user's own machine, which is why an account with no paired machine 
 
 The camera permission is used only when sending a photo into a session (Agents ▸ a session ▸ the
 image button).
+
+The microphone permission is used only for voice input: the mic button under a session's terminal
+records what is said, and it is transcribed into the message sent to that session (a session ▸ the
+mic at the bottom right).
 ```
 
 ## Submitting
@@ -199,3 +218,71 @@ terminates its own end-to-end encryption (X25519, ChaCha20-Poly1305, a CPace PAK
 that answer is very likely wrong. Settle it with whoever owns export compliance before submitting: a
 wrong answer is not a build failure, it is review asking a question and the version standing still
 until someone answers it.
+
+## Android — Google Play
+
+The Play app is **OpenHarness**, package **`ai.autonomous.harness.android`**. ⚠️ That id is permanent
+from the first upload on: Play keys the app on it and there is no renaming it afterwards.
+
+### Build
+
+```bash
+bash mobile/scripts/release-android.sh   # -> build/app/outputs/bundle/release/app-release.aab
+```
+
+It builds and checks the bundle is signed with the upload key; it does not upload. Play takes the
+`.aab` by hand: Play Console ▸ OpenHarness ▸ *Test and release* ▸ a track ▸ **Create new release**.
+
+The versionCode is the same `+N` as the iOS build number. Each store keeps its own count, so one `+N`
+can go to both — but Play refuses a versionCode it has seen, exactly as App Store Connect does, so the
+`+N` is bumped after an upload to either store.
+
+### The upload key
+
+```
+~/.android-release/harness-upload.jks          the upload key (PKCS12, alias `upload`)   (chmod 600)
+~/.android-release/harness-upload.properties   its path and passwords                    (chmod 600)
+```
+
+Outside this public repo for the same reason the App Store Connect key is. `android/app/build.gradle.kts`
+reads the `.properties` (or `HARNESS_ANDROID_SIGNING`, for CI); without it a release build signs with
+the debug key so `flutter run --release` still works anywhere, and the script refuses to build.
+
+**Play App Signing** holds the real app signing key — accept Google's generated key when the first
+release asks. This one only proves an upload came from us, so a lost one is recoverable (Play Console
+▸ *App integrity* ▸ request an upload key reset), but that takes days. **Back both files up to the
+team's password manager.**
+
+### First release — once
+
+1. **Create app** (Play Console ▸ *Create app*): name `OpenHarness`, default language, *App*, *Free*.
+2. **App content** — Play will not publish anything to production while one of these is open:
+   - *Privacy policy*: required (the app asks for the camera and microphone). Same URL as iOS.
+   - *App access*: sign-in is required → give the demo account from the iOS review notes, and keep a
+     machine paired to it online, for the same reason as [App Review notes](#app-review-notes--the-part-that-gets-10-rejected).
+   - *Ads*: no. *Content rating*: fill the questionnaire (a utility, no user-generated content shown
+     to others). *Target audience*: 18+.
+   - *Data safety*: the [App Privacy](#app-privacy) table above, restated — email address and user ID
+     (app functionality, analytics), app interactions (analytics); all encrypted in transit; no data
+     shared with third parties; crash logs stay on the device.
+     ⚠️ **Plus Audio ▸ Voice or sound recordings (app functionality)**, which that table leaves out:
+     voice input uploads the recording to the backend's `/api/voice/stt` to be transcribed. Declare it
+     *processed ephemerally* only if the backend keeps nothing — TODO(BE): confirm. The same gap is on
+     the iOS side (App Privacy ▸ Audio Data). Pictures sent to an agent are not collected: they go end
+     to end to the user's own machine, where we cannot read them.
+3. **Store listing**: the iOS subtitle and description fit the short (80) and full (4000) fields;
+   plus a 512×512 icon, a 1024×500 feature graphic, and at least two phone screenshots.
+4. **Internal testing** first: *Create new release* ▸ upload the `.aab` ▸ add testers by email ▸ share
+   the opt-in link. Live for testers within minutes, no review.
+5. **Production**: *Create new release* ▸ same `.aab` (or *Promote release*) ▸ **Send for review**.
+   A new app's first review takes days, not hours.
+
+⚠️ A **personal** developer account created after November 2023 must first run a *closed* test with
+at least 12 opted-in testers for 14 days before it can even apply for production. An organization
+account (Autonomous Inc.) is exempt — check which kind the account is before planning a date.
+
+### Already built
+
+| versionCode | When | Where it went |
+| --- | --- | --- |
+| `16` (1.0.0) | 2026-09-18 | Internal testing — the first Play upload |

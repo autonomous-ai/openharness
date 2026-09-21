@@ -187,7 +187,8 @@ void main() {
       await tester.pump(const Duration(milliseconds: 150));
       expect(box.engine, 'codex');
       expect(find.text('Start'), findsOneWidget);
-      expect(find.text('New Harness / New Tab'), findsOneWidget);
+      expect(find.text('New Harness'), findsOneWidget);
+      expect(find.text('New Tab'), findsOneWidget);
       await key(tester, LogicalKeyboardKey.enter);
       await tester.pump();
       expect(app.launches, hasLength(1));
@@ -562,6 +563,46 @@ void main() {
     },
   );
 
+  testWidgets(
+    'New Tab caption stays centered in the visible area above each dock',
+    (tester) async {
+      final app = _FirstApp();
+      addTearDown(app.dispose);
+      app.machineStates['m']!.agents = [
+        Agent(id: 'saved', name: 'Robot arm', engine: 'claude'),
+      ];
+      await _mount(tester, app, FirstHarnessLaunch());
+      await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+      await tester.pumpAndSettle();
+      final page = find.byKey(const ValueKey('new-tab-start-page')).last;
+      final tagline = find.byKey(const ValueKey('new-tab-tagline')).last;
+      void expectCentered() {
+        expect(tester.getCenter(tagline), tester.getRect(page).center);
+        expect(
+          find.descendant(of: page, matching: find.byType(Image)),
+          findsNothing,
+        );
+      }
+
+      expectCentered();
+
+      final search = find.byKey(const ValueKey('swarm-search-input'));
+      await tester.enterText(search, 'nothing matches');
+      await tester.pumpAndSettle();
+      expectCentered();
+
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+      await tester.pumpAndSettle();
+      expect(find.byType(NewHarnessBox), findsOneWidget);
+      expectCentered();
+      expect(
+        tester.getRect(find.byType(NewHarnessBox)).top,
+        greaterThan(tester.getRect(tagline).bottom),
+      );
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   final output = Platform.environment['GUIDE_RENDER_DIR'];
   testWidgets('render first entry guide', skip: output == null, (tester) async {
     await tester.runAsync(() async {
@@ -603,6 +644,20 @@ void main() {
         find.byType(MaterialApp),
         matchesGoldenFile(Uri.file('$output/$name-compact.png')),
       );
+      if (hasHarnesses) {
+        await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+        for (final (size, name) in [
+          (const Size(1280, 800), 'new-tab'),
+          (const Size(960, 640), 'new-tab-compact'),
+        ]) {
+          tester.view.physicalSize = size;
+          await tester.pumpAndSettle();
+          await expectLater(
+            find.byType(MaterialApp),
+            matchesGoldenFile(Uri.file('$output/$name.png')),
+          );
+        }
+      }
       await tester.pumpWidget(const SizedBox());
     }
   });

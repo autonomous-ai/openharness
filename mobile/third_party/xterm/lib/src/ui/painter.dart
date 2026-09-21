@@ -184,6 +184,11 @@ class TerminalPainter {
   void paintCellForeground(Canvas canvas, Offset offset, CellData cellData) {
     final charCode = cellData.content & CellContent.codepointMask;
     if (charCode == 0) return;
+    // A plain space has no ink — its colour is [paintCellBackground]'s — and a
+    // TUI's screen is mostly spaces: padding, box interiors, the tail of every
+    // short line. Each one was still a hash, a cache lookup and a
+    // `drawParagraph`, every frame. Only an underlined space draws (see below).
+    if (charCode == 0x20 && cellData.flags & CellFlags.underline == 0) return;
 
     final cacheKey = cellData.getHash() ^ _textScaler.hashCode;
     var paragraph = _paragraphCache.getLayoutFromCache(cacheKey);

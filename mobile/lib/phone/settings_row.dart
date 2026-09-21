@@ -31,6 +31,16 @@ const double kSettingsRowHeight = 50;
 /// Re-measure if the icon size or the icon pack changes; this number belongs to both.
 const double _chevronInk = 6.68;
 
+/// A row's own left padding, and the step a [SettingsRow.nested] child takes beyond it.
+///
+/// The step is the glyph's box plus the gap after it, so a child's TITLE begins exactly where its
+/// parent's title does. Written as the sum rather than as the number it comes to, because the three
+/// parts are set independently below and a hand-rounded total would drift away from them.
+const double _rowPadding = 13;
+const double _rowGlyph = 18;
+const double _rowGlyphGap = 12;
+const double _nestedPadding = _rowPadding + _rowGlyph + _rowGlyphGap;
+
 /// A caption over a run of rows.
 class SettingsCaption extends StatelessWidget {
   const SettingsCaption(this.text, {super.key});
@@ -140,6 +150,7 @@ class SettingsRow extends StatelessWidget {
     this.trailing,
     this.onTap,
     this.destructive = false,
+    this.nested = false,
   });
 
   final String title;
@@ -157,6 +168,15 @@ class SettingsRow extends StatelessWidget {
   final VoidCallback? onTap;
   final bool destructive;
 
+  /// Draws this row as a CHILD of the one above it — the Codex profiles under Codex, the folders
+  /// under Recent.
+  ///
+  /// ⚠️ Indent, not a nested group. A group of its own would draw its own card edge and read as a
+  /// separate question; the whole point is that these rows belong to the row above. The step is the
+  /// width [leading] occupies plus its gap, so a child without a glyph lines up under its parent's
+  /// TEXT rather than under the parent's icon.
+  final bool nested;
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
@@ -168,10 +188,18 @@ class SettingsRow extends StatelessWidget {
       // in a group clears the same bar — without it a row carrying a stepper (34pt tall) stands
       // visibly taller than one carrying only a value, and a group of four reads as ragged.
       constraints: const BoxConstraints(minHeight: kSettingsRowHeight),
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+      padding: EdgeInsets.fromLTRB(
+        nested ? _nestedPadding : _rowPadding,
+        8,
+        _rowPadding,
+        8,
+      ),
       child: Row(
         children: [
-          if (leading != null) ...[leading!, const SizedBox(width: 12)],
+          if (leading != null) ...[
+            leading!,
+            const SizedBox(width: _rowGlyphGap),
+          ],
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

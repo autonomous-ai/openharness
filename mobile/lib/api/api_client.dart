@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 
 import '../auth/auth_session.dart';
@@ -6,6 +8,7 @@ import '../core/models.dart';
 import '../logging/http_log.dart';
 import 'access_token_source.dart';
 import 'bearer_auth_interceptor.dart';
+import 'multipart_body.dart';
 
 /// Control-plane REST client.
 ///
@@ -80,6 +83,38 @@ class ApiClient {
       options: Options(headers: {'x-adapter-local': '1'}),
     );
     unwrapApiResponse(res);
+  }
+
+  // -- voice (backend only: the viewer's own SSO session signs it) --
+
+  /// The words in one WAV recording, in [lang] — `POST /api/voice/stt`, the
+  /// endpoint the dial's recordings reach through the CLI, called here with the
+  /// token this viewer already holds.
+  ///
+  /// [lang] must be one the backend serves (`VOICE_WAV_LANGS` in the backend's
+  /// `lib/deepgramWav.ts`); anything else is transcribed as English there.
+  Future<String> transcribeVoice(Uint8List wav, {required String lang}) async {
+    final body = multipartFileBody(
+      field: 'file',
+      filename: 'voice.wav',
+      fileContentType: 'audio/wav',
+      file: wav,
+      boundary: 'harness-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    final res = await _dio.post(
+      '/api/voice/stt',
+      queryParameters: {'lang': lang},
+      data: body.bytes,
+      options: Options(
+        contentType: body.contentType,
+        // A take can run five minutes — megabytes on a phone connection — and
+        // the backend waits on the transcription provider before it answers.
+        sendTimeout: const Duration(minutes: 2),
+        receiveTimeout: const Duration(minutes: 2),
+      ),
+    );
+    final data = unwrapApiResponse(res) as Map<String, dynamic>;
+    return (data['transcript'] as String? ?? '').trim();
   }
 }
 

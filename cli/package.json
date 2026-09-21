@@ -19,7 +19,9 @@
     "test:remote-viewers": "vitest run --config vitest.viewer.config.ts",
     "test:cursor-e2e": "RUN_CURSOR_E2E=1 vitest run src/engines/cursor/localE2e.spec.ts",
     "test:tmux-real": "RUN_REAL_TMUX_DISCOVERY=1 vitest run src/lib/tmuxAgentDiscovery.real.spec.ts --reporter=verbose",
-    "test:herdr-real": "RUN_REAL_HERDR=1 vitest run src/lib/herdrBackend.real.spec.ts --reporter=verbose"
+    "test:herdr-real": "RUN_REAL_HERDR=1 vitest run src/lib/herdrBackend.real.spec.ts --reporter=verbose",
+    "test:resume": "vitest run src/lib/sessionRepair.spec.ts src/lib/captureResumeIdentity.spec.ts src/lib/resumeStoppedAgent.spec.ts src/lib/resumeAgentService.spec.ts src/lib/stoppedAgents.spec.ts src/lib/stopAgentService.spec.ts --coverage --coverage.include=src/lib/captureResumeIdentity.ts --coverage.include=src/lib/resumeStoppedAgent.ts --coverage.include=src/lib/resumeAgentService.ts --coverage.include=src/lib/stoppedAgents.ts --coverage.include=src/lib/stopAgentService.ts --coverage.thresholds.lines=100 --coverage.thresholds.statements=100 --coverage.thresholds.branches=100 --coverage.thresholds.functions=100 --coverage.reporter=text --coverage.reporter=json --coverage.reportsDirectory=coverage/resume",
+    "test:resume-native": "tsx scripts/resume-native-e2e.ts"
   },
   "dependencies": {
     "@noble/ciphers": "^1.3.0",

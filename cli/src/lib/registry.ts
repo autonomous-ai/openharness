@@ -73,6 +73,8 @@ export interface RegisteredSession {
   active: boolean
   /** Harness-created panes can be rendered before their engine process exists. Absent on legacy rows. */
   launch?: AgentLaunch
+  /** Enter on stopped work must never become a fresh conversation, including after a daemon restart. */
+  resumeOnly?: true
   /**
    * THE AGENT. Public identity: this is what web tabs, device tiles and every inbound frame address.
    *
@@ -387,7 +389,7 @@ function rowFingerprint(row: unknown): string {
   return JSON.stringify(row)
 }
 
-function atomicWriteJson(file: string, value: unknown, exclusive = false): void {
+export function atomicWriteJson(file: string, value: unknown, exclusive = false): void {
   const exists = hardenPrivateStateFileIfPresent(file)
   if (exclusive && exists) return
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
@@ -441,7 +443,7 @@ function persistedRow(entry: RegisteredSession): RegisteredSession | Omit<Regist
   return { ...row, runtimes: row.runtimes.map((runtime) => ({ ...runtime })) }
 }
 
-function strictPersistedRow(value: unknown): RegisteredSession | null {
+export function strictPersistedRow(value: unknown): RegisteredSession | null {
   if (!value || typeof value !== 'object') return null
   const row = value as Partial<RegisteredSession>
   const runtimes = normalizedRuntimes(row.runtimes, row.tmuxPane)
@@ -860,6 +862,7 @@ class Registry {
           schemaVersion: 2,
           active,
           ...(launch ? { launch } : {}),
+          ...(raw.resumeOnly === true ? { resumeOnly: true } : {}),
           agentId,
           boundAt: bound ? (typeof raw.boundAt === 'number' ? raw.boundAt : (raw.registeredAt ?? now)) : null,
           engine,
@@ -1018,7 +1021,7 @@ class Registry {
       existing.cwd = input.cwd ?? existing.cwd
       existing.processIdentity = processIdentity
       existing.active = true
-      if (existing.launch) existing.launch = { state: 'ready' }
+      if (existing.launch && !existing.resumeOnly) existing.launch = { state: 'ready' }
       // Only a successful read speaks: an undefined probe (ps failed, /proc unreadable) keeps whatever
       // the last good one said rather than silently downgrading a gateway agent to a vendor one.
       if (input.gateway !== undefined) existing.gateway = input.gateway
@@ -1163,6 +1166,32 @@ class Registry {
     return entry
   }
 
+  /** A stopped agent gets a new terminal route while keeping its saved conversation and identity.
+   * Archived routes/processes are evidence only: none of them may be indexed or signalled here. */
+  resumePendingAgent(saved: RegisteredSession, runtimes: TerminalRuntimeRef[]): RegisteredSession | null {
+    if (this.writeBlocked || this.agents.has(saved.agentId)
+      || (saved.sessionId && this.bySession(saved.sessionId))) return null
+    const routes = normalizedRuntimes(runtimes)
+    if (!routes.length || routes.some(route => this.runtimeIndex.has(terminalRouteKey(route)))) return null
+    const entry: RegisteredSession = {
+      ...saved,
+      resumeOnly: true,
+      boundAt: null,
+      lastHookAt: 0,
+      active: true,
+      launch: { state: 'starting' },
+      processIdentity: null,
+      runtimes: routes,
+      primaryRuntimeKey: selectedRuntimeKey(routes, ''),
+      tmuxPane: tmuxProjection(routes),
+      updatedAt: Date.now(),
+    }
+    this.index(entry)
+    this.terminalAvailableAgents.add(entry.agentId)
+    this.save()
+    return entry
+  }
+
   /** Every name an agent on this machine answers to: default names, project names, renames. */
   agentNamesInUse(): string[] {
     return [
@@ -1251,6 +1280,14 @@ class Registry {
 
     const now = Date.now()
     const existing = this.agents.get(agentId)
+    if (existing?.resumeOnly && existing.launch && existing.launch.state !== 'ready') {
+      // A native startup hook, carrying the verified process, must confirm this exact history.
+      if (sessionId !== existing.sessionId) {
+        this.setLaunch(agentId, { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'The agent reported a different conversation. The requested conversation is still saved.' })
+        return null
+      }
+      if (!validProcessIdentity(input.processIdentity)) return null
+    }
     // `isNew` still means "this SESSION id was not bound here before" — a rotation counts as new, which is
     // what makes the caller announce the newly bound session. The agent itself may be long-lived.
     const isNew = !existing || existing.sessionId !== sessionId
@@ -1341,6 +1378,7 @@ class Registry {
       agent: existing?.agent ?? null,
       ...(existing?.bypassPermission ? { bypassPermission: true } : {}),
       ...(existing?.permissionMode ? { permissionMode: existing.permissionMode } : {}),
+      ...(existing?.resumeOnly ? { resumeOnly: true, launch: { state: 'ready' as const } } : {}),
       ...(existing?.terminalHost ? { terminalHost: true } : {}),
       processIdentity: validProcessIdentity(input.processIdentity) ? input.processIdentity : existing?.processIdentity ?? null,
       registeredAt: existing?.registeredAt ?? now,
@@ -1461,11 +1499,16 @@ class Registry {
    * pane and its name stay: this is the opposite of dormant, the terminal is live. `terminalHost`
    * is set from here on, since that is what the pane now is.
    */
-  releaseEngine(agentId: string): RegisteredSession | null {
-    const entry = this.agents.get(agentId)
-    if (!entry || isTerminalEngine(entry.engine)) return null
-    this.drop(entry)
+  releaseEngine(agentId: string, separateShell = false): RegisteredSession | null {
+    const original = this.agents.get(agentId)
+    if (!original || (isTerminalEngine(original.engine) && !separateShell)) return null
+    this.drop(original)
+    this.terminalAvailableAgents.delete(agentId)
+    // The archived conversation owns the original Harness ID. Preserve the physical shell under
+    // a new identity, without sending input, stopping processes or claiming its route twice.
+    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
     this.releaseBinding(entry)
+    delete entry.resumeOnly
     entry.engine = 'terminal'
     entry.terminalHost = true
     entry.processIdentity = null

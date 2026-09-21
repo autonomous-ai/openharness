@@ -21,6 +21,7 @@ import '../terminal/terminal_font_store.dart';
 import '../terminal/terminal_link_opener.dart';
 import '../terminal/remote_media_download.dart';
 import '../terminal/terminal_links.dart';
+import '../terminal/terminal_prompt_zone.dart';
 import '../terminal/terminal_session.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
@@ -58,19 +59,22 @@ class TerminalPanel extends StatefulWidget {
   /// True while the software keyboard is mid-animation and the pane's height is
   /// still a moving target.
   ///
-  /// Freezes the renderer for the duration, WITHOUT touching focus — that is
+  /// Holds the remote resize for the duration, WITHOUT touching focus — that is
   /// the whole reason this is not just `visible: false`, which releases the
   /// keyboard this animation is raising.
   ///
-  /// ⚠️ What actually stutters is not painting, it is the RESIZE. Every frame
-  /// of the keyboard sliding gives the view a new height, xterm re-derives rows
-  /// from it in `performLayout` and fires `onResize` → `session.resize` → a
-  /// `terminal_resize` frame and a real SIGWINCH on the far machine. A full-screen
-  /// TUI redraws for each one, and those redraws come back as keyframes that
-  /// repaint the pane while it is still moving. `renderingEnabled: false` gates
-  /// both halves of that loop in the vendored renderer (see
+  /// ⚠️ What stutters is the RESIZE, not painting. Every frame of the keyboard
+  /// sliding gives the view a new height, xterm re-derives rows from it in
+  /// `performLayout` and fires `onResize` → `session.resize` → a
+  /// `terminal_resize` frame and a real SIGWINCH on the far machine. A
+  /// full-screen TUI redraws for each one, and those redraws come back as
+  /// keyframes. `autoResize: false` is what closes that loop (see
   /// `RenderTerminal._resizeTerminalIfNeeded`), so the shell is asked exactly
   /// once, for the height the keyboard settles at.
+  ///
+  /// ⚠️ **It does not stop painting, and it used to.** `renderingEnabled: false`
+  /// closed the same loop but froze the output for the whole slide as well —
+  /// see [_TerminalPanelState._live].
   final bool settling;
   final Size? viewportSize;
 
@@ -88,6 +92,21 @@ class TerminalPanel extends StatefulWidget {
   /// Find overlay goes with it.
   final bool showHeader;
   final int focusRequest;
+
+  /// Takes over the tap that would raise the software keyboard. Null leaves it
+  /// to xterm, which is what every desktop tile does.
+  ///
+  /// Set on the phone, where the page raises the keyboard itself, with what the
+  /// mic heard typed into the prompt first (`phone/terminal_page.dart`).
+  /// Claimed on tap DOWN — xterm then neither raises the keyboard nor reports
+  /// the click to a mouse-tracking program — but run on tap UP, so a scroll
+  /// that began as a press opens nothing. A tap that clears a selection, or
+  /// opens a link, is still exactly that.
+  ///
+  /// Run only for a tap on the prompt ([isPromptTap]). Every other claimed tap
+  /// is swallowed: somebody tapping the output is reading it, and a keyboard
+  /// jumping up would cover half of what they were reading.
+  final VoidCallback? onInputTap;
 
   /// Whether this tile's composer textbox is showing. Only consulted for a remote machine.
   final bool composerVisible;
@@ -118,6 +137,7 @@ class TerminalPanel extends StatefulWidget {
     this.compactHeader = false,
     this.showHeader = true,
     this.focusRequest = 0,
+    this.onInputTap,
     this.composerVisible = false,
     this.readOnly = false,
     this.notice,
@@ -193,6 +213,9 @@ class _TerminalPanelState extends State<TerminalPanel>
     null,
   );
   String? _pressedLink;
+
+  /// Whether the tap in progress was claimed for [TerminalPanel.onInputTap].
+  bool _inputTapClaimed = false;
   bool _openingLink = false;
   bool _linkRefreshPending = false;
   bool _followTail = true;
@@ -367,11 +390,20 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// is `remote` (see the filter in `_loadMachines`), so `isRemote` is true for every pane,
   /// including this very computer. What separates them is whether the machine's computerId is this
   /// one, which is what puts it on the loopback transport.
-  /// Whether the renderer is allowed to paint and to resize the remote shell.
+  /// Whether the renderer may resize the remote shell to this view's height,
+  /// and run the cursor clock.
   ///
-  /// A parked page stops both because nobody is looking; a settling one stops
-  /// them because its height is still moving. Focus is deliberately NOT part of
-  /// this — see [TerminalPanel.settling].
+  /// A parked page may not because it is not the one being read; a settling one
+  /// may not because its height is still moving. Focus is deliberately NOT part
+  /// of this — see [TerminalPanel.settling].
+  ///
+  /// ⚠️ **Painting is not gated on it, and on a phone it must not be.** A
+  /// mounted panel there is on screen: the pager builds only the pages the
+  /// viewport touches. Gating paint on [TerminalPanel.visible] meant the agent
+  /// sliding in never laid out — its scroll offset sat at zero, so it drew the
+  /// OLDEST lines of its scrollback until the swipe passed halfway, then jumped
+  /// to the end — while the agent sliding out froze. Gating it on settling
+  /// stopped the output dead for the whole keyboard slide.
   bool get _live => widget.visible && !widget.settling;
 
   bool get _showsComposer {
@@ -404,6 +436,11 @@ class _TerminalPanelState extends State<TerminalPanel>
         if (!mounted || !widget.visible) return;
         if (!_followTail || !_scrollController.hasClients) return;
         final position = _scrollController.position;
+        // ⚠️ A position can be attached before its first layout, and until then `maxScrollExtent`
+        // is a null-check that THROWS — it did, once per output frame, for a pane whose session
+        // was already streaming while the terminal was still behind "Attaching…". Nothing to
+        // follow yet; the next frame after layout does it.
+        if (!position.hasContentDimensions || !position.hasPixels) return;
         if (position.pixels != position.maxScrollExtent) {
           position.jumpTo(position.maxScrollExtent);
         }
@@ -601,6 +638,9 @@ class _TerminalPanelState extends State<TerminalPanel>
     return _claimFocus(view, navigating: true);
   }
 
+  @override
+  void clearInputBuffer() => _terminalViewKey.currentState?.clearInputBuffer();
+
   void _claimFocusAfterFrame() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -685,6 +725,34 @@ class _TerminalPanelState extends State<TerminalPanel>
     }
   }
 
+  /// The one thing a pane nobody is looking at contributes to its session: how
+  /// big it is, before the stream opens. True when there is nothing (more) to
+  /// do; false when the view has not laid out yet and this should be asked
+  /// again next frame.
+  ///
+  /// ⚠️ **Only until `streamId` is set.** The phone's pager mounts the pages
+  /// either side of the one on screen and attaches them ahead of a swipe (see
+  /// `AgentSwipeHost`); their `open(waitForViewportSize: true)` would otherwise
+  /// wait two seconds for a measurement that never came, fall back to 80×24,
+  /// and pay a resize and a second keyframe on arrival. Once the stream is open
+  /// a parked pane goes back to saying nothing: a resize from a page nobody is
+  /// looking at is a SIGWINCH and a full TUI redraw on the far machine, which
+  /// is what gating everything else on `visible` is for.
+  bool _reportInitialViewport() {
+    if (widget.session.streamId != null) return true;
+    final view = _laidOutTerminalView();
+    if (view == null) return false;
+    final renderTerminal = view.renderTerminal;
+    final cellSize = renderTerminal.cellSize;
+    final renderSize = renderTerminal.size;
+    if (cellSize.width <= 0 || cellSize.height <= 0) return false;
+    widget.session.reportViewport(
+      renderSize.width ~/ cellSize.width,
+      renderSize.height ~/ cellSize.height,
+    );
+    return true;
+  }
+
   void _afterTerminalMounted({
     bool clearSelection = false,
     bool scrollToEnd = true,
@@ -699,7 +767,21 @@ class _TerminalPanelState extends State<TerminalPanel>
       _laidOutTerminalView()?.scrollToBottom();
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !widget.visible) return;
+      if (!mounted) return;
+      if (!widget.visible) {
+        // A parked pane does one thing, and only until its stream opens — see
+        // [_reportInitialViewport]. Retried like the visible path below: the
+        // view may not have laid out yet on the frame this was asked in.
+        if (!_reportInitialViewport() && retries > 0) {
+          _afterTerminalMounted(
+            clearSelection: clearSelection,
+            scrollToEnd: scrollToEnd,
+            claimFocus: claimFocus,
+            retries: retries - 1,
+          );
+        }
+        return;
+      }
       if (clearSelection) _controller.clearSelection();
       final view = _laidOutTerminalView();
       if (view == null) {
@@ -1153,6 +1235,25 @@ class _TerminalPanelState extends State<TerminalPanel>
     _hoveredLink.value = target;
   }
 
+  bool _onTerminalTapDown(TapDownDetails details, CellOffset cell) {
+    _inputTapClaimed = false;
+    if (_onLinkTapDown(details, cell)) return true;
+    if (widget.onInputTap == null || _controller.selection != null) {
+      return false;
+    }
+    return _inputTapClaimed = true;
+  }
+
+  void _onTerminalTapUp(TapUpDetails details, CellOffset cell) {
+    if (!_inputTapClaimed) {
+      _onLinkTapUp(details, cell);
+      return;
+    }
+    _inputTapClaimed = false;
+    if (!isPromptTap(_viewTerminal.buffer, cell.y)) return;
+    widget.onInputTap?.call();
+  }
+
   bool _onLinkTapDown(TapDownDetails details, CellOffset cell) {
     _pressedLink = _linkModifierPressed
         ? _linkAtPointer(details.globalPosition)
@@ -1335,11 +1436,23 @@ class _TerminalPanelState extends State<TerminalPanel>
                           controller: _controller,
                           autoResize: _live,
                           resizeBuffer: false,
-                          renderingEnabled: _live,
                           scrollController: _scrollController,
                           focusNode: _focusNode,
                           autofocus: widget.focused && !showComposer,
                           readOnly: widget.readOnly || !session.acceptsInput,
+                          // iOS answers Backspace over an empty native buffer
+                          // with nothing at all (`deleteBackward` in
+                          // FlutterTextInputPlugin.mm), so a line the keyboard
+                          // did not type — text typed on the desktop, a voice
+                          // transcript, a recalled command — could not be
+                          // rubbed out. xterm keeps a padding for Backspace to
+                          // eat instead — see test/terminal_ime_input_test.dart.
+                          //
+                          // Unconditional: this package builds for iOS and
+                          // Android only. ⚠️ Lost once already in a merge
+                          // (cb47ba35 → TestFlight build 11), which is why
+                          // test/terminal_panel_backspace_test.dart pins it.
+                          deleteDetection: true,
                           theme: terminalThemeFor(
                             grid.AppTheme.palette.value,
                             terminalThemeStore.value,
@@ -1374,8 +1487,8 @@ class _TerminalPanelState extends State<TerminalPanel>
                           allowedMimeTypes: const ['image/png'],
                           onContentInserted: _onContentInserted,
                           onKeyEvent: _onTerminalKey,
-                          onTapDown: _onLinkTapDown,
-                          onTapUp: _onLinkTapUp,
+                          onTapDown: _onTerminalTapDown,
+                          onTapUp: _onTerminalTapUp,
                           // Constant on purpose. The click cursor is applied by
                           // [_LinkTooltip]'s own MouseRegion, which repaints
                           // without rebuilding this view.

@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xterm/xterm.dart';
 
+import 'keyboard_fakes.dart';
+
 /// The phone has no composer box under its pane — see `phone/terminal_page.dart`
 /// — so the terminal's own input connection is the only place a software
 /// keyboard has to compose in. Whatever this config says, a Vietnamese Telex or
@@ -11,14 +13,22 @@ void main() {
   Terminal newTerminal() =>
       Terminal(maxLines: 200, reflowEnabled: false)..resize(80, 12);
 
-  Future<void> pumpTerminal(WidgetTester tester, Terminal terminal) async {
+  Future<void> pumpTerminal(
+    WidgetTester tester,
+    Terminal terminal, {
+    bool deleteDetection = false,
+  }) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: SizedBox(
             width: 400,
             height: 320,
-            child: TerminalView(terminal, autofocus: true),
+            child: TerminalView(
+              terminal,
+              autofocus: true,
+              deleteDetection: deleteDetection,
+            ),
           ),
         ),
       ),
@@ -126,6 +136,59 @@ void main() {
     },
     variant: TargetPlatformVariant.only(TargetPlatform.iOS),
   );
+
+  group('with delete detection, as a phone runs it', () {
+    testWidgets('Backspace keeps rubbing out a line the keyboard never typed', (
+      tester,
+    ) async {
+      final terminal = newTerminal();
+      final outbound = <String>[];
+      terminal.onOutput = outbound.add;
+      await pumpTerminal(tester, terminal, deleteDetection: true);
+
+      // A voice transcript sits in the prompt; the native buffer knows
+      // nothing of it.
+      for (var press = 0; press < 5; press++) {
+        await deleteBackward(tester);
+      }
+
+      expect(outbound, List.filled(5, '\x7f'));
+    }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+    testWidgets(
+      'Return submits once when iOS appends its newline to the padding',
+      (tester) async {
+        final terminal = newTerminal();
+        final outbound = <String>[];
+        terminal.onOutput = outbound.add;
+        await pumpTerminal(tester, terminal, deleteDetection: true);
+
+        tester.testTextInput.updateEditingValue(
+          const TextEditingValue(
+            text: '  hi',
+            selection: TextSelection.collapsed(offset: 4),
+          ),
+        );
+        await tester.pump();
+        outbound.clear();
+
+        await tester.testTextInput.receiveAction(TextInputAction.newline);
+        await tester.pump();
+        // The race's other winner: the reset landed first, so the newline
+        // arrives on the padding rather than on the line.
+        tester.testTextInput.updateEditingValue(
+          const TextEditingValue(
+            text: '  \n',
+            selection: TextSelection.collapsed(offset: 3),
+          ),
+        );
+        await tester.pump();
+
+        expect(outbound, ['\r']);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.iOS),
+    );
+  });
 
   testWidgets(
     'Telex sends the composed word, not the letters it was typed from',
@@ -241,5 +304,47 @@ void main() {
       expect(received?.data, bytes);
     },
     variant: TargetPlatformVariant.only(TargetPlatform.android),
+  );
+
+  testWidgets(
+    "the keyboard's own dictation lands as what was finally heard",
+    (tester) async {
+      final terminal = newTerminal();
+      final outbound = <String>[];
+      terminal.onOutput = outbound.add;
+      await pumpTerminal(tester, terminal);
+
+      // Voice input on the phone IS the keyboard's mic. Dictation streams its
+      // guesses into the buffer and then rewrites them — here the capital, the
+      // accents and the question it first misheard — with no composing range
+      // to hold any of it back from the pty.
+      for (final guess in const [
+        'hom nay',
+        'hom nay la thu may',
+        'Hôm nay là thứ mấy?',
+      ]) {
+        tester.testTextInput.updateEditingValue(
+          TextEditingValue(
+            text: guess,
+            selection: TextSelection.collapsed(offset: guess.length),
+          ),
+        );
+        await tester.pump();
+      }
+
+      // The prompt sees every revision as rubbing out and retyping, so what it
+      // ends up holding is the line a readline-style editor would.
+      final line = <int>[];
+      for (final chunk in outbound) {
+        // DEL — the keytab's plain Backspace, one per rune rubbed out.
+        if (chunk == '\x7f') {
+          line.removeLast();
+        } else {
+          line.addAll(chunk.runes);
+        }
+      }
+      expect(String.fromCharCodes(line), 'Hôm nay là thứ mấy?');
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.iOS),
   );
 }

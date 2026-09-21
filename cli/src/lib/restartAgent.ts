@@ -45,12 +45,13 @@ export type RestartAgentReply =
 /** One process replacement per agent, even across clients and different receipt
  * IDs. Stop cancels the work before its next process-changing step. */
 export class AgentRestartCoordinator {
-  private readonly jobs = new Map<string, { cancelled: boolean; result: Promise<RestartAgentReply> }>()
+  private readonly jobs = new Map<string, { operation: string; cancelled: boolean; result: Promise<RestartAgentReply> }>()
 
-  run(agentId: string, restart: (current: () => boolean) => Promise<RestartAgentReply>): Promise<RestartAgentReply> {
+  run(agentId: string, restart: (current: () => boolean) => Promise<RestartAgentReply>, operation = 'restart'): Promise<RestartAgentReply> {
     const existing = this.jobs.get(agentId)
-    if (existing) return existing.result
-    const job = { cancelled: false, result: null! as Promise<RestartAgentReply> }
+    if (existing) return existing.operation === operation ? existing.result
+      : Promise.resolve({ ok: false, error: 'AGENT_BUSY', detail: 'Another lifecycle operation is changing this harness.' })
+    const job = { operation, cancelled: false, result: null! as Promise<RestartAgentReply> }
     const current = () => !job.cancelled && this.jobs.get(agentId) === job
     job.result = Promise.resolve().then(async () => {
       if (!current()) return { ok: false, error: 'AGENT_CHANGED' } as const
@@ -62,6 +63,8 @@ export class AgentRestartCoordinator {
     this.jobs.set(agentId, job)
     return job.result
   }
+
+  busy(agentId: string): boolean { return this.jobs.has(agentId) }
 
   cancel(agentId: string): void {
     const job = this.jobs.get(agentId)

@@ -336,7 +336,7 @@ void main() {
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
-    expect(find.text('Stop Agent'), findsOneWidget);
+    expect(find.text('Stop Harness'), findsOneWidget);
     expect(find.text('Hide viewer'), findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();

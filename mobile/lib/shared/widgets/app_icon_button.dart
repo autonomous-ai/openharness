@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
+import 'touch_target.dart';
 
 /// A small icon affordance that lifts under the pointer.
 ///
@@ -212,6 +213,12 @@ class _AppIconButtonState extends State<AppIconButton>
     );
 
     final tooltip = widget.tooltip;
-    return tooltip == null ? button : Tooltip(message: tooltip, child: button);
+    // The 24pt box is what reads right as a glyph with a lift; a thumb needs
+    // 44 — see [TouchTarget].
+    return TouchTarget(
+      child: tooltip == null
+          ? button
+          : Tooltip(message: tooltip, child: button),
+    );
   }
 }

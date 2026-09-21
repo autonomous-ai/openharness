@@ -179,3 +179,53 @@ it if one is dropped.
     never swallowed, and Android performs its editor action without the second
     insert so nothing there matches. Regression:
     `mobile/test/terminal_ime_input_test.dart`.
+
+12. **Backspace sent as a key keeps the keyboard's buffer in step**
+    (`lib/src/ui/custom_text_edit.dart`). Gboard delivers Backspace as a
+    `KeyDownEvent`, not as an edit to its buffer, and the terminal consumed the
+    key — deleting on the pty while the buffer the keyboard edits kept the
+    letter. After "xin chào" and four Backspaces the keyboard still held
+    "xin chào" and appended the next word to it; when Telex re-marked that run,
+    the diff deleted and retyped characters already gone ("chào" came out as
+    "xiaochaof"). On a phone, a plain Backspace over a non-empty buffer is now
+    applied to the buffer itself and handed back to the keyboard, and the pty
+    gets the same single delete through the usual sync. An empty buffer still
+    sends it straight on; Ctrl/Alt/Meta+Backspace and desktop platforms are
+    untouched.
+
+13. **Delete detection survives a kept buffer**
+    (`lib/src/ui/custom_text_edit.dart`). iOS answers Backspace over an empty
+    native buffer with nothing at all (`deleteBackward` in
+    `FlutterTextInputPlugin.mm`), so the phone turns `deleteDetection` on and
+    Backspace eats a two-space padding instead. Upstream reset the buffer after
+    every edit, which refilled it; this copy keeps the buffer between keys for
+    Telex (note 12's neighbour), so two Backspaces into a line the keyboard
+    never typed — a voice transcript, a recalled command — spent the padding and
+    Backspace went dead. The buffer is now reset whenever the padding has been
+    eaten into, and the Return echo of note 11 also matches a newline appended
+    to the padding. Regression: `mobile/test/terminal_ime_input_test.dart`.
+
+14. **A plain space paints nothing** (`lib/src/ui/painter.dart`). Every frame
+    paints every cell on screen, one `drawParagraph` per cell, and a TUI's
+    screen is mostly spaces — padding, box interiors, the tail of every short
+    line. A space has no ink (its colour is the background pass's), so it now
+    returns before the hash, the cache lookup and the draw. An underlined
+    space still draws, through the existing U+00A0 substitution. Regression:
+    `mobile/test/terminal_painter_test.dart`.
+15. **Alt-buffer scrolling survives a new scroll position**
+    (`lib/src/ui/infinite_scroll_view.dart`). `_RenderInfiniteScrollView`
+    listened for `_onScroll` on the position it was attached with, and its
+    `position` setter moved only the layout listener. The Scrollable replaces
+    its position whenever its dependencies change — a route pushed over the
+    terminal and popped is enough — so from then on no drag reached the
+    full-screen program as wheel events or arrow keys, until the view was
+    rebuilt. The setter now moves `_onScroll` with it. Regression:
+    `mobile/test/terminal_alt_scroll_test.dart`.
+
+16. **An embedder can empty the keyboard's buffer**
+    (`lib/src/terminal_view.dart`). `TerminalViewState.clearInputBuffer()`
+    resets the native editing state the way a submitted line does. The phone's
+    key strip clears the prompt with Ctrl+E Ctrl+U and types `/` and Tab
+    without the keyboard seeing them; left holding the old words, the keyboard
+    would edit them again — Telex re-marks the word it believes is being typed
+    and would rub out characters the prompt no longer holds.

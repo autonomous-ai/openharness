@@ -30,6 +30,12 @@ class PhoneFab extends StatelessWidget {
     AppTheme.watch(context);
     return FloatingActionButton(
       onPressed: onPressed,
+      // ⚠️ No hero flight, and it is not a preference. `FloatingActionButton` defaults to ONE
+      // shared tag for every instance, and this app keeps three tabs mounted at once inside an
+      // IndexedStack — so the Agents tab's button and a machine page's are in the tree together,
+      // and the first route transition after that throws "multiple heroes share the same tag" and
+      // takes the screen down. Nothing here is flying between routes anyway.
+      heroTag: null,
       // The accent is specified as a solid fill with white on it, so the
       // foreground is white in both themes rather than a token that flips.
       backgroundColor: AppPalette.accent,

@@ -413,3 +413,30 @@ describe('findResumedTranscript', () => {
     await expect(findResumedTranscript('cursor', 'f56f0a36-aa58-4af1-a6e2-a77386122332')).resolves.toBeNull()
   })
 })
+
+it.each(['local', 'utc'])('recovers an old Claude process in a busy project from its native %s record', async zone => {
+  const home = tempRoot(); const root = join(home, 'projects')
+  const id = '11111111-2222-4333-8444-555555555555'
+  writeTranscript(root, 'project', id, CWD, STARTED_AT)
+  writeTranscript(root, 'project', 'another-session', CWD, STARTED_AT)
+  mkdirSync(join(home, 'sessions'))
+  const procStart = zone === 'utc' ? new Date(STARTED_AT).toUTCString().replace(/ GMT$/, '') : new Date(STARTED_AT).toString()
+  writeFileSync(join(home, 'sessions', '77.json'), JSON.stringify({ pid: 77, cwd: CWD, sessionId: id, procStart }))
+  const { findLiveSession } = await load(root)
+  expect(await findLiveSession('claude', CWD, STARTED_AT, { pid: 77, bornOnly: true })).toMatchObject({ sessionId: id })
+})
+it.each(['bad pid', 'bad start', 'missing file', 'bad json', 'different pid', 'different start', 'missing start', 'different cwd', 'missing cwd', 'missing id', 'invalid id', 'missing history'])('refuses stale/invalid Claude native metadata: %s', async mode => {
+  const home = tempRoot(); const root = join(home, 'projects'); mkdirSync(root)
+  const { claudeProcessSession } = await load(root)
+  const record: Record<string, unknown> = { pid: 77, cwd: CWD, sessionId: '11111111-2222-4333-8444-555555555555', procStart: new Date(STARTED_AT).toUTCString() }
+  if (mode === 'different pid') record.pid = 78
+  if (mode === 'different start') record.procStart = new Date(STARTED_AT + 1000).toUTCString()
+  if (mode === 'missing start') delete record.procStart
+  if (mode === 'different cwd') record.cwd = '/different'
+  if (mode === 'missing cwd') delete record.cwd
+  if (mode === 'missing id') delete record.sessionId
+  if (mode === 'invalid id') record.sessionId = '../escape'
+  mkdirSync(join(home, 'sessions'))
+  if (mode !== 'missing file') writeFileSync(join(home, 'sessions', '77.json'), mode === 'bad json' ? '{' : JSON.stringify(record))
+  expect(await claudeProcessSession(mode === 'bad pid' ? -1 : 77, CWD, mode === 'bad start' ? NaN : STARTED_AT)).toBeNull()
+})

@@ -13,6 +13,7 @@ class Swarm {
     required this.id,
     String name = defaultName,
     this.kind = 'harness',
+    this.isNewTabPage = false,
     bool? nameIsCustom,
   }) : name = nameIsCustom == true ? name : normalizeName(name),
        nameIsCustom = nameIsCustom ?? (normalizeName(name) != defaultName);
@@ -23,6 +24,11 @@ class Swarm {
   /// just is not somewhere a pane can land. Mutable because the store takes
   /// over the New Tab it was opened from, the way a first agent does.
   String kind;
+
+  /// A deliberately opened tab has a minimal landing page, separate from onboarding.
+  bool isNewTabPage;
+  bool get isBlankNewTab =>
+      isNewTabPage && kind == 'harness' && panes.isEmpty && presets.isEmpty;
   bool get isStore => kind == 'store';
   bool get isOrchestrator =>
       kind == 'orchestrator' &&
@@ -121,6 +127,7 @@ class Swarm {
       'id': id,
       'name': name,
       if (nameIsCustom) 'nameIsCustom': true,
+      if (isNewTabPage) 'newTabPage': true,
       if (titleMachineId != null) 'titleMachineId': titleMachineId,
       if (titleAgentId != null) 'titleAgentId': titleAgentId,
       if (kind != 'harness') 'kind': kind,

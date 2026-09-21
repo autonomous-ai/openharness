@@ -7,6 +7,35 @@ import '../shortcuts/keymap_commands.dart';
 import 'box_chrome.dart';
 import 'welcome_project_example.dart';
 
+/// The everyday New Tab page leaves the dock as the only action surface.
+class NewTabStartPage extends StatelessWidget {
+  const NewTabStartPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    return ColoredBox(
+      key: const ValueKey('new-tab-start-page'),
+      color: grid.AppPalette.swarmWelcome,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text(
+            'Follow your curiosity.',
+            key: const ValueKey('new-tab-tagline'),
+            textAlign: TextAlign.center,
+            style: boxMonoStyle(
+              size: 24,
+              color: const Color(0xffd3d0ca),
+              weight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// A quiet, live keyboard map for an empty workspace. The drawing illustrates
 /// tabs and panes. Only the full shortcuts link is interactive.
 class WorkspaceStartGuide extends StatelessWidget {

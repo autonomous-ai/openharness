@@ -75,6 +75,8 @@ void main() {
         highlighted('create');
       }
       await key(tester, LogicalKeyboardKey.arrowUp);
+      highlighted('placement');
+      await key(tester, LogicalKeyboardKey.arrowUp);
       highlighted('task');
       expect(
         find.byKey(const ValueKey('new-harness-field-options')),
@@ -483,6 +485,56 @@ void main() {
     },
   );
 
+  for (final size in [const Size(1440, 1000), const Size(900, 560)]) {
+    testWidgets('recent sessions fill the available dock at $size', (
+      tester,
+    ) async {
+      final app = createApp();
+      addTearDown(app.dispose);
+      final map = MemoryKeymap();
+      addTearDown(map.dispose);
+      app.adoptSessionForTest(terminal('a69', []));
+      await configured.mount(tester, app, map);
+      tester.view.physicalSize = size;
+      await tester.pump();
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      final results = tester.widget<SwarmSearchResults>(
+        find.byType(SwarmSearchResults),
+      );
+      final list = tester.getRect(
+        find.byKey(const ValueKey('swarm-search-result-list')),
+      );
+      final visible = results.search.rows.where((row) {
+        if (row.isCreate) return false;
+        final finder = find.byKey(ValueKey(row.id));
+        if (finder.evaluate().isEmpty) return false;
+        final bounds = tester.getRect(finder);
+        return bounds.top >= list.top - 1 && bounds.bottom <= list.bottom + 1;
+      }).length;
+      if (size.height >= 1000) {
+        expect(visible, 10);
+      } else {
+        expect(visible, inInclusiveRange(1, 10));
+      }
+      expect(
+        find.byKey(const ValueKey('swarm-search-input')).hitTestable(),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('create:harness')).hitTestable(),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('swarm-search-hints')).hitTestable(),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(milliseconds: 100));
+    });
+  }
+
   for (final size in [const Size(1280, 800), const Size(600, 700)]) {
     testWidgets(
       'dock pins creation beside its input while matches filter at $size',
@@ -532,7 +584,7 @@ void main() {
             tester
                 .getSize(find.byKey(const ValueKey('swarm-search-results')))
                 .height,
-            lessThan(size.height * .4),
+            lessThan(size.height * .65),
           );
         }
         await key(tester, LogicalKeyboardKey.slash, ctrl: true);

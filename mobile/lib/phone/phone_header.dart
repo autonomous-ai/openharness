@@ -65,10 +65,19 @@ class PhoneHeader extends StatelessWidget {
                   ],
                   if (leading != null) ...[leading!, const SizedBox(width: 10)],
                   Expanded(
-                    child: _Titles(
-                      title: title,
-                      subtitle: subtitle,
-                      large: large,
+                    // ⚠️ Nudged down beside the back chevron. The title's line box reserves room
+                    // under the baseline for descenders, so a centred box puts the LETTERS above
+                    // the chevron's middle — visibly riding high on every page with a back button.
+                    // Painted offset rather than padding, so the header's height does not change.
+                    child: Transform.translate(
+                      // 3.5, measured: at 1.5 the capitals still sat ~2pt above the chevron's
+                      // centre on a Pixel 8 Pro.
+                      offset: Offset(0, canPop && subtitle == null ? 3.5 : 0),
+                      child: _Titles(
+                        title: title,
+                        subtitle: subtitle,
+                        large: large,
+                      ),
                     ),
                   ),
                 ],

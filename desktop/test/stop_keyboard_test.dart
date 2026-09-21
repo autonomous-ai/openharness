@@ -82,7 +82,7 @@ void main() {
       app.adoptSessionForTest(terminal('a1', input));
       await mount(tester);
       await open(tester);
-      expect(find.text('Stop Agent'), findsOneWidget);
+      expect(find.text('Stop Harness'), findsOneWidget);
       expect(
         find.textContaining('Close Pane keeps it running.'),
         findsOneWidget,
@@ -90,7 +90,7 @@ void main() {
       // The default action must leave the agent running.
       await key(tester, LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
-      expect(find.text('Stop Agent'), findsNothing);
+      expect(find.text('Stop Harness'), findsNothing);
       expect(connection.stops, isEmpty);
       await open(tester);
       await key(tester, LogicalKeyboardKey.tab);
@@ -102,7 +102,7 @@ void main() {
       expect(connection.stops, hasLength(1));
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      expect(find.text('Stop Agent'), findsNothing);
+      expect(find.text('Stop Harness'), findsNothing);
       await open(tester);
       expect(find.text('Stopping…'), findsOneWidget);
       expect(connection.stops, hasLength(1));
@@ -117,14 +117,14 @@ void main() {
         LogicalKeyboardKey.enter,
       ); // Retry still starts on Cancel.
       await tester.pumpAndSettle();
-      expect(find.text('Stop Agent'), findsNothing);
+      expect(find.text('Stop Harness'), findsNothing);
       expect(connection.stops, hasLength(1));
       await open(tester);
       await key(tester, LogicalKeyboardKey.tab);
       await key(tester, LogicalKeyboardKey.enter);
       connection.stopReplies.last.complete({'deleted': true});
       await tester.pumpAndSettle();
-      expect(find.text('Stop Agent'), findsNothing);
+      expect(find.text('Stop Harness'), findsNothing);
       expect(app.allPanes, [retained]);
       expect(app.focusedPane, same(retained));
       expect(input, isEmpty);
@@ -152,7 +152,7 @@ void main() {
     await open(tester, accept: LogicalKeyboardKey.f8);
     expect(find.text('F8  select'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.escape);
-    expect(find.text('Stop Agent'), findsOneWidget);
+    expect(find.text('Stop Harness'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.f6);
     await key(tester, LogicalKeyboardKey.f8);
     expect(connection.stops, ['a0']);
@@ -163,10 +163,10 @@ void main() {
     await tester.pump();
     expect(find.text('F4  close'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.escape);
-    expect(find.text('Stop Agent'), findsOneWidget);
+    expect(find.text('Stop Harness'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.f4);
     await tester.pumpAndSettle();
-    expect(find.text('Stop Agent'), findsNothing);
+    expect(find.text('Stop Harness'), findsNothing);
     connection.stopReplies.single.complete({'error': 'REFUSED'});
     await tester.pumpAndSettle();
     expect(app.stateOf('m')!.agents.any((agent) => agent.id == 'a0'), isTrue);
@@ -261,7 +261,7 @@ void main() {
       LogicalKeyboardKey.enter,
     ); // Cancel retains focus on error.
     await tester.pumpAndSettle();
-    expect(find.text('Stop Agent'), findsNothing);
+    expect(find.text('Stop Harness'), findsNothing);
     await tester.pumpWidget(const SizedBox());
   });
 }

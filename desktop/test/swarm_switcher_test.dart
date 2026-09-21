@@ -57,7 +57,11 @@ void main() {
           await tester.tap(find.byKey(const ValueKey('swarm-new-tab-button')));
           await tester.pump();
         }
-        expect(app.activeSwarm, same(original));
+        final draft = app.activeSwarm;
+        expect(draft, isNot(same(original)));
+        expect(draft.isBlankNewTab, isTrue);
+        expect(app.swarms, hasLength(2));
+        expect(original.panes, [pane]);
         expect(find.byType(AlertDialog), findsNothing);
         final field = find.byKey(const ValueKey('swarm-search-input'));
         expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
@@ -66,7 +70,7 @@ void main() {
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
         final opened = app.activeSwarm;
-        expect(opened, isNot(same(original)));
+        expect(opened, same(draft));
         expect(opened.panes, [pane]);
         expect(original.panes, [pane]);
         expect(app.focusedPane, same(pane));
@@ -121,8 +125,9 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('command:swarm.new')));
     await tester.pump();
-    expect(app.panes, [pane]);
-    expect(app.swarms, hasLength(1));
+    expect(app.activeSwarm.isBlankNewTab, isTrue);
+    expect(app.panes, isEmpty);
+    expect(app.swarms, hasLength(2));
     expect(app.allPanes, contains(pane));
     expect(jumpField, findsOneWidget);
     final search = tester

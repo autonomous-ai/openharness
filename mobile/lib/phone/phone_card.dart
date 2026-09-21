@@ -10,6 +10,12 @@ const double kPhoneCardGap = 10;
 /// this, so a list that answers does not jump.
 const double kPhoneCardHeight = 70;
 
+/// An agent card's height. Taller than [kPhoneCardHeight] by one line, because an agent row carries
+/// a third: its name, what it is doing, and — [AgentContextLine] — where it is. The alternative was
+/// folding the folder and the machine into the status line, which is what the Agents tab did while
+/// it had two lines, and at that width the status was the part that truncated.
+const double kPhoneAgentCardHeight = 88;
+
 /// A phone list's padding: clear of the screen edges, and of the home indicator at the bottom.
 EdgeInsets phoneListPadding(BuildContext context) =>
     EdgeInsets.fromLTRB(16, 4, 16, MediaQuery.paddingOf(context).bottom + 24);
@@ -23,6 +29,7 @@ class PhoneCard extends StatefulWidget {
     this.onTap,
     this.onLongPress,
     this.border,
+    this.height = kPhoneCardHeight,
   });
 
   final Widget child;
@@ -39,6 +46,11 @@ class PhoneCard extends StatefulWidget {
   /// Overrides the card's hairline rim. Used to mark a row that needs attention — a waiting agent —
   /// so it is findable in a long list before a word of it is read. Null keeps the ordinary rim.
   final BoxBorder? border;
+
+  /// The row's height. [kPhoneAgentCardHeight] for the three-line agent rows; the two-line default
+  /// for everything else. Fixed either way, so a list of cards stays a regular column rather than
+  /// a ladder of uneven rungs.
+  final double height;
 
   @override
   State<PhoneCard> createState() => _PhoneCardState();
@@ -78,7 +90,7 @@ class _PhoneCardState extends State<PhoneCard> {
         child: AnimatedContainer(
           duration: AppMotion.press,
           curve: AppMotion.curve,
-          height: kPhoneCardHeight,
+          height: widget.height,
           padding: const EdgeInsets.symmetric(horizontal: 13),
           decoration: BoxDecoration(
             color: _pressed ? AppGlass.rowHoverFill : AppGlass.rowFill,
@@ -144,9 +156,17 @@ class PhoneCardList extends StatelessWidget {
 
 /// A list of cards that has not answered yet: the same cards, empty, at a real row's height.
 class PhoneListSkeleton extends StatelessWidget {
-  const PhoneListSkeleton({super.key, this.rows = 3});
+  const PhoneListSkeleton({
+    super.key,
+    this.rows = 3,
+    this.height = kPhoneCardHeight,
+  });
 
   final int rows;
+
+  /// The height of the cards this list is standing in for — pass [kPhoneAgentCardHeight] where
+  /// agents will land, so the list does not jump a row taller the moment they arrive.
+  final double height;
 
   @override
   Widget build(BuildContext context) => ListView.separated(
@@ -154,9 +174,9 @@ class PhoneListSkeleton extends StatelessWidget {
     padding: phoneListPadding(context),
     itemCount: rows,
     separatorBuilder: (_, _) => const SizedBox(height: kPhoneCardGap),
-    itemBuilder: (_, _) => const Skeleton(
+    itemBuilder: (_, _) => Skeleton(
       width: double.infinity,
-      height: kPhoneCardHeight,
+      height: height,
       radius: AppCard.radius,
     ),
   );

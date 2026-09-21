@@ -827,7 +827,10 @@ class AppNotifier extends ChangeNotifier {
   final _draftSwarmReturns = <String, String>{};
 
   bool isDraftSwarm(String id) {
-    if (!_draftSwarmReturns.containsKey(id)) return false;
+    if (!_draftSwarmReturns.containsKey(id) ||
+        _activeAgentCreations.any((attempt) => attempt._targetId == id)) {
+      return false;
+    }
     final swarm = swarms.where((swarm) => swarm.id == id).firstOrNull;
     return swarm != null &&
         swarm.panes.isEmpty &&
@@ -835,11 +838,15 @@ class AppNotifier extends ChangeNotifier {
         swarm.presets.isEmpty;
   }
 
-  void newSwarm({String name = Swarm.defaultName, bool draft = false}) {
+  void newSwarm({
+    String name = Swarm.defaultName,
+    bool draft = false,
+    bool newTabPage = false,
+  }) {
     name = Swarm.normalizeName(name);
-    // Every New Tab entry point reuses the existing start page, including
-    // when another tab is selected or the tab limit has been reached.
-    if (name == Swarm.defaultName) {
+    // Reuse onboarding for ordinary destinations. Explicit Cmd-T opens a
+    // temporary minimal page, removed when the user cancels or leaves it.
+    if (name == Swarm.defaultName && !newTabPage) {
       final starter = activeSwarm.isEmptyStarter
           ? activeSwarm
           : swarms.where((swarm) => swarm.isEmptyStarter).firstOrNull;
@@ -856,6 +863,7 @@ class AppNotifier extends ChangeNotifier {
     final swarm = Swarm(
       id: _desk.enabled ? newDeskId() : 'swarm-${_nextSwarmId++}',
       name: name,
+      isNewTabPage: newTabPage,
     );
     if (draft) {
       _draftSwarmReturns[swarm.id] =
@@ -940,21 +948,24 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Cancel an untouched New Tab without closing a session or recording
-  /// Recently Closed. A sole workspace remains the app's starting screen.
+  /// Recently Closed. If its return tab disappeared, restore onboarding.
   bool cancelSwarmDraft(String id) {
     final returnId = _draftSwarmReturns[id];
     final target = swarms.where((swarm) => swarm.id == id).firstOrNull;
     if (returnId == null ||
+        !isDraftSwarm(id) ||
         target == null ||
         target.panes.isNotEmpty ||
         target.name != Swarm.defaultName ||
-        target.presets.isNotEmpty ||
-        swarms.length == 1) {
+        target.presets.isNotEmpty) {
       return false;
     }
     final wasActive = activeSwarmId == id;
     swarms.remove(target);
     _draftSwarmReturns.remove(id);
+    if (swarms.isEmpty) {
+      swarms.add(Swarm(id: 'swarm-${_nextSwarmId++}'));
+    }
     if (wasActive) {
       selectSwarm(
         swarms.any((swarm) => swarm.id == returnId) ? returnId : swarms.last.id,
@@ -3922,6 +3933,7 @@ class AppNotifier extends ChangeNotifier {
     try {
       final response = await connection.request(
         'agents_list',
+        payload: const {'includeStopped': true},
         timeout: const Duration(seconds: 10),
       );
       if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) {
@@ -4515,7 +4527,7 @@ class AppNotifier extends ChangeNotifier {
         payload: {
           'agentId': agentId,
           'gridModel': modelId,
-          if (gridName != null) 'gridName': gridName,
+          'gridName': ?gridName,
         },
         timeout: const Duration(seconds: 30),
       );
@@ -4849,6 +4861,7 @@ class AppNotifier extends ChangeNotifier {
       );
       final response = await connection.request(
         'agents_list',
+        payload: const {'includeStopped': true},
         timeout: remaining,
       );
       if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) {
@@ -5472,6 +5485,36 @@ class AppNotifier extends ChangeNotifier {
     _syncAgentName(machine, machine.agents[index]);
   }
 
+  // Creation can be in flight while a Stop reply removes the old final pane.
+  final _activeAgentCreations = <AgentCreationAttempt>{};
+
+  void _closeTabsEmptiedByStop(Set<Swarm> affected) {
+    final activeIndex = swarms.indexWhere((tab) => tab.id == _activeSwarmId);
+    final removable = affected.where(
+      (tab) =>
+          tab.kind == 'harness' &&
+          tab.panes.isEmpty &&
+          tab.presets.isEmpty &&
+          !_activeAgentCreations.any((attempt) => attempt._targetId == tab.id),
+    );
+    final ids = removable.map((tab) => tab.id).toSet();
+    if (ids.isEmpty) return;
+    swarms.removeWhere((tab) => ids.contains(tab.id));
+    for (final id in ids) {
+      _draftSwarmReturns.remove(id);
+    }
+    if (swarms.isEmpty) {
+      // A fresh start page gets the normal welcome/dock behavior. Never reuse
+      // the stopped harness's name, which would suppress that entry behavior.
+      swarms.add(Swarm(id: 'swarm-${_nextSwarmId++}'));
+    }
+    if (ids.contains(_activeSwarmId)) {
+      _activeSwarmId = swarms[activeIndex.clamp(0, swarms.length - 1)].id;
+      selectedMachineId = focusedPane?.machineId;
+      _paneFocusRequest++;
+    }
+  }
+
   Future<void> _removeAgent(MachineState machine, String agentId) async {
     final stop = _agentStops[(machine.machine.machineId, agentId)];
     final confirmedStop = stop != null && _agentStopCurrent(stop) ? stop : null;
@@ -5495,6 +5538,7 @@ class AppNotifier extends ChangeNotifier {
     // already destroyed.
     final machineId = machine.machine.machineId;
     final closing = <Future<void>>[];
+    final affected = <Swarm>{};
     for (final pane in allPanes.toList()) {
       final owned =
           pane.machineId == machineId &&
@@ -5502,10 +5546,14 @@ class AppNotifier extends ChangeNotifier {
               (pane.isWeb && pane.ownerAgentId == agentId));
       if (!owned) continue;
       for (final swarm in swarms) {
-        swarm.remove(pane);
+        if (swarm.panes.contains(pane)) {
+          affected.add(swarm);
+          swarm.remove(pane);
+        }
       }
       closing.add(_detachSession(pane, sendClose: false));
     }
+    _closeTabsEmptiedByStop(affected);
     _dismissedViewers.remove(_viewerKey(machineId, agentId));
     _persistLayout();
     _announceAppFocus();
@@ -6095,9 +6143,15 @@ class AppNotifier extends ChangeNotifier {
       creation._split = split;
       creation._placement = placement;
     }
+    _activeAgentCreations.add(creation);
     final work = _createAgentWithReceipt(creation);
     creation._inFlight = work;
-    return work.whenComplete(() => creation._inFlight = null);
+    return work.whenComplete(() {
+      creation._inFlight = null;
+      if (!creation.awaitingConfirmation) {
+        _activeAgentCreations.remove(creation);
+      }
+    });
   }
 
   String? _creationPlacementError(
@@ -6606,7 +6660,7 @@ class AppNotifier extends ChangeNotifier {
     final trimmed = name.trim();
     if (trimmed.isEmpty) return Future.value('Name cannot be empty');
     if (machine.machine.isShared) {
-      return Future.value('Shared agents are view-only.');
+      return Future.value('Shared harnesses are view-only.');
     }
     if (pendingAgentStop(machineId, agentId) != null) {
       return Future.value('The agent is stopping.');
@@ -6711,7 +6765,7 @@ class AppNotifier extends ChangeNotifier {
     final machine = machineStates[machineId];
     if (machine == null) return Future.value('Machine not found');
     if (machine.machine.isShared) {
-      return Future.value('Shared agents are view-only.');
+      return Future.value('Shared harnesses are view-only.');
     }
     if (pendingAgentStop(machineId, agentId) case final pending?) {
       return pending;
@@ -6845,6 +6899,27 @@ class AppNotifier extends ChangeNotifier {
     return true;
   }
 
+  /// Attach to a running harness or resume its saved conversation immediately.
+  Future<RestartAgentResult> resumeAgent(String machineId, String agentId) {
+    final agent = stateOf(machineId)?.agents
+        .where((agent) => agent.id == agentId)
+        .firstOrNull;
+    if (agent?.terminalAvailable == true) {
+      return Future.value(const RestartAgentResult());
+    }
+    if (agent?.isStopped != true) {
+      return Future.value(
+        const RestartAgentResult(
+          error: 'The saved harness is no longer available. Search again.',
+          retryable: false,
+        ),
+      );
+    }
+    // Resume shares the receipt coordinator, while sending its own lifecycle
+    // command. Repeated Enter checks the existing intent instead of relaunching.
+    return restartAgent(machineId, agentId);
+  }
+
   /// Restart keeps the agent, every view and the current focus. Only explicit
   /// new intent can repeat a request whose outcome is still unknown.
   Future<RestartAgentResult> restartAgent(
@@ -6885,7 +6960,7 @@ class AppNotifier extends ChangeNotifier {
     }
     if (machine.machine.isShared) {
       return const RestartAgentResult(
-        error: 'Shared agents are view-only.',
+        error: 'Shared harnesses are view-only.',
         retryable: false,
       );
     }
@@ -6909,13 +6984,20 @@ class AppNotifier extends ChangeNotifier {
       attempt._startedRevision = machine._agentRevision;
     }
     attempt._awaitingConfirmation = true;
-    const unknown = RestartAgentResult(
-      error: 'The restart is not confirmed yet. Check status, or close this prompt to inspect the terminal before restarting again.',
+    final resuming = attempt.agent?.isStopped == true;
+    final unknown = RestartAgentResult(
+      error: resuming
+          ? 'Still waiting for the resume response. Select the harness again to check status.'
+          : 'The restart is not confirmed yet. Check status, or close this prompt to inspect the terminal before restarting again.',
     );
     Map<String, dynamic> result;
     try {
       result = await _conn(machineId).request(
-        checking ? 'agent_create_status' : 'agent_restart',
+        checking
+            ? 'agent_create_status'
+            : resuming
+            ? 'agent_resume'
+            : 'agent_restart',
         payload: {'creationId': attempt._id, if (!checking) 'agentId': agentId},
       );
     } catch (_) {
@@ -6943,12 +7025,16 @@ class AppNotifier extends ChangeNotifier {
         return unknown;
       }
       attempt._awaitingConfirmation = false;
-      return RestartAgentResult(error: _restartFailure(code, result['detail']));
+      return RestartAgentResult(
+        error: _restartFailure(code, result['detail'], resuming: resuming),
+      );
     }
     switch (result['state']) {
       case 'pending':
-        return const RestartAgentResult(
-          error: 'The machine is still restarting the agent. Check again in a moment.',
+        return RestartAgentResult(
+          error: resuming
+              ? 'The machine is still resuming the harness. Select it again in a moment.'
+              : 'The machine is still restarting the agent. Check again in a moment.',
         );
       case 'missing':
       case 'unconfirmed':
@@ -6964,7 +7050,11 @@ class AppNotifier extends ChangeNotifier {
         if (failure is! Map || failure['code'] is! String) return unknown;
         attempt._awaitingConfirmation = false;
         return RestartAgentResult(
-          error: _restartFailure(failure['code'] as String, failure['detail']),
+          error: _restartFailure(
+            failure['code'] as String,
+            failure['detail'],
+            resuming: resuming,
+          ),
         );
       case 'created':
       case null:
@@ -6978,6 +7068,13 @@ class AppNotifier extends ChangeNotifier {
       if (raw is! Map || raw['id'] != agentId) return unknown;
       try {
         var updated = Agent.fromJson(Map<String, dynamic>.from(raw));
+        if (resuming &&
+            (result['resumed'] == false ||
+                updated.sessionId != attempt.agent!.sessionId ||
+                updated.launchState == 'starting' ||
+                updated.launchState == 'failed')) {
+          return unknown;
+        }
         final current = machine.agents
             .where((agent) => agent.id == agentId)
             .first;
@@ -7000,7 +7097,7 @@ class AppNotifier extends ChangeNotifier {
       } catch (_) {
         return unknown;
       }
-    } else if (!result.containsKey('resumed')) {
+    } else if (resuming || !result.containsKey('resumed')) {
       return unknown;
     }
     machine._agentRestartRevisions[agentId] = ++machine._agentRevision;
@@ -7013,14 +7110,22 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
-  String _restartFailure(String code, Object? detail) =>
-      detail is String && detail.isNotEmpty
+  String _restartFailure(
+    String code,
+    Object? detail, {
+    bool resuming = false,
+  }) => detail is String && detail.isNotEmpty
       ? detail
       : switch (code) {
           'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
-            'Update the harness CLI on this machine to restart an agent.',
+            resuming
+                ? 'Update the harness CLI on this machine to open saved harnesses.'
+                : 'Update the harness CLI on this machine to restart an agent.',
           'AGENT_BUSY' => 'Another operation is changing this agent. Wait for it to finish, then retry.',
-          _ => 'Restart failed: $code',
+          _ =>
+            resuming
+                ? 'Could not open this harness: $code'
+                : 'Restart failed: $code',
         };
 
   bool _forkSourceCurrent(AgentForkAttempt attempt) {
@@ -7209,35 +7314,34 @@ class AppNotifier extends ChangeNotifier {
     if (machine.machine.machineId != machineId ||
         attempt.source?.id != agentId) {
       return const ForkAgentResult(
-        error: 'The source agent is no longer available.',
+        error: 'The source harness is no longer available.',
       );
     }
     if (!_machineWorkCurrent(machine, attempt._authRevision)) {
       return const ForkAgentResult(
-        error: 'This fork is no longer active. Reopen Fork Agent.',
+        error: 'This fork is no longer active. Reopen Fork Harness.',
       );
     }
     if (machine.machine.isShared) {
-      return const ForkAgentResult(error: 'Shared agents are view-only.');
+      return const ForkAgentResult(error: 'Shared harnesses are view-only.');
     }
     if (!attempt.awaitingConfirmation) {
       if (!_forkSourceCurrent(attempt)) {
         return const ForkAgentResult(
-          error: 'The source agent changed. Close this prompt and reopen Fork Agent.',
+          error: 'The source harness changed. Close this prompt and reopen Fork Harness.',
         );
       }
       if (pendingAgentStop(machineId, agentId) != null) {
-        return const ForkAgentResult(error: 'The source agent is stopping.');
+        return const ForkAgentResult(error: 'The source harness is stopping.');
       }
       if (attempt.source?.canFork != true) {
         return const ForkAgentResult(
-          error: 'This agent does not support forking.',
+          error: 'This harness does not support forking.',
         );
       }
       if (agentIsProcessing(machineId, agentId)) {
         return const ForkAgentResult(
-          error:
-              'This agent is working. Wait for its turn to finish, then fork.',
+          error: 'This harness is working. Wait for its turn to finish, then fork.',
         );
       }
       if (attempt.name.characters.length > 80) {
@@ -7394,7 +7498,7 @@ class AppNotifier extends ChangeNotifier {
           'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
             'Update the harness CLI on this machine to fork an agent.',
           'AGENT_BUSY' =>
-            'This agent is working. Wait for its turn to finish, then fork.',
+            'This harness is working. Wait for its turn to finish, then fork.',
           _ => 'Fork failed: $code',
         };
 
@@ -8840,6 +8944,7 @@ class AppNotifier extends ChangeNotifier {
               ..orchestratorMachineId = raw['orchestratorMachineId'] is String
                   ? raw['orchestratorMachineId'] as String
                   : null;
+        swarm.isNewTabPage = raw['newTabPage'] == true;
         swarm.titleMachineId = raw['titleMachineId'] as String?;
         swarm.titleAgentId = raw['titleAgentId'] as String?;
         swarm.nameIsCustom =
@@ -8900,7 +9005,9 @@ class AppNotifier extends ChangeNotifier {
       if (restored.isNotEmpty) {
         // Older builds saved multiple unused start pages. Retain the selected
         // one when possible; custom names, presets and real work stay intact.
-        final starters = restored.where((swarm) => swarm.isEmptyStarter);
+        final starters = restored.where(
+          (swarm) => swarm.isEmptyStarter && !swarm.isNewTabPage,
+        );
         final starter =
             starters
                 .where((swarm) => swarm.id == saved['activeId'])
@@ -8909,7 +9016,8 @@ class AppNotifier extends ChangeNotifier {
         final hadDuplicateStarters = starters.length > 1;
         if (hadDuplicateStarters) {
           restored.removeWhere(
-            (swarm) => swarm.isEmptyStarter && swarm != starter,
+            (swarm) =>
+                swarm.isEmptyStarter && !swarm.isNewTabPage && swarm != starter,
           );
         }
         swarms
@@ -9317,7 +9425,11 @@ class AppNotifier extends ChangeNotifier {
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
           await _removeAgent(machine, agentId);
-        } else {
+        }
+        // Only a daemon that retained this stop asks us to refresh history.
+        // A legacy deletion must not race a newly reused identity with an
+        // unnecessary inventory request.
+        if (agentId == null || payload['retained'] == true) {
           unawaited(_loadMachineData(machine, force: true));
         }
         break;

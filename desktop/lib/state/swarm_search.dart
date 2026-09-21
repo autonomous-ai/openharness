@@ -17,9 +17,15 @@ const kSwarmCreateRowId = 'create:harness';
 /// Search text and selection retained while the start-page picker is dismissed.
 /// Membership and availability are revalidated against a fresh catalog on return.
 class SwarmSearchDraft {
-  const SwarmSearchDraft._(this.targetId, this.query, this.selectedId);
+  const SwarmSearchDraft._(
+    this.targetId,
+    this.query,
+    this.selectedId,
+    this.groupScope,
+  );
   final String targetId, query;
   final String? selectedId;
+  final ({String id, String name, String query})? groupScope;
 }
 
 /// One search session, shared by the native/Flutter input and its results.
@@ -189,11 +195,12 @@ class SwarmSearchController extends ChangeNotifier {
   bool? _splitCurrent;
   Set<String> _presentIds = const {};
   SwarmSearchDraft get draft =>
-      SwarmSearchDraft._(targetId, query, selected?.id);
+      SwarmSearchDraft._(targetId, query, selected?.id, _groupScope);
 
-  void restoreDraft(SwarmSearchDraft draft) {
-    if (!adding || draft.targetId != targetId) return;
+  void restoreDraft(SwarmSearchDraft draft, {bool newTab = false}) {
+    if (!adding || (!newTab && draft.targetId != targetId)) return;
     query = draft.query;
+    _groupScope = draft.groupScope;
     _selectedId = draft.selectedId;
     cursor = 0;
     _filter();

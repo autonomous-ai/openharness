@@ -429,6 +429,12 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                             ),
                           )
                         : ListView.builder(
+                            // ⚠️ Zero, not the default. A ListView left to choose pads itself with
+                            // the screen's safe-area insets — on a phone the status bar above and
+                            // the gesture bar below — even inside this boxed dialog, where neither
+                            // is anywhere near it. A home folder with one subfolder then drew that
+                            // row halfway down an empty box.
+                            padding: EdgeInsets.zero,
                             controller: _scroll,
                             itemExtent: _rowHeight,
                             itemCount: _entries.length,

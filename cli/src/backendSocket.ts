@@ -42,7 +42,7 @@ import { engineInstallRecipe } from './lib/engineInstall.js'
 import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from './lib/projectFolder.js'
 import { preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.js'
 import { projectPreview } from './lib/projectPreview.js'
-import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
+import { agentFrame, lastActivityAt, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import { installedDsh, listInstalledDsh } from './dsh/installed.js'
 import { OrchestratorService } from './orchestrator/service.js'
 import { OrchestratorError } from './orchestrator/model.js'
@@ -57,6 +57,7 @@ import { dshInstallReply, dshInstallRequest, dshInstallStatus, dshListRows, dshR
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { routeVoiceTask } from './lib/voiceRouter.js'
 import { tailFile } from './lib/sessions.js'
+import { stoppedAgents } from './lib/stoppedAgents.js'
 import { messagesToEvents, windowRawLines, subagentStatsFromRawLines, type SessionEvent } from './lib/normalize.js'
 import { listFileTree, readProjectFile } from './lib/files.js'
 import { MediaPreviewError, readMediaPreviewChunk } from './lib/mediaPreview.js'
@@ -400,7 +401,7 @@ export class BackendSocket {
   onCancel: ((sessionId: string) => void) | null = null
   /** Called when the web deletes an agent (`agent_delete`) — cli.ts signals only the validated engine
    *  process and forgets the session. Keeps recap + agent name. */
-  onDeleteAgent: ((sessionId: string) => void) | null = null
+  onDeleteAgent: ((sessionId: string) => void | Promise<void>) | null = null
   /** Called on `agent_create` — cli.ts spawns a fresh tmux session running the requested engine in the
    *  requested folder and returns its process-agent. Session metadata may bind later through hooks. */
   onCreateAgent: ((input: {
@@ -517,6 +518,9 @@ export class BackendSocket {
       { ok: true; session: RegisteredSession; resumed: boolean }
       | { ok: false; error: string; detail?: string }
     >) | null = null
+  /** Resume stopped work directly, or attach if it is already running. Never replaces a live
+   * process and never falls back to a fresh conversation. */
+  onResumeAgent: BackendSocket['onRestartAgent'] = null
   /** Called on `agent_fork` — cli.ts opens a NEW agent that starts with `agentId`'s whole history
    *  (lib/forkAgent.ts) and returns its process-agent, exactly as `agent_create` does. `level` says
    *  what the new agent actually got: the engine's own fork, or a handoff message. */
@@ -1279,7 +1283,11 @@ export class BackendSocket {
     }
     if (connId && this.e2ee.hasSession(connId) && encryptRpcResult(resultType)) {
       let replyPayload = payload
-      if (resultType === 'agent_recent_result') {
+      // ⚠️ The DIAL's frame budget, so only a dial's reply is fitted to it. The phone app and a remote
+      // desktop are `web` sessions and search this reply for the agent's latest answer: fitted, a reply
+      // over ~15KB dropped to one event without its `fullText`, so any agent doing real work — long
+      // answers — could not be found by what it had just said.
+      if (resultType === 'agent_recent_result' && this.e2ee.sessionRole(connId) === 'device') {
         const trim = fitRecentReplyPayloadForDevice(
           payload,
           (candidate) => this.e2ee.rpcReplyFrameBytes(connId, resultType, requestId, candidate),
@@ -1534,6 +1542,11 @@ export class BackendSocket {
 
         case 'agents_list': {
           const projects = await Promise.all(registry.advertised().map((s) => this.toProject(s)))
+          // Older clients/devices keep their live-only contract. The desktop picker
+          // explicitly asks for stopped work and receives no stale terminal routes.
+          if (payload.includeStopped === true && this.e2ee.sessionRole(connId) !== 'device') {
+            projects.push(...await Promise.all(stoppedAgents.available(registry.advertised()).map(s => this.toStoppedProject(s))))
+          }
           // Ordered by creation time, oldest → newest — a stable tab order that doesn't reshuffle as
           // sessions become active (createdAt = the session's registeredAt). The id breaks a tie so the
           // order is TOTAL: without it two agents registered in the same millisecond fall through to array
@@ -1558,14 +1571,13 @@ export class BackendSocket {
           // lands, instead of pinning `currentSessionId` to an id no event will ever carry.
           if (!s || !s.sessionId) { reply(type, requestId, { sessions: [] }); return }
           const lines = s.transcriptPath ? await tailFile(s.transcriptPath, Infinity) : []
-          const st = s.transcriptPath ? await stat(s.transcriptPath).catch(() => null) : null
           reply(type, requestId, {
             sessions: [{
               id: s.sessionId,
               title: projectDisplayName(s),
               timestamp: new Date(s.registeredAt).toISOString(),
               messageCount: lines.length,
-              lastActivity: new Date(st?.mtimeMs ?? s.updatedAt).toISOString(),
+              lastActivity: new Date(await lastActivityAt(s)).toISOString(),
               participants: [],
             }],
           })
@@ -2271,28 +2283,30 @@ export class BackendSocket {
         case 'agent_delete': {
           const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
           if (!target) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
-          this.onDeleteAgent?.(target)
+          await this.onDeleteAgent?.(target)
           reply(type, requestId, { deleted: true })
           return
         }
 
-        // Restart an agent: exit its live engine process and relaunch it in the SAME tmux pane, keeping
-        // the SAME agentId. Follows agent_create/agent_delete's exact validate → delegate → reply shape.
+        // Resume attaches or restores a saved conversation; restart replaces a live process in its
+        // existing pane. Both keep the agentId and use the same durable operation receipt protocol.
+        case 'agent_resume':
         case 'agent_restart': {
           const target = payload.agentId as string | undefined
           if (!target) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
-          if (!this.onRestartAgent) { reply(type, requestId, { error: 'UNSUPPORTED_ON_REMOTE' }); return }
+          const operation = type === 'agent_resume' ? 'resume' : 'restart'
+          const restart = operation === 'resume' ? this.onResumeAgent : this.onRestartAgent
+          if (!restart) { reply(type, requestId, { error: 'UNSUPPORTED_ON_REMOTE' }); return }
           const creationId = payload.creationId
           if (creationId !== undefined) {
             if (!validCreationId(creationId)) { reply(type, requestId, { error: 'INVALID_CREATION_ID' }); return }
-            const restart = this.onRestartAgent
             try {
-              void this.agentCreations.run(creationId, creationFingerprint({ operation: 'restart', agentId: target }), async () => {
+              void this.agentCreations.run(creationId, creationFingerprint({ operation, agentId: target }), async () => {
                 const result = await restart(target)
                 if (result.ok) return { state: 'created', agentId: result.session.agentId, resumed: result.resumed }
                 // RESTART_FAILED can follow an unobserved relaunch. Never silently
                 // replace that process again when a caller checks this intent.
-                if (result.error === 'RESTART_FAILED') return { state: 'unconfirmed' }
+                if (result.error === 'RESTART_FAILED' || result.error === 'RESUME_UNCONFIRMED') return { state: 'unconfirmed' }
                 return { state: 'failed', error: result.error, ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
               }).then(async (status) => {
                 reply(type, requestId, { creationId, ...await this.creationStatusPayload(status) })
@@ -2302,7 +2316,7 @@ export class BackendSocket {
             }
             return
           }
-          const result = await this.onRestartAgent(target)
+          const result = await restart(target)
           if (!result.ok) {
             reply(type, requestId, result.detail ? { error: result.error, detail: result.detail } : { error: result.error })
             return
@@ -2530,6 +2544,23 @@ export class BackendSocket {
       return { state: 'failed', ...(status.preparedFolder ? { preparedFolder: status.preparedFolder } : {}), failure: { code: status.error, ...(status.detail ? { detail: status.detail } : {}) } }
     }
     return status
+  }
+
+  async publishStoppedAgent(s: RegisteredSession): Promise<void> {
+    this.send({ type: 'agent_synced', payload: { agent: await this.toStoppedProject(s) } })
+    this.sendCommander({ type: 'agent_deleted', payload: { agentId: s.agentId } })
+  }
+
+  private async toStoppedProject(s: RegisteredSession): Promise<AgentFrame> {
+    const frame = await agentFrame(s, { selectedModel: s.model, terminalAvailable: false, dsh: this.dshFrameProvider?.(s) ?? null })
+    return {
+      ...frame,
+      status: 'stopped',
+      tmuxPane: null,
+      terminal: { available: false, primary: '', runtimes: [] },
+      viewerUrl: null,
+      forkable: false,
+    }
   }
 
   /** Map a registered tmux session onto the web's Project shape (tabs in ProjectTabs). */

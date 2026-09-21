@@ -5,6 +5,7 @@ import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/widgets/link_machine_screen.dart';
 
 import 'phone_header.dart';
+import 'phone_shell_scope.dart';
 
 /// A machine's password form, as a phone page — the same [LinkMachineScreen] the desktop pops
 /// up, since the exchange behind it is the same.
@@ -84,8 +85,13 @@ class _LinkPageState extends State<LinkPage> {
       // machine's agent list, which is the navigation the Machines tab no longer does — agents
       // belong to the Agents tab, where the machine is a filter rather than a step. Going back is
       // what shows the result: the row this was opened from is now under "Linked".
+      //
+      // …and then the shell carries on to the agent, which is what the password was for. Read
+      // before the pop: once the route starts leaving, this context is on its way out.
+      final shell = PhoneShellScope.maybeOf(context);
       _leaving = true;
       navigator.maybePop();
+      shell?.onMachineLinked(widget.machineId);
       return;
     }
     final closed =

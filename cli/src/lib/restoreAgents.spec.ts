@@ -288,6 +288,25 @@ describe('restoreAgents — which agents get a pane back', () => {
 })
 
 describe('restoreAgents — waiting for the engine', () => {
+  it('keeps an explicit resume failure instead of silently starting fresh after a daemon restart', async () => {
+    const h = harness([row({ resumeOnly: true })])
+    h.probes.set('%0', [null, null])
+    h.states.set('%0', [{ dead: true }])
+    await restoreAgents(h.deps)
+    await settled(h, 1)
+    expect(h.respawns).toBe(0)
+    expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'session-a' }])
+    expect(h.rows.get('agent-a')?.launch).toMatchObject({ state: 'failed', error: 'RESUME_FAILED' })
+    expect(h.calls).not.toContain('unbind:session-a')
+  })
+
+  it('does not create a fresh conversation if a resume-only binding is missing', async () => {
+    const h = harness([row({ resumeOnly: true, sessionId: '' })])
+    await restoreAgents(h.deps)
+    expect(h.launches).toEqual([])
+    expect(h.rows.get('agent-a')?.launch).toMatchObject({ state: 'failed', error: 'RESUME_UNAVAILABLE' })
+  })
+
   it('falls back to a fresh launch once when the resumed engine dies, and unbinds the stale session', async () => {
     const h = harness([row()])
     h.probes.set('%0', [null, null, identity(9)])
@@ -456,4 +475,26 @@ describe('restoreAgents — terminals', () => {
     expect(h.launched[0].launch.argv[0]).toBe('terminal')
     expect(h.rows.get('term-1')).toMatchObject({ engine: 'terminal', launch: { state: 'ready' } })
   })
+})
+
+
+it('retains a missing strict-resume pane for explicit Open after daemon restart', async () => {
+  const entry = row({ resumeOnly: true, launch: { state: 'starting' } })
+  const h = harness([entry])
+  h.deps.retainStopped = vi.fn((saved, _paneAlive) => { h.rows.delete(saved.agentId) })
+  const summary = await restoreAgents(h.deps)
+  expect(h.deps.retainStopped).toHaveBeenCalledWith(entry, false)
+  expect(summary.restored).toEqual([])
+  expect(h.paneCreates).toBe(0)
+  expect(h.respawns).toBe(0)
+})
+
+it('archives an engine that exited while the daemon was down without overwriting its shell', async () => {
+  const entry = row()
+  const h = harness([entry], { alivePanes: ['%3'] })
+  h.deps.retainStopped = vi.fn()
+  await restoreAgents(h.deps)
+  expect(h.deps.retainStopped).toHaveBeenCalledWith(entry, true)
+  expect(h.paneCreates).toBe(0)
+  expect(h.respawns).toBe(0)
 })

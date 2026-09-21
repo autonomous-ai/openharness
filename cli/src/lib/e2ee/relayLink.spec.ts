@@ -150,6 +150,15 @@ describe('remote-password link + relay session crypto (interop with the real E2e
       expect(statusReply.payload).not.toHaveProperty('agent')
       expect(crypto.unwrapIncoming(statusReply)?.payload).toEqual(status)
 
+      const resume = { requestId: 'resume-1', agentId: 'saved-work', creationId: 'resume-fixture-001' }
+      const resumeRequest = crypto.wrapOutgoing({ type: 'agent_resume', payload: resume })
+      expect(resumeRequest.payload).not.toHaveProperty('agentId')
+      expect(manager.unwrapDown('session-conn', resumeRequest)?.payload).toEqual(resume)
+      const resumed = { ...resume, state: 'created', agent: { id: 'saved-work', cwd: '/private/work' } }
+      const resumeReply = manager.wrapTarget('session-conn', 'agent_resume_result', resumed)!
+      expect(resumeReply.payload).not.toHaveProperty('agent')
+      expect(crypto.unwrapIncoming(resumeReply)?.payload).toEqual(resumed)
+
       const lowerDown = crypto.wrapOutgoing({ type: 'terminal_resize', payload: { streamId: 's', cols: 80 } })
       const higherDown = crypto.wrapOutgoing({ type: 'terminal_resize', payload: { streamId: 's', cols: 120 } })
       expect((manager.unwrapDown('session-conn', higherDown)?.payload as Record<string, unknown>).cols).toBe(120)

@@ -109,6 +109,7 @@ notes/
 *.local
 *.local.*
 TODO.local.md
+mobile/docs/
 
 # pi agent task logs
 .pi/

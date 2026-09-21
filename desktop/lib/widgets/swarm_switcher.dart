@@ -399,8 +399,10 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
     final capacity = ((available - chrome) / _rowHeight).floor();
     // A window too short for one row can only scroll a partial row.
     if (capacity < 1) return constraints.maxHeight;
+    // Ten recent sessions plus the pinned New Harness row on a roomy screen.
+    // The measured capacity below still reduces this for smaller windows.
     final maxRows = search.resultsFromBottom
-        ? 6
+        ? 11
         : widget.terminal
         ? 9
         : 12;

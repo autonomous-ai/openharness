@@ -70,7 +70,7 @@ Future<void> chord(
 void main() {
   for (final native in [false, true]) {
     testWidgets(
-      'New Tab actions defer placement until selection (native: $native)',
+      'New Tab opens a minimal draft and Escape removes only that draft (native: $native)',
       (tester) async {
         const channel = MethodChannel('harness/swarm_tabs');
         const codec = StandardMethodCodec();
@@ -131,12 +131,21 @@ void main() {
           await tester.pumpAndSettle();
           await action();
           await tester.pumpAndSettle();
-          expect(app.activeSwarmId, work);
-          expect(app.swarms, hasLength(2));
+          expect(app.activeSwarmId, isNot(work));
+          expect(app.activeSwarm.isNewTabPage, isTrue);
+          expect(app.swarms, hasLength(3));
+          expect(find.text('Follow your curiosity.'), findsWidgets);
+          expect(
+            find.text('Follow your curiosity. Build across disciplines.'),
+            findsNothing,
+          );
           final input = find.byKey(const ValueKey('swarm-search-input'));
           expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
           await tester.enterText(input, 'Agent 1');
           await tester.pump();
+          await chord(tester, LogicalKeyboardKey.keyT);
+          expect(app.swarms, hasLength(3));
+          expect(tester.widget<TextField>(input).controller!.text, 'Agent 1');
           await tester.sendKeyEvent(LogicalKeyboardKey.escape);
           await tester.pump();
           expect(input, findsNothing);
@@ -152,9 +161,13 @@ void main() {
         await tester.pump();
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
-        expect(app.activeSwarmId, starter);
-        expect(app.swarms, hasLength(2));
+        expect(app.activeSwarmId, isNot(starter));
+        expect(app.swarms, hasLength(3));
         expect(app.panes.single.agentId, 'a0');
+        expect(
+          app.swarms.firstWhere((tab) => tab.id == work).panes.single.agentId,
+          'a0',
+        );
         await tester.pumpWidget(const SizedBox());
         app.dispose();
         projects.dispose();
@@ -243,13 +256,13 @@ void main() {
         'Share harness',
         'Show message composer',
         'Zoom Pane',
-        'Restart Agent',
-        'Fork Agent',
-        'Stop Agent',
+        'Restart Harness',
+        'Fork Harness',
+        'Stop Harness',
         'Close Pane',
       ]),
     );
-    expect(find.byTooltip('Stop Agent').first.hitTestable(), findsNothing);
+    expect(find.byTooltip('Stop Harness').first.hitTestable(), findsNothing);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: const Offset(1, 1));
     Future<void> hover() async {
@@ -276,10 +289,10 @@ void main() {
     await hover();
 
     await tester.tap(
-      find.descendant(of: controls, matching: find.byTooltip('Stop Agent')),
+      find.descendant(of: controls, matching: find.byTooltip('Stop Harness')),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Stop Agent'), findsOneWidget);
+    expect(find.text('Stop Harness'), findsOneWidget);
     expect(find.text('Stop'), findsOneWidget);
     expect(app.panes, contains(pane));
     expect(original.panes.single.session, same(session));
@@ -398,6 +411,10 @@ void main() {
       );
       final starter = app.activeSwarmId;
       await activate('new');
+      expect(app.swarms, hasLength(2));
+      expect(app.activeSwarmId, isNot(starter));
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
       expect(app.swarms, hasLength(1));
       expect(app.activeSwarmId, starter);
       expect(input, hasLength(2));

@@ -1,5 +1,6 @@
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/state/app_state.dart';
+
 import 'phone_status.dart';
 
 /// One agent, together with the machine it runs on.
@@ -17,26 +18,41 @@ class AgentEntry {
   String get machineId => machine.machine.machineId;
   String get machineName => machine.machine.displayName;
 
+  /// The folder this agent works in, as [AgentContextLine] names it. Through [MachineState.projectOf]
+  /// rather than `agent.project` directly: a locally launched agent carries its project on the
+  /// machine's own side, and a row reading the field alone shows nothing for exactly those agents.
+  AgentProject? get project => machine.projectOf(agent);
+
   /// Whether this agent is blocked on an answer from the person holding the phone.
   bool get isWaiting => machine.blockedAgents.containsKey(agent.id);
 
   bool get isWorking => machine.processingAgentIds.contains(agent.id);
+
+  /// When its conversation last moved: the machine's own [Agent.updatedAt], or
+  /// a turn this app saw since ([MachineState.agentActivityAt]) — whichever is
+  /// later. Null when neither is known.
+  DateTime? get lastActiveAt {
+    final reported = agent.updatedAt;
+    final seen = machine.agentActivityAt[agent.id];
+    if (reported == null || seen == null) return seen ?? reported;
+    return seen.isAfter(reported) ? seen : reported;
+  }
 
   PhoneSummary get summary => phoneAgentSummary(machine, agent);
 }
 
 /// Every agent the account can reach, ordered the way the tab draws them.
 ///
-/// Only machines that are LINKED and answering contribute: an offline machine's agent list is
-/// whatever was last seen there, and drawing it beside live ones would offer rows that cannot be
-/// opened. Those machines are reachable on the Machines tab instead, which is where the thing to
-/// do about them lives.
+/// Only machines that are LINKED and answering contribute — or only re-dialling after answering, see
+/// [phoneMachineListsAgents]: an offline machine's agent list is whatever was last seen there, and
+/// drawing it beside live ones would offer rows that cannot be opened. Those machines are reachable
+/// on the Machines tab instead, which is where the thing to do about them lives.
 List<AgentEntry> agentIndex(AppNotifier notifier) {
   final entries = <AgentEntry>[];
   for (final machine in notifier.machines) {
     final state = notifier.stateOf(machine.machineId);
     if (state == null) continue;
-    if (phoneMachineStatusOf(state) != PhoneMachineStatus.ready) continue;
+    if (!phoneMachineListsAgents(state)) continue;
     for (final agent in state.agents) {
       entries.add(AgentEntry(machine: state, agent: agent));
     }
@@ -57,26 +73,54 @@ List<AgentEntry> waitingAgents(List<AgentEntry> entries) =>
 /// Sorted rather than left in machine order because "working" is the only remaining state that
 /// changes on its own — an idle agent will still be idle in a minute, and a row that is moving is
 /// the one worth putting where the eye lands.
-List<AgentEntry> otherAgents(List<AgentEntry> entries) {
-  final rest = entries.where((entry) => !entry.isWaiting).toList();
-  // A stable sort, which `List.sort` is not — see [filterableMachines] for the same technique and
-  // the same reason. It matters more here than it does for the chips: the terminal page walks this
-  // order to find the next agent along, so an unstable tie would let two idle agents swap places on
-  // an unrelated rebuild and send a swipe to a different agent than the list was offering.
-  final indexed = [for (final (index, entry) in rest.indexed) (index, entry)]
+List<AgentEntry> otherAgents(List<AgentEntry> entries) =>
+    // A stable sort, which `List.sort` is not. It matters more here than it does for the chips: the
+    // terminal page walks this order to find the next agent along, so an unstable tie would let two
+    // idle agents swap places on an unrelated rebuild and send a swipe to a different agent than the
+    // list was offering.
+    _stableSorted(
+      entries.where((entry) => !entry.isWaiting),
+      (a, b) =>
+          _firstWhere(a.isWorking, b.isWorking) ??
+          // Then agents that can actually be opened, so a row with no terminal never heads the list.
+          _firstWhere(a.agent.terminalAvailable, b.agent.terminalAvailable) ??
+          0,
+    );
+
+/// Every agent, in the order search offers them before a word is typed: waiting on the person,
+/// then working, then the one whose conversation moved last.
+///
+/// The recency is what the tabs deliberately do NOT sort on — a list somebody browses must not
+/// reshuffle — but a search is opened to reach one agent and closed again, and the agent somebody
+/// reaches for is overwhelmingly the one that just finished — see [AgentEntry.lastActiveAt]. Agents
+/// with no date at all keep their index order after every dated one.
+List<AgentEntry> recentAgents(List<AgentEntry> entries) => _stableSorted(
+  entries,
+  (a, b) =>
+      _firstWhere(a.isWaiting, b.isWaiting) ??
+      _firstWhere(a.isWorking, b.isWorking) ??
+      _firstWhere(a.agent.terminalAvailable, b.agent.terminalAvailable) ??
+      _newestFirst(a.lastActiveAt, b.lastActiveAt),
+);
+
+/// -1 when only [a] holds, 1 when only [b] does, null on a tie — so comparators chain with `??`.
+int? _firstWhere(bool a, bool b) => a == b ? null : (a ? -1 : 1);
+
+int _newestFirst(DateTime? a, DateTime? b) {
+  if (a == null || b == null) return _firstWhere(a != null, b != null) ?? 0;
+  return b.compareTo(a);
+}
+
+/// [items] sorted by [compare], ties kept in their incoming order — which `List.sort` does not
+/// promise. Every list here is walked by index by something (a pager, a chip rail), so a tie that
+/// flips on an unrelated rebuild moves a row out from under a finger.
+List<T> _stableSorted<T>(Iterable<T> items, int Function(T a, T b) compare) {
+  final indexed = [...items.indexed]
     ..sort((a, b) {
-      final aEntry = a.$2;
-      final bEntry = b.$2;
-      if (aEntry.isWorking != bEntry.isWorking) {
-        return aEntry.isWorking ? -1 : 1;
-      }
-      // Then agents that can actually be opened, so a row with no terminal never heads the list.
-      final aOpen = aEntry.agent.terminalAvailable;
-      final bOpen = bEntry.agent.terminalAvailable;
-      if (aOpen != bOpen) return aOpen ? -1 : 1;
-      return a.$1.compareTo(b.$1);
+      final order = compare(a.$2, b.$2);
+      return order != 0 ? order : a.$1.compareTo(b.$1);
     });
-  return [for (final (_, entry) in indexed) entry];
+  return [for (final (_, item) in indexed) item];
 }
 
 /// Every agent the list draws, in the order a finger meets them.
@@ -110,14 +154,9 @@ List<MachineState> filterableMachines(AppNotifier notifier) {
     for (final machine in notifier.machines)
       ?notifier.stateOf(machine.machineId),
   ];
-  // A stable sort, which `List.sort` is not — an unstable one would let two ready machines swap
-  // places on an unrelated rebuild, moving a chip out from under a finger already reaching for it.
-  final indexed = [for (final (index, state) in states.indexed) (index, state)]
-    ..sort((a, b) {
-      final rank = _chipRank(a.$2).compareTo(_chipRank(b.$2));
-      return rank != 0 ? rank : a.$1.compareTo(b.$1);
-    });
-  return [for (final (_, state) in indexed) state];
+  // Stable, so two ready machines never swap places on an unrelated rebuild and move a chip out
+  // from under a finger already reaching for it.
+  return _stableSorted(states, (a, b) => _chipRank(a).compareTo(_chipRank(b)));
 }
 
 /// Where a machine's chip sits: lower sorts first.

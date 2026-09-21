@@ -43,6 +43,8 @@ export type RestoreLaunchResult = RestoreLaunch | { error: string; detail: strin
 export const GRID_CREDENTIAL_REQUIRED = 'GRID_CREDENTIAL_REQUIRED'
 
 export interface RestoreAgentsDeps {
+  retainStopped?: (entry: RegisteredSession, paneAlive: boolean) => void
+
   registry: {
     list(): RegisteredSession[]
     byAgent(agentId: string): RegisteredSession | undefined
@@ -155,9 +157,15 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
         // reconciler adopts it by process instead of treating it as an unbound route.
         if (!entry.processIdentity) deps.registry.updateProcessIdentity(entry.agentId, engineLive)
       } else if (!isTerminalEngine(entry.engine)) {
-        deps.registry.releaseEngine(entry.agentId)
+        if (deps.retainStopped) deps.retainStopped(entry, true)
+        else deps.registry.releaseEngine(entry.agentId)
         deps.log(`[restore] ${entry.engine} → terminal · agent ${entry.agentId} · its engine exited while the daemon was down`)
       }
+      continue
+    }
+    if (entry.resumeOnly && deps.retainStopped) {
+      deps.retainStopped(entry, false)
+      summary.skipped.push({ agentId: entry.agentId, reason: 'saved conversation awaits explicit Open' })
       continue
     }
     // A terminal whose pane is gone comes back as a terminal — never as the engine that was once
@@ -203,6 +211,12 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
       // into this agent (route adoption requires either no identity or a matching pid).
       deps.registry.clearProcessIdentity(entry.agentId)
       const resumeSessionId = entry.sessionId || undefined
+      if (entry.resumeOnly && !resumeSessionId && !isTerminalEngine(entry.engine)) {
+        const reason = 'The saved conversation is no longer available. Start a new conversation separately.'
+        summary.failed.push({ agentId: entry.agentId, reason })
+        deps.registry.setLaunch(entry.agentId, { state: 'failed', error: 'RESUME_UNAVAILABLE', detail: reason })
+        continue
+      }
       const launch = await deps.buildLaunch(entry, resumeSessionId ? { resumeSessionId } : {})
       if ('error' in launch) {
         summary.failed.push({ agentId: entry.agentId, reason: launch.detail })
@@ -260,6 +274,10 @@ async function watchRestoredPane(
   let mayRetryFresh = resuming
   /** The pane's engine is gone. True when a fresh relaunch is now under way, false when this is the end. */
   const relaunchFresh = async (): Promise<boolean> => {
+    if (entry.resumeOnly) {
+      fail('RESUME_FAILED', `${engine} could not resume the saved conversation. See the terminal output, or start a new conversation separately.`)
+      return false
+    }
     if (!mayRetryFresh) {
       fail('ENGINE_DID_NOT_START', `${engine} exited before its engine process became ready. See the terminal output for details.`)
       return false

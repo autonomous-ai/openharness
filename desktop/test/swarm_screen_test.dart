@@ -163,7 +163,7 @@ void main() {
         }
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 300));
-        expect(app.swarms, hasLength(30));
+        expect(app.swarms, hasLength(31));
         final input = find.byKey(const ValueKey('swarm-search-input'));
         await tester.enterText(input, 'Agent 1');
         await tester.pump();

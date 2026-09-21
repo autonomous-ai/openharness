@@ -11,6 +11,7 @@ import 'control_chord.dart';
 import 'terminal_binary.dart';
 import 'terminal_input.dart';
 import 'terminal_viewport.dart';
+import 'utf8_chunks.dart';
 
 typedef TerminalFrameSender = Future<bool> Function(
   String type,
@@ -86,7 +87,13 @@ class TerminalSession extends ChangeNotifier {
   /// going stale silently (the relayed machine's own Harness process restarted, dropping its E2EE
   /// session without the transport ever closing) so a reconnect looks like a couple of extra seconds
   /// of "attaching" instead of a hang the user has to notice and manually retry.
-  final Future<void> Function()? onOpenStalled;
+  /// Force a fresh transport dial for a stream that opened and then went silent.
+  ///
+  /// Returns whether a reconnect was actually started. False means the caller
+  /// declined — the transport is not up yet, so there is nothing to reconnect —
+  /// and [_recoverAndResend] then keeps its one-per-open budget rather than
+  /// spending it on a no-op.
+  final Future<bool> Function()? onOpenStalled;
 
   TerminalSession({
     required this.machineId,
@@ -127,6 +134,20 @@ class TerminalSession extends ChangeNotifier {
 
   String? _openRequestId;
   int? _expectedSeq;
+
+  /// Whether this session has drawn anything yet.
+  ///
+  /// False from the moment the session opens until the machine's first
+  /// `terminal_keyframe` lands — the window in which [status] already reads
+  /// `controlling` and the emulator's buffer is still empty, so a terminal built
+  /// on it paints a blank screen. The phone shows its skeleton across exactly
+  /// this gap (`phone/terminal_page.dart`), which is why the flag is public
+  /// rather than inferred from [status].
+  ///
+  /// Reads `_expectedSeq`, the sequence cursor set by that first frame and
+  /// cleared by every reopen (see `_armInitialKeyframeWatchdog`, which treats
+  /// the same null as "no keyframe arrived").
+  bool get hasRenderedFrame => _expectedSeq != null;
   int _lastRenderedSeq = -1;
   int _framesSinceAck = 0;
   int _renderedSinceAckBytes = 0;
@@ -372,12 +393,21 @@ class TerminalSession extends ChangeNotifier {
   ) async {
     final recover = onOpenStalled;
     if (_openStallRecovered || recover == null) return false;
-    _openStallRecovered = true;
+    var reconnected = false;
     try {
-      await recover();
+      reconnected = await recover();
     } catch (_) {
-      // Still worth polling for readiness even if the forced reconnect itself errored.
+      // A forced reconnect that threw still started one; poll for readiness.
+      reconnected = true;
     }
+    // ⚠️ **The one forced reconnect per open is spent only if one happened.**
+    // The hook declines while the transport is still connecting — there is
+    // nothing to recover there, and redialling would destroy the dial in
+    // progress (see `onOpenStalled` in `app_state.dart`). Marking the budget
+    // spent on a decline would leave a stream that later stalls for real with no
+    // recovery left, which is the failure this whole path exists to handle.
+    if (!reconnected) return false;
+    _openStallRecovered = true;
     for (var attempt = 0; attempt < 10; attempt++) {
       if (!_isCurrent(generation) ||
           status != TerminalSessionStatus.opening ||
@@ -567,7 +597,7 @@ class TerminalSession extends ChangeNotifier {
             }
             // Publish a complete screen atomically. A damaged snapshot must
             // leave the retained screen available while resync recovers.
-            final decoded = _decodeUtf8(_prepareKeyframeBytes(bytes));
+            final decoded = decodeUtf8Chunk(_prepareKeyframeBytes(bytes));
             final replacement = _newTerminal(bindCallbacks: false)
               ..resize(_clampCols(nextCols), _clampRows(nextRows))
               ..write(decoded.text);
@@ -687,6 +717,25 @@ class TerminalSession extends ChangeNotifier {
     if (identical(_viewport, viewport)) _viewport = null;
   }
 
+  /// Empties the prompt being typed into: Ctrl+E to its end, then Ctrl+U to
+  /// delete back to its start — what a shell and Claude Code's prompt both
+  /// read as "clear the line" — and the keyboard's own buffer with it (see
+  /// [TerminalViewport.clearInputBuffer]).
+  ///
+  /// ⚠️ Not Ctrl+C: to Claude Code an empty prompt's Ctrl+C is the first half
+  /// of quitting.
+  void clearPrompt() {
+    if (!acceptsInput) return;
+    terminal.keyInput(TerminalKey.keyE, ctrl: true);
+    terminal.keyInput(TerminalKey.keyU, ctrl: true);
+    resetInputBuffer();
+  }
+
+  /// Empties the keyboard's own buffer after a key sent from outside it — Tab
+  /// completing a word, a `/` typed from the key strip — changed the prompt
+  /// behind its back. See [TerminalViewport.clearInputBuffer].
+  void resetInputBuffer() => _viewport?.clearInputBuffer();
+
   /// Changes only the local paint phase of the cursor. Incoming terminal data
   /// is always parsed against [_remoteCursorVisible], so blinking cannot turn
   /// a remote DECTCEM hide/show command into terminal input or corrupt its
@@ -714,41 +763,10 @@ class TerminalSession extends ChangeNotifier {
     // Most packets end on a scalar boundary. Decode their existing byte view
     // directly; only a split UTF-8 scalar needs a joined buffer.
     final combined = _utf8Tail.isEmpty ? bytes : <int>[..._utf8Tail, ...bytes];
-    final decoded = _decodeUtf8(combined);
+    final decoded = decodeUtf8Chunk(combined);
     if (decoded.text.isNotEmpty) _writeTerminalText(decoded.text);
     _utf8Tail = decoded.tail;
     return true;
-  }
-
-  ({String text, List<int> tail}) _decodeUtf8(List<int> combined) {
-    for (
-      var tailLength = 0;
-      tailLength <= min(3, combined.length);
-      tailLength++
-    ) {
-      try {
-        final text = utf8.decoder.convert(
-          combined,
-          0,
-          combined.length - tailLength,
-        );
-        return (
-          text: text,
-          tail: tailLength == 0
-              ? const []
-              : combined.sublist(combined.length - tailLength),
-        );
-      } on FormatException {
-        // A UTF-8 scalar can span at most four bytes; retain only a trailing
-        // partial scalar before falling back to replacement rendering below.
-      }
-    }
-    // PTY output is byte-oriented. A snapshot cut can rarely land between the
-    // leading and continuation bytes of a scalar, leaving a continuation byte
-    // at the start of the post-cut frame. Real terminals render malformed UTF-8
-    // as U+FFFD; resyncing the entire screen creates a second keyframe race and
-    // cannot recover the missing pre-cut byte anyway.
-    return (text: utf8.decode(combined, allowMalformed: true), tail: const []);
   }
 
   List<int> _prepareKeyframeBytes(Uint8List bytes) {

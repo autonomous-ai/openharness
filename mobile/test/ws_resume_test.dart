@@ -16,13 +16,19 @@ class _Hub {
   final List<WebSocket> live = [];
   int opened = 0;
 
+  /// Answers every dial with a 404 rather than an upgrade — a dial that fails.
+  bool refuse = false;
+
+  /// Closes the next socket opened with this code the moment it opens.
+  int? closeNextWith;
+
   int get port => server.port;
 
   static Future<_Hub> start() async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final hub = _Hub._(server);
     server.listen((request) async {
-      if (!WebSocketTransformer.isUpgradeRequest(request)) {
+      if (hub.refuse || !WebSocketTransformer.isUpgradeRequest(request)) {
         request.response.statusCode = 404;
         await request.response.close();
         return;
@@ -33,6 +39,12 @@ class _Hub {
             protocols.isNotEmpty ? protocols.first : null,
       );
       hub.opened++;
+      final closeWith = hub.closeNextWith;
+      if (closeWith != null) {
+        hub.closeNextWith = null;
+        await ws.close(closeWith);
+        return;
+      }
       hub.live.add(ws);
       // Whatever the client says, this hub only counts connections.
       ws.listen((_) {}, onDone: () => hub.live.remove(ws));
@@ -54,20 +66,22 @@ class _Hub {
 void main() {
   late _Hub hub;
   final statuses = <ConnectionStatus>[];
+  final signOuts = <String>[];
 
   setUp(() async {
     hub = await _Hub.start();
     statuses.clear();
+    signOuts.clear();
   });
 
   tearDown(() async => hub.stop());
 
-  WsConn newConn() => WsConn(
+  WsConn newConn({AccessTokenProvider? tokens}) => WsConn(
     wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
     autonomousEnv: 'test',
     machineId: 'm',
-    accessTokenProvider: (_, _) async => 'token',
-    onAuthFailure: (_) {},
+    accessTokenProvider: tokens ?? (_, _) async => 'token',
+    onAuthFailure: signOuts.add,
     onEvent: (_) {},
     onStatus: statuses.add,
   );
@@ -136,6 +150,50 @@ void main() {
       );
     },
   );
+
+  test('a dial that failed does not hold up the next one', () async {
+    hub.refuse = true;
+    final conn = newConn();
+    addTearDown(conn.close);
+    await conn.connect();
+    hub.refuse = false;
+
+    // Back in front of somebody, on a network that works now.
+    conn.reconnectNow();
+
+    // Well inside the one-second backoff the failed dial armed.
+    expect(
+      await opensReach(1, within: const Duration(milliseconds: 350)),
+      isTrue,
+    );
+  });
+
+  test('a token refresh that cannot reach the server is retried', () async {
+    hub.closeNextWith = 4401;
+    final conn = newConn(
+      tokens: (force, _) async =>
+          force ? throw StateError('network unreachable') : 'token',
+    );
+    addTearDown(conn.close);
+    await conn.connect();
+
+    expect(await opensReach(2, within: const Duration(seconds: 3)), isTrue);
+    expect(signOuts, isEmpty, reason: 'an outage is not a dead session');
+  });
+
+  test('a session that is gone for good signs out', () async {
+    hub.closeNextWith = 4401;
+    final conn = newConn(
+      tokens: (force, _) async =>
+          force ? throw const WsCredentialRevoked('revoked') : 'token',
+    );
+    addTearDown(conn.close);
+    await conn.connect();
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+
+    expect(signOuts, hasLength(1));
+    expect(conn.isClosed, isTrue);
+  });
 
   test('a connection somebody closed stays closed', () async {
     final conn = newConn();

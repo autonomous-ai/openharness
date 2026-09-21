@@ -220,14 +220,14 @@ class _AgentsBody extends StatelessWidget {
     if (status == PhoneMachineStatus.offline) {
       return EmptyState(
         icon: LucideIcons.cloudOff300,
-        title: "Harness isn't running there",
+        title: "OpenHarness isn't running there",
         message:
-            'Start Harness on ${machine.machine.displayName} and its agents '
+            'Start OpenHarness on ${machine.machine.displayName} and its agents '
             'will show up here.',
       );
     }
     if (agents.isEmpty && status == PhoneMachineStatus.connecting) {
-      return const PhoneListSkeleton();
+      return const PhoneListSkeleton(height: kPhoneAgentCardHeight);
     }
     final loadError = machine.agentsLoadError;
     if (agents.isEmpty && loadError != null) {
@@ -245,7 +245,7 @@ class _AgentsBody extends StatelessWidget {
       return EmptyState(
         icon: LucideIcons.squareTerminal300,
         title: 'No agents yet',
-        message: 'Start one here, or from Harness on that machine.',
+        message: 'Start one here, or from OpenHarness on that machine.',
         action: FilledButton(
           onPressed: () => openNewAgent(context, notifier, _machineId),
           child: const Text('New agent'),
@@ -291,13 +291,15 @@ Future<void> showAgentActions(
   ],
 );
 
-/// The one way into [NewAgentPage] — this page's header button, its empty state, and the Agents
-/// tab's `+` all come through here rather than drifting into three ways of opening it.
+/// The one way into [NewAgentPage] — every door to the form comes through here rather than
+/// drifting into several ways of opening it.
 ///
 /// ⚠️ [machineId] is not a detail the caller may guess at. A new agent needs the machine to list
-/// its folders and name the engines it has, so every door has to establish which machine FIRST:
-/// this page already knows, and the tab asks (`agents_tab.dart`).
-void openNewAgent(
+/// its folders and name the engines it has, so every door has to establish which machine FIRST.
+/// Returns when the form closes — by creating an agent or by being backed out
+/// of — so a caller whose own chrome depends on being the top route can rebuild
+/// (see `terminal_page.dart`). Callers that do not care can ignore it.
+Future<void> openNewAgent(
   BuildContext context,
   AppNotifier notifier,
   String machineId,

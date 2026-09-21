@@ -18,8 +18,13 @@
          cannot run without: a tablet or emulator with no camera must still
          install and show every other screen. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- Voice input, the terminal's default way to type. The recording is
+         transcribed by the Harness backend (`/api/voice/stt`), so the
+         microphone is the only permission it needs. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <application
-        android:label="harness"
+        android:label="OpenHarness"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

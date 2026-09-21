@@ -6,13 +6,19 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/widgets/engine_identity.dart';
 
+import 'agent_context_line.dart';
 import 'phone_card.dart';
 import 'phone_status.dart';
 import 'status_pill.dart';
 
-/// One agent on a machine's page: its engine, its name, and what it is doing. An agent with no
-/// terminal to attach is drawn dimmed and does not open — but it can still be held for [onLongPress],
-/// which is the only way to reach an agent whose terminal has gone.
+/// One agent on a machine's page: its engine, its name, what it is doing, and — [AgentContextLine] —
+/// the folder and branch it is working in. An agent with no terminal to attach is drawn dimmed and
+/// does not open, but it can still be held for [onLongPress], which is the only way to reach an
+/// agent whose terminal has gone.
+///
+/// The machine is named on the line too, though this page is already about one machine: the row is
+/// the same row the Agents tab draws, and an agent should not read differently depending on which
+/// door was used to reach it.
 class AgentTile extends StatelessWidget {
   const AgentTile({
     super.key,
@@ -31,6 +37,7 @@ class AgentTile extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     return PhoneCard(
+      height: kPhoneAgentCardHeight,
       onTap: agent.terminalAvailable ? onTap : null,
       onLongPress: onLongPress,
       child: Row(
@@ -58,8 +65,13 @@ class AgentTile extends StatelessWidget {
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                const SizedBox(height: 5),
+                const SizedBox(height: 3),
                 StatusPill(summary: phoneAgentSummary(machine, agent)),
+                const SizedBox(height: 3),
+                AgentContextLine(
+                  project: machine.projectOf(agent),
+                  machineName: machine.machine.displayName,
+                ),
               ],
             ),
           ),

@@ -44,8 +44,12 @@ class _Conn extends WsConn {
   }
 }
 
-/// A machine answering, with one agent already in a folder — which is what puts a tappable folder
-/// on the form. Browsing for one instead would open the remote picker, a screen of its own.
+/// A machine answering, with one agent already in a folder.
+///
+/// ⚠️ The agent is no longer what puts a tappable folder on the form — RECENT does, and RECENT is
+/// the stored history rather than a reading of the machine's agents. The caller seeds that history;
+/// this agent is here so the machine is not empty. Browsing for a folder instead would open the
+/// remote picker, a screen of its own.
 AppNotifier _app(_Conn conn) {
   final app = AppNotifier(
     config: AppConfig.dev,
@@ -76,37 +80,46 @@ AppNotifier _app(_Conn conn) {
 }
 
 void main() {
-  testWidgets('creating an agent opens it, and leaves no form to come back to', (
-    tester,
-  ) async {
-    final app = _app(_Conn());
-    addTearDown(app.dispose);
-    await tester.pumpWidget(
-      MaterialApp(home: NewAgentPage(notifier: app, machineId: 'm')),
-    );
-    await tester.pump();
+  testWidgets(
+    'creating an agent opens it, and leaves no form to come back to',
+    (tester) async {
+      final app = _app(_Conn());
+      addTearDown(app.dispose);
+      // A folder this machine has been used with before. Its row is titled by the path's last
+      // segment, so this is the 'grid' tapped below.
+      await app.projectHistory.select('m', '/src/grid');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: NewAgentPage(notifier: app, machineId: 'm'),
+        ),
+      );
+      await tester.pump();
 
-    await tester.tap(find.text('grid'));
-    await tester.pump();
-    await tester.tap(find.text('Claude'));
-    await tester.pump();
-    await tester.tap(find.text('Create agent'));
-    // The create resolves on a microtask, then the route it pushes has to slide in — and only once
-    // that transition ends does the form's own route come off the stack.
-    await tester.pump();
-    for (var i = 0; i < 4; i++) {
-      await tester.pump(const Duration(milliseconds: 400));
-    }
+      // Recent is folded shut, so its entries are not on screen until it is opened.
+      await tester.tap(find.text('Recent'));
+      await tester.pump();
+      await tester.tap(find.text('grid'));
+      await tester.pump();
+      await tester.tap(find.text('Claude'));
+      await tester.pump();
+      await tester.tap(find.text('Create agent'));
+      // The create resolves on a microtask, then the route it pushes has to slide in — and only once
+      // that transition ends does the form's own route come off the stack.
+      await tester.pump();
+      for (var i = 0; i < 4; i++) {
+        await tester.pump(const Duration(milliseconds: 400));
+      }
 
-    expect(
-      find.byType(AgentSwipeHost),
-      findsOneWidget,
-      reason: 'the agent just asked for is what the form opens',
-    );
-    expect(
-      find.byType(NewAgentPage),
-      findsNothing,
-      reason: 'the form is replaced, so back from the agent is the list behind it',
-    );
-  });
+      expect(
+        find.byType(AgentSwipeHost),
+        findsOneWidget,
+        reason: 'the agent just asked for is what the form opens',
+      );
+      expect(
+        find.byType(NewAgentPage),
+        findsNothing,
+        reason: 'the form is replaced, so back from the agent is the list behind it',
+      );
+    },
+  );
 }

@@ -3,11 +3,14 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
+
 import 'agent_index.dart';
 import 'agent_swipe.dart';
+import 'agent_swipe_list.dart';
 import 'agents_page.dart';
 import 'link_page.dart';
 import 'machine_swipe.dart';
+import 'phone_shell_scope.dart';
 
 /// Every phone page slides in the iOS way, and goes back with the edge swipe — unless
 /// [swipeToGoBack] is off, which is how a page that wants the horizontal axis for itself keeps it.
@@ -52,7 +55,8 @@ void openMachine(
   MachineSwipeList? swipeNeighbours,
 }) {
   final machine = notifier.stateOf(machineId);
-  if (machine == null) return;
+  // Offline: no password form to show and no agents to list — every caller also draws the row inert.
+  if (machine == null || machine.nodeOnline == false) return;
   // A pager decides page by page which of the two screens a machine needs, because that answer
   // changes under the finger — linking one mid-swipe turns its page into the agents list. Opened on
   // its own, the old pair of routes is kept: [LinkPage] then walks forward to [AgentsPage] itself,
@@ -120,6 +124,15 @@ void openAgent(
   AgentSwipeList? swipeNeighbours,
   bool replacingCurrentPage = false,
 }) {
+  // Inside the shell the terminal is the home screen, so an agent is opened THERE — every stack
+  // back to its root and the root switched to this agent — rather than pushed over the page that
+  // asked. A pushed terminal carried a back button to a page the person was done with. The push
+  // below is what a page pumped without a shell still gets.
+  final shell = PhoneShellScope.maybeOf(context);
+  if (shell != null) {
+    shell.onOpenAgent(machineId, agentId);
+    return;
+  }
   final route = phoneRoute(
     (_) => AgentSwipeHost(
       notifier: notifier,
@@ -137,7 +150,14 @@ void openAgent(
   } else {
     navigator.push(route);
   }
-  unawaited(_openPane(notifier, machineId, agentId, keepOthers: swipeNeighbours != null));
+  unawaited(
+    _openPane(
+      notifier,
+      machineId,
+      agentId,
+      keepOthers: swipeNeighbours != null,
+    ),
+  );
 }
 
 /// Opens one agent as a PAGER over [entries]: the page it lands on is the agent tapped, and a
@@ -164,8 +184,8 @@ void openAgentPager(
 ///
 /// [keepOthers] is what separates the two ways in. A page opened on its own keeps the phone's old
 /// rule — one pane, because a second one attached behind a screen nobody can see is a terminal
-/// streaming for nothing. A PAGER deliberately keeps its neighbours attached: that is the whole
-/// point of swiping, and the panes it keeps are exactly the pages it has mounted.
+/// streaming for nothing. A PAGER does its own housekeeping instead: it closes the agent behind it
+/// a beat after each swipe, and the rest when it goes (see [AgentSwipeHost]).
 ///
 /// `selectAgent` already does the right thing either way — it reuses an existing pane and only
 /// reopens a session that died, so arriving back on a page already attached costs nothing.

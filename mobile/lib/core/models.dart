@@ -119,10 +119,33 @@ class Agent {
   final String id;
   final String? sessionId;
   final String name;
+
+  /// What the agent is on, in its own words — the transcript's title as the
+  /// daemon cleaned it, null when it has none or it is the name already. A
+  /// created agent keeps its `work · 3188` name while this moves with the work,
+  /// so it is what tells two such agents apart on a phone.
+  final String? title;
+
+  /// When the conversation was last written — the transcript's mtime, which the
+  /// daemon prefers over its own bookkeeping precisely so a client sorting by
+  /// recency follows the work. Null from a daemon too old to send it.
+  final DateTime? updatedAt;
   final String? engine;
   final String? engineDisplayName;
   final String? engineIconHint;
   final String? codexHome;
+
+  /// The model a grid launch pinned (`qwen3-coder`, a llama.cpp GGUF), null when
+  /// the agent is on its engine's own login or the engine chose.
+  final String? gridModel;
+
+  /// The runtime profile's model for this session (`gpt-5-codex`, `opus`), null
+  /// when the daemon has none to report.
+  final String? selectedModel;
+
+  /// A domain-specific harness's display name ("Model manager"), null for a
+  /// plain engine.
+  final String? dshName;
   final String? parentAgentId;
   final AgentProject? project;
   final String status;
@@ -136,10 +159,15 @@ class Agent {
     required this.id,
     this.sessionId,
     required this.name,
+    this.title,
+    this.updatedAt,
     this.engine,
     this.engineDisplayName,
     this.engineIconHint,
     this.codexHome,
+    this.gridModel,
+    this.selectedModel,
+    this.dshName,
     this.parentAgentId,
     this.project,
     this.status = 'active',
@@ -174,14 +202,20 @@ class Agent {
       'failed' => 'failed',
       _ => 'ready',
     };
+    final grid = j['grid'];
     return Agent(
       id: j['id'] as String,
       sessionId: _safeLabel(j['sessionId']),
       name: j['name'] as String? ?? 'agent',
+      title: _safeLabel(j['title']),
+      updatedAt: _safeTime(j['updatedAt']),
       engine: _safeEngine(j['engine']),
       engineDisplayName: _safeLabel(j['engineDisplayName']),
       engineIconHint: _safeLabel(j['engineIconHint']),
       codexHome: j['engine'] == 'codex' ? _safeCodexHome(j['codexHome']) : null,
+      gridModel: grid is Map ? _safeLabel(grid['model']) : null,
+      selectedModel: _safeLabel(j['selectedModel']),
+      dshName: _safeLabel(j['dshName']),
       parentAgentId: _safeLabel(j['parentAgentId'] ?? j['parentId']),
       project: AgentProject.fromJson(j['project']),
       status: (j['status'] as String?) ?? 'active',
@@ -202,10 +236,15 @@ class Agent {
     id: id,
     sessionId: sessionId,
     name: name ?? this.name,
+    title: title,
+    updatedAt: updatedAt,
     engine: engine,
     engineDisplayName: engineDisplayName,
     engineIconHint: engineIconHint,
     codexHome: codexHome,
+    gridModel: gridModel,
+    selectedModel: selectedModel,
+    dshName: dshName,
     parentAgentId: parentAgentId,
     project: project,
     status: status,
@@ -235,6 +274,9 @@ class Agent {
     if (raw is! String || raw.isEmpty) return null;
     return raw.length <= 80 ? raw : raw.substring(0, 80);
   }
+
+  static DateTime? _safeTime(Object? raw) =>
+      raw is String && raw.length <= 64 ? DateTime.tryParse(raw) : null;
 
   static String? _safeDetail(Object? raw) {
     if (raw is! String || raw.isEmpty) return null;
@@ -387,6 +429,23 @@ class AgentProject {
 
   String identity(String machineId) =>
       remote != null ? 'repo:$remote' : 'folder:$machineId:${root ?? cwd}';
+
+  /// The folder a person names this agent by: the last segment of [cwd], falling back to [name]
+  /// when the path has no segment to take (a root, or a bare drive).
+  ///
+  /// The tail rather than the whole path, because every row that shows it is width-starved — a
+  /// phone card, a pane header — and `/Users/…/WorkPlace/Grid/autonomous-harness` spends all of
+  /// that width on the prefix that is identical for every agent somebody owns.
+  String get folder {
+    final parts = cwd.split(RegExp(r'[/\\]')).where((part) => part.isNotEmpty);
+    return parts.isEmpty ? name : parts.last;
+  }
+
+  /// The branch, or null when the daemon reported none or reported it blank.
+  String? get branchLabel {
+    final trimmed = branch?.trim();
+    return trimmed == null || trimmed.isEmpty ? null : trimmed;
+  }
 
   @override
   bool operator ==(Object other) =>

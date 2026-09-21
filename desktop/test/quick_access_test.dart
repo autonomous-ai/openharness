@@ -125,8 +125,8 @@ void main() {
         final map = MemoryKeymap();
         addTearDown(map.dispose);
         await configured.mount(tester, app, map);
-        final tabs = app.swarms.length;
         await key(tester, entry, cmd: true);
+        final tabs = app.swarms.length;
         final input = find.byKey(const ValueKey('swarm-search-input'));
         final field = tester.widget<TextField>(input);
         final search = tester

@@ -1,8 +1,7 @@
-import 'package:harness_mobile/core/fuzzy_match.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/state/session_preview.dart';
 
 import 'agent_index.dart';
-import 'machine_index.dart';
 import 'phone_status.dart';
 
 /// What a search result opens.
@@ -17,18 +16,22 @@ enum PhoneSearchKind { agent, machine }
 /// runs on. This is the flattening that lets one query reach both, built the way
 /// [AgentEntry] flattens machine-keyed state for the Agents tab.
 ///
-/// [fields] is what the query is matched against, title first. The order is the
-/// ranking: a hit on the name outranks a hit on the machine under it, the same
-/// rule the desktop's `swarmFieldMatchScore` applies with its `title` flag.
+/// [fields] is what the query is matched against, title fields first. The order
+/// is the ranking: a hit on the name outranks a hit on the machine under it, the
+/// same rule the desktop's `swarmFieldMatchScore` applies with its `title` flag.
 class PhoneSearchResult {
   const PhoneSearchResult({
     required this.kind,
     required this.id,
     required this.title,
     required this.subtitle,
+    required this.placedSubtitle,
+    required this.machinedSubtitle,
     required this.fields,
     required this.summary,
     required this.machineId,
+    this.titleFields = 1,
+    this.preview,
     this.entry,
     this.machine,
   });
@@ -42,14 +45,38 @@ class PhoneSearchResult {
   /// The name, as the row draws it and as the query matches it first.
   final String title;
 
-  /// The line under it: an agent's engine and machine, a machine's status.
+  /// The line under it, when a folder header over the row already says where
+  /// it is: an agent's work and branch, a machine's status.
   final String subtitle;
+
+  /// The line under it when nothing above the row says where it is — the
+  /// Recent list, which is one run rather than folders: the work, then the
+  /// folder and the machine.
+  final String placedSubtitle;
+
+  /// The line under it when a MACHINE header above the row already names the
+  /// machine but nothing names the folder — the agents list, which groups by
+  /// machine and no deeper. [placedSubtitle] minus the machine: repeating it
+  /// down every row of a group whose header just said it is the noise the
+  /// header was added to remove, and the folder is what tells the group's own
+  /// rows apart.
+  final String machinedSubtitle;
 
   /// Every searchable string, lowercased, title first. Not everything in here is
   /// drawn — an agent's engine id is matched but never shown as itself — which is
   /// why [SearchResultText] re-checks that a matched field is actually present in
   /// the text it is emphasising.
   final List<String> fields;
+
+  /// How many of [fields], from the front, rank as a name rather than as
+  /// metadata: two for an agent that has a title, which is how people describe
+  /// it, and is ranked that way on the desktop too (its `titleFields`).
+  final int titleFields;
+
+  /// What was last asked of this agent and what it answered — cached from its
+  /// machine and kept live by its turn events. The fallback a word that matches
+  /// no field is looked for in, as on the desktop.
+  final SessionPreview? preview;
 
   final PhoneSummary summary;
 
@@ -64,173 +91,82 @@ class PhoneSearchResult {
   final MachineState? machine;
 }
 
-/// Everything one query can reach, unfiltered, in the order the two tabs draw.
+/// Everything one query can reach, unfiltered: agents most recent first (see
+/// [recentAgents]).
+///
+/// Recomputed on every rebuild, so the recency in it is live — which is why the
+/// screen drawing it pins the order down rather than following it. See
+/// `PhoneSearchOrder`.
 ///
 /// Agents come from [agentIndex], so only machines that are LINKED and answering
 /// contribute — a row offered here has to be openable, and an offline machine's
-/// last-seen agent list is not. Machines come from [visibleMachines], which keeps
-/// every one INCLUDING the locked and the offline: a machine wanting its password
-/// is exactly what somebody searching for it came to fix.
-///
-/// The asymmetry is deliberate and is the same one the tabs already make.
-List<PhoneSearchResult> phoneSearchIndex(AppNotifier notifier) {
-  final results = <PhoneSearchResult>[];
-  for (final entry in visibleAgents(agentIndex(notifier))) {
-    final agent = entry.agent;
-    final engine = agent.engineDisplayName ?? agent.engine ?? '';
-    results.add(
-      PhoneSearchResult(
-        kind: PhoneSearchKind.agent,
-        id: 'agent:${entry.machineId}:${agent.id}',
-        title: agent.name,
-        subtitle: engine.isEmpty
-            ? entry.machineName
-            : '$engine · ${entry.machineName}',
-        fields: [
-          agent.name.toLowerCase(),
-          entry.machineName.toLowerCase(),
-          engine.toLowerCase(),
-          // The raw engine id as well as its display name: somebody types
-          // "codex", and the display name may well be "Codex CLI".
-          (agent.engine ?? '').toLowerCase(),
-          // Neither the project nor its branch is drawn on a phone row — there
-          // is no third line for either — but they are how people describe the
-          // agent they are hunting for, so both stay searchable. [SearchResultText]
-          // checks that a matched field is present in the text it is about to
-          // emphasise, so matching here never bolds something unrelated.
-          (agent.project?.name ?? '').toLowerCase(),
-          (agent.project?.branch ?? '').toLowerCase(),
-        ].where((field) => field.isNotEmpty).toList(),
-        summary: entry.summary,
-        machineId: entry.machineId,
-        entry: entry,
+/// last-seen agent list is not. Machines are not listed: they are reached from
+/// the terminal's `⋯` sheet (`machine_actions.dart`), so search answers the one
+/// question it is opened for.
+List<PhoneSearchResult> phoneSearchIndex(AppNotifier notifier) => [
+  for (final entry in recentAgents(agentIndex(notifier)))
+    _agentResult(
+      entry,
+      notifier.sessionPreviews.read(
+        notifier.previewKey(entry.machineId, entry.agent),
       ),
-    );
-  }
-  for (final machine in visibleMachines(notifier)) {
-    final summary = phoneMachineSummary(machine);
-    results.add(
-      PhoneSearchResult(
-        kind: PhoneSearchKind.machine,
-        id: 'machine:${machine.machine.machineId}',
-        title: machine.machine.displayName,
-        subtitle: summary.label,
-        fields: [
-          machine.machine.displayName.toLowerCase(),
-          summary.label.toLowerCase(),
-        ].where((field) => field.isNotEmpty).toList(),
-        summary: summary,
-        machineId: machine.machine.machineId,
-        machine: machine,
-      ),
-    );
-  }
-  return results;
-}
-
-/// The query, split into the words that each have to match something.
-///
-/// Every word must hit — possibly a DIFFERENT field each — so "review mac" finds
-/// the review agent on the MacBook without either word having to match the whole
-/// row. The desktop splits the same way, and the freedom to match different
-/// fields is what makes word order not matter.
-List<String> phoneSearchTerms(String query) => query
-    .toLowerCase()
-    .split(RegExp(r'\s+'))
-    .where((term) => term.isNotEmpty)
-    .toList();
-
-/// How well [term] matches [field]: LOWER is better, null does not match.
-///
-/// Ported from the desktop's `swarmFieldMatchScore` so both apps rank alike.
-/// The bands, cheapest first: an exact field, a prefix, a substring anywhere,
-/// and last a scattered-letter subsequence whose cost grows with how far apart
-/// the letters landed. A non-title field takes a flat 64 penalty, which is what
-/// keeps a name match ahead of every piece of metadata under it.
-int? phoneFieldMatchScore(String field, String term, {required bool title}) {
-  final offset = field.indexOf(term);
-  final spread = offset >= 0 ? 0 : subsequenceSpread(field, term);
-  if (spread == null) return null;
-  return (title ? 0 : 64) +
-      (field == term
-          ? 0
-          : offset == 0
-          ? 8
-          : offset > 0
-          ? 16
-          : 128 + spread);
-}
-
-/// The rows [query] reaches, best first.
-///
-/// An empty query keeps index order untouched — the two tabs already sort
-/// themselves by what needs attention, and re-sorting a list nobody has filtered
-/// would only move rows out from under a finger.
-///
-/// ⚠️ Ties break on the row's position in the index, never on anything that
-/// moves by itself. An agent that starts working sorts upward in [agentIndex],
-/// and that is the one reshuffle worth having; a second, unstable tiebreak on
-/// top of it would let two idle rows swap places on an unrelated rebuild.
-List<PhoneSearchResult> rankPhoneSearch(
-  List<PhoneSearchResult> all,
-  String query,
-) {
-  final needle = query.trim().toLowerCase();
-  if (needle.isEmpty) return all;
-  final terms = phoneSearchTerms(needle);
-  if (terms.isEmpty) return all;
-
-  final ranked = <({PhoneSearchResult row, int score, int index})>[];
-  for (final (index, row) in all.indexed) {
-    // An exact hit on the name wins outright, ahead of every scored row. Typing
-    // a name in full is the least ambiguous thing somebody can do.
-    if (row.fields.first == needle) {
-      ranked.add((row: row, score: -1, index: index));
-      continue;
-    }
-    var total = 0;
-    for (final term in terms) {
-      int? best;
-      for (final (fieldIndex, field) in row.fields.indexed) {
-        final score = phoneFieldMatchScore(
-          field,
-          term,
-          title: fieldIndex == 0,
-        );
-        if (score == null) continue;
-        if (best == null || score < best) best = score;
-        // Every field after the first is metadata, whose best possible score is
-        // 64. An exact, prefix or substring title match already beats that, so
-        // there is nothing left to find.
-        if (best <= 64) break;
-      }
-      // One word matching nothing drops the row: the words narrow, they do not
-      // accumulate. Without this, "review mac" would return everything either
-      // word touches.
-      if (best == null) {
-        total = -1;
-        break;
-      }
-      total += best;
-    }
-    if (total >= 0) ranked.add((row: row, score: total, index: index));
-  }
-
-  ranked.sort((a, b) {
-    final byScore = a.score.compareTo(b.score);
-    return byScore != 0 ? byScore : a.index.compareTo(b.index);
-  });
-  return [for (final row in ranked) row.row];
-}
-
-/// The matching rows of one kind, keeping rank order.
-List<PhoneSearchResult> phoneSearchOfKind(
-  List<PhoneSearchResult> rows,
-  PhoneSearchKind kind,
-) => [
-  for (final row in rows)
-    if (row.kind == kind) row,
+    ),
 ];
+
+PhoneSearchResult _agentResult(AgentEntry entry, SessionPreview? preview) {
+  final agent = entry.agent;
+  final engine = agent.engineDisplayName ?? agent.engine ?? '';
+  final title = agent.title ?? '';
+  final branch = entry.project?.branchLabel ?? '';
+  final folder = entry.project?.folder ?? '';
+  return PhoneSearchResult(
+    kind: PhoneSearchKind.agent,
+    id: 'agent:${entry.machineId}:${agent.id}',
+    title: agent.name,
+    // What tells `work · 3188` from `work · 48e9`: the work itself, then its
+    // branch. The folder and the machine are said once, by the group header
+    // over the row, rather than repeated down every line of it; the engine is
+    // the mark's to show and is only spelled out when nothing else is known.
+    subtitle: _joined([title, branch]).ifEmpty(engine),
+    placedSubtitle: _joined([title, folder, entry.machineName]).ifEmpty(engine),
+    machinedSubtitle: _joined([title, folder]).ifEmpty(engine),
+    fields: [
+      agent.name,
+      title,
+      entry.machineName,
+      engine,
+      // The raw engine id as well as its display name: somebody types "codex",
+      // and the display name may well be "Codex CLI".
+      agent.engine ?? '',
+      // What it runs on and what it was made as. None of these is drawn, but
+      // "the llama one" or "the model manager" is how somebody away from the
+      // desk remembers an agent whose name is `harness-3`.
+      agent.gridModel ?? '',
+      agent.selectedModel ?? '',
+      agent.dshName ?? '',
+      folder,
+      // The project's own name is not drawn on a result row, but it is how
+      // people describe the agent they are hunting for, so it stays searchable.
+      // [SearchResultText] checks that a matched field is present in the text
+      // it is about to emphasise, so matching here never bolds something
+      // unrelated.
+      entry.project?.name ?? '',
+      branch,
+    ].map((field) => field.toLowerCase()).where((field) => field.isNotEmpty).toList(),
+    titleFields: title.isEmpty ? 1 : 2,
+    preview: preview,
+    summary: entry.summary,
+    machineId: entry.machineId,
+    entry: entry,
+  );
+}
+
+String _joined(List<String> parts) =>
+    parts.where((part) => part.isNotEmpty).join(' · ');
+
+extension on String {
+  String ifEmpty(String fallback) => isEmpty ? fallback : this;
+}
 
 /// The agent rows' entries, in rank order — what a pager opened from a result
 /// swipes along.

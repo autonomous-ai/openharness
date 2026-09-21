@@ -41,7 +41,7 @@ class KeyboardLesson {
       '[agent 1]\nThe second view closes. Its agent keeps running.',
     'swarm.close' =>
       '[previous tab]\nThe view closes. Its agents keep running.',
-    'navigation.commands' => '> rename\nRename Agent\nRename Tab',
+    'navigation.commands' => '> rename\nRename Harness\nRename Tab',
     'terminal.find' => 'find > timeout\n1/3 matches in this terminal’s output',
     'picker.complete' => 'project  ~/work/payments\nTab completes the current argument; Enter accepts it.',
     'picker.complete_back' =>
@@ -69,12 +69,11 @@ class KeyboardLesson {
       'more options\nPermissions · Codex profile · repository',
     'picker.toggle_preview' =>
       'results │ preview\nToggle again to hide the preview.',
-    'agent.stop' => 'Stop Agent?\n> Cancel    Stop\nStopping ends the agent; closing a pane only closes a view.',
-    'agent.restart' =>
-      'Restart Agent\nA fresh conversation starts in the same project.',
+    'agent.stop' => 'Stop Harness?\n> Cancel    Stop\nStopping ends the running harness; its saved conversation is kept. Closing a pane only closes a view.',
+    'agent.restart' => 'Restart Harness\nRestarts the harness in the same pane and tries to resume its conversation.',
     'agent.fork' =>
-      'Fork Agent\nChoose a name and first task. The source stays open.',
-    'agent.clone' => 'Clone Agent\nAnother of this one opens beside it: same folder and settings, fresh conversation.',
+      'Fork Harness\nChoose a name and first task. The source stays open.',
+    'agent.clone' => 'Clone Harness\nAnother of this one opens beside it: same folder and settings, fresh conversation.',
     'app.store' =>
       '[Harness Store]\nFind a harness for the kind of work you want to do.',
     'pane.focus_left' ||

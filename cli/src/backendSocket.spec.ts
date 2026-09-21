@@ -8,6 +8,7 @@ import { WS_IDLE_DEADLINE_MS as IDLE_DEADLINE_MS } from './lib/wsLiveness.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { decodeTerminalLocal, TerminalBinaryKind } from './lib/terminalBinary.js'
 import { registry, type RegisteredSession } from './lib/registry.js'
+import { stoppedAgents } from './lib/stoppedAgents.js'
 import * as mediaPreview from './lib/mediaPreview.js'
 import * as projectFolder from './lib/projectFolder.js'
 import * as projectPreview from './lib/projectPreview.js'
@@ -1442,6 +1443,38 @@ describe('agent_restart RPC', () => {
     return { socket, frames }
   }
 
+  it('lists stopped work only on request, without exposing old routes or launch credentials', async () => {
+    const { socket, frames } = localSocket()
+    const saved = { ...BASE_SESSION, gridLaunch: { apiKey: 'fixture-private-key' } } as RegisteredSession
+    vi.spyOn(registry, 'advertised').mockReturnValue([])
+    vi.spyOn(registry, 'list').mockReturnValue([])
+    vi.spyOn(stoppedAgents, 'available').mockReturnValue([saved])
+    socket.handleLocalFrame('local:restart', { type: 'agents_list', payload: { requestId: 'live' } })
+    socket.handleLocalFrame('local:restart', { type: 'agents_list', payload: { requestId: 'all', includeStopped: true } })
+    await vi.waitFor(() => expect(frames.filter(frame => frame.type === 'agents_list_result')).toHaveLength(2))
+    const response = (id: string) => frames.find(frame => (frame.payload as any).requestId === id)?.payload as any
+    expect(response('live').agents).toEqual([])
+    expect(response('all').agents).toEqual([expect.objectContaining({ id: 'agent-1', status: 'stopped', sessionId: 'session-1', terminal: { available: false, primary: '', runtimes: [] }, tmuxPane: null, forkable: false })])
+    expect(JSON.stringify(response('all'))).not.toContain('fixture-private-key')
+    await socket.unregisterLocalClient('local:restart')
+    await socket.stop()
+  })
+
+  it('delegates a resume-only intent and retains its original receipt', async () => {
+    const { socket, frames } = localSocket()
+    const creationId = `resume-${randomUUID()}`
+    const handler = vi.fn(async () => ({ ok: true as const, session: BASE_SESSION, resumed: true }))
+    socket.onResumeAgent = handler
+    vi.spyOn(registry, 'byAgent').mockReturnValue(BASE_SESSION)
+    for (const requestId of ['first', 'again']) {
+      socket.handleLocalFrame('local:restart', { type: 'agent_resume', payload: { requestId, agentId: 'agent-1', creationId } })
+      await vi.waitFor(() => expect(frames.some(frame => (frame.payload as any).requestId === requestId)).toBe(true))
+    }
+    expect(handler).toHaveBeenCalledExactlyOnceWith('agent-1')
+    await socket.unregisterLocalClient('local:restart')
+    await socket.stop()
+  })
+
   it('replies MISSING_AGENT_ID when no agentId is given', async () => {
     const { socket, frames } = localSocket()
     socket.handleLocalFrame('local:restart', { type: 'agent_restart', payload: { requestId: 'r1' } })
@@ -2081,5 +2114,44 @@ describe('Autonomous direct isolation from existing relay/browser behavior', () 
     await backend.receiveDirectDevice('autonomous-direct:test', { type: 'e2e_hello', payload: {} }, false)
     expect(handle).toHaveBeenCalledOnce()
     backend.detachDirectDevice('autonomous-direct:test')
+  })
+})
+
+describe('agent_recent replies', () => {
+  // Three long answers — well past the dial's ~15KB frame — as a working agent's recaps are.
+  const answer = (turn: number) => `Turn ${turn}: ${'the llama.cpp build is b4521 and '.repeat(250)}`
+  const events = [1, 2, 3].map((turn) => ({ kind: 'summary', text: `body ${turn}`, recap: `recap ${turn}`, fullText: answer(turn) }))
+
+  async function recentReplyFor(role: 'web' | 'device') {
+    const socket = new BackendSocket('token')
+    socket.recentProvider = () => events
+    socket.recentAsksProvider = () => ['which llama.cpp build is this?']
+    socket.connect()
+    const ws = wsMock.instances.at(-1)!
+    ws.open()
+    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'agent_recent', payload: { requestId: 'recent-1', agentId: 'a1', n: 3 } })
+    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
+    vi.spyOn(socket.e2ee, 'sessionRole').mockReturnValue(role)
+    vi.spyOn(socket.e2ee, 'rpcReplyFrameBytes').mockImplementation((_c, _t, _r, payload) => Buffer.byteLength(JSON.stringify(payload)))
+    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+      type: 'agent_recent_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } },
+    })
+    ws.message({ t: 'down', connId: 'conn-1', frame: { type: 'agent_recent', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } } })
+    await vi.waitFor(() => expect(wrapReply).toHaveBeenCalled())
+    await socket.stop()
+    return wrapReply.mock.calls[0][3] as { events: Array<Record<string, unknown>>; asks: string[] }
+  }
+
+  it('reaches the phone and a remote desktop whole, full answers included', async () => {
+    const reply = await recentReplyFor('web')
+    expect(reply.events).toHaveLength(3)
+    expect(reply.events[0].fullText).toBe(answer(1))
+    expect(reply.asks).toEqual(['which llama.cpp build is this?'])
+  })
+
+  it('is still fitted to the dial’s frame for a device', async () => {
+    const reply = await recentReplyFor('device')
+    expect(reply.events).toHaveLength(1)
+    expect(reply.events[0]).not.toHaveProperty('fullText')
   })
 })

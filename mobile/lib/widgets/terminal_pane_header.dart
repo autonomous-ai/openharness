@@ -119,11 +119,13 @@ class TerminalPaneHeader extends StatelessWidget {
         .firstOrNull;
     final project = agent == null ? null : machine?.projectOf(agent);
     final machineName = machine?.machine.displayName ?? session.machineId;
+    final folder = project?.folder;
+    final branch = project?.branchLabel;
     final identityDetail = [
       session.agentName,
       machineName,
       if (project != null) project.cwd,
-      if (project?.branch != null) 'Branch: ${project!.branch}',
+      if (branch != null) 'Branch: $branch',
       if (profile != null) 'Codex profile: $profile',
       'Double-click to rename',
     ].join('\n');
@@ -131,20 +133,8 @@ class TerminalPaneHeader extends StatelessWidget {
         ? onToggleComposer
         : null;
     final actionsWidth = remoteComposer == null ? 88.0 : 118.0;
-    final folder =
-        project?.cwd
-            .split(RegExp(r'[/\\]'))
-            .where((part) => part.isNotEmpty)
-            .lastOrNull ??
-        project?.name;
-    final details = [
-      if (folder?.isNotEmpty == true) folder!,
-      if (project?.branch?.trim().isNotEmpty == true) project!.branch!,
-      machineName,
-    ];
-    final branchIndex = project?.branch?.trim().isNotEmpty == true
-        ? (folder?.isNotEmpty == true ? 1 : 0)
-        : null;
+    final details = [?folder, ?branch, machineName];
+    final branchIndex = branch == null ? null : (folder == null ? 0 : 1);
     final strip = PaneHeaderHover(
       child: SizedBox(
         height: compact ? 38 : 46,
@@ -271,8 +261,7 @@ class TerminalPaneHeader extends StatelessWidget {
                     details: Tooltip(
                       message: [
                         if (project != null) project.cwd,
-                        if (project?.branch?.isNotEmpty == true)
-                          'Branch: ${project!.branch}',
+                        if (branch != null) 'Branch: $branch',
                         machineName,
                       ].join('\n'),
                       child: Row(

@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Harness</string>
+	<string>OpenHarness</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -43,6 +43,12 @@
 	     be shown and is deliberately absent. -->
 	<key>NSCameraUsageDescription</key>
 	<string>Take a photo to send to an agent in a terminal.</string>
+	<!-- Voice input, what tapping a terminal opens. Asked for on the first tap,
+	     not at launch. The microphone alone: the recording is transcribed by
+	     the Harness backend (`/api/voice/stt`, the dial's own path), not by the
+	     OS, so there is no Speech Recognition permission to ask for. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Talk to an agent in a terminal instead of typing.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -24,6 +24,7 @@ const Set<String> encryptedDownTypes = {
   'session_get',
   'models_list',
   'agent_create',
+  'agent_create_status',
   'agent_delete',
   'agent_restart',
   'agent_recent',
@@ -31,8 +32,15 @@ const Set<String> encryptedDownTypes = {
   'agent_files',
   'agent_read_file',
   'fs_list_dir',
+  'project_preview',
   'codex_profiles_list',
   'codex_profile_link',
+  // Asks the machine to read its OWN agent accounts' usage (cli/src/lib/accountUsage.ts). Missing
+  // here it went out in the clear and the machine's CLI refused it outright with E2EE_REQUIRED —
+  // which surfaced as an empty Usage page on a phone that was linked and connected.
+  'usage_read',
+  // The pane colours this client paints with, for the machine's tmux sessions (cli/src/lib/hostTheme.ts).
+  'theme_set',
   'device_e2ee_pair',
   'e2ee_pairings_list',
   'e2ee_pairing_unpair',
