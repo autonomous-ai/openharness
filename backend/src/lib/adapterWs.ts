@@ -20,7 +20,7 @@ import { prisma } from './prisma.js'
 import {
   publishUp, claimMachineOwner, releaseMachineOwner, publishDeviceE2eePair,
   publishTerminalUp, subscribeTerminalDown,
-  setMachineAppState, clearMachineAppState, subscribeDeskChanged,
+  setMachineAppState, clearMachineAppState,
 } from './bus.js'
 import { trackSocketLiveness } from './hub.js'
 import { guardedSend, guardedSendJson } from './wsSend.js'
@@ -33,6 +33,7 @@ import { utcDayKey } from '../types/analytics.js'
 import { machineBillingAllowsDataPlane } from './billingState.js'
 import { normalizeComputerId } from './deviceAuth.js'
 import { authenticateAccessToken, SsoAuthError } from './ssoAuth.js'
+import { relayAccountPushes } from './adapterAccountPushes.js'
 import { parseAutonomousEnvironment } from './autonomousEnvironment.js'
 import { machineService } from '../services/MachineService.js'
 import { AppError } from '../errors/index.js'
@@ -203,12 +204,9 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   const send = (obj: unknown): boolean => guardedSendJson(ws, obj, 'must', { machineId, kind: 'adapter' })
   logger.info('adapter connected', { machineId, computer: label })
   send({ t: 'connected', machineId })
-  // The account's tabs changed on some worker: this computer's app re-fetches `/api/desk` through its
-  // daemon (backendSocket.ts relays `desk_changed` to the window). One frame, no payload beyond the
-  // revision — the doc itself is fetched, so a burst of edits collapses into one read.
-  const deskUnsub = await subscribeDeskChanged(userId, (msg) => {
-    send({ t: 'down', connId: '', frame: { type: 'desk_changed', payload: { revision: msg.revision } } })
-  })
+  // What changed for the ACCOUNT on some worker (its tabs, its machine list): this computer's app
+  // re-reads through its daemon rather than polling for it. See adapterAccountPushes.ts.
+  const accountPushesUnsub = await relayAccountPushes(userId, send)
 
   // Last desktop-app state THIS socket asserted. Socket-scoped on purpose: a new adapter connection
   // starts with no claim and must re-assert, so a fresh value can never renew a stale one.
@@ -480,7 +478,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   const cleanup = (): void => {
     releaseLiveness()
     terminalDownUnsub()
-    void deskUnsub()
+    accountPushesUnsub()
     // Only the CURRENT owner tears the role down — a superseded socket must not mark the fresh
     // connection offline. A superseded socket still releases its own liveness tracking above.
     if (owners.get(machineId) === ws) {
