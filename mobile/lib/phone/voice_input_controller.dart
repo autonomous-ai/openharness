@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:harness_mobile/logging/app_log.dart';
 
 import 'voice_language_store.dart';
+import 'voice_mic_mode.dart';
 import 'voice_notice.dart';
 import 'voice_recorder.dart';
 
@@ -66,7 +67,15 @@ class VoiceInputController extends ChangeNotifier {
   /// the way to the backend and come back empty — reported as "Didn't catch
   /// that", which blames the speaking rather than the length. Caught here it is
   /// silent: nothing was said, so nothing is announced.
-  static const minTake = Duration(milliseconds: 350);
+  ///
+  /// ⚠️ **Zero in [VoiceMicMode.tapToToggle], and that is the point of reading
+  /// the mode rather than a constant.** A tap mode take is bounded by two
+  /// deliberate taps, so there is no brush to protect against — while a short
+  /// answer that IS the message ("yes", "stop", "ok") runs well under a third of
+  /// a second, and this dropped it in silence: nothing sent, nothing said about
+  /// it, a mic that read as broken.
+  static Duration get minTake =>
+      micHoldsToTalk ? const Duration(milliseconds: 350) : Duration.zero;
 
   /// How long a notice stays on the row before it clears itself.
   ///
