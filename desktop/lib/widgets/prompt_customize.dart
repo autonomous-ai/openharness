@@ -52,7 +52,7 @@ class PromptCustomize extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'prompt style',
+              'header style',
               style: boxMonoStyle(color: grid.AppPalette.textSecondary),
             ),
             const SizedBox(height: 8),
@@ -110,22 +110,15 @@ class PromptCustomize extends StatelessWidget {
             TerminalBox(
               child: Padding(
                 padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    PromptContextView(
-                      key: const ValueKey('prompt-preview'),
-                      store: store,
-                      contextData: const PromptContext(
-                        harness: 'Codex',
-                        machine: 'devbox',
-                        project: 'openharness',
-                        branch: 'main',
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text('> fix the login flow', style: boxMonoStyle()),
-                  ],
+                child: PromptContextView(
+                  key: const ValueKey('prompt-preview'),
+                  store: store,
+                  contextData: const PromptContext(
+                    harness: 'Codex',
+                    machine: 'devbox',
+                    project: 'openharness',
+                    branch: 'main',
+                  ),
                 ),
               ),
             ),
@@ -174,7 +167,7 @@ class PromptCustomize extends StatelessWidget {
               key: const ValueKey('prompt-reset'),
               onPressed: () => choose(const PromptPrefs()),
               child: Text(
-                'Reset prompt style',
+                'Reset header style',
                 style: boxMonoStyle(color: grid.AppPalette.textSecondary),
               ),
             ),

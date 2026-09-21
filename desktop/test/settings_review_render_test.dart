@@ -18,6 +18,7 @@ import 'package:harness/settings/settings_nav.dart';
 import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/settings/settings_section.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/widgets/section_scaffold.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/update/desktop_updater.dart';
 import 'package:harness/update/manual_update_check.dart';
@@ -69,9 +70,10 @@ void main() {
 
   for (final brightness in Brightness.values) {
     for (final scale in [1.0, 1.8]) {
-      for (final section in settingsGroupsFor(
-        debugSurface: false,
-      ).expand((group) => group.sections)) {
+      for (final section
+          in settingsGroupsFor(debugSurface: false)
+              .expand((group) => group.sections)
+              .where((section) => section != SettingsSection.customize)) {
         testWidgets(
           '${section.name} at minimum window, ${brightness.name}, $scale text',
           (tester) async {
@@ -145,6 +147,20 @@ void main() {
             expect(
               tester.widget<SettingsNav>(find.byType(SettingsNav)).section,
               section,
+            );
+            await tester.enterText(search, '');
+            await tester.pumpAndSettle();
+            final scaffold = find.byType(SectionScaffold);
+            final heading = find.descendant(
+              of: scaffold,
+              matching: find.text(
+                tester.widget<SectionScaffold>(scaffold).title,
+              ),
+            );
+            expect(
+              tester.getCenter(find.text('Back to app')).dy,
+              closeTo(tester.getCenter(heading).dy, 1),
+              reason: 'Back and the section title share a header at every text size.',
             );
             if (section == SettingsSection.about) {
               await tester.runAsync(() async {

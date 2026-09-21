@@ -222,6 +222,12 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       settings.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + "settings")
       settings.keyEquivalentModifierMask = [.command]
       if settings.menu == nil { appMenu.insertItem(settings, at: min(2, appMenu.numberOfItems)) }
+      let customize = NSMenuItem(title: "Customize Harness", action: #selector(menuAction(_:)), keyEquivalent: "")
+      customize.target = self
+      customize.representedObject = "customize"
+      customize.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + "customize")
+      customize.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: nil)
+      appMenu.insertItem(customize, at: appMenu.index(of: settings))
     }
     func add(_ menu: NSMenu, _ title: String, _ key: String, _ action: String, _ modifiers: NSEvent.ModifierFlags = [.command]) {
       let item = NSMenuItem(title: title, action: #selector(menuAction(_:)), keyEquivalent: key)

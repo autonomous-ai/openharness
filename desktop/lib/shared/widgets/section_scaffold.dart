@@ -17,6 +17,13 @@ class SectionScaffold extends StatelessWidget {
   final String title;
   final String? subtitle;
 
+  static const double contentPadding = 24;
+
+  /// Settings navigation shares this row so Back and the section heading stay
+  /// aligned, including when the user enlarges text.
+  static double headingHeight(BuildContext context) =>
+      MediaQuery.textScalerOf(context).scale(40);
+
   /// Fills the space under the rule, so a body that can outgrow the window
   /// brings its own scroll view.
   final Widget child;
@@ -25,11 +32,18 @@ class SectionScaffold extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(contentPadding),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: theme.textTheme.headlineSmall),
+          ConstrainedBox(
+            constraints: BoxConstraints(minHeight: headingHeight(context)),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              heightFactor: 1,
+              child: Text(title, style: theme.textTheme.headlineSmall),
+            ),
+          ),
           if (subtitle != null) ...[
             const SizedBox(height: 4),
             Text(
