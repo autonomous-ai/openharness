@@ -280,6 +280,20 @@ class Agent {
   /// decides (see [canFork]).
   final bool? forkable;
 
+  /// The permission mode this agent was launched in (`plan`, `readOnly`, …),
+  /// as the daemon recorded it; null from a daemon that predates the field, a
+  /// row from before the choice existed, or an agent Harness did not launch.
+  /// Read for Clone (⌘⇧N), so another of this one opens in the same mode.
+  final String? permissionMode;
+
+  /// Whether its permission prompts were bypassed at launch; null when
+  /// unrecorded (see [permissionMode]) — then a clone uses the default.
+  final bool? bypassPermission;
+
+  /// The engine's own named agent it was opened as (`agent_create`'s `agent`),
+  /// or null for a general session.
+  final String? namedAgent;
+
   const Agent({
     required this.id,
     this.sessionId,
@@ -307,6 +321,9 @@ class Agent {
     this.verdict,
     this.forkedFrom,
     this.forkable,
+    this.permissionMode,
+    this.bypassPermission,
+    this.namedAgent,
   });
 
   /// Explicit names win. An automatic CLI label gives way to its session title.
@@ -324,6 +341,11 @@ class Agent {
   /// can neither fork nor open with a message, so the button is not drawn
   /// rather than drawn and refused.
   bool get canFork => forkable ?? forkableEngines.contains(engine);
+
+  /// Whether Clone (⌘⇧N) can open another of this agent — any engine, but not
+  /// one on a grid: the frame carries the grid's model and never its launch
+  /// key, so a clone would silently land on the engine's own login instead.
+  bool get canClone => engine != null && gridModel == null;
 
   /// What to draw this agent AS: its harness when it has one, else its engine.
   String? get identityEngine => dsh ?? engine;
@@ -388,6 +410,11 @@ class Agent {
       verdict: AgentVerdict.fromJson(j['verdict']),
       forkedFrom: ForkedFrom.fromJson(j['forkedFrom']),
       forkable: j['forkable'] is bool ? j['forkable'] as bool : null,
+      permissionMode: _safePermissionMode(j['permissionMode']),
+      bypassPermission: j['bypassPermission'] is bool
+          ? j['bypassPermission'] as bool
+          : null,
+      namedAgent: _safeNamedAgent(j['namedAgent']),
     );
   }
 
@@ -418,7 +445,23 @@ class Agent {
     verdict: verdict,
     forkedFrom: forkedFrom,
     forkable: forkable,
+    permissionMode: permissionMode,
+    bypassPermission: bypassPermission,
+    namedAgent: namedAgent,
   );
+
+  /// A mode id as `PERMISSION_MODES` spells them (`acceptEdits`, `readOnly`):
+  /// one word. Not checked against this build's own list — the daemon that
+  /// launched the agent is the authority, and it is the one that will read the
+  /// id back on a clone.
+  static String? _safePermissionMode(Object? raw) =>
+      raw is String && RegExp(r'^[A-Za-z]{1,32}$').hasMatch(raw) ? raw : null;
+
+  /// The daemon's `AGENT_NAME_RE` (engineLaunch.ts): a flag value, never a path.
+  static String? _safeNamedAgent(Object? raw) =>
+      raw is String && RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(raw)
+      ? raw
+      : null;
 
   /// `owner/name`, exactly the shape the DSH manifest schema allows and nothing else — the
   /// id names an install directory on the far machine and a picker tile here.
