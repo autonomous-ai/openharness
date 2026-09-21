@@ -90,22 +90,9 @@ class PhoneDesk {
     onChanged();
   }
 
-  /// The screen worked out which tab it is showing, and which agent of it.
-  /// Silent: this is called from a build, and it is a record of what is already
-  /// drawn, not a change to draw.
-  void note(String? tabId, {AgentRef? showing}) {
-    _activeTabId = tabId;
-    if (showing != null) _lastAgent[tabId] = showing;
-  }
-
-  /// The agent this phone last had on screen in [tabId], if it has been in it.
-  ///
-  /// What makes a tab switch feel like the desktop's: going back to a tab returns
-  /// to where you were in it rather than to its first agent. Per device and never
-  /// written down — a tab is a place you were, and only this phone was there.
-  AgentRef? lastAgentIn(String? tabId) => _lastAgent[tabId];
-
-  final Map<String?, AgentRef> _lastAgent = {};
+  /// The screen worked out which tab it is showing. Silent: this is called from
+  /// a build, and it is a record of what is already drawn, not a change to draw.
+  void note(String? tabId) => _activeTabId = tabId;
 
   // ── reading ──────────────────────────────────────────────────────────────
 
@@ -326,7 +313,6 @@ class PhoneDesk {
     pause();
     _joining = null;
     _activeTabId = null;
-    _lastAgent.clear();
     _state.reset();
   }
 

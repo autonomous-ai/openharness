@@ -557,9 +557,8 @@ class _AgentHomeState extends State<AgentHome> {
         _pagerGeneration++;
       }
       // What the phone is in, recorded for the paths that cannot derive it: an
-      // agent created here joins this tab (`PhoneDesk.adopt`), and coming back
-      // to a tab returns to the agent it was left on.
-      widget.notifier.noteDeskTab(group.id, showing: chosen);
+      // agent created here joins this tab (`PhoneDesk.adopt`).
+      widget.notifier.noteDeskTab(group.id);
       // A pager already up for this agent is LEFT ALONE — same key, same snapshot, so it keeps the
       // page it is on, and [_showing] keeps naming whatever it has been swiped to. A pager is built
       // here only when there is none, or when the one there opened on an agent that can no longer be

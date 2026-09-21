@@ -2,36 +2,30 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
-import 'package:harness_mobile/state/app_state.dart';
 
 import 'desk_groups.dart';
-import 'phone_navigation.dart';
-import 'terminal_header.dart';
 
-/// The account's tabs as a rail of names under the terminal's header — the
-/// browser's own tab strip, one name per tab with a bar under the one you are
-/// in.
+/// The account's tabs as a row of names, with a bar under the one being shown.
 ///
 /// ```
 ///  Desktop   Docker   Other
 /// ━━━━━━━
 /// ```
 ///
-/// ⚠️ **It is not on screen by default, and that is what pays for it.** The
-/// terminal IS the screen here: every permanent line of chrome above it is a
-/// line of somebody's session that is not being shown, and the tab is chosen a
-/// few times a day. So the mark beside `⋯` opens the rail, the rail closes
-/// again the moment a tab is picked, and the terminal keeps its rows the rest
-/// of the time — see [TerminalPage].
+/// It lives at the top of the tabs popup — see [showDeskTabsPopup] — and picks
+/// which tab's agents the row under it lists. Nothing here opens an agent: the
+/// name changes what is offered, the card below is what is chosen.
 ///
-/// ⚠️ **A tab with nothing this phone can open is drawn, dimmed and inert.**
-/// Its agents are on a machine that is asleep or wants its password. Dropping
-/// it from the rail would read as a tab somebody deleted — see [DeskGroup].
+/// ⚠️ **A tab with nothing this phone can open is drawn dim, but still picked.**
+/// Its agents are on a machine that is asleep or wants its password. Dropping it
+/// from the row would read as a tab somebody deleted, and refusing the tap would
+/// leave the person tapping a name that never answers — picked, it says what is
+/// wrong in the space below, where there is room for the sentence.
 class DeskTabStrip extends StatelessWidget {
   const DeskTabStrip({
     super.key,
     required this.groups,
-    required this.activeId,
+    required this.selectedId,
     required this.onPick,
   });
 
@@ -39,18 +33,21 @@ class DeskTabStrip extends StatelessWidget {
   /// [deskGroups]. Never empty.
   final List<DeskGroup> groups;
 
-  /// [DeskGroup.id] of the tab the phone is in — see [activeDeskGroup]. Null is
-  /// a real value: it is the leftover group, and it wears the bar like any
-  /// other.
-  final String? activeId;
+  /// [DeskGroup.id] of the tab whose agents are listed below. Null is a real
+  /// value: it is the leftover group, and it wears the bar like any other.
+  final String? selectedId;
 
   final void Function(DeskGroup group) onPick;
 
-  /// The rail's height, which is what the header's reveal animates open to.
+  /// The row's height, which the popup counts into its own.
   ///
-  /// One 15pt line, the bar under it, and the air either side that keeps the
-  /// names off the header above and the output below.
+  /// One 15pt line, the bar under it, and the air that keeps the names off the
+  /// drag handle above and the cards below.
   static const double height = 40;
+
+  /// The popup's own side inset — the measure [showPhoneSheet] gives its rows,
+  /// so the first name starts on the same line as everything else in a sheet.
+  static const double sideInset = 20;
 
   /// The gap between two names. Wide enough that two short tabs — `All`, `adu`
   /// — read as two, narrow enough that four fit on a phone without scrolling.
@@ -66,17 +63,15 @@ class DeskTabStrip extends StatelessWidget {
       // which is what turns tab names into `Deskt…`, `Dock…`.
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(
-          horizontal: TerminalHeader.sideInset,
-        ),
+        padding: const EdgeInsets.symmetric(horizontal: sideInset),
         itemCount: groups.length,
         separatorBuilder: (context, index) => const SizedBox(width: _gap),
         itemBuilder: (context, index) {
           final group = groups[index];
           return _DeskTabName(
             name: group.name,
-            selected: group.id == activeId,
-            enabled: !group.isEmpty,
+            selected: group.id == selectedId,
+            reachable: !group.isEmpty,
             onTap: () => onPick(group),
           );
         },
@@ -85,7 +80,7 @@ class DeskTabStrip extends StatelessWidget {
   }
 }
 
-/// One name in the rail, with the bar under it while it is the tab you are in.
+/// One name in the row, with the bar under it while it is the tab being shown.
 ///
 /// ⚠️ **The bar is drawn in a [Stack] rather than under the text in a column.**
 /// It has to be exactly as wide as the name it belongs to, and a column in a
@@ -96,16 +91,16 @@ class _DeskTabName extends StatelessWidget {
   const _DeskTabName({
     required this.name,
     required this.selected,
-    required this.enabled,
+    required this.reachable,
     required this.onTap,
   });
 
   final String name;
   final bool selected;
 
-  /// False for a tab whose agents are all out of reach: drawn dim, and it does
-  /// not answer a tap.
-  final bool enabled;
+  /// False for a tab whose agents are all out of reach — drawn dim, and still
+  /// pickable. See [DeskTabStrip].
+  final bool reachable;
 
   final VoidCallback onTap;
 
@@ -115,16 +110,16 @@ class _DeskTabName extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final color = switch ((enabled, selected)) {
+    final color = switch ((reachable, selected)) {
       (false, _) => AppPalette.textFaint,
       (true, true) => AppPalette.textPrimary,
       (true, false) => AppPalette.textSecondary,
     };
     return GestureDetector(
-      // Opaque, so the whole height of the rail either side of the name takes
+      // Opaque, so the whole height of the row either side of the name takes
       // the tap — a 15pt word is a small thing to hit with a thumb.
       behavior: HitTestBehavior.opaque,
-      onTap: enabled ? _tapped : null,
+      onTap: _tapped,
       child: Center(
         child: Stack(
           children: [
@@ -137,7 +132,7 @@ class _DeskTabName extends StatelessWidget {
                 style: TextStyle(
                   color: color,
                   fontSize: 15,
-                  // The tab you are in is a weight heavier as well as darker,
+                  // The tab being shown is a weight heavier as well as darker,
                   // which is what carries it to someone who cannot see the bar
                   // — the same pairing [PhoneTabBar] uses below.
                   fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
@@ -153,6 +148,9 @@ class _DeskTabName extends StatelessWidget {
                 child: Container(
                   height: _barHeight,
                   decoration: BoxDecoration(
+                    // The bar keeps the primary ink even under a dim name: it
+                    // marks where you are, and a tab out of reach is still
+                    // where you are while you are reading it.
                     color: AppPalette.textPrimary,
                     borderRadius: BorderRadius.circular(_barHeight / 2),
                   ),
@@ -168,28 +166,4 @@ class _DeskTabName extends StatelessWidget {
     HapticFeedback.selectionClick();
     onTap();
   }
-}
-
-/// Switch to [group]: the phone is in that tab from here, and the agent it
-/// opens is the one this phone was last on in it — its first, the first time.
-///
-/// ⚠️ The order matters. [AppNotifier.selectDeskTab] is what settles which tab
-/// an agent that sits on TWO of them belongs to (see [activeDeskGroup]); set
-/// after the open, it would be read a frame too late and the rail would bar the
-/// tab that was left.
-void openDeskGroup(
-  BuildContext context,
-  AppNotifier notifier,
-  DeskGroup group,
-) {
-  if (group.isEmpty) return;
-  notifier.selectDeskTab(group.id);
-  final remembered = notifier.deskLastAgentIn(group.id);
-  final target = remembered != null && group.holds(remembered)
-      ? remembered
-      : (
-          machineId: group.entries.first.machineId,
-          agentId: group.entries.first.agent.id,
-        );
-  openAgent(context, notifier, target.machineId, target.agentId);
 }

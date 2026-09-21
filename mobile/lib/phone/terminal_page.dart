@@ -20,12 +20,10 @@ import 'package:harness_mobile/terminal/terminal_session.dart';
 import 'package:harness_mobile/widgets/rename_agent_dialog.dart';
 import 'package:harness_mobile/widgets/terminal_panel.dart';
 
-import 'agent_index.dart';
 import 'agents_list_page.dart';
 import 'agents_page.dart' show openNewAgent;
 import 'delete_agent.dart';
-import 'desk_groups.dart';
-import 'desk_tab_strip.dart';
+import 'desk_tabs_popup.dart';
 import 'held_height.dart';
 import 'machines_tab.dart';
 import 'phone_navigation.dart' show phoneRoute;
@@ -170,7 +168,7 @@ typedef _PageFacts = ({
   PhoneMachineStatus? machineStatus,
   bool imagePaste,
   String? machineName,
-  String deskTabs,
+  bool deskTabs,
 });
 
 class _TerminalPageState extends State<TerminalPage>
@@ -421,13 +419,7 @@ class _TerminalPageState extends State<TerminalPage>
       // only when one of these facts moves. Tabs arriving from another computer
       // change nothing else about this agent, and the mark that opens them
       // would not appear until something unrelated happened to redraw the page.
-      //
-      // ⚠️ Their NAMES, not just whether there are any: the rail under the
-      // header draws the names, so a tab renamed on the desk has to reach a
-      // page that is showing it — see [DeskTabStrip].
-      deskTabs: [
-        for (final tab in notifier.deskTabs) '${tab.id}\u0000${tab.name}',
-      ].join('\u0001'),
+      deskTabs: notifier.deskTabs.isNotEmpty,
     );
   }
 
@@ -917,11 +909,7 @@ class _TerminalPageState extends State<TerminalPage>
       session,
       (id) => widget.notifier.stateOf(id)?.machine.displayName,
     );
-    final takeoverNotice = phoneTakeoverNotice(
-      session,
-      takerName,
-      held: held,
-    );
+    final takeoverNotice = phoneTakeoverNotice(session, takerName, held: held);
     // Creating needs the machine to list its folders and name its engines,
     // so one that is offline or still wants its password cannot host a new
     // agent — the same gate the Agents tab puts on its fab.
@@ -1153,12 +1141,14 @@ class _TerminalPageState extends State<TerminalPage>
                         // older CLI never advertises the binary kind, so the
                         // upload would go nowhere silently. Null leaves the
                         // buttons undrawn rather than drawn dead.
-                        onPickImage: machine?.terminalImagePasteAvailable == true
+                        onPickImage:
+                            machine?.terminalImagePasteAvailable == true
                             ? () => unawaited(
                                 _sendImage(session, ImageSource.gallery),
                               )
                             : null,
-                        onTakePhoto: machine?.terminalImagePasteAvailable == true
+                        onTakePhoto:
+                            machine?.terminalImagePasteAvailable == true
                             ? () => unawaited(
                                 _sendImage(session, ImageSource.camera),
                               )
@@ -1235,23 +1225,30 @@ class _TerminalPageState extends State<TerminalPage>
                             // only way to another tab now that a swipe stays
                             // inside the one you are in.
                             //
-                            // ⚠️ **It opens the rail below rather than a
-                            // sheet**, and the rail is not on screen until it
-                            // does: the terminal is the screen, and chrome
-                            // above it is somebody's session not being shown.
-                            // See [DeskTabStrip].
+                            // ⚠️ **A mark, not a rail of tabs across the top.**
+                            // The terminal is the screen; chrome above it is
+                            // somebody's session not being shown, and this is a
+                            // choice made a few times a day. What it opens
+                            // comes up from the bottom instead, where the thumb
+                            // already is — see [showDeskTabsPopup].
                             //
                             // Undrawn for an account with no tabs at all: the
-                            // rail would carry one name over every agent on the
-                            // account, which is what a swipe already does.
+                            // panel would hold one tab over every agent on the
+                            // account, which is what a swipe already walks.
                             if (widget.notifier.deskTabs.isNotEmpty)
                               _HeaderAction(
                                 icon: LucideIcons.layoutGrid300,
-                                // One name in both states, open and closed: it
-                                // is the mark for the tabs, and the rail below
-                                // is what says which of the two it is in.
                                 tooltip: 'Tabs',
-                                onPressed: _toggleTabs,
+                                onPressed: () => unawaited(
+                                  showDeskTabsPopup(
+                                    context,
+                                    widget.notifier,
+                                    showing: (
+                                      machineId: widget.machineId,
+                                      agentId: widget.agentId,
+                                    ),
+                                  ),
+                                ),
                               ),
                             // Null while the agent is not loaded: there is
                             // nothing to act on yet, and a menu of actions
@@ -1265,18 +1262,14 @@ class _TerminalPageState extends State<TerminalPage>
                                 // the header's own right inset.
                                 last: true,
                                 onPressed: () => _showActions(
-                                  machineName: machine?.machine.displayName ?? '',
+                                  machineName:
+                                      machine?.machine.displayName ?? '',
                                   agentName: agent.name,
                                   project: agent.project,
                                 ),
                               ),
                           ],
                         ),
-                        // ⚠️ Above the divider, so the rail is part of the
-                        // bar rather than a row floating on the output: the
-                        // hairline stays the line where chrome ends and the
-                        // terminal begins, wherever the rail is.
-                        _tabStrip(),
                         Divider(height: 1, color: AppGlass.hair),
                         // ⚠️ Inside the header's own slide, not under it: the two are one bar as far
                         // as a scroll is concerned, and a band left behind while the header left
@@ -1370,60 +1363,6 @@ class _TerminalPageState extends State<TerminalPage>
         navigator.removeRoute(route);
       }
     });
-  }
-
-  /// Whether the tab rail under the header is open.
-  ///
-  /// Closed on arrival, and closed again the moment a tab is picked: the rail
-  /// is a question asked a few times a day, and the rest of the time its height
-  /// belongs to the terminal — see [DeskTabStrip].
-  bool _tabsOpen = false;
-
-  void _toggleTabs() => setState(() => _tabsOpen = !_tabsOpen);
-
-  /// A tab was tapped in the rail.
-  ///
-  /// [current] is the tab this page is already in, which closes the rail and
-  /// does nothing else: opening it would re-attach the terminal already on
-  /// screen, and a tap on the tab you are in reads as "yes, this one".
-  void _pickDeskGroup(DeskGroup group, {required bool current}) {
-    setState(() => _tabsOpen = false);
-    if (current) return;
-    openDeskGroup(context, widget.notifier, group);
-  }
-
-  /// The rail, open or closed, as the header's own column draws it.
-  ///
-  /// ⚠️ **The groups are built only while it is open.** [deskGroups] walks
-  /// every agent on the account, and this page is rebuilt on any fact of its
-  /// own moving — paying for that on every status tick, to lay out a rail
-  /// nobody has asked for, is work for nothing.
-  ///
-  /// Closed it is a zero-height box rather than nothing at all, so
-  /// [AnimatedSize] has a size on both sides of the change to run between.
-  Widget _tabStrip() {
-    final notifier = widget.notifier;
-    Widget child = const SizedBox(width: double.infinity);
-    if (_tabsOpen && notifier.deskTabs.isNotEmpty) {
-      final groups = deskGroups(notifier, visibleAgents(agentIndex(notifier)));
-      final activeId = activeDeskGroup(notifier, groups, (
-        machineId: widget.machineId,
-        agentId: widget.agentId,
-      )).id;
-      child = DeskTabStrip(
-        groups: groups,
-        activeId: activeId,
-        onPick: (group) => _pickDeskGroup(group, current: group.id == activeId),
-      );
-    }
-    return AnimatedSize(
-      duration: const Duration(milliseconds: 180),
-      curve: Curves.easeOutCubic,
-      // From under the header: the rail unrolls downward over the terminal
-      // rather than growing out of its own middle.
-      alignment: Alignment.topCenter,
-      child: child,
-    );
   }
 
   void _showActions({

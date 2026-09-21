@@ -539,17 +539,12 @@ class AppNotifier extends ChangeNotifier {
   /// The tab the phone is in, or null for the agents no tab holds.
   String? get activeDeskTabId => _desk.activeTabId;
 
-  /// A tab picked by hand, in the strip. The screen answers by opening an agent
-  /// of that tab.
+  /// A tab picked by hand, in the tabs panel — set as the agent chosen there
+  /// is opened, so the swipe walks that tab from then on.
   void selectDeskTab(String? tabId) => _desk.select(tabId);
 
-  /// The tab the screen has worked out it is showing, and the agent of it on
-  /// screen — see [PhoneDesk.note].
-  void noteDeskTab(String? tabId, {AgentRef? showing}) =>
-      _desk.note(tabId, showing: showing);
-
-  /// Where this phone was in [tabId] last time it was in it.
-  AgentRef? deskLastAgentIn(String? tabId) => _desk.lastAgentIn(tabId);
+  /// The tab the screen has worked out it is showing — see [PhoneDesk.note].
+  void noteDeskTab(String? tabId) => _desk.note(tabId);
 
   /// Read the desk now, and wait for it — what a sign-in and the app coming
   /// back to the foreground both start without waiting.

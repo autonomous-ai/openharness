@@ -271,21 +271,20 @@ void main() {
     expect(desk.tabs, hasLength(3));
   });
 
-  test(
-    'a tab picked by hand is remembered, with where the phone was in it',
-    () async {
-      await join();
+  test('a tab picked by hand is remembered', () async {
+    await join();
 
-      desk.select('t2');
-      expect(desk.activeTabId, 't2');
-      expect(changes, greaterThan(0));
+    desk.select('t2');
+    expect(desk.activeTabId, 't2');
+    expect(changes, greaterThan(0));
 
-      desk.note('t2', showing: (machineId: 'm', agentId: 'c'));
-      desk.note('t1', showing: (machineId: 'm', agentId: 'b'));
-      expect(desk.lastAgentIn('t2'), (machineId: 'm', agentId: 'c'));
-      expect(desk.lastAgentIn('t1'), (machineId: 'm', agentId: 'b'));
-    },
-  );
+    // And the screen's own reading of which tab it ended up in overwrites it,
+    // without asking for a redraw of what is already drawn.
+    final drawn = changes;
+    desk.note('t1');
+    expect(desk.activeTabId, 't1');
+    expect(changes, drawn);
+  });
 
   test(
     'signing out takes the tabs, the tab you were in, and the unsent writes',
@@ -301,7 +300,6 @@ void main() {
       expect(desk.enabled, isFalse);
       expect(desk.tabs, isEmpty);
       expect(desk.activeTabId, isNull);
-      expect(desk.lastAgentIn('t1'), isNull);
 
       // The write belonged to the account that left: the next one must not send it.
       backend.offline = false;

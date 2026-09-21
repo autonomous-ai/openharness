@@ -4,6 +4,7 @@ import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/phone/agent_swipe.dart';
 import 'package:harness_mobile/phone/desk_groups.dart';
 import 'package:harness_mobile/phone/desk_tab_strip.dart';
+import 'package:harness_mobile/phone/phone_card.dart';
 import 'package:harness_mobile/phone/terminal_header.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/state/app_state.dart';
@@ -13,7 +14,7 @@ import 'agent_pager_fixture.dart';
 import 'desk_fixture.dart';
 
 /// The home screen inside its tab: a swipe walks the tab the phone is in, and
-/// the mark beside `⋯` is how it gets to another one.
+/// the mark beside `⋯` opens the panel that reaches the others.
 ///
 /// ⚠️ **The pager's `neighbours` is the assertion throughout, because it IS the
 /// swipe.** [AgentSwipeHost] pages through exactly that list and nothing else,
@@ -21,7 +22,7 @@ import 'desk_fixture.dart';
 /// which is the whole change, and it can be read without flinging anything.
 void main() {
   /// The home screen as the shell mounts it: an agent picked anywhere else —
-  /// the tab rail included — arrives through [AgentHome.openAgent], and the
+  /// the tabs panel included — arrives through [AgentHome.openAgent], and the
   /// shell is what carries it there.
   Future<AppNotifier> pumpHome(
     WidgetTester tester, {
@@ -53,33 +54,48 @@ void main() {
   AgentSwipeHost pager(WidgetTester tester) =>
       tester.widget<AgentSwipeHost>(find.byType(AgentSwipeHost));
 
-  /// Open the rail from the mark in the header — see [DeskTabStrip].
+  /// Open the tabs panel from the mark in the header — see [showDeskTabsPopup].
   ///
   /// ⚠️ **Timed pumps, never `pumpAndSettle`.** These pages have no terminal
   /// behind them (see [deskApp]), so each one draws the "Attaching…" skeleton —
   /// which breathes for ever, and `pumpAndSettle` waits for a still frame that
-  /// never comes. The wait is the rail's own unroll.
-  Future<void> openRail(WidgetTester tester) async {
+  /// never comes. The waits below are the panel's own open and dismiss
+  /// animations.
+  Future<void> openPanel(WidgetTester tester) async {
     await tester.tap(find.byTooltip('Tabs'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
   }
 
-  /// Pick [tab] in the rail already open, which switches and closes at once.
-  Future<void> pick(WidgetTester tester, String tab) async {
+  /// Tap a tab's name in the open panel, which changes the cards under it and
+  /// nothing else.
+  Future<void> showTab(WidgetTester tester, String tab) async {
     await tester.tap(find.text(tab));
+    await tester.pump();
+  }
+
+  /// Tap an agent's card, which opens it and takes the panel away.
+  Future<void> openCard(WidgetTester tester, String agent) async {
+    await tester.tap(
+      find.ancestor(of: find.text(agent), matching: find.byType(PhoneCard)),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
   }
 
-  /// Open the rail and pick [tab] in it.
-  Future<void> switchTo(WidgetTester tester, String tab) async {
-    await openRail(tester);
-    await pick(tester, tab);
-  }
-
-  DeskTabStrip rail(WidgetTester tester) =>
+  DeskTabStrip strip(WidgetTester tester) =>
       tester.widget<DeskTabStrip>(find.byType(DeskTabStrip));
+
+  /// The agents the panel is offering: one name per card.
+  ///
+  /// The name is the card's only plain [Text] — `AgentContextLine` draws the
+  /// line under it as a `Text.rich`, whose `data` is null.
+  List<String> cardsShown(WidgetTester tester) => [
+    for (final text in tester.widgetList<Text>(
+      find.descendant(of: find.byType(PhoneCard), matching: find.byType(Text)),
+    ))
+      if (text.data != null) text.data!,
+  ];
 
   List<String> swipesOver(WidgetTester tester) => [
     for (final entry in pager(tester).neighbours!.entries) entry.agent.id,
@@ -100,7 +116,29 @@ void main() {
     expect(swipesOver(tester), ['a', 'b']);
   });
 
-  testWidgets('tapping a tab opens its first agent, and swipes inside it', (
+  testWidgets('the panel opens on the tab the agent on screen is in', (
+    tester,
+  ) async {
+    await pumpHome(
+      tester,
+      tabs: [
+        deskTab('t1', 'Desktop', ['a', 'b']),
+        deskTab('t2', 'Docker', ['c']),
+      ],
+    );
+
+    await openPanel(tester);
+
+    expect(strip(tester).selectedId, 't1');
+    expect(cardsShown(tester), ['a', 'b']);
+    expect(strip(tester).groups.map((group) => group.name), [
+      'Desktop',
+      'Docker',
+      kUntabbedGroupName,
+    ]);
+  });
+
+  testWidgets('a tab name changes the cards and leaves the terminal alone', (
     tester,
   ) async {
     await pumpHome(
@@ -111,9 +149,34 @@ void main() {
       ],
     );
 
-    await switchTo(tester, 'Docker');
+    await openPanel(tester);
+    await showTab(tester, 'Docker');
 
-    expect(pager(tester).agentId, 'c');
+    // The other tab's agents are on offer...
+    expect(strip(tester).selectedId, 't2');
+    expect(cardsShown(tester), ['c', 'd']);
+    // ...and the phone is still in the tab it was in, on the agent it was on.
+    // Looking into another tab is not leaving this one.
+    expect(pager(tester).agentId, 'a');
+    expect(swipesOver(tester), ['a', 'b']);
+  });
+
+  testWidgets('a card opens its agent, and the swipe walks that tab', (
+    tester,
+  ) async {
+    await pumpHome(
+      tester,
+      tabs: [
+        deskTab('t1', 'Desktop', ['a', 'b']),
+        deskTab('t2', 'Docker', ['c', 'd']),
+      ],
+    );
+
+    await openPanel(tester);
+    await showTab(tester, 'Docker');
+    await openCard(tester, 'd');
+
+    expect(pager(tester).agentId, 'd');
     expect(swipesOver(tester), ['c', 'd']);
   });
 
@@ -126,36 +189,58 @@ void main() {
       ],
     );
 
-    await switchTo(tester, kUntabbedGroupName);
+    await openPanel(tester);
+    await showTab(tester, kUntabbedGroupName);
+
+    expect(cardsShown(tester), ['c', 'd']);
+
+    await openCard(tester, 'c');
 
     expect(pager(tester).agentId, 'c');
     expect(swipesOver(tester), ['c', 'd']);
   });
 
-  testWidgets('coming back to a tab returns to the agent it was left on', (
+  testWidgets('the agent on screen keeps its card, and wears the rim', (
     tester,
   ) async {
-    final app = await pumpHome(
+    await pumpHome(
       tester,
       tabs: [
         deskTab('t1', 'Desktop', ['a', 'b']),
-        deskTab('t2', 'Docker', ['c', 'd']),
+        deskTab('t2', 'Docker', ['c']),
       ],
     );
 
-    await switchTo(tester, 'Docker');
-    expect(pager(tester).agentId, 'c');
-    // Desktop was left on `b` — what a swipe inside that tab records, and what
-    // the home screen writes down on every build it draws (`noteDeskTab`).
-    app.noteDeskTab('t1', showing: (machineId: 'm', agentId: 'b'));
+    await openPanel(tester);
 
-    await switchTo(tester, 'Desktop');
+    PhoneCard cardOf(String agent) => tester.widget<PhoneCard>(
+      find.ancestor(of: find.text(agent), matching: find.byType(PhoneCard)),
+    );
+    expect(cardOf('a').border, isNotNull, reason: 'the agent on screen');
+    expect(cardOf('b').border, isNull);
+  });
 
-    expect(pager(tester).agentId, 'b');
+  testWidgets('a tab this phone cannot reach is listed, and says why', (
+    tester,
+  ) async {
+    await pumpHome(
+      tester,
+      tabs: [
+        deskTab('t1', 'Desktop', ['a', 'b']),
+        // A tab of agents no machine here is listing — one asleep, in life.
+        deskTab('t2', 'Away', ['gone']),
+      ],
+    );
+
+    await openPanel(tester);
+    await showTab(tester, 'Away');
+
+    expect(cardsShown(tester), isEmpty);
+    expect(find.textContaining('asleep'), findsOneWidget);
   });
 
   testWidgets('an account with no tabs is offered none', (tester) async {
-    // Nothing on the desk: the rail would carry one name over every agent on
+    // Nothing on the desk: the panel would hold one tab over every agent on
     // the account, which is what a swipe already walks. So no mark at all, and
     // the header is the row it has always been.
     await pumpHome(tester, tabs: []);
@@ -209,70 +294,5 @@ void main() {
 
     expect(pager(tester).agentId, 'a');
     expect(swipesOver(tester), ['a', 'b']);
-  });
-
-  testWidgets('the rail is drawn only while the mark is on', (tester) async {
-    await pumpHome(
-      tester,
-      tabs: [
-        deskTab('t1', 'Desktop', ['a', 'b']),
-        deskTab('t2', 'Docker', ['c']),
-      ],
-    );
-
-    // The terminal keeps its rows until somebody asks for the tabs.
-    expect(find.byType(DeskTabStrip), findsNothing);
-
-    await openRail(tester);
-    expect(rail(tester).groups.map((group) => group.name), [
-      'Desktop',
-      'Docker',
-      kUntabbedGroupName,
-    ]);
-
-    // The same mark puts it away again.
-    await openRail(tester);
-    expect(find.byType(DeskTabStrip), findsNothing);
-  });
-
-  testWidgets('the rail bars the tab the agent on screen is in', (
-    tester,
-  ) async {
-    await pumpHome(
-      tester,
-      tabs: [
-        deskTab('t1', 'Desktop', ['a', 'b']),
-        deskTab('t2', 'Docker', ['c']),
-      ],
-    );
-
-    await openRail(tester);
-    expect(rail(tester).activeId, 't1');
-
-    // The rail is already open, so this is the pick alone — opening it again
-    // here would put it away.
-    await pick(tester, 'Docker');
-    await openRail(tester);
-    expect(rail(tester).activeId, 't2');
-  });
-
-  testWidgets('picking the tab you are in only closes the rail', (
-    tester,
-  ) async {
-    await pumpHome(
-      tester,
-      tabs: [
-        deskTab('t1', 'Desktop', ['a', 'b']),
-        deskTab('t2', 'Docker', ['c']),
-      ],
-    );
-
-    await switchTo(tester, 'Desktop');
-
-    // Still on `a`, and the rail is away: re-opening the tab already on screen
-    // would re-attach the terminal under it for nothing.
-    expect(pager(tester).agentId, 'a');
-    expect(swipesOver(tester), ['a', 'b']);
-    expect(find.byType(DeskTabStrip), findsNothing);
   });
 }
