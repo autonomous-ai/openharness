@@ -87,6 +87,22 @@ class TerminalPane {
   /// Also what keeps the closed-history clean: a warm tile closed by the pager
   /// was never something the person had open, so it is not remembered as such.
   bool warm = false;
+
+  /// Whether this tile has no session because opening one would have TAKEN the
+  /// terminal from whoever is driving it.
+  ///
+  /// Only ever set on a machine whose CLI predates `takeover: false` (see
+  /// `MachineState.terminalNoTakeoverAvailable`). There, every open is a
+  /// takeover, so `AppNotifier._attachSession` refuses each one that is not a
+  /// person pressing "Take control" — and a tile left with a null session is
+  /// otherwise indistinguishable from one still attaching, which would leave
+  /// the page on "Attaching…" for good with no way forward.
+  ///
+  /// This is what gives it the way forward: the page reads it as "another app
+  /// may be driving this — press to take it", the same offer a `takenOver`
+  /// session gets. Cleared by the press itself, and by anything else that
+  /// attaches the tile.
+  bool heldForTakeControl = false;
 }
 
 /// A tile as it survives a restart: intent only, never the session.
