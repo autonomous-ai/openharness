@@ -243,6 +243,8 @@ const COMPUTER_ID_FILE = env.ADAPTER_COMPUTER_ID_FILE
 // The machine's display name, mirrored from the backend (`machine_meta` on connect + web renames) by the
 // daemon so the separate `harness status` process can print it. Absent = unnamed machine.
 const MACHINE_NAME_FILE = join(env.ADAPTER_DATA_DIR, 'machine-name')
+/** Pairing labels that stand in for a name rather than being one (manager.ts `addPaired` callers). */
+const GENERIC_PAIR_LABELS: ReadonlySet<string> = new Set(['harness link', 'browser'])
 /** The name a new terminal tile greets with: the machine's display name the backend gave it, else the host's. */
 function terminalHintMachineName(): string {
   try { return readFileSync(MACHINE_NAME_FILE, 'utf-8').trim() || hostname() } catch { return hostname() }
@@ -1766,6 +1768,15 @@ async function runForeground(session: AuthSession): Promise<void> {
     sendTarget: (connId, type, payload) => backend.sendTerminalTo(connId, type, payload),
     sendBinaryTarget: (connId, frame) => backend.sendTerminalBinaryTo(connId, frame),
     isLoopback: isLocalClientId,
+    // For a client that did not introduce itself on `terminal_open` (an older build). A loopback
+    // window can only be this computer's desktop; a paired peer is named by its pairing label unless
+    // that label is one of the placeholders pairing hands out — those name nothing.
+    describeClient: (connId) => {
+      if (isLocalClientId(connId)) return { kind: 'desktop', name: terminalHintMachineName() }
+      const label = backend.e2ee.sessionLabel(connId)
+      if (!label || GENERIC_PAIR_LABELS.has(label)) return null
+      return { kind: backend.e2ee.sessionRole(connId) === 'device' ? 'device' : 'web', name: label }
+    },
     streamingAvailable: tmuxBackend != null,
     diagnostic: (event, fields) => console.log(`[terminal-stream] ${event}`, fields),
   })

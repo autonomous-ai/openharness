@@ -101,6 +101,10 @@ export class E2eeStore {
     return this.paired.get(identityPubB64)?.role ?? null
   }
 
+  pairedLabel(identityPubB64: string): string | null {
+    return this.paired.get(identityPubB64)?.label ?? null
+  }
+
   addPaired(identityPubB64: string, label: string, at: number, role: PairRole = 'web'): void {
     this.paired.set(identityPubB64, { identityPub: identityPubB64, label, pairedAt: at, role })
     writeSecure(PAIRED_FILE, [...this.paired.values()])
