@@ -302,6 +302,14 @@ final harnessCommands = <HarnessCommand>[
   const HarnessCommand('agent.rename', 'Rename Agent', ShortcutGroup.actions),
   const HarnessCommand('agent.stop', 'Stop Agent', ShortcutGroup.actions),
   const HarnessCommand('agent.fork', 'Fork Agent', ShortcutGroup.actions),
+  const HarnessCommand(
+    'agent.clone',
+    'Clone Agent',
+    ShortcutGroup.actions,
+    action: ShortcutAction.cloneAgent,
+    nativeAction: 'cloneAgent',
+    keywords: ['duplicate', 'another', 'fresh'],
+  ),
   const HarnessCommand('agent.restart', 'Restart Agent', ShortcutGroup.actions),
   const HarnessCommand(
     'terminal.new',
@@ -358,6 +366,7 @@ final harnessCommands = <HarnessCommand>[
     'app.customize',
     'Customize OpenHarness',
     ShortcutGroup.actions,
+    nativeAction: 'customize',
   ),
   const HarnessCommand(
     'app.store',

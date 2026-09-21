@@ -17,7 +17,7 @@ import type { AgentEngine } from '../engines/types.js'
 import { probeGatewayRuntime } from './gatewayRuntime.js'
 import { probeGridAssignment, type GridAssignment } from './gridAssignment.js'
 import { probeCodexHome } from './codexHomeProbe.js'
-import { isHarnessSession } from './harnessSessionLabel.js'
+import { buildHarnessSessionLabel, isHarnessSession, isLegacyHarnessSession } from './harnessSessionLabel.js'
 import { psEnv } from './childLocale.js'
 import type { ProcessIdentity, RegisteredSession } from './registry.js'
 import {
@@ -145,6 +145,43 @@ export async function listTmuxPanes(): Promise<TmuxPaneInventory> {
     return result
   }
   return { ok: true, panes: parsePanes(result.stdout).filter((pane) => isHarnessSession(pane.tmuxSessionName)) }
+}
+
+export interface AdoptedLegacySession { from: string; to: string; paneId: string }
+
+/**
+ * Bring the sessions an older build created — `<engine>-<ts>`, from before the `harness-` prefix —
+ * under the current convention, so the whitelist above sees them again. Only for panes the registry
+ * owns (`ownedPanes`: pane id → the row's engine): a stray session that merely looks legacy is left
+ * alone. One rename per session, whichever of its panes is met first.
+ *
+ * Measured on machine-remote-1: six agents from before the prefix sat dormant for ten days after the
+ * whitelist landed — never re-observed, so their process identity was never refreshed and every hook
+ * bind that followed was released on the spot ("process changed under tmux pane"). Each was on screen,
+ * answering, and had no session to fork.
+ */
+export async function adoptLegacyHarnessSessions(
+  ownedPanes: ReadonlyMap<string, string>,
+  now: number = Date.now(),
+): Promise<AdoptedLegacySession[]> {
+  if (!ownedPanes.size) return []
+  const result = await execText('tmux', ['list-panes', '-a', '-F', '#{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}'], 2_000)
+  if (!result.ok) return []
+  const adopted: AdoptedLegacySession[] = []
+  const seen = new Set<string>()
+  for (const pane of parsePanes(result.stdout)) {
+    const engine = ownedPanes.get(pane.tmuxPane)
+    if (!engine || seen.has(pane.tmuxSessionName) || !isLegacyHarnessSession(pane.tmuxSessionName)) continue
+    seen.add(pane.tmuxSessionName)
+    // `now + n`: two sessions of one engine renamed in the same millisecond would otherwise collide.
+    // Counted by session met, not by rename that succeeded, so a failed rename never hands its label
+    // to the next one.
+    const to = buildHarnessSessionLabel(engine, now + seen.size - 1)
+    // `=name` is tmux's exact match; a bare name may also be read as a prefix or a pane target.
+    const renamed = await execText('tmux', ['rename-session', '-t', `=${pane.tmuxSessionName}`, to], 2_000)
+    if (renamed.ok) adopted.push({ from: pane.tmuxSessionName, to, paneId: pane.tmuxPane })
+  }
+  return adopted
 }
 
 function childrenByParent(rows: readonly ProcessRow[]): Map<number, ProcessRow[]> {

@@ -14,6 +14,7 @@ The defaults, in the workspace:
 | ⌘B | Boss mode: describe a task, it picks the agent |
 | ⌘W · ⇧⌘R | Close tab · rename tab |
 | ⇧⌘T | New terminal in the current project |
+| ⇧⌘N | Clone Agent — another agent like the focused pane's (same machine, project, harness, Codex profile, permission mode, named agent) with a fresh conversation. No dialog; fork minus the context |
 | ⌘1 … ⌘9 | Select tab by position |
 | ⇧⌘] · ⇧⌘[ · ⌃Tab · ⌃⇧Tab | Next · previous tab |
 | ⌘] · ⌘[ · ⌘Y | Forward · back through visited agents · full history |
@@ -28,6 +29,8 @@ The defaults, in the workspace:
 In the New Tab and New Pane pickers, New agent is selected when the query is empty. Typing selects the best matching existing harness; the creation row stays pinned above it and carries the query into the first task. Projects and machines filter individual harnesses rather than opening whole groups. The destination is shown in the picker and carried into creation. A harness can have views in several tabs, with one view per tab; closing a pane only removes that view.
 
 Hover near a pane’s right or bottom edge to reveal its **+** button, or use **File → Split Right… / Split Down…**. The picker shows **New Pane to the Right** or **New Pane Below**. The split is applied after choosing or creating a harness; Escape leaves the layout unchanged.
+
+When a split needs more room, the workspace expands and scrolls to keep both panes readable. Keyboard focus brings the selected pane into view. Splitting remains available up to the tab’s 64-pane limit.
 
 In a picker: ↓ ⌃N ⌃J and ↑ ⌃P ⌃K move, ⏎ accepts, and Esc, ⌃C, or ⌃G closes. In the New Tab and New Pane pickers, ⌘⏎ accepts into the same requested destination. Preview starts hidden; ⌃/ toggles it and Page Up/Down scroll it without leaving the search input.
 The terminal keeps ⌘C, ⌘V, ⌘A, Esc, ⌥⏎ and ⌃C for itself. `pane.pin`, `pane.focus_1…9`,

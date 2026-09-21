@@ -21,7 +21,7 @@ import { promisify } from 'util'
 import { env } from '../config/env.js'
 import { museEvent, museWorkspaceRoot } from '../engines/muse/normalizer.js'
 import type { AgentEngine } from '../engines/types.js'
-import { readCodexRolloutMeta } from '../engines/codex/rollout.js'
+import { readCodexRolloutMeta, resolveCodexRollout } from '../engines/codex/rollout.js'
 import { agyConversationForPid, findAgyTranscript } from '../engines/agy/session.js'
 import { copilotSessionCwd, copilotSessionForPid, findCopilotTranscript } from '../engines/copilot/session.js'
 import { sqlitePreflightMessage } from './sqliteAvailability.js'
@@ -432,4 +432,32 @@ export async function claudeContinuation(transcriptPath: string): Promise<Repair
     return null
   }
   return { sessionId: nextId, transcriptPath: nextPath }
+}
+
+/**
+ * The transcript behind a session id a claude/codex process names on its own command line
+ * (`claude --resume <id>`, `codex resume <id>`) — the file `registry.register` insists on for those
+ * two engines, which argv does not carry. Claude keeps one file per session under
+ * `<projects>/<encoded cwd>/<id>.jsonl`; the cwd encoding is Claude's to define, so the project
+ * folders are listed rather than the name derived. Codex names its rollout after the thread id, and
+ * the rollout walker already knows that layout. Only a file that exists is returned: a resume of a
+ * session this machine never wrote (or one that was deleted) binds nothing.
+ */
+export async function findResumedTranscript(
+  engine: AgentEngine,
+  sessionId: string,
+  opts?: { codexHome?: string },
+): Promise<string | null> {
+  if (!/^[0-9a-f-]{16,}$/i.test(sessionId)) return null
+  if (engine === 'codex') return resolveCodexRollout(sessionId, join(opts?.codexHome || env.CODEX_HOME, 'sessions'))
+  if (engine !== 'claude') return null
+  let projects: string[]
+  try { projects = await readdir(env.CLAUDE_PROJECTS_DIR) } catch { return null }
+  for (const project of projects) {
+    const candidate = join(env.CLAUDE_PROJECTS_DIR, project, `${sessionId}.jsonl`)
+    try {
+      if ((await stat(candidate)).isFile()) return candidate
+    } catch { /* not this project */ }
+  }
+  return null
 }

@@ -71,6 +71,25 @@ describe('agentFrame', () => {
     expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).toHaveProperty('viewerName', null)
   })
 
+  // What the desktop's Clone (⌘⇧N) sends back through `agent_create`: the choices only the registry
+  // row holds. Without them a clone of a Plan-mode reviewer would come up as an auto-mode general.
+  it('carries the launch choices a clone needs', async () => {
+    const row = session(null)
+    row.permissionMode = 'plan'
+    row.bypassPermission = false
+    row.agent = 'reviewer'
+    expect(await agentFrame(row, { selectedModel: null, terminalAvailable: true }))
+      .toMatchObject({ permissionMode: 'plan', bypassPermission: false, namedAgent: 'reviewer' })
+  })
+
+  it('reports unrecorded launch choices as null rather than omitting them', async () => {
+    const frame = await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })
+    expect(frame).toHaveProperty('permissionMode', null)
+    expect(frame).toHaveProperty('bypassPermission', null)
+    expect(frame).toHaveProperty('namedAgent', null)
+    expect(frame).not.toHaveProperty('agent')
+  })
+
   it('reports launch state and defaults legacy agents to ready', async () => {
     const legacy = session(null)
     expect(await agentFrame(legacy, { selectedModel: null, terminalAvailable: true }))

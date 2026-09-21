@@ -78,6 +78,18 @@ export type AgentFrame = {
   /** Whether `agent_fork` can do anything for this engine (lib/forkAgent.ts) — natively, or by a
    *  handoff. A client hides the Fork action on a false rather than offering a button that refuses. */
   forkable: boolean
+  /**
+   * The launch choices a client needs to open ANOTHER agent like this one — the desktop's Clone
+   * (`agent_create` with the same `permissionMode`, `bypassPermission` and `agent`). Read off the
+   * registry row, never off the live process. Each null is a real answer: a row from before the
+   * choice existed, or an agent Harness did not launch, has none to report — and a clone of one
+   * falls back to the client's own defaults rather than to a guess made here.
+   */
+  permissionMode: string | null
+  bypassPermission: boolean | null
+  /** The engine's named agent (`agent_create`'s `agent`); `namedAgent` on the wire so an agent
+   *  object never carries a key called `agent`. */
+  namedAgent: string | null
 }
 
 /** What the daemon knows about an agent's DSH — looked up by the caller, never here. */
@@ -161,5 +173,8 @@ export async function agentFrame(
     verdict: dsh?.verdict ?? null,
     forkedFrom: s.forkedFrom ? { agentId: s.forkedFrom.agentId, name: s.forkedFrom.name } : null,
     forkable: engineCanFork(s.engine),
+    permissionMode: s.permissionMode ?? null,
+    bypassPermission: s.bypassPermission ?? null,
+    namedAgent: s.agent ?? null,
   }
 }

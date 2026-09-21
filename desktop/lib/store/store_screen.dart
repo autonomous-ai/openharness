@@ -406,39 +406,6 @@ class _StoreTabState extends State<StoreTab> {
     );
   }
 
-  Widget _actionsFor(DshEntry entry) {
-    final local = widget.notifier.localMachineState;
-    if (!entry.isViewerPackage &&
-        (_installedOnMachine(local, entry.id) ||
-            storeResumeTargets(widget.notifier, entry.id).isNotEmpty)) {
-      return StoreHarnessActions(
-        notifier: widget.notifier,
-        harnessId: entry.id,
-        recent: widget.recentHarnesses,
-        newButtonKey: ValueKey('store-action:${entry.id}'),
-        onNew: local == null || local.dsh.runs[entry.id]?.inProgress == true
-            ? null
-            : () => openStoreAgent(
-                context,
-                widget.notifier,
-                entry.id,
-                local.machine.machineId,
-              ),
-      );
-    }
-    return TextButton(
-      key: ValueKey('store-action:${entry.id}'),
-      onPressed: () => _openPage(entry.id),
-      style: TextButton.styleFrom(
-        backgroundColor: grid.AppSurface.selectedFill,
-        foregroundColor: grid.AppPalette.accentOnSurface,
-        minimumSize: const Size(70, 34),
-        shape: const StadiumBorder(),
-      ),
-      child: Text(entry.isViewerPackage ? 'View' : 'Get'),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -567,7 +534,6 @@ class _StoreTabState extends State<StoreTab> {
                                         StoreController.keyFor(entry),
                                       ),
                                       onOpen: _openPage,
-                                      actionsFor: _actionsFor,
                                       onCategory: (name) =>
                                           _show(_Category(name)),
                                       onAll: () => _show(const _All()),
@@ -590,7 +556,6 @@ class _StoreTabState extends State<StoreTab> {
                                               .loaded ??
                                           false,
                                       onOpen: _openPage,
-                                      actionsFor: _actionsFor,
                                     ),
                             ),
                           ),
@@ -744,7 +709,6 @@ class _Shelf$View extends StatelessWidget {
     required this.installedOn,
     required this.loaded,
     required this.onOpen,
-    required this.actionsFor,
   });
 
   final _Listed shelf;
@@ -755,7 +719,6 @@ class _Shelf$View extends StatelessWidget {
   final List<MachineState> Function(String id) installedOn;
   final bool loaded;
   final ValueChanged<String> onOpen;
-  final Widget Function(DshEntry) actionsFor;
 
   String get _title => switch (shelf) {
     _All() => 'All harnesses',
@@ -782,7 +745,6 @@ class _Shelf$View extends StatelessWidget {
         ratingFor: (entry) => store.ratingOf(StoreController.keyFor(entry)),
         installed: (id) => installedOn(id).isNotEmpty,
         onOpen: onOpen,
-        actionsFor: actionsFor,
       );
     }
     return SingleChildScrollView(
@@ -835,7 +797,6 @@ class _Shelf$View extends StatelessWidget {
                   ratingFor: (entry) =>
                       store.ratingOf(StoreController.keyFor(entry)),
                   onOpen: onOpen,
-                  actionsFor: actionsFor,
                 ),
               if (entries.isEmpty && shelf is _Search)
                 Wrap(
@@ -1125,8 +1086,8 @@ class _ProductPageState extends State<_ProductPage> {
         (localInstalled || _canGetOnMachine(local, entry));
     final showLaunch =
         !entry.isViewerPackage &&
-        (localInstalled ||
-            storeResumeTargets(widget.notifier, entry.id).isNotEmpty);
+        !hasUpdate &&
+        localInstalled;
     // A package that has not published its own examples yet still leads with
     // prompts — the editorial ones — so every page reads the same way.
     final examples = entry.examples.isNotEmpty
@@ -1268,7 +1229,7 @@ class _ProductPageState extends State<_ProductPage> {
                       ],
                     ),
                     const SizedBox(height: 34),
-                    if (showAction && (!showLaunch || hasUpdate))
+                    if (showAction && !showLaunch)
                       Center(
                         child: FilledButton(
                           key: const ValueKey('store-primary-action'),
@@ -1317,18 +1278,13 @@ class _ProductPageState extends State<_ProductPage> {
                       ),
                     ],
                     if (showLaunch) ...[
-                      if (hasUpdate) const SizedBox(height: 16),
                       Center(
                         child: StoreHarnessActions(
                           notifier: widget.notifier,
                           harnessId: entry.id,
                           recent: widget.recentHarnesses,
                           prominent: true,
-                          newButtonKey: ValueKey(
-                            hasUpdate
-                                ? 'store-open-current'
-                                : 'store-primary-action',
-                          ),
+                          newButtonKey: const ValueKey('store-primary-action'),
                           onNew: local != null && !busy && !installing
                               ? () => _open(local.machine.machineId)
                               : null,

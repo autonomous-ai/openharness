@@ -58,6 +58,11 @@ enum ShortcutAction {
   /// A plain shell in a pane, like a native terminal's new tab — the daemon
   /// treats whatever engine is later typed into it as the pane's agent.
   newTerminal,
+
+  /// Another agent of the focused pane's kind — same machine, folder, harness,
+  /// profile and permission mode — with a fresh conversation: fork minus the
+  /// context. No dialog, like [newTerminal].
+  cloneAgent,
   routeTask,
   orchestrate,
   reload,
@@ -377,6 +382,18 @@ const kSwarmShortcuts = [
       shift: true,
     ),
     label: 'New Terminal',
+    group: ShortcutGroup.actions,
+  ),
+  // ⌘⇧N was Create Agent until ⌘N became New Harness (01989f5a); reclaimed
+  // for its shifted sibling: ⌘N starts a new one, ⌘⇧N another of this one.
+  AppShortcut(
+    action: ShortcutAction.cloneAgent,
+    activator: SingleActivator(
+      LogicalKeyboardKey.keyN,
+      meta: true,
+      shift: true,
+    ),
+    label: 'Clone Agent',
     group: ShortcutGroup.actions,
   ),
   AppShortcut(

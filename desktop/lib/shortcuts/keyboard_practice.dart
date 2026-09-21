@@ -74,6 +74,7 @@ class KeyboardLesson {
       'Restart Agent\nA fresh conversation starts in the same project.',
     'agent.fork' =>
       'Fork Agent\nChoose a name and first task. The source stays open.',
+    'agent.clone' => 'Clone Agent\nAnother of this one opens beside it: same folder and settings, fresh conversation.',
     'app.store' =>
       '[Harness Store]\nFind a harness for the kind of work you want to do.',
     'pane.focus_left' ||

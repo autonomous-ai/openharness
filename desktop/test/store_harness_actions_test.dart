@@ -180,9 +180,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('no choices disables Resume; New Harness stays available', (
-    tester,
-  ) async {
+  testWidgets('no choices shows only New Harness', (tester) async {
     final app = createApp();
     addTearDown(app.dispose);
     app.machineStates['m']!.agents = [];
@@ -194,14 +192,7 @@ void main() {
         created++;
       },
     );
-    expect(
-      tester
-          .widget<OutlinedButton>(
-            find.byKey(const ValueKey('store-resume:codex')),
-          )
-          .onPressed,
-      isNull,
-    );
+    expect(find.byKey(const ValueKey('store-resume:codex')), findsNothing);
     expect(
       find.byKey(const ValueKey('store-resume-chevron:codex')),
       findsNothing,
@@ -234,6 +225,10 @@ void main() {
         },
       );
       expect(find.byKey(ValueKey('store-resume-chevron:$id')), findsNothing);
+      expect(
+        tester.getSize(find.byKey(ValueKey('store-resume:$id'))).width,
+        tester.getSize(find.byKey(ValueKey('store-new:$id'))).width,
+      );
       await tester.tap(find.text('Resume Harness'));
       await tester.pumpAndSettle();
       expect(find.text('Recent harnesses'), findsNothing);
@@ -265,6 +260,10 @@ void main() {
       expect(
         find.byKey(const ValueKey('store-resume-chevron:codex')),
         findsOneWidget,
+      );
+      expect(
+        tester.getSize(find.byKey(const ValueKey('store-resume:codex'))).width,
+        tester.getSize(find.byKey(const ValueKey('store-new:codex'))).width,
       );
       await tester.tap(find.text('Resume Harness'));
       await tester.pumpAndSettle();

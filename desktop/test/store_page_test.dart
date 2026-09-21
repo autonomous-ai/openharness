@@ -281,9 +281,10 @@ void main() {
         expect(find.text('Your projects and files are kept.'), findsOneWidget);
         expect(find.text('aaaaaaaa'), findsOneWidget);
         expect(
-          _key('store-open-current'),
-          viewer ? findsNothing : findsOneWidget,
+          find.text('Resume Harness'),
+          findsNothing,
         );
+        expect(find.text('New Harness'), findsNothing);
         app.updateGate = Completer<String?>();
         await tester.tap(_key('store-primary-action'));
         await tester.pump();
@@ -301,6 +302,7 @@ void main() {
           _in('store-primary-action', find.text('Update')),
           findsOneWidget,
         );
+        expect(find.text('New Harness'), findsNothing);
         app.updateGate = null;
         await tester.tap(_key('store-primary-action'));
         await tester.pumpAndSettle();
@@ -328,7 +330,7 @@ void main() {
   }
 
   testWidgets(
-    'launch actions stay available with an update; the page handles package updates',
+    'a row with an update opens details; launch and update actions stay on the page',
     (tester) async {
       const entry = DshEntry(
         id: 'acme/updateable',
@@ -346,12 +348,14 @@ void main() {
       await tester.enterText(_key('store-search'), 'Updateable');
       await tester.pumpAndSettle();
       expect(
-        _in('store-action:${entry.id}', find.text('New Harness')),
-        findsOneWidget,
+        find.text('New Harness'),
+        findsNothing,
       );
       await tester.tap(_key('store-card:${entry.id}'));
       await tester.pumpAndSettle();
       expect(_key('store-page:${entry.id}'), findsOneWidget);
+      expect(_in('store-primary-action', find.text('Update')), findsOneWidget);
+      expect(find.text('New Harness'), findsNothing);
       expect(app.updates, isEmpty);
       app.machineStates['machine-1']!.dsh.replace(const [
         DshEntry(
@@ -1126,7 +1130,7 @@ void main() {
         expect(_key('store-catalog:Coding'), findsOneWidget);
         expect(_key('store-card:autonomous/marp'), findsNothing);
         expect(
-          find.textContaining('coding agents to explore.'),
+          find.textContaining(RegExp(r'^\d+ coding agents$')),
           findsOneWidget,
         );
       },
@@ -1154,7 +1158,7 @@ void main() {
         expect(_key('store-shelf-category:Other'), findsOneWidget);
         await tester.tap(_key('store-shelf-category:Other'));
         await tester.pumpAndSettle();
-        expect(find.text('1 harness to explore.'), findsOneWidget);
+        expect(find.text('1 harness'), findsOneWidget);
         expect(_key('store-card:someone/loom'), findsOneWidget);
 
         await tester.tap(_key('store-shelf-category:Productivity'));
@@ -1242,11 +1246,11 @@ void main() {
       final tabs = app.swarms.length;
 
       expect(
-        _in('store-action:autonomous/typst', find.text('Get')),
-        findsOneWidget,
+        find.text('Get'),
+        findsNothing,
       );
-      await tester.ensureVisible(_key('store-action:autonomous/typst'));
-      await tester.tap(_key('store-action:autonomous/typst'));
+      await tester.ensureVisible(_key('store-card:autonomous/typst'));
+      await tester.tap(_key('store-card:autonomous/typst'));
       await tester.pumpAndSettle();
       expect(_key('store-page:autonomous/typst'), findsOneWidget);
       expect(_in('store-primary-action', find.text('Get')), findsOneWidget);
@@ -1262,18 +1266,23 @@ void main() {
       await tester.tap(_key('store-back'));
       await tester.pumpAndSettle();
 
-      // Once installed locally, the same card becomes Open and stays local.
+      // Installation never changes browsing into a launch action. The same
+      // card opens details, whose New Harness action stays local.
       app.machineStates['machine-1']!.dsh.replace(
         app.machineStates['remote']!.dsh.entries,
       );
       app.changed();
       await tester.pumpAndSettle();
       expect(
-        _in('store-action:autonomous/typst', find.text('New Harness')),
-        findsOneWidget,
+        find.text('New Harness'),
+        findsNothing,
       );
-      await tester.ensureVisible(_key('store-action:autonomous/typst'));
-      await tester.tap(_key('store-action:autonomous/typst'));
+      await tester.ensureVisible(_key('store-card:autonomous/typst'));
+      await tester.tap(_key('store-card:autonomous/typst'));
+      await tester.pumpAndSettle();
+      expect(_key('store-page:autonomous/typst'), findsOneWidget);
+      expect(_in('store-primary-action', find.text('New Harness')), findsOneWidget);
+      await tester.tap(_key('store-primary-action'));
       await tester.pumpAndSettle();
       expect(
         tester
@@ -1285,7 +1294,10 @@ void main() {
       await tester.pumpAndSettle();
 
       // Remote-only packages never leak into the local catalog.
-      expect(_key('store-action:autonomous/manim'), findsNothing);
+      await tester.enterText(_key('store-search'), 'Manim');
+      await tester.pumpAndSettle();
+      expect(_key('store-card:autonomous/manim'), findsNothing);
+      expect(find.text('0 results'), findsOneWidget);
       expect(app.swarms.length, tabs);
     });
 
@@ -1321,16 +1333,20 @@ void main() {
               );
             },
           );
-          void expectGet() =>
-              expect(_in('store-action:$id', find.text('Get')), findsOneWidget);
-          expectGet(); // Discover.
+          void expectBrowseOnly() {
+            expect(_key('store-card:$id'), findsOneWidget);
+            expect(find.text('Resume Harness'), findsNothing);
+            expect(find.text('New Harness'), findsNothing);
+            expect(find.text('Get'), findsNothing);
+          }
+          expectBrowseOnly(); // Discover.
           await tester.tap(_key('store-shelf-category:$category'));
           await tester.pumpAndSettle();
-          expectGet();
+          expectBrowseOnly();
           await tester.enterText(_key('store-search'), name);
           await tester.pumpAndSettle();
-          expectGet();
-          await tester.tap(_key('store-action:$id'));
+          expectBrowseOnly();
+          await tester.tap(_key('store-card:$id'));
           await tester.pumpAndSettle();
           expect(_key('store-page:$id'), findsOneWidget);
           expect(_in('store-primary-action', find.text('Get')), findsOneWidget);

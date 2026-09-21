@@ -98,6 +98,11 @@ void main() {
       'Harness needs tmux to start harnesses on Test host. Install tmux there, then try again.',
     ),
     (
+      'CODEX_CLI_TOO_OLD',
+      'Your installed Codex CLI does not support --approve-for-me. Update Codex and try again.',
+      'Your installed Codex CLI does not support --approve-for-me. Update Codex and try again.',
+    ),
+    (
       'UNSUPPORTED',
       null,
       'Update the harness CLI on this machine to start a harness',

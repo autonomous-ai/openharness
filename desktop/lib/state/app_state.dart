@@ -22,6 +22,7 @@ import '../auth/cli_login.dart';
 import '../bootstrap/environment_provisioner.dart';
 import '../core/viewer_mode.dart';
 import '../core/config.dart';
+import '../core/agent_names.dart';
 import '../core/agent_preference.dart';
 import '../core/dsh_catalog.dart';
 import '../core/engine_availability.dart';
@@ -183,6 +184,11 @@ class AgentCreationAttempt {
   ProjectFolderRequest? _projectFolder;
   String? _remoteProjectName;
   int _projectNameRetries = 0;
+
+  /// The `codexHome` came off this machine's own agent frame (a clone), so the
+  /// daemon there evidently supports it — the capability probe, which only
+  /// New Harness runs, is not needed to prove it.
+  bool _codexHomeTrusted = false;
 
   bool get awaitingConfirmation => _awaitingConfirmation;
 
@@ -6046,6 +6052,10 @@ class AppNotifier extends ChangeNotifier {
         'TMUX_UNAVAILABLE' =>
           'Harness needs tmux to start harnesses on $machine. '
               'Install tmux there, then try again.',
+        'CODEX_CLI_TOO_OLD' =>
+          detail ??
+              'The installed Codex CLI on $machine is too old for Auto approvals. '
+                  'Update Codex, or choose Ask permissions.',
         'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
           'Update the harness CLI on this machine to start a harness',
         'INVALID_DSH' =>
@@ -6057,6 +6067,10 @@ class AppNotifier extends ChangeNotifier {
           'This first task is too long for $machine. Shorten it and try again.',
         'AGENT_UNSUPPORTED' =>
           'This engine cannot be opened as a named agent on $machine.',
+        'INVALID_AGENT' =>
+          'This engine cannot be opened as that named agent on $machine.',
+        'INVALID_PERMISSION_MODE' =>
+          'This engine has no such permission mode on $machine.',
         // A daemon that predates the terminal engine refuses it by name; the
         // fix is the same one the other UNSUPPORTED codes ask for.
         'INVALID_ENGINE' =>
@@ -6100,7 +6114,8 @@ class AppNotifier extends ChangeNotifier {
         if (choices['engine'] != 'codex') {
           return 'Choose a Codex profile only for Codex';
         }
-        if (machine.engines['codex']?.supportsCodexHome != true) {
+        if (!creation._codexHomeTrusted &&
+            machine.engines['codex']?.supportsCodexHome != true) {
           return 'Update the harness CLI on this machine to choose a Codex profile';
         }
       }
@@ -6229,7 +6244,10 @@ class AppNotifier extends ChangeNotifier {
         'PROMPT_TOO_LONG',
         'INVALID_PROMPT',
         'AGENT_UNSUPPORTED',
+        'INVALID_AGENT',
+        'INVALID_PERMISSION_MODE',
         'TMUX_UNAVAILABLE',
+        'CODEX_CLI_TOO_OLD',
         'TMUX_TOO_OLD_FOR_GRID',
         'GRID_CONFIG_FAILED',
         'UNSUPPORTED_ON_REMOTE',
@@ -6976,6 +6994,75 @@ class AppNotifier extends ChangeNotifier {
     }
     _agentForks.remove((machineId, agentId));
     return true;
+  }
+
+  /// Clone (⌘⇧N): another agent of the same kind as [agentId], with a fresh
+  /// conversation — fork minus the context. Same machine (its own or a relayed
+  /// one: `agent_create` takes the same road either way), same project folder,
+  /// same engine or harness, Codex profile, named agent and permission mode,
+  /// every one read off the agent's own frame. Nothing of the source is
+  /// touched — no session to bind, so a clone works while the source is busy
+  /// or has no session yet, where a fork would wait or refuse.
+  ///
+  /// A daemon from before the frame carried the launch choices reports them
+  /// null; the clone then opens the way New Harness would by default — auto
+  /// mode, no named agent — while folder, harness and profile still carry. So
+  /// does an agent Harness did not launch.
+  ///
+  /// Returns null once the agent exists, else the sentence to show. A terminal
+  /// pane clones to a terminal in the same folder, exactly what ⌘⇧T opens; the
+  /// daemon names those itself.
+  Future<String?> cloneAgent(
+    String machineId,
+    String agentId, {
+    String? swarmId,
+  }) {
+    final machine = machineStates[machineId];
+    if (machine == null) return Future.value('Machine not found');
+    if (machine.machine.isShared) {
+      return Future.value('Shared agents are view-only.');
+    }
+    final source = machine.agents
+        .where((agent) => agent.id == agentId)
+        .firstOrNull;
+    if (source == null) {
+      return Future.value('The source agent is no longer available.');
+    }
+    final engine = source.engine;
+    if (engine == null) {
+      return Future.value('${source.displayName} has no engine to clone.');
+    }
+    if (!source.canClone) {
+      return Future.value(
+        '${source.displayName} runs on a grid; cloning a grid agent is not supported.',
+      );
+    }
+    final terminal = isTerminalEngine(engine);
+    final cwd = machine.projectOf(source)?.cwd;
+    if (cwd == null && !terminal) {
+      return Future.value(
+        '${source.displayName} has no project folder to clone into.',
+      );
+    }
+    return createAgent(
+      machineId,
+      engine: engine,
+      folder: cwd,
+      dsh: source.dsh,
+      codexHome: source.codexHome,
+      attempt: AgentCreationAttempt().._codexHomeTrusted = true,
+      agent: source.namedAgent,
+      permissionMode: source.permissionMode,
+      // Unrecorded is not "off": an older daemon's agent clones the way a new
+      // one would open. A terminal has no permissions to bypass (⌘⇧T's choice).
+      bypassPermission: source.bypassPermission ?? !terminal,
+      name: terminal ? null : cloneNameFor(source.displayName),
+      swarmId: swarmId ?? activeSwarmId,
+      // The current tab, said out loud: without a placement a harness clone
+      // would open a tab of its own (see `createAgent`), and the point of a
+      // clone is another tile beside the one it came from.
+      placement: HarnessPlacement.currentTab,
+    );
   }
 
   /// A fork keeps the originating tab and creation receipt while its prompt is
@@ -7885,7 +7972,7 @@ class AppNotifier extends ChangeNotifier {
   /// not as a step.
   void focusPaneVertically(int delta) {
     final to = _neighbour(dx: 0, dy: delta) ?? _wrapVertically(delta);
-    if (to != null) focusPane(panes[to].id);
+    if (to != null) focusPane(panes[to].id, reveal: true);
   }
 
   /// The tile at the far end of this column — ⌘j off the bottom row, ⌘k off the
@@ -7948,12 +8035,12 @@ class AppNotifier extends ChangeNotifier {
     if (railFocused) {
       if (panes.isEmpty) return;
       unfocusRail();
-      focusPane(delta < 0 ? panes.last.id : panes.first.id);
+      focusPane(delta < 0 ? panes.last.id : panes.first.id, reveal: true);
       return;
     }
     final to = _neighbour(dx: delta, dy: 0);
     if (to != null) {
-      focusPane(panes[to].id);
+      focusPane(panes[to].id, reveal: true);
       return;
     }
     if (hasNavigationRail) focusRail();
@@ -7963,7 +8050,7 @@ class AppNotifier extends ChangeNotifier {
     // would simply do nothing at the edge, which is the exact behaviour the ring
     // exists to remove.
     if (!railFocused && panes.isNotEmpty) {
-      focusPane(delta < 0 ? panes.last.id : panes.first.id);
+      focusPane(delta < 0 ? panes.last.id : panes.first.id, reveal: true);
     }
   }
 
@@ -8043,7 +8130,7 @@ class AppNotifier extends ChangeNotifier {
       _previousPaneId = null;
       return;
     }
-    focusPane(back);
+    focusPane(back, reveal: true);
   }
 
   /// ⌘⏎ — one pane filling the grid, and back.
@@ -8072,7 +8159,7 @@ class AppNotifier extends ChangeNotifier {
   /// show it — a key meant only to look, rearranging the desk.
   void focusPaneByIndex(int index) {
     if (index < 0 || index >= panes.length) return;
-    focusPane(panes[index].id);
+    focusPane(panes[index].id, reveal: true);
   }
 
   /// Walk the focus one tile — ⌘← / ⌘→, and ⌘[ / ⌘].
@@ -8084,7 +8171,7 @@ class AppNotifier extends ChangeNotifier {
     if (panes.length < 2) return;
     final at = panes.indexWhere((pane) => pane.id == focusedPaneId);
     final next = at < 0 ? 0 : (at + delta + panes.length) % panes.length;
-    focusPane(panes[next].id);
+    focusPane(panes[next].id, reveal: true);
   }
 
   /// Move the focused pane one slot, for the keyboard twin of the drag.

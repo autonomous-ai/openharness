@@ -6,6 +6,68 @@ import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/pane_preset.dart';
 
 void main() {
+  for (final axis in PaneResizeAxis.values) {
+    test(
+      'small ${axis.name} splits grow linearly through the pane capacity',
+      () {
+        const viewport = Size(1280, 768);
+        const floor = Size(400, 240);
+        var extent = viewport;
+        var layout = PaneArrangement(PanePreset.middleMain.tilesFor(5));
+        for (var count = 5; count < 64; count++) {
+          final next = layout.split(
+            count - 1,
+            axis,
+            minimum: Size(
+              floor.width / extent.width,
+              floor.height / extent.height,
+            ),
+          );
+          expect(next, isNotNull);
+          layout = next!;
+          extent = Size(
+            max(
+              viewport.width,
+              floor.width / layout.tiles.map((tile) => tile.width).reduce(min),
+            ),
+            max(
+              viewport.height,
+              floor.height /
+                  layout.tiles.map((tile) => tile.height).reduce(min),
+            ),
+          );
+          expect(PaneArrangement.fromJson(layout.toJson()), isNotNull);
+          expect(
+            layout.tiles.fold<double>(
+              0,
+              (area, tile) => area + tile.width * tile.height,
+            ),
+            closeTo(1, .000001),
+          );
+          // Repeatedly splitting the newest small tile must add usable space,
+          // without magnifying the entire workspace on every split.
+          expect(
+            extent.width,
+            lessThanOrEqualTo(viewport.width + floor.width * count),
+          );
+          expect(
+            extent.height,
+            lessThanOrEqualTo(viewport.height + floor.height * count),
+          );
+          expect(
+            layout.tiles.last.width * extent.width,
+            greaterThanOrEqualTo(floor.width - .001),
+          );
+          expect(
+            layout.tiles.last.height * extent.height,
+            greaterThanOrEqualTo(floor.height - .001),
+          );
+        }
+        expect(layout.split(63, axis, minimum: Size.zero), isNull);
+      },
+    );
+  }
+
   test('nested splits and local close repairs retain complete nonoverlapping coverage', () {
     final random = Random(17);
     for (var trial = 0; trial < 30; trial++) {

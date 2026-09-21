@@ -23,6 +23,7 @@ import 'package:harness/store/store_cover_art.dart';
 import 'package:harness/store/store_explore_widgets.dart';
 import 'package:harness/store/store_editorial.dart';
 import 'package:harness/store/store_exploration.dart';
+import 'package:harness/store/store_featured_art.dart';
 import 'package:harness/store/store_models.dart';
 import 'package:harness/store/store_screen.dart';
 
@@ -101,12 +102,13 @@ class _App extends AppNotifier {
 }
 
 class _Api implements StoreApi {
-  _Api({this.unavailable = false});
+  _Api({this.unavailable = false, this.items = const []});
   final bool unavailable;
+  final List<StoreRating> items;
   @override
   Future<List<StoreRating>> ratings() async {
     if (unavailable) throw StateError('service unavailable');
-    return [];
+    return items;
   }
 
   @override
@@ -135,6 +137,7 @@ Future<(_App, GlobalKey)> _open(
   List<DshEntry>? entries,
   String? initialHarness,
   bool unavailable = false,
+  List<StoreRating> ratings = const [],
   double width = 1440,
   double height = 1000,
   double scale = 1,
@@ -188,7 +191,7 @@ Future<(_App, GlobalKey)> _open(
               enabled: () => true,
               child: StoreTab(
                 notifier: app,
-                api: _Api(unavailable: unavailable),
+                api: _Api(unavailable: unavailable, items: ratings),
                 initialHarness: initialHarness,
               ),
             ),
@@ -212,6 +215,7 @@ Future<(_App, GlobalKey)> _open(
     for (final asset in {
       ...storeProjectAssets.values,
       ...storeCoverArt.values.map((cover) => cover.asset),
+      ...storeFeaturedArt.values,
       'assets/store/blender-studio.png',
     }) {
       await precacheImage(AssetImage(asset), context);
@@ -1006,56 +1010,111 @@ void main() {
   });
 
   testWidgets(
-    'a project card copies its full prompt without opening the page',
+    'discovery has three illustrated features and categories have one',
     (tester) async {
-      String? copied;
-      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        SystemChannels.platform,
-        (call) async {
-          if (call.method == 'Clipboard.setData') {
-            copied = (call.arguments as Map)['text'] as String;
-          }
-          return null;
-        },
-      );
-      addTearDown(
-        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          SystemChannels.platform,
-          null,
-        ),
-      );
       final (_, key) = await _open(tester);
-      await tester.tap(
-        find.byKey(const ValueKey('store-shelf-category:Design')),
-      );
-      await tester.pumpAndSettle();
-      final copy = find.byKey(
-        const ValueKey('store-copy-idea:autonomous/blender'),
-      );
-      await tester.ensureVisible(copy);
-      await tester.pumpAndSettle();
-      await _capture(tester, key, 'project-prompts');
-      await tester.tap(copy);
-      await tester.pumpAndSettle();
+      expect(find.byType(StoreProjectArt), findsNothing);
+      expect(find.byType(StoreFeaturedArt), findsNWidgets(3));
       expect(
-        copied,
-        storeProjectPrompt(
-          _catalog.firstWhere((e) => e.id == 'autonomous/blender'),
-        ),
+        find.byKey(const ValueKey('store-feature-art:codex')),
+        findsOneWidget,
       );
-      expect(copied, contains('armchair'));
       expect(
-        find.byKey(const ValueKey('store-page:autonomous/blender')),
-        findsNothing,
+        find.byKey(const ValueKey('store-feature-art:autonomous/blender')),
+        findsOneWidget,
       );
-      expect(find.text('Prompt copied'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('store-feature-art:autonomous/copper')),
+        findsOneWidget,
+      );
+      final category = find.byKey(const ValueKey('store-category:Design'));
+      expect(
+        find.descendant(of: category, matching: find.byType(EngineMark)),
+        findsOneWidget,
+      );
+      await tester.ensureVisible(category);
+      await _capture(tester, key, 'discover-disciplines');
+      await tester.tap(category);
+      await tester.pumpAndSettle();
+      expect(find.byType(StoreProjectArt), findsNothing);
+      expect(find.byType(StoreFeaturedArt), findsOneWidget);
+      for (final entry in _catalog.where(
+        (entry) =>
+            storeCategoryFor(entry) == 'Design' && !entry.isViewerPackage,
+      )) {
+        final row = find.byKey(ValueKey('store-card:${entry.id}'));
+        expect(row, findsOneWidget);
+        expect(
+          find.descendant(of: row, matching: find.byType(EngineMark)),
+          findsOneWidget,
+        );
+      }
+      expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('top rated appears only with enough community reviews', (
+    tester,
+  ) async {
+    final (_, key) = await _open(
+      tester,
+      ratings: [
+        for (final (id, average, count) in [
+          ('autonomous/blender', 4.8, 5),
+          ('autonomous/strudel', 4.5, 8),
+          ('autonomous/marp', 5.0, 1),
+        ])
+          StoreRating(
+            harnessId: id,
+            average: average,
+            count: count,
+            histogram: const [],
+          ),
+      ],
+    );
+    expect(
+      find.byKey(const ValueKey('store-recent-collection')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('store-top-rated-collection')),
+      findsOneWidget,
+    );
+    final first = find.byKey(
+      const ValueKey('store-top-rated:autonomous/blender'),
+    );
+    expect(first, findsOneWidget);
+    expect(
+      find.descendant(of: first, matching: find.text('1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('store-top-rated:autonomous/strudel')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('store-top-rated:autonomous/marp')),
+      findsNothing,
+    );
+    await tester.ensureVisible(find.text('Top rated'));
+    await _capture(tester, key, 'discover-top-rated');
+    await tester.tap(first);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('store-page:autonomous/blender')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'unavailable reviews do not become a release notice in discovery or detail',
     (tester) async {
       await _open(tester, unavailable: true);
+      expect(
+        find.byKey(const ValueKey('store-top-rated-collection')),
+        findsNothing,
+      );
       expect(find.textContaining('not available'), findsNothing);
       await tester.tap(
         find.byKey(const ValueKey('store-feature:autonomous/blender')),
@@ -1085,7 +1144,7 @@ void main() {
   });
 
   testWidgets(
-    'Open launches the installed harness and cancel abandons only its draft',
+    'a browse row opens details; New Harness starts work from the page',
     (tester) async {
       final (app, _) = await _open(tester);
       await tester.tap(
@@ -1094,11 +1153,19 @@ void main() {
       await tester.pumpAndSettle();
       final count = app.swarms.length;
       await tester.ensureVisible(
-        find.byKey(const ValueKey('store-action:autonomous/blender')),
+        find.byKey(const ValueKey('store-card:autonomous/blender')),
       );
       await tester.tap(
-        find.byKey(const ValueKey('store-action:autonomous/blender')),
+        find.byKey(const ValueKey('store-card:autonomous/blender')),
       );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('store-page:autonomous/blender')),
+        findsOneWidget,
+      );
+      expect(app.swarms.length, count);
+      expect(find.text('Resume Harness'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('store-primary-action')));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('create-agent-submit')), findsOneWidget);
       expect(

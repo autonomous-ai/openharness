@@ -17,6 +17,7 @@ import {
   buildEngineCommandArgv,
   buildEngineLaunchArgv,
   commandAvailableInInteractiveShell,
+  commandSupportsFlagInInteractiveShell,
   engineFallbackPrelude,
   firstPromptArgs,
   gridPanePrelude,
@@ -571,6 +572,45 @@ describe('commandAvailableInInteractiveShell', () => {
     await expect(
       commandAvailableInInteractiveShell('cursor-agent', bashProbeShell(), recipe),
     ).resolves.toBe(true)
+  })
+})
+
+describe('commandSupportsFlagInInteractiveShell', () => {
+  it('distinguishes an older CLI help surface from a supported flag', async () => {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-capability-'))
+    dirs.push(binDir)
+    const codex = join(binDir, 'codex')
+    writeFileSync(
+      codex,
+      '#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" "--sandbox"; exit 0; fi\nexit 2\n',
+    )
+    chmodSync(codex, 0o700)
+    process.env.HARNESS_ENGINE_TEST_PATH = binDir
+
+    await expect(
+      commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', bashProbeShell()),
+    ).resolves.toBe('unsupported')
+
+    writeFileSync(
+      codex,
+      '#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" "--approve-for-me"; exit 0; fi\nexit 2\n',
+    )
+    await expect(
+      commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', bashProbeShell()),
+    ).resolves.toBe('supported')
+  })
+
+  it('does not reject a CLI when its help command cannot be inspected', async () => {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-capability-'))
+    dirs.push(binDir)
+    const codex = join(binDir, 'codex')
+    writeFileSync(codex, '#!/bin/sh\nexit 2\n')
+    chmodSync(codex, 0o700)
+    process.env.HARNESS_ENGINE_TEST_PATH = binDir
+
+    await expect(
+      commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', bashProbeShell()),
+    ).resolves.toBe('unknown')
   })
 })
 
