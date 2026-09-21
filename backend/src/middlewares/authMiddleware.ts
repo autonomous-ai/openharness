@@ -3,6 +3,7 @@ import { authenticateAccessToken, bearerToken, SsoAuthError } from '../lib/ssoAu
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { ForbiddenError } from '../errors/index.js'
 import { parseAutonomousEnvironment, type AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
+import { countryCodeFromHeaders, stampUserCountry } from '../lib/clientGeo.js'
 
 /**
  * Public local routes (no user access token). Data-plane requests never reach Fastify — they're
@@ -70,6 +71,11 @@ export function registerAuthMiddleware(
     const auth = await resolveSsoAuth(token, authenticate, autonomousEnv)
     if ('user' in auth) {
       request.user = auth.user
+      // Where the person is, per Cloudflare (`CF-IPCountry`, absent off-Cloudflare). Every control-plane
+      // call comes from their own computer, which is what makes this — and not the daemon's socket —
+      // the "user country" signal. Fire-and-forget and rate-floored inside; never on the request path.
+      const countryCode = countryCodeFromHeaders(request.headers)
+      if (countryCode) void stampUserCountry(auth.user.sub, countryCode)
       return
     }
     return reply.code(auth.status).send({

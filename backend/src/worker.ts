@@ -8,6 +8,7 @@ import {
   migrateAutonomousEnvironment,
   migrateMachineRename,
   migrateUserIdentityByEmail,
+  migrateUserPresencePerMachine,
   pruneLegacyDeviceBindings,
 } from './lib/db/migrate.js'
 import { ensurePlans } from './lib/db/seed.js'
@@ -22,6 +23,8 @@ async function start(): Promise<void> {
   // the old global unique indexes for their per-environment replacements.
   await migrateAutonomousEnvironment()
   await migrateUserIdentityByEmail()
+  // Same reason: the old (user, day) unique must be gone before the push installs its replacement.
+  await migrateUserPresencePerMachine()
   ensureSchema()
   // AFTER the push: it creates the new collections + their unique indexes, and the copy uses $merge
   // so those indexes survive. Copying first would leave the unique index build to fail silently.

@@ -29,6 +29,7 @@ import { reserveVoice, releaseVoice } from './voiceBudget.js'
 import { prisma } from './prisma.js'
 import { deviceService } from '../services/index.js'
 import { touchDeviceOnlineDay } from './dailyTracking.js'
+import { countryCodeFromHeaders } from './clientGeo.js'
 import { utcDayKey } from '../types/analytics.js'
 import { agentLimit, recordCreatedAgent } from './agentTracker.js'
 import { env } from '../config/env.js'
@@ -289,6 +290,8 @@ interface RelayOpts {
    *  machine from the other one. `webWs` has always enforced this; the device plane could not, because
    *  until SSO auth landed here there was no authenticated env to compare against. */
   autonomousEnv: 'prod' | 'stag'
+  /** Cloudflare `CF-IPCountry` at the upgrade (lib/clientGeo.ts); undefined off-Cloudflare. */
+  countryCode?: string
 }
 
 /** Hook from server.ts `upgrade` for `/api/device-ws`.
@@ -346,7 +349,13 @@ export function handleDeviceUpgrade(req: IncomingMessage, socket: Duplex, head: 
       label ?? 'computer',
     )
     wss.handleUpgrade(req, socket, head, (ws) =>
-      relay(ws, { userId: device.userId, deviceId: device.deviceId, autonomousEnv: user.autonomousEnv }))
+      relay(ws, {
+        userId: device.userId,
+        deviceId: device.deviceId,
+        autonomousEnv: user.autonomousEnv,
+        // Where this device is, per Cloudflare (absent off-Cloudflare); lands on the daily presence row.
+        countryCode: countryCodeFromHeaders(req.headers),
+      }))
   })().catch((err) => {
     if (err instanceof AppError) { denyWith(err.statusCode, 'Service Unavailable'); return }
     logger.warn('device-ws upgrade failed', { error: errMsg(err) })
@@ -461,7 +470,7 @@ function relay(device: WebSocket, opts: RelayOpts): void {
     const now = new Date()
     const dayKey = utcDayKey(now)
     if (!isNewConnection && dayKey === lastDevicePresenceDayKey) return
-    touchDeviceOnlineDay(userId, id, now, { isNewConnection })
+    touchDeviceOnlineDay(userId, id, now, { isNewConnection, countryCode: opts.countryCode })
       .then(() => { lastDevicePresenceDayKey = dayKey })
       .catch((err) => logger.warn('device presence tracking failed', { userId, deviceId: id, error: String(err) }))
   }

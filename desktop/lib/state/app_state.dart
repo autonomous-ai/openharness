@@ -8072,6 +8072,26 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// How this window introduces itself on `terminal_open`, so a pane it
+  /// displaces elsewhere can say "(this Mac) took control": this computer's
+  /// machine in the fleet, by id and current name, else the hostname. A viewer
+  /// (read-only) never takes control and so declares nothing.
+  TerminalClientDescriptor? localClientDescriptor() {
+    if (viewer != null) return null;
+    final local = machineStates.values
+        .where((state) => state.isLocalMachine)
+        .firstOrNull
+        ?.machine;
+    final name = local?.displayName ?? localHostnameOrNull() ?? 'Desktop';
+    return TerminalClientDescriptor(
+      kind: 'desktop',
+      name: name.length > TerminalClientDescriptor.nameMax
+          ? name.substring(0, TerminalClientDescriptor.nameMax)
+          : name,
+      machineId: local?.machineId,
+    );
+  }
+
   /// Open the stream for a tile that already knows what it wants.
   ///
   /// Separate from [assignAgentToPane] because a restored tile takes this path
@@ -8108,6 +8128,7 @@ class AppNotifier extends ChangeNotifier {
       agentId: agent.id,
       agentName: agent.displayName,
       engineId: agent.engine,
+      client: localClientDescriptor(),
       send: (type, payload) =>
           _conn(pane.machineId).sendTerminalFrame(type, payload),
       sendBinary: (frame) => _sendTerminalBinary(pane.machineId, frame),

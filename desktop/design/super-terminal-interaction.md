@@ -155,6 +155,18 @@ clipboard content sends no input to a shell. Clipboard read errors leave the
 session usable and offer a retry. Older daemons keep bracketed paste, and
 remote agents retain their image-upload path.
 
+A terminal has one controller. When another client opens the same agent, the
+displaced pane keeps its last screen, read only, under a band that says who:
+"Mac mini took control of this terminal", with Take control (or ⏎) as the
+way back. The name comes from the taker's own introduction on `terminal_open`
+(`client: {kind, name, machineId}` — a desktop names its machine in the fleet,
+a phone its device name), which the daemon repeats on the incumbent's
+`terminal_closed` as `takenBy`; a machine this app knows is shown by its
+current fleet name. An older daemon, or a taker that said nothing, reads as
+"Another app took control of this terminal". The phone draws the same line
+under its header. Retaking control introduces this app in turn, so the other
+side sees this machine's name.
+
 ## Creation
 
 Cmd-N opens a compact launch menu with inherited arguments:

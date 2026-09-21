@@ -23,22 +23,25 @@ describe('touchUserOnlineDay', () => {
     db.userPresenceUpsert.mockResolvedValue({})
   })
 
-  it('an app `open` upserts the (user, UTC day) row and bumps connections', async () => {
+  it('an app `open` upserts the (user, machine, UTC day) row and bumps connections', async () => {
     const now = new Date('2026-09-16T10:15:30.000Z')
-    await touchUserOnlineDay('user-1', now, { isNewConnection: true })
+    await touchUserOnlineDay('user-1', 'machine-a', now, { isNewConnection: true })
 
     expect(db.userPresenceUpsert).toHaveBeenCalledTimes(1)
     const call = db.userPresenceUpsert.mock.calls[0][0]
-    expect(call.where).toEqual({ userId_dayUtc: { userId: 'user-1', dayUtc: utcDayStart(now) } })
+    expect(call.where).toEqual({
+      userId_machineId_dayUtc: { userId: 'user-1', machineId: 'machine-a', dayUtc: utcDayStart(now) },
+    })
     expect(call.create).toEqual({
-      userId: 'user-1', dayUtc: utcDayStart(now), connections: 1, firstSeenAt: now, lastSeenAt: now,
+      userId: 'user-1', machineId: 'machine-a', dayUtc: utcDayStart(now),
+      connections: 1, firstSeenAt: now, lastSeenAt: now,
     })
     expect(call.update).toEqual({ lastSeenAt: now, connections: { increment: 1 } })
   })
 
   it('an app `ping` only touches lastSeenAt — a session spanning midnight opens no connection that day', async () => {
     const now = new Date('2026-09-16T00:00:20.000Z')
-    await touchUserOnlineDay('user-1', now, { isNewConnection: false })
+    await touchUserOnlineDay('user-1', 'machine-a', now, { isNewConnection: false })
 
     const call = db.userPresenceUpsert.mock.calls[0][0]
     expect(call.update).toEqual({ lastSeenAt: now })
@@ -75,6 +78,24 @@ describe('touchMachineOnlineDay', () => {
     // First write of a new UTC day from a session that spans midnight: the row exists, but no
     // connection was opened on that day.
     expect(call.create.connections).toBe(0)
+  })
+
+  it('carries the Cloudflare country into both create and update (last write of the day wins)', async () => {
+    const now = new Date('2026-09-16T10:15:30.000Z')
+    await touchMachineOnlineDay('user-1', 'machine-a', now, { isNewConnection: false, countryCode: 'VN' })
+
+    const call = db.machinePresenceUpsert.mock.calls[0][0]
+    expect(call.create.countryCode).toBe('VN')
+    expect(call.update).toEqual({ lastSeenAt: now, countryCode: 'VN' })
+  })
+
+  it('never clears a country: a touch without one leaves the column out of the write', async () => {
+    const now = new Date('2026-09-16T10:15:30.000Z')
+    await touchMachineOnlineDay('user-1', 'machine-a', now, { isNewConnection: true })
+
+    const call = db.machinePresenceUpsert.mock.calls[0][0]
+    expect(call.create).not.toHaveProperty('countryCode')
+    expect(call.update).not.toHaveProperty('countryCode')
   })
 
   it('propagates a DB failure so the caller can log it and keep its guard unchanged', async () => {

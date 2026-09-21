@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/terminal/terminal_session.dart';
@@ -112,7 +113,60 @@ void main() {
   final banner = find.widgetWithText(FilledButton, 'Take control');
   final takenOverTitle = find.text('Another app took control of this terminal');
 
+  /// The daemon named the taker; `machineId` is another machine in the fleet
+  /// when [inFleet], so the app can show that machine's current name instead.
+  void takeOverBy({bool inFleet = false}) {
+    if (inFleet) {
+      const studio = Machine(
+        machineId: 'ab12ab12ab12ab12',
+        authMode: MachineAuthMode.remote,
+        name: 'Studio',
+      );
+      app.machineStates['ab12ab12ab12ab12'] = MachineState(studio);
+    }
+    session.handleFrame('terminal_closed', {
+      'streamId': 'stream-a0',
+      'code': 'TERMINAL_TAKEN_OVER',
+      'reason': 'another client connected',
+      'takenBy': {
+        'kind': 'desktop',
+        'name': 'Mac mini',
+        'machineId': 'ab12ab12ab12ab12',
+      },
+    });
+  }
+
   final hint = find.textContaining('Press ⏎');
+
+  testWidgets('the banner names who took control when the daemon said', (
+    tester,
+  ) async {
+    await pump(tester);
+    takeOverBy();
+    await tester.pump();
+    expect(find.text('Mac mini took control of this terminal'), findsOneWidget);
+    expect(takenOverTitle, findsNothing);
+    expect(banner, findsOneWidget);
+    // The chip's tooltip says the same.
+    expect(
+      find.byWidgetPredicate(
+        (w) => w is Tooltip && (w.message ?? '').contains('Mac mini controls'),
+      ),
+      findsOneWidget,
+    );
+    await finish(tester);
+  });
+
+  testWidgets('a taker in the fleet is named as the fleet names it', (
+    tester,
+  ) async {
+    await pump(tester);
+    takeOverBy(inFleet: true);
+    await tester.pump();
+    expect(find.text('Studio took control of this terminal'), findsOneWidget);
+    expect(find.textContaining('Mac mini'), findsNothing);
+    await finish(tester);
+  });
 
   testWidgets('the banner appears over a taken-over pane and only there', (
     tester,
