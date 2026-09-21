@@ -1,8 +1,13 @@
 # New Harness entry rules
 
-All workspace entry points use the command dock. Start submits the values in
-the reviewed draft. Merely opening or cancelling it never starts a harness or
-allocates a tab.
+All workspace entry points use the command dock. Start Harness submits the
+reviewed draft. Opening or cancelling it never starts a harness. Cmd-T allocates
+a temporary tab that is removed on cancellation if it remains untouched.
+
+The launch form starts with Agent, Machine, and Project, followed by Start
+Harness, which is selected initially. There is no heading, Task row, or Open In
+row. Cmd-T and Cmd-P pickers also omit their heading and result-count row.
+Tasks carried from search or Store examples remain part of the draft.
 
 | Entry | Initial values | Destination after a successful start |
 | --- | --- | --- |
@@ -21,9 +26,27 @@ apply any agent or machine explicitly named by the request.
 
 While the harness picker is open, Cmd-T and Cmd-P change only the destination.
 They preserve the query, text selection, highlighted result, and project or
-machine filter. Repeating either shortcut refocuses the same input. The heading,
-Enter action, and available capacity update together. Cancelling still leaves
+machine filter. Repeating either shortcut refocuses the same input. The Enter
+action and available capacity update together. Cancelling still leaves
 the workspace unchanged.
+
+## Git projects
+
+Git projects show Branch and Worktree. Worktree defaults to `[x]` for each new
+project context; Enter, Space, or a click toggles `[x]` and `[ ]`. Folders without
+Git show neither row. Discovery runs on the selected machine without fetching,
+switching branches, or creating a worktree. A failed discovery offers Retry and
+blocks starting until the result is known.
+
+Branch selects the starting local or remote ref. With `[x]`, Start Harness
+creates a unique worktree and branch under `~/harnesses/worktrees`, keeping
+uncommitted source files intact. With `[ ]`, only local branches are selectable;
+Start Harness switches the existing folder using Git's normal protections.
+No changes are forced, stashed, or discarded. A selected subfolder follows into
+the new worktree only if it exists in that commit.
+
+Drafts and advanced options preserve these choices. A lost start reply reuses
+its receipt, and retrying a confirmed launch failure reuses its prepared folder.
 
 ## Draft ownership
 
@@ -58,6 +81,10 @@ never silently renamed, and existing files are never overwritten.
 
 ## Regression coverage
 
+- `test/new_harness_git_test.dart`, `test/git_worktree_test.dart`, and
+  `test/git_worktree_failures_test.dart`: Git defaults, hidden non-Git rows,
+  keyboard/click toggles, branch search, stale replies, retries, actual Git
+  worktrees and branch safety, process deadlines, and bounded output.
 - `test/new_harness_entry_rules_test.dart`: product changes with an open or
   dismissed dock, Open/Try, edited names, machine changes, explicit agent
   precedence, search isolation, exact launch payloads, pending receipts, source

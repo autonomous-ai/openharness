@@ -31,6 +31,7 @@ import '../core/local_git_projects.dart';
 import '../core/test_run.dart';
 import '../core/models.dart';
 import '../core/project_folder.dart';
+import '../core/git_worktree.dart';
 import '../core/project_history.dart';
 import '../core/project_preview.dart';
 import '../core/repository_clone.dart';
@@ -6034,6 +6035,37 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  @visibleForTesting
+  Future<Map<String, dynamic>> Function(String machineId, String path)?
+  gitProjectReaderForTest;
+
+  /// Git choices are read on the machine that owns this project.
+  Future<Map<String, dynamic>> readGitProject(
+    String machineId,
+    String path,
+  ) async {
+    final machine = machineStates[machineId];
+    if (machine == null) return {'error': 'UNAVAILABLE'};
+    final reader = gitProjectReaderForTest;
+    if (reader != null) return reader(machineId, path);
+    if (machine.isLocalMachine) return readLocalGitProject(path);
+    if (connectionForTest == null &&
+        (machine.nodeOnline == false ||
+            machine.needsLink ||
+            machine.connectionStatus != ConnectionStatus.connected)) {
+      return {'error': 'UNAVAILABLE'};
+    }
+    try {
+      return await _conn(machineId).request(
+        'git_project_info',
+        payload: {'path': path},
+        timeout: const Duration(seconds: 6),
+      );
+    } catch (_) {
+      return {'error': 'UNAVAILABLE'};
+    }
+  }
+
   /// Reads source material only on the machine that owns the selected path.
   Future<Map<String, dynamic>> readProjectPreview(
     String machineId,
@@ -6239,6 +6271,10 @@ class AppNotifier extends ChangeNotifier {
     'PROJECT_EXISTS' ||
     'CLONE_FAILED' ||
     'CLONE_TIMEOUT' ||
+    'GIT_PROJECT_UNAVAILABLE' ||
+    'INVALID_BRANCH' ||
+    'BRANCH_SWITCH_FAILED' ||
+    'WORKTREE_FAILED' ||
     'GIT_UNAVAILABLE' =>
       detail ?? 'Could not prepare the project folder on $machine.',
     'CWD_NOT_FOUND' || 'INVALID_CWD' =>
@@ -6376,6 +6412,8 @@ class AppNotifier extends ChangeNotifier {
         ..remove('projectSource')
         ..remove('repositoryUrl')
         ..remove('projectName')
+        ..remove('gitSource')
+        ..remove('branchRef')
         ..['cwd'] = creation._preparedFolder;
     }
     if (!machine.isLocalMachine && creation._remoteProjectName != null) {

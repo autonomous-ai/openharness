@@ -99,6 +99,7 @@ void main() {
     final app = createApp();
     seedMixedAgents(app);
     app.machineStates['m']!.localOnly = true;
+    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
     app.adoptSessionForTest(terminal('a0', []));
     addTearDown(app.dispose);
     final previous = FileSelectorPlatform.instance;
