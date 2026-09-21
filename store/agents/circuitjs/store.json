@@ -2,7 +2,7 @@
   "homepage": "https://www.falstad.com/circuit/",
   "upstream": "https://github.com/pfalstad/circuitjs1",
   "license": "MIT",
-  "tagline": "Electronic circuit simulator in the browser",
+  "tagline": "Build a circuit, compare native traces, and keep what you discovered",
   "examples": [
     {
       "prompt": "Build a two-transistor flasher that alternates three red and three blue LEDs like a police light, about twice a second, with a scope on each side and a knob for each side's on-time.",
@@ -13,6 +13,10 @@
       "prompt": "Build a 555 astable LED flasher with a potentiometer that sets the rate, and scopes on the capacitor and the output.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/circuitjs/555-led-flasher.jpg",
       "caption": "555 LED flasher · running live, ~1.1 Hz · rate knob + 2 scopes"
+    },
+    {
+      "prompt": "Build a 100 Hz RC low-pass filter with a 1 kΩ resistor and 1 µF capacitor. Label the input and output nodes. I want to capture both in Scope Lab, double the resistance and compare the amplitude and timing.",
+      "caption": "Native circuit exports, timestamped measurements, an SVG plot, notes and a checksummed ZIP."
     }
   ]
 }

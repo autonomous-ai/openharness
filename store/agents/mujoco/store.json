@@ -2,7 +2,7 @@
   "homepage": "https://mujoco.org",
   "upstream": "https://github.com/google-deepmind/mujoco",
   "license": "MIT",
-  "tagline": "Advanced physics simulation",
+  "tagline": "Run real physics, change the world, and compare what happens next",
   "examples": [
     {
       "prompt": "Make the Unitree G1 humanoid say hello: stand, raise its right hand and wave three times, then lower it and take a small bow. Record it.",
@@ -13,6 +13,10 @@
       "prompt": "Load the Unitree Go2, make it stand, then do three slow squats and wave the front left leg. Record it.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/mujoco/go2-squats-and-wave.jpg",
       "caption": "Unitree Go2 · 3 squats + a wave · 21 s rollout, live in the MuJoCo Viewer"
+    },
+    {
+      "prompt": "Load the Unitree Go2 and make it stand, then do three slow squats. Record the motion so I can open What if, change the surface friction and compare what happens from the same moment.",
+      "caption": "A reproducible physics experiment and measurements CSV."
     }
   ]
 }

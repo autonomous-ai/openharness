@@ -2,7 +2,7 @@
   "homepage": "https://github.com/htdt/godogen",
   "upstream": "https://github.com/htdt/godogen",
   "license": "MIT",
-  "tagline": "Autonomous game development",
+  "tagline": "Make a game, rewind a run, and turn playtest moments into the next version",
   "screenshots": [
     "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/agents/godogen/screenshots/explore.png",
     "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/agents/godogen/screenshots/play.png"
@@ -17,6 +17,10 @@
       "prompt": "Make a low-poly sailing game: steer a little sloop around a sunny archipelago of palm islands with a lighthouse, find twelve floating treasure chests marked by beams of light before the sun sets, and watch out for reefs.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/godogen/treasure-isles.jpg",
       "caption": "Treasure Isles · 3D low-poly sailing treasure hunt · playable in Game Studio"
+    },
+    {
+      "prompt": "Make a small rooftop delivery game with three jumps, a visible destination and forgiving controls. Make Rewind and Try from here work for the complete game state, so I can replay a difficult moment and leave useful playtest notes.",
+      "caption": "A screenshot, complete game state, feedback and that version's compiled game."
     }
   ]
 }

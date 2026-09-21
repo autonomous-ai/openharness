@@ -46,6 +46,11 @@ Agent saves wait while a comparison is active. Returning to simulation applies t
 an invalid source edit keeps the previous model and its captured inputs. A new compiled model clears
 the old lab state. Saved experiments carry their source assets, so they survive later workspace edits.
 
+[Watch a native What if session](../../../docs/images/mujoco-what-if-demo.mp4): a Go2 receives a
+100 N sideways force for 0.15 seconds while both worlds use the same recorded controls. The saved
+three-second experiment reproduces with native MuJoCo independently of the original workspace.
+[Try your own experiment](../../../docs/hands-on.md#mujoco-try-a-different-world).
+
 ## What the pane opens
 
 The artifact Harness passes (`?file=`) is a hint, not the only way in. The server resolves

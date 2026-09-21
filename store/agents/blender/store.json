@@ -2,7 +2,7 @@
   "homepage": "https://www.blender.org",
   "upstream": "https://projects.blender.org/blender/blender",
   "license": "MIT",
-  "tagline": "Free and open source 3D creation software",
+  "tagline": "Build in 3D, shape your own variations, and keep the designs you love",
   "examples": [
     {
       "prompt": "Make a cozy isometric reading nook: a cut-away corner of a room with an armchair, a floor lamp glowing warm, a bookshelf full of colourful books, a round rug and a monstera, with evening sun through the window and a cat asleep on the rug.",
@@ -13,6 +13,10 @@
       "prompt": "Model a small desk robot toy: a rounded body, a head with two round eyes, two arms that rotate at the shoulders, an antenna, and a round base. Separate named objects in collections, real sizes in millimetres, and nice materials.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/blender/desk-robot-toy.jpg",
       "caption": "Desk robot toy · 29 named parts, 10 materials · glTF + Cycles render"
+    },
+    {
+      "prompt": "Design a sculptural desk lamp from twisting ribbons. Give me Shape Lab controls for height, twist, ribbon count and finish, with sensible ranges. I want to explore the proportions myself and keep a few directions before the final render.",
+      "caption": "Source, chosen values, model, measurements and a standalone rebuild script."
     }
   ]
 }

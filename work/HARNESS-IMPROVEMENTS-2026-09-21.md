@@ -670,3 +670,57 @@ Repeatable test: `store/tools/jev-kit/test/async-sessions.test.mjs`. Before/afte
 package results are in `/private/tmp/openharness-harness-improvements-evidence/jev-async-*.txt`
 and `jev-existing-tests.txt`. These checks verify real wrapper/client protocol behavior using
 local fixture answers; they do not establish live Jev speed, judgment or calibration.
+
+## Tenth improvement: a field guide for getting hands-on
+
+The new experiences now have a common entry point: [the readable field guide](../docs/hands-on.md)
+and its [interactive local version](../docs/hands-on.html). Both are generated from the same
+reviewed `store/hands-on.json`. The guide starts with the user's craft and intended action:
+change a world, shape a design, retry a moment, perform music, inspect a molecular bond, review a
+PDF, refine a question, or compare a signal. Each has a real native screenshot and recording,
+a starting prompt, three concrete interactions, the artifact it keeps and a follow-up prompt that
+carries the user's judgment back into the agent's next revision.
+
+The videos show separately authored projects; suggested prompts are not presented as the prompts
+that produced those recordings. Jev Sheets remains prominently identified as offline practice
+with fictional data. Provider requirements and the important limits of open-loop physics, rigid
+bond scans, PDF anchors, compiled games and native circuit captures stay beside their experience.
+
+The browser guide opens directly from disk. It has no framework, analytics, remote dependencies
+or service. Craft links preserve ordinary linking and browser history; a next-craft action puts
+keyboard focus into the visible experience. Videos load only on an explicit play action and
+pause when hidden. Prompt text stays fully visible in narrow panes; clipboard failure selects
+it and gives a truthful manual-copy instruction. Without JavaScript, all eight articles, prompts,
+images and direct video links remain readable. The generated Markdown gives GitHub readers the
+same instructions without needing to open an HTML file.
+
+The root README links to the guide outside its generated inventory block. Eight Store packages
+now include the same starting prompts; seven generic upstream taglines were rewritten around the
+actual hands-on workflow. Existing screenshot/prompt pairs remain first. The previous Jev Sheets
+Question Lab example was moved behind its original illustrated example because the Store's
+browse surface independently selects the first available image.
+
+Verification:
+
+- 63 browser checks passed against the final HTML opened directly from disk: all eight craft
+  destinations and exact prompts, all eight real MP4s decoding, deep links and Back, keyboard
+  navigation, native clipboard contents and denied-clipboard selection, no remote requests,
+  no early video downloads, hidden-video pause, complete prompt visibility and no horizontal
+  overflow at 390 and 320 pixels, and the JavaScript-free fallback. No page exceptions.
+- Desktop, Jev and narrow screenshots were visually inspected. Evidence:
+  `hands-on/` and `hands-on-browser-final.txt` under the local evidence root.
+- `node store/tools/hands-on.mjs --check` verifies generated content, all local asset paths and
+  matching Store prompts. The 49-harness/10-viewer presentation and 59-entry published-catalog
+  schema checks pass. The catalog was validated locally, not published.
+- Added an actual Go2 MuJoCo recording: a 100 N force for 0.15 seconds, three seconds of native
+  simulation, 19 bundled source/model assets and 168 stored frames. Greatest separation is
+  6.586 cm; final separation is 0.786 cm. The downloaded packet reproduces under native MuJoCo
+  3.13.0 without its original workspace, with max qpos error below `2.8e-15`. The 13.72-second,
+  1440×1040 H.264 video and a native screenshot are committed. Evidence: `mujoco-shove-demo/`.
+
+Finished classifying all 17 first-pass structural warnings by their actual setup, initialization,
+instruction and artifact-routing contracts. The [inventory](HARNESS-INVENTORY-2026-09-21.md)
+records why each warning occurs and the verification boundary. They were not suppressed or
+misrepresented as cold-install/native-runtime passes. Eight setup-created paths were also found
+in the separately installed Circuit, Workshop, Godogen and Remotion packages; KiCad's cold setup
+and the OpenMontage production pipeline were not rerun for that structural review.

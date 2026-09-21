@@ -2,7 +2,7 @@
   "homepage": "https://typst.app",
   "upstream": "https://github.com/typst/typst",
   "license": "MIT",
-  "tagline": "Markup-based typesetting system",
+  "tagline": "Make beautiful documents and carry precise feedback into the next draft",
   "examples": [
     {
       "prompt": "Make a two-page orbital mechanics cheat sheet: Kepler's three laws, the vis-viva equation, a labelled diagram of an elliptical orbit, a Hohmann transfer from Earth to Mars worked out step by step, and a table of planet data. Two columns, dense but beautiful.",
@@ -13,6 +13,10 @@
       "prompt": "Write a one-page spec sheet for a 20 mm M3 aluminium hex standoff: a title, a two-sentence description, a table of dimensions (length, across-flats, thread, mass), materials and finish, and a tolerances note. Keep it to one page.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/typst/hex-standoff-spec-sheet.jpg",
       "caption": "Hex standoff spec sheet · 1-page PDF with drawing and dimension table"
+    },
+    {
+      "prompt": "Make a two-page design brief for a small desk lamp: the idea, intended use, dimensions, materials and three open questions. Use Typst and give it a clear visual hierarchy. I want to review the PDF in the pane before we revise it.",
+      "caption": "The reviewed PDF, anchored notes, readable feedback and a portable review ZIP."
     }
   ]
 }

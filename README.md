@@ -20,7 +20,7 @@ Use the desktop app on its own, or add the optional **Harness device** to follow
 their questions, and speak new tasks from your desk. The app, firmware, schematics, PCB layouts, and
 enclosure CAD files are all open source.
 
-[Who it's for](#for-polymaths-in-the-making) · [What you can make](#domain-specific-harnesses-dsh) · [Run it](#run-it) ·
+[Who it's for](#for-polymaths-in-the-making) · [What you can make](#domain-specific-harnesses-dsh) · [Get hands-on](docs/hands-on.md) · [Run it](#run-it) ·
 [Harness device](#harness-device) · [Architecture](docs/architecture.md) · [Contribute](#contributing)
 
 <p align="center">
@@ -67,6 +67,12 @@ game takes shape on the other, and stays interactive after the agent is done.
 
 A DSH is a folder with a `harness.json`. The agent does the reasoning; the harness brings the tools
 and the view. Adding a domain never needs a change to the app or the daemon.
+
+**Try the part only you can do.** Change a robot's world, shape a lamp, rewind a jump, perform a
+track, turn a molecular bond, review a draft, sharpen a question, or compare a circuit's traces.
+The [hands-on field guide](docs/hands-on.md) has eight native demos, starting prompts and ways to
+keep your decisions. Open [the interactive guide](docs/hands-on.html) from this checkout in a browser
+to pick a craft and watch the local recordings.
 
 <!-- store-catalog:start -->
 ### Coding and beyond

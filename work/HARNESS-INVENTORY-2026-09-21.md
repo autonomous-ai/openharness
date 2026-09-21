@@ -5,13 +5,26 @@ conformance review, **not** a claim that every runtime or user journey has been 
 
 - 72 harness packages: 49 listed and 23 unlisted. The canonical registry reader confirms the count.
 - 10 shared viewers. All 82 packages pass `checkDsh` on this worktree.
-- 17 structural warnings remain: setup-provided upstream files, optional missing skills, Marp's
-  verdict-driven artifact routing, and OpenMontage's marker created by initialization. These need
-  domain-aware review; a warning alone is not evidence that setup is broken.
+- 17 structural warnings remain. Their setup and routing contracts were reviewed below; they
+  describe files supplied at installation or initialization, direct agent instructions and
+  verdict-driven artifact routing. This is not a cold-install claim for every package.
 - The checked-in README/catalog overview omitted Harness Monitor and still counted 48 packages.
   Regenerated both using `node store/tools/presentation.mjs`; `--check` now passes.
 - Detailed interaction review and improvement progress live in
   [the working log](HARNESS-IMPROVEMENTS-2026-09-21.md).
+
+## Structural warning review
+
+| Warnings | Packages | Reviewed contract and remaining boundary |
+|---|---|---|
+| 9 upstream paths | Autonomous Circuit, Autonomous Workshop, KiCad | Each setup calls a pinned `fetch-upstream.sh`, then the upstream setup. The sparse paths include the declared templates, instructions and skills. All six Circuit/Workshop paths exist in the separately installed packages on this machine. KiCad was reviewed from source; its complete cold installation was not run. |
+| 2 installed skill paths | Godogen, Remotion | Godogen's setup calls `publish-runtime.mjs`, which copies and renders the asset-generation skill into `runtime/.claude/skills`. Remotion fetches its pinned skills and explicitly checks for `remotion-best-practices/SKILL.md`. Both declared paths exist in the installed packages. |
+| 3 optional skill declarations | MLX-LM, Ollama, vLLM | Each package ships substantive `agent/AGENTS.md` instructions covering the workspace-aware runner, native runtime, lifecycle, measurements and failure reporting. A separate skill directory is optional; none is declared. No local model was loaded as part of this structural audit. |
+| 2 initialization contracts | OpenMontage | `init_workspace.py` creates `film.json` if absent and links `.openmontage` to its pinned upstream. `AGENTS.md` directs the agent to the upstream guide and stage skills through that link. A separate `agent.skills` declaration is not how this package exposes them. The script was inspected; its upstream production pipeline was not rerun. |
+| 1 artifact route | Marp | The viewer defaults to `deck.md`; `writeVerdict` names that Markdown source as its artifact and the viewer renders it through Marp. An `artifactExtensions` scan is not required for this declared path. |
+
+The warnings have not been suppressed or reclassified as successful native tests. The individual
+native experience checks and their actual limits are recorded in the working log.
 
 Each row names the first workspace marker and the actual viewer route declared by the package.
 Upstream templates and instructions can be created by setup rather than checked in. Unlisted
