@@ -3,6 +3,7 @@ import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/desk_sync.dart';
+import 'package:harness_mobile/state/phone_desk.dart';
 
 import 'agent_pager_fixture.dart';
 
@@ -65,13 +66,20 @@ Future<AppNotifier> deskApp(
   if (!opensTerminals) {
     app.stateOf('m')!.terminalCapabilityAvailable = false;
   }
-  await app.deskSyncForTest();
-  // ⚠️ A test is not a phone somebody is holding. Joining the desk arms the
-  // foreground poll (see [PhoneDesk.pollInterval]), and `testWidgets` fails a
-  // test that leaves a timer running. Tests about the poll itself drive
-  // [PhoneDesk] directly, with an interval of their own.
-  app.handleAppPaused();
+  await syncDesk(app);
   return app;
+}
+
+/// Read the desk now, and leave no poll behind.
+///
+/// ⚠️ A test is not a phone somebody is holding. Reading the desk arms the
+/// foreground poll (see [PhoneDesk.pollInterval]) and `testWidgets` fails a test
+/// that leaves a timer running — so every read a test makes ends the way
+/// backgrounding the app would. Tests about the poll itself drive [PhoneDesk]
+/// directly, with an interval of their own.
+Future<void> syncDesk(AppNotifier app) async {
+  await app.deskSyncForTest();
+  app.handleAppPaused();
 }
 
 /// The desk this app is talking to.
