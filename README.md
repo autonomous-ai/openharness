@@ -1,3 +1,7 @@
+> “World-class entrepreneurs are polymaths.”
+>
+> — [Peter Thiel](https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s)
+
 # Follow your curiosity. Build across disciplines.
 
 OpenHarness is open-source software and hardware for building with coding agents. Use Claude Code,
@@ -24,11 +28,6 @@ enclosure CAD files are all open source.
 </p>
 
 ## For polymaths in the making.
-
-> “I think that one kind of perspective for a lot of the world-class entrepreneurs is they’re not
-> specialists. They’re something close to polymaths.”
->
-> — [Peter Thiel](https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s)
 
 Built for the curious engineer who wants to build beyond software. Get your hands on more of what
 you are making, from the physical product to the analysis and the launch video. Makers and creators
