@@ -309,6 +309,8 @@ class Agent {
     this.forkable,
   });
 
+  bool get isStopped => status == 'stopped';
+
   /// Explicit names win. An automatic CLI label gives way to its session title.
   String get displayName => _automaticHarnessName.hasMatch(name)
       ? (title?.trim().isNotEmpty == true ? title!.trim() : kUntitledPane)

@@ -84,6 +84,8 @@ import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from
 import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
+import { stoppedAgents } from './lib/stoppedAgents.js'
+import { resumeStoppedAgent } from './lib/resumeStoppedAgent.js'
 import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from './lib/launchOverrides.js'
 import { prepareCodexResume } from './engines/codex/portableHistory.js'
 import { buildHarnessSessionLabel } from './lib/harnessSessionLabel.js'
@@ -2568,6 +2570,7 @@ async function runForeground(session: AuthSession): Promise<void> {
       ? `[agent] ${sid(announceId)} released session ${sid(sessionId)}`
       : `[agent] ${sid(announceId)} forgotten`)
 
+    if (!opts.keepAgent && doomed) stoppedAgents.save(doomed)
     if (opts.keepAgent) registry.unbindSession(sessionId)
     else if (doomed) registry.removeAgent(doomed.agentId)
     else registry.remove(sessionId)
@@ -2607,7 +2610,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     if (!opts.keepAgent) detachDsh(announceId)
     mirror.forget(sessionId) // aborts any in-flight recap + clears busy; KEEPS the persisted summary
     if (opts.keepAgent) return
-    backend.send({ type: 'agent_deleted', payload: { agentId: announceId } }) // web tab
+    backend.send({ type: 'agent_deleted', payload: { agentId: announceId, retained: !!doomed } }) // web tab
     backend.sendCommander({ type: 'agent_deleted', payload: { agentId: announceId } })
 
   }
@@ -2956,6 +2959,7 @@ async function runForeground(session: AuthSession): Promise<void> {
       // the grid/profile/DSH the launch is about to use. Not for a pane that is dead either — that
       // one is on its way to `onRemoved`.
       if (agent.launch?.state !== 'starting') {
+        stoppedAgents.save(agent)
         const released = registry.releaseEngine(agent.agentId)
         if (released) {
           syncRecapPool()
@@ -4196,6 +4200,7 @@ async function runForeground(session: AuthSession): Promise<void> {
         // "Start failed" tile they cannot type into.
         if (paneState.engineExit !== null) {
           await clearPaneRemainOnExit(spawned.runtime.paneId)
+          stoppedAgents.save(pending)
           const released = registry.releaseEngine(pending.agentId)
           if (released) announceSession(released)
           console.warn(`[agent] create · ${engine} exited (${paneState.engineExit}) before ready · agent ${pending.agentId} kept as a terminal`)
@@ -4483,6 +4488,7 @@ async function runForeground(session: AuthSession): Promise<void> {
    * half that drifts is the half nobody ran today.
    */
   const restartJobs = new AgentRestartCoordinator()
+  const resumeJobs = new AgentRestartCoordinator()
   const sameRestartTarget = (session: RegisteredSession): boolean => {
     const current = registry.byAgent(session.agentId)
     return !!current && current.registeredAt === session.registeredAt
@@ -4761,55 +4767,109 @@ async function runForeground(session: AuthSession): Promise<void> {
   }
 
   /**
-   * Web or device deleted an agent (`agent_delete`): end the AGENT, not the user's window.
-   *
-   * This used to `tmux kill-pane`, which took the pane down — and with it the window, and the session if
-   * that pane was the last one. The pane is the user's; only the exact discovered engine process is
-   * signalled. Its PID and start marker are re-validated before SIGTERM/SIGKILL.
-   *
-   * `registry.remove` + `mirror.forget` keep the recap AND the agent-name override for a later resume.
+   * Stop Harness (`agent_delete`) archives its conversation and launch settings, removes the live
+   * registry entry, and closes its tmux pane. Exact PID/start-marker validation guards the engine's
+   * SIGTERM/SIGKILL fallback. Engine conversation files, recaps and the Harness name remain on disk.
    */
-  backend.onDeleteAgent = (sessionId) => {
-    restartJobs.cancel(registry.resolve(sessionId)?.agentId ?? sessionId)
-    const s = registry.resolve(sessionId) // BEFORE forgetSession — that removes it from the registry
-    // The engine outlives this call by a second or two now, and its catch hook fires on every turn
-    // boundary. Without the tombstone that hook re-registers the session and the tile comes straight back.
-    markDeleted(sessionId)
-    if (s?.processIdentity) {
-      agentReconciler.suppress(s)
-    }
-    forgetSession(sessionId, { force: true })
-    if (!s) return
-    // Stopping is closing the pane. Every pane is a shell with the engine inside it now, so signalling
-    // the engine alone would leave a shell running in a pane nobody can see any more — a leak, and
-    // for a bare terminal there is no engine pid to signal at all. The engine's own termination
-    // below stays as the belt to this: a pane kill that does not land must not leave a live engine
-    // the UI already calls gone.
-    if (tmuxBackend) {
-      const runtimes = s.runtimes.filter((runtime): runtime is TmuxRuntimeRef => runtime.backend === 'tmux')
-      void Promise.all(runtimes.map((runtime) => tmuxBackend.kill(runtime))).then(() => {
-        console.log(`[delete] ${sid(sessionId)} ${s.engine} · pane closed`)
-        if (isTerminalEngine(s.engine)) clearDeleted(sessionId)
-        void agentReconciler.trigger()
-      }).catch((err) => {
-        console.error('[delete] terminal pane close failed:', err instanceof Error ? err.message : err)
-      })
-      if (isTerminalEngine(s.engine)) return
-    }
-    void terminateDeletedAgent(s, {
-      checkRuntime: checkPidRuntime,
-      kill: (pid, signal) => process.kill(pid, signal),
-      sleep: (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.() }),
-      log: (message) => console.log(message),
-    }, 0).then((outcome) => {
-      console.log(`[delete] ${sid(sessionId)} ${s.engine} · ${outcome}`)
-      // Provably gone ⇒ nothing left that could re-register, so stop blocking the id early.
-      if (outcome !== 'failed') clearDeleted(sessionId)
+  const stopJobs = new Map<string, Promise<void>>()
+  backend.onDeleteAgent = (target) => {
+    const sessionId = registry.resolve(target)?.agentId ?? target
+    const existing = stopJobs.get(sessionId)
+    if (existing) return existing
+    restartJobs.cancel(sessionId)
+    resumeJobs.cancel(sessionId)
+    const job = Promise.resolve().then(async () => {
+      const s = registry.resolve(sessionId)
+      if (!s) return
+      // Saving precedes every mutation. A storage failure leaves the live agent alone.
+      stoppedAgents.save(s)
+      markDeleted(sessionId)
+      if (s.sessionId) markDeleted(s.sessionId)
+      if (s.processIdentity) agentReconciler.suppress(s)
+      forgetSession(sessionId, { force: true })
+      const paneStop = tmuxBackend
+        ? Promise.all(s.runtimes.filter((runtime): runtime is TmuxRuntimeRef => runtime.backend === 'tmux')
+          .map(runtime => tmuxBackend!.kill(runtime)))
+        : Promise.resolve([])
+      const processStop = isTerminalEngine(s.engine) ? Promise.resolve('gone' as const)
+        : terminateDeletedAgent(s, {
+          checkRuntime: checkPidRuntime,
+          kill: (pid, signal) => process.kill(pid, signal),
+          sleep: ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() }),
+          log: message => console.log(message),
+        }, 0)
+      const [, outcome] = await Promise.all([paneStop, processStop])
+      if (outcome !== 'failed') {
+        clearDeleted(sessionId)
+        if (s.sessionId) clearDeleted(s.sessionId)
+      }
       void agentReconciler.trigger()
-    }).catch((err) => {
-      console.error('[delete] process termination failed:', err instanceof Error ? err.message : err)
+    }).finally(() => {
+      if (stopJobs.get(sessionId) === job) stopJobs.delete(sessionId)
     })
+    stopJobs.set(sessionId, job)
+    return job
   }
+
+  const resumeStopped = (agentId: string, current: () => boolean) => resumeStoppedAgent({
+    live: () => registry.byAgent(agentId),
+    saved: () => stoppedAgents.get(agentId),
+    current,
+    canLaunch: async saved => {
+      await stopJobs.get(agentId)
+      return !registry.bySession(saved.sessionId) && (await checkPidRuntime(saved)).state === 'gone'
+    },
+    launch: async (saved, resumeSessionId) => {
+      if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
+      const built = await relaunchOverrides(saved)
+      if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
+      if (resumeSessionId) {
+        try { prepareSessionResume(saved) } catch {
+          return { ok: false, error: 'RESUME_PREPARATION_FAILED', detail: 'Could not prepare the saved conversation. Start a new conversation separately if needed.' }
+        }
+      }
+      if (!current()) return { ok: false, error: 'AGENT_CHANGED' }
+      if (saved.sessionId && registry.bySession(saved.sessionId)) return { ok: false, error: 'AGENT_BUSY', detail: 'This conversation is already running. Select its running harness in search.' }
+      const { env: launchEnv, extraArgs, clearEnv } = built.overrides
+      const installIfMissing = enginePathOverride(saved.engine) ? undefined : engineInstallRecipe(saved.engine)
+      const options = {
+        resumeSessionId,
+        bypassPermission: saved.bypassPermission === true,
+        ...(saved.permissionMode ? { permissionMode: saved.permissionMode } : {}),
+        ...(saved.cwd ? { cwd: saved.cwd } : {}),
+        ...(extraArgs.length ? { extraArgs } : {}),
+        ...(clearEnv.length ? { clearEnv } : {}),
+        ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
+        installIfMissing,
+      }
+      // The saved id is passed exactly once. This path never invokes restart's
+      // best-effort fallback to a fresh conversation.
+      clearDeleted(agentId)
+      const result = await createAndRegisterPane({
+        tmuxBackend,
+        registry: { openPendingAgent: input => current() ? registry.resumePendingAgent(saved, input.runtimes) : null },
+        maxAttempts: 1,
+        engine: saved.engine,
+        sessionLabel: buildHarnessSessionLabel(saved.engine),
+        argv: buildEngineLaunchArgv(saved.engine, options),
+        ...(Object.keys(launchEnv).length ? { env: launchEnv } : {}),
+      })
+      if (!result.ok) return { ok: false, error: result.error, detail: result.detail }
+      const { pending, spawned } = result
+      refreshGridWebSearch(pending.agentId, built.overrides)
+      if (isTerminalEngine(saved.engine)) {
+        await clearPaneRemainOnExit(spawned.runtime.paneId)
+        registry.setLaunch(pending.agentId, { state: 'ready' })
+      } else {
+        if (pending.dsh) attachDsh(pending)
+        void watchNewPane(saved.engine, pending, spawned, buildEngineCommandArgv(saved.engine, options), installIfMissing)
+      }
+      announceSession(pending)
+      return { ok: true, session: pending, resumed: true }
+    },
+  })
+
+  backend.onResumeAgent = (agentId) => resumeJobs.run(agentId, current => resumeStopped(agentId, current))
 
   /**
    * Web or device restarted an agent (`agent_restart`): exit the live engine process and relaunch it in

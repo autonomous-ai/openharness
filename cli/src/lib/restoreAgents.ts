@@ -203,6 +203,12 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
       // into this agent (route adoption requires either no identity or a matching pid).
       deps.registry.clearProcessIdentity(entry.agentId)
       const resumeSessionId = entry.sessionId || undefined
+      if (entry.resumeOnly && !resumeSessionId && !isTerminalEngine(entry.engine)) {
+        const reason = 'The saved conversation is no longer available. Start a new conversation separately.'
+        summary.failed.push({ agentId: entry.agentId, reason })
+        deps.registry.setLaunch(entry.agentId, { state: 'failed', error: 'RESUME_UNAVAILABLE', detail: reason })
+        continue
+      }
       const launch = await deps.buildLaunch(entry, resumeSessionId ? { resumeSessionId } : {})
       if ('error' in launch) {
         summary.failed.push({ agentId: entry.agentId, reason: launch.detail })
@@ -260,6 +266,10 @@ async function watchRestoredPane(
   let mayRetryFresh = resuming
   /** The pane's engine is gone. True when a fresh relaunch is now under way, false when this is the end. */
   const relaunchFresh = async (): Promise<boolean> => {
+    if (entry.resumeOnly) {
+      fail('RESUME_FAILED', `${engine} could not resume the saved conversation. See the terminal output, or start a new conversation separately.`)
+      return false
+    }
     if (!mayRetryFresh) {
       fail('ENGINE_DID_NOT_START', `${engine} exited before its engine process became ready. See the terminal output for details.`)
       return false

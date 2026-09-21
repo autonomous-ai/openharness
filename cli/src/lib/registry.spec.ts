@@ -1457,6 +1457,31 @@ describe('registry across a reboot and pane loss', () => {
     expect(bound?.entry.subscriptionModel).toBe('opus')
   })
 
+  it('keeps strict conversation resume after the engine binds and the daemon reloads', async () => {
+    const transcriptPath = join(dataDir, 'session-resumed.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const original = registerProcess(registry, {
+      engine: 'claude', sessionId: 'session-resumed', transcriptPath, tmuxPane: '%21', cwd: '/tmp/demo',
+    })!.entry
+    registry.removeAgent(original.agentId)
+    registry.resumePendingAgent(original, [{ backend: 'tmux', paneId: '%22' }])
+
+    // SessionStart rebuilds the row. It must retain the policy that prevents a
+    // later daemon restore from silently replacing this saved conversation.
+    const bound = registry.register({
+      engine: 'claude', sessionId: original.sessionId, transcriptPath, tmuxPane: '%22', cwd: '/tmp/demo',
+    })
+    expect(bound?.entry.agentId).toBe(original.agentId)
+    expect(bound?.entry.resumeOnly).toBe(true)
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(original.agentId)).toMatchObject({
+      sessionId: original.sessionId, tmuxPane: '%22', resumeOnly: true,
+    })
+  })
+
   it('drops any launch state on the hook that proves the engine is up', async () => {
     const transcriptPath = join(dataDir, 'session-f.jsonl')
     writeFileSync(transcriptPath, '{}\n')

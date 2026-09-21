@@ -1874,14 +1874,44 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     _preparePaneFocus();
-    final opened = await activateSwarmSearchSelection(
-      app,
-      selected,
-      destinationSwarmId: target,
-      projects: _projects.projects,
-      split: split,
-      placement: placement,
-    );
+    bool opened;
+    try {
+      opened = await activateSwarmSearchSelection(
+        app,
+        selected,
+        destinationSwarmId: target,
+        projects: _projects.projects,
+        split: split,
+        placement: placement,
+      );
+    } on SwarmResumeFailure catch (failure) {
+      if (!mounted) return;
+      final row = failure.destination;
+      final agent = app
+          .stateOf(row.machineId!)
+          ?.agents
+          .where((agent) => agent.id == row.agentId)
+          .firstOrNull;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(failure.message),
+          action: SnackBarAction(
+            label: 'Start New Conversation',
+            onPressed: () => _openNewHarness(
+              machineId: row.machineId!,
+              engine: agent?.dsh ?? agent?.engine,
+              folder: agent?.project?.cwd,
+              swarmId: app.swarms.any((tab) => tab.id == target)
+                  ? target
+                  : app.activeSwarmId,
+              placement: placement,
+              task: '',
+            ),
+          ),
+        ),
+      );
+      return;
+    }
     if (!opened && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
