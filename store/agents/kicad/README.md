@@ -19,12 +19,21 @@ template; the doctor, workspace init and viewer are that package's own scripts, 
 - `harness.json` — name, category, engine, and paths into `upstream/harness/kicad/`.
 - `VERSIONS` — the repository, the pinned commit (on its `feat/v2-kicad-native` branch), the sparse patterns.
 - `toolchain/runtimes.sh` — the store's copy: a Node and a venv Python of the package's own.
-- `toolchain/fetch-upstream.sh` — the read-only, sparse, blob-less fetch; `setup.sh`, `doctor.sh`,
-  `init-workspace.sh`, `viewer.sh`, `python` hand off to the package's scripts of the same names.
+- `toolchain/kicad.sh` — KiCad vendored at the pin (macOS: the official DMG, copied without 3D models
+  and help); `VERSIONS` carries its version, URL, checksum and size.
+- `toolchain/fetch-upstream.sh` — the read-only, sparse, blob-less fetch (a tarball when there is no
+  git); `setup.sh`, `doctor.sh`, `init-workspace.sh`, `viewer.sh`, `python` hand off to the package's
+  scripts of the same names.
 
-What the machine must have: **KiCad** (`brew install --cask kicad` — kicad-cli and its bundled Python with
-`pcbnew`; the doctor fails without them), the engine CLI, git. Node and Python come with the package;
-Freerouting and the viewer are vendored by setup.
+What the machine must have: **the engine's CLI, signed in.** Everything else comes with the package,
+installed into its own folder and never onto the machine: a Node and a venv Python (`runtimes.sh`),
+**KiCad itself** (`toolchain/kicad.sh` — on macOS the official unified DMG at the version and checksum
+`VERSIONS` pins, mounted and copied into `kicad/KiCad.app` without the 3D models and the offline help:
+a 1.4 GB download, 1.3 GB on disk; the manifest points the pipeline at it with `KICADPY_CLI`,
+`KICADPY_PYTHON`, `CIRCUIT_KICAD_CLI` and `KICAD_HARNESS_SHARE`), Freerouting with its JRE, and the built
+viewer. git is optional: without it the pinned commit arrives as GitHub's tarball. On Linux there is
+no relocatable KiCad artifact, so KiCad stays a system install (apt/dnf/flatpak) named by
+`KICADPY_CLI` / `KICADPY_PYTHON`, and the doctor says so.
 
 ## Credit and stewardship
 

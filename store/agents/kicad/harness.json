@@ -25,6 +25,10 @@
       "KICAD_HARNESS_ROOT": "${dsh}/upstream",
       "KICAD_HARNESS_BLOCKS": "${dsh}/upstream/packages/golden-blocks/blocks",
       "CIRCUIT_TOOLCHAIN": "${dsh}/upstream/toolchain",
+      "KICADPY_CLI": "${dsh}/kicad/KiCad.app/Contents/MacOS/kicad-cli",
+      "KICADPY_PYTHON": "${dsh}/kicad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3",
+      "CIRCUIT_KICAD_CLI": "${dsh}/kicad/KiCad.app/Contents/MacOS/kicad-cli",
+      "KICAD_HARNESS_SHARE": "${dsh}/kicad/KiCad.app/Contents/SharedSupport",
       "CIRCUIT_SKILLS_DIR": "${workspace}/.claude/skills",
       "DISABLE_AUTOUPDATER": "1"
     }
