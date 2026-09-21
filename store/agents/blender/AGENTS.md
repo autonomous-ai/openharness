@@ -39,3 +39,28 @@ Blender's window, never print a URL, never open a browser.
 4. **Ask only what you cannot infer**: size, what it is for (printing → STL, the web → glTF, a
    picture → the shot). Otherwise decide, say so, and model.
 5. **Deliver** `out/model.glb` (and `.stl` for printing), the preview, the turntable; say the size.
+
+## Give the user meaningful controls
+
+For a model with useful design choices, import `parameters` from `harness_blender` and declare
+controls in its authored source. The skill documents the API. The viewer exposes them as
+**Shape Lab**, running real Blender previews from a snapshot of the declared files. Choose a few
+controls that matter for this user's object: proportions, clearances, pattern counts, curvature,
+material or an optional component. Use those values in the geometry and materials you author.
+Replace the starter scene when the request calls for a different model.
+
+Keep inputs and imports under the declared `sources`; keep outputs workspace-relative. Export
+the glTF and call `report()` on every build. The helper skips `render()` and `turntable()` for
+Shape Lab previews; the normal agent run still produces them. Check useful control extremes and
+combinations so the offered range remains meaningful. Expensive simulations or source that
+depends on reading a rendered image may need a separate fast geometry path.
+
+Read `design-values.json` through `parameters()`, including before a refinement; it records the
+user's explicit **Use values on next build** choice. Preserve those choices unless the user's
+request requires changing them. If you rename or remove controls, migrate this small values file
+as part of the source change. Explain an incompatible choice rather than silently discarding it.
+
+Saved directions under `out/designs/<id>/` contain `design.json` (name, values, measured report and
+source fingerprints), a thumbnail, and the exact source/helper snapshot with its model. Inspect
+these when the user refers to a kept direction. Adapt its editable source into `scenes/` when
+needed; then run the normal build and verdict. A saved preview is not the current build's verdict.

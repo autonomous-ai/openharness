@@ -156,3 +156,70 @@ Next: continue the 3D/CAD authoring review, beginning with Blender, Autonomous W
 shared viewers. Initial README review confirms Generative Art, Creative Direction, and Music
 Studio already have substantial original authoring and export workflows; preserve those rather
 than replacing them with cosmetic presets. The full catalog goal remains active.
+
+## Third improvement: shape an authored Blender design and keep its source
+
+Reviewed Blender, the shared 3D Viewer, Autonomous Workshop, FreeCAD, OpenSCAD and text-to-cad.
+The CAD wrappers already emphasize editable native source, measured checks and useful exports;
+Autonomous Workshop's upstream workflow adds an explicit physical-part critique. The generic
+3D Viewer has strong inspection tools, but changing a Blender model previously always required
+another agent turn. This made direct exploration of an original design the most useful addition.
+
+Implemented **Shape Lab**, an optional protocol for any authored Blender scene:
+
+- The scene declares its own numeric, integer, boolean and choice controls with `parameters()`.
+  The values drive actual Python geometry and materials. The mug starter demonstrates the API;
+  a separately authored ribbon lampshade proves the viewer has no mug-specific controls.
+- Changing a control runs native Blender on a snapshot of explicitly declared source and assets.
+  Material shading reveals finish choices; a changed model is fitted into the view while keeping
+  its viewing direction. Existing measure, section, shading and orbit tools remain available.
+- **Keep** preserves the exact source, helper modules/license, parameter values, measured glTF,
+  report, canvas thumbnail, standalone rebuild script and project ZIP in `out/designs/`.
+  Named directions reopen after source changes and after a viewer restart.
+- **Use values on next build** writes only `design-values.json`, after matching source hashes.
+  The next agent build reads the selected values and produces its normal exports and verdict.
+  Main exports wait while the user is exploring; closing the lab returns to the latest one.
+- Source and chosen-value revisions are distinct: revisiting a kept direction stays editable
+  when only the current choice changed. An incompatible source requires reloading controls or
+  having the agent adapt the older direction.
+- One native worker and one replaceable queued request, bounded inputs/artifacts, failed-build
+  recovery, cancellation and process-group cleanup. Snapshot/archive paths reject escaping links.
+  HTTP writes require the page token and same-origin requests. Relative output isolation is a
+  project convention, not a security sandbox for arbitrary Python.
+
+Verified:
+
+- All 33 model-viewer tests pass, including the original server/lifecycle/script checks and new
+  snapshot, queue replacement, timeout/descendant cleanup, cancellation, archive persistence,
+  revision checks, path confinement and write authorization cases.
+- All 63 existing Blender tests pass with native bpy, including real small renders, glTF/STL
+  exports and turntables. Four new parameter tests pass without bpy.
+- Seven actual Chrome/native-Blender workflows pass with no browser errors: controlled geometry
+  and material, independent ZIP verification and rebuild, saved directions and explicit values,
+  deferred agent exports, persistence across restart, changed-source/failure recovery, and a
+  different authored scene with a declared JSON asset.
+- The 75 × 75 × 145 mm tumbler rebuilt from its downloaded ZIP in another directory with matching
+  object names, measured dimensions, vertices, faces and material names. Original model and
+  report hashes stayed unchanged until the test deliberately ran a new main build.
+- The lampshade's 32 ribbons and foot produced 33 native mesh objects, 4,992 vertices and 4,834
+  faces at 135.2 × 135.2 × 328.02 mm. Its ribbon count, twist and finish come from its source.
+- Desktop and 390px screenshots were visually reviewed on Chrome's Apple M2 Max Metal renderer.
+  Review fixed cropped tall variants, invalid timestamp display and transient change highlights
+  in kept thumbnails. Source synchronization and late-created workspaces also have regression
+  coverage. Both package conformance checks and generated catalog checks pass.
+
+Evidence is in `/private/tmp/openharness-harness-improvements-evidence/blender-final/` and
+`blender-demo/`. The repeatable native check is
+`store/viewers/model-viewer/test/shape-lab-browser.mjs`. These checks establish the implemented
+author/explore/keep/rebuild loop; they are not independent user research or an assertion that
+every authored scene supports interactive build speeds. Additional source dependencies still
+need to be installed, and expensive/custom render paths may need a geometry-only preview path.
+
+The recorded lamp session keeps two different directions and reopens one; native preview builds
+for the two kept designs took 0.518 and 0.578 seconds on this machine. Checked-in evidence:
+[design shelf](../docs/images/blender-shape-lab.png),
+[390px controls](../docs/images/blender-shape-lab-mobile.png), and
+[native interaction recording](../docs/images/blender-shape-lab-demo.mp4).
+
+The full catalog review and improvement goal remains active. No installed harness, user session,
+store publication or main-worktree content was changed by this feature.

@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="design-token" content="__DESIGN_TOKEN__">
 <title>3D Viewer</title>
 <link rel="stylesheet" href="/app/style.css">
 <script type="importmap">{ "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }</script>
@@ -16,6 +17,7 @@
   </button>
   <div id="status" class="status" data-kind="idle" role="status" aria-live="polite"><span class="dot"></span><span class="label">Connecting</span></div>
   <div class="spacer"></div>
+  <button id="design-open" class="design-entry" aria-controls="design-lab" aria-expanded="false" hidden>Shape Lab</button>
   <nav id="views" class="seg views" aria-label="View">
     <button data-view="model" class="on" title="Live 3D scene"><span data-icon="model"></span><span class="t">3D</span></button>
     <button data-view="video" hidden title="The rendered turntable (V)"><span data-icon="video"></span><span class="t">Turntable</span></button>
@@ -88,6 +90,29 @@
       <div id="tree" class="tree" role="tree"></div>
       <div class="side-split"><span>Properties</span></div>
       <div id="props" class="props"></div>
+    </aside>
+    <aside id="design-lab" class="design-lab" aria-label="Shape Lab" hidden>
+      <div class="design-head">
+        <div><span class="design-eyebrow">Shape Lab</span><h2 id="design-title">Explore this design</h2></div>
+        <button id="design-close" class="icon-btn" aria-label="Close Shape Lab" data-icon="close"></button>
+      </div>
+      <div class="design-scroll">
+        <p class="design-intro">Make it yours. Each preview builds the actual Blender geometry.</p>
+        <div id="design-source-change" class="design-change" hidden>The project has changed. <button id="design-reload">Reload its controls</button></div>
+        <div id="design-controls" class="design-controls"></div>
+        <div class="design-build-row">
+          <label class="design-auto"><input id="design-auto" type="checkbox" checked> Build as I change</label>
+          <button id="design-build" class="design-button">Build</button>
+          <button id="design-cancel" class="design-button" hidden>Cancel</button>
+        </div>
+        <p id="design-message" class="design-message" role="status" aria-live="polite"></p>
+        <div class="design-save-row"><input id="design-name" type="text" maxlength="80" placeholder="Name this direction…" aria-label="Design name"><button id="design-keep" class="design-button primary" disabled>Keep</button></div>
+        <div class="design-actions"><button id="design-original">Original</button><a id="design-model" hidden>Download model</a></div>
+        <button id="design-use" class="design-button design-use" disabled>Use values on next build</button>
+        <p class="design-hint">Sets the kept design’s values for the agent’s next build.</p>
+        <h3 class="design-shelf-title">Your directions</h3>
+        <div id="design-variants" class="design-variants"></div>
+      </div>
     </aside>
   </section>
 
