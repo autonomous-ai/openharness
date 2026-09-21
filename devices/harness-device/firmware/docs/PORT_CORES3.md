@@ -3,11 +3,11 @@
 OpenHarness device firmware on the M5Stack CoreS3, packaged as an app the
 [M5Launcher](https://github.com/bmorcelli/Launcher) installs from the SD card.
 
-> **STATUS (2026-09-19): hardware bring-up essentially complete — screen pipeline live but the
-> panel still renders black.** Board bring-up, audio, USB link, buttons and the render/flush
-> counters all verified on hardware. The one open issue (flushed pixels not visible) plus the
-> full investigation history live in [`PORT_CORES3_DEBUG_LOG.md`](PORT_CORES3_DEBUG_LOG.md) —
-> read that first when continuing this work.
+> **STATUS (2026-09-19): usable on hardware.** Panel, Geist text, audio, USB cable, Settings → WiFi
+> (STA join + NVS), and CoreS3-only tile layout are on the device. LAN cable (`_harness-dial._tcp`)
+> is in firmware + this checkout's daemon; the installed OpenHarness app does not have it yet.
+> Do not open an upstream PR until WiFi-to-agents is tested with USB unplugged. History:
+> [`PORT_CORES3_DEBUG_LOG.md`](PORT_CORES3_DEBUG_LOG.md).
 
 ## Upgrade path (how upstream updates reach this port)
 
@@ -19,14 +19,21 @@ files, so most upstream changes merge without touching the port:
 | New (port-only) files | Purpose |
 |---|---|
 | `main/board/cores3_board.h/.c` | AW9523B expander + AXP2101 rails + LCD reset + backlight + ES7210 sequence |
-| `main/ui/display_cores3.h/.c` | ILI9342C/E bring-up, 466→320×240 downscale flush, brightness |
+| `main/ui/display_cores3.h/.c` | ILI9342C/E bring-up, 466→320×240 compositor, brightness |
+| `main/ui/ui_fonts.h` | Geist `extern`s (Montserrat only for `LV_SYMBOL_*`) |
+| `main/wifi_sta.h/.c` | STA scan / join / NVS SSID+PSK |
+| `main/wifi_cable.h/.c` | mDNS `_harness-dial._tcp:17420`, one TCP client, USB-bind only |
 | `scripts/build-cores3.sh`, `scripts/flash-cores3.sh`, `scripts/update-upstream.sh` | build / flash / rebase tooling |
 | `docs/PORT_CORES3.md` | this file |
 
-Edited upstream files (guarded, so the round-dial build is byte-identical):
+Daemon (this checkout, not the App Store / Applications binary):
+`cli/src/cable/tcpLink.ts`, `cli/src/cable/dialBind.ts` — USB mints a bind token; TCP welcome must present it.
+
+Edited upstream files (guarded, so the round-dial build keeps Geist and the AMOLED path):
 `board/board_pins.h`, `board/board.h`, `board/board.c`, `ui/display.c`,
-`ui/touch.c`, `audio_capture.c`, `ptt.c`, `app_main.c`, `main/CMakeLists.txt`,
-`main/idf_component.yml`.
+`ui/touch.c`, `ui/ui_screens.c` (`#include "ui_fonts.h"` + CoreS3 layout), `audio_capture.c`,
+`ptt.c`, `app_main.c`, `cable_link.c/.h`, `cable_client.c`, `config_store.c/.h`,
+`main/CMakeLists.txt`, `main/idf_component.yml` (`espressif/mdns`).
 
 ### When upstream moves
 
@@ -86,18 +93,55 @@ Implementation notes:
   on CoreS3 and to the screen toggle on the dial.
 - Consequence: the factory-reset-at-boot gesture (BOOT held at power-on,
   `app_main.c`) does not exist on CoreS3. Nothing on this device needs it — NVS
-  holds only brightness and voice-language — and clearing those means reinstalling.
+  holds brightness, voice-language, WiFi SSID/PSK, and the USB bind token — and clearing those means reinstalling.
 
 ## The virtual round screen
 
 The 8,400-line UI is designed for the 466×466 round AMOLED. Rather than rewrite it, LVGL still
-renders a 466×466 virtual display (partial render mode, the dial's proven architecture — a
-direct-mode full PSRAM frame was tried and hung LVGL 9.5's draw dispatch, see the debug log);
-the flush callback downscales each dirty area by 29/50 (0.58) onto the 320×240 panel and touch
-coordinates are mapped back up by 50/29. The window is fitted to the UI's real content bounds —
-the notification pill at virtual y=22 through the Voice button bottom at y=434 fills the panel's
-240 rows exactly; the 466px face centers on the 320px panel with dark side margins. See
-`main/ui/display_cores3.c`.
+renders a 466×466 virtual display (partial render mode — a direct-mode full PSRAM frame hung
+LVGL 9.5's draw dispatch under `LV_OS_NONE`). Each flush is copied into a full 466×466 PSRAM
+framebuffer, then the panel is sampled from that complete image: integer 1/2 plus a 2×2 RGB565
+box average (~233×233 centred in 320×240, black bars). Touch maps back by ×2. Non-integer
+nearest-neighbour (29/50) shredded 4-bpp glyphs; scaling only the dirty rectangle garbled later
+paints because the 2×2 kernel needed neighbours outside the flush. `esp_lcd_panel_draw_bitmap`
+wants packed rows of the dirty width: a 320-wide staging buffer made the first full-screen paint
+look fine and every later text invalidate look like noise — which is why swapping Geist for
+Montserrat changed nothing on the panel. See `main/ui/display_cores3.c`.
+
+## Fonts
+
+Geist is compiled on CoreS3 (same faces as the dial). A packed-row bug in the compositor
+(`esp_lcd_panel_draw_bitmap` needs tightly packed dirty-width rows, not a 320-wide staging
+buffer) made later text invalidates look like noise. That was mistaken for a font bug and
+briefly aliased to Montserrat; Montserrat lacks `›` `✓` `✗` `…`, so those showed as rectangles.
+Geist is back. `LV_SYMBOL_*` (bell, close) stay on Montserrat (FontAwesome). Emoji are stripped
+by `utf8_filter`.
+
+Also required for readable text: native RGB565 + byte-swap in the flush (not `RGB565_SWAPPED`,
+lvgl#9387); skip AMOLED software-dim (AXP2101 DLDO1 only); opaque overview circles.
+
+## WiFi and the cable
+
+USB is still authorization. Settings → WiFi scans, joins, and stores SSID+PSK in NVS
+(`config_store` keys `wssid`/`wpass`). Optional local `main/provisioned_config.h` (gitignored)
+can seed those on boot.
+
+After WiFi has an IP, the device advertises `_harness-dial._tcp` on port 17420. One TCP client.
+While USB is plugged in, USB always wins (writes always go to USB-Serial-JTAG; LAN bytes are
+ignored). A USB `welcome.bind` (64 hex chars) is stored in NVS (`wbind`). A TCP welcome without
+that token is dropped — a second OpenHarness on the same LAN cannot steal the session.
+
+The LAN client is `cli/src/cable/tcpLink.ts` + `dialBind.ts` in **this** tree. Run `harness` from
+this checkout, plug USB once (mints the token), then unplug. The Applications-folder desktop app
+does not speak this yet.
+
+## CoreS3-only tile layout (`DEVICE_BOARD_M5CORES3` in `ui_screens.c`)
+
+- Agent tile: engine mark 80px **above** tab pill then session title (not beside the name).
+- Title / Thinking… / recap column `TILE_COL_W` 454. Name clip 26 glyphs (dial is 15). Recap 64
+  glyphs, two-line fit. Agent mic at virtual y=383.
+- Empty tab: pill is **Switch tab** (opens the tab list). Empty “New Harness” rows are omitted
+  from the picker so you are not stuck with a nameless entry. Does not close the tab on the Mac.
 
 ## Build
 
@@ -139,7 +183,10 @@ round dial.
   flashing. Reinstall via the SD card instead.
 - Rendering the 466×466 virtual screen scaled down costs CPU on the LVGL task; if a screen
   ever feels heavy, shrink `DRAW_LINES` in `ui/display.c` or drop the LVGL pool.
-- Touch is initialized but not yet user-verified; `touch_chip_name()` logs "no-touch" for the
-  FT6336U (cosmetic, one-line fix in `ui/touch.c`).
-- **Open: the panel renders black** — render/flush pipeline verified live by counters, pixels
-  not visible. Continue from [`PORT_CORES3_DEBUG_LOG.md`](PORT_CORES3_DEBUG_LOG.md) "Open issue".
+- A USB **host** module on the CoreS3 can blank the panel; flash/use the USB-Serial/JTAG port
+  (`/dev/cu.usbmodem*`), not a host dongle.
+- WiFi STA is on the device; agents over WiFi need this checkout's daemon (see "WiFi and the
+  cable"). OTA stays USB.
+- **Not done:** GitHub PR. Work is on the local `cores3` branch, uncommitted as of this note.
+  First upstream PR should be the USB hardware port with the WiFi menu off; LAN + bind as a
+  follow-up with the daemon `TcpLink`.

@@ -81,6 +81,9 @@ static void *s_lvgl_psram_pool;          // lifetime-owned 64KiB secondary LVGL 
 #define DRAW_LINES   (BSP_LCD_V_RES / 16)   // smaller so both draw buffers fit in internal DMA RAM
 #define BYTES_PER_PX (BSP_LCD_BIT_PER_PIXEL / 8)   // RGB565 -> 2
 static uint8_t *s_buf1;
+#if defined(DEVICE_BOARD_M5CORES3)
+static uint32_t s_buf_bytes;   // size of each, shared with the native display (display_cores3.c)
+#endif
 static uint8_t *s_buf2;
 
 // esp_lcd "color trans done" → tell LVGL the flush finished. Uses the global
@@ -193,10 +196,11 @@ static void lvgl_task(void *arg)
 static void rounder_cb(lv_event_t *e)
 {
     lv_area_t *area = lv_event_get_param(e);
-    if (area->x1 >= 2) area->x1 -= 2;
-    if (area->y1 >= 2) area->y1 -= 2;
-    if (area->x2 < BSP_LCD_H_RES - 3) area->x2 += 2;
-    if (area->y2 < BSP_LCD_V_RES - 3) area->y2 += 2;
+    // Pad enough that a 29/50 bilinear kernel (one extra virtual px) stays inside the flush.
+    if (area->x1 >= 4) area->x1 -= 4;
+    if (area->y1 >= 4) area->y1 -= 4;
+    if (area->x2 < BSP_LCD_H_RES - 5) area->x2 += 4;
+    if (area->y2 < BSP_LCD_V_RES - 5) area->y2 += 4;
 }
 #else
 static void rounder_cb(lv_event_t *e)
@@ -319,11 +323,19 @@ static void display_init_impl(int draw_lines, bool with_touch)
     lv_display_add_event_cb(s_disp, invalidate_stats_event_cb, LV_EVENT_INVALIDATE_AREA, NULL);
     lv_display_add_event_cb(s_disp, refr_stats_event_cb, LV_EVENT_REFR_REQUEST, NULL);
 #endif
-    // Render directly in the panel's byte order (big-endian RGB565). The CO5300 wants byte-swapped
-    // RGB565; letting the SW renderer emit it saves a per-pixel CPU swap on every flush (a big win for
-    // scroll/pan smoothness — that loop ran over the whole moving region each frame).
+    // Dial (CO5300): render already byte-swapped so flush is a DMA copy.
+    // CoreS3 (ILI9342 SPI): LVGL 9's RGB565_SWAPPED path is incomplete for fonts/layers
+    // (lvgl#9387, forum: "ILI9341 + ESP-IDF garbled letters"). Render native RGB565 and
+    // byte-swap in the CoreS3 flush, which is the documented ILI9341 recipe.
+#if defined(DEVICE_BOARD_M5CORES3)
+    lv_display_set_color_format(s_disp, LV_COLOR_FORMAT_RGB565);
+#else
     lv_display_set_color_format(s_disp, LV_COLOR_FORMAT_RGB565_SWAPPED);
+#endif
     lv_display_set_buffers(s_disp, s_buf1, s_buf2, buf_bytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
+#if defined(DEVICE_BOARD_M5CORES3)
+    s_buf_bytes = buf_bytes;
+#endif
     lv_display_add_event_cb(s_disp, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL);
 
     // The LVGL default theme is light (LV_THEME_DEFAULT_DARK 0) → the auto-created default screen is WHITE.
@@ -390,11 +402,26 @@ void display_set_power_cb(void (*cb)(bool on)) { s_power_cb = cb; }
 // Reset the idle-off timer WITHOUT a touch. Voice uses the PWR key (not the touchscreen), so a whole
 // voice turn (record + upload + the agent working) has no touch and the screen would auto-off mid-task.
 // ui_screens bumps this while a voice/turn is active. No-op while asleep (the timer is moot then).
+#if defined(DEVICE_BOARD_M5CORES3)
+lv_display_t *display_virtual_display(void) { return s_disp; }
+
+void display_shared_draw_buffers(void **b1, void **b2, uint32_t *bytes)
+{
+    if (b1) *b1 = s_buf1;
+    if (b2) *b2 = s_buf2;
+    if (bytes) *bytes = s_buf_bytes;
+}
+#endif
+
 void display_bump_activity(void) { if (!s_asleep) lv_display_trigger_activity(s_disp); }
 
 // Both run on the LVGL task (idle check / touch_read), so LVGL calls here need no extra lock.
 void display_sleep(void)
 {
+#if defined(DEVICE_BOARD_M5CORES3)
+    // PWR is back/stop, not a wake key. The panel stays on whenever the device is on.
+    return;
+#endif
     if (s_asleep) return;
     s_asleep = true;
 #if defined(DEVICE_BOARD_M5CORES3)

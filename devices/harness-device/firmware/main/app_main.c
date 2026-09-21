@@ -36,6 +36,9 @@
 #include "ui/display.h"
 #include "ui/touch.h"
 #include "ui/ui_screens.h"
+#if defined(DEVICE_BOARD_M5CORES3)
+#include "wifi_sta.h"
+#endif
 
 static const char *TAG = "app";
 
@@ -167,6 +170,9 @@ static void refresh_task(void *arg)
 
         // Chip and settings actions, tapped on the LVGL task and executed here off it.
         ui_service_model_picker();
+#if defined(DEVICE_BOARD_M5CORES3)
+        ui_service_wifi();
+#endif
 
         // A machine.select the daemon never answered. Drained here rather than on the LVGL task so the
         // bounce (spinner down, wheel back, toast) happens off the render path, like every other action.
@@ -192,6 +198,9 @@ void app_main(void)
     last_words_boot();   // before the first log line, so the previous boot's ring is read, not overwritten
     board_detect();      // which dial this is — the panel's reset pin comes from here, so before display_init
     config_store_init();
+#if defined(DEVICE_BOARD_M5CORES3)
+    wifi_sta_init();   // STA only — join saved network if any; setup UI is Settings → WiFi
+#endif
 
     if (boot_button_held()) {
         ESP_LOGW(TAG, "BOOT held — factory reset");
@@ -204,6 +213,9 @@ void app_main(void)
     display_init();
     ui_init();
     ui_set_brightness(config_load_brightness());
+#if defined(DEVICE_BOARD_M5CORES3)
+    display_wake();   // PWR is back/stop — never boot into a dark panel
+#endif
     ram_telemetry_checkpoint("ui_ready");
 
     // Reserve the PSRAM voice buffer now, while the heap is still unfragmented — a large contiguous block

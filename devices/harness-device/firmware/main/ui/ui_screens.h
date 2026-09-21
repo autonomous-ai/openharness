@@ -137,6 +137,12 @@ bool ui_reader_is_open(void);
 int ui_notif_pull_zone_px(void);
 /** True while a chooser wheel covers the face — its own controls own the top band, not the pull-down. */
 bool ui_picker_is_open(void);
+// True while a full-face overlay on lv_layer_top owns the pointer (Brightness, WiFi).
+// touch.c skips the notification band and carousel swipe so those screens keep their taps.
+bool ui_modal_is_open(void);
+#if defined(DEVICE_BOARD_M5CORES3)
+void ui_service_wifi(void);   // drain scan/join on refresh_task
+#endif
 // Circular swipe (driven by touch.c): begin records the tile at press-down; end(+1 right / -1 left)
 // wraps first-project↔Settings when the swipe was an edge swipe (position unchanged since press-down).
 void ui_swipe_begin(void);

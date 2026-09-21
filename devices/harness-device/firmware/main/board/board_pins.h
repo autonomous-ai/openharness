@@ -27,18 +27,15 @@
 #define BSP_LCD_RST_GPIO      -1          // reset lives on the AW9523B expander (P1_1), not a GPIO
 #define BSP_LCD_PIXEL_CLK_HZ  (40 * 1000 * 1000)
 
-// Virtual round-screen LVGL surface the UI draws into; the flush callback downscales it
-// onto the panel. Scale 29/50 = 0.58, window chosen from the UI's real content bounds
-// (ui_screens.c): the topmost element is the notification pill at virtual y=22, the lowest
-// the Voice button at y=434 — 413.8px tall, which 240 panel rows at 0.58 covers exactly
-// (22..435.8). Horizontally the 466px face maps to 270px, centred on the 320px panel with
-// ~25px black side margins (the round bezel's corners — the arc tiles end well inside).
-#define BSP_LCD_H_RES         466         // virtual (LVGL) resolution — UI geometry stays 1:1
+// Virtual 466×466 LVGL surface, integer-halved onto the 320×240 panel.
+// Non-integer nearest-neighbour (29/50) shreds 4-bpp fonts (bell, "0 agents"); 1/2 is the
+// standard downsample: every panel pixel is a 2×2 of virtual pixels, centred with black bars.
+#define BSP_LCD_H_RES         466
 #define BSP_LCD_V_RES         466
-#define BSP_SCALE_NUM         29          // virtual → panel scale = NUM/DEN
-#define BSP_SCALE_DEN         50
-#define BSP_PANEL_OFF_X       (-43)       // virtual x sampled at panel column 0 (centred)
-#define BSP_PANEL_OFF_Y       22          // virtual y sampled at panel row 0 (pill top → mic bottom)
+#define BSP_SCALE_NUM         1
+#define BSP_SCALE_DEN         2
+#define BSP_PANEL_OFF_X       (-86)       // (320 - 233) / 2 = 43 → virtual 0 at panel x=43
+#define BSP_PANEL_OFF_Y       (-6)        // (240 - 233) / 2 = 3  → virtual 0 at panel y=3
 
 // ---- I2C bus (touch + PMIC + codec + expander share it) ----
 #define BSP_I2C_SDA          12

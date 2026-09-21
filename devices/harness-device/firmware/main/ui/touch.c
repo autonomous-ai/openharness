@@ -374,7 +374,9 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
     // The driver reports PANEL coordinates (320×240); everything below — LVGL, the gesture
     // recognizers, the hit tests — lives in the 466×466 virtual round-screen space. Scale once,
     // here, so every consumer sees the same geometry the flush callback drew.
-    if (pressed) {
+    // ...unless the native 320x240 display owns the panel, where the driver's coordinates already ARE
+    // LVGL's. Scaling them there would double every tap and push most of the keyboard off-screen.
+    if (pressed && !display_cores3_native_active()) {
         int vx, vy;
         panel_to_virtual(x, y, &vx, &vy);
         x = (uint16_t)vx; y = (uint16_t)vy;
@@ -446,7 +448,7 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
             // that leaves the screen could never be pressed. A modal chooser also has no business
             // offering a pull-to-notifications on top of itself.
             s_band_drag = !display_is_asleep() && !ui_reader_is_open() && !ui_switch_is_open() &&
-                    !ui_picker_is_open() && !ui_notif_pill_hit(x, y) &&
+                    !ui_picker_is_open() && !ui_modal_is_open() && !ui_notif_pill_hit(x, y) &&
                     (ui_notif_is_open() || y < ui_notif_pull_zone_px());
             ndy0 = ndyl = y; ncap = s_band_drag;
             if (s_band_drag) ESP_LOGI(TAG, "band: captured at y=%u (drawer %s)", y, ui_notif_is_open() ? "open" : "closed");
@@ -479,7 +481,8 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
     // ...and not under the TABS picker, whose rows are LVGL's to dispatch: swipe_track would read a row
     // tap as the tap that opens the detail reader, and a scroll of the list as a carousel swipe, both
     // happening to the tile UNDERNEATH the overlay.
-    if (!display_is_asleep() && !s_swallow_until_release && !ui_switch_is_open())
+    if (!display_is_asleep() && !s_swallow_until_release && !ui_switch_is_open() &&
+        !ui_picker_is_open() && !ui_modal_is_open())
         swipe_track(gesture_pressed, x, y);
 
     // A still hold used to start a GOAL voice command here (owner, 2026-09-15: "remove luôn cái long
@@ -637,11 +640,24 @@ void touch_stats(touch_stats_t *out)
     out->held_now = s_stuck_warned;
 }
 
+static lv_indev_t *s_indev;
+
+#if defined(DEVICE_BOARD_M5CORES3)
+// Point the one pointer indev at whichever display currently owns the panel. LVGL resolves a pointer's
+// coordinates against its display, so leaving it on the virtual face while the native one is up would
+// scale every tap by two and land it off-screen.
+void touch_bind_display(lv_display_t *d)
+{
+    if (s_indev && d) lv_indev_set_display(s_indev, d);
+}
+#endif
+
 void touch_init(void)
 {
     if (!touch_open()) return;
 
     lv_indev_t *indev = lv_indev_create();
+    s_indev = indev;
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(indev, touch_read);
     ESP_LOGI(TAG, "%s touch ready", touch_chip_name());

@@ -25,6 +25,11 @@
 #include "esp_system.h"   // esp_restart() for the WiFi-portal Cancel
 #include "esp_app_desc.h"   // esp_app_get_description() → firmware version shown on Settings
 #include "esp_attr.h"
+#if defined(DEVICE_BOARD_M5CORES3)
+#include "wifi_sta.h"
+#include "wifi_cable.h"
+#include "display_cores3.h"
+#endif
 
 static const char *TAG = "ui";
 
@@ -39,23 +44,7 @@ static const char *TAG = "ui";
 // a narrow one — measured, 0.534 em against 0.453 em average ASCII advance, so every line is ~18% longer
 // than the surrounding geometry was tuned for. Those clip limits and max_widths are deliberately untouched.
 //
-// LVGL's Montserrat faces stay linked for LV_SYMBOL_* only: those are private-use codepoints that exist in
-// no other font, so a label carrying one keeps a Montserrat face or its glyph draws as an empty box.
-extern const lv_font_t geist_reg_16;
-extern const lv_font_t geist_reg_20;
-extern const lv_font_t geist_reg_24;  // small labels / muted meta
-extern const lv_font_t geist_reg_25;  // main body: project-screen content, event cards, settings rows
-extern const lv_font_t geist_med_28;
-extern const lv_font_t geist_med_32;  // titles, section headers, agent name in the reader, status verb
-extern const lv_font_t geist_reg_32;
-extern const lv_font_t geist_reg_34;
-extern const lv_font_t geist_reg_38;  // large body: reader detail, "No activity" placeholder, the "+" glyph
-extern const lv_font_t geist_med_38;
-extern const lv_font_t geist_med_48;
-extern const lv_font_t geist_med_64;  // DIGITS ONLY (0-9 and space) — the Overview's agent count, nothing else
-// The only SemiBold on the device: the reset confirm's primary, which the design sets one weight
-// above its neighbours to mark it as the safe, committing action.
-extern const lv_font_t geist_sem_24;  // largest display: tile agent name + overview agent count
+#include "ui_fonts.h"
 
 // Round 466x466 AMOLED: keep ALL content inside the inscribed square (~330px, r·√2) and CENTRE it,
 // so nothing reaches the curved edge. 330px is the widest column whose corners never clip; centred
@@ -64,6 +53,13 @@ extern const lv_font_t geist_sem_24;  // largest display: tile agent name + over
 #define SCREEN_PAD   18
 #define SAFE_CONTENT_W 384       // centred column for readable content — wide, since content sits in the
                                  // circle's mid band where the usable width is much larger than the inscribed square
+#if defined(DEVICE_BOARD_M5CORES3)
+#define TILE_COL_W     454       // session title + recap: as wide as the square (384×1.18; 1.3×384 would clip)
+#define STATUS_LINE_W  TILE_COL_W
+#else
+#define TILE_COL_W     SAFE_CONTENT_W
+#define STATUS_LINE_W  SAFE_CONTENT_W
+#endif
 // The Overview's seats (mockup/overview-v3.html, "H · Halo, no ring"). FIXED, not a growing column: nothing
 // moves when the status changes, the words change. Every number is a device pixel on the 466 face; the far
 // corner of every control is inside the 233px rim, above the home-swipe band (y ≥ 400) and below the
@@ -241,6 +237,7 @@ static lv_obj_t *s_no_agents_hint_lbl; // the closing line under the command / t
 static lv_obj_t *s_na_eyebrow;       // machine name above the no-agents headline (remote only)
 static lv_obj_t *s_na_title;         // "Start on your computer" / "No agents yet"
 static lv_obj_t *s_na_cmd_lbl;       // the "New Harness" label inside the action pill (hidden while not connected)
+static void swarm_line_tap(lv_event_t *e);   // tab picker — CoreS3 empty-tab pill also uses this
 static lv_obj_t *s_na_marks;         // the engines' marks under the pill: what will appear here
 static lv_obj_t *s_overview_tile;      // persistent leading "overview" tile (ring 0): MACHINE eyebrow + "N agents"
 static lv_obj_t *s_overview_count_lbl; // the "N agents" label inside the overview tile (updated on count change)
@@ -261,6 +258,9 @@ static lv_obj_t *s_overview_settings_btn;
 static lv_obj_t *s_overview_bell_btn, *s_overview_bell_glyph, *s_overview_bell_badge, *s_overview_bell_badge_lbl;   // Inbox, and its unread badge
 static lv_obj_t *s_overview_agents_lbl;   // the word under the count
 static void overview_settings_tap(lv_event_t *e);
+#if defined(DEVICE_BOARD_M5CORES3)
+static void rebuild_settings_tile(void);
+#endif
 static lv_obj_t *s_overview_goal_btn;
 static lv_obj_t *s_overview_loop_btn;
 // Kept so the disabled state can be painted with COLOUR. Never reach for lv_obj_set_style_opa() here:
@@ -312,6 +312,12 @@ static lv_obj_t *s_voice_overlay;    // voice-mode overlay: shown while recordin
 static lv_obj_t *s_bright_fill;      // white fill of the brightness control; its width = the level
 static lv_obj_t *s_bright_box;       // the visible track; presses on it drive the level
 static lv_obj_t *s_bright_screen;    // Brightness on its own screen (top layer), opened from the Settings row
+#if defined(DEVICE_BOARD_M5CORES3)
+static lv_obj_t *s_wifi_screen, *s_wifi_status, *s_wifi_list, *s_wifi_trail;
+static lv_obj_t *s_wifi_pass_box, *s_wifi_ta;
+static lv_timer_t *s_wifi_timer;
+static char s_wifi_pending_ssid[WIFI_STA_SSID_MAX];
+#endif
 
 // Raise an lv_layer_top overlay, then put the software dim BACK on top of it.
 //
@@ -1020,6 +1026,10 @@ static void statusbar_tick(lv_timer_t *t)
     ext_prev = ext;
 
     refresh_conn_ui();   // project dot colors + the "Reconnecting…" badge
+#if defined(DEVICE_BOARD_M5CORES3)
+    display_cores3_set_battery(power_battery_pct(), power_is_charging());
+    display_cores3_set_wifi(wifi_sta_state() == WIFI_STA_CONNECTED, wifi_sta_rssi());
+#endif
 }
 
 // Claude-Code-style rotating gerunds for the working-status verb row (ASCII only → font renders them).
@@ -1225,8 +1235,9 @@ static void busy_dots_tick(lv_timer_t *t)
     } else {
         // Route voice: mark the moment the upload finished and hold the loading state until the router
         // answers; if it never does (STT/LLM failure with no terminal frame), release after the budget.
-        if (s_voice_routing && s_vic_state == VIC_SEND && !audio_client_active()) {
-            if (!s_voice_route_ms) s_voice_route_ms = lv_tick_get();
+        if (s_voice_routing) {
+            if (!s_voice_route_ms && s_vic_state == VIC_SEND && !audio_client_active())
+                s_voice_route_ms = lv_tick_get();
             // THE ONE CONDITION: is the tile ready to show Working? Asked of the model, three times a
             // second, so it cannot be missed by the order two messages happen to arrive in.
             //
@@ -1237,7 +1248,8 @@ static void busy_dots_tick(lv_timer_t *t)
             // the bug — not the overlay, which was up the whole time.
             const int ai = s_active_idx;
             const bool tile_working = ai >= 0 && ai < s_proj_count && s_proj[ai].busy_model;
-            if (tile_working || lv_tick_elaps(s_voice_route_ms) > VOICE_ROUTE_WAIT_MS) {
+            const bool timed_out = s_voice_route_ms && lv_tick_elaps(s_voice_route_ms) > VOICE_ROUTE_WAIT_MS;
+            if (tile_working || timed_out) {
                 s_voice_routing = false; s_voice_route_ms = 0;
                 voice_icon_apply(VIC_NONE);
                 voice_overlay_set(false);
@@ -1777,6 +1789,13 @@ void ui_init(void)
     // in OpenHarness, not a thing to type — the old "$ tmux new" was an instruction for a product that
     // no longer exists (herdr is retired; the daemon starts tmux itself; a harness is made with ⌘N).
     s_na_cmd_lbl = action_pill(s_no_agents_tile, "Cmd N", "New Harness");
+#if defined(DEVICE_BOARD_M5CORES3)
+    { lv_obj_t *pill = lv_obj_get_parent(s_na_cmd_lbl);
+      lv_obj_add_flag(pill, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_add_event_cb(pill, swarm_line_tap, LV_EVENT_CLICKED, NULL); }
+    lv_obj_add_flag(s_na_eyebrow, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_na_eyebrow, swarm_line_tap, LV_EVENT_CLICKED, NULL);
+#endif
     // The engines' marks, at their native 20px: a wordless "these are the kinds of thing that will
     // appear here". Three is enough to read as a set; the row does not try to be the whole catalogue.
     s_na_marks = lv_obj_create(s_no_agents_tile);
@@ -1900,18 +1919,32 @@ void ui_init(void)
     lv_obj_set_pos(s_overview_actions, 0, 0);
 
     // A round control: transparent-ish ghost for the two sides, Voice's own green pair for the middle.
+    // CoreS3: opaque fill. Translucent+radius makes an LVGL snapshot layer that garbles the
+    // 320×240 downscale (inbox bell looked like noise; Voice was fine because it is already opaque).
+#if defined(DEVICE_BOARD_M5CORES3)
+    #define OV_ROUND_FILL(var) do { \
+        lv_obj_set_style_bg_color(var, lv_color_hex(0x1c1c1c), 0); \
+        lv_obj_set_style_bg_opa(var, LV_OPA_COVER, 0); \
+        lv_obj_set_style_bg_color(var, lv_color_hex(0x2a2a2a), LV_STATE_PRESSED); \
+        lv_obj_set_style_bg_opa(var, LV_OPA_COVER, LV_STATE_PRESSED); \
+    } while (0)
+#else
+    #define OV_ROUND_FILL(var) do { \
+        lv_obj_set_style_bg_color(var, COL_FG, 0); \
+        lv_obj_set_style_bg_opa(var, LV_OPA_10, 0); \
+        lv_obj_set_style_bg_opa(var, LV_OPA_20, LV_STATE_PRESSED); \
+    } while (0)
+#endif
     #define OV_ROUND(var, x, y, d, cb) do { \
         var = lv_button_create(s_overview_actions); \
         lv_obj_remove_style_all(var); \
         lv_obj_set_size(var, d, d); \
         lv_obj_set_pos(var, x, y); \
         lv_obj_set_style_radius(var, LV_RADIUS_CIRCLE, 0); \
-        lv_obj_set_style_bg_color(var, COL_FG, 0); \
-        lv_obj_set_style_bg_opa(var, LV_OPA_10, 0); \
-        lv_obj_set_style_bg_opa(var, LV_OPA_20, LV_STATE_PRESSED); \
         lv_obj_set_style_border_width(var, 1, 0); \
         lv_obj_set_style_border_color(var, COL_FG, 0); \
         lv_obj_set_style_border_opa(var, LV_OPA_10, 0); \
+        OV_ROUND_FILL(var); \
         lv_obj_set_ext_click_area(var, 16); \
         lv_obj_clear_flag(var, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE); \
         lv_obj_add_event_cb(var, cb, LV_EVENT_CLICKED, NULL); \
@@ -1963,6 +1996,7 @@ void ui_init(void)
       lv_label_set_text(g, LV_SYMBOL_SETTINGS);
       lv_obj_center(g); }
     #undef OV_ROUND
+    #undef OV_ROUND_FILL
     // The modifiers left this face with their pills; their handlers and marks stay for the day they return.
     s_overview_goal_btn = s_overview_loop_btn = NULL;
     s_ov_goal_lbl = s_ov_loop_lbl = NULL; s_ov_loop_ico = NULL;
@@ -3082,7 +3116,11 @@ static void build_agent_actions(void)
 #endif
     // Voice — the centre of the arc, 31px lower than its neighbours (the ±36° offset). It does NOT move
     // sideways: it is the one under the resting thumb, and the other two spread away from it.
+#if defined(DEVICE_BOARD_M5CORES3)
+    { lv_obj_t *b = agent_act_btn(193, 383, agent_voice_tap);   // lower so the recap card does not sit on it
+#else
     { lv_obj_t *b = agent_act_btn(193, 353, agent_voice_tap);
+#endif
       s_agent_voice_btn = b;
       lv_obj_t *ic = lv_image_create(b);
       lv_image_set_src(ic, &icon_act_voice);      // 44px native, colour baked — see the note on the asset
@@ -3320,7 +3358,14 @@ static void apply_dim(uint8_t level)
 void ui_set_brightness(uint8_t level)
 {
     s_brightness = level;
+#if defined(DEVICE_BOARD_M5CORES3)
+    // Hardware backlight is the dimmer. The software overlay is an AMOLED trick (black pixels
+    // are off); on the ILI9342 it forces a full-screen LVGL layer that garbles the downscaled
+    // face after the first clean paint.
+    display_set_brightness(level);
+#else
     apply_dim(level);
+#endif
 }
 
 // --- Brightness row — iOS-Control-Center style, built from plain objects (NOT lv_slider) ---
@@ -3486,6 +3531,324 @@ static void settings_brightness_tap(lv_event_t *e)
     overlay_raise(s_bright_screen);   // the preview has to be honest on THIS screen especially
 }
 
+#if defined(DEVICE_BOARD_M5CORES3)
+static void wifi_status_text(char *out, size_t cap)
+{
+    wifi_sta_state_t st = wifi_sta_state();
+    const char *ssid = wifi_sta_ssid();
+    switch (st) {
+    case WIFI_STA_CONNECTED:
+        snprintf(out, cap, "%s", ssid[0] ? ssid : "On");
+        break;
+    case WIFI_STA_CONNECTING:
+        snprintf(out, cap, "Joining…");
+        break;
+    case WIFI_STA_SCANNING:
+        snprintf(out, cap, "Scanning…");
+        break;
+    case WIFI_STA_FAILED:
+        snprintf(out, cap, "Failed");
+        break;
+    default:
+        snprintf(out, cap, ssid[0] ? "Saved" : "Off");
+        break;
+    }
+}
+
+static void wifi_overlay_hide(void)
+{
+    if (s_wifi_timer) { lv_timer_delete(s_wifi_timer); s_wifi_timer = NULL; }
+    if (s_wifi_pass_box) lv_obj_add_flag(s_wifi_pass_box, LV_OBJ_FLAG_HIDDEN);
+    // Closing the WiFi overlay while the password box was up would otherwise leave the panel with the
+    // native display, i.e. a blank 320x240 screen and a carousel nobody can see.
+    display_cores3_native_activate(false);
+    if (s_wifi_screen) lv_obj_add_flag(s_wifi_screen, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void wifi_overlay_close(lv_event_t *e)
+{
+    (void)e;
+    s_suppress_tap = true;
+    wifi_overlay_hide();
+}
+
+static void wifi_pass_hide(void)
+{
+    if (s_wifi_pass_box) lv_obj_add_flag(s_wifi_pass_box, LV_OBJ_FLAG_HIDDEN);
+    if (s_wifi_list) lv_obj_clear_flag(s_wifi_list, LV_OBJ_FLAG_HIDDEN);
+    display_cores3_native_activate(false);   // round face takes the panel back
+}
+
+static void wifi_join_open(const char *ssid)
+{
+    if (!s_wifi_ta) return;
+    lv_textarea_set_text(s_wifi_ta, "");
+    wifi_sta_connect(ssid, "");
+    wifi_pass_hide();
+}
+
+static void wifi_ap_tap(lv_event_t *e)
+{
+    wifi_sta_ap_t *ap = lv_event_get_user_data(e);
+    if (!ap || !ap->ssid[0]) return;
+    s_suppress_tap = true;
+    if (ap->open) {
+        wifi_join_open(ap->ssid);
+        return;
+    }
+    strncpy(s_wifi_pending_ssid, ap->ssid, sizeof(s_wifi_pending_ssid) - 1);
+    s_wifi_pending_ssid[sizeof(s_wifi_pending_ssid) - 1] = '\0';
+    if (s_wifi_list) lv_obj_add_flag(s_wifi_list, LV_OBJ_FLAG_HIDDEN);
+    if (s_wifi_ta) lv_textarea_set_text(s_wifi_ta, "");
+    if (s_wifi_pass_box) {
+        lv_obj_t *ttl = lv_obj_get_child(s_wifi_pass_box, 0);
+        if (ttl) lv_label_set_text(ttl, s_wifi_pending_ssid);
+        lv_obj_clear_flag(s_wifi_pass_box, LV_OBJ_FLAG_HIDDEN);
+        display_cores3_native_activate(true);   // native 320x240 owns the panel while typing
+    }
+    if (s_wifi_ta) lv_obj_add_state(s_wifi_ta, LV_STATE_FOCUSED);
+}
+
+static void wifi_kb_ready(lv_event_t *e)
+{
+    (void)e;
+    if (!s_wifi_ta || !s_wifi_pending_ssid[0]) return;
+    const char *pass = lv_textarea_get_text(s_wifi_ta);
+    wifi_sta_connect(s_wifi_pending_ssid, pass);
+    wifi_pass_hide();
+}
+
+static void wifi_kb_cancel(lv_event_t *e)
+{
+    (void)e;
+    s_wifi_pending_ssid[0] = '\0';
+    wifi_pass_hide();
+}
+
+static void wifi_forget_tap(lv_event_t *e)
+{
+    (void)e;
+    s_suppress_tap = true;
+    wifi_sta_forget();
+}
+
+static void wifi_ap_free(lv_event_t *e)
+{
+    void *p = lv_event_get_user_data(e);
+    if (p) lv_free(p);
+}
+
+static void wifi_fill_list(void)
+{
+    if (!s_wifi_list) return;
+    lv_obj_clean(s_wifi_list);
+    wifi_sta_ap_t aps[WIFI_STA_AP_MAX];
+    int n = wifi_sta_copy_scan(aps, WIFI_STA_AP_MAX);
+    const char *cur = wifi_sta_ssid();
+    if (n == 0) {
+        lv_obj_t *empty = lv_label_create(s_wifi_list);
+        lv_obj_set_style_text_font(empty, &geist_reg_20, 0);
+        lv_obj_set_style_text_color(empty, COL_MUTED, 0);
+        lv_label_set_text(empty, wifi_sta_state() == WIFI_STA_SCANNING ? "Scanning…" : "No networks");
+        lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(empty, lv_pct(100));
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        lv_obj_t *row = lv_button_create(s_wifi_list);
+        lv_obj_set_width(row, SET_ROW_W);
+        lv_obj_set_height(row, 56);
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_bg_color(row, COL_FG, LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(row, LV_OPA_10, LV_STATE_PRESSED);
+        lv_obj_set_style_radius(row, 16, 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_style_shadow_width(row, 0, 0);
+        lv_obj_set_style_pad_hor(row, 12, 0);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_t *nm = lv_label_create(row);
+        lv_obj_set_style_text_font(nm, &geist_reg_20, 0);
+        lv_obj_set_style_text_color(nm, (cur[0] && strcmp(cur, aps[i].ssid) == 0) ? COL_GREEN : COL_FG, 0);
+        lv_label_set_text(nm, aps[i].ssid);
+        lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
+        lv_obj_set_flex_grow(nm, 1);
+        lv_obj_t *tr = lv_label_create(row);
+        lv_obj_set_style_text_font(tr, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(tr, COL_MUTED, 0);
+        lv_label_set_text(tr, aps[i].open ? LV_SYMBOL_OK : LV_SYMBOL_SETTINGS);
+        wifi_sta_ap_t *keep = lv_malloc(sizeof(*keep));
+        if (keep) {
+            *keep = aps[i];
+            lv_obj_add_event_cb(row, wifi_ap_tap, LV_EVENT_CLICKED, keep);
+            lv_obj_add_event_cb(row, wifi_ap_free, LV_EVENT_DELETE, keep);
+        }
+    }
+}
+
+static void wifi_refresh_labels(void)
+{
+    char buf[40];
+    wifi_status_text(buf, sizeof(buf));
+    if (s_wifi_status) lv_label_set_text(s_wifi_status, buf);
+    if (s_wifi_trail) lv_label_set_text(s_wifi_trail, buf);
+}
+
+static void wifi_tick(lv_timer_t *t)
+{
+    (void)t;
+    wifi_refresh_labels();
+    if (wifi_sta_take_scan_done()) wifi_fill_list();
+}
+
+static void wifi_build_overlay(void)
+{
+    if (s_wifi_screen) return;
+    lv_obj_t *ov = lv_obj_create(lv_layer_top());
+    s_wifi_screen = ov;
+    lv_obj_set_size(ov, lv_pct(100), lv_pct(100));
+    lv_obj_align(ov, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(ov, COL_BG, 0);
+    lv_obj_set_style_bg_opa(ov, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(ov, 0, 0);
+    lv_obj_set_style_radius(ov, 0, 0);   // square: keyboard needs the full 466 face, not the round clip
+    lv_obj_set_style_pad_all(ov, 0, 0);
+    lv_obj_clear_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(ov, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+    make_close_pill(ov, wifi_overlay_close, 16);
+
+    lv_obj_t *ttl = lv_label_create(ov);
+    lv_obj_set_style_text_font(ttl, &geist_med_32, 0);
+    lv_obj_set_style_text_color(ttl, COL_FG, 0);
+    lv_label_set_text(ttl, "WiFi");
+    lv_obj_align(ttl, LV_ALIGN_TOP_MID, 0, 56);
+
+    s_wifi_status = lv_label_create(ov);
+    lv_obj_set_style_text_font(s_wifi_status, &geist_reg_20, 0);
+    lv_obj_set_style_text_color(s_wifi_status, COL_MUTED, 0);
+    lv_label_set_text(s_wifi_status, "Off");
+    lv_obj_align(s_wifi_status, LV_ALIGN_TOP_MID, 0, 96);
+
+    s_wifi_list = lv_obj_create(ov);
+    lv_obj_remove_style_all(s_wifi_list);
+    lv_obj_set_size(s_wifi_list, SET_ROW_W, 250);
+    lv_obj_align(s_wifi_list, LV_ALIGN_TOP_MID, 0, 128);
+    lv_obj_set_flex_flow(s_wifi_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(s_wifi_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(s_wifi_list, 4, 0);
+    lv_obj_set_scroll_dir(s_wifi_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_wifi_list, LV_SCROLLBAR_MODE_OFF);
+
+    lv_obj_t *forget = lv_button_create(ov);
+    lv_obj_set_size(forget, 200, 44);
+    lv_obj_align(forget, LV_ALIGN_BOTTOM_MID, 0, -18);
+    lv_obj_set_style_bg_color(forget, COL_SET_PILL, 0);
+    lv_obj_set_style_bg_opa(forget, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(forget, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(forget, 0, 0);
+    lv_obj_add_event_cb(forget, wifi_forget_tap, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *fl = lv_label_create(forget);
+    lv_obj_set_style_text_font(fl, &geist_reg_20, 0);
+    lv_obj_set_style_text_color(fl, COL_MUTED, 0);
+    lv_label_set_text(fl, "Forget");
+    lv_obj_center(fl);
+
+    // The password screen is the ONE screen that leaves the round face. Everything else can live with
+    // the half downsample; a keyboard cannot — 466 virtual maps to 233 physical, which is ~18 px per key
+    // (about 2.5 mm) against the ~7 mm a fingertip wants. So this box is parented on the native 320x240
+    // display and authored in REAL panel pixels: no lv_pct of a virtual face, no scaling on the way out.
+    lv_obj_t *pass_parent = ov;
+    lv_display_t *nat = display_cores3_native_display();
+    if (nat) pass_parent = lv_display_get_screen_active(nat);
+    s_wifi_pass_box = lv_obj_create(pass_parent);
+    lv_obj_remove_style_all(s_wifi_pass_box);
+    lv_obj_set_size(s_wifi_pass_box, lv_pct(100), lv_pct(100));
+    lv_obj_align(s_wifi_pass_box, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_add_flag(s_wifi_pass_box, LV_OBJ_FLAG_HIDDEN | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(s_wifi_pass_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(s_wifi_pass_box, COL_BG, 0);
+    lv_obj_set_style_bg_opa(s_wifi_pass_box, LV_OPA_COVER, 0);
+    lv_obj_t *pt = lv_label_create(s_wifi_pass_box);
+    lv_obj_set_style_text_font(pt, &geist_reg_20, 0);
+    lv_obj_set_style_text_color(pt, COL_FG, 0);
+    lv_label_set_text(pt, "");
+    lv_obj_align(pt, LV_ALIGN_TOP_MID, 0, 4);
+    s_wifi_ta = lv_textarea_create(s_wifi_pass_box);
+    lv_obj_set_size(s_wifi_ta, lv_pct(94), 34);
+    lv_obj_align(s_wifi_ta, LV_ALIGN_TOP_MID, 0, 26);
+    lv_textarea_set_one_line(s_wifi_ta, true);
+    lv_textarea_set_password_mode(s_wifi_ta, true);
+    lv_textarea_set_placeholder_text(s_wifi_ta, "Password");
+    lv_obj_set_style_text_font(s_wifi_ta, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_pad_all(s_wifi_ta, 5, 0);
+    // Sized in real panel pixels, not virtual ones. Ten keys across 320 with 3 px gutters gives ~29 px
+    // a key against the 18 px the virtual face allowed, and every glyph is drawn 1:1 instead of being
+    // box-filtered to half size — the blur mattered as much as the size on 4-bpp fonts.
+    lv_obj_t *kb = lv_keyboard_create(s_wifi_pass_box);
+    lv_obj_set_size(kb, lv_pct(100), 168);
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_textarea(kb, s_wifi_ta);
+    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_LOWER);
+    lv_obj_set_style_text_font(kb, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_pad_all(kb, 3, 0);
+    lv_obj_set_style_pad_row(kb, 3, 0);
+    lv_obj_set_style_pad_column(kb, 3, 0);
+    lv_obj_set_style_min_height(kb, 38, LV_PART_ITEMS);
+    lv_obj_set_style_radius(kb, 10, LV_PART_ITEMS);
+    lv_obj_set_style_bg_color(kb, lv_color_hex(0x2a2a2a), LV_PART_ITEMS);
+    lv_obj_add_event_cb(kb, wifi_kb_ready, LV_EVENT_READY, NULL);
+    lv_obj_add_event_cb(kb, wifi_kb_cancel, LV_EVENT_CANCEL, NULL);
+}
+
+static void settings_wifi_tap(lv_event_t *e)
+{
+    (void)e;
+    s_suppress_tap = true;
+    wifi_build_overlay();
+    wifi_refresh_labels();
+    wifi_fill_list();
+    wifi_sta_request_scan();
+    lv_obj_clear_flag(s_wifi_screen, LV_OBJ_FLAG_HIDDEN);
+    overlay_raise(s_wifi_screen);
+    if (!s_wifi_timer) s_wifi_timer = lv_timer_create(wifi_tick, 400, NULL);
+}
+
+void ui_service_wifi(void)
+{
+    wifi_sta_service();
+}
+
+// rebuild_settings_tile() deletes s_settings_tile, and the Unpair row is a CHILD of that tile — so
+// calling it straight from this handler frees the object tree LVGL is still dispatching this very event
+// inside. It presented as a dead screen rather than a crash (invalidations stopped dead at the tap and
+// never resumed; a swipe built a new tile and it came back), which is the misleading part: the visible
+// symptom was recoverable while the underlying fault was a use-after-free, free to surface later as an
+// unrelated crash. Deferring to lv_async_call runs the rebuild once the event has finished unwinding.
+static void unpair_rebuild_async(void *unused)
+{
+    (void)unused;
+    rebuild_settings_tile();
+}
+
+static void settings_unpair_tap(lv_event_t *e)
+{
+    (void)e;
+    s_suppress_tap = true;
+    config_clear_bind();
+    wifi_cable_drop();
+    lv_async_call(unpair_rebuild_async, NULL);
+}
+#endif  // DEVICE_BOARD_M5CORES3
+
+bool ui_modal_is_open(void)
+{
+    if (s_bright_screen && !lv_obj_has_flag(s_bright_screen, LV_OBJ_FLAG_HIDDEN)) return true;
+#if defined(DEVICE_BOARD_M5CORES3)
+    if (s_wifi_screen && !lv_obj_has_flag(s_wifi_screen, LV_OBJ_FLAG_HIDDEN)) return true;
+#endif
+    return false;
+}
+
 // (Re)build the trailing "settings" tile so it always sits at the column AFTER the last project.
 // Delete+recreate keeps its tileview column index correct without touching LVGL internals. Caller
 // holds the display lock. If the user was on the settings tile, re-focus it after the rebuild.
@@ -3494,7 +3857,11 @@ static void rebuild_settings_tile(void)
     if (!tileview) return;
     bool was_active = s_settings_active;
     if (s_settings_tile) { lv_obj_delete(s_settings_tile); s_settings_tile = NULL; s_vlang_lbl = NULL;
-                           s_scroll_dir_lbl = NULL; s_swipe_dir_lbl = NULL; }
+                           s_scroll_dir_lbl = NULL; s_swipe_dir_lbl = NULL;
+#if defined(DEVICE_BOARD_M5CORES3)
+                           s_wifi_trail = NULL;
+#endif
+                         }
 
     lv_obj_t *t = lv_obj_create(tileview);
     lv_obj_set_size(t, carousel_w(), carousel_h());
@@ -3535,6 +3902,15 @@ static void rebuild_settings_tile(void)
     // hold. The confirm overlay and its handlers survive unreferenced rather than being torn out with
     // them: nothing reaches that screen now, and removing live UI plumbing to chase two dead rows is how
     // a working stop button disappears.
+#if defined(DEVICE_BOARD_M5CORES3)
+    { char wbuf[40]; wifi_status_text(wbuf, sizeof(wbuf));
+      s_wifi_trail = settings_row(t, &icon_wifi, NULL, COL_FG, "WiFi", COL_FG, wbuf,
+                                  &geist_reg_24, COL_FG, settings_wifi_tap, NULL); }
+    if (config_has_bind()) {
+        settings_row(t, &icon_lock, NULL, COL_FG, "Unpair", COL_FG, "This computer",
+                     &geist_reg_24, COL_GREEN, settings_unpair_tap, NULL);
+    }
+#endif
     char vl[40]; vlang_label(vl, sizeof(vl));
     // Every trailing VALUE on this page is one font — geist_reg_24, the size Version already used. The row
     // label stays SET_ROW_FONT (32), so a value always reads as subordinate to the thing it belongs to.
@@ -3852,8 +4228,13 @@ static void parse_and_store(proj_t *p)
 #define CTL_CHIP_PAD_V  6
 #define CTL_CHIP_GAP    13          // between pills (10 → 13: the row sits lower now, so there is room)
 #define CTL_MARK_SRC    20          // every engine icon asset is 20x20
+#if defined(DEVICE_BOARD_M5CORES3)
+#define SHELL_MARK      80          // stacked above the title, 2× the previous CoreS3 mark
+#define SHELL_MARK_GAP  10          // between the mark and the name below it
+#else
 #define SHELL_MARK      28          // the mark beside the name: 0.72 of a 38px name, rounded
 #define SHELL_MARK_GAP  10          // between the mark and the first letter
+#endif
 static void swarm_line_tap(lv_event_t *e);   // the tab line → the tab picker (defined with it)
 static void swarm_line_paint(proj_t *p);     // name the window's current tab on this tile, or hide the line
 // Chip row BOTTOM → agent name top.
@@ -4398,7 +4779,11 @@ static char *dup_str(const char *s)
 // back without it left the words floating on the black face with nothing holding them. Same surface as
 // before — flat #23252f, 28px radius, a hairline at 20% — with the vertical padding down from 18 to 14:
 // the card holds two pinned lines now instead of a paragraph that could be one.
+#if defined(DEVICE_BOARD_M5CORES3)
+#define RECAP_MAX_CHARS   64        // fill the wider card (~12 more glyphs than 52)
+#else
 #define RECAP_MAX_CHARS   40
+#endif
 #define RECAP_FONT        (&geist_med_28)
 #define RECAP_LINE_SPACE  3
 #define RECAP_CARD_PAD_H  18
@@ -4406,7 +4791,7 @@ static char *dup_str(const char *s)
 // gripping them — a recap that wraps close to the edge no longer looks clipped at the bottom.
 #define RECAP_CARD_PAD_V  19
 /** The text column inside the card: the safe width less the padding and the hairline each side. */
-#define RECAP_TEXT_W      (SAFE_CONTENT_W - 2 * RECAP_CARD_PAD_H - 2)
+#define RECAP_TEXT_W      (TILE_COL_W - 2 * RECAP_CARD_PAD_H - 2)
 /** The card's fixed height: two lines of recap, the space between them, the padding, and the 1px edge
  *  on each side. Fixed so the box does not breathe as the carousel moves between tiles. */
 #define RECAP_CARD_H      (2 * lv_font_get_line_height(RECAP_FONT) + RECAP_LINE_SPACE \
@@ -4524,6 +4909,9 @@ static void render_busy_row(proj_t *p)
     p->busy_verb = lv_label_create(p->busy);            // "<verb> <elapsed>" (green, one line)
     lv_obj_set_style_text_font(p->busy_verb, &geist_med_32, 0);
     lv_obj_set_style_text_color(p->busy_verb, COL_VOICE, 0);   // Figma #00ff2f
+    lv_obj_set_width(p->busy_verb, TILE_COL_W);          // same column as the session title (Thinking… / Working…)
+    lv_label_set_long_mode(p->busy_verb, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(p->busy_verb, LV_TEXT_ALIGN_CENTER, 0);
     p->busy_meta = NULL;   // no stale-recap teaser here; live activity shows via tool_line when the backend sends it
     busy_compose(p);
 }
@@ -4532,7 +4920,11 @@ static void render_busy_row(proj_t *p)
 // a mismatch shows up as the tile shifting after every turn. The name sits at the mockup's y=124 — 15px
 // lower than it did, which is what losing the machine line under it paid for.
 // The chip row's own offset is NOT here — it is derived from the chip metrics in ctl_row_y().
+#if defined(DEVICE_BOARD_M5CORES3)
+#define TILE_PAD_TOP     36         // tab pill is in the header under the mark, not floating above it
+#else
 #define TILE_PAD_TOP    119         // 84 → 117 → 112 → 109 → 124 → 109 → 119 (CTL_NAME_GAP: row stays at y=69)
+#endif
 
 
 // Agent name BOTTOM → card top. The card is 2×28px lines + 14px padding + a hairline = 111px, so 21 puts
@@ -4557,7 +4949,11 @@ static void tile_layout_apply(proj_t *p)
     const bool centred = p->busy_model || !p->m_preview;
     if (centred) {
         lv_obj_set_flex_align(p->tile, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+#if defined(DEVICE_BOARD_M5CORES3)
+        lv_obj_set_style_pad_top(p->tile, 0, 0);   // tab pill is in-flow under the mark
+#else
         lv_obj_set_style_pad_top(p->tile, ctl_row_shown(p) ? ctl_band_h() : 0, 0);
+#endif
         // Working: the status hugs the name (the old 8px gap is already inside the busy group).
         // Nothing yet: the same gap the recap layout uses, so the placeholder sits where a status would.
         lv_obj_set_style_pad_row(p->tile, p->busy_model ? 0 : TILE_NAME_GAP, 0);
@@ -4637,7 +5033,11 @@ static void shell_name_fit(proj_t *p)
 {
     if (!p->name_lbl) return;
     bool mark = p->engine_lbl && !lv_obj_has_flag(p->engine_lbl, LV_OBJ_FLAG_HIDDEN);
+#if defined(DEVICE_BOARD_M5CORES3)
+    int32_t cap = TILE_COL_W;       // session title — the "Fix CoreS3 blan…" line
+#else
     int32_t cap = SAFE_CONTENT_W - (mark ? SHELL_MARK + SHELL_MARK_GAP : 0);
+#endif
     const char *text = lv_label_get_text(p->name_lbl);
     lv_point_t sz;
     lv_text_get_size(&sz, text, &geist_med_38, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
@@ -4657,16 +5057,32 @@ static void shell_name_fit(proj_t *p)
     // shorter one sits centred under it — and the mark sits on the FIRST line, centred on it, rather than
     // floating between the two.
     const bool multi = lines > 1;
+#if defined(DEVICE_BOARD_M5CORES3)
+    lv_obj_set_width(p->name_lbl, cap);   // session title shares TILE_COL_W with Thinking… / Working…
+#else
     lv_obj_set_width(p->name_lbl, multi ? wrapped.x : (sz.x < cap ? sz.x : cap));
+#endif
     lv_obj_set_height(p->name_lbl, lines * lh);
     lv_obj_set_style_text_align(p->name_lbl, LV_TEXT_ALIGN_CENTER, 0);
     if (p->header) {
+#if defined(DEVICE_BOARD_M5CORES3)
+        int extra = mark ? SHELL_MARK + SHELL_MARK_GAP : 0;
+        if (ctl_row_shown(p)) extra += ctl_pill_h() + SHELL_MARK_GAP;
+        lv_obj_set_height(p->header, extra + lines * lh);
+        lv_obj_set_flex_align(p->header, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        (void)multi;
+#else
         lv_obj_set_height(p->header, lines * lh);
         lv_obj_set_flex_align(p->header, LV_FLEX_ALIGN_CENTER,
                               multi ? LV_FLEX_ALIGN_START : LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+#endif
     }
     if (p->engine_lbl) {
+#if defined(DEVICE_BOARD_M5CORES3)
+        lv_obj_set_style_margin_top(p->engine_lbl, 0, 0);
+#else
         lv_obj_set_style_margin_top(p->engine_lbl, multi && mark ? (lh - SHELL_MARK) / 2 : 0, 0);
+#endif
     }
 }
 
@@ -4722,15 +5138,21 @@ static void build_shell(proj_t *p)
     if (!p->tile || p->header) return;      // no tile, or shell already built
     p->dot = NULL;                          // recap design drops the status dot (its only reader is guarded)
 
-    // The header is ONE ROW: [engine mark] [name], centred as a pair. See shell_name_fit for why the name
-    // is measured rather than boxed.
+    // Dial: ONE ROW [engine mark][name]. CoreS3: COLUMN, mark above the name, so the status
+    // line below can use the full square width instead of sharing it with the icon.
     p->header = lv_obj_create(p->tile);
     lv_obj_remove_style_all(p->header);
     lv_obj_clear_flag(p->header, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(p->header, SAFE_CONTENT_W, lv_font_get_line_height(&geist_med_38));
+    lv_obj_set_size(p->header, TILE_COL_W, lv_font_get_line_height(&geist_med_38));
+#if defined(DEVICE_BOARD_M5CORES3)
+    lv_obj_set_flex_flow(p->header, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(p->header, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(p->header, SHELL_MARK_GAP, 0);
+#else
     lv_obj_set_flex_flow(p->header, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(p->header, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(p->header, SHELL_MARK_GAP, 0);
+#endif
 
     p->engine_lbl = lv_image_create(p->header);        // engine product mark, sized by apply_engine_label
     // The text mark, for the one "engine" that is not a product: a terminal (see apply_engine_label).
@@ -4772,8 +5194,14 @@ static void build_shell(proj_t *p)
     lv_obj_set_flex_align(ctl, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(ctl, 8, 0);
     lv_obj_clear_flag(ctl, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+#if defined(DEVICE_BOARD_M5CORES3)
+    // In-flow under the engine mark: [logo][tab name][agent name]. Floating it above the header
+    // put the session label ON TOP of the logo, which is the opposite of what this square wants.
+    lv_obj_move_to_index(ctl, 1);
+#else
     lv_obj_add_flag(ctl, LV_OBJ_FLAG_FLOATING);
     lv_obj_align(ctl, LV_ALIGN_TOP_MID, 0, ctl_row_y());
+#endif
     lv_obj_add_event_cb(ctl, swarm_line_tap, LV_EVENT_CLICKED, NULL);
     p->swarm_lbl = lv_label_create(ctl);
     lv_obj_set_style_text_font(p->swarm_lbl, CTL_CHIP_FONT, 0);   // the chip's own face and colour
@@ -4784,7 +5212,11 @@ static void build_shell(proj_t *p)
     // 340 for the words, 364 with the pill's padding: the row sits at y≈130–175 on the round face, where
     // the chord is 418 px wide at the narrowest, and SAFE_CONTENT_W is 384 for everything below it.
     // It was 260 — "Autonomous Workshop" cut to "Autonomou…" with half the pill's room unused.
+#if defined(DEVICE_BOARD_M5CORES3)
+    lv_obj_set_style_max_width(p->swarm_lbl, 400, 0);
+#else
     lv_obj_set_style_max_width(p->swarm_lbl, 340, 0);
+#endif
     lv_obj_set_height(p->swarm_lbl, lv_font_get_line_height(CTL_CHIP_FONT));
     lv_label_set_long_mode(p->swarm_lbl, LV_LABEL_LONG_DOT);
     // No ▾ after the name: the pill IS the affordance, as the Model chip was.
@@ -4813,7 +5245,7 @@ static void materialize_content(int i)
 
     p->body = lv_obj_create(p->tile);
     lv_obj_remove_style_all(p->body);
-    lv_obj_set_width(p->body, SAFE_CONTENT_W);
+    lv_obj_set_width(p->body, TILE_COL_W);
     lv_obj_set_height(p->body, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(p->body, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(p->body, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -5347,7 +5779,11 @@ static int add_proj(const char *id)
 // very long name (now editable via rename) would otherwise overflow the round header.
 static void name_clip(const char *in, char *out, size_t cap)
 {
+#if defined(DEVICE_BOARD_M5CORES3)
+    const int MAX_CP = 26;   // 15 was the round header; the square title can hold ~26 at geist 38
+#else
     const int MAX_CP = 15;
+#endif
     const unsigned char *p = (const unsigned char *)in;
     size_t o = 0; int cp = 0;
     while (*p && cp < MAX_CP) {
@@ -5669,6 +6105,9 @@ void ui_home_overview(void)
 {
     if (s_bright_dragging) return;   // a brightness-slider drag on Settings is not a home swipe (mirror ui_swipe_*)
     ui_notif_close();   // no-op if closed; takes/releases the lock itself (must not nest inside our lock)
+#if defined(DEVICE_BOARD_M5CORES3)
+    wifi_overlay_hide();
+#endif
     display_lock();
     swarm_picker_close();
     if (s_ring != RING_AGENTS && lv_screen_active() == scr_projects) {
@@ -5789,7 +6228,7 @@ static void notif_remove(const char *proj_id)
 // hình agent"). A notification lands on the agent's tile and stops there; a tap on the recap opens
 // nothing. The screen, its X and open_reader_text are kept built and wired — set DETAIL_READER to 1 and
 // both ways in come back.
-#define DETAIL_READER 0
+#define DETAIL_READER 1   // back ON for evaluation (jay, 2026-09-20): both ways in are live again.
 static void open_agent_detail(const char *proj_id)
 {
     if (!proj_id || !proj_id[0]) return;
@@ -6468,7 +6907,7 @@ void ui_project_set_tool(const char *project_id, const char *tool_name, const ch
         lv_obj_set_style_text_font(dt, &geist_reg_20, 0);
         lv_obj_set_style_text_color(dt, COL_MUTED, 0);
         lv_obj_set_style_text_align(dt, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_width(dt, SAFE_CONTENT_W);
+        lv_obj_set_width(dt, STATUS_LINE_W);
         lv_obj_move_to_index(p->tool_line, lv_obj_get_index(p->busy));   // sit just above the Working row
     }
     lv_obj_t *tr = lv_obj_get_child(p->tool_line, 0);
@@ -6498,7 +6937,7 @@ void ui_project_set_tool(const char *project_id, const char *tool_name, const ch
             lead_w = lead_sz.x;
         }
         lv_text_get_size(&title_sz, tbuf, &geist_reg_25, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-        int title_w = SAFE_CONTENT_W - lead_w - 6;   // 6px flex gap between tool name/icon and title
+        int title_w = STATUS_LINE_W - lead_w - 6;   // 6px flex gap; CoreS3 STATUS_LINE_W is wider so this truncates later
         if (title_w < 1) title_w = 1;
         if (title_w > title_sz.x) title_w = title_sz.x;
         // LV_LABEL_LONG_DOT only ellipsizes reliably when both dimensions are fixed. Keeping the row at
@@ -7584,13 +8023,23 @@ static void no_agents_apply(void)
             if (strcmp(s_swarms[i].id, s_swarm_selected) == 0) { tab = s_swarms[i].name[0] ? s_swarms[i].name : NULL; break; }
         lv_label_set_text(s_na_eyebrow, tab ? tab : "This tab");
         lv_label_set_text(s_na_title, "Nothing on this tab");
+#if defined(DEVICE_BOARD_M5CORES3)
+        if (s_na_cmd_lbl) lv_label_set_text(s_na_cmd_lbl, "Switch tab");
+        if (pill) { lv_obj_t *cap = lv_obj_get_child(pill, 0); if (cap) set_hidden(cap, true); }
+        lv_label_set_text(s_no_agents_hint_lbl, "Tap to pick a tab that has agents.");
+#else
         lv_label_set_text(s_no_agents_hint_lbl, "Create one in OpenHarness,\nor pick another tab in the app.");
+#endif
         return;
     }
     if (s_na_marks) set_hidden(s_na_marks, false);
     // Name as-is, exactly like the Overview eyebrow: the device never upper-cases anything.
     lv_label_set_text(s_na_eyebrow, name ? name : "");
     lv_label_set_text(s_na_title, "No Harnesses yet");
+#if defined(DEVICE_BOARD_M5CORES3)
+    if (s_na_cmd_lbl) lv_label_set_text(s_na_cmd_lbl, "New Harness");
+    if (pill) { lv_obj_t *cap = lv_obj_get_child(pill, 0); if (cap) set_hidden(cap, false); }
+#endif
     lv_label_set_text(s_no_agents_hint_lbl, "Create one in OpenHarness \xE2\x80\x94\nit shows up here the moment it starts.");
 }
 
@@ -8147,6 +8596,21 @@ static void update_stop_btn(void)
 // Safe to call from a non-LVGL task.
 void ui_boot_pressed(void)
 {
+    // Voice overlay (recording / sending / waiting for transcript) has no other way off on CoreS3 —
+    // PWR is back/stop. Drop it before the cancel-task confirm.
+    if (s_voice_routing || ui_voice_is_active()
+        || (s_voice_overlay && !lv_obj_has_flag(s_voice_overlay, LV_OBJ_FLAG_HIDDEN))) {
+        if (audio_client_active()) audio_client_abort();
+        display_lock();
+        s_voice_routing = false;
+        s_voice_route_ms = 0;
+        voice_icon_apply(VIC_NONE);
+        voice_overlay_set(false);
+        update_stop_btn();
+        display_unlock();
+        ESP_LOGI(TAG, "BOOT → dismiss voice overlay");
+        return;
+    }
     // While a question is shown, BOOT means "back" (cancel voice / dismiss the question). Otherwise, if
     // the visible project is WORKING, pop a "Cancel task?" confirm (a running turn is always shown on
     // the projects screen) so an accidental press can't kill it. Nothing running → ignore.

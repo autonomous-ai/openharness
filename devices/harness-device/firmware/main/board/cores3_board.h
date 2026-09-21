@@ -25,6 +25,9 @@ void cores3_backlight_set(uint8_t level);
 // The AW88298's own I2C registers are the amp's real on/off; this is the rail side.
 void cores3_audio_rail(bool on);
 
+// Pulse AW9523B P0.1 (AW88298 reset, active-low). Call before opening the speaker codec.
+void cores3_aw88298_reset(void);
+
 // CoreS3 mic routing: the register sequence M5Unified writes on this board (bias, HPF,
 // channel power-down, gains), applied after esp_codec_dev's open so the known-good
 // board-specific values win. Talks to the ES7210 @0x40 on the shared bus.

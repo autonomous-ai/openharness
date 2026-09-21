@@ -5,6 +5,7 @@
 #include "driver/i2s_std.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
+#include "es7210_adc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_timer.h"
@@ -86,12 +87,14 @@ void audio_notify_init(void)
     if (!s_spk_ctrl || !s_gpio_if) { ESP_LOGW(TAG, "spk ctrl/gpio if failed"); return; }
 
 #if defined(DEVICE_BOARD_M5CORES3)
-    // AW88298 smart amp: no PA GPIO (the enable is the board rail, up since boot); the
-    // driver's open() powers the amp over I2C. pa_gain 15 per esp-bsp on this board.
+    // AW88298 smart amp: RST is AW9523 P0.1 (xiaozhi ResetAw88298). pa_gain 15 per esp-bsp.
+    cores3_aw88298_reset();
+    cores3_audio_rail(true);
     aw88298_codec_cfg_t aw_cfg = {
         .ctrl_if = s_spk_ctrl,
         .gpio_if = s_gpio_if,
-        .hw_gain = { .pa_gain = 15 },
+        .reset_pin = -1,  // hardware reset is AW9523 P0.1, not a GPIO
+        .hw_gain = { .pa_voltage = 5.0f, .codec_dac_voltage = 3.3f, .pa_gain = 15 },
     };
     s_spk_codec = aw88298_codec_new(&aw_cfg);
     if (!s_spk_codec) { ESP_LOGW(TAG, "aw88298 new — no speaker"); return; }
@@ -182,8 +185,11 @@ bool audio_capture_init(void)
 
     es7210_codec_cfg_t es_cfg = {
         .ctrl_if = s_ctrl_if,
-        // Match the vendor BSP: leave mic_selected at the driver default (the board's mics
-        // aren't necessarily MIC1/MIC2; an explicit wrong selection captures silence).
+#if defined(DEVICE_BOARD_M5CORES3)
+        // CoreS3 has two mics on ES7210 ch1/ch2 (xiaozhi also enables MIC3 as a reference
+        // channel; we don't do AEC, so just the pair).
+        .mic_selected = ES7210_SEL_MIC1 | ES7210_SEL_MIC2,
+#endif
     };
     s_es7210 = es7210_codec_new(&es_cfg);
     if (!s_es7210) { ESP_LOGE(TAG, "es7210 new"); return false; }

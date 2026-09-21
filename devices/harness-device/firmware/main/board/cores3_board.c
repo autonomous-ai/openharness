@@ -17,6 +17,8 @@ static const char *TAG = "cores3";
 #define AXP2101_ALDO2_VOLT  0x93    // ES7210 mic ADC rail (3.3V)
 #define AXP2101_DLDO1_VOLT  0x99    // LCD backlight
 #define AXP_DLDO1_EN        (1 << 7)
+#define AW9523_LEDMODE_P0   0x12    // 1 = GPIO, 0 = LED current-sink
+#define AW9523_LEDMODE_P1   0x13
 
 static i2c_master_dev_handle_t s_aw;
 static i2c_master_dev_handle_t s_axp;
@@ -62,12 +64,16 @@ void cores3_board_power_init(void)
 
     // AW9523B: P0 drives the enables (P0_0 touch, P0_2 audio front-end, P0_7 SY7088 boost);
     // P1_1 is the LCD reset and must drive; P1_2 stays an input (touch INT comes through it).
+    // LEDMODE must be GPIO (1), not LED current-sink (0): LCD RST in LED mode cannot drive high,
+    // which is a known CoreS3 blank-panel failure. Matches 78/xiaozhi-esp32 m5stack/core-s3.
     s_aw = dev_add(BSP_AW9523_I2C_ADDR);
     if (!s_aw) { ESP_LOGE(TAG, "AW9523B @0x%02X not answering — LCD/audio rails stay off", BSP_AW9523_I2C_ADDR); return; }
     wr(s_aw, AW9523_P0_CFG, 0x00);        // P0[7:0] all outputs
     wr(s_aw, AW9523_P1_CFG, 0b11111101);  // P1_1 output, P1_2 (touch INT) input, rest input
     wr(s_aw, AW9523_GCR, 0x10);           // P1 push-pull (P0 keeps its default mode)
-    wr(s_aw, AW9523_P0_OUT, 0b10000101);  // boost + touch + audio front-end ON, amp quiet for now
+    wr(s_aw, AW9523_LEDMODE_P0, 0xFF);    // GPIO mode, not LED
+    wr(s_aw, AW9523_LEDMODE_P1, 0xFF);
+    wr(s_aw, AW9523_P0_OUT, 0b10000111);  // boost + touch + AW88298 out of reset + audio FE ON
     wr(s_aw, AW9523_P1_OUT, 0x00);        // LCD held in reset until cores3_lcd_reset()
 
     // AXP2101 rails, per M5Unified's Power.begin for this board. ALDO1 (1.8V) feeds the
@@ -78,6 +84,7 @@ void cores3_board_power_init(void)
     wr(s_axp, AXP2101_LDO_ONOFF, 0xBF);   // ALDO1-4 + BLDO1/2 + DLDO1 enabled
     wr(s_axp, AXP2101_ALDO1_VOLT, 18 - 5);
     wr(s_axp, AXP2101_ALDO2_VOLT, 33 - 5);
+    wr(s_axp, AXP2101_DLDO1_VOLT, 28);    // backlight 3.3V now — leaving 0x99 at 0 is 0.5V (looks off)
     wr(s_axp, 0x94, 0);                   // ALDO3 (camera) off — camera unused by this app
     wr(s_axp, 0x95, 0);                   // ALDO4 (TF card) off — card unused by this app
     wr(s_axp, 0x27, 0x00);                // PWR key: hold 1s / power-off 4s (matches M5Unified)
@@ -93,7 +100,7 @@ void cores3_lcd_reset(void)
     cores3_board_power_init();
     if (!s_aw) return;
     aw_bit(AW9523_P1_OUT, 0x02, false);   // P1_1 low
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(20));
     aw_bit(AW9523_P1_OUT, 0x02, true);    // out of reset
     vTaskDelay(pdMS_TO_TICKS(120));
 }
@@ -109,6 +116,8 @@ void cores3_backlight_set(uint8_t level)
     }
     uint8_t reg = (uint8_t)((level + 641) >> 5);   // M5GFX mapping: 255 → reg 28 (3.3V)
     wr(s_axp, AXP2101_DLDO1_VOLT, reg < 28 ? reg : 28);
+    int en = rd(s_axp, AXP2101_LDO_ONOFF);
+    wr(s_axp, AXP2101_LDO_ONOFF, (uint8_t)(en < 0 ? AXP_DLDO1_EN : en) | AXP_DLDO1_EN);
 }
 
 void cores3_audio_rail(bool on)
@@ -118,6 +127,17 @@ void cores3_audio_rail(bool on)
     aw_bit(AW9523_P0_OUT, 0b00000100, on);         // P0_2 audio front-end enable
     if (on) wr(s_axp, AXP2101_ALDO1_VOLT, 18 - 5); // AW88298 rail up
     else wr(s_axp, AXP2101_ALDO1_VOLT, 0);
+}
+
+void cores3_aw88298_reset(void)
+{
+    // Xiaozhi / M5Unified: AW88298 RST is AW9523 P0.1, active-low. Pulse it after the 1.8V rail is up.
+    cores3_board_power_init();
+    if (!s_aw) return;
+    aw_bit(AW9523_P0_OUT, 0b00000010, false);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    aw_bit(AW9523_P0_OUT, 0b00000010, true);
+    vTaskDelay(pdMS_TO_TICKS(50));
 }
 
 void cores3_es7210_apply_sequence(void)
