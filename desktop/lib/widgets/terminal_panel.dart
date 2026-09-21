@@ -186,6 +186,22 @@ class _TerminalPanelState extends State<TerminalPanel>
   Object? _headerPresentation;
   Widget? _header;
 
+  /// Set while the in-pane control banner is answering a keystroke that went
+  /// nowhere (see [_nudgeControlBanner]); cleared by [_controlNudgeTimer].
+  bool _controlNudged = false;
+  int _controlNudge = 0;
+  Timer? _controlNudgeTimer;
+
+  /// Set when THIS pane asked for the stream back, so the banner can stay up
+  /// through `opening` saying so. A first open, or a resync, is not that and
+  /// shows nothing.
+  bool _retakingControl = false;
+
+  /// The status the last frame was built for. The grid normally rebuilds this
+  /// panel on every session change, but the banner must not depend on that.
+  TerminalSessionStatus? _builtStatus;
+  bool _wasBlocked = false;
+
   @override
   void initState() {
     super.initState();
@@ -317,6 +333,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     terminalThemeStore.removeListener(_onFontChanged);
     _cancelDialInertia();
     _cursorBlinkTimer?.cancel();
+    _controlNudgeTimer?.cancel();
     _focusNode.removeListener(_handleFocusChange);
     _composerFocus.removeListener(_handleComposerFocusChange);
     _controller.dispose();
@@ -349,6 +366,32 @@ class _TerminalPanelState extends State<TerminalPanel>
   void _onSessionChanged() {
     if (!mounted) return;
     _syncCursorBlink();
+    if (_controlNudged && !_inputBlocked) {
+      _controlNudgeTimer?.cancel();
+      _controlNudgeTimer = null;
+      setState(() => _controlNudged = false);
+    }
+    if (_retakingControl &&
+        widget.session.status != TerminalSessionStatus.opening) {
+      setState(() => _retakingControl = false);
+    } else if (_builtStatus != widget.session.status) {
+      setState(() {});
+    }
+    // The band promises ⏎, so the focused tile puts the keyboard in its
+    // terminal the moment the stream is lost: a composer being disabled drops
+    // it on the floor, and a pane reached by mouse may never have held it —
+    // either way the focused tile would be the one place ⏎ did nothing.
+    // Only when the keyboard is this pane's or nobody's, though: a person
+    // mid-word in the command dock or a rename field keeps it, and the band's
+    // text is there to click when they come back.
+    if (_inputBlocked &&
+        !_wasBlocked &&
+        widget.focused &&
+        widget.visible &&
+        _keyboardIsOursOrIdle) {
+      _claimFocusAfterFrame();
+    }
+    _wasBlocked = _inputBlocked;
     // A pane can open BEFORE its screen exists: over the relay it mounts empty
     // and the retained scrollback is replayed a moment later, so the jump in
     // `_afterTerminalMounted` lands on nothing and the screen then fills in
@@ -540,10 +583,14 @@ class _TerminalPanelState extends State<TerminalPanel>
       bar.focusSearch(selectAll: false);
       return true;
     }
-    if (_composerFocus.hasFocus) return true;
     // On a remote pane the box gets the caret, not the terminal. Landing in the terminal would
     // hand the user the per-keystroke path by default — the exact cost the box exists to avoid.
-    if (_showsComposer && !widget.readOnly) {
+    // Except while the pane has lost control: the box is being disabled (it
+    // may still hold focus this frame, and drops it on the next) and the
+    // terminal is where ⏎ takes control back (see [_onTerminalKey]), so the
+    // keyboard is moved there rather than left to fall to the route.
+    if (_composerFocus.hasFocus && !_inputBlocked) return true;
+    if (_showsComposer && !widget.readOnly && !_inputBlocked) {
       if (widget.session.acceptsInput && _composerFocus.canRequestFocus) {
         _composerFocus.requestFocus();
         return true;
@@ -553,6 +600,65 @@ class _TerminalPanelState extends State<TerminalPanel>
     }
     view.requestKeyboard();
     return true;
+  }
+
+  /// Whether pulling focus into the terminal would take it from nobody: the
+  /// keyboard is already in this pane (terminal or composer) or has fallen
+  /// back to a scope with no field under it.
+  bool get _keyboardIsOursOrIdle {
+    final primary = FocusManager.instance.primaryFocus;
+    return primary == null ||
+        primary is FocusScopeNode ||
+        identical(primary, _focusNode) ||
+        identical(primary, _composerFocus);
+  }
+
+  /// Another client took the stream ([TerminalSessionStatus.takenOver]) and
+  /// only a person can take it back. That state alone: `closed`/`error` are
+  /// usually a beat long — the app reattaches them itself
+  /// (`_paneNeedsAttach`) — and a band that flashes up for those frames is
+  /// noise, where a taken-over pane stays taken over until somebody acts.
+  /// Never a pane-level [TerminalPanel.notice] (offline, unlinked — nothing
+  /// here would help) and never a shared read-only view.
+  bool get _inputBlocked =>
+      !widget.readOnly &&
+      widget.notice == null &&
+      widget.session.status == TerminalSessionStatus.takenOver;
+
+  /// Retakes the stream, the same path as the header chip: `selectAgent` on a
+  /// dead pane is `reopen()`, and a repeat while it is already `opening` only
+  /// re-focuses the tile, so a held ⏎ sends one `terminal_open`.
+  Future<void> _takeControl() async {
+    final session = widget.session;
+    if (_inputBlocked && !_retakingControl) {
+      setState(() => _retakingControl = true);
+    }
+    await widget.notifier.selectAgent(session.machineId, session.agentId);
+    // `selectAgent` declines quietly when the pane cannot be attached (machine
+    // gone offline meanwhile, agent withdrawn). No status change means no
+    // listener call, so the flag is taken back here rather than left armed
+    // for an `opening` this pane never asked for.
+    if (mounted &&
+        _retakingControl &&
+        identical(widget.session, session) &&
+        session.status != TerminalSessionStatus.opening) {
+      setState(() => _retakingControl = false);
+    }
+  }
+
+  /// A keystroke was typed into a pane that cannot take it. Flash the banner
+  /// and say so for a moment, rather than letting the key vanish in silence.
+  void _nudgeControlBanner() {
+    if (!mounted) return;
+    _controlNudgeTimer?.cancel();
+    _controlNudgeTimer = Timer(const Duration(seconds: 2), () {
+      _controlNudgeTimer = null;
+      if (mounted) setState(() => _controlNudged = false);
+    });
+    setState(() {
+      _controlNudged = true;
+      _controlNudge++;
+    });
   }
 
   bool get _canClaimInput =>
@@ -1022,10 +1128,29 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// so agent image paste follows the same path. Linux reserves Ctrl-V for
   /// the terminal program and uses Ctrl-Shift-V for its clipboard.
   KeyEventResult _onTerminalKey(FocusNode node, KeyEvent event) {
+    final keyboard = HardwareKeyboard.instance;
+    // A pane that lost control still gets the keys (xterm's read-only mode
+    // keeps the focus node, it only stops opening an input connection), and
+    // dropping them silently is how people sit typing into a frozen pane. ⏎
+    // takes control back; any other plain key nudges the banner that says so.
+    // ⌘/⌃ chords are left alone: they are the app's and the pane's shortcuts.
+    if (event is KeyDownEvent &&
+        _inputBlocked &&
+        !keyboard.isMetaPressed &&
+        !keyboard.isControlPressed) {
+      if (event.logicalKey == LogicalKeyboardKey.enter ||
+          event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+        unawaited(_takeControl());
+        return KeyEventResult.handled;
+      }
+      if (_isTypingKey(event)) {
+        _nudgeControlBanner();
+        return KeyEventResult.ignored;
+      }
+    }
     if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.keyV) {
       return KeyEventResult.ignored;
     }
-    final keyboard = HardwareKeyboard.instance;
     if (keyboard.isAltPressed) return KeyEventResult.ignored;
     final apple =
         defaultTargetPlatform == TargetPlatform.macOS ||
@@ -1042,6 +1167,28 @@ class _TerminalPanelState extends State<TerminalPanel>
     unawaited(_paste());
     return KeyEventResult.handled;
   }
+
+  /// A key that would have put something into the terminal: a character, or
+  /// one of the editing/navigation keys a prompt answers. Not a bare modifier
+  /// or a function key, which nobody expects to echo.
+  static bool _isTypingKey(KeyEvent event) {
+    final character = event.character;
+    if (character != null && character.isNotEmpty) return true;
+    return _editingKeys.contains(event.logicalKey);
+  }
+
+  // Not const: LogicalKeyboardKey overrides `==`, which a const set refuses.
+  static final Set<LogicalKeyboardKey> _editingKeys = {
+    LogicalKeyboardKey.backspace,
+    LogicalKeyboardKey.delete,
+    LogicalKeyboardKey.tab,
+    LogicalKeyboardKey.escape,
+    LogicalKeyboardKey.space,
+    LogicalKeyboardKey.arrowUp,
+    LogicalKeyboardKey.arrowDown,
+    LogicalKeyboardKey.arrowLeft,
+    LogicalKeyboardKey.arrowRight,
+  };
 
   bool get _linkModifierPressed {
     final keyboard = HardwareKeyboard.instance;
@@ -1204,6 +1351,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     grid.AppTheme.watch(context);
     final session = widget.session;
     _syncTerminal(session.terminal);
+    _builtStatus = session.status;
     final machineState = widget.notifier.stateOf(session.machineId);
     final remote = machineState != null && !machineState.isLocalMachine;
     final showComposer = _showsComposer;
@@ -1342,6 +1490,9 @@ class _TerminalPanelState extends State<TerminalPanel>
                           mouseCursor:
                               _hoveredLink != null && _linkModifierPressed
                               ? SystemMouseCursors.click
+                              // An I-beam invites typing; a blocked pane does not.
+                              : _inputBlocked
+                              ? SystemMouseCursors.basic
                               : SystemMouseCursors.text,
                           onSecondaryTapDown: (_, _) => _copyOrPaste(),
 
@@ -1352,6 +1503,29 @@ class _TerminalPanelState extends State<TerminalPanel>
                       ),
                     ),
                   ),
+                  // The header's status chip is 11pt in a corner; a person
+                  // mid-sentence never sees it. This band sits over the
+                  // frozen output itself, where the eyes already are, and
+                  // stays through `opening` so the pane does not jump when
+                  // it is answered.
+                  if (_inputBlocked ||
+                      (_retakingControl &&
+                          session.status == TerminalSessionStatus.opening))
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: _ControlBanner(
+                        busy: !_inputBlocked,
+                        nudged: _controlNudged,
+                        nudge: _controlNudge,
+                        onTakeControl: _inputBlocked
+                            ? () => unawaited(_takeControl())
+                            : null,
+                        onFocusTerminal: () =>
+                            _laidOutTerminalView()?.requestKeyboard(),
+                      ),
+                    ),
                   if (session.uploadProgress != null ||
                       _previewProgress != null)
                     Positioned(
@@ -1467,6 +1641,7 @@ class _TerminalPanelState extends State<TerminalPanel>
         onDelete: widget.onDelete == null
             ? null
             : () => widget.onDelete?.call(),
+        onReconnect: () => unawaited(_takeControl()),
         composerVisible: widget.composerVisible,
         onToggleComposer: widget.onToggleComposer == null
             ? null
@@ -1490,6 +1665,10 @@ class _TerminalHeader extends StatelessWidget {
   /// Ends the agent (with a confirmation), as the rail's row menu does. Null
   /// where the pane cannot name a live agent to end.
   final VoidCallback? onDelete;
+
+  /// Retakes a dead or taken-over stream — the panel's `_takeControl`, so the
+  /// chip and the in-pane band drive one path.
+  final VoidCallback onReconnect;
   final bool compact;
   final VoidCallback? onToggleZoom;
   final bool zoomed;
@@ -1515,6 +1694,7 @@ class _TerminalHeader extends StatelessWidget {
     this.onRestart,
     this.onFork,
     this.onDelete,
+    required this.onReconnect,
     this.compact = false,
     this.onToggleZoom,
     this.zoomed = false,
@@ -1679,12 +1859,7 @@ class _TerminalHeader extends StatelessWidget {
                             message: '${status.label}: ${status.detail}',
                             child: IconButton(
                               tooltip: status.label,
-                              onPressed: canReconnect
-                                  ? () => notifier.selectAgent(
-                                      session.machineId,
-                                      session.agentId,
-                                    )
-                                  : null,
+                              onPressed: canReconnect ? onReconnect : null,
                               icon: Icon(status.icon, size: 14),
                               style: IconButton.styleFrom(
                                 foregroundColor: color,
@@ -1712,12 +1887,7 @@ class _TerminalHeader extends StatelessWidget {
                               child: Tooltip(
                                 message: status.detail,
                                 child: TextButton(
-                                  onPressed: canReconnect
-                                      ? () => notifier.selectAgent(
-                                          session.machineId,
-                                          session.agentId,
-                                        )
-                                      : null,
+                                  onPressed: canReconnect ? onReconnect : null,
                                   style: TextButton.styleFrom(
                                     foregroundColor: color,
                                     disabledForegroundColor: AppColors.textSoft,
@@ -1938,6 +2108,237 @@ class _LinkModeMark extends StatelessWidget {
     return Tooltip(
       message: label,
       child: Icon(icon, size: 14, color: color, semanticLabel: label),
+    );
+  }
+}
+
+/// The band over a pane another client took the stream of. It says what
+/// happened, that keys go nowhere, and how to get it back — the header's chip
+/// carries the same fact, but at 11pt in a corner it was being read by nobody,
+/// and people sat typing. Taken-over only, not closed/error: see
+/// [_TerminalPanelState._inputBlocked] for why those keep the chip alone.
+///
+/// ⏎ is named on the button itself and in the line under the title, always:
+/// the first cut showed it only once the terminal held focus and hid the line
+/// on a compact header, which is every pane in swarm mode — so the one thing
+/// a person needed to know was the one thing the band left out.
+///
+/// While the pane is retaking the stream [busy] is set and the band keeps its
+/// place with the button swapped for a spinner, so answering it does not jump
+/// the layout.
+class _ControlBanner extends StatelessWidget {
+  final bool busy;
+
+  /// A key was just typed into the pane; see [_TerminalPanelState._nudgeControlBanner].
+  final bool nudged;
+  final int nudge;
+  final VoidCallback? onTakeControl;
+
+  /// A click on the band's text puts the keyboard in the terminal, so ⏎ works
+  /// even when the person reached the pane with the mouse.
+  final VoidCallback? onFocusTerminal;
+
+  const _ControlBanner({
+    required this.busy,
+    required this.nudged,
+    required this.nudge,
+    required this.onTakeControl,
+    required this.onFocusTerminal,
+  });
+
+  String get title =>
+      busy ? 'Taking control…' : 'Another app took control of this terminal';
+
+  String? get detail {
+    if (busy) return null;
+    if (nudged) return 'Keys are ignored — press ⏎ to take control.';
+    return 'Typing is paused. Press ⏎ or click Take control to type here again.';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final ink = AppColors.warning;
+    final detail = this.detail;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    // Composited over the pane's own ground, as [UpdateNotice] is over the
+    // window's: the terminal theme behind this band may be any colour, and a
+    // bare 12% wash would read differently on each of them.
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      child: Stack(
+        children: [
+          // The flash is the ground only. Re-keyed per nudge so each ignored
+          // key restarts it from full, and kept OUT of the content's ancestry
+          // so the button is not remounted (and does not lose focus or hover)
+          // on every keystroke.
+          Positioned.fill(
+            child: TweenAnimationBuilder<double>(
+              key: ValueKey(nudge),
+              tween: Tween(begin: 1, end: 0),
+              duration: reduceMotion
+                  ? Duration.zero
+                  : const Duration(milliseconds: 450),
+              curve: Curves.easeOut,
+              builder: (context, flash, _) {
+                final wash = ink.withValues(alpha: 0.12 + 0.18 * flash);
+                return DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Color.alphaBlend(wash, grid.AppPalette.panelBg),
+                    border: Border(
+                      bottom: BorderSide(color: ink.withValues(alpha: 0.55)),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 12, 10),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // A quarter-width tile at large text cannot seat the sentence
+                // and the button on one line; there the button takes a line of
+                // its own under the title rather than running off the edge.
+                final narrow = constraints.maxWidth < 340;
+                final lead = !busy
+                    ? Icon(Icons.lock_outline, size: 16, color: ink)
+                    : SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: ink,
+                        ),
+                      );
+                final text = Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: AppColors.text,
+                        fontFamily: AppFonts.sans,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (detail != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        detail,
+                        maxLines: narrow ? 1 : 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: nudged ? ink : AppColors.textSoft,
+                          fontFamily: AppFonts.sans,
+                          fontSize: 11,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ],
+                );
+                // The text is a click target too: it hands the terminal the
+                // keyboard, which is what makes the ⏎ it promises true.
+                final prose = MouseRegion(
+                  cursor: SystemMouseCursors.basic,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: onFocusTerminal,
+                    child: Row(
+                      children: [
+                        lead,
+                        const SizedBox(width: 10),
+                        Expanded(child: text),
+                      ],
+                    ),
+                  ),
+                );
+                final button = busy
+                    ? null
+                    : _ControlBannerButton(onPressed: onTakeControl);
+                if (narrow) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      prose,
+                      if (button != null) ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: button,
+                          ),
+                        ),
+                      ],
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    Expanded(child: prose),
+                    if (button != null) ...[const SizedBox(width: 12), button],
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// `Take control ⏎` — the action with its key drawn on it, in the button's own
+/// ink rather than [KeyCap]'s well fill, which would sit as a grey square on
+/// the accent.
+class _ControlBannerButton extends StatelessWidget {
+  final VoidCallback? onPressed;
+  const _ControlBannerButton({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    final onAccent = Theme.of(context).colorScheme.onPrimary;
+    return FilledButton(
+      onPressed: onPressed,
+      style: FilledButton.styleFrom(
+        minimumSize: const Size(0, 28),
+        padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'Take control',
+            style: TextStyle(
+              fontFamily: AppFonts.sans,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+            decoration: BoxDecoration(
+              border: Border.all(color: onAccent.withValues(alpha: 0.6)),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Semantics(
+              label: 'Return',
+              child: Icon(Icons.keyboard_return, size: 12, color: onAccent),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

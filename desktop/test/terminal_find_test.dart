@@ -808,7 +808,9 @@ void main() {
     await tester.pump();
     expect(session.status, TerminalSessionStatus.takenOver);
     expect(find.text('TERMINAL FROZEN'), findsNothing);
-    expect(find.text('Take control'), findsOneWidget);
+    // Header chip and the in-pane banner both offer it; neither typed anything.
+    expect(find.widgetWithText(TextButton, 'Take control'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Take control'), findsOneWidget);
     expect(input, isEmpty);
     await tester.pumpWidget(const SizedBox());
     app.dispose();

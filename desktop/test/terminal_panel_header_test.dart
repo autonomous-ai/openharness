@@ -99,7 +99,9 @@ void main() {
         session.status = status;
         await pump(tester, session);
         final nameRect = tester.getRect(find.text('Desktop'));
-        final statusRect = tester.getRect(find.text(label));
+        final statusRect = tester.getRect(
+          find.widgetWithText(TextButton, label),
+        );
         expect(statusRect.left, greaterThan(nameRect.right));
         expect(statusRect.right, lessThan(projectRect.left));
         expect(tester.getRect(project), projectRect);

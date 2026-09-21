@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../core/models.dart';
+import '../core/harness_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
@@ -46,7 +47,10 @@ List<StoreResumeTarget> storeResumeTargets(
   for (final machine in app.machineStates.values) {
     for (final agent in machine.agents) {
       // A Blender harness running Codex belongs under Blender, not Codex.
-      if (agent.identityEngine != harnessId) continue;
+      if (canonicalHarnessId(agent.identityEngine ?? '') !=
+          canonicalHarnessId(harnessId)) {
+        continue;
+      }
       final target = StoreResumeTarget(machine, agent);
       // Existing views can still be visited while their machine reconnects.
       // Discovered entries without a terminal or a view cannot be resumed.

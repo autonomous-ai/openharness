@@ -1,0 +1,352 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/state/app_state.dart';
+import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/terminal/terminal_session.dart';
+import 'package:harness/widgets/terminal_panel.dart';
+
+import 'swarm_state_test.dart' show createApp;
+
+/// The band over a pane that lost its stream: what it says, that ⏎ takes the
+/// stream back, and that a stray keystroke is answered rather than dropped.
+void main() {
+  late AppNotifier app;
+  late TerminalSession session;
+  late List<String> sent;
+  late List<TerminalBinaryFrame> input;
+
+  setUp(() {
+    app = createApp();
+    app.stateOf('m')!
+      ..nodeOnline = true
+      ..terminalCapabilityAvailable = true;
+    sent = [];
+    input = [];
+    session =
+        TerminalSession(
+            machineId: 'm',
+            agentId: 'a0',
+            agentName: 'Session a0',
+            engineId: 'codex',
+            send: (type, _) async {
+              sent.add(type);
+              return true;
+            },
+            sendBinary: (frame) async {
+              if (frame.kind == TerminalBinaryKind.input) input.add(frame);
+              return true;
+            },
+          )
+          ..status = TerminalSessionStatus.controlling
+          ..streamId = 'stream-a0';
+    app.adoptSessionForTest(session);
+  });
+
+  // The app owns the adopted session and disposes it with itself. Done inside
+  // the test body: a reopen arms the session's handshake timers, and the
+  // binding checks for pending timers before tearDown runs.
+  var finished = false;
+  Future<void> finish(WidgetTester tester) async {
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+    finished = true;
+  }
+
+  tearDown(() {
+    if (!finished) app.dispose();
+    finished = false;
+  });
+
+  Future<void> pump(
+    WidgetTester tester, {
+    bool readOnly = false,
+    TerminalNotice? notice,
+    bool composerVisible = false,
+    bool compactHeader = false,
+    double width = 900,
+    Widget? beside,
+  }) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              ?beside,
+              Center(
+                child: SizedBox(
+                  width: width,
+                  height: 400,
+                  child: TerminalPanel(
+                    notifier: app,
+                    session: session,
+                    focused: true,
+                    readOnly: readOnly,
+                    notice: notice,
+                    composerVisible: composerVisible,
+                    compactHeader: compactHeader,
+                    onToggleComposer: () {},
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+  }
+
+  /// Mounting measures the grid and sends a resize; only the opens matter here.
+  List<String> opens() => sent.where((t) => t == 'terminal_open').toList();
+
+  void takeOver() {
+    session.handleFrame('terminal_closed', {
+      'streamId': 'stream-a0',
+      'code': 'TERMINAL_TAKEN_OVER',
+      'reason': 'Another client connected to this terminal.',
+    });
+  }
+
+  final banner = find.widgetWithText(FilledButton, 'Take control');
+  final takenOverTitle = find.text('Another app took control of this terminal');
+
+  final hint = find.textContaining('Press ⏎');
+
+  testWidgets('the banner appears over a taken-over pane and only there', (
+    tester,
+  ) async {
+    // Swarm mode hands every pane a compact header; the band must not read
+    // that as permission to drop the one line that says what to press.
+    await pump(tester, compactHeader: true);
+    expect(takenOverTitle, findsNothing);
+    expect(banner, findsNothing);
+
+    takeOver();
+    await tester.pump();
+    expect(session.status, TerminalSessionStatus.takenOver);
+    expect(takenOverTitle, findsOneWidget);
+    expect(banner, findsOneWidget);
+    expect(hint, findsOneWidget);
+    expect(
+      find.descendant(of: banner, matching: find.byIcon(Icons.keyboard_return)),
+      findsOneWidget,
+      reason: 'the key is drawn on the button itself',
+    );
+
+    // A shared read-only view has nothing to take.
+    await pump(tester, readOnly: true);
+    expect(takenOverTitle, findsNothing);
+
+    // A pane-level notice (offline, unlinked) already explains itself.
+    await pump(
+      tester,
+      notice: (
+        label: 'Offline',
+        icon: Icons.cloud_off,
+        detail: 'Test host is offline.',
+      ),
+    );
+    expect(takenOverTitle, findsNothing);
+    await finish(tester);
+  });
+
+  testWidgets('⏎ in the terminal takes control back, once', (tester) async {
+    await pump(tester);
+    takeOver();
+    await tester.pump();
+    expect(opens(), isEmpty);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(opens(), ['terminal_open']);
+    expect(input, isEmpty);
+    expect(session.status, TerminalSessionStatus.opening);
+    // The band stays through the handshake, saying so, without a button.
+    expect(find.text('Taking control…'), findsOneWidget);
+    expect(banner, findsNothing);
+
+    // A held or repeated ⏎ does not send a second open.
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(opens(), ['terminal_open']);
+
+    session
+      ..status = TerminalSessionStatus.controlling
+      ..streamId = 'stream-a0-2'
+      ..notifyListeners();
+    await tester.pump();
+    expect(find.text('Taking control…'), findsNothing);
+    expect(takenOverTitle, findsNothing);
+    await finish(tester);
+  });
+
+  testWidgets('a keystroke into a taken-over pane is answered, not dropped', (
+    tester,
+  ) async {
+    await pump(tester);
+    takeOver();
+    await tester.pump();
+    final nudge = find.text('Keys are ignored — press ⏎ to take control.');
+    expect(nudge, findsNothing);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+    await tester.pump();
+    expect(input, isEmpty);
+    expect(opens(), isEmpty);
+    expect(nudge, findsOneWidget);
+
+    // The message steps back once the person stops typing.
+    await tester.pump(const Duration(seconds: 3));
+    expect(nudge, findsNothing);
+
+    // ⌘ chords are the app's, not an attempt to type.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pump();
+    expect(nudge, findsNothing);
+    expect(opens(), isEmpty);
+    await finish(tester);
+  });
+
+  testWidgets('the button takes control too', (tester) async {
+    await pump(tester);
+    takeOver();
+    await tester.pump();
+    await tester.tap(banner);
+    await tester.pump();
+    expect(opens(), ['terminal_open']);
+    expect(find.text('Taking control…'), findsOneWidget);
+    await finish(tester);
+  });
+
+  testWidgets('a closed stream keeps the header chip alone, no band', (
+    tester,
+  ) async {
+    // closed/error are usually a beat long — the app reattaches them itself —
+    // so a band there would flash; they keep the old Reconnect chip and ⏎
+    // goes to the read-only terminal as before.
+    await pump(tester);
+    session.handleFrame('terminal_closed', {
+      'streamId': 'stream-a0',
+      'reason': 'Session exited.',
+    });
+    await tester.pump();
+    expect(session.status, TerminalSessionStatus.closed);
+    expect(find.widgetWithText(TextButton, 'Reconnect'), findsOneWidget);
+    expect(find.byType(FilledButton), findsNothing);
+    expect(takenOverTitle, findsNothing);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(opens(), isEmpty);
+    await finish(tester);
+  });
+
+  testWidgets('a shared read-only view ignores ⏎', (tester) async {
+    await pump(tester, readOnly: true);
+    takeOver();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(opens(), isEmpty);
+    await finish(tester);
+  });
+
+  testWidgets('with the composer showing, the terminal still takes ⏎', (
+    tester,
+  ) async {
+    // The composer is disabled while the pane has no stream and refuses focus;
+    // the keyboard has to land on the terminal for ⏎ to mean anything.
+    await pump(tester, composerVisible: true);
+    takeOver();
+    await tester.pump();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(opens(), ['terminal_open']);
+    await finish(tester);
+  });
+
+  testWidgets('losing the stream pulls an idle keyboard into the tile', (
+    tester,
+  ) async {
+    // Nothing in the window held the keyboard (it had fallen back to the
+    // route's scope). The band promises ⏎, so the focused tile takes it.
+    await pump(tester);
+    FocusManager.instance.primaryFocus?.unfocus();
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus, isA<FocusScopeNode>());
+
+    takeOver();
+    await tester.pump();
+    await tester.pump();
+    expect(hint, findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(opens(), ['terminal_open']);
+    await finish(tester);
+  });
+
+  testWidgets('losing the stream never steals the keyboard from a field', (
+    tester,
+  ) async {
+    // Mid-word in the command dock, a rename box, anything: that stays put.
+    final elsewhere = FocusNode();
+    addTearDown(elsewhere.dispose);
+    await pump(tester, beside: TextField(focusNode: elsewhere));
+    elsewhere.requestFocus();
+    await tester.pump();
+    expect(elsewhere.hasFocus, isTrue);
+
+    takeOver();
+    await tester.pump();
+    await tester.pump();
+    expect(elsewhere.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(opens(), isEmpty);
+    await finish(tester);
+  });
+
+  testWidgets('clicking the band\'s text focuses the terminal for ⏎', (
+    tester,
+  ) async {
+    final elsewhere = FocusNode();
+    addTearDown(elsewhere.dispose);
+    await pump(tester, beside: TextField(focusNode: elsewhere));
+    takeOver();
+    await tester.pump();
+    await tester.pump();
+    // Wander off again after the pull, then come back by mouse.
+    elsewhere.requestFocus();
+    await tester.pump();
+    expect(elsewhere.hasFocus, isTrue);
+
+    await tester.tap(takenOverTitle);
+    await tester.pump();
+    expect(elsewhere.hasFocus, isFalse);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(opens(), ['terminal_open']);
+    await finish(tester);
+  });
+
+  testWidgets('a narrow tile stacks the button under the title', (
+    tester,
+  ) async {
+    await pump(tester, width: 240);
+    takeOver();
+    await tester.pump();
+    expect(takenOverTitle, findsOneWidget);
+    expect(banner, findsOneWidget);
+    expect(hint, findsOneWidget, reason: 'the hint stays, on one line');
+    expect(tester.takeException(), isNull);
+    final title = tester.getRect(takenOverTitle);
+    final button = tester.getRect(banner);
+    expect(button.top, greaterThanOrEqualTo(title.bottom));
+    await finish(tester);
+  });
+}

@@ -55,7 +55,7 @@ import { stopDaemonProcess } from './lib/daemonStop.js'
 import { ensureTmuxOnPath, requireTmuxAvailable } from './lib/tmuxOnPath.js'
 import { flashCommand } from './lib/flash.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
-import { renderLoginSuccessHtml } from './lib/loginPage.js'
+import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE } from './lib/loginCallback.js'
 import { AuthSessionError, AuthSessionManager, clearAuthSession, readAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { ensureGridInstalled, type GridInstallResult } from './lib/gridInstall.js'
@@ -764,25 +764,9 @@ async function browserSignIn(
     const manual = !json && process.stdin.isTTY ? promptForCallbackUrl(redirectUri) : null
     let callbackResult: { code: string; state: string }
     try {
-      callbackResult = await new Promise<{ code: string; state: string }>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('SSO login timed out')), 5 * 60_000)
-        callback.on('request', (req, res) => {
-          const url = new URL(req.url ?? '/', redirectUri)
-          const code = url.searchParams.get('code')
-          const state = url.searchParams.get('state')
-          const error = url.searchParams.get('error')
-          res.writeHead(error || !code || !state ? 400 : 200, { 'content-type': 'text/html; charset=utf-8' })
-          res.end(error || !code || !state
-            ? '<h1>Harness login failed</h1><p>You can close this window.</p>'
-            : renderLoginSuccessHtml())
-          clearTimeout(timeout)
-          if (error) reject(new Error(`SSO login failed: ${error}`))
-          else if (code && state) resolve({ code, state })
-        })
-        manual?.promise.then(resolve, reject)
-      })
+      callbackResult = await awaitLoginCallback({ server: callback, redirectUri, manual: manual?.promise ?? null, timeoutMs: 5 * 60_000 })
     } catch (err) {
-      const timedOut = (err as Error).message === 'SSO login timed out'
+      const timedOut = (err as Error).message === LOGIN_TIMEOUT_MESSAGE
       if (json) { emit({ type: 'result', status: 'error', code: timedOut ? 'TIMEOUT' : 'CALLBACK_ERROR', message: (err as Error).message }); process.exitCode = 1; return { signedIn: false } }
       throw err
     } finally {
@@ -818,6 +802,9 @@ async function browserSignIn(
     }
     return await succeed()
   } finally {
+    // A keep-alive socket the browser left open would hold `close()` until it idles out (a pinned
+    // ADAPTER_LOGIN_CALLBACK_PORT behind an SSH tunnel is where that shows up); drop it first.
+    callback.closeAllConnections?.()
     await new Promise<void>((resolve) => callback.close(() => resolve()))
   }
 }
@@ -915,28 +902,6 @@ async function gridLogoutCommand(args: string[]): Promise<void> {
   // `grid` as a clean sign-out.
   if (outcome.ran === false) console.error(`\n  ✗ ${outcome.message}\n`)
   process.exitCode = outcome.exitCode
-}
-
-/**
- * Pulls `code`/`state`/`error` out of whatever the user pasted — the full callback URL, just its query
- * string (with or without a leading `?`), or a bare `code=...&state=...` pair with no URL shape at all.
- * `new URL(input, redirectUri)` never throws (a base makes it permissive), but a bare `code=...&state=...`
- * parses as a relative PATH against that base, landing in an empty query — so a URL parse that comes up
- * empty falls back to treating the whole input as a raw query string instead.
- */
-function extractCallbackParams(input: string, redirectUri: string): {
-  code: string | null
-  state: string | null
-  error: string | null
-} {
-  const read = (params: URLSearchParams) => ({
-    code: params.get('code'),
-    state: params.get('state'),
-    error: params.get('error'),
-  })
-  const viaUrl = read(new URL(input, redirectUri).searchParams)
-  if (viaUrl.code || viaUrl.state || viaUrl.error) return viaUrl
-  return read(new URLSearchParams(input))
 }
 
 /**
