@@ -73,6 +73,8 @@ export interface RegisteredSession {
   active: boolean
   /** Harness-created panes can be rendered before their engine process exists. Absent on legacy rows. */
   launch?: AgentLaunch
+  /** Enter on stopped work must never become a fresh conversation, including after a daemon restart. */
+  resumeOnly?: true
   /**
    * THE AGENT. Public identity: this is what web tabs, device tiles and every inbound frame address.
    *
@@ -387,7 +389,7 @@ function rowFingerprint(row: unknown): string {
   return JSON.stringify(row)
 }
 
-function atomicWriteJson(file: string, value: unknown, exclusive = false): void {
+export function atomicWriteJson(file: string, value: unknown, exclusive = false): void {
   const exists = hardenPrivateStateFileIfPresent(file)
   if (exclusive && exists) return
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
@@ -441,7 +443,7 @@ function persistedRow(entry: RegisteredSession): RegisteredSession | Omit<Regist
   return { ...row, runtimes: row.runtimes.map((runtime) => ({ ...runtime })) }
 }
 
-function strictPersistedRow(value: unknown): RegisteredSession | null {
+export function strictPersistedRow(value: unknown): RegisteredSession | null {
   if (!value || typeof value !== 'object') return null
   const row = value as Partial<RegisteredSession>
   const runtimes = normalizedRuntimes(row.runtimes, row.tmuxPane)
@@ -860,6 +862,7 @@ class Registry {
           schemaVersion: 2,
           active,
           ...(launch ? { launch } : {}),
+          ...(raw.resumeOnly === true ? { resumeOnly: true } : {}),
           agentId,
           boundAt: bound ? (typeof raw.boundAt === 'number' ? raw.boundAt : (raw.registeredAt ?? now)) : null,
           engine,
@@ -1163,6 +1166,30 @@ class Registry {
     return entry
   }
 
+  /** A stopped agent gets a new terminal route while keeping its saved conversation and identity.
+   * Archived routes/processes are evidence only: none of them may be indexed or signalled here. */
+  resumePendingAgent(saved: RegisteredSession, runtimes: TerminalRuntimeRef[]): RegisteredSession | null {
+    if (this.writeBlocked || this.agents.has(saved.agentId)
+      || (saved.sessionId && this.bySession(saved.sessionId))) return null
+    const routes = normalizedRuntimes(runtimes)
+    if (!routes.length || routes.some(route => this.runtimeIndex.has(terminalRouteKey(route)))) return null
+    const entry: RegisteredSession = {
+      ...saved,
+      resumeOnly: true,
+      active: true,
+      launch: { state: 'starting' },
+      processIdentity: null,
+      runtimes: routes,
+      primaryRuntimeKey: selectedRuntimeKey(routes, ''),
+      tmuxPane: tmuxProjection(routes),
+      updatedAt: Date.now(),
+    }
+    this.index(entry)
+    this.terminalAvailableAgents.add(entry.agentId)
+    this.save()
+    return entry
+  }
+
   /** Every name an agent on this machine answers to: default names, project names, renames. */
   agentNamesInUse(): string[] {
     return [
@@ -1341,6 +1368,7 @@ class Registry {
       agent: existing?.agent ?? null,
       ...(existing?.bypassPermission ? { bypassPermission: true } : {}),
       ...(existing?.permissionMode ? { permissionMode: existing.permissionMode } : {}),
+      ...(existing?.resumeOnly ? { resumeOnly: true } : {}),
       ...(existing?.terminalHost ? { terminalHost: true } : {}),
       processIdentity: validProcessIdentity(input.processIdentity) ? input.processIdentity : existing?.processIdentity ?? null,
       registeredAt: existing?.registeredAt ?? now,

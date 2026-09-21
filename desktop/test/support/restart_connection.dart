@@ -5,6 +5,7 @@ import 'stop_connection.dart';
 /// Controlled receipts only; never opens a connection or starts a process.
 class RestartConnection extends StopConnection {
   final requests = <Map<String, dynamic>>[];
+  final types = <String>[];
   final restartReplies = <Completer<Map<String, dynamic>>>[];
   final checks = <Map<String, dynamic>>[];
   final checkReplies = <Completer<Map<String, dynamic>>>[];
@@ -15,9 +16,12 @@ class RestartConnection extends StopConnection {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
   }) {
-    if (type == 'agent_restart' || type == 'agent_create_status') {
+    if (type == 'agent_restart' ||
+        type == 'agent_resume' ||
+        type == 'agent_create_status') {
       final reply = Completer<Map<String, dynamic>>();
-      if (type == 'agent_restart') {
+      if (type == 'agent_restart' || type == 'agent_resume') {
+        types.add(type);
         requests.add(Map.of(payload));
         restartReplies.add(reply);
       } else {

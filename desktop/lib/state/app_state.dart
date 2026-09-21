@@ -3883,6 +3883,7 @@ class AppNotifier extends ChangeNotifier {
     try {
       final response = await connection.request(
         'agents_list',
+        payload: const {'includeStopped': true},
         timeout: const Duration(seconds: 10),
       );
       if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) {
@@ -4473,7 +4474,7 @@ class AppNotifier extends ChangeNotifier {
         payload: {
           'agentId': agentId,
           'gridModel': modelId,
-          if (gridName != null) 'gridName': gridName,
+          'gridName': ?gridName,
         },
         timeout: const Duration(seconds: 30),
       );
@@ -4807,6 +4808,7 @@ class AppNotifier extends ChangeNotifier {
       );
       final response = await connection.request(
         'agents_list',
+        payload: const {'includeStopped': true},
         timeout: remaining,
       );
       if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) {
@@ -6800,6 +6802,27 @@ class AppNotifier extends ChangeNotifier {
     return true;
   }
 
+  /// Attach to a running harness or resume its saved conversation immediately.
+  Future<RestartAgentResult> resumeAgent(String machineId, String agentId) {
+    final agent = stateOf(machineId)?.agents
+        .where((agent) => agent.id == agentId)
+        .firstOrNull;
+    if (agent?.terminalAvailable == true) {
+      return Future.value(const RestartAgentResult());
+    }
+    if (agent?.isStopped != true) {
+      return Future.value(
+        const RestartAgentResult(
+          error: 'The saved harness is no longer available. Search again.',
+          retryable: false,
+        ),
+      );
+    }
+    // Resume shares the receipt coordinator, while sending its own lifecycle
+    // command. Repeated Enter checks the existing intent instead of relaunching.
+    return restartAgent(machineId, agentId);
+  }
+
   /// Restart keeps the agent, every view and the current focus. Only explicit
   /// new intent can repeat a request whose outcome is still unknown.
   Future<RestartAgentResult> restartAgent(
@@ -6864,13 +6887,20 @@ class AppNotifier extends ChangeNotifier {
       attempt._startedRevision = machine._agentRevision;
     }
     attempt._awaitingConfirmation = true;
-    const unknown = RestartAgentResult(
-      error: 'The restart is not confirmed yet. Check status, or close this prompt to inspect the terminal before restarting again.',
+    final resuming = attempt.agent?.isStopped == true;
+    final unknown = RestartAgentResult(
+      error: resuming
+          ? 'Still waiting for the resume response. Select the harness again to check status.'
+          : 'The restart is not confirmed yet. Check status, or close this prompt to inspect the terminal before restarting again.',
     );
     Map<String, dynamic> result;
     try {
       result = await _conn(machineId).request(
-        checking ? 'agent_create_status' : 'agent_restart',
+        checking
+            ? 'agent_create_status'
+            : resuming
+            ? 'agent_resume'
+            : 'agent_restart',
         payload: {'creationId': attempt._id, if (!checking) 'agentId': agentId},
       );
     } catch (_) {
@@ -6902,8 +6932,10 @@ class AppNotifier extends ChangeNotifier {
     }
     switch (result['state']) {
       case 'pending':
-        return const RestartAgentResult(
-          error: 'The machine is still restarting the agent. Check again in a moment.',
+        return RestartAgentResult(
+          error: resuming
+              ? 'The machine is still resuming the harness. Select it again in a moment.'
+              : 'The machine is still restarting the agent. Check again in a moment.',
         );
       case 'missing':
       case 'unconfirmed':
@@ -8917,7 +8949,11 @@ class AppNotifier extends ChangeNotifier {
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
           await _removeAgent(machine, agentId);
-        } else {
+        }
+        // Only a daemon that retained this stop asks us to refresh history.
+        // A legacy deletion must not race a newly reused identity with an
+        // unnecessary inventory request.
+        if (agentId == null || payload['retained'] == true) {
           unawaited(_loadMachineData(machine, force: true));
         }
         break;

@@ -8,6 +8,7 @@ import { WS_IDLE_DEADLINE_MS as IDLE_DEADLINE_MS } from './lib/wsLiveness.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { decodeTerminalLocal, TerminalBinaryKind } from './lib/terminalBinary.js'
 import { registry, type RegisteredSession } from './lib/registry.js'
+import { stoppedAgents } from './lib/stoppedAgents.js'
 import * as mediaPreview from './lib/mediaPreview.js'
 import * as projectFolder from './lib/projectFolder.js'
 import * as projectPreview from './lib/projectPreview.js'
@@ -1417,6 +1418,38 @@ describe('agent_restart RPC', () => {
     })
     return { socket, frames }
   }
+
+  it('lists stopped work only on request, without exposing old routes or launch credentials', async () => {
+    const { socket, frames } = localSocket()
+    const saved = { ...BASE_SESSION, gridLaunch: { apiKey: 'fixture-private-key' } } as RegisteredSession
+    vi.spyOn(registry, 'advertised').mockReturnValue([])
+    vi.spyOn(registry, 'list').mockReturnValue([])
+    vi.spyOn(stoppedAgents, 'available').mockReturnValue([saved])
+    socket.handleLocalFrame('local:restart', { type: 'agents_list', payload: { requestId: 'live' } })
+    socket.handleLocalFrame('local:restart', { type: 'agents_list', payload: { requestId: 'all', includeStopped: true } })
+    await vi.waitFor(() => expect(frames.filter(frame => frame.type === 'agents_list_result')).toHaveLength(2))
+    const response = (id: string) => frames.find(frame => (frame.payload as any).requestId === id)?.payload as any
+    expect(response('live').agents).toEqual([])
+    expect(response('all').agents).toEqual([expect.objectContaining({ id: 'agent-1', status: 'stopped', sessionId: 'session-1', terminal: { available: false, primary: '', runtimes: [] }, tmuxPane: null, forkable: false })])
+    expect(JSON.stringify(response('all'))).not.toContain('fixture-private-key')
+    await socket.unregisterLocalClient('local:restart')
+    await socket.stop()
+  })
+
+  it('delegates a resume-only intent and retains its original receipt', async () => {
+    const { socket, frames } = localSocket()
+    const creationId = `resume-${randomUUID()}`
+    const handler = vi.fn(async () => ({ ok: true as const, session: BASE_SESSION, resumed: true }))
+    socket.onResumeAgent = handler
+    vi.spyOn(registry, 'byAgent').mockReturnValue(BASE_SESSION)
+    for (const requestId of ['first', 'again']) {
+      socket.handleLocalFrame('local:restart', { type: 'agent_resume', payload: { requestId, agentId: 'agent-1', creationId } })
+      await vi.waitFor(() => expect(frames.some(frame => (frame.payload as any).requestId === requestId)).toBe(true))
+    }
+    expect(handler).toHaveBeenCalledExactlyOnceWith('agent-1')
+    await socket.unregisterLocalClient('local:restart')
+    await socket.stop()
+  })
 
   it('replies MISSING_AGENT_ID when no agentId is given', async () => {
     const { socket, frames } = localSocket()

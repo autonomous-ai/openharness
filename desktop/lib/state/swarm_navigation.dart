@@ -330,6 +330,31 @@ class SwarmDestination {
 
 enum SwarmSearchAction { open, addHere }
 
+class SwarmResumeFailure implements Exception {
+  const SwarmResumeFailure(this.destination, this.message);
+  final SwarmDestination destination;
+  final String message;
+}
+
+Future<void> _resumeStoppedDestination(
+  AppNotifier app,
+  SwarmDestination destination,
+) async {
+  final machineId = destination.machineId;
+  final agentId = destination.agentId;
+  if (machineId == null || agentId == null) return;
+  final agent = app
+      .stateOf(machineId)
+      ?.agents
+      .where((agent) => agent.id == agentId)
+      .firstOrNull;
+  if (agent?.isStopped != true) return;
+  final result = await app.resumeAgent(machineId, agentId);
+  if (result.error case final error?) {
+    throw SwarmResumeFailure(destination, error);
+  }
+}
+
 ({String text, String terminalText, int? branchOffset}) _harnessDetail(
   String? type,
   AgentProject? project,
@@ -678,7 +703,10 @@ Future<bool> activateSwarmSearchSelection(
     final hasView = app.allPanes.any(
       (pane) => pane.machineId == machineId && pane.agentId == agentId,
     );
-    if (agent == null || (!agent.terminalAvailable && !hasView)) return false;
+    if (agent == null ||
+        (!agent.terminalAvailable && !agent.isStopped && !hasView)) {
+      return false;
+    }
     var target = app.swarms
         .where((tab) => tab.id == destinationSwarmId)
         .firstOrNull;
@@ -692,9 +720,20 @@ Future<bool> activateSwarmSearchSelection(
       if (!existing && target.panes.length >= AppNotifier.maxPanes) {
         return false;
       }
+    }
+    await _resumeStoppedDestination(app, destination);
+    if (placement == HarnessPlacement.currentTab) {
+      if (!app.swarms.contains(target) ||
+          (target!.panes.length >= AppNotifier.maxPanes &&
+              !target.panes.any(
+                (pane) =>
+                    pane.machineId == machineId && pane.agentId == agentId,
+              ))) {
+        return false;
+      }
     } else {
-      // Validation precedes allocation, and allocation precedes the first
-      // network wait. A stale row cannot leave an empty tab behind.
+      // Validate and resume before allocation, so a stale row or a failed
+      // resume cannot leave an empty tab behind.
       app.newSwarm();
       target = app.activeSwarm;
     }
@@ -744,6 +783,10 @@ Future<bool> activateSwarmSearchSelection(
     }
     // Validate the complete selection before recording any membership. Every
     // add records its destination synchronously, before attachment can wait.
+    for (final row in members) {
+      await _resumeStoppedDestination(app, row);
+    }
+    if (!app.swarms.contains(target)) return false;
     await Future.wait([
       for (final row in members)
         app.addAgentToSwarm(row.machineId!, row.agentId!, swarmId: target.id),
@@ -803,6 +846,10 @@ Future<bool> activateSwarmSearchSelection(
       }
       // Every membership is recorded before awaiting any attachment. A slow
       // machine cannot retarget the add or hold up the other agents.
+      for (final row in members) {
+        await _resumeStoppedDestination(app, row);
+      }
+      if (!app.swarms.contains(target)) return false;
       await Future.wait([
         for (final row in members)
           app.addAgentToSwarm(row.machineId!, row.agentId!, swarmId: target.id),
@@ -825,6 +872,11 @@ Future<bool> activateSwarmSearchSelection(
         .where((e) => e.id == destination.id)
         .firstOrNull;
     if (live == null) return false;
+    await _resumeStoppedDestination(app, live);
+    if (!app.swarms.any((s) => s.id == destinationSwarmId) ||
+        (split != null && !app.isPaneSplitCurrent(split))) {
+      return false;
+    }
     await app.assignAgentToPane(
       null,
       destination.machineId!,
@@ -1061,7 +1113,11 @@ List<SwarmDestination> swarmDestinations(
   for (final id in {...owners.keys, if (!openOnly) ...agents.keys}) {
     final memberships = owners[id] ?? const <Swarm>[];
     final row = agents[id];
-    if (memberships.isEmpty && row?.$2.terminalAvailable != true) continue;
+    if (memberships.isEmpty &&
+        row?.$2.terminalAvailable != true &&
+        row?.$2.isStopped != true) {
+      continue;
+    }
     Swarm? owner;
     var ownerRank = 1000;
     for (final candidate in memberships) {
@@ -1289,10 +1345,12 @@ Future<bool> activateSwarmDestination(
   final agent = app.machineStates[destination.machineId]?.agents
       .where((a) => a.id == destination.agentId)
       .firstOrNull;
-  if (agent?.terminalAvailable != true ||
+  if ((agent?.terminalAvailable != true && agent?.isStopped != true) ||
       !app.swarms.any((s) => s.id == destinationSwarmId)) {
     return false;
   }
+  await _resumeStoppedDestination(app, destination);
+  if (!app.swarms.any((s) => s.id == destinationSwarmId)) return false;
   await app.addAgentToSwarm(
     destination.machineId!,
     destination.agentId!,

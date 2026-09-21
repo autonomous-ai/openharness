@@ -288,6 +288,25 @@ describe('restoreAgents — which agents get a pane back', () => {
 })
 
 describe('restoreAgents — waiting for the engine', () => {
+  it('keeps an explicit resume failure instead of silently starting fresh after a daemon restart', async () => {
+    const h = harness([row({ resumeOnly: true })])
+    h.probes.set('%0', [null, null])
+    h.states.set('%0', [{ dead: true }])
+    await restoreAgents(h.deps)
+    await settled(h, 1)
+    expect(h.respawns).toBe(0)
+    expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'session-a' }])
+    expect(h.rows.get('agent-a')?.launch).toMatchObject({ state: 'failed', error: 'RESUME_FAILED' })
+    expect(h.calls).not.toContain('unbind:session-a')
+  })
+
+  it('does not create a fresh conversation if a resume-only binding is missing', async () => {
+    const h = harness([row({ resumeOnly: true, sessionId: '' })])
+    await restoreAgents(h.deps)
+    expect(h.launches).toEqual([])
+    expect(h.rows.get('agent-a')?.launch).toMatchObject({ state: 'failed', error: 'RESUME_UNAVAILABLE' })
+  })
+
   it('falls back to a fresh launch once when the resumed engine dies, and unbinds the stale session', async () => {
     const h = harness([row()])
     h.probes.set('%0', [null, null, identity(9)])
