@@ -129,14 +129,37 @@ class StoreProjectArt extends StatelessWidget {
             errorBuilder: (_, _, _) => example,
             frameBuilder: (context, child, frame, _) {
               if (frame == null) return example;
+              final viewport = cover.viewport;
+              final imageSize = cover.imageSize;
+              final framed = viewport == null || imageSize == null
+                  ? Transform.scale(scale: cover.scale, child: child)
+                  : FittedBox(
+                      fit: cover.fit,
+                      alignment: cover.alignment,
+                      child: SizedBox(
+                        width: viewport.width,
+                        height: viewport.height,
+                        child: ClipRect(
+                          child: OverflowBox(
+                            alignment: Alignment.topLeft,
+                            minWidth: imageSize.width,
+                            maxWidth: imageSize.width,
+                            minHeight: imageSize.height,
+                            maxHeight: imageSize.height,
+                            child: Transform.translate(
+                              offset: Offset(-viewport.left, -viewport.top),
+                              child: child,
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
               return Stack(
                 fit: StackFit.expand,
                 children: [
                   ColoredBox(
                     color: cover.background ?? grid.AppPalette.panelBg,
-                    child: ClipRect(
-                      child: Transform.scale(scale: cover.scale, child: child),
-                    ),
+                    child: ClipRect(child: framed),
                   ),
                   if (cover.credit != null && cover.source != null)
                     Positioned(

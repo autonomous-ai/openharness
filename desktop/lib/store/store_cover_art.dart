@@ -14,7 +14,9 @@ class StoreCoverArt {
     this.fit = BoxFit.cover,
     this.background,
     this.scale = 1,
-  });
+    this.imageSize,
+    this.viewport,
+  }) : assert(viewport == null || imageSize != null);
 
   final String asset;
   final String description;
@@ -25,6 +27,11 @@ class StoreCoverArt {
   final BoxFit fit;
   final Color? background;
   final double scale;
+
+  /// Pixel coordinates in the unmodified source. Frame the useful output instead
+  /// of shrinking an entire application window and its controls into a card.
+  final Size? imageSize;
+  final Rect? viewport;
 }
 
 const storeCoverArt = <String, StoreCoverArt>{
@@ -91,6 +98,8 @@ const storeCoverArt = <String, StoreCoverArt>{
   'autonomous/music-studio': StoreCoverArt(
     asset: 'assets/store/covers/music-studio.png',
     description: 'Keepsake: a composition in Music Studio',
+    imageSize: Size(1600, 1478),
+    viewport: Rect.fromLTWH(24, 133, 1552, 1108),
   ),
   'autonomous/data-studio': StoreCoverArt(
     asset: 'assets/store/covers/data-studio.jpg',
@@ -113,16 +122,22 @@ const storeCoverArt = <String, StoreCoverArt>{
     description:
         'Jev Browser exploring pages and collecting structured results',
     alignment: Alignment.topCenter,
+    imageSize: Size(1600, 1000),
+    viewport: Rect.fromLTWH(16, 80, 1560, 650),
   ),
   'autonomous/jev-sheets': StoreCoverArt(
     asset: 'assets/store/covers/jev-sheets.jpg',
     description: 'A typed column in Jev Sheets',
     alignment: Alignment.topCenter,
+    imageSize: Size(1600, 1000),
+    viewport: Rect.fromLTWH(112, 120, 1408, 610),
   ),
   'autonomous/roundtable': StoreCoverArt(
     asset: 'assets/store/covers/roundtable.jpg',
     description: 'Roundtable’s map of agreement and disagreement',
     alignment: Alignment.topCenter,
+    imageSize: Size(1500, 1150),
+    viewport: Rect.fromLTWH(38, 172, 1425, 437),
   ),
   'autonomous/phaser': StoreCoverArt(
     asset: 'assets/store/covers/phaser.jpg',
@@ -157,5 +172,167 @@ const storeCoverArt = <String, StoreCoverArt>{
   'autonomous/rdkit': StoreCoverArt(
     asset: 'assets/store/covers/rdkit.jpg',
     description: 'Molecular structures explored with RDKit',
+  ),
+
+  'autonomous/ableton-ai': StoreCoverArt(
+    asset: 'assets/store/covers/ableton-ai.png',
+    description: 'Arrangement, instruments, and modulation in Ableton Live',
+    credit: '© Ableton AG',
+    source: 'https://www.ableton.com/en/press/',
+    license: 'Ableton press image',
+    imageSize: Size(2880, 1772),
+    viewport: Rect.fromLTWH(930, 168, 1901, 1152),
+  ),
+  'autonomous/bonsai-mcp': StoreCoverArt(
+    asset: 'assets/store/covers/bonsai-mcp.png',
+    description: 'An IFC building in Bonsai’s official example project',
+    credit: 'IfcOpenShell contributors',
+    source: 'https://docs.bonsaibim.org/quickstart/explore_model.html',
+    license: 'GPL 3.0 or later',
+    imageSize: Size(1110, 677),
+    viewport: Rect.fromLTWH(322, 169, 505, 379),
+  ),
+  'autonomous/comfy-mcp': StoreCoverArt(
+    asset: 'assets/store/covers/comfy-mcp.png',
+    description: 'A landscape from ComfyUI’s area-composition example',
+    credit: 'ComfyUI examples contributors',
+    source:
+        'https://comfyanonymous.github.io/ComfyUI_examples/area_composition/',
+    license: 'ComfyUI examples permission notice',
+    imageSize: Size(1088, 1920),
+    viewport: Rect.fromLTWH(0, 538, 1088, 653),
+  ),
+  'autonomous/dimos': StoreCoverArt(
+    asset: 'assets/store/covers/dimos.png',
+    description: 'A spatial map from DimOS navigation',
+    credit: 'Dimensional Inc.',
+    source: 'https://github.com/dimensionalOS/dimos',
+    license: 'Apache 2.0',
+  ),
+  'autonomous/simskill': StoreCoverArt(
+    asset: 'assets/store/covers/simskill.png',
+    description:
+        'SimSkill’s connected library of simulation knowledge and skills',
+    credit: 'SimSkill contributors',
+    source: 'https://github.com/qiliuchn/SimSkill-V1',
+    license: 'Apache 2.0',
+    imageSize: Size(4629, 2305),
+    viewport: Rect.fromLTWH(23, 12, 1898, 1579),
+  ),
+  'autonomous/text-to-cad': StoreCoverArt(
+    asset: 'assets/store/covers/text-to-cad.png',
+    description: 'A planetary gear set from text-to-cad’s own preview',
+    credit: 'Jake Adair · text-to-cad contributors',
+    source: 'https://github.com/earthtojake/text-to-cad',
+    license: 'MIT',
+    imageSize: Size(1200, 630),
+    viewport: Rect.fromLTWH(96, 217, 960, 296),
+  ),
+  'autonomous/home-assistant': StoreCoverArt(
+    asset: 'assets/store/covers/home-assistant.png',
+    description: 'Home Assistant’s public demo dashboard',
+    credit: 'Home Assistant contributors',
+    source: 'https://demo.home-assistant.io/',
+    license: 'Apache 2.0 · demo UI',
+    imageSize: Size(1440, 960),
+    viewport: Rect.fromLTWH(537, 134, 878, 480),
+  ),
+  'autonomous/openscad': StoreCoverArt(
+    asset: 'assets/store/covers/openscad.png',
+    description:
+        'A parametric impeller in OpenSCAD’s official application screenshot',
+    credit: 'OpenSCAD contributors',
+    source: 'https://openscad.org/',
+    license: 'GPL 2.0 · application UI',
+    imageSize: Size(800, 437),
+    viewport: Rect.fromLTWH(416, 50, 372, 334),
+  ),
+  'autonomous/autonomous-circuit': StoreCoverArt(
+    asset: 'assets/store/covers/autonomous-circuit.png',
+    description:
+        'A keyboard PCB rendered from Autonomous Circuit’s board model',
+  ),
+  'autonomous/autonomous-grid': StoreCoverArt(
+    asset: 'assets/store/covers/autonomous-grid.png',
+    description: 'Autonomous Grid’s map of models across machines',
+    imageSize: Size(1440, 1100),
+    viewport: Rect.fromLTWH(29, 33, 1008, 726),
+  ),
+  'autonomous/autoresearch-mlx': StoreCoverArt(
+    asset: 'assets/store/covers/autoresearch-mlx.png',
+    description:
+        'The training curve in Harness’s Autoresearch research notebook',
+    imageSize: Size(1280, 1000),
+    viewport: Rect.fromLTWH(70, 225, 890, 360),
+  ),
+  'autonomous/circuitjs': StoreCoverArt(
+    asset: 'assets/store/covers/circuitjs.jpg',
+    description: 'An oscillating police-light circuit in CircuitJS',
+    imageSize: Size(1600, 1000),
+    viewport: Rect.fromLTWH(128, 135, 1296, 740),
+  ),
+  'autonomous/foam-agent': StoreCoverArt(
+    asset: 'assets/store/covers/foam-agent.png',
+    description: 'The interactive flow view in Harness’s wind tunnel',
+    imageSize: Size(1280, 1015),
+    viewport: Rect.fromLTWH(74, 228, 883, 381),
+  ),
+  'autonomous/godogen': StoreCoverArt(
+    asset: 'assets/store/covers/godogen.jpg',
+    description: 'Neon Drift: a playable game made with Godogen',
+    imageSize: Size(1600, 1000),
+    viewport: Rect.fromLTWH(29, 75, 1541, 860),
+  ),
+  'autonomous/juce-agent-toolkit': StoreCoverArt(
+    asset: 'assets/store/covers/juce-agent-toolkit.png',
+    description: 'The waveform and keyboard in Harness’s instrument maker',
+    imageSize: Size(1280, 1000),
+    viewport: Rect.fromLTWH(72, 225, 883, 400),
+  ),
+  'autonomous/machine-monitor': StoreCoverArt(
+    asset: 'assets/store/covers/machine-monitor.png',
+    description: 'Machine Monitor’s fleet view with an illustrative demo fleet',
+    imageSize: Size(1360, 900),
+    viewport: Rect.fromLTWH(90, 80, 875, 640),
+    fit: BoxFit.contain,
+    background: Color(0xff101113),
+  ),
+  'autonomous/marp': StoreCoverArt(
+    asset: 'assets/store/covers/marp.jpg',
+    description: 'A deep-sea keynote made with Marp',
+    imageSize: Size(1600, 1000),
+    viewport: Rect.fromLTWH(224, 150, 1248, 725),
+  ),
+  'autonomous/mlx-lm': StoreCoverArt(
+    asset: 'assets/store/covers/mlx-lm.png',
+    description:
+        'MLX-LM in Harness’s local-model viewer, with a demo inventory',
+  ),
+  'autonomous/ollama': StoreCoverArt(
+    asset: 'assets/store/covers/ollama.png',
+    description:
+        'Ollama in Harness’s local-model viewer, with a demo inventory',
+  ),
+  'autonomous/vllm': StoreCoverArt(
+    asset: 'assets/store/covers/vllm.png',
+    description: 'vLLM in Harness’s local-model viewer, with a demo inventory',
+  ),
+  'autonomous/orca-slicer': StoreCoverArt(
+    asset: 'assets/store/covers/orca-slicer.jpg',
+    description: 'A sliced part and its toolpaths in the Orca Slicer harness',
+    imageSize: Size(1600, 1250),
+    viewport: Rect.fromLTWH(104, 44, 1056, 525),
+  ),
+  'autonomous/score': StoreCoverArt(
+    asset: 'assets/store/covers/score.jpg',
+    description: 'An ensemble score made with Score',
+    imageSize: Size(1600, 1100),
+    viewport: Rect.fromLTWH(112, 280, 992, 671),
+  ),
+  'autonomous/yosys': StoreCoverArt(
+    asset: 'assets/store/covers/yosys.jpg',
+    description: 'Timing traces from a CPU built with Yosys',
+    imageSize: Size(1600, 1000),
+    viewport: Rect.fromLTWH(280, 135, 1296, 530),
   ),
 };

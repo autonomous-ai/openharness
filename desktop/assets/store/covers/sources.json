@@ -1,12 +1,13 @@
 [
   {
     "asset": "blender.jpg",
-    "credit": "DOGWALK \u00b7 \u00a9 Blender Foundation",
+    "credit": "DOGWALK · © Blender Foundation",
     "license": "CC BY 4.0",
     "licenseFile": "LICENSE-blender-CC-BY-4.0",
     "source": "https://www.blender.org/download/demo-files/",
     "download": "https://www.cgchannel.com/wp-content/uploads/2025/07/250715_Blender45_5KeyFeatures_f.jpg",
-    "sha256": "83ca829f6e838b846756b5a5a5948611ee4fd86807e39382275ebbd8c2b9c847"
+    "sha256": "83ca829f6e838b846756b5a5a5948611ee4fd86807e39382275ebbd8c2b9c847",
+    "harness": "autonomous/blender"
   },
   {
     "asset": "kicad.png",
@@ -15,7 +16,8 @@
     "licenseFile": "LICENSE-kicad-CC-BY-3.0",
     "source": "https://www.kicad.org/about/licenses/",
     "download": "https://www.kicad.org/img/frontpage/kicad_3dviewer.png",
-    "sha256": "3f0a2179fa8bcf35e15321bacb8e089e063b6b46155832939168b413e728b218"
+    "sha256": "3f0a2179fa8bcf35e15321bacb8e089e063b6b46155832939168b413e728b218",
+    "harness": "autonomous/kicad"
   },
   {
     "asset": "freecad.png",
@@ -24,16 +26,18 @@
     "licenseFile": "LICENSE-freecad-LGPL-2.1",
     "source": "https://github.com/FreeCAD/FreeCAD-Homepage",
     "download": "https://raw.githubusercontent.com/FreeCAD/FreeCAD-Homepage/main/images/cover-photo.png",
-    "sha256": "e019c7bd3906a3615b2025f4e425ef42f0afe06a1f400a3d99ae72306cbe69ad"
+    "sha256": "e019c7bd3906a3615b2025f4e425ef42f0afe06a1f400a3d99ae72306cbe69ad",
+    "harness": "autonomous/freecad"
   },
   {
     "asset": "mujoco.png",
-    "credit": "MuJoCo Menagerie \u00b7 Unitree Robotics",
+    "credit": "MuJoCo Menagerie · Unitree Robotics",
     "license": "BSD 3-Clause",
     "licenseFile": "LICENSE-mujoco-unitree-BSD-3-Clause",
     "source": "https://github.com/google-deepmind/mujoco_menagerie/tree/main/unitree_g1",
     "download": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/main/unitree_g1/g1.png",
-    "sha256": "72bb2dd0bf7fab732229554d1bd80b561aa161a9dabe45778ffa70193e05e1e7"
+    "sha256": "72bb2dd0bf7fab732229554d1bd80b561aa161a9dabe45778ffa70193e05e1e7",
+    "harness": "autonomous/mujoco"
   },
   {
     "asset": "marimo.png",
@@ -42,126 +46,346 @@
     "licenseFile": "LICENSE-marimo-Apache-2.0",
     "source": "https://github.com/marimo-team/marimo",
     "download": "https://raw.githubusercontent.com/marimo-team/marimo/main/docs/_static/example-thumbs/altair.png",
-    "sha256": "e80cdae67d7a7e73077c3032fa8028ccf3b2513a603bfef9347d634ff247d8cf"
+    "sha256": "e80cdae67d7a7e73077c3032fa8028ccf3b2513a603bfef9347d634ff247d8cf",
+    "harness": "autonomous/marimo"
   },
   {
     "asset": "workshop.jpg",
     "source": "store/showcase/autonomous-workshop/honeycomb-desk-organizer.jpg",
     "credit": "OpenHarness example",
-    "sha256": "7a6c01efd6b95bde2148a5255769d02502ac7c78af10fa6c0df5071418f870ac"
+    "sha256": "7a6c01efd6b95bde2148a5255769d02502ac7c78af10fa6c0df5071418f870ac",
+    "harness": "autonomous/autonomous-workshop"
   },
   {
     "asset": "creative-direction.jpg",
     "source": "store/showcase/creative-direction/stillwater.jpg",
     "credit": "OpenHarness example",
-    "sha256": "c5aff04056cbf73c53f47b94b6b27f793505c023a9abe4f5c33464c7fab80219"
+    "sha256": "c5aff04056cbf73c53f47b94b6b27f793505c023a9abe4f5c33464c7fab80219",
+    "harness": "autonomous/creative-direction"
   },
   {
     "asset": "generative-art.png",
     "source": "store/showcase/generative-art/canopy.png",
     "credit": "OpenHarness example",
-    "sha256": "a95b23319b1b40156fc0ba2466bac02a8882dca2166875cbb30fdf89350a6c9c"
+    "sha256": "a95b23319b1b40156fc0ba2466bac02a8882dca2166875cbb30fdf89350a6c9c",
+    "harness": "autonomous/generative-art"
   },
   {
     "asset": "voxel-worlds.jpg",
     "source": "store/showcase/voxel-worlds/amber-vault.jpg",
     "credit": "OpenHarness example",
-    "sha256": "a1c23d78a5949d33343f6fa1e292fca2f927b4f235d90838f5ba7a9264738c33"
+    "sha256": "a1c23d78a5949d33343f6fa1e292fca2f927b4f235d90838f5ba7a9264738c33",
+    "harness": "autonomous/voxel-worlds"
   },
   {
     "asset": "music-studio.png",
     "source": "store/showcase/music-studio/keepsake.png",
     "credit": "OpenHarness example",
-    "sha256": "e5deb68411dfe552283cf3ef3ea06745de56e4f6d55edcde9e730f9f8bfbfefa"
+    "sha256": "e5deb68411dfe552283cf3ef3ea06745de56e4f6d55edcde9e730f9f8bfbfefa",
+    "harness": "autonomous/music-studio"
   },
   {
     "asset": "data-studio.jpg",
     "source": "store/showcase/data-studio/evidence.jpg",
     "credit": "OpenHarness example",
-    "sha256": "34b64bfbc0b854fe1b2d2d2abae3a0b945888444d9358666756b0c575c126560"
+    "sha256": "34b64bfbc0b854fe1b2d2d2abae3a0b945888444d9358666756b0c575c126560",
+    "harness": "autonomous/data-studio"
   },
   {
     "asset": "drone-pilot.jpg",
     "source": "store/showcase/drone-pilot/works-yard.jpg",
     "credit": "OpenHarness example",
-    "sha256": "edce0970db7c6f406acdab1222b690c93233542bff8bbca558a18fd26f02b03a"
+    "sha256": "edce0970db7c6f406acdab1222b690c93233542bff8bbca558a18fd26f02b03a",
+    "harness": "autonomous/drone-pilot"
   },
   {
     "asset": "game-master.jpg",
     "source": "store/showcase/game-master/signal-garden.jpg",
     "credit": "OpenHarness example",
-    "sha256": "84030f9ae091eb270a83e52e8c932cc59f67c7939fbb1e1fbccc5ea8b42f50a9"
+    "sha256": "84030f9ae091eb270a83e52e8c932cc59f67c7939fbb1e1fbccc5ea8b42f50a9",
+    "harness": "autonomous/game-master"
   },
   {
     "asset": "lab-bench.jpg",
     "source": "store/showcase/lab-bench/canopy.jpg",
     "credit": "OpenHarness example",
-    "sha256": "97241e98cde1f352ae2be9a3941f5376e8ab8fcf820c1f3842271474c14e1816"
+    "sha256": "97241e98cde1f352ae2be9a3941f5376e8ab8fcf820c1f3842271474c14e1816",
+    "harness": "autonomous/lab-bench"
   },
   {
     "asset": "jev-browser.jpg",
     "source": "store/showcase/jev-browser/jev-picks-the-columns.jpg",
     "credit": "OpenHarness example",
-    "sha256": "6ad1491a161e00035a755e990aff05455b8708436adb0c94df078af02fc9d6a9"
+    "sha256": "6ad1491a161e00035a755e990aff05455b8708436adb0c94df078af02fc9d6a9",
+    "harness": "autonomous/jev-browser"
   },
   {
     "asset": "jev-sheets.jpg",
     "source": "store/showcase/jev-sheets/typed-column.jpg",
     "credit": "OpenHarness example",
-    "sha256": "8635a777ab9a5f0ddb25d9fdbe27cfceb9805b10a48e63f830c7c53916c7ff03"
+    "sha256": "8635a777ab9a5f0ddb25d9fdbe27cfceb9805b10a48e63f830c7c53916c7ff03",
+    "harness": "autonomous/jev-sheets"
   },
   {
     "asset": "roundtable.jpg",
     "source": "store/showcase/roundtable/claim-map-mid-round.jpg",
     "credit": "OpenHarness example",
-    "sha256": "afeec4a105fd44df005cae9012016bbbf98160543c2a654a15d00760f08a3c90"
+    "sha256": "afeec4a105fd44df005cae9012016bbbf98160543c2a654a15d00760f08a3c90",
+    "harness": "autonomous/roundtable"
   },
   {
     "asset": "phaser.jpg",
     "source": "store/showcase/phaser/sunset-fox-platformer.jpg",
     "credit": "OpenHarness example",
-    "sha256": "85b7e4cca0af9052a1200a4bfcde9e9c940d0cac49576943c0e9259f35904fdf"
+    "sha256": "85b7e4cca0af9052a1200a4bfcde9e9c940d0cac49576943c0e9259f35904fdf",
+    "harness": "autonomous/phaser"
   },
   {
     "asset": "manim.jpg",
     "source": "store/showcase/manim/fourier-knight.jpg",
     "credit": "OpenHarness example",
-    "sha256": "4180e989ae12fbb625a6bc14e3bc238898a5cf0fc5f0d03580a77d1f7766a03e"
+    "sha256": "4180e989ae12fbb625a6bc14e3bc238898a5cf0fc5f0d03580a77d1f7766a03e",
+    "harness": "autonomous/manim"
   },
   {
     "asset": "openmontage.jpg",
     "source": "store/showcase/openmontage/lanterns-title-sequence.jpg",
     "credit": "OpenHarness example",
-    "sha256": "0d988471fdcc09e8ab1731529de92313d12954b5792be204fc4d7905bd661441"
+    "sha256": "0d988471fdcc09e8ab1731529de92313d12954b5792be204fc4d7905bd661441",
+    "harness": "autonomous/openmontage"
   },
   {
     "asset": "remotion.jpg",
     "source": "store/showcase/remotion/year-in-running.jpg",
     "credit": "OpenHarness example",
-    "sha256": "436759f611b80d13ce8bc9640af120dd0b4413c1bd4baf1a9b7a465730653b02"
+    "sha256": "436759f611b80d13ce8bc9640af120dd0b4413c1bd4baf1a9b7a465730653b02",
+    "harness": "autonomous/remotion"
   },
   {
     "asset": "strudel.jpg",
     "source": "store/showcase/strudel/synthwave-night-drive.jpg",
     "credit": "OpenHarness example",
-    "sha256": "e0031b6e20746743f61d7fd08a158c0d0a75a086d994ef0b49d34a15c52d3196"
+    "sha256": "e0031b6e20746743f61d7fd08a158c0d0a75a086d994ef0b49d34a15c52d3196",
+    "harness": "autonomous/strudel"
   },
   {
     "asset": "typst.jpg",
     "source": "store/showcase/typst/orbital-mechanics-guide.jpg",
     "credit": "OpenHarness example",
-    "sha256": "34e8d44089ba7189a0d3eba98f159a62d2537b562f0a3b766e21852f7fde0274"
+    "sha256": "34e8d44089ba7189a0d3eba98f159a62d2537b562f0a3b766e21852f7fde0274",
+    "harness": "autonomous/typst"
   },
   {
     "asset": "excalidraw.jpg",
     "source": "store/showcase/excalidraw/url-shortener-architecture.jpg",
     "credit": "OpenHarness example",
-    "sha256": "6652b64c29304a9e5af2d1e243d54cc19a32fbbfdf5d9f7d6f83ae30433fb1bc"
+    "sha256": "6652b64c29304a9e5af2d1e243d54cc19a32fbbfdf5d9f7d6f83ae30433fb1bc",
+    "harness": "autonomous/excalidraw"
   },
   {
     "asset": "rdkit.jpg",
     "source": "store/showcase/rdkit/ibuprofen-analogues.jpg",
     "credit": "OpenHarness example",
-    "sha256": "eed9fbe1857e9378b6c7117619cf0636bae64be58764e9f0157c1389568a9503"
+    "sha256": "eed9fbe1857e9378b6c7117619cf0636bae64be58764e9f0157c1389568a9503",
+    "harness": "autonomous/rdkit"
+  },
+  {
+    "asset": "ableton-ai.png",
+    "source": "https://www.ableton.com/en/press/",
+    "download": "https://cdn-resources.ableton.com/resources/press/press-releases/ableton-live12-release__presskit-en.zip",
+    "credit": "© Ableton AG",
+    "license": "Ableton press image",
+    "licenseFile": "LICENSE-ableton-ai",
+    "sha256": "d4b281923ecd751dae6922f90ec25df1e24b25786a41dd84f0f7dd0f77eae28b",
+    "archiveMember": "EN/Images/1_RGB screen/4_Ableton-Live 12-Release.png",
+    "harness": "autonomous/ableton-ai"
+  },
+  {
+    "asset": "bonsai-mcp.png",
+    "source": "https://docs.bonsaibim.org/quickstart/explore_model.html",
+    "download": "https://raw.githubusercontent.com/IfcOpenShell/IfcOpenShell/v0.8.0/src/bonsai/docs/quickstart/images/example-project.png",
+    "credit": "IfcOpenShell contributors",
+    "license": "GPL 3.0 or later",
+    "licenseFile": "LICENSE-bonsai-mcp",
+    "sha256": "c2bcc685313dd00eaab0905e72dc21c24b4867d826f9f0824a96e16fc7d5a5c9",
+    "harness": "autonomous/bonsai-mcp"
+  },
+  {
+    "asset": "comfy-mcp.png",
+    "source": "https://comfyanonymous.github.io/ComfyUI_examples/area_composition/",
+    "download": "https://raw.githubusercontent.com/comfyanonymous/ComfyUI_examples/master/area_composition/morning_day_evening_night.png",
+    "credit": "ComfyUI examples contributors",
+    "license": "ComfyUI examples permission notice",
+    "licenseFile": "LICENSE-comfy-mcp",
+    "sha256": "0895968cfca62cf8332ac31649925bea99631144152283178dc6f82b70633522",
+    "harness": "autonomous/comfy-mcp"
+  },
+  {
+    "asset": "dimos.png",
+    "source": "https://github.com/dimensionalOS/dimos",
+    "download": "https://media.githubusercontent.com/media/dimensionalOS/dimos/main/assets/readme/navigation.png",
+    "credit": "Dimensional Inc.",
+    "license": "Apache 2.0",
+    "licenseFile": "LICENSE-dimos",
+    "sha256": "472cabca4b0d661658bf9ffbde78e636668e9ef6499dc38ea0f552557d735bd9",
+    "harness": "autonomous/dimos"
+  },
+  {
+    "asset": "simskill.png",
+    "source": "https://github.com/qiliuchn/SimSkill-V1",
+    "download": "https://raw.githubusercontent.com/qiliuchn/SimSkill-V1/main/assets/graph_view.png",
+    "credit": "SimSkill contributors",
+    "license": "Apache 2.0",
+    "licenseFile": "LICENSE-simskill",
+    "sha256": "23b1a861316cb0e52e17d830a1e028fb4fda25fa9efbb8855d5ec51cee2b99fa",
+    "harness": "autonomous/simskill"
+  },
+  {
+    "asset": "text-to-cad.png",
+    "source": "https://github.com/earthtojake/text-to-cad",
+    "download": "https://raw.githubusercontent.com/earthtojake/text-to-cad/main/apps/docs/public/social-preview-gear.png",
+    "credit": "Jake Adair · text-to-cad contributors",
+    "license": "MIT",
+    "licenseFile": "LICENSE-text-to-cad",
+    "sha256": "851df32a47118eb7f0c2de5c84d126b7c684a10acb1e0080464a260ebd251120",
+    "harness": "autonomous/text-to-cad"
+  },
+  {
+    "asset": "home-assistant.png",
+    "source": "https://demo.home-assistant.io/",
+    "download": "https://demo.home-assistant.io/",
+    "credit": "Home Assistant contributors",
+    "license": "Apache 2.0 · demo UI",
+    "licenseFile": "LICENSE-home-assistant",
+    "sha256": "db27995ce8508738e72cb7798a7e632762769cf40374c61da11d0494f30acdc4",
+    "capture": "desktop/tool/store_artwork/capture-covers.mjs home-assistant",
+    "harness": "autonomous/home-assistant"
+  },
+  {
+    "asset": "openscad.png",
+    "source": "https://openscad.org/",
+    "download": "https://raw.githubusercontent.com/openscad/openscad.github.com/master/images/appdata-screenshot-1.png",
+    "credit": "OpenSCAD contributors",
+    "license": "GPL 2.0 · application UI",
+    "licenseFile": "LICENSE-openscad",
+    "sha256": "3b4593ed1b654975bd8940e6d869225ff5c01ee6c46ed45e735b9e139f6e093c",
+    "harness": "autonomous/openscad"
+  },
+  {
+    "asset": "autonomous-circuit.png",
+    "source": "desktop/assets/store/copper-board.png",
+    "credit": "OpenHarness example",
+    "sha256": "675e6ec025c659a589b814a56ed39a389f6edcad753fe3a59b03e860d08ddb83",
+    "harness": "autonomous/autonomous-circuit"
+  },
+  {
+    "asset": "autonomous-grid.png",
+    "source": "store/agents/autonomous-grid/screenshots/grid-topology.png",
+    "credit": "OpenHarness example",
+    "sha256": "6e36d862360ef66fa097dee09283bf813b9da8683e85503695a8c0bdf3eba9d0",
+    "harness": "autonomous/autonomous-grid"
+  },
+  {
+    "asset": "autoresearch-mlx.png",
+    "source": "store/agents/autoresearch-mlx/screenshots/studio.png",
+    "credit": "OpenHarness example",
+    "sha256": "b3dc6660952a2169d68886e0e3c3fff964a878b9af0a5cfeb469c835f57c6ae1",
+    "selection": "Original Harness research viewer; upstream repository publishes no artwork.",
+    "harness": "autonomous/autoresearch-mlx"
+  },
+  {
+    "asset": "circuitjs.jpg",
+    "source": "store/showcase/circuitjs/police-light-flasher.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "dd8c520261c5d1ffadbae5089cb361386f97f263b97b3aaf368b99a6bb87fee3",
+    "harness": "autonomous/circuitjs"
+  },
+  {
+    "asset": "foam-agent.png",
+    "source": "store/agents/foam-agent/screenshots/studio.png",
+    "credit": "OpenHarness example",
+    "sha256": "5bb928b7b4c7dca0e9ec47c84d5b39c042f0fde3bf81ba44b99070584517c691",
+    "selection": "Original Harness flow viewer; the upstream overview is a dense architecture diagram.",
+    "harness": "autonomous/foam-agent"
+  },
+  {
+    "asset": "godogen.jpg",
+    "source": "store/showcase/godogen/neon-drift.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "a77816c74172dc3bbb556829e5abf11cd0e26d3e6e7ec2b33ca6ed48b56d6dea",
+    "selection": "Original game output; the upstream video thumbnail is a text title card.",
+    "harness": "autonomous/godogen"
+  },
+  {
+    "asset": "juce-agent-toolkit.png",
+    "source": "store/agents/juce-agent-toolkit/screenshots/studio.png",
+    "credit": "OpenHarness example",
+    "sha256": "c89979f4ca19e7e53d27dc5f834739be2572050b9d397bf3c55ee1cc7d1cf4ba",
+    "selection": "Original Harness instrument viewer; the toolkit publishes no instrument artwork.",
+    "harness": "autonomous/juce-agent-toolkit"
+  },
+  {
+    "asset": "machine-monitor.png",
+    "source": "desktop/tool/store_artwork/capture-covers.mjs machine-monitor",
+    "credit": "OpenHarness example",
+    "sha256": "2280bb4665f289059cebae89340576a0521a61140d3d97e7c5b717a78d07694e",
+    "capture": "Synthetic test fleet. No user account, machines, or activity were read.",
+    "harness": "autonomous/machine-monitor"
+  },
+  {
+    "asset": "marp.jpg",
+    "source": "store/showcase/marp/deep-sea-keynote.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "a35a2764b2ba3d09f6d0de560e23baf128aef9cbe756e2892fed54edcb00982b",
+    "harness": "autonomous/marp"
+  },
+  {
+    "asset": "mlx-lm.png",
+    "source": "desktop/tool/store_artwork/capture-covers.mjs mlx-lm",
+    "credit": "OpenHarness example",
+    "sha256": "872803823d78b8d41e7c7cb539df6313d0f6a9dd753735bd2b4152095d3c8bf0",
+    "capture": "Synthetic model inventory using the bundled catalog. No performance benchmarks or generation results are fabricated.",
+    "selection": "Original Harness model-control UI. The wrapped runtimes are command-line tools.",
+    "harness": "autonomous/mlx-lm"
+  },
+  {
+    "asset": "ollama.png",
+    "source": "desktop/tool/store_artwork/capture-covers.mjs ollama",
+    "credit": "OpenHarness example",
+    "sha256": "0b7b5b8afaa613ea820224f06ca38ff185dff1c38ad5a7afdbaf00365a8d5afd",
+    "capture": "Synthetic model inventory using the bundled catalog. No performance benchmarks or generation results are fabricated.",
+    "selection": "Original Harness model-control UI. The wrapped runtimes are command-line tools.",
+    "harness": "autonomous/ollama"
+  },
+  {
+    "asset": "vllm.png",
+    "source": "desktop/tool/store_artwork/capture-covers.mjs vllm",
+    "credit": "OpenHarness example",
+    "sha256": "4abc8c8de642802d18472a0c0ded5038bf11efbb262dfa8e1d5ab79b3fe2c5fd",
+    "capture": "Synthetic model inventory using the bundled catalog. No performance benchmarks or generation results are fabricated.",
+    "selection": "Original Harness model-control UI. The wrapped runtimes are command-line tools.",
+    "harness": "autonomous/vllm"
+  },
+  {
+    "asset": "orca-slicer.jpg",
+    "source": "store/showcase/orca-slicer/review.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "54cce216a760848696cc45c9fc8f2e28dbeaba29f6ffb7ddfd86dccec3f35c88",
+    "selection": "Original slice review viewer showing real project output.",
+    "harness": "autonomous/orca-slicer"
+  },
+  {
+    "asset": "score.jpg",
+    "source": "store/showcase/score/ensemble.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "84ae48938fd5312ad30062d472c9b5dbb33928d37d6ed07737b5077e182bae2d",
+    "harness": "autonomous/score"
+  },
+  {
+    "asset": "yosys.jpg",
+    "source": "store/showcase/yosys/fibonacci-cpu.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "d0656e998e639c26013d26ef671e5e661bfc35bad5f5b2445f7c589908cf30f8",
+    "harness": "autonomous/yosys"
   }
 ]
