@@ -5136,43 +5136,6 @@ class AppNotifier extends ChangeNotifier {
     await addAgentToSwarm(machineId, agentId);
   }
 
-  /// Opens an agent's terminal WITHOUT selecting it — the phone's pager warming the agents one
-  /// swipe either side of the one on screen, so a swipe lands on output rather than on
-  /// "Attaching…" while a stream opens and its keyframe crosses the network.
-  ///
-  /// ⚠️ **Nothing about the selection moves, and that is the difference from [selectAgent].** Not
-  /// the focused pane, the selected machine, the machine's active agent, the focus announced to the
-  /// dial, nor the persisted layout: every one of those still names the agent being read, and a
-  /// warm-up that moved them would have the dial and a relaunch follow an agent nobody opened.
-  ///
-  /// The stream opens at [cols]×[rows] rather than waiting for a view to measure it, because there
-  /// IS no view — the page is not built until it is swiped to. The pager's pages all share one
-  /// size, so the size of the page on screen is the right one, and the keyframe that comes back is
-  /// already laid out for the page it will be drawn on.
-  ///
-  /// A pane that already holds a session is left alone. An agent that cannot be attached now — its
-  /// machine offline or unlinked, its terminal unverified — gets no pane at all: an empty one would
-  /// sit in the layout waiting for nothing.
-  Future<void> preattachAgent(
-    String machineId,
-    String agentId, {
-    required int cols,
-    required int rows,
-  }) async {
-    if (_disposed || !_canAttachAgent(machineId, agentId)) return;
-    var pane = paneOfAgent(machineId, agentId);
-    if (pane == null) {
-      if (panes.length >= maxPanes) return;
-      pane = TerminalPane(
-        id: _nextPaneId++,
-        machineId: machineId,
-        agentId: agentId,
-      );
-      panes.add(pane);
-    }
-    await _attachSession(pane, openAt: (cols: cols, rows: rows));
-  }
-
   /// Show a MACHINE in the grid, for the states that belong to the machine
   /// rather than to any agent on it.
   ///
@@ -5349,13 +5312,7 @@ class AppNotifier extends ChangeNotifier {
   /// Separate from [assignAgentToPane] because a restored tile takes this path
   /// on its own, later, when its machine finally answers — the intent was
   /// settled at launch, and nothing about the selection should move again then.
-  ///
-  /// [openAt] opens the stream at a size already known instead of waiting for a
-  /// view to measure one — see [preattachAgent], whose pane has no view yet.
-  Future<void> _attachSession(
-    TerminalPane pane, {
-    ({int cols, int rows})? openAt,
-  }) async {
+  Future<void> _attachSession(TerminalPane pane) async {
     if (_disposed || !allPanes.contains(pane) || pane.session != null) return;
     final wantedAgentId = pane.agentId;
     if (wantedAgentId == null) return;
@@ -5413,13 +5370,6 @@ class AppNotifier extends ChangeNotifier {
     // blank "Attaching…" placeholder already covers this measurement, which lands within a frame or
     // two of the panel mounting; `waitForViewportSize`'s own 2s timeout falls back to 80x24 only if
     // the pane genuinely never gets laid out.
-    //
-    // ⚠️ Which is exactly the pane [preattachAgent] opens: it has no view until it is swiped to, so
-    // waiting would sit out the whole 2s and then open at 80x24. It hands over the size instead.
-    if (openAt != null) {
-      await terminal.open(initialCols: openAt.cols, initialRows: openAt.rows);
-      return;
-    }
     await terminal.open(waitForViewportSize: true);
   }
 

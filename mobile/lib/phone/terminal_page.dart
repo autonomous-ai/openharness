@@ -747,14 +747,22 @@ class _TerminalPageState extends State<TerminalPage>
             .firstOrNull;
         if (pane != null) {
           _hadPane = true;
-        } else if (_hadPane && widget.isActive) {
-          // The pane this page was showing is gone — another tab opened a different agent, or the
-          // agent was deleted. Leave rather than spin: there is nothing here to come back.
+        } else if (!widget.isActive) {
+          // ⚠️ **A parked page whose pane went away has to FORGET it ever had one.** It is the
+          // ordinary case now: the pager closes the agent behind it a beat after each swipe, so the
+          // phone holds only the one on screen (see [AgentPanePruner]). The flag means "this page's
+          // stream is live", and a parked page's is not — swiping back is what attaches it again.
+          // Left set, the page would land saying the agent had GONE for any frame that beats the
+          // attach to it, and the branch below takes the whole pager down for that.
+          _hadPane = false;
+        } else if (_hadPane) {
+          // The pane this page was showing is gone while it was the one being READ — another tab
+          // opened a different agent, or the agent was deleted. Leave rather than spin: there is
+          // nothing here to come back.
           //
           // ⚠️ Only the ACTIVE page may leave, and only it ever should. A page parked beside the one
           // being read shares the route, so popping from there would take the whole pager down —
-          // including the terminal actually on screen. A parked page whose pane went away simply
-          // waits: swiping to it is what makes it attach again.
+          // including the terminal actually on screen.
           _leave();
         }
         final session = pane?.session;

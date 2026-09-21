@@ -184,8 +184,8 @@ void openAgentPager(
 ///
 /// [keepOthers] is what separates the two ways in. A page opened on its own keeps the phone's old
 /// rule — one pane, because a second one attached behind a screen nobody can see is a terminal
-/// streaming for nothing. A PAGER deliberately keeps its neighbours attached: that is the whole
-/// point of swiping, and the panes it keeps are exactly the pages it has mounted.
+/// streaming for nothing. A PAGER does its own housekeeping instead: it closes the agent behind it
+/// a beat after each swipe, and the rest when it goes (see [AgentSwipeHost]).
 ///
 /// `selectAgent` already does the right thing either way — it reuses an existing pane and only
 /// reopens a session that died, so arriving back on a page already attached costs nothing.

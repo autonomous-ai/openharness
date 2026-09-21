@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness_mobile/phone/agent_neighbour_warmer.dart';
 import 'package:harness_mobile/phone/agent_swipe.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:xterm/xterm.dart';
@@ -64,13 +63,17 @@ void main() {
     tester,
   ) async {
     final app = await pumpPager(tester);
-    // The neighbour opens and answers before the swipe reaches it, as in use.
-    await tester.pump(AgentNeighbourWarmer.delay);
-    await tester.pump();
-    await goLive(app.paneOfAgent('m', 'c')!.session!);
 
     await tester.fling(find.byType(PageView), const Offset(-400, 0), 1000);
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    // The page swiped to opens as it lands, and its machine answers — `pumpAndSettle` cannot be used
+    // while it is still "Attaching…", whose skeleton breathes for ever (see [goLive]).
+    await goLive(app.paneOfAgent('m', 'c')!.session!);
+    // Twice: each of the keyframe's coalescing windows is armed by the frame before it, and the
+    // binding fails a test that leaves one pending.
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
     await raiseKeyboard(tester);
 
     expect(terminalHasFocus(tester), isTrue);

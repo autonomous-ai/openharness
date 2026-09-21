@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
 
-import 'agent_neighbour_warmer.dart';
+import 'agent_pane_prune.dart';
 import 'agent_swipe_list.dart';
 import 'terminal_page.dart';
 import 'voice_input_controller.dart';
@@ -78,30 +78,35 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
     agentId: widget.agentId,
   );
 
-  /// Every agent this pager attached, so leaving can detach them again.
+  /// Every agent this pager attached and has not closed yet — in practice the one on screen, and
+  /// the one behind it until [_pruner]'s beat has passed.
   ///
   /// ⚠️ **Without this the pager leaks terminals.** The phone's old rule was one pane, enforced by
-  /// closing every other one on the way in; a pager has to keep its neighbours attached, so nothing
-  /// would ever close them. Each pane left behind is a remote stream with a 10,000-line scrollback
-  /// and a heartbeat, held for a screen that is gone.
+  /// closing every other one on the way in; a pager attaches its own pages, so nothing else would
+  /// ever close them. Each pane left behind is a remote stream with a 10,000-line scrollback and a
+  /// heartbeat, held for a screen that is gone — and a claim on an agent the desktop then cannot
+  /// open, since the daemon keeps a single controller per agent.
   ///
   /// Recorded rather than recomputed: by the time this page is disposed the list may have moved on,
   /// and the panes to close are the ones actually opened, not the ones a fresh list would name.
-  /// [_warmer] adds to it and prunes it as the pager moves — see [AgentNeighbourWarmer].
+  ///
+  /// ⚠️ **Only agents actually SWIPED TO go in here.** The pager used to open the agent one swipe
+  /// either side as well, so a page slid in already showing output instead of "Attaching…" — which
+  /// took the terminal of the two agents beside the one being read away from the desktop, and they
+  /// were agents nobody had asked for.
   final Set<AgentRef> _attached = {};
 
-  /// Opens the agents either side of the one on screen once it is live. Null for a pager with nothing
-  /// to swipe to.
-  late final AgentNeighbourWarmer? _warmer = widget.neighbours?.wraps == true
-      ? AgentNeighbourWarmer(
-          notifier: widget.notifier,
-          list: widget.neighbours!,
-          attached: _attached,
-        )
-      : null;
+  /// Closes every agent but the one on screen, a beat after each swipe. Null for a passthrough page,
+  /// which has no swipe to prune after. See [AgentPanePruner].
+  AgentPanePruner? _pruner;
 
-  /// The only signal that the agent on screen has gone live — see [AgentNeighbourWarmer.check].
-  void _checkNeighbours() => _warmer?.check(page: _page, current: _current);
+  /// Whether [agent] belongs to a pager OTHER than this one, which is then the one to close it.
+  ///
+  /// `pager != this` matters only while this pager is live — [_detachAll] is out of [_livePagers]
+  /// by the time it asks — and without it the prune would spare every agent on its own record.
+  bool _heldByAnotherPager(AgentRef agent) => _livePagers.any(
+    (pager) => pager != this && pager._attached.contains(agent),
+  );
 
   /// Voice input for every page of this pager: a take in progress, and what has been heard so far,
   /// survive a swipe the way a keyboard that is up does. Disposed with the pager, which is what
@@ -140,14 +145,16 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
         ? _origin * neighbours.entries.length + start
         : start;
     _controller = PageController(initialPage: _page);
-    widget.notifier.addListener(_checkNeighbours);
-    _checkNeighbours();
+    _pruner = AgentPanePruner(
+      notifier: widget.notifier,
+      attached: _attached,
+      heldElsewhere: _heldByAnotherPager,
+    );
   }
 
   @override
   void dispose() {
-    widget.notifier.removeListener(_checkNeighbours);
-    _warmer?.dispose();
+    _pruner?.dispose();
     _voice.dispose();
     _controller?.dispose();
     // Out of the live set FIRST: [_detachAll] skips panes a live pager holds, and this one no
@@ -168,7 +175,8 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
   /// Closes what this pager opened, keeping the one the phone is still pointed at.
   ///
   /// The agent last read stays attached — that is the pane the Agents tab's row now refers to, and
-  /// re-opening it should be instant rather than a fresh "Attaching…". Everything swiped past goes.
+  /// re-opening it should be instant rather than a fresh "Attaching…". Anything [_pruner] has not
+  /// caught up with yet goes with it.
   ///
   /// Not awaited, and deliberately: `dispose` cannot wait, and `closePane` only has to be STARTED —
   /// it detaches the session and tells the daemon on its own. The notifier outlives this widget, so
@@ -180,9 +188,7 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
   /// built in this one's place among them, whose terminal was left stuck on a stale build (it would
   /// not scroll until it was opened again). Deferred, the close lands on an unlocked tree.
   ///
-  /// ⚠️ And a pane a live pager has attached since is left alone: the pager replacing this one can
-  /// be showing one of the very agents swiped past here, and closing its pane after it mounted would
-  /// pull the terminal out from under it.
+  /// ⚠️ And a pane a live pager has attached since is left alone — see [_heldByAnotherPager].
   void _detachAll() {
     final notifier = widget.notifier;
     final keep = _current;
@@ -192,18 +198,7 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
     };
     if (leaving.isEmpty) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      for (final agent in leaving) {
-        if (_livePagers.any((pager) => pager._attached.contains(agent))) {
-          continue;
-        }
-        final pane = notifier.panes
-            .where(
-              (p) =>
-                  p.machineId == agent.machineId && p.agentId == agent.agentId,
-            )
-            .firstOrNull;
-        if (pane != null) unawaited(notifier.closePane(pane.id));
-      }
+      releaseAgentPanes(notifier, leaving, heldElsewhere: _heldByAnotherPager);
     });
   }
 
@@ -300,13 +295,13 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
     // Before the setState, so a host that rebuilds this pager in response already names the agent
     // swiped to — told afterwards, it would rebuild still pointing at the previous one.
     widget.onAgentChanged?.call(arrived);
-    // Warm-up for the page just left is abandoned; the page arrived at is warmed once it is live.
-    _warmer?.cancel();
     setState(() {
       _page = index;
       _current = arrived;
     });
-    _checkNeighbours();
+    // The agents behind this page go back to whoever else wants them, once the swipe has settled —
+    // see [AgentPanePruner].
+    _pruner?.keepOnly(arrived);
     // Attaching is what makes the terminal live, and it only happens once the page has SETTLED —
     // `onPageChanged` fires at the halfway point of a settled swipe, not on every dragged pixel, so
     // flicking across five agents attaches the ones passed through rather than all of them at once.
