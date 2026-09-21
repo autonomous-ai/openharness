@@ -20,7 +20,6 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/first_harness_launch.dart';
 import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/new_harness.dart';
-import 'package:harness/state/new_tab_wallpaper.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/widgets/new_harness_box.dart';
 import 'package:harness/widgets/workspace_start_guide.dart';
@@ -58,11 +57,6 @@ class _FirstApp extends AppNotifier {
       ..nodeOnline = true
       ..agentLoadStatus = AgentLoadStatus.loaded;
   }
-  void reviewWallpaper(NewTabWallpaper wallpaper) {
-    activeSwarm.wallpaper = wallpaper;
-    notifyListeners();
-  }
-
   Completer<void>? detection;
   List<String> installed = ['codex'];
   final launches =
@@ -570,7 +564,7 @@ void main() {
   );
 
   testWidgets(
-    'New Tab artwork and caption stay fixed while filtering and editing the dock',
+    'New Tab caption stays centered in the visible area above each dock',
     (tester) async {
       final app = _FirstApp();
       addTearDown(app.dispose);
@@ -580,26 +574,27 @@ void main() {
       await _mount(tester, app, FirstHarnessLaunch());
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
       await tester.pumpAndSettle();
-      final page = find.byKey(const ValueKey('new-tab-start-page'));
-      final tagline = find.byKey(const ValueKey('new-tab-tagline'));
-      final wallpaper = app.activeSwarm.wallpaper;
-      final bounds = tester.getRect(page);
-      final center = tester.getCenter(tagline);
-      expect(center, bounds.center);
+      final page = find.byKey(const ValueKey('new-tab-start-page')).last;
+      final tagline = find.byKey(const ValueKey('new-tab-tagline')).last;
+      void expectCentered() {
+        expect(tester.getCenter(tagline), tester.getRect(page).center);
+        expect(
+          find.descendant(of: page, matching: find.byType(Image)),
+          findsNothing,
+        );
+      }
+
+      expectCentered();
 
       final search = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(search, 'nothing matches');
       await tester.pumpAndSettle();
-      expect(tester.getRect(page), bounds);
-      expect(tester.getCenter(tagline), center);
-      expect(app.activeSwarm.wallpaper, wallpaper);
+      expectCentered();
 
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       await tester.pumpAndSettle();
       expect(find.byType(NewHarnessBox), findsOneWidget);
-      expect(tester.getRect(page), bounds);
-      expect(tester.getCenter(tagline), center);
-      expect(app.activeSwarm.wallpaper, wallpaper);
+      expectCentered();
       expect(
         tester.getRect(find.byType(NewHarnessBox)).top,
         greaterThan(tester.getRect(tagline).bottom),
@@ -651,28 +646,16 @@ void main() {
       );
       if (hasHarnesses) {
         await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-        for (final wallpaper in NewTabWallpaper.values) {
-          app.reviewWallpaper(wallpaper);
-          await tester.pump();
-          await tester.runAsync(
-            () => precacheImage(
-              AssetImage(wallpaper.asset),
-              tester.element(find.byType(NewTabStartPage).first),
-            ),
+        for (final (size, name) in [
+          (const Size(1280, 800), 'new-tab'),
+          (const Size(960, 640), 'new-tab-compact'),
+        ]) {
+          tester.view.physicalSize = size;
+          await tester.pumpAndSettle();
+          await expectLater(
+            find.byType(MaterialApp),
+            matchesGoldenFile(Uri.file('$output/$name.png')),
           );
-          for (final (size, name) in [
-            (const Size(1280, 800), 'new-tab'),
-            (const Size(960, 640), 'new-tab-compact'),
-          ]) {
-            tester.view.physicalSize = size;
-            await tester.pumpAndSettle();
-            await expectLater(
-              find.byType(MaterialApp),
-              matchesGoldenFile(
-                Uri.file('$output/$name-${wallpaper.name}.png'),
-              ),
-            );
-          }
         }
       }
       await tester.pumpWidget(const SizedBox());

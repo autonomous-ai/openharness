@@ -110,9 +110,6 @@ flutter:
     - assets/engine-icons/
     - assets/store/
     - assets/store/projects/
-    - assets/welcome/leonardo-flight.png
-    - assets/welcome/leonardo-wings.png
-    - assets/welcome/leonardo-mechanisms.png
     # The real app icon, shown in Settings ▸ About. Copied from the macOS
     # icon set (`macos/Runner/Assets.xcassets/AppIcon.appiconset`) rather than
     # loaded from the bundle: Flutter can't read an .icns, and About should show
