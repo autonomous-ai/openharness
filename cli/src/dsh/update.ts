@@ -13,12 +13,13 @@ export interface DshUpdateOptions {
   onProgress?: DshInstallOptions['onProgress']
   onLine?: DshInstallOptions['onLine']
   setupTimeoutMs?: number
+  cloneRetryDelaysMs?: DshInstallOptions['cloneRetryDelaysMs']
 }
 
 /** Replace only the package, retaining the old files and index until the new doctor passes. */
 export async function updateDsh(opts: DshUpdateOptions): Promise<DshInstallResult> {
   const result = await updatePackage(opts)
-  opts.onProgress?.({ id: opts.id, phase: result.ok ? 'done' : 'failed', ...(!result.ok ? { detail: result.detail } : {}) })
+  opts.onProgress?.({ id: opts.id, phase: result.ok ? 'done' : 'failed', ...(!result.ok ? { detail: result.detail, error: result.error } : {}) })
   return result
 }
 
@@ -40,7 +41,7 @@ async function updatePackage(opts: DshUpdateOptions): Promise<DshInstallResult> 
     const ref = entry?.ref ?? record.ref ?? undefined
     const path = record.path ?? undefined
     opts.onProgress?.({ id: opts.id, phase: 'clone', detail: `fetching ${record.source}` })
-    const cloned = await cloneInstall(record.source, ref, path, opts.onLine)
+    const cloned = await cloneInstall(record.source, ref, path, opts.onLine, opts.cloneRetryDelaysMs)
     if (!cloned.ok) return cloned
     staged = cloned.tmpDir
     if (cloned.manifest.id !== record.id) {

@@ -6,7 +6,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { DOCTOR_TIMEOUT_MS, installDsh, removeDsh, resolveInstallSource, runDshDoctor, type DshInstallProgress } from './install.js'
+import { DOCTOR_TIMEOUT_MS, installDsh, isTransientGitFailure, removeDsh, resolveInstallSource, runDshDoctor, type DshInstallProgress } from './install.js'
 import { dshInstallDir, installedDsh, invalidateInstalledDsh, listInstalledDsh, readInstalledIndex, type InstalledDsh } from './installed.js'
 import { HARNESS_MONOREPO, type DshRegistryEntry } from './registry.js'
 
@@ -268,7 +268,7 @@ describe('installDsh, every way it can go', () => {
       const frames: DshInstallProgress[] = []
       expect(await installDsh({ source: 'relative/thing', link: true, onProgress: (p) => frames.push(p) }))
         .toEqual({ ok: false, error: 'INVALID_SOURCE', detail: '--link needs an absolute path to a checkout' })
-      expect(frames.at(-1)).toEqual({ id: null, phase: 'failed', detail: '--link needs an absolute path to a checkout' })
+      expect(frames.at(-1)).toEqual({ id: null, phase: 'failed', detail: '--link needs an absolute path to a checkout', error: 'INVALID_SOURCE' })
       expect(await installDsh({ source: join(root, 'nope'), link: true })).toEqual({ ok: false, error: 'SOURCE_NOT_FOUND', detail: `${join(root, 'nope')} does not exist` })
       mkdirSync(join(root, 'empty'))
       expect(await installDsh({ source: join(root, 'empty'), link: true })).toMatchObject({ ok: false, error: 'INVALID_MANIFEST' })
@@ -380,6 +380,78 @@ describe('installDsh, every way it can go', () => {
       expect(await pending).toEqual({ ok: false, error: 'CLONE_FAILED', detail: 'git clone was still running after 10 min: Cloning into x...' })
     })
 
+    it('a fetch that failed the way a bad connection fails is tried again, from nothing, and the retry is narrated', async () => {
+      const repo = thing()
+      const marker = join(root, 'attempts')
+      // The first clone stalls out the way curl reports it; every later call is the real git.
+      stubGit(`if [ "$1" = clone ] && [ ! -e '${marker}' ]; then touch '${marker}'; printf 'Cloning into x...\\nerror: RPC failed; curl 28 Operation too slow. Less than 1024 bytes/sec transferred the last 60 seconds\\nfatal: early EOF\\n' >&2; exit 128; fi\nexec "$REAL_GIT" "$@"`)
+      const lines: string[] = []
+      const frames: DshInstallProgress[] = []
+      const result = await installDsh({ source: repo, cloneRetryDelaysMs: [0, 0], onLine: (line) => lines.push(line), onProgress: (p) => frames.push(p) })
+      expect(result.ok, JSON.stringify(result)).toBe(true)
+      expect(lines.find((line) => line.startsWith('fetch failed'))).toBe('fetch failed · git clone exited 128: Cloning into x... · error: RPC failed; curl 28 Operation too slow. Less than 1024 bytes/sec transferred the last 60 seconds · fatal: early EOF · retrying (2/3)')
+      expect(frames.map((f) => f.phase)).toEqual(['clone', 'doctor', 'done'])
+      expect(leftovers()).toEqual([])
+    })
+
+    it('a connection that never recovers is given up after three attempts, and said to have been', async () => {
+      stubGit(`printf 'fatal: unable to access https://example.com/thing.git/: Could not resolve host: example.com\\n' >&2\nexit 128`)
+      const lines: string[] = []
+      const frames: DshInstallProgress[] = []
+      const result = await installDsh({ source: 'https://example.com/thing.git', cloneRetryDelaysMs: [0, 0], onLine: (line) => lines.push(line), onProgress: (p) => frames.push(p) })
+      expect(result).toEqual({ ok: false, error: 'CLONE_FAILED', detail: 'git clone exited 128: fatal: unable to access https://example.com/thing.git/: Could not resolve host: example.com · gave up after 3 attempts' })
+      expect(lines.filter((line) => line.startsWith('fetch failed')).map((line) => line.slice(-'retrying (2/3)'.length))).toEqual(['retrying (2/3)', 'retrying (3/3)'])
+      expect(frames.at(-1)).toMatchObject({ phase: 'failed', error: 'CLONE_FAILED', detail: expect.stringContaining('gave up after 3 attempts') })
+      expect(leftovers()).toEqual([])
+    })
+
+    it('a repository that is not there is not tried again', async () => {
+      const marker = join(root, 'attempts')
+      stubGit(`echo x >> '${marker}'\nprintf 'remote: Repository not found.\\nfatal: repository https://example.com/thing.git/ not found\\n' >&2\nexit 128`)
+      const lines: string[] = []
+      const result = await installDsh({ source: 'https://example.com/thing.git', cloneRetryDelaysMs: [0, 0], onLine: (line) => lines.push(line) })
+      expect(result).toEqual({ ok: false, error: 'CLONE_FAILED', detail: 'git clone exited 128: fatal: repository https://example.com/thing.git/ not found' })
+      expect(readFileSync(marker, 'utf8')).toBe('x\n')
+      expect(lines.some((line) => line.startsWith('fetch failed'))).toBe(false)
+    })
+
+    it('git is run with a stall limit and no credential prompt, on top of the daemon\'s environment', async () => {
+      stubGit(`printf 'env %s %s %s %s\\n' "$GIT_HTTP_LOW_SPEED_LIMIT" "$GIT_HTTP_LOW_SPEED_TIME" "$GIT_TERMINAL_PROMPT" "$DSH_SPEC_MARK" >&2\nexit 1`)
+      process.env.DSH_SPEC_MARK = 'still-here'
+      try {
+        const lines: string[] = []
+        await installDsh({ source: 'https://example.com/thing.git', onLine: (line) => lines.push(line) })
+        expect(lines).toContain('env 1024 60 0 still-here')
+      } finally {
+        delete process.env.DSH_SPEC_MARK
+      }
+    })
+
+    it('isTransientGitFailure: the network is, the repository and our own stop are not', () => {
+      for (const said of [
+        'git clone exited 128: error: RPC failed; curl 28 Operation too slow',
+        'git clone exited 128: fatal: early EOF',
+        'git fetch exited 128: fatal: the remote end hung up unexpectedly',
+        'git clone exited 128: fatal: unable to access https://x/: Could not resolve host: x',
+        'git clone exited 128: fatal: unable to access https://x/: Failed to connect to x port 443: Connection refused',
+        'git clone exited 128: error: The requested URL returned error: 502',
+        'git clone exited 128: fatal: unable to access https://x/: GnuTLS recv error (-110)',
+        'git clone exited 128: fatal: unable to access https://x/: OpenSSL SSL_read: Connection reset by peer, errno 104',
+      ]) expect(isTransientGitFailure(said), said).toBe(true)
+      for (const said of [
+        'git clone was still running after 10 min: Receiving objects: 40%',
+        'git clone exited 128: fatal: repository https://x/ not found',
+        'git clone exited 128: error: RPC failed; curl 22 The requested URL returned error: 404',
+        'git clone exited 128: error: RPC failed; HTTP 401 curl 22 The requested URL returned error: 401',
+        'git clone exited 128: fatal: Authentication failed for https://x/',
+        'git clone exited 128: git@x: Permission denied (publickey). · fatal: Could not read from remote repository.',
+        'git clone exited 128: fatal: could not read Username for https://x: terminal prompts disabled',
+        'git clone exited 128: fatal: Remote branch nope not found in upstream origin',
+        'https://x at main has no folder store/agents/nope',
+        'git clone exited 2',
+      ]) expect(isTransientGitFailure(said), said).toBe(false)
+    })
+
     it('a git that fails without a word is reported by how it ended alone, a code or a signal', async () => {
       stubGit('exit 2')
       expect(await installDsh({ source: 'https://example.com/thing.git' })).toEqual({ ok: false, error: 'CLONE_FAILED', detail: 'git clone exited 2' })
@@ -428,7 +500,7 @@ describe('installDsh, every way it can go', () => {
       const result = await installDsh({ source: repo, registry, onProgress: (p) => frames.push(p), onLine: (line) => lines.push(line) })
       expect(result).toMatchObject({ ok: false, error: 'CLONE_FAILED' })
       expect(!result.ok && result.detail).toMatch(/^viewer acme\/viewer · git clone exited 128: /)
-      expect(frames.filter((f) => f.phase === 'failed')).toEqual([{ id: 'acme/thing', phase: 'failed', detail: !result.ok && result.detail }])
+      expect(frames.filter((f) => f.phase === 'failed')).toEqual([{ id: 'acme/thing', phase: 'failed', detail: !result.ok && result.detail, error: 'CLONE_FAILED' }])
       expect(frames.every((f) => f.id === null || f.id === 'acme/thing')).toBe(true)
       expect(lines).toContain('viewer acme/viewer · installing')
       expect(readInstalledIndex()).toEqual([])
@@ -446,7 +518,7 @@ describe('installDsh, every way it can go', () => {
       const frames: DshInstallProgress[] = []
       const result = await installDsh({ source: repo, onProgress: (p) => frames.push(p) })
       expect(result).toEqual({ ok: false, error: 'DOCTOR_FAILED', detail: 'doctor failed · miss typst on PATH · miss fonts' })
-      expect(frames.at(-1)).toEqual({ id: 'acme/thing', phase: 'failed', detail: 'doctor failed · miss typst on PATH · miss fonts' })
+      expect(frames.at(-1)).toEqual({ id: 'acme/thing', phase: 'failed', detail: 'doctor failed · miss typst on PATH · miss fonts', error: 'DOCTOR_FAILED' })
       expect(readInstalledIndex().map((row) => row.id)).toEqual(['acme/thing'])
     })
 

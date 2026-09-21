@@ -16,6 +16,7 @@ import '../shared/widgets/app_icon_button.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../state/app_state.dart';
+import '../widgets/dsh_install_panel.dart' show describeInstallFailure;
 import '../widgets/engine_identity.dart';
 import '../widgets/new_agent_dialog.dart';
 import '../widgets/open_harness_intent.dart';
@@ -989,7 +990,18 @@ class _ProductPageState extends State<_ProductPage> {
     );
     _busy.remove(machineId);
     if (mounted) setState(() {});
-    if (failure != null) _say(failure);
+    if (failure != null) _say(_failureSentence(local, failure));
+  }
+
+  /// The toast for a failed Get/Update: what kind of failure and what to do,
+  /// not the two thousand characters git printed — those stay on the page,
+  /// under the button, where they can be read at leisure.
+  String _failureSentence(MachineState local, String fallback) {
+    final run = local.dsh.runs[_operationId(local, widget.entry.id)];
+    if (run == null || !run.failed) return fallback;
+    final failure = describeInstallFailure(run, widget.entry.name);
+    final hint = failure.hint;
+    return hint == null ? failure.title : '${failure.title} $hint';
   }
 
   Future<void> _update(String machineId) async {
@@ -1007,7 +1019,7 @@ class _ProductPageState extends State<_ProductPage> {
     );
     _busy.remove(machineId);
     if (mounted) setState(() {});
-    if (failure != null) _say(failure);
+    if (failure != null) _say(_failureSentence(local, failure));
   }
 
   Future<void> _remove(String machineId, String machineName) async {
@@ -1474,6 +1486,11 @@ class _InstallLine extends StatelessWidget {
     final installing = run != null && run.inProgress;
     final installed = !entry.isEngine && row?.installed == true;
     final String status;
+    // On a failure: what the machine said, in full, a hover away. The line
+    // itself says which kind of thing went wrong and what to do about it —
+    // a bare "Install failed" over a fetch the network dropped left nothing to
+    // tell it apart from a broken package (issue #109).
+    String? failureTooltip;
     if (entry.isEngine) {
       status = _engineStatus();
     } else if (installing) {
@@ -1484,9 +1501,19 @@ class _InstallLine extends StatelessWidget {
         _ => 'Installing…',
       };
     } else if (run != null && run.failed) {
-      status =
-          run.log.where((line) => line.startsWith('miss')).lastOrNull ??
-          (installed ? 'Update failed' : 'Install failed');
+      final failure = describeInstallFailure(run, entry.name);
+      status = failure.hint == null
+          ? failure.title
+          : '${failure.title} ${failure.hint}';
+      final words = [
+        if (failure.body != null && failure.body != failure.title) failure.body,
+        if (failure.command != null) failure.command,
+        if (run.detail != null &&
+            run.detail != failure.body &&
+            run.detail != failure.title)
+          run.detail,
+      ].whereType<String>().join('\n');
+      if (words.isNotEmpty) failureTooltip = words;
     } else if (installed) {
       status = row?.linked == true
           ? 'Installed · linked to a checkout'
@@ -1530,13 +1557,17 @@ class _InstallLine extends StatelessWidget {
           ),
         Text('${state.machine.displayName} · this computer', style: faint),
         Text('·', style: faint),
-        Text(
-          status,
-          style: TextStyle(
-            fontSize: 12.5,
-            color: run?.failed == true
-                ? grid.AppPalette.warn
-                : grid.AppPalette.textSecondary,
+        _maybeTooltip(
+          failureTooltip,
+          Text(
+            status,
+            key: const ValueKey('store-install-status'),
+            style: TextStyle(
+              fontSize: 12.5,
+              color: run?.failed == true
+                  ? grid.AppPalette.warn
+                  : grid.AppPalette.textSecondary,
+            ),
           ),
         ),
         if (installed && row?.installedCommit != null)
@@ -1558,6 +1589,15 @@ class _InstallLine extends StatelessWidget {
     );
   }
 }
+
+Widget _maybeTooltip(String? message, Widget child) => message == null
+    ? child
+    : Tooltip(
+        key: const ValueKey('store-install-failure-detail'),
+        message: message,
+        waitDuration: const Duration(milliseconds: 300),
+        child: child,
+      );
 
 /// A link that stays out of the way: secondary text, brighter under the pointer, an arrow when it
 /// leaves the app. Without a destination it is plain text (the licence).
