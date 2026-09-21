@@ -486,3 +486,72 @@ the separate demo script and portable packets are under
 The full catalog objective remains active. No installed harness, original user workspace, paid
 model account, remote service or published catalog was modified. Remaining work includes deeper
 implementation review of the unlisted experiments and selecting the next high-value interaction.
+
+## Seventh improvement: compare a question before asking the whole sheet
+
+Reviewed Jev Sheets' native client, row/context construction, header grammar, cache identity,
+source-file handling, in-pane edits, existing file chooser/export and tests. Also inspected the CAD
+Viewer contract: its pinned upstream viewer already has native measurement, section planes,
+explosion and rendering controls, so replacing those controls would not address a missing workflow.
+
+Jev Sheets already advised an agent to test wording on ten hard rows, but this required writing a
+one-off script. Added **Question Lab**, directly beside the sheet controls:
+
+- Preview 10/20/40 rows selected from low confidence plus a spread, a spread alone, or the current
+  sorted/filtered view. Pin a selected sheet row. Freeze the actual row text, metadata and context;
+  exclude sample truth labels and group labels from the model input.
+- Write any supported yes/no, choice or score header. Re-ask both versions together using the same
+  native client and shared question builder, one paired call per frozen row, with four in flight.
+  Read full probability distributions and exact wire questions. Filter changed labels, record a
+  human preference and write a note without turning that preference into a truth label.
+- Keep an immutable `.harness/question-trials/<id>/` packet with the exact sample, question wire
+  payloads, raw answers, returned provider/model/usage, human notes, CSV, readable review, reusable
+  sample `sheet.json`, candidate `column.json`, file checksums and a portable ZIP. Kept packets
+  reopen after viewer restart or source deletion. They include sampled data, never credentials.
+- Try the candidate across the whole sheet as a separate column. Reuse the trial rows only when
+  context/data and the currently connected route/requested model match. Preserve the original
+  column; reject a changed source/context/question. As with existing pane-added columns, the
+  extra column is runtime state. Updated guidance tells the agent to retain an accepted header in
+  the original `sheet.json`, never replace the original dataset with the trial's small sample.
+- Trials are bounded to 40 rows, 4,000-character headers, a 512 KB preview, 24 KB per paired result,
+  2 MB result JSON, eight open trials and 100 kept trials. Cancellation stops scheduling; in-flight
+  calls may finish using the client's normal transient-error retries. Authentication/credit errors
+  stop further rows after the in-flight batch. Failed/cancelled packets retain their status.
+- New commands require a per-process page token on the existing loopback/Origin-guarded server.
+  Archives reject symlink directories/files, stage writes atomically, validate result checksums on
+  reopening and clean up failed saves. Start, keep and apply tolerate lost acknowledgements without
+  duplicating a trial, archive or column. A restarted server refreshes the page token.
+- A real browser sequence caught a note being overwritten when the result filter changed during
+  its save. Separate note drafts and partial note/preference updates now preserve typing across
+  polling and filtering; the selected preference also updates while the note retains focus.
+
+Verified **57 package checks**, including the existing sheet/import/Excel/counting behavior, sample
+selection, frozen context, result validation, cancellation, partial failures, note/preference
+updates, archive integrity/immutability, write-failure retry, path/token checks, cached whole-sheet
+application and staleness. A local HTTP protocol fixture uses the production Jev client with an
+explicit dummy key and isolated empty credential file: it verifies actual paired requests and
+returned probabilities/model/usage without calling an external provider.
+
+**Seven native Chrome journeys** pass with no page errors: import the original fictional CSV,
+select/pin a real sheet cell, compare, filter and review; retain a note while switching filters;
+retry a lost keep response and independently extract/check the downloaded ZIP with Python;
+apply without duplicating the column; reject stale data while retaining the frozen preview;
+recover a lost start response without a second trial; restart the server, refresh the token and
+reopen after deleting the source; and use the 390px layout, Escape and reopening. These native
+browser runs explicitly use the offline client. They do **not** establish live Jev accuracy,
+latency, calibration or superiority of one wording. The UI, packet and guidance say so.
+
+Visually checked the desktop preview, reviewed comparison and narrow view. Recorded and inspected
+a separate paced **12.84-second H.264 walkthrough**, 1440×1040, from actual browser interactions.
+Package conformance and the doctor pass; shared Jev kit copies remain unchanged and in sync.
+
+Evidence: [comparison](../docs/images/question-lab.png),
+[frozen preview](../docs/images/question-lab-preview.png),
+[narrow layout](../docs/images/question-lab-mobile.png),
+[native walkthrough](../docs/images/question-lab-demo.mp4).
+Repeatable acceptance: `store/agents/jev-sheets/test/question-lab-browser.mjs`. Test logs, JSON
+results, downloaded ZIP, raw recording, separate demo script and workspaces are under
+`/private/tmp/openharness-harness-improvements-evidence/question-lab*`.
+
+The full catalog objective remains active. Continue the detailed source review of the unlisted
+experiments, then prioritize the next interaction or correctness gap supported by that evidence.

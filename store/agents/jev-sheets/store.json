@@ -2,8 +2,12 @@
   "homepage": "https://typesafe.ai",
   "upstream": "https://typesafe.ai",
   "license": "MIT",
-  "tagline": "Drop in any spreadsheet, ask in plain words, get every row answered in seconds",
+  "tagline": "Ask every row a question, test better wording, and keep the evidence",
   "examples": [
+    {
+      "prompt": "I tried two versions of our urgency question in Question Lab and kept the review. Read the rows and my notes, help me choose the clearer wording, and retain it in sheet.json before running the whole file.",
+      "caption": "Frozen rows, paired answers, full probabilities and your judgment in a portable trial packet"
+    },
     {
       "prompt": "I dropped my app reviews export on the pane. Read a sample of it, then work out what people complain about most, who is thinking of leaving, and how angry they are. Write me a findings report with the counts and word-for-word quotes.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-sheets/own-file.jpg",

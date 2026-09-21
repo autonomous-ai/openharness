@@ -1,0 +1,17 @@
+ticket,message,channel,product
+FL-101,"Production is down. The charging station crashes every minute. Please fix this immediately.",email,Station
+FL-102,"Love the warmer light. Could you add a timer sometime next year? No rush.",survey,Lamp
+FL-103,"Our order was charged twice. Please refund the extra payment before Friday.",email,Studio kit
+FL-104,"The latest firmware update broke sync. We need all twelve lamps working for tonight's opening.",chat,Lamp
+FL-105,"Thanks for the quick replacement. Everything works perfectly now.",survey,Lamp
+FL-106,"Can someone send a quote for thirty stations? We are comparing options for next quarter.",email,Station
+FL-107,"URGENT: the station is down and the team cannot work. We need help right now!",chat,Station
+FL-108,"No hurry, but I would love a dimmer first step for reading at night.",survey,Lamp
+FL-109,"Please cancel our renewal. The third outage this month was the last straw.",email,Studio kit
+FL-110,"The invoice has the wrong purchase order number. Could you correct it when you get a chance?",email,Studio kit
+FL-111,"Our launch is tomorrow and the upload keeps timing out. We are blocked.",chat,Station
+FL-112,"The new finish is beautiful. We renewed and added four more seats.",survey,Studio kit
+FL-113,"A lamp froze once after I changed the schedule. It worked again after a restart.",survey,Lamp
+FL-114,"Someone accessed our account from an unknown device. Please investigate immediately.",email,Station
+FL-115,"How much is an annual team plan? We are only exploring at this point.",chat,Studio kit
+FL-116,"Thank you for fixing sync. All good now; nothing pressing.",survey,Station
