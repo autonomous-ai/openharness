@@ -4,6 +4,11 @@
 [Manim Community](https://www.manim.community): describe an explanation in the chat pane, watch it
 animate in the Video Viewer pane as the scenes render. Runs on Claude Code.
 
+Inspect a moment with the frame controls and press **S** to keep its PNG. Give the saved path back
+to the agent with what should change. Each different image has its own path, so later renders
+preserve the frame you meant; **C** copies it, with the same saved-frame fallback when the clipboard
+is unavailable.
+
 - `harness.json` — engine, template, skill, toolchain, `viewer.use: autonomous/video-viewer`.
 - `skills/manim/` — the Manim skill (ours): the library, the commands, the rules of a good scene.
 - `toolchain/setup.sh` makes one environment with the pinned Manim (`MANIM_VERSION`): conda-forge's

@@ -25,8 +25,11 @@ Manim uses it; any harness that ends in a video can.
 - **Frame-accurate.** `←`/`→` one frame, `⇧←`/`⇧→` one second, `[`/`]` one animation, `J`/`K`/`L`
   shuttle (reverse included; `K` held with `J`/`L` steps), speed 0.25×–2×, loop the whole video or a
   range set with `I`/`O`.
-- **Stills.** `C` copies the frame as PNG; `S` saves it to `.harness/stills/<scene>-<quality>-f<frame>.png`,
-  a path you can hand the agent.
+- **Stills.** `C` copies the frame as PNG; `S` keeps it at
+  `.harness/stills/<scene>-<quality>-f<frame>-<hash>.png`, a path you can hand the agent. The pixels,
+  scene and frame label are captured together, even if another render opens while PNG encoding
+  finishes. A new image never replaces an earlier saved version. Retrying identical bytes reuses
+  their path. If the clipboard is unavailable, the same captured frame is saved instead.
 - **Live.** While a render runs the pane plays the clips already written, one animation after
   another, on a timeline that grows (a hatched tail shows what is still to come, a spinner waits at
   the live edge), with "Rendering · 7 of ~26 · Create(Square)" in the header. When the movie lands it
@@ -84,11 +87,18 @@ hidden `<video>` elements, and plays a render in progress as a playlist of its c
 
 ```sh
 node --test test/*.test.mjs          # the MP4 reader, the library, the server and the scripts, on synthetic files
+MANIM_PYTHON=/path/to/python PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node test/stills.browser.mjs
+                                   # real Manim renders + Chrome, delayed capture and saved-version checks
 harness dsh check .                  # conformance
 harness dsh install "$PWD" --link    # this checkout as the installed viewer
 ```
 
 `doctor.sh` checks for Node.
+
+Saved frames are published atomically, with a content hash in their name and the full SHA-256 in
+the save response. Writes reject symlinked `.harness` or `stills` directories. The viewer accepts
+only its loopback hosts and same-origin browser requests. Frames remain PNG snapshots; the
+editable animation source and video stay in the workspace.
 
 ## Credit and stewardship
 

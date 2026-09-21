@@ -754,3 +754,46 @@ live simulation.
 
 Evidence: `mujoco-peak-tests.txt`, `mujoco-peak-browser.txt`, `mujoco-peak/` and
 `mujoco-peak-demo/` under the local evidence root.
+
+## Twelfth improvement: keep the video frame the user actually chose
+
+A final review of Video Viewer found two concrete handoff failures. `Save frame` captured its
+pixels before PNG encoding but built the filename afterward, using whatever render and frame
+were then current. Opening Beta while Alpha's encoder finished saved Alpha's pixels with Beta's
+name. Different renders saved at the same scene/quality/frame path also silently replaced the
+older PNG. Both were reproduced with two original, native Manim scenes before changing the code.
+
+The viewer now captures pixels, scene, frame label and dimensions together. A source or clip that
+changes while an outstanding seek is still preparing the frame produces a clear retry message.
+After the pixels have been captured, encoding can complete independently of subsequent playback
+or source changes. Clipboard fallback reuses the same capture, including when the clipboard fails
+only after encoding; it no longer takes a new frame from the later video. An encoder returning no
+PNG reports failure and leaves subsequent saves working.
+
+Saved images have a content hash in their filename. Publishing uses a private staging file and
+an atomic link that cannot overwrite an existing file. Identical retries return the existing path;
+a different image gets a different path. A modified prior file or an occupied short-hash name is
+preserved, with a complete-hash fallback. The save response includes the full SHA-256. Writes do
+not follow symlinked workspace subdirectories or existing image names. The existing workspace
+routes now reject foreign browser origins and non-loopback Host headers; the daemon's remote
+viewer proxy already rewrites Host and Origin to the target origin, so its forwarding contract
+is retained.
+
+Verification:
+
+- Before fixes, native Manim/Chrome reproduced all three failing assertions: wrong source/frame
+  name, same path for different pixels, and replacement of the earlier image.
+- All 50 Video Viewer tests now pass, covering native MP4 headers/library/server behavior plus
+  version preservation, idempotent repeats, collision recovery, staging cleanup, symlink bounds,
+  foreign origin/Host rejection, conflict responses and filesystem failures.
+- Twelve native browser checks pass on the same original Manim renders: exact earlier PNG bytes
+  despite a later render opening, distinct preserved versions, repeat identity, delayed clipboard
+  denial, no recapture from the later video, null-encoder failure and recovery, and a 390px layout.
+  There were no browser exceptions. The narrow pane and its Copy path action were visually checked.
+- The fixture uses the existing Manim render wrapper and installed native engine, isolated under
+  the evidence directory. No installed harness, user project, model provider or remote service was
+  modified or called.
+
+Evidence: `video-stills-before.txt`, `video-stills-before/`, `video-stills-tests-final.txt`,
+`video-stills-final.txt`, and `video-stills-final/` under the local evidence root. The reproducible
+native browser check and its original Manim source are included in the Video Viewer package.

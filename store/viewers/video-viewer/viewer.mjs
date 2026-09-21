@@ -5,14 +5,15 @@
 //   GET  /api/library      every render in the workspace, the renders in progress (lib/library.mjs)
 //   GET  /events           server-sent events: `library` with the same JSON whenever it changes
 //   GET  /ws/<path>        a workspace file, with byte ranges so seeking is instant
-//   POST /api/still?name=  a PNG frame from the page, saved to .harness/stills/<name>.png
+//   POST /api/still?name=  a PNG frame from the page, kept under .harness/stills/ with its content hash
 //
 // Any other path is a workspace file too (the pane's first version linked files at /<path>).
 import { createServer } from 'node:http'
-import { createReadStream, mkdirSync, statSync, watch, writeFileSync } from 'node:fs'
+import { createReadStream, statSync, watch } from 'node:fs'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createLibrary, STALL_MS } from './lib/library.mjs'
+import { keepStill, MAX_STILL_BYTES } from './lib/stills.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const port = Number(process.env.HARNESS_VIEWER_PORT)
@@ -72,6 +73,8 @@ const server = createServer((req, res) => {
   // client's mistake: answer it, never throw out of the handler and take the pane down.
   let url, path
   try { url = new URL(req.url, `http://127.0.0.1:${port}`); path = decodeURIComponent(url.pathname) } catch { return send(res, 400, 'bad request') }
+  const host = String(req.headers.host || '').toLowerCase()
+  if (![ `127.0.0.1:${port}`, `localhost:${port}` ].includes(host) || (req.headers.origin && req.headers.origin !== `http://${host}`)) return send(res, 403, 'forbidden')
   if (path === '/' || path === '/index.html') return serveFile(req, res, join(here, 'ui', 'index.html'))
   if (path.startsWith('/ui/')) {
     const full = inside(join(here, 'ui'), path.slice(4))
@@ -88,19 +91,14 @@ const server = createServer((req, res) => {
   if (path === '/api/still' && req.method === 'POST') {
     // A custom header: a page on another origin cannot send it without a preflight this server refuses.
     if (req.headers['x-video-viewer'] !== 'still') return send(res, 403, 'forbidden')
-    const name = (url.searchParams.get('name') || 'frame').replace(/[^\w.@+-]+/g, '-').replace(/^[-.]+/, '').slice(0, 120) || 'frame'
     const chunks = []
     let size = 0
-    req.on('data', (c) => { size += c.length; if (size > 64 * 1024 * 1024) req.destroy(); else chunks.push(c) })
+    req.on('data', (c) => { size += c.length; if (size > MAX_STILL_BYTES) req.destroy(); else chunks.push(c) })
     req.on('end', () => {
-      const body = Buffer.concat(chunks)
-      if (body.length < 8 || body.readUInt32BE(0) !== 0x89504e47) return send(res, 400, 'not a png')
-      const rel = `.harness/stills/${name}.png`
       try {
-        mkdirSync(join(workspace, '.harness', 'stills'), { recursive: true })
-        writeFileSync(join(workspace, rel), body)
-      } catch (error) { return send(res, 500, error.message) }
-      send(res, 200, JSON.stringify({ path: rel, abs: join(workspace, rel) }), { 'content-type': 'application/json' })
+        const kept = keepStill(workspace, url.searchParams.get('name'), Buffer.concat(chunks))
+        send(res, 200, JSON.stringify(kept), { 'content-type': 'application/json' })
+      } catch (error) { return send(res, error.status || 500, error.message) }
     })
     return
   }
