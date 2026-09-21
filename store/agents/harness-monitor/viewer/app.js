@@ -88,7 +88,7 @@ function renderGauges() {
   const held = summary.held >= 1024 ** 3 ? `${(summary.held / 1024 ** 3).toFixed(1)} GB` : `${Math.round(summary.held / 1024 ** 2)} MB`
   const chips = [
     ['live', summary.running, 'running'],
-    ['', summary.paused + summary.retired, 'paused'],
+    ['', summary.paused, 'paused'],
     ['', held, 'held'],
     ['', summary.projects, 'projects'],
   ]
@@ -307,7 +307,7 @@ function renderStatus() {
   const held = totals.frees >= 1024 ** 3 ? `${(totals.frees / 1024 ** 3).toFixed(1)} GB` : `${Math.round(totals.frees / 1024 ** 2)} MB`
   const hidden = (state.snapshot?.rows ?? []).length - list.length
   const bits = [`${list.length} shown${hidden > 0 ? ` of ${(state.snapshot?.rows ?? []).length}` : ''}`]
-  if (summary) bits.push(`${summary.running} running`, `${summary.paused + summary.retired} paused`)
+  if (summary) bits.push(`${summary.running} running`, `${summary.paused} paused`)
   if (totals.pause) bits.push(`policy: pause ${totals.pause} (${held})`)
   for (const problem of state.snapshot?.problems ?? []) bits.push(`⚠ ${problem.machine}`)
   dom.statusLeft.textContent = bits.join('  ·  ')
