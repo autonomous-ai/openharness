@@ -1,3 +1,3 @@
 /* The app's name as people see it: Dock, Finder, menu bar, About. The bundle stays Harness.app. */
-"CFBundleDisplayName" = "OpenHarness";
-"CFBundleName" = "OpenHarness";
+"CFBundleDisplayName" = "Harness";
+"CFBundleName" = "Harness";

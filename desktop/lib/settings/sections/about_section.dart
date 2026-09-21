@@ -72,7 +72,7 @@ class _AboutSectionState extends State<AboutSection> {
               const SizedBox(height: 12),
               Text(
                 widget.notifier.updateChecksEnabled
-                    ? 'OpenHarness checks for a newer build when it starts, '
+                    ? 'Harness checks for a newer build when it starts, '
                           'and every six hours after that.'
                     : 'Updates are disabled in this build.',
                 style: TextStyle(

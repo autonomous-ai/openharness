@@ -68,9 +68,9 @@ class UpdateNotice extends StatelessWidget {
     if (failed) {
       message = error;
     } else if (installing) {
-      message = 'Installing OpenHarness ${update.version}…';
+      message = 'Installing Harness ${update.version}…';
     } else {
-      message = 'OpenHarness ${update.version} is available';
+      message = 'Harness ${update.version} is available';
     }
 
     return WindowDragArea(
@@ -297,7 +297,7 @@ Future<void> showUpdateCheckDialog(
             return const _UpdateDialog(
               icon: LucideIcons.refreshCw300,
               title: 'Checking for updates…',
-              body: 'Looking for a newer version of OpenHarness.',
+              body: 'Looking for a newer version of Harness.',
               busy: true,
             );
           }
@@ -307,7 +307,7 @@ Future<void> showUpdateCheckDialog(
               tone: _DialogTone.warning,
               title: 'Couldn’t check for updates',
               body:
-                  'OpenHarness couldn’t read the latest version. '
+                  'Harness couldn’t read the latest version. '
                   'Check your connection and try again.',
               actions: [
                 _DialogAction(
@@ -343,7 +343,7 @@ Future<void> showUpdateCheckDialog(
               icon: LucideIcons.circleCheck300,
               tone: _DialogTone.ok,
               title: 'You’re up to date',
-              body: 'This copy of OpenHarness already has the latest version.',
+              body: 'This copy of Harness already has the latest version.',
             );
           }
           return PopScope(
@@ -351,13 +351,13 @@ Future<void> showUpdateCheckDialog(
             child: _UpdateDialog(
               icon: LucideIcons.arrowDownToLine300,
               title: installing
-                  ? 'Installing OpenHarness ${update.version}…'
-                  : 'OpenHarness ${update.version} is available',
+                  ? 'Installing Harness ${update.version}…'
+                  : 'Harness ${update.version} is available',
               body: installing
-                  ? 'Don’t quit OpenHarness. It will restart on its own.'
+                  ? 'Don’t quit Harness. It will restart on its own.'
                   : current.isSkipped
                   ? 'You skipped this version earlier. You can still install it.'
-                  : 'Download and install it now? OpenHarness will restart when it '
+                  : 'Download and install it now? Harness will restart when it '
                         'finishes.',
               busy: installing,
               update: installing ? null : update,

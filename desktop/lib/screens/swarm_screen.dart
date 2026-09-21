@@ -2671,7 +2671,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ?mode('keyboard.open_config', 'Edit keybindings', 'keybindings.jsonc'),
       ?mode(
         'app.customize',
-        'Customize OpenHarness',
+        'Customize Harness',
         'Prompt · colors · fonts',
       ),
       ?mode('app.settings', 'Settings', ''),

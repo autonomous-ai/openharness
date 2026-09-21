@@ -16,7 +16,7 @@ class BootstrappingScreen extends StatelessWidget {
   final String? statusMessage;
 
   static const double _cardWidth = 420;
-  static const String _fallbackStatus = 'Opening OpenHarness…';
+  static const String _fallbackStatus = 'Opening Harness…';
 
   @override
   Widget build(BuildContext context) {
@@ -48,7 +48,7 @@ class BootstrappingScreen extends StatelessWidget {
                       const _BootAppMark(),
                       const SizedBox(height: 20),
                       Text(
-                        'Getting OpenHarness ready',
+                        'Getting Harness ready',
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.titleLarge,
                       ),
@@ -63,7 +63,7 @@ class BootstrappingScreen extends StatelessWidget {
                         key: const Key('boot-status'),
                         container: true,
                         liveRegion: true,
-                        label: 'OpenHarness startup status',
+                        label: 'Harness startup status',
                         value: status,
                         child: ExcludeSemantics(
                           child: Container(

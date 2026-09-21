@@ -1,1 +1,1 @@
-const desktopAppName = 'OpenHarness';
+const desktopAppName = 'Harness';
