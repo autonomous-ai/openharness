@@ -24,6 +24,7 @@ class AppChoicePicker<T> extends StatefulWidget {
     this.compact = false,
     this.tileSize,
     this.notifyOnReselect = false,
+    this.terminalStyle = false,
   });
 
   final T value;
@@ -50,6 +51,7 @@ class AppChoicePicker<T> extends StatefulWidget {
   final bool compact;
   final Size? tileSize;
   final bool notifyOnReselect;
+  final bool terminalStyle;
 
   @override
   State<AppChoicePicker<T>> createState() => _AppChoicePickerState<T>();
@@ -273,10 +275,11 @@ class _AppChoicePickerState<T> extends State<AppChoicePicker<T>> {
     final size = widget.tileSize!;
     return Wrap(
       spacing: AppChoiceTile.gap,
-      runSpacing: AppChoiceTile.gap,
+      runSpacing: widget.terminalStyle ? 2 : AppChoiceTile.gap,
       children: [
         for (final option in ordered.take(3))
           AppChoiceTile(
+            terminalStyle: widget.terminalStyle,
             key: widget.optionKey(option.value),
             size: size,
             label: option.label,
@@ -291,21 +294,32 @@ class _AppChoicePickerState<T> extends State<AppChoicePicker<T>> {
             inMutuallyExclusiveGroup: true,
             child: AppSelectField<T>(
               key: widget.moreKey,
+              textStyle: widget.terminalStyle
+                  ? DefaultTextStyle.of(context).style
+                  : null,
+              radius: widget.terminalStyle ? 2 : null,
               value: widget.value,
               options: _overflowOrder(ordered.skip(3)),
               onChanged: _choose,
               filterable: true,
               width: size.width,
               height: size.height,
-              padding: AppChoiceTile.padding,
+              padding: widget.terminalStyle
+                  ? AppChoiceTile.terminalPadding
+                  : AppChoiceTile.padding,
               selected: selectedExtra,
               fillColor: selectedExtra
                   ? AppPalette.swarmAccent.withValues(alpha: .16)
+                  : widget.terminalStyle
+                  ? Colors.transparent
                   : AppSurface.recess,
               trigger: AppChoiceTileContent(
+                terminalStyle: widget.terminalStyle,
                 label: extra?.label ?? widget.moreLabel,
                 detail: extra?.detail,
-                leading: extra == null
+                leading: widget.terminalStyle
+                    ? Text(selectedExtra ? '>' : ' ')
+                    : extra == null
                     ? widget.moreLeading
                     : extra.leading?.call(),
                 trailing: const Icon(Icons.keyboard_arrow_down, size: 18),
@@ -415,6 +429,10 @@ class _AppChoicePickerState<T> extends State<AppChoicePicker<T>> {
 class AppChoiceTile extends StatelessWidget {
   static const double gap = 12;
   static const padding = EdgeInsets.symmetric(horizontal: 18, vertical: 16);
+  static const terminalPadding = EdgeInsets.symmetric(
+    horizontal: 10,
+    vertical: 4,
+  );
 
   const AppChoiceTile({
     super.key,
@@ -425,6 +443,7 @@ class AppChoiceTile extends StatelessWidget {
     this.leading,
     this.selected = false,
     this.focusNode,
+    this.terminalStyle = false,
   });
   final Size size;
   final String label;
@@ -433,6 +452,7 @@ class AppChoiceTile extends StatelessWidget {
   final bool selected;
   final VoidCallback? onPressed;
   final FocusNode? focusNode;
+  final bool terminalStyle;
 
   @override
   Widget build(BuildContext context) => SizedBox(
@@ -449,24 +469,36 @@ class AppChoiceTile extends StatelessWidget {
               foregroundColor: AppPalette.textPrimary,
               backgroundColor: selected
                   ? AppPalette.swarmAccent.withValues(alpha: .16)
+                  : terminalStyle
+                  ? Colors.transparent
                   : AppSurface.recess,
-              padding: padding,
+              padding: terminalStyle ? terminalPadding : padding,
+              textStyle: terminalStyle
+                  ? DefaultTextStyle.of(context).style
+                  : null,
+              minimumSize: terminalStyle ? Size.zero : null,
+              tapTargetSize: terminalStyle
+                  ? MaterialTapTargetSize.shrinkWrap
+                  : null,
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(AppControl.radius),
+                borderRadius: BorderRadius.circular(
+                  terminalStyle ? 2 : AppControl.radius,
+                ),
               ),
             ).copyWith(
               side: WidgetStateProperty.resolveWith(
                 (states) => BorderSide(
-                  color: selected
+                  color: selected && !terminalStyle
                       ? AppPalette.swarmAccent.withValues(alpha: .7)
                       : Colors.transparent,
                 ),
               ),
             ),
         child: AppChoiceTileContent(
+          terminalStyle: terminalStyle,
           label: label,
           detail: detail,
-          leading: leading,
+          leading: terminalStyle ? Text(selected ? '>' : ' ') : leading,
         ),
       ),
     ),
@@ -480,10 +512,12 @@ class AppChoiceTileContent extends StatelessWidget {
     this.detail,
     this.leading,
     this.trailing,
+    this.terminalStyle = false,
   });
   final String label;
   final String? detail;
   final Widget? leading, trailing;
+  final bool terminalStyle;
 
   /// The name's type, and the detail's under it. Written down because the tile
   /// height is arithmetic over exactly these numbers — see [linesFor] and the
@@ -528,6 +562,52 @@ class AppChoiceTileContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (terminalStyle) {
+      final style = DefaultTextStyle.of(context).style.copyWith(
+        fontSize: 13,
+        height: 1.35,
+        fontWeight: FontWeight.w400,
+        color: AppPalette.textPrimary,
+      );
+      return DefaultTextStyle.merge(
+        style: style,
+        child: Row(
+          children: [
+            SizedBox(width: 22, child: leading),
+            Expanded(
+              child: Row(
+                children: [
+                  Flexible(
+                    flex: 3,
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (detail != null) ...[
+                    const SizedBox(width: 12),
+                    Flexible(
+                      flex: 5,
+                      child: Text(
+                        detail!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: style.copyWith(
+                          fontSize: 12,
+                          color: AppPalette.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (trailing != null) ...[const SizedBox(width: 8), trailing!],
+          ],
+        ),
+      );
+    }
     final labelStyle = TextStyle(
       fontFamily: AppFont.sans,
       fontFamilyFallback: AppFont.sansFallback,

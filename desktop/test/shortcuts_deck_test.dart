@@ -180,4 +180,74 @@ void main() {
       reason: 'a chord outgrew the narrowest card — it must wrap, not overflow',
     );
   });
+
+  testWidgets('enlarged text reduces columns before labels become cramped', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(brightness: Brightness.light),
+        home: MediaQuery(
+          data: const MediaQueryData(textScaler: TextScaler.linear(1.8)),
+          child: const Scaffold(
+            body: SingleChildScrollView(
+              child: SizedBox(width: 900, child: ShortcutsDeck()),
+            ),
+          ),
+        ),
+      ),
+    );
+    final workspace = tester.getTopLeft(find.text('WORKSPACE'));
+    final panes = tester.getTopLeft(find.text('PANES'));
+    expect(panes.dx, workspace.dx);
+    expect(panes.dy, greaterThan(workspace.dy));
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final label in ['W', 'Ctrl K, then Ctrl Shift R']) {
+    testWidgets('enlarged keycap keeps the full glyphs for $label', (
+      tester,
+    ) async {
+      const probe = Key('natural-key-label');
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildAppTheme(brightness: Brightness.light),
+          home: MediaQuery(
+            data: const MediaQueryData(textScaler: TextScaler.linear(2.5)),
+            child: Scaffold(
+              body: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(width: 260, child: KeyCap(label)),
+                  SizedBox(
+                    width: 248,
+                    child: Text(
+                      label,
+                      key: probe,
+                      style: const TextStyle(fontSize: 11.5, height: 1),
+                    ),
+                  ),
+                  const KeyCap('⇥'),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(
+        tester.getSize(find.byType(KeyCap).first).height,
+        greaterThan(tester.getSize(find.byKey(probe)).height),
+        reason: 'The cap needs room for its full label and vertical padding.',
+      );
+      expect(
+        tester.getSize(find.byIcon(Icons.keyboard_tab)).height,
+        greaterThan(14),
+        reason: 'The Tab symbol should enlarge along with the letter keys.',
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
 }

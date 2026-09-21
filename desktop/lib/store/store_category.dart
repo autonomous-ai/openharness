@@ -22,7 +22,7 @@ class StoreCategory extends StatefulWidget {
     required this.ratingFor,
     required this.installed,
     required this.onOpen,
-    required this.onAction,
+    required this.actionsFor,
   });
 
   final String name;
@@ -33,7 +33,7 @@ class StoreCategory extends StatefulWidget {
   final StoreRating Function(DshEntry) ratingFor;
   final bool Function(String) installed;
   final ValueChanged<String> onOpen;
-  final ValueChanged<DshEntry> onAction;
+  final Widget Function(DshEntry) actionsFor;
 
   @override
   State<StoreCategory> createState() => _StoreCategoryState();
@@ -73,7 +73,7 @@ class _StoreCategoryState extends State<StoreCategory> {
     final ratingFor = widget.ratingFor;
     final installed = widget.installed;
     final onOpen = widget.onOpen;
-    final onAction = widget.onAction;
+    final actionsFor = widget.actionsFor;
     final installedCount = widget.entries.where((e) => installed(e.id)).length;
     final entries = _installedOnly
         ? widget.entries.where((e) => installed(e.id)).toList()
@@ -195,17 +195,15 @@ class _StoreCategoryState extends State<StoreCategory> {
                     StoreListing(
                       entries: entries,
                       ratingFor: ratingFor,
-                      installed: installed,
                       onOpen: onOpen,
-                      onAction: onAction,
+                      actionsFor: actionsFor,
                     )
                   else
                     StoreProjectGrid(
                       entries: entries,
                       ratingFor: ratingFor,
-                      installed: installed,
                       onOpen: onOpen,
-                      onAction: onAction,
+                      actionsFor: actionsFor,
                     ),
                   if (related.isNotEmpty) ...[
                     const SizedBox(height: 36),

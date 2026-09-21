@@ -1,3 +1,9 @@
+import 'package:harness/widgets/swarm_switcher.dart';
+import 'package:flutter/services.dart';
+
+import 'swarm_interactions_test.dart' show chord;
+
+import 'package:harness/state/swarm_navigation.dart';
 import 'package:flutter/material.dart';
 import 'package:harness/widgets/swarm_project_agents.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -92,21 +98,29 @@ void main() {
         reason:
             'Editing project membership does not attach or take over terminals',
       );
-      await tester.tap(find.byKey(const ValueKey('swarm-open-agent-button')));
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.pump();
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Solid',
       );
       await tester.pump();
-      await tester.tap(find.widgetWithText(ListTile, 'Solid'));
+      expect(
+        tester
+            .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+            .search
+            .rows
+            .where((row) => row.isProject),
+        isEmpty,
+      );
+      await tester.tap(
+        find.byKey(ValueKey(agentDestinationId('remote', 'chess'))),
+      );
       await tester.pump(const Duration(milliseconds: 100));
       expect(app.panes.map((p) => (p.machineId, p.agentId)), [
-        ('m', 'a0'),
-        ('m', 'a1'),
         ('remote', 'chess'),
       ]);
-      expect(app.activeSwarm.name, 'Solid');
+      expect(app.panes.single.machineId, 'remote');
       await tester.pumpWidget(const SizedBox());
       app.dispose();
       projects.dispose();

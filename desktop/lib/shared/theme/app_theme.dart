@@ -189,6 +189,8 @@ class _PaletteScope extends InheritedNotifier<ValueNotifier<HarnessPalette>> {
 abstract final class AppPalette {
   // Approved Swarms canvas and native tab-strip palette.
   static Color get swarmField => AppTheme.palette.value.workspace;
+  // The welcome illustration recedes behind the working command dock.
+  static Color get swarmWelcome => const Color(0xff171717);
   static Color get swarmTabBar => AppTheme.palette.value.tabBar;
   static Color get swarmAccent => AppTheme.palette.value.accent;
   // Shared with the native search field for a continuous input/results surface.

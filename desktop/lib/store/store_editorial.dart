@@ -9,7 +9,11 @@ String storeCategoryFor(DshEntry entry) {
   if (const {'autonomous/autonomous-grid', 'local/ollama'}.contains(entry.id)) {
     return 'Local AI';
   }
-  final domain = entry.category?.trim().toLowerCase();
+  // Published Home Assistant packages also use the older Automation domain.
+  final domain = switch (entry.category?.trim().toLowerCase()) {
+    'automation' => 'home automation',
+    final domain => domain,
+  };
   for (final category in storeCategoryDomains.entries) {
     if (category.key.toLowerCase() == domain ||
         category.value.any((value) => value.toLowerCase() == domain)) {

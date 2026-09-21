@@ -17,10 +17,12 @@ import '../shortcuts/keymap.dart';
 import '../state/app_state.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/new_agent_dialog.dart';
+import '../widgets/open_harness_intent.dart';
 import 'store_category.dart';
 import 'store_controller.dart';
 import 'store_discover.dart';
 import 'store_editorial.dart';
+import 'store_harness_actions.dart';
 import 'store_listing.dart';
 import 'store_models.dart';
 import 'store_search.dart';
@@ -30,12 +32,13 @@ import 'store_viewers.dart';
 /// The Harness Store, the content of its tab: every harness the registry
 /// knows and every built-in engine, as a shelf of cards; one becomes its page
 /// — what it is, whose it is, where it is installed, what people think of it —
-/// with Get, Open and Remove. A tab, not a screen over the window, so the
-/// strip stays where it is and browsing never blocks switching.
+/// with Get, Resume Harness, New Harness and Remove. A tab, not a screen over
+/// the window, so the strip stays where it is and browsing never blocks switching.
 ///
 /// The catalogue and installation state come from this computer's daemon.
-/// Browsing, Get, Open and Remove all refer to this computer; remote machines
-/// do not contribute packages or installation state to the Store.
+/// Browsing, Get and Remove refer to this computer; Resume can return to a
+/// harness on any linked machine. Remote machines do not contribute packages
+/// or installation state to the Store.
 /// Ratings and reviews come from the control plane through
 /// [StoreApi]; the screen works without them (a page simply has no stars).
 class StoreTab extends StatefulWidget {
@@ -45,9 +48,11 @@ class StoreTab extends StatefulWidget {
     this.source = 'unknown',
     this.api,
     this.initialHarness,
+    this.recentHarnesses = const [],
   });
 
   final AppNotifier notifier;
+  final List<String> recentHarnesses;
   final String source;
 
   /// The ratings backend; null takes the real one through the local CLI.
@@ -401,21 +406,36 @@ class _StoreTabState extends State<StoreTab> {
     );
   }
 
-  void _takeAction(DshEntry entry) {
+  Widget _actionsFor(DshEntry entry) {
     final local = widget.notifier.localMachineState;
-    if (local == null ||
-        !_installedOnMachine(local, entry.id) ||
-        local.dsh[entry.id]?.hasUpdate == true) {
-      _openPage(entry.id);
-      return;
+    if (!entry.isViewerPackage &&
+        (_installedOnMachine(local, entry.id) ||
+            storeResumeTargets(widget.notifier, entry.id).isNotEmpty)) {
+      return StoreHarnessActions(
+        notifier: widget.notifier,
+        harnessId: entry.id,
+        recent: widget.recentHarnesses,
+        newButtonKey: ValueKey('store-action:${entry.id}'),
+        onNew: local == null || local.dsh.runs[entry.id]?.inProgress == true
+            ? null
+            : () => openStoreAgent(
+                context,
+                widget.notifier,
+                entry.id,
+                local.machine.machineId,
+              ),
+      );
     }
-    unawaited(
-      openStoreAgent(
-        context,
-        widget.notifier,
-        entry.id,
-        local.machine.machineId,
+    return TextButton(
+      key: ValueKey('store-action:${entry.id}'),
+      onPressed: () => _openPage(entry.id),
+      style: TextButton.styleFrom(
+        backgroundColor: grid.AppSurface.selectedFill,
+        foregroundColor: grid.AppPalette.accentOnSurface,
+        minimumSize: const Size(70, 34),
+        shape: const StadiumBorder(),
       ),
+      child: Text(entry.isViewerPackage ? 'View' : 'Get'),
     );
   }
 
@@ -505,6 +525,7 @@ class _StoreTabState extends State<StoreTab> {
                                       ),
                                       entry: selected,
                                       notifier: widget.notifier,
+                                      recentHarnesses: widget.recentHarnesses,
                                       store: _store,
                                     )
                                   : _shelf is _Viewers
@@ -545,10 +566,8 @@ class _StoreTabState extends State<StoreTab> {
                                       ratingFor: (entry) => _store.ratingOf(
                                         StoreController.keyFor(entry),
                                       ),
-                                      installed: (id) =>
-                                          _installedOn(id).isNotEmpty,
                                       onOpen: _openPage,
-                                      onAction: _takeAction,
+                                      actionsFor: _actionsFor,
                                       onCategory: (name) =>
                                           _show(_Category(name)),
                                       onAll: () => _show(const _All()),
@@ -571,7 +590,7 @@ class _StoreTabState extends State<StoreTab> {
                                               .loaded ??
                                           false,
                                       onOpen: _openPage,
-                                      onAction: _takeAction,
+                                      actionsFor: _actionsFor,
                                     ),
                             ),
                           ),
@@ -725,7 +744,7 @@ class _Shelf$View extends StatelessWidget {
     required this.installedOn,
     required this.loaded,
     required this.onOpen,
-    required this.onAction,
+    required this.actionsFor,
   });
 
   final _Listed shelf;
@@ -736,7 +755,7 @@ class _Shelf$View extends StatelessWidget {
   final List<MachineState> Function(String id) installedOn;
   final bool loaded;
   final ValueChanged<String> onOpen;
-  final ValueChanged<DshEntry> onAction;
+  final Widget Function(DshEntry) actionsFor;
 
   String get _title => switch (shelf) {
     _All() => 'All harnesses',
@@ -763,7 +782,7 @@ class _Shelf$View extends StatelessWidget {
         ratingFor: (entry) => store.ratingOf(StoreController.keyFor(entry)),
         installed: (id) => installedOn(id).isNotEmpty,
         onOpen: onOpen,
-        onAction: onAction,
+        actionsFor: actionsFor,
       );
     }
     return SingleChildScrollView(
@@ -815,9 +834,8 @@ class _Shelf$View extends StatelessWidget {
                   entries: entries,
                   ratingFor: (entry) =>
                       store.ratingOf(StoreController.keyFor(entry)),
-                  installed: (id) => installedOn(id).isNotEmpty,
                   onOpen: onOpen,
-                  onAction: onAction,
+                  actionsFor: actionsFor,
                 ),
               if (entries.isEmpty && shelf is _Search)
                 Wrap(
@@ -892,8 +910,8 @@ bool _canGetOnMachine(MachineState machine, DshEntry entry) {
       machine.dsh.runs[entry.id]?.inProgress != true;
 }
 
-/// Open a Store harness on [machineId] the way the Store's Open button does: a
-/// draft tab of its own, then New Agent with the harness already chosen.
+/// Open the workspace's New Harness dock with this product and machine chosen.
+/// A successful start opens a new tab; reviewing or cancelling allocates none.
 ///
 /// Public because it is the ONE way a harness is opened from anywhere — the
 /// Store page, and the model picker's "Open Grid" — so the two cannot drift
@@ -905,6 +923,12 @@ Future<void> openStoreAgent(
   String machineId, {
   String? prompt,
 }) async {
+  final intent = OpenHarnessIntent(harnessId, machineId, task: prompt);
+  if (Actions.maybeFind<OpenHarnessIntent>(context) != null) {
+    final opening = Actions.maybeInvoke(context, intent);
+    if (opening is Future) await opening;
+    return;
+  }
   final navigator = Navigator.of(context);
   final origin = notifier.activeSwarmId;
   notifier.newSwarm(draft: true);
@@ -940,11 +964,13 @@ class _ProductPage extends StatefulWidget {
     required this.entry,
     required this.notifier,
     required this.store,
+    required this.recentHarnesses,
   });
 
   final DshEntry entry;
   final AppNotifier notifier;
   final StoreController store;
+  final List<String> recentHarnesses;
 
   @override
   State<_ProductPage> createState() => _ProductPageState();
@@ -1032,10 +1058,8 @@ class _ProductPageState extends State<_ProductPage> {
     if (failure != null) _say(failure);
   }
 
-  /// Open (or Get) from the store: the harness needs a tab of its own, since
-  /// a pane never lands in the store tab. A draft tab is opened for it and
-  /// abandoned — back to the store — if the dialog is dismissed. [prompt] is
-  /// an example's, and becomes the new harness's first message.
+  /// Open from the Store with this product and machine. An example's [prompt]
+  /// becomes the editable task in the same dock before the person presses Start.
   Future<void> _open(String machineId, {String? prompt}) async {
     if (widget.notifier.localMachineState?.machine.machineId != machineId) {
       return;
@@ -1099,6 +1123,10 @@ class _ProductPageState extends State<_ProductPage> {
         !busy &&
         !installing &&
         (localInstalled || _canGetOnMachine(local, entry));
+    final showLaunch =
+        !entry.isViewerPackage &&
+        (localInstalled ||
+            storeResumeTargets(widget.notifier, entry.id).isNotEmpty);
     // A package that has not published its own examples yet still leads with
     // prompts — the editorial ones — so every page reads the same way.
     final examples = entry.examples.isNotEmpty
@@ -1240,7 +1268,7 @@ class _ProductPageState extends State<_ProductPage> {
                       ],
                     ),
                     const SizedBox(height: 34),
-                    if (showAction)
+                    if (showAction && (!showLaunch || hasUpdate))
                       Center(
                         child: FilledButton(
                           key: const ValueKey('store-primary-action'),
@@ -1252,8 +1280,6 @@ class _ProductPageState extends State<_ProductPage> {
                               ? null
                               : () => hasUpdate
                                     ? _update(local.machine.machineId)
-                                    : localInstalled
-                                    ? _open(local.machine.machineId)
                                     : _get(local.machine.machineId),
                           style: FilledButton.styleFrom(
                             backgroundColor: grid.AppPalette.textPrimary,
@@ -1273,8 +1299,6 @@ class _ProductPageState extends State<_ProductPage> {
                                 ? 'Working…'
                                 : hasUpdate
                                 ? 'Update'
-                                : localInstalled
-                                ? 'Open'
                                 : failed
                                 ? 'Try again'
                                 : 'Get',
@@ -1291,14 +1315,25 @@ class _ProductPageState extends State<_ProductPage> {
                           color: grid.AppPalette.textSecondary,
                         ),
                       ),
-                      if (!entry.isViewerPackage)
-                        TextButton(
-                          key: const ValueKey('store-open-current'),
-                          onPressed: busy || installing
-                              ? null
-                              : () => _open(local!.machine.machineId),
-                          child: const Text('Open'),
+                    ],
+                    if (showLaunch) ...[
+                      if (hasUpdate) const SizedBox(height: 16),
+                      Center(
+                        child: StoreHarnessActions(
+                          notifier: widget.notifier,
+                          harnessId: entry.id,
+                          recent: widget.recentHarnesses,
+                          prominent: true,
+                          newButtonKey: ValueKey(
+                            hasUpdate
+                                ? 'store-open-current'
+                                : 'store-primary-action',
+                          ),
+                          onNew: local != null && !busy && !installing
+                              ? () => _open(local.machine.machineId)
+                              : null,
                         ),
+                      ),
                     ],
                     const SizedBox(height: 14),
                     Center(

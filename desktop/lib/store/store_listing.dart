@@ -12,15 +12,13 @@ class StoreListing extends StatelessWidget {
     super.key,
     required this.entries,
     required this.ratingFor,
-    required this.installed,
     required this.onOpen,
-    required this.onAction,
+    required this.actionsFor,
   });
   final List<DshEntry> entries;
   final StoreRating Function(DshEntry) ratingFor;
-  final bool Function(String) installed;
   final ValueChanged<String> onOpen;
-  final ValueChanged<DshEntry> onAction;
+  final Widget Function(DshEntry) actionsFor;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -41,9 +39,8 @@ class StoreListing extends StatelessWidget {
                 key: ValueKey('store-card:${entry.id}'),
                 entry: entry,
                 rating: ratingFor(entry),
-                installed: installed(entry.id),
                 onOpen: () => onOpen(entry.id),
-                onAction: () => onAction(entry),
+                actions: actionsFor(entry),
               ),
             ),
         ],
@@ -57,15 +54,13 @@ class _ProductRow extends StatelessWidget {
     super.key,
     required this.entry,
     required this.rating,
-    required this.installed,
     required this.onOpen,
-    required this.onAction,
+    required this.actions,
   });
   final DshEntry entry;
   final StoreRating rating;
-  final bool installed;
   final VoidCallback onOpen;
-  final VoidCallback onAction;
+  final Widget actions;
 
   @override
   Widget build(BuildContext context) => Material(
@@ -79,84 +74,83 @@ class _ProductRow extends StatelessWidget {
         decoration: BoxDecoration(
           border: Border(bottom: BorderSide(color: grid.AppPalette.divider)),
         ),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            EngineMark(engine: entry.id, displayName: entry.name, size: 42),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    entry.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: grid.AppPalette.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    storeBenefit(entry),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      height: 1.3,
-                      color: grid.AppPalette.textSecondary,
-                    ),
-                  ),
-                  if (!rating.isEmpty) ...[
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.star_rounded,
-                          size: 12,
+            Row(
+              children: [
+                EngineMark(engine: entry.id, displayName: entry.name, size: 42),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        entry.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: grid.AppPalette.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        storeBenefit(entry),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          height: 1.3,
                           color: grid.AppPalette.textSecondary,
                         ),
-                        const SizedBox(width: 3),
+                      ),
+                      if (entry.hasUpdate) ...[
+                        const SizedBox(height: 4),
                         Text(
-                          '${rating.average.toStringAsFixed(1)} · ${rating.count}',
+                          'Update available',
                           style: TextStyle(
                             fontSize: 11,
-                            color: grid.AppPalette.textSecondary,
+                            color: grid.AppPalette.accentOnSurface,
                           ),
                         ),
                       ],
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            TextButton(
-              key: ValueKey('store-action:${entry.id}'),
-              onPressed: entry.isViewerPackage ? onOpen : onAction,
-              style: TextButton.styleFrom(
-                backgroundColor: grid.AppSurface.selectedFill,
-                foregroundColor: grid.AppPalette.accentOnSurface,
-                minimumSize: const Size(62, 30),
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                shape: const StadiumBorder(),
-              ),
-              child: Text(
-                entry.isViewerPackage
-                    ? 'View'
-                    : entry.hasUpdate
-                    ? 'Update'
-                    : installed
-                    ? 'Open'
-                    : 'Get',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
+                      if (!rating.isEmpty) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.star_rounded,
+                              size: 12,
+                              color: grid.AppPalette.textSecondary,
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                              '${rating.average.toStringAsFixed(1)} · ${rating.count}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: grid.AppPalette.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
-              ),
+              ],
             ),
+            const SizedBox(height: 12),
+            if (entry.isViewerPackage)
+              TextButton(
+                key: ValueKey('store-action:${entry.id}'),
+                onPressed: onOpen,
+                child: const Text('View'),
+              )
+            else
+              actions,
           ],
         ),
       ),

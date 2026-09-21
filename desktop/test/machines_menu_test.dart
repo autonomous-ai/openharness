@@ -320,7 +320,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     await reply.future;
     expect(find.text('Delete machine'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Delete'), findsOneWidget);
+    expect(find.byKey(const Key('machine-delete-confirm')), findsOneWidget);
 
     // Cancelling leaves the machine in place.
     await tester.tap(find.text('Cancel'));
@@ -370,7 +370,7 @@ void main() {
     expect(find.text('Delete machine'), findsOneWidget);
 
     // Confirming drops the machine from the client and the API.
-    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.tap(find.byKey(const Key('machine-delete-confirm')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(api.deleted, ['m']);

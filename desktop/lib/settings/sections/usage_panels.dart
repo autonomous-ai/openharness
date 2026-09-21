@@ -10,9 +10,47 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/app_theme.dart';
+import '../../shared/widgets/skeleton.dart';
 import '../../stats/harness_stats.dart';
 import '../../usage/ledger/ledger_types.dart';
 import '../../usage/ledger/usage_overview.dart';
+
+/// Waiting is distinct from an answered, empty range or a switched-off source.
+class UsageLoadingState extends StatelessWidget {
+  const UsageLoadingState({super.key, required this.message});
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppGlass.surfaceFill,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              message,
+              style: TextStyle(fontSize: 12.5, color: AppPalette.textSecondary),
+            ),
+            const SizedBox(height: 12),
+            const SkeletonText(
+              style: TextStyle(fontSize: 20, height: 1.1),
+              widthFactor: .45,
+            ),
+            const SizedBox(height: 8),
+            const SkeletonText(style: TextStyle(fontSize: 12), widthFactor: .7),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 /// The app's own three counters, and the date they start from.
 ///
@@ -594,45 +632,61 @@ class ProviderUsageRow extends StatelessWidget {
               detail,
               style: TextStyle(fontSize: 11.5, color: AppPalette.textSecondary),
             ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '${formatTokens(ledger.totals.total)} tokens',
-                  style: TextStyle(fontSize: 12, color: AppPalette.textPrimary),
-                ),
-              ),
-              Text(
-                formatCost(ledger.costUsd),
-                style: TextStyle(
-                  fontSize: 12,
-                  color: AppPalette.textPrimary,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(3),
-            child: SizedBox(
-              height: 5,
-              child: Row(
-                children: [
-                  if (share > 0)
-                    Expanded(
-                      flex: (share * 1000).round(),
-                      child: ColoredBox(color: AppPalette.accent),
+          if (state.status == LedgerStatus.scanning && !ledger.hasData) ...[
+            const SizedBox(height: 10),
+            const SkeletonText(
+              style: TextStyle(fontSize: 12),
+              widthFactor: .55,
+            ),
+          ],
+          if (state.enabled &&
+              (state.status == LedgerStatus.ok ||
+                  (state.status == LedgerStatus.partial && ledger.hasData) ||
+                  (state.status == LedgerStatus.scanning &&
+                      ledger.hasData))) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${formatTokens(ledger.totals.total)} tokens',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppPalette.textPrimary,
                     ),
-                  Expanded(
-                    flex: (1000 - share * 1000).round().clamp(0, 1000),
-                    child: ColoredBox(color: AppSurface.recess),
                   ),
-                ],
+                ),
+                Text(
+                  formatCost(ledger.costUsd),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppPalette.textPrimary,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: SizedBox(
+                height: 5,
+                child: Row(
+                  children: [
+                    if (share > 0)
+                      Expanded(
+                        flex: (share * 1000).round(),
+                        child: ColoredBox(color: AppPalette.accent),
+                      ),
+                    Expanded(
+                      flex: (1000 - share * 1000).round().clamp(0, 1000),
+                      child: ColoredBox(color: AppSurface.recess),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
+          ],
         ],
       ),
     );
@@ -650,7 +704,9 @@ class ProviderUsageRow extends StatelessWidget {
   String? _detail() {
     if (!state.enabled) return null;
     return switch (state.status) {
-      LedgerStatus.scanning => null,
+      LedgerStatus.scanning =>
+        state.hasIncompleteFigures ? state.message : null,
+      LedgerStatus.partial => state.message ?? 'Figures are incomplete.',
       LedgerStatus.unavailable ||
       LedgerStatus.failed => state.message ?? 'No figures.',
       LedgerStatus.disabled => null,
@@ -675,6 +731,7 @@ class _StatusPill extends StatelessWidget {
         ? state.status
         : LedgerStatus.disabled) {
       LedgerStatus.ok => ('On', AppPalette.online),
+      LedgerStatus.partial => ('Incomplete', AppPalette.warn),
       LedgerStatus.scanning => ('Scanning', AppPalette.accentOnSurface),
       LedgerStatus.unavailable => ('Not found', AppPalette.textFaint),
       LedgerStatus.failed => ('Failed', AppPalette.warn),

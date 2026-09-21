@@ -20,11 +20,15 @@ import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/app_choice_picker.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_select_field.dart';
+import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
+import '../state/harness_placement.dart';
+import '../state/new_harness.dart';
 import '../store/store_editorial.dart';
 import 'engine_identity.dart';
 import 'codex_profile_field.dart';
 import 'agent_picker.dart';
+import 'box_chrome.dart';
 import 'remote_folder_picker.dart';
 import 'new_agent_project_picker.dart';
 import 'new_harness_help.dart';
@@ -49,8 +53,15 @@ Future<NewAgentDialogResult?> showNewAgentDialog(
   String machineId, {
   required String source,
   String? initialFolder,
+  ProjectFolderRequest? initialProjectFolder,
+  String? initialPermissionMode,
+  bool initiallyAdvanced = false,
+  NewHarnessDraft? initialDraft,
+  ValueChanged<NewHarnessDraft>? onBack,
+  AppKeymap? keymap,
   String? swarmId,
   PaneSplitRequest? split,
+  HarnessPlacement? placement,
   Future<void>? initialEngineProbe,
   bool offerFindExisting = false,
   bool offerBackToSearch = false,
@@ -62,6 +73,14 @@ Future<NewAgentDialogResult?> showNewAgentDialog(
   /// The harness's first message, sent as it starts — the store's "Try this prompt".
   String? initialPrompt,
 }) {
+  if (initialDraft != null) {
+    machineId = initialDraft.machineId;
+    initialEngine = initialDraft.engine;
+    initialFolder = initialDraft.project.folder;
+    initialProjectFolder = initialDraft.projectFolderRequest;
+    initialPermissionMode = initialDraft.permissionMode;
+    initialPrompt = initialDraft.task;
+  }
   // Reported here rather than at each call site: the doors are four and
   // growing, and one that forgets to track is a hole in the funnel that only
   // shows up as a number quietly being too small.
@@ -75,22 +94,36 @@ Future<NewAgentDialogResult?> showNewAgentDialog(
         '';
   }
   analytics.newAgentOpened(source: source);
+  // This dialog uses a separate route. Carry the live picker bindings with
+  // it; showGeneralDialog does not capture inherited themes for us.
+  final activeKeymap = keymap ?? KeymapTheme.of(context, listen: false);
   return showAppDialog<NewAgentDialogResult>(
     context: context,
     transitionDuration: Duration.zero,
     veilBlur: 0,
-    builder: (context) => _NewAgentDialog(
-      notifier: notifier,
-      initialEngine: initialEngine,
-      initialPrompt: initialPrompt,
-      machineId: machineId,
-      initialFolder: initialFolder,
-      swarmId: swarmId ?? notifier.activeSwarmId,
-      split: split,
-      initialEngineProbe: initialEngineProbe,
-      offerFindExisting: offerFindExisting,
-      offerBackToSearch: offerBackToSearch,
-    ),
+    builder: (context) {
+      final dialog = _NewAgentDialog(
+        notifier: notifier,
+        initialEngine: initialEngine,
+        initialPrompt: initialPrompt,
+        machineId: machineId,
+        initialFolder: initialFolder,
+        initialProjectFolder: initialProjectFolder,
+        initialPermissionMode: initialPermissionMode,
+        initiallyAdvanced: initiallyAdvanced,
+        initialDraft: initialDraft,
+        onBack: onBack,
+        swarmId: swarmId ?? notifier.activeSwarmId,
+        split: split,
+        placement: placement,
+        initialEngineProbe: initialEngineProbe,
+        offerFindExisting: offerFindExisting,
+        offerBackToSearch: offerBackToSearch,
+      );
+      return activeKeymap == null
+          ? dialog
+          : KeymapProvider(keymap: activeKeymap, child: dialog);
+    },
   );
 }
 
@@ -98,8 +131,14 @@ class _NewAgentDialog extends StatefulWidget {
   final AppNotifier notifier;
   final String machineId;
   final String? initialFolder;
+  final ProjectFolderRequest? initialProjectFolder;
+  final String? initialPermissionMode;
+  final bool initiallyAdvanced;
+  final NewHarnessDraft? initialDraft;
+  final ValueChanged<NewHarnessDraft>? onBack;
   final String swarmId;
   final PaneSplitRequest? split;
+  final HarnessPlacement? placement;
   final Future<void>? initialEngineProbe;
   final bool offerFindExisting;
   final bool offerBackToSearch;
@@ -108,8 +147,14 @@ class _NewAgentDialog extends StatefulWidget {
     required this.notifier,
     required this.machineId,
     this.initialFolder,
+    this.initialProjectFolder,
+    this.initialPermissionMode,
+    this.initiallyAdvanced = false,
+    this.initialDraft,
+    this.onBack,
     required this.swarmId,
     this.split,
+    this.placement,
     this.initialEngineProbe,
     required this.offerFindExisting,
     required this.offerBackToSearch,
@@ -133,7 +178,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   /// starts the harness with nothing sent. The Store's "Try this prompt" fills
   /// it, and the person can change it before creating.
   late final _task = TextEditingController(
-    text: widget.initialPrompt?.trim() ?? '',
+    text: widget.initialDraft?.task ?? widget.initialPrompt?.trim() ?? '',
   );
   String? get _firstPrompt {
     final task = _task.text.trim();
@@ -160,14 +205,22 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   final _folderFocus = FocusNode(debugLabel: 'Working folder');
   final _agentSearchFocus = FocusNode(debugLabel: 'Agent search');
   final _actionFocus = FocusNode(debugLabel: 'Create or check agent');
-  GitHubRepository? _repository;
+  late GitHubRepository? _repository = widget.initialProjectFolder?.repository;
+  late String? _projectName = widget.initialProjectFolder?.name;
+  late ProjectFolderRequest? _generatedProject =
+      widget.initialProjectFolder?.isGenerated == true
+      ? widget.initialProjectFolder
+      : null;
   final _choicesScroll = ScrollController();
   final _projectChoices = PageStorageBucket();
-  late _FolderSource _folderSource = widget.initialFolder == null
+  late _FolderSource _folderSource =
+      widget.initialProjectFolder?.repository != null
+      ? _FolderSource.remote
+      : widget.initialFolder == null
       ? _FolderSource.newProject
       : _FolderSource.local;
   String? _preparedFolder;
-  AgentCreationAttempt? _creation;
+  late AgentCreationAttempt? _creation = widget.initialDraft?.attempt;
   bool _checkingCreation = false;
   bool get _confirmationPending => _creation?.awaitingConfirmation == true;
   bool get _choicesLocked => _submitting || _confirmationPending;
@@ -176,13 +229,15 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   late String _machineId = widget.machineId;
   int _machineRevision = 0;
   late String? _folder = widget.initialFolder;
-  LocalCodexProfile? _codexProfile;
+  late LocalCodexProfile? _codexProfile = widget.initialDraft?.profile;
+  late bool _codexProfileChosen = widget.initialDraft?.profileChosen ?? false;
   bool _codexProfilesBusy = true;
 
   /// Auto-approve unless the person picks otherwise: a new harness works without stopping to ask
   /// for each command — Claude Code's manual mode was what every harness opened in before. Kept
   /// across engine changes; an engine without the picked mode uses its default instead.
-  String _permissionMode = kDefaultPermissionMode;
+  late String _permissionMode =
+      widget.initialPermissionMode ?? kDefaultPermissionMode;
 
   /// The mode [engine] launches in: the picked one when it has it.
   String _permissionModeFor(String engine) {
@@ -192,10 +247,9 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
         : kDefaultPermissionMode;
   }
 
-  /// Whether the fold is open. Closed on every open of the dialog, deliberately:
-  /// it is shut for the case it exists to serve, and a drawer that remembers
-  /// being open is a drawer that is open for somebody who never asked.
-  bool _advancedOpen = false;
+  /// Direct creation starts compact. More options from the task prompt opens
+  /// the advanced controls immediately, keeping the chosen mode visible.
+  late bool _advancedOpen = widget.initiallyAdvanced;
   bool _submitting = false;
 
   /// A harness install is running ahead of the create. Its progress line is
@@ -379,6 +433,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
         if (_engine != remembered) {
           _engine = remembered!;
           _codexProfile = null;
+          _codexProfileChosen = false;
           _codexProfilesBusy = true;
         }
       });
@@ -417,6 +472,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
     setState(() {
       _engine = preferred;
       _codexProfile = null;
+      _codexProfileChosen = false;
       _codexProfilesBusy = true;
     });
   }
@@ -450,7 +506,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   }
 
   bool _picking = false;
-  String? _error;
+  late String? _error = widget.initialDraft?.error;
 
   /// Whether the machine this agent will run on is the computer the app is
   /// running on, which is what decides where the folder is picked.
@@ -580,6 +636,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
       projectFolder: project,
       swarmId: widget.swarmId,
       split: widget.split,
+      placement: widget.placement,
       bypassPermission: bypassPermission,
       permissionMode: permissionMode,
       // Keep the explicit choice even if machine discovery changes mid-submit.
@@ -619,7 +676,8 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   }
 
   ProjectFolderRequest? get _projectFolder => switch (_folderSource) {
-    _FolderSource.newProject => const ProjectFolderRequest.newProject(),
+    _FolderSource.newProject =>
+      _generatedProject ?? ProjectFolderRequest.newProject(name: _projectName),
     _FolderSource.local => null,
     _FolderSource.remote => switch (_repository) {
       final repository? => ProjectFolderRequest.remote(repository),
@@ -629,6 +687,30 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
 
   void _toggleAdvanced() => setState(() => _advancedOpen = !_advancedOpen);
 
+  NewHarnessDraft get _draft {
+    final folder =
+        _preparedFolder ??
+        (_folderSource == _FolderSource.local ? _folder : null);
+    return NewHarnessDraft(
+      machineId: _machineId,
+      engine: _engine,
+      project: folder != null
+          ? NewHarnessProject.folder(folder)
+          : _folderSource == _FolderSource.remote && _repository != null
+          ? NewHarnessProject.clone(_repository!)
+          : _generatedProject != null
+          ? NewHarnessProject.generated(_generatedProject!)
+          : NewHarnessProject.fresh(_projectName),
+      task: _task.text,
+      permissionMode: _permissionMode,
+      profile: _codexProfile,
+      profileChosen: _codexProfileChosen,
+      attempt: _creation,
+      error: _error,
+      projectsByMachine: widget.initialDraft?.projectsByMachine ?? const {},
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Reads colour tokens, and lives in an Overlay — a top-down rebuild never
@@ -637,10 +719,13 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
     grid.AppTheme.watch(context);
     return ListenableBuilder(
       listenable: widget.notifier,
-      builder: (context, _) => PopScope(
+      builder: (context, _) => PopScope<NewAgentDialogResult>(
         // The launch request cannot be cancelled after it is sent. Keep its
         // outcome visible instead of allowing an accidental second launch.
         canPop: !_submitting,
+        onPopInvokedWithResult: (didPop, result) {
+          if (didPop && result == null) widget.onBack?.call(_draft);
+        },
         child: _buildDialog(context),
       ),
     );
@@ -648,14 +733,16 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
 
   /// The dialog's title: what it makes, and where a split puts it. The
   /// primary button says "New Harness" alone.
-  String get _title => switch (widget.split?.axis) {
-    PaneResizeAxis.x => 'New Harness to the right',
-    PaneResizeAxis.y => 'New Harness below',
-    null => 'New Harness',
-  };
+  String get _title =>
+      widget.placement?.createAction ??
+      switch (widget.split?.axis) {
+        PaneResizeAxis.x => 'New Harness to the right',
+        PaneResizeAxis.y => 'New Harness below',
+        null => 'New Harness',
+      };
 
   Widget _buildDialog(BuildContext context) {
-    final edgePadding = MediaQuery.sizeOf(context).width < 700 ? 24.0 : 36.0;
+    const edgePadding = 14.0;
     final compactHeight = MediaQuery.sizeOf(context).height < 800;
     final canCreate =
         (_preparedFolder != null ||
@@ -677,37 +764,24 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
         },
       },
       child: AlertDialog(
+        alignment: Alignment.topCenter,
+        insetPadding: const EdgeInsets.fromLTRB(16, 56, 16, 18),
         constraints: BoxConstraints.tightFor(
           width: _dialogWidth + edgePadding * 2,
         ),
         backgroundColor: grid.AppPalette.swarmField,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        elevation: 4,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(3),
+          side: BorderSide(color: Colors.white.withValues(alpha: .24)),
+        ),
         title: Text(_title),
-        titleTextStyle: Theme.of(context).textTheme.headlineSmall?.copyWith(
-          fontSize: 28,
-          height: 1.2,
-          fontWeight: grid.AppFont.semibold,
-          color: grid.AppPalette.textPrimary,
-        ),
-        titlePadding: EdgeInsets.fromLTRB(
-          edgePadding,
-          compactHeight ? 24 : 32,
-          edgePadding,
-          0,
-        ),
-        contentPadding: EdgeInsets.fromLTRB(
-          edgePadding,
-          compactHeight ? 24 : 32,
-          edgePadding,
-          40,
-        ),
-        actionsPadding: EdgeInsets.fromLTRB(
-          edgePadding,
-          0,
-          edgePadding,
-          compactHeight ? 24 : 28,
-        ),
+        titleTextStyle: boxMonoStyle(size: 12, color: kBoxFaint),
+        contentTextStyle: boxMonoStyle(),
+        titlePadding: EdgeInsets.fromLTRB(edgePadding, 12, edgePadding, 0),
+        contentPadding: EdgeInsets.fromLTRB(edgePadding, 16, edgePadding, 16),
+        actionsPadding: EdgeInsets.fromLTRB(edgePadding, 0, edgePadding, 10),
         actionsOverflowButtonSpacing: 8,
         content: SizedBox(
           width: _dialogWidth,
@@ -753,7 +827,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            SizedBox(height: compactHeight ? 24 : 32),
+                            const SizedBox(height: 16),
                             _sectionHeader(
                               'First task',
                               _takesTask
@@ -840,7 +914,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                         style: TextButton.styleFrom(
                           foregroundColor: grid.AppPalette.textSecondary,
                         ),
-                        child: const Text('Close'),
+                        child: Text(widget.onBack == null ? 'Close' : 'Back'),
                       ),
                     if (widget.offerFindExisting &&
                         _confirmationPending &&
@@ -859,24 +933,21 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                       focusNode: _actionFocus,
                       onPressed: canCreate ? _submit : null,
                       style: FilledButton.styleFrom(
-                        // Taller and larger type, in proportion with the
-                        // tile-tall rows above it; no wider at rest, so the
-                        // settings beside it keep their one line at 900.
-                        minimumSize: const Size(192, 64),
+                        minimumSize: const Size(0, 32),
                         maximumSize: const Size(420, double.infinity),
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 32,
-                          vertical: 18,
+                          horizontal: 12,
+                          vertical: 8,
                         ),
-                        backgroundColor: grid.AppPalette.accent,
+                        backgroundColor: Colors.white.withValues(alpha: .08),
                         foregroundColor: Colors.white,
-                        textStyle: TextStyle(
-                          fontFamily: grid.AppFont.sans,
-                          fontFamilyFallback: grid.AppFont.sansFallback,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
+                        textStyle: boxMonoStyle(),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(2),
+                          side: BorderSide(
+                            color: Colors.white.withValues(alpha: .24),
+                          ),
                         ),
-                        shape: const StadiumBorder(),
                         disabledForegroundColor: _submitting
                             ? grid.AppPalette.textPrimary
                             : null,
@@ -913,7 +984,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                                           ? 'Installing ${_labelOf(_engine)}…'
                                           : _engineIsTerminal
                                           ? 'Opening terminal…'
-                                          : 'Creating harness…',
+                                          : 'Starting harness…',
                                     ),
                                   ),
                                 ],
@@ -935,7 +1006,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                     constraints.maxWidth < 740 * math.min(1.4, scale);
                 // Keep the controls mounted when the footer wraps or hides.
                 // In particular, an explicit Default profile must stay chosen.
-                return Flex(
+                final controls = Flex(
                   direction: stacked ? Axis.vertical : Axis.horizontal,
                   mainAxisSize: stacked ? MainAxisSize.min : MainAxisSize.max,
                   crossAxisAlignment: stacked
@@ -948,6 +1019,35 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                     ),
                     SizedBox(width: stacked ? 0 : 16, height: stacked ? 12 : 0),
                     Align(alignment: Alignment.centerRight, child: actions),
+                  ],
+                );
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    controls,
+                    const SizedBox(height: 8),
+                    DefaultTextStyle(
+                      style: boxMonoStyle(),
+                      child: BoxHintStrip(
+                        hints: [
+                          BoxHint(
+                            Theme.of(context).platform == TargetPlatform.macOS
+                                ? 'cmd-enter'
+                                : 'ctrl-enter',
+                            _confirmationPending ? 'check status' : 'create',
+                            onTap: canCreate ? _submit : null,
+                          ),
+                          const BoxHint('tab / shift-tab', 'fields'),
+                          BoxHint(
+                            'esc',
+                            widget.onBack == null ? 'close' : 'back',
+                            onTap: _submitting
+                                ? null
+                                : () => Navigator.of(context).maybePop(),
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
                 );
               },
@@ -966,7 +1066,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
     HarnessHelpTopic? helpTopic, {
     required bool compactHeight,
   }) => Padding(
-    padding: EdgeInsets.only(bottom: compactHeight ? 12 : 16),
+    padding: const EdgeInsets.only(bottom: 6),
     child: OverflowBar(
       alignment: MainAxisAlignment.spaceBetween,
       overflowAlignment: OverflowBarAlignment.end,
@@ -988,15 +1088,11 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                 TextSpan(text: ' $prompt'),
               ],
             ),
-            style: TextStyle(
-              fontSize: 20,
-              height: 1.35,
-              fontWeight: grid.AppFont.regular,
-              color: grid.AppPalette.textSecondary,
-            ),
+            style: boxMonoStyle(size: 12, color: grid.AppPalette.textSecondary),
           ),
         ),
-        if (helpTopic != null) HarnessHelpLink(topic: helpTopic),
+        if (helpTopic != null)
+          HarnessHelpLink(topic: helpTopic, textStyle: boxMonoStyle(size: 12)),
       ],
     ),
   );
@@ -1005,41 +1101,18 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   /// but never on its width — so the task field, laid out outside the tiles'
   /// LayoutBuilder, can be the same height as they are.
   static double _tileHeight(TextScaler scaler, {required bool compactHeight}) {
-    final labelLine =
-        scaler.scale(AppChoiceTileContent.labelSize) *
-        AppChoiceTileContent.lineHeight;
-    final detailLine =
-        scaler.scale(AppChoiceTileContent.detailSize) *
-        AppChoiceTileContent.lineHeight;
-    return math.max(
-      compactHeight ? 96 : 100,
-      math.max(labelLine * 2 + detailLine, labelLine + detailLine * 2) + 38,
-    );
+    return math.max(32, scaler.scale(13) * 1.35 + 14);
   }
 
   Widget _choices() => LayoutBuilder(
     builder: (context, constraints) {
       final scaler = MediaQuery.textScalerOf(context);
       final compactHeight = MediaQuery.sizeOf(context).height < 800;
-      final sectionGap = compactHeight ? 24.0 : 32.0;
-      final minimumTileWidth = 172 * math.min(1.3, scaler.scale(16) / 16);
-      final columns =
-          constraints.maxWidth >= minimumTileWidth * 4 + AppChoiceTile.gap * 3
-          ? 4
-          : constraints.maxWidth >= minimumTileWidth * 2 + AppChoiceTile.gap
-          ? 2
-          : 1;
-      // Three lines of text, and the 38 the tile spends on its own padding and
-      // the gap between them. Three because the name and the detail under it
-      // each want two and the tile can afford one second line between them:
-      // sized for whichever of those two shapes is taller, so either can
-      // happen without the column overflowing its box. The detail is the one
-      // that usually takes it — "Documents · Typst GmbH" does not fit on one
-      // line at this width, and on one it arrived as "Documents · Typst Gm…".
-      // Which line is spent where is decided per tile, against the name it
-      // actually holds: AppChoiceTileContent.linesFor.
+      const sectionGap = 16.0;
+      // Single-line choices keep names and machine/project context readable.
+      // Their shared full width also makes keyboard focus easy to follow.
       final tileSize = Size(
-        (constraints.maxWidth - AppChoiceTile.gap * (columns - 1)) / columns,
+        constraints.maxWidth,
         _tileHeight(scaler, compactHeight: compactHeight),
       );
       return Column(
@@ -1056,6 +1129,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
             compactHeight: compactHeight,
           ),
           AgentPicker(
+            terminalStyle: true,
             key: const Key('new-agent-agent-picker'),
             focusNode: _agentSearchFocus,
             // A tile's height, so the bar is in proportion with the rows of
@@ -1124,7 +1198,20 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                 _engineChosenByUser = true;
                 if (_engine != value) {
                   _engine = value;
+                  if (_generatedProject != null) {
+                    _generatedProject = ProjectFolderRequest.generated(
+                      label:
+                          widget.notifier
+                              .stateOf(_machineId)
+                              ?.dsh[value]
+                              ?.name ??
+                          engineIdentity(value).label,
+                      at: DateTime.now(),
+                    );
+                    _projectName = _generatedProject!.name;
+                  }
                   _codexProfile = null;
+                  _codexProfileChosen = false;
                   _codexProfilesBusy = true;
                   // A terminal cannot clone: a Git project chosen for an
                   // agent goes back to the default, as the project picker
@@ -1151,9 +1238,11 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                 Expanded(
                   child: Text(
                     'Couldn’t check whether ${_labelOf(_baseEngine(_engine))} is installed. '
-                    'You can still try creating the harness.',
-                    style: Theme.of(context).textTheme.bodySmall
-                        ?.copyWith(color: grid.AppPalette.textSecondary),
+                    'You can still try starting the harness.',
+                    style: boxMonoStyle(
+                      size: 12,
+                      color: grid.AppPalette.textSecondary,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -1185,6 +1274,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
           PageStorage(
             bucket: _projectChoices,
             child: NewAgentProjectPicker(
+              terminalStyle: true,
               // Keyed on the kind too: a terminal's tiles differ (Home, no
               // Git), and switching remounts the picker with them.
               key: ValueKey(
@@ -1194,6 +1284,12 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
               notifier: widget.notifier,
               machineId: _machineId,
               initialFolder: _folder,
+              initialProject: _repository != null
+                  ? ProjectFolderRequest.remote(_repository!)
+                  : _projectName != null
+                  ? _generatedProject ??
+                        ProjectFolderRequest.newProject(name: _projectName)
+                  : null,
               focusNode: _folderFocus,
               tileSize: tileSize,
               locked: _choicesLocked,
@@ -1201,12 +1297,16 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
               // home when none is named, never in one prepared or cloned.
               terminal: _engineIsTerminal,
               onBrowse: _browse,
-              onSelected: (folder, repository) {
+              onSelected: (folder, project) {
                 if (_choicesLocked) return;
                 setState(() {
                   _folder = folder;
-                  _repository = repository;
-                  _folderSource = repository != null
+                  _repository = project?.repository;
+                  _projectName = project?.name;
+                  _generatedProject = project?.isGenerated == true
+                      ? project
+                      : null;
+                  _folderSource = _repository != null
                       ? _FolderSource.remote
                       : folder != null
                       ? _FolderSource.local
@@ -1228,6 +1328,8 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
     children: [
       if (_availability('codex')?.supportsCodexHome == true)
         CodexProfileField(
+          textStyle: boxMonoStyle(),
+          valueChosen: _codexProfileChosen,
           notifier: widget.notifier,
           machineId: _machineId,
           machineIsThisComputer: _machineIsThisComputer,
@@ -1239,7 +1341,10 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
           },
           onChanged: (profile) {
             if (!_choicesLocked) {
-              setState(() => _codexProfile = profile);
+              setState(() {
+                _codexProfile = profile;
+                _codexProfileChosen = true;
+              });
             }
           },
           onBusyChanged: (busy) {
@@ -1268,9 +1373,9 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   Widget _taskField({required double minHeight}) => ListenableBuilder(
     listenable: _task,
     builder: (context, _) {
-      final radius = BorderRadius.circular(grid.AppControl.radius);
-      final line = MediaQuery.textScalerOf(context).scale(16) * 1.45;
-      final padding = ((minHeight - line) / 2).clamp(12.0, double.infinity);
+      final radius = BorderRadius.circular(2);
+      final line = MediaQuery.textScalerOf(context).scale(13) * 1.35;
+      final padding = ((minHeight - line) / 2).clamp(6.0, double.infinity);
       final tooLong = _taskTooLong;
       final errorBorder = OutlineInputBorder(
         borderRadius: radius,
@@ -1289,19 +1394,11 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
         maxLines: 6,
         keyboardType: TextInputType.multiline,
         textInputAction: TextInputAction.newline,
-        style: TextStyle(
-          fontSize: 16,
-          height: 1.45,
-          color: grid.AppPalette.textPrimary,
-        ),
+        style: boxMonoStyle(),
         decoration: InputDecoration(
           hintText: 'Tell your agent what to do first.',
           // Readable, not faint: the hint says what the field is for.
-          hintStyle: TextStyle(
-            fontSize: 16,
-            height: 1.45,
-            color: grid.AppPalette.textSecondary,
-          ),
+          hintStyle: boxMonoStyle(color: kBoxFaint),
           // One line, so an empty box is exactly a tile tall at any width.
           hintMaxLines: 1,
           errorText: tooLong
@@ -1363,15 +1460,16 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
         label: 'Advanced settings',
         button: true,
         toggled: _advancedOpen,
-        child: IconButton(
+        child: TextButton(
           key: const Key('new-agent-advanced'),
           onPressed: _choicesLocked ? null : _toggleAdvanced,
-          icon: const Icon(LucideIcons.settings, size: 16),
-          color: grid.AppPalette.textFaint,
-          style: IconButton.styleFrom(
+          style: TextButton.styleFrom(
+            foregroundColor: grid.AppPalette.textSecondary,
+            textStyle: boxMonoStyle(size: 12),
             minimumSize: const Size(28, 28),
             padding: const EdgeInsets.all(6),
           ),
+          child: Text(_advancedOpen ? '[-] options' : '[+] options'),
         ),
       ),
       if (permissionModesOf(_baseEngine(_engine)) case final modes
@@ -1384,11 +1482,19 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   /// How far the agent may go without asking. The field shows the mode; the menu says what each
   /// one does, since "Accept edits" and "Plan first" mean little on their own.
   Widget _permissionModeField(List<PermissionMode> modes) => SizedBox(
-    width: 156 * math.min(1.4, MediaQuery.textScalerOf(context).scale(13) / 13),
-    height: 34,
+    width: 156 * math.min(1.8, MediaQuery.textScalerOf(context).scale(13) / 13),
+    height: math.max(
+      34,
+      MediaQuery.textScalerOf(context).scale(13) * 1.35 + 14,
+    ),
     child: AppSelectField<String>(
       key: const Key('new-agent-permission-mode'),
-      height: 34,
+      textStyle: boxMonoStyle(),
+      radius: 2,
+      height: math.max(
+        34,
+        MediaQuery.textScalerOf(context).scale(13) * 1.35 + 14,
+      ),
       menuWidth: 340,
       value: _permissionModeFor(_baseEngine(_engine)),
       options: [
@@ -1453,6 +1559,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   }
 
   Widget _machineOptions(Size tileSize) => AppChoicePicker<String>(
+    terminalStyle: true,
     key: const Key('new-agent-machine-field'),
     value: _machineId,
     moreKey: const Key('new-agent-machine-more'),
@@ -1495,9 +1602,12 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
         _machineId = id;
         _folder = null;
         _repository = null;
+        _projectName = null;
+        _generatedProject = null;
         _folderSource = _FolderSource.newProject;
         _preparedFolder = null;
         _codexProfile = null;
+        _codexProfileChosen = false;
         _codexProfilesBusy = true;
         _error = null;
       });
@@ -1557,7 +1667,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
 }
 
 /// The project picker shares Open Agent’s generous reading space.
-const double _dialogWidth = 1080;
+const double _dialogWidth = 812;
 
 /// Blocks inside one card: the command, the facts, the reason.
 const double _gapBlock = 12;

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -26,10 +28,16 @@ class KeyCap extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    final iconSize = MediaQuery.textScalerOf(context).scale(14);
+    final minEdge = math.max(height, iconSize + 8);
     return Container(
-      constraints: const BoxConstraints(minWidth: _minWidth),
-      height: height,
-      padding: const EdgeInsets.symmetric(horizontal: 6),
+      // A minimum, not a fixed height: large text and a multi-stroke custom
+      // binding must be able to grow without clipping their glyphs.
+      constraints: BoxConstraints(
+        minWidth: math.max(_minWidth, minEdge),
+        minHeight: minEdge,
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       decoration: BoxDecoration(
         color: grid.AppSurface.wellFill,
         borderRadius: BorderRadius.circular(6),
@@ -42,12 +50,13 @@ class KeyCap extends StatelessWidget {
       // and a label squeezed to a character per line beside it.
       child: Center(
         widthFactor: 1,
+        heightFactor: 1,
         child: label == '⇥' || label == '↵' || label == '⏎'
             ? Semantics(
                 label: label == '⇥' ? 'Tab' : 'Return',
                 child: Icon(
                   label == '⇥' ? Icons.keyboard_tab : Icons.keyboard_return,
-                  size: 14,
+                  size: iconSize,
                   color: grid.AppPalette.textPrimary,
                 ),
               )

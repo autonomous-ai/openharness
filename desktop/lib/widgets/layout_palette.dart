@@ -9,7 +9,7 @@ import '../shortcuts/keymap.dart';
 import '../state/pane_preset.dart';
 import '../theme/app_theme.dart';
 
-/// ⌘S — pick the shape of the grid.
+/// ⇧⌘L — pick the shape of the grid.
 ///
 /// Shapes are DRAWN, not listed. "Two over one" and "one over two" are the same
 /// four words in a different order, and nobody reads a layout name twice; the
@@ -17,15 +17,15 @@ import '../theme/app_theme.dart';
 ///
 /// Every card describes a distinct concrete arrangement. Automatic defaults
 /// resolve to the matching card, instead of adding a duplicate picture.
-/// Set while the palette is up, so a second ⌘S can be answered rather than
+/// Set while the palette is up, so a second ⇧⌘L can be answered rather than
 /// stacking a route.
 ///
 /// It used to be a bool and a bare return. That stopped the palette fading the
 /// window to black under a held key — each press laid another dialog and another
-/// 30% barrier over the last — but it left ⌘S meaning "open" once and nothing
+/// 30% barrier over the last — but it left ⇧⌘L meaning "open" once and nothing
 /// ever after, which is the one thing a person holding a key does not expect.
 ///
-/// THE SAME KEY WALKS THE STRIP. ⌘S opens it, ⌘S again steps to the next shape,
+/// THE SAME KEY WALKS THE STRIP. ⇧⌘L opens it, ⇧⌘L again steps to the next shape,
 /// Enter takes it. That is how every cycling chord on this OS behaves, and it
 /// means the shape can be chosen without the hand leaving the chord it arrived
 /// on.
@@ -107,7 +107,7 @@ class _LayoutPaletteState extends State<_LayoutPalette> {
   /// `autofocus: true` alone was not enough: it only takes the focus when the
   /// enclosing scope has none to give, and by the time this is laid out the
   /// route that opened it has already settled focus somewhere. The symptom was
-  /// precise — ⌘S opened the palette and cycled it, because that chord is a
+  /// precise — ⇧⌘L opened the palette and cycled it, because that chord is a
   /// global binding, while the arrow keys did nothing at all, because those are
   /// read HERE and nothing here was listening.
   final FocusNode _keys = FocusNode(debugLabel: 'layout-palette');
@@ -123,7 +123,7 @@ class _LayoutPaletteState extends State<_LayoutPalette> {
     });
     // Registered here rather than by the opener, so the hook cannot outlive the
     // widget it steps: a stale callback would move a cursor on a palette that
-    // is no longer on screen, and the next ⌘S would find the strip already
+    // is no longer on screen, and the next ⇧⌘L would find the strip already
     // walked.
     _layoutPaletteAdvance = _advance;
   }

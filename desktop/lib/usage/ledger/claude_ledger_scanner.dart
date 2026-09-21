@@ -11,6 +11,7 @@ import 'dart:io';
 
 import 'ledger_scanner.dart';
 import 'ledger_types.dart';
+import 'jsonl_ledger_scan.dart';
 
 class ClaudeLedgerScanner implements LedgerScanner {
   ClaudeLedgerScanner({String? home, this.environment})
@@ -39,56 +40,25 @@ class ClaudeLedgerScanner implements LedgerScanner {
         'No home directory to read Claude transcripts from',
       );
     }
-    final files = await listJsonlFiles(roots);
-    if (files.isEmpty) {
-      return const LedgerScanResult.unavailable(
-        'No Claude Code transcripts on this computer',
-      );
-    }
-
-    final sources = <ScannedSource>[];
-    for (final file in files) {
-      final FileStat stat;
-      try {
-        stat = await file.stat();
-      } on FileSystemException {
-        continue;
-      }
-      final cached = previous[file.path];
-      if (cached != null && cached.matches(stat)) {
-        sources.add(cached);
-        continue;
-      }
-      sources.add(
-        ScannedSource(
-          path: file.path,
-          mtimeMs: stat.modified.millisecondsSinceEpoch,
-          size: stat.size,
-          entries: await _parse(file),
-        ),
-      );
-    }
-    return LedgerScanResult(sources: sources);
+    return scanJsonlUsage(
+      provider: provider,
+      roots: roots,
+      previous: previous,
+      missingMessage: 'No Claude Code transcripts on this computer',
+      parse: _parse,
+    );
   }
 
-  Future<List<LedgerEntry>> _parse(File file) async {
+  Future<List<LedgerEntry>> _parse(File file, int length) async {
     // The session id the transcript is named after, for the rows that omit it.
     final fallbackSessionId = file.uri.pathSegments.last.replaceAll(
       '.jsonl',
       '',
     );
     final turns = <ClaudeTurn>[];
-    try {
-      final lines = file
-          .openRead()
-          .transform(utf8.decoder)
-          .transform(const LineSplitter());
-      await for (final line in lines) {
-        final turn = parseClaudeLine(line, fallbackSessionId);
-        if (turn != null) turns.add(turn);
-      }
-    } on FileSystemException {
-      return const [];
+    await for (final line in readJsonlLines(file, length)) {
+      final turn = parseClaudeLine(line, fallbackSessionId);
+      if (turn != null) turns.add(turn);
     }
     return _dedupe(turns);
   }

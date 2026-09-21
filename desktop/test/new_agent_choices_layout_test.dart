@@ -12,6 +12,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/widgets/new_agent_dialog.dart';
 import 'package:harness/shared/widgets/app_choice_picker.dart';
@@ -72,6 +73,7 @@ class _ChoicesApp extends AppNotifier {
     String? name,
     String? agent,
     AgentCreationAttempt? attempt,
+    HarnessPlacement? placement,
   }) async {
     createCalls++;
     return null;
@@ -246,7 +248,8 @@ void main() {
       }
 
       expectUniformTiles();
-      // The agent box, the tiles and the first-task box are one height.
+      // Choices are compact rows; the task can reserve room for its cursor
+      // and clear control without returning to a large card-sized field.
       final tileHeight = tester
           .getSize(find.byType(AppChoiceTile).first)
           .height;
@@ -264,9 +267,12 @@ void main() {
               ),
             )
             .height,
-        closeTo(tileHeight, 1),
+        inInclusiveRange(tileHeight - 1, tileHeight + 16),
       );
-      expect(tester.getSize(taskBox).height, closeTo(tileHeight, 1));
+      expect(
+        tester.getSize(taskBox).height,
+        inInclusiveRange(tileHeight - 1, tileHeight + 16),
+      );
       expect(
         find.text('First task. What should your agent work on? (Optional)'),
         findsOneWidget,
@@ -303,6 +309,24 @@ void main() {
         tester.getRect(find.byKey(const Key('new-agent-agent-panel'))).bottom,
         lessThanOrEqualTo(size.height),
       );
+      // Both lines must fit inside the row's selection background. A compact
+      // single-line extent allowed descriptions to paint into the next row.
+      final rows = find.descendant(
+        of: find.byKey(const Key('new-agent-agent-list')),
+        matching: find.byType(ListTile),
+      );
+      for (final row in rows.evaluate()) {
+        final finder = find.byWidget(row.widget);
+        final bounds = tester.getRect(finder);
+        for (final text
+            in find
+                .descendant(of: finder, matching: find.byType(RichText))
+                .evaluate()) {
+          final rect = tester.getRect(find.byWidget(text.widget));
+          expect(rect.top, greaterThanOrEqualTo(bounds.top - .1));
+          expect(rect.bottom, lessThanOrEqualTo(bounds.bottom + .1));
+        }
+      }
       await capture('search-open');
       await tester.enterText(agentSearch, 'openc');
       await tester.pumpAndSettle();

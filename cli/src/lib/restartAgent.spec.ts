@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { restartAgent, type RestartAgentDeps } from './restartAgent.js'
+import { AgentRestartCoordinator, restartAgent, type RestartAgentDeps } from './restartAgent.js'
 import type { ProcessIdentity } from './registry.js'
 
 const IDENTITY: ProcessIdentity = { pid: 555, executable: 'claude', startMarker: 'Mon Aug  3 09:05:00 2026' }
@@ -153,5 +153,69 @@ describe('restartAgent', () => {
     const outcome = await restartAgent({ engine: 'claude', sessionId: 's1' }, false, d)
     expect(outcome.ok).toBe(false)
     expect(d.calls).not.toContain('waitForProcess')
+  })
+})
+
+
+describe('restart cancellation', () => {
+  for (const phase of ['before', 'hold', 'terminate', 'prepare', 'respawn', 'wait'] as const) {
+    it(`does not continue process replacement after cancellation at ${phase}`, async () => {
+      let current = phase !== 'before'
+      const stopAt = (at: string) => { if (phase === at) current = false }
+      const d = deps({
+        holdOpen: async () => { stopAt('hold'); return { ok: true } },
+        terminate: async () => { stopAt('terminate'); return 'terminated' },
+        prepareResume: async () => { stopAt('prepare') },
+        respawn: async () => { stopAt('respawn'); return { ok: true } },
+        waitForProcess: async () => { stopAt('wait'); return null },
+      })
+      const result = await restartAgent({ engine: 'codex', sessionId: 's1' }, false, { ...d, isCurrent: () => current })
+      expect(result).toEqual({ ok: false, detail: 'the agent changed or stopped during restart' })
+      expect(d.calls.filter((call) => call === 'respawn')).toHaveLength(['respawn', 'wait'].includes(phase) ? 1 : 0)
+      if (phase === 'before') expect(d.calls).toEqual([])
+      if (phase === 'hold') expect(d.calls).toEqual(['holdOpen'])
+    })
+  }
+
+  it('joins overlapping restarts but leaves other agents independent', async () => {
+    const coordinator = new AgentRestartCoordinator()
+    let finish!: () => void
+    const handler = vi.fn(async () => { await new Promise<void>((resolve) => { finish = resolve }); return { ok: false, error: 'fixture' } as const })
+    const first = coordinator.run('a', handler)
+    expect(coordinator.run('a', handler)).toBe(first)
+    expect(await coordinator.run('b', async () => ({ ok: false, error: 'other' }))).toEqual({ ok: false, error: 'other' })
+    finish()
+    await first
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(await coordinator.run('a', async () => ({ ok: false, error: 'fresh' }))).toEqual({ ok: false, error: 'fresh' })
+  })
+
+  it('Stop cancels before dispatch and during an outstanding step', async () => {
+    const coordinator = new AgentRestartCoordinator()
+    const untouched = vi.fn(async () => ({ ok: false, error: 'unexpected' } as const))
+    const first = coordinator.run('a', untouched)
+    coordinator.cancel('a')
+    expect(await first).toEqual({ ok: false, error: 'AGENT_CHANGED' })
+    expect(untouched).not.toHaveBeenCalled()
+    let finish!: () => void
+    let isCurrent!: () => boolean
+    const second = coordinator.run('a', async (current) => {
+      isCurrent = current
+      await new Promise<void>((resolve) => { finish = resolve })
+      return { ok: false, error: 'old receipt' }
+    })
+    await Promise.resolve()
+    coordinator.cancel('a')
+    expect(isCurrent()).toBe(false)
+    expect(coordinator.run('a', untouched)).toBe(second)
+    finish()
+    expect(await second).toEqual({ ok: false, error: 'AGENT_CHANGED' })
+    expect(untouched).not.toHaveBeenCalled()
+  })
+
+  it('a thrown restart releases the coordinator for a new explicit attempt', async () => {
+    const coordinator = new AgentRestartCoordinator()
+    await expect(coordinator.run('a', async () => { throw new Error('lost') })).rejects.toThrow('lost')
+    expect(await coordinator.run('a', async () => ({ ok: false, error: 'fresh' }))).toEqual({ ok: false, error: 'fresh' })
   })
 })

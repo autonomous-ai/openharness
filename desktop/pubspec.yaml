@@ -30,6 +30,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Natural ordering for numbered agents, projects, and completion candidates.
+  collection: ^1.19.1
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -108,6 +110,7 @@ flutter:
     - assets/engine-icons/
     - assets/store/
     - assets/store/projects/
+    - assets/store/covers/
     # The real app icon, shown in Settings ▸ About. Copied from the macOS
     # icon set (`macos/Runner/Assets.xcassets/AppIcon.appiconset`) rather than
     # loaded from the bundle: Flutter can't read an .icns, and About should show

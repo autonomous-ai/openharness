@@ -262,10 +262,10 @@ void main() {
       expect(chordsFor(ShortcutAction.zoomPane), contains('⌘⏎'));
       expect(chordsFor(ShortcutAction.lastPane), contains('⌘;'));
       expect(chordsFor(ShortcutAction.newSwarm), ['⌘T']);
-      expect(chordsFor(ShortcutAction.showLayout), ['⌘S']);
-      expect(chordsFor(ShortcutAction.orchestrate), ['⌘P']);
+      expect(chordsFor(ShortcutAction.showLayout), ['⇧⌘L']);
+      expect(chordsFor(ShortcutAction.orchestrate), isEmpty);
       expect(chordsFor(ShortcutAction.routeTask), ['⌘B']);
-      expect(chordsFor(ShortcutAction.addAgent), ['⌘O']);
+      expect(chordsFor(ShortcutAction.addAgent), ['⌘P']);
       expect(chordsFor(ShortcutAction.newAgent), ['⌘N']);
       expect(chordsFor(ShortcutAction.showAttention), ['⇧⌘I']);
       expect(chordsFor(ShortcutAction.findTerminal), ['⌘F']);
@@ -297,7 +297,7 @@ void main() {
         ['⌘', '→'],
       ]);
 
-      final next = rows.firstWhere((row) => row.label == 'Next Harness');
+      final next = rows.firstWhere((row) => row.label == 'Next Tab');
       expect(next.chords, [
         ['⇧', '⌘', ']'],
         ['⌃', '⇥'],
@@ -318,9 +318,7 @@ void main() {
 
     test('the digits are one row, at the end of their own group', () {
       final rows = shortcutRows();
-      final digits = rows.indexWhere(
-        (row) => row.label == 'Select harnesses 1–9',
-      );
+      final digits = rows.indexWhere((row) => row.label == 'Select tabs 1–9');
       expect(digits, isNot(-1));
       expect(rows[digits].chords, [
         ['⌘', '1 – 9'],

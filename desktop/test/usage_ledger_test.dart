@@ -480,6 +480,25 @@ void main() {
   });
 
   group('aggregation', () {
+    test(
+      'repeated model names still price each turn at its own context tier',
+      () {
+        final ledger = buildProviderLedger(LedgerProvider.claude, [
+          sourceOf('tiered.jsonl', [
+            entryOf(
+              model: 'claude-sonnet-4-5',
+              totals: const UsageTotals(freshInput: 100000),
+            ),
+            entryOf(
+              model: 'claude-sonnet-4-5',
+              totals: const UsageTotals(freshInput: 400000),
+            ),
+          ]),
+        ]);
+        expect(ledger.costUsd, closeTo(2.1, 0.000001));
+        expect(ledger.totals.freshInput, 500000);
+      },
+    );
     test('drops an exchange seen in two files', () {
       final ledger = buildProviderLedger(LedgerProvider.claude, [
         sourceOf('a.jsonl', [entryOf(dedupeKey: 'k1')]),
@@ -577,6 +596,40 @@ void main() {
       expect(recent.last.totals.freshInput, 10);
     });
   });
+
+  test(
+    'version 2 empty-file caches are rescanned even with a fresh timestamp',
+    () async {
+      final settings = MemorySettings()
+        ..values['usageLedger.claude.enabled'] = 'true';
+      final scanner = FakeScanner(
+        LedgerProvider.claude,
+        LedgerScanResult(
+          sources: [
+            sourceOf('restored.jsonl', [entryOf()]),
+          ],
+        ),
+      );
+      final store = UsageLedgerStore(
+        scanner: scanner,
+        settings: settings,
+        snapshots: MemorySnapshotStore(
+          jsonEncode({
+            'version': 2,
+            'provider': 'claude',
+            'lastScanAt': DateTime.now().toIso8601String(),
+            'sources': [sourceOf('restored.jsonl', []).toJson()],
+          }),
+        ),
+      );
+      addTearDown(store.dispose);
+      await store.load();
+      await store.refresh();
+      expect(scanner.scans, 1);
+      expect(scanner.lastPrevious, isEmpty);
+      expect(store.ledger.hasData, isTrue);
+    },
+  );
 
   group('formatting', () {
     test('shortens token counts, billions included', () {

@@ -148,6 +148,10 @@ class MainFlutterWindow: NSWindow {
       at: 0
     )
     helpMenu.insertItem(NSMenuItem.separator(), at: 1)
+    helpMenu.insertItem(menuItem(title: "Quick Start", action: #selector(quickStart(_:)),
+      symbol: "terminal", tag: 7310), at: 0)
+    helpMenu.insertItem(menuItem(title: "Keyboard Practice", action: #selector(keyboardPractice(_:)),
+      symbol: "keyboard", tag: 7311), at: 1)
   }
 
   /// The Safari/Chrome/Terminal.app "Font" convention, in the SAME menu and the SAME order those
@@ -189,17 +193,14 @@ class MainFlutterWindow: NSWindow {
     // key equivalent it is handled by the responder chain first, so it works
     // wherever the focus happens to be.
     //
-    // ⌘S, matching the Dart binding. It was still "l" here after that binding moved, and this side is
-    // the one that wins: AppKit takes the key equivalent before Flutter ever sees the event, so ⌘L went
-    // on opening the layout palette and ⌘S did nothing inside a terminal — the exact silent conflict
-    // the shortcut table's own comment warns about.
+    // Cmd-Shift-L matches the workspace keymap; Cmd-S opens the Store.
     viewMenu.insertItem(
       menuItem(
         title: "Layout…",
         action: #selector(showLayout(_:)),
         symbol: "square.grid.2x2",
         tag: layoutMenuItemTag,
-        keyEquivalent: "s"
+        keyEquivalent: "l"
       ),
       at: at
     )
@@ -259,8 +260,10 @@ class MainFlutterWindow: NSWindow {
     )
     item.target = self
     item.tag = tag
-    if tag == shortcutsMenuItemTag || tag == layoutMenuItemTag {
-      let command = tag == shortcutsMenuItemTag ? "showShortcuts" : "layout"
+    if tag == layoutMenuItemTag { item.keyEquivalentModifierMask = [.command, .shift] }
+    let keymapActions = [shortcutsMenuItemTag: "showShortcuts", layoutMenuItemTag: "layout",
+      7310: "quickStart", 7311: "keyboardPractice"]
+    if let command = keymapActions[tag] {
       item.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + command)
     }
     // Every other row in this menu carries a glyph, so one without reads as
@@ -312,6 +315,14 @@ class MainFlutterWindow: NSWindow {
 
   @objc private func showShortcuts(_ sender: Any?) {
     menuChannel?.invokeMethod("showShortcuts", arguments: nil)
+  }
+
+  @objc private func quickStart(_ sender: Any?) {
+    swarmTitlebar?.startQuickStart()
+  }
+
+  @objc private func keyboardPractice(_ sender: Any?) {
+    menuChannel?.invokeMethod("keyboardPractice", arguments: nil)
   }
 
   @objc private func increaseTerminalFontSize(_ sender: Any?) {

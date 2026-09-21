@@ -15,6 +15,26 @@ library;
 
 import '../../usage/ledger/ledger_types.dart';
 
+// A history repeats the same model thousands of times. Resolve its naming
+// variants once, while keeping token-dependent tier arithmetic per entry.
+// Bound both count and key length because model names originate in log files.
+final _claudeModelNames = <String, String?>{};
+final _codexModelNames = <String, String?>{};
+
+String? _rememberModelName(
+  String? model,
+  Map<String, String?> cache,
+  String? Function(String) resolve,
+) {
+  if (model == null) return null;
+  if (model.length > 512) return resolve(model);
+  if (cache.containsKey(model)) return cache[model];
+  final result = resolve(model);
+  if (cache.length >= 128) cache.remove(cache.keys.first);
+  cache[model] = result;
+  return result;
+}
+
 /// USD per million tokens, per bucket.
 ///
 /// The `above` fields are the long-context tier: past [thresholdTokens] in a
@@ -231,8 +251,10 @@ bool _isLegacyBaseOpus4(String model) {
 }
 
 /// The pricing key a Claude model id maps to, or null when none does.
-String? normalizeClaudeModel(String? model) {
-  if (model == null) return null;
+String? normalizeClaudeModel(String? model) =>
+    _rememberModelName(model, _claudeModelNames, _normalizeClaudeModel);
+
+String? _normalizeClaudeModel(String model) {
   final lower = model.toLowerCase().trim().replaceFirst(
     RegExp(r'^anthropic[/:]'),
     '',
@@ -438,8 +460,10 @@ String _stripDashTiers(String model) {
 }
 
 /// The pricing key a Codex model id maps to, or null when none does.
-String? normalizeCodexModel(String? model) {
-  if (model == null) return null;
+String? normalizeCodexModel(String? model) =>
+    _rememberModelName(model, _codexModelNames, _normalizeCodexModel);
+
+String? _normalizeCodexModel(String model) {
   final stripped = _stripParenthesizedTier(model.toLowerCase().trim());
   if (stripped == null || stripped.isEmpty) return null;
   final normalized = _stripDashTiers(stripped);

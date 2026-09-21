@@ -43,6 +43,31 @@ void main() {
     modifier: modifier,
   );
 
+  test('a picker key nothing can run is left to the text field', () {
+    final picker = KeymapDispatch(
+      ResolvedKeymap([
+        binding('alt+1', 'picker.pick_1'),
+      ], const KeymapConfig.empty()),
+    );
+    KeymapDispatchResult press(KeymapContext context, {required bool can}) =>
+        picker.dispatch(
+          stroke: KeyStroke.parse('alt+1'),
+          physicalKey: 'Digit1',
+          phase: KeymapKeyPhase.down,
+          context: context,
+          owner: owner,
+          canExecute: (_) => can,
+        );
+    // In a list it picks a row. On the task field there are no rows, and
+    // swallowing it took ¡ ™ £ out of a message somebody was writing.
+    for (final context in [KeymapContext.picker, KeymapContext.project]) {
+      expect(press(context, can: true).command, 'picker.pick_1');
+      final unavailable = press(context, can: false);
+      expect(unavailable.handled, isFalse);
+      expect(unavailable.command, isNull);
+    }
+  });
+
   test('ordinary terminal and native editing keys are untouched', () {
     for (final key in [
       'h',

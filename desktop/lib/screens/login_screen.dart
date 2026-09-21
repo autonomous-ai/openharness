@@ -44,71 +44,87 @@ class LoginScreen extends StatelessWidget {
 
     // The same flag `RootShell` routes on, so the button's state and the reason
     // this screen is on screen at all can never disagree.
-    final waiting = notifier.signingIn;
+    final waiting = notifier.signingIn || notifier.signingOut;
     final compact = MediaQuery.sizeOf(context).height < 640;
     final gap = compact ? 16.0 : 24.0;
+    // Preserve room for the primary action and its explanation at the minimum
+    // window size with enlarged text. The illustration is supplementary.
+    final showFleet =
+        !compact || MediaQuery.textScalerOf(context).scale(16) <= 20;
 
-    return Scaffold(
-      // The PANEL tone, not the window's. In light both `windowBg` and the
-      // card's `surfaceFill` are pure white, so a card on the window is a card
-      // you cannot see — only its shadow separates it, and at this size that
-      // reads as a printing artefact rather than as a raised block. The rail's
-      // own barely-there grey gives the card something to sit on in both
-      // themes, which is the same trick the app plays everywhere else.
-      backgroundColor: grid.AppPalette.panelBg,
-      body: Stack(
-        children: [
-          const Positioned.fill(child: LoginAurora()),
-          Center(
-            child: SingleChildScrollView(
-              padding: EdgeInsets.all(compact ? 16 : 24),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: _cardWidth),
-                child: Container(
-                  // The app's raised-block recipe: fill plus a soft lift, no rim.
-                  decoration: BoxDecoration(
-                    color: grid.AppGlass.surfaceFill,
-                    borderRadius: BorderRadius.circular(14),
-                    boxShadow: grid.AppCard.shadow,
-                  ),
-                  padding: EdgeInsets.all(compact ? 20 : 24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const _AppMark(),
-                      SizedBox(height: gap),
-                      Text(
-                        'Your agents, wherever they run',
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'At home, at the office, in the cloud — every machine you '
-                        'sign in to becomes part of one desk, here.',
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      SizedBox(height: gap),
-                      const LoginFleetMap(),
-                      SizedBox(height: gap),
-                      _Action(notifier: notifier, waiting: waiting),
-                      if (notifier.lastError != null) ...[
-                        const SizedBox(height: 16),
-                        _ErrorTile(
-                          message: notifier.lastError!,
-                          onRetry: notifier.login,
+    return CallbackShortcuts(
+      bindings: {
+        if (notifier.canCancelLogin)
+          const SingleActivator(
+            LogicalKeyboardKey.escape,
+            includeRepeats: false,
+          ): notifier.cancelLogin,
+      },
+      child: Scaffold(
+        // The PANEL tone, not the window's. In light both `windowBg` and the
+        // card's `surfaceFill` are pure white, so a card on the window is a card
+        // you cannot see — only its shadow separates it, and at this size that
+        // reads as a printing artefact rather than as a raised block. The rail's
+        // own barely-there grey gives the card something to sit on in both
+        // themes, which is the same trick the app plays everywhere else.
+        backgroundColor: grid.AppPalette.panelBg,
+        body: Stack(
+          children: [
+            const Positioned.fill(child: LoginAurora()),
+            Center(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.all(compact ? 16 : 24),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: _cardWidth),
+                  child: Container(
+                    // The app's raised-block recipe: fill plus a soft lift, no rim.
+                    decoration: BoxDecoration(
+                      color: grid.AppGlass.surfaceFill,
+                      borderRadius: BorderRadius.circular(14),
+                      boxShadow: grid.AppCard.shadow,
+                    ),
+                    padding: EdgeInsets.all(compact ? 20 : 24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const _AppMark(),
+                        SizedBox(height: gap),
+                        Text(
+                          'Your agents, wherever they run',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.titleLarge,
                         ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'At home, at the office, in the cloud — every machine you '
+                          'sign in to becomes part of one desk, here.',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        SizedBox(height: gap),
+                        if (showFleet) ...[
+                          const LoginFleetMap(),
+                          SizedBox(height: gap),
+                        ],
+                        _Action(notifier: notifier, waiting: waiting),
+                        if (notifier.lastError != null &&
+                            !notifier.sessionExpired) ...[
+                          const SizedBox(height: 16),
+                          _ErrorTile(
+                            message: notifier.lastError!,
+                            onRetry: notifier.login,
+                          ),
+                        ],
+                        SizedBox(height: gap),
+                        const _Seal(),
                       ],
-                      SizedBox(height: gap),
-                      const _Seal(),
-                    ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -181,20 +197,29 @@ class _ActionState extends State<_Action> {
     grid.AppTheme.watch(context);
 
     if (!widget.waiting) {
+      final signingOutFailed = notifier.signOutError != null;
       return Column(
         children: [
           FilledButton.icon(
             focusNode: _signInFocus,
             autofocus: true,
-            onPressed: notifier.login,
-            icon: const Icon(Icons.login, size: grid.AppControl.iconSize),
-            label: const Text('Sign in'),
+            onPressed: signingOutFailed ? notifier.logout : notifier.login,
+            icon: Icon(
+              signingOutFailed ? Icons.logout : Icons.login,
+              size: grid.AppControl.iconSize,
+            ),
+            label: Text(signingOutFailed ? 'Retry sign out' : 'Sign in'),
           ),
           const SizedBox(height: 12),
-          Text(
-            'Sign in through your browser to continue.',
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodySmall,
+          Semantics(
+            liveRegion: signingOutFailed || notifier.sessionExpired,
+            child: Text(
+              notifier.signOutError ??
+                  (notifier.sessionExpired ? notifier.lastError : null) ??
+                  'Sign in through your browser to continue.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ),
         ],
       );
@@ -217,16 +242,22 @@ class _ActionState extends State<_Action> {
             height: grid.AppControl.iconSize,
             child: CircularProgressIndicator(strokeWidth: 2),
           ),
-          label: Text(url == null ? 'Signing in…' : 'Waiting for your browser'),
+          label: Text(
+            notifier.signingOut
+                ? 'Signing out…'
+                : (url == null ? 'Signing in…' : 'Waiting for your browser'),
+          ),
         ),
         const SizedBox(height: 12),
         Semantics(
           liveRegion: true,
           child: Text(
-            message ??
-                (url == null
-                    ? 'Your workspace will open when sign-in is complete.'
-                    : 'Finish signing in in your browser, then return here.'),
+            notifier.signingOut
+                ? 'Clearing your saved sign-in.'
+                : message ??
+                      (url == null
+                          ? 'Your workspace will open when sign-in is complete.'
+                          : 'Finish signing in in your browser, then return here.'),
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodySmall,
           ),

@@ -1021,7 +1021,9 @@ void main() {
     },
   );
 
-  test('resync retries three times, reopens once, then fails closed', () async {
+  testWidgets('resync retries three times, reopens once, then fails closed', (
+    tester,
+  ) async {
     session.dispose();
     session = TerminalSession(
       machineId: 'machine-1',
@@ -1044,7 +1046,9 @@ void main() {
     );
     await session.handleBinary(output(2, utf8.encode('gap')));
 
-    await Future<void>.delayed(const Duration(milliseconds: 45));
+    // Advance the retry clock deterministically; an overloaded test runner
+    // can wake a 45 ms wall-clock wait before the last 5 ms retry is armed.
+    await tester.pump(const Duration(milliseconds: 45));
 
     expect(
       sent.where((frame) => frame.type == 'terminal_resync'),

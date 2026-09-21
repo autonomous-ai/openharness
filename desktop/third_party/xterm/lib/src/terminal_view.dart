@@ -562,6 +562,20 @@ class TerminalViewState extends State<TerminalView> {
     // committed text (`に`) arrives. Let TextInputClient own all text without
     // Control/Command; it will call _onInsert exactly once on commit.
     final isTextInput = _isPrintableText(event.character);
+    // Linux's left Alt is Meta for readline/Vim: preserve the actual case
+    // and punctuation produced by the keyboard layout. Right Alt (AltGr)
+    // and macOS Option stay with the native text input client.
+    final keyboard = HardwareKeyboard.instance;
+    final linuxMeta = defaultTargetPlatform == TargetPlatform.linux &&
+        keyboard.logicalKeysPressed.contains(LogicalKeyboardKey.altLeft) &&
+        !keyboard.logicalKeysPressed.contains(LogicalKeyboardKey.altRight) &&
+        !keyboard.isControlPressed &&
+        !keyboard.isMetaPressed;
+    if (isTextInput && linuxMeta) {
+      widget.terminal.textInput('\x1b${event.character}');
+      _scrollToBottom();
+      return KeyEventResult.handled;
+    }
     if (isTextInput && !reservesTerminalKey) {
       // Do not let another Flutter shortcut consume this before macOS gets a
       // chance to update the native text-input client.

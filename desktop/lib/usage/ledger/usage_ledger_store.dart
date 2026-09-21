@@ -12,6 +12,7 @@
 /// [enabled] defaults false and [refresh] returns without looking when it is.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -43,7 +44,9 @@ const kLedgerStaleAfter = Duration(minutes: 5);
 /// corrected it, because those fingerprints go on matching forever — only a
 /// version bump discards the stale rows. `usage_ledger_test.dart` pins the
 /// serialised key set so the next field cannot be added quietly.
-const _kCacheVersion = 2;
+// Version 2 could cache failed JSONL reads as empty successful files, whose
+// unchanged size/mtime then hid their usage even after access was restored.
+const _kCacheVersion = 3;
 
 class UsageLedgerStore extends ChangeNotifier {
   UsageLedgerStore({
@@ -71,7 +74,35 @@ class UsageLedgerStore extends ChangeNotifier {
   Map<String, ScannedSource> _sources = const {};
 
   Future<void>? _inFlight;
+  int? _scanRevision;
+  Future<void>? _loading;
+  int _revision = 0;
+  bool _hasExplicitChoice = false;
   bool _disposed = false;
+
+  // Reopening Settings creates new stores. Those stores must wait for an Off
+  // already being persisted by the previous screen before restoring a cache.
+  // The shared settings instance identifies the same user's persistence;
+  // providers still write independently of one another.
+  static final _writes = Expando<Map<LedgerProvider, Future<void>>>();
+  Map<LedgerProvider, Future<void>> get _writeQueue =>
+      _writes[_settings] ??= {};
+  Future<void> get _persisted => _writeQueue[provider] ?? Future.value();
+
+  bool _current(int revision) => !_disposed && revision == _revision;
+
+  Future<void> _persist(Future<void> Function() operation) {
+    final next = _persisted.then((_) async {
+      try {
+        await operation();
+      } on Object {
+        // Persistence is best effort. An in-session toggle still takes effect,
+        // and one failed write must not prevent a following cache clear.
+      }
+    });
+    _writeQueue[provider] = next;
+    return next;
+  }
 
   LedgerScanState get state => _state;
   ProviderLedger get ledger => _ledger;
@@ -83,45 +114,58 @@ class UsageLedgerStore extends ChangeNotifier {
   /// Never throws: a cache that cannot be read is a cache that is not there, and
   /// a panel that failed to open because last week's snapshot was truncated
   /// would be a worse bug than a rescan.
-  Future<void> load() async {
-    _state = LedgerScanState(provider: provider);
-    _ledger = ProviderLedger(provider: provider);
+  Future<void> load() => _loading ??= _load(_revision);
+
+  Future<void> _load(int revision) async {
+    if (_disposed || _hasExplicitChoice) return;
     try {
+      await _persisted;
+      if (!_current(revision)) return;
       final enabled = await _settings.read(_enabledKey) == 'true';
-      _state = _state.copyWith(enabled: enabled);
-      if (enabled) await _loadCache();
+      if (!_current(revision)) return;
+      final cache = enabled ? await _readCache().onError((_, _) => null) : null;
+      if (!_current(revision)) return;
+      _sources = cache?.sources ?? const {};
+      _ledger = buildProviderLedger(provider, _sources.values);
+      _state = LedgerScanState(
+        provider: provider,
+        enabled: enabled,
+        status: cache == null ? LedgerStatus.disabled : LedgerStatus.ok,
+        lastScanAt: cache?.scannedAt,
+      );
     } on Object {
-      // Fall through to the empty state this method already installed.
+      // An unreadable preference/cache leaves the initial empty state.
     }
-    _notify();
+    if (_current(revision)) _notify();
   }
 
-  Future<void> _loadCache() async {
+  Future<({Map<String, ScannedSource> sources, DateTime? scannedAt})?>
+  _readCache() async {
     final contents = await _snapshots.read();
-    if (contents == null) return;
+    if (contents == null) return null;
     final Object? decoded;
     try {
       decoded = jsonDecode(contents);
     } on Object {
-      return;
+      return null;
     }
-    if (decoded is! Map<String, Object?>) return;
-    if (decoded['version'] != _kCacheVersion) return;
+    if (decoded is! Map<String, Object?> ||
+        decoded['version'] != _kCacheVersion ||
+        decoded['provider'] != provider.name) {
+      return null;
+    }
 
     final sources = decoded['sources'];
-    if (sources is! List) return;
+    if (sources is! List) return null;
     final restored = <String, ScannedSource>{};
     for (final raw in sources) {
       if (raw is! Map<String, Object?>) continue;
       final source = ScannedSource.fromJson(provider, raw);
       if (source != null) restored[source.path] = source;
     }
-    _sources = restored;
-    _ledger = buildProviderLedger(provider, _sources.values);
-    final scannedAt = DateTime.tryParse('${decoded['lastScanAt']}');
-    _state = _state.copyWith(
-      status: _ledger.hasData ? LedgerStatus.ok : _state.status,
-      lastScanAt: scannedAt,
+    return (
+      sources: restored,
+      scannedAt: DateTime.tryParse('${decoded['lastScanAt']}'),
     );
   }
 
@@ -130,29 +174,31 @@ class UsageLedgerStore extends ChangeNotifier {
   /// Switching off drops the snapshot from memory AND from disk. Keeping it
   /// would mean a provider the user turned off still had its transcripts
   /// summarised in a file on their machine, which is not what "off" reads as.
-  Future<void> setEnabled(bool enabled) async {
-    if (_state.enabled == enabled) return;
-    _state = _state.copyWith(
+  Future<void> setEnabled(bool enabled) {
+    if (_disposed) return Future.value();
+    if (_hasExplicitChoice && _state.enabled == enabled) {
+      return enabled ? refresh() : _persisted;
+    }
+    _hasExplicitChoice = true;
+    final revision = ++_revision;
+    _state = LedgerScanState(
+      provider: provider,
       enabled: enabled,
       status: enabled ? LedgerStatus.scanning : LedgerStatus.disabled,
-      clearMessage: true,
     );
-    _notify();
-    try {
-      await _settings.write(_enabledKey, '$enabled');
-    } on Object {
-      // A switch that could not be persisted still holds for this session; the
-      // alternative is refusing an action the user can see took effect.
-    }
+    var saved = _persist(() => _settings.write(_enabledKey, '$enabled'));
     if (!enabled) {
       _sources = const {};
       _ledger = ProviderLedger(provider: provider);
-      _state = _state.copyWith(status: LedgerStatus.disabled, lastScanAt: null);
-      await _snapshots.clear();
-      _notify();
-      return;
+      saved = _persist(_snapshots.clear);
     }
-    await refresh(force: true);
+    // Queue persistence before notifying: a listener can make the next choice
+    // synchronously, and the writes must retain that same order.
+    _notify();
+    return Future.wait([
+      saved,
+      if (enabled && _current(revision)) refresh(force: true),
+    ]);
   }
 
   /// Rescan if the last result has gone stale, or [force] regardless.
@@ -160,66 +206,127 @@ class UsageLedgerStore extends ChangeNotifier {
   /// Concurrent calls share one scan rather than queueing a second walk of the
   /// same disk.
   Future<void> refresh({bool force = false}) {
-    if (!_state.enabled) return Future.value();
+    if (_disposed || !_state.enabled) return Future.value();
+    final revision = _revision;
+    if (_inFlight case final pending?) {
+      if (_scanRevision == revision &&
+          (_state.status == LedgerStatus.scanning ||
+              (!force && _state.status == LedgerStatus.ok))) {
+        return pending;
+      }
+      // Off/On invalidates the old result, but cannot cancel a scanner's disk
+      // operation. Finish that read before starting the newly requested one.
+      // A Retry after a visible failure also waits for the old cache clear,
+      // then starts a fresh read instead of joining the finished failure.
+      return pending.then((_) async {
+        if (_current(revision) && _state.enabled) await refresh(force: force);
+      });
+    }
     final lastScanAt = _state.lastScanAt;
     if (!force &&
+        _state.status == LedgerStatus.ok &&
         lastScanAt != null &&
         DateTime.now().difference(lastScanAt) < kLedgerStaleAfter) {
       return Future.value();
     }
-    return _inFlight ??= _run().whenComplete(() => _inFlight = null);
+    final done = Completer<void>();
+    _inFlight = done.future;
+    _scanRevision = revision;
+    // Install the shared future before _run notifies synchronous listeners.
+    unawaited(
+      _run(revision).then(
+        (_) {
+          _inFlight = null;
+          _scanRevision = null;
+          done.complete();
+        },
+        onError: (Object error, StackTrace stack) {
+          _inFlight = null;
+          _scanRevision = null;
+          done.completeError(error, stack);
+        },
+      ),
+    );
+    return done.future;
   }
 
-  Future<void> _run() async {
-    _state = _state.copyWith(status: LedgerStatus.scanning, clearMessage: true);
+  Future<void> _run(int revision) async {
+    _state = _state.copyWith(
+      status: LedgerStatus.scanning,
+      clearMessage: _state.status != LedgerStatus.partial,
+    );
     _notify();
+    if (!_current(revision) || !_state.enabled) return;
 
     LedgerScanResult result;
     try {
       result = await scanner.scan(_sources);
     } on Object catch (error) {
-      _state = _state.copyWith(
-        status: LedgerStatus.failed,
-        message: 'Could not read ${provider.label} usage: $error',
+      await _failed(
+        revision,
+        LedgerStatus.failed,
+        'Could not read ${provider.label} usage: $error',
       );
-      _notify();
       return;
     }
-    if (_disposed) return;
+    if (!_current(revision) || !_state.enabled) return;
 
-    if (result.status != LedgerStatus.ok) {
+    if (result.status != LedgerStatus.ok &&
+        result.status != LedgerStatus.partial) {
       // The sources are dropped with the result: a provider that has become
       // unavailable must not keep showing the totals from when it was not.
-      _sources = const {};
-      _ledger = ProviderLedger(provider: provider);
-      _state = _state.copyWith(
-        status: result.status,
-        message: result.message,
-        clearMessage: result.message == null,
-      );
-      _notify();
+      await _failed(revision, result.status, result.message);
       return;
     }
 
     _sources = {for (final source in result.sources) source.path: source};
     _ledger = buildProviderLedger(provider, _sources.values);
     _state = _state.copyWith(
-      status: LedgerStatus.ok,
+      status: result.status,
       lastScanAt: DateTime.now(),
-      clearMessage: true,
+      message: result.message,
+      clearMessage: result.status == LedgerStatus.ok,
     );
+    if (result.status == LedgerStatus.partial) {
+      // Keep readable figures in this view, but never restore an incomplete
+      // snapshot as a fresh complete result when Settings is reopened.
+      final cleared = _persist(_snapshots.clear);
+      _notify();
+      await cleared;
+      return;
+    }
     _notify();
-    await _writeCache();
+    await _persist(() async {
+      if (!_current(revision) || !_state.enabled) return;
+      await _snapshots.write(
+        jsonEncode({
+          'version': _kCacheVersion,
+          'provider': provider.name,
+          'lastScanAt': _state.lastScanAt?.toIso8601String(),
+          'sources': [for (final source in _sources.values) source.toJson()],
+        }),
+      );
+    });
   }
 
-  Future<void> _writeCache() => _snapshots.write(
-    jsonEncode({
-      'version': _kCacheVersion,
-      'provider': provider.name,
-      'lastScanAt': _state.lastScanAt?.toIso8601String(),
-      'sources': [for (final source in _sources.values) source.toJson()],
-    }),
-  );
+  Future<void> _failed(
+    int revision,
+    LedgerStatus status,
+    String? message,
+  ) async {
+    if (!_current(revision) || !_state.enabled) return;
+    _sources = const {};
+    _ledger = ProviderLedger(provider: provider);
+    _state = LedgerScanState(
+      provider: provider,
+      enabled: true,
+      status: status,
+      message: message,
+    );
+    final cleared = _persist(_snapshots.clear);
+    _notify();
+    await cleared;
+  }
 
   void _notify() {
     if (!_disposed) notifyListeners();

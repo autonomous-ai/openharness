@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -636,6 +637,111 @@ void main() {
     expect(calls.any((line) => line.contains('command -v xclip')), isFalse);
     expect(calls.any((line) => line.contains('command -v wl-copy')), isFalse);
   });
+
+  for (final source in ['log', 'result', 'empty result']) {
+    test(
+      'a Terminal recheck tolerates ${source == 'empty result' ? 'a partially written empty result' : 'invalid UTF-8 in its $source'}',
+      () async {
+        await createManagedHarness();
+        var launches = 0;
+        final provisioner = EnvironmentProvisioner(
+          harnessHome: scratch,
+          isMacOS: false,
+          isLinux: true,
+          platformEnvironment: const {'DISPLAY': ':0'},
+          openTerminal: (_) async => launches++,
+          run: runner(tmuxPresent: () => true, xclipPresent: () => false),
+        );
+        final waiting = await provisioner.ensureReady(
+          onProgress: (_) {},
+          install: true,
+          mode: EnvironmentSetupMode.automatic,
+        );
+        final path = source == 'log'
+            ? waiting.terminalLogPath!
+            : waiting.terminalResultPath!;
+        await File(path).writeAsBytes(
+          source == 'empty result'
+              ? []
+              : [
+                  ...utf8.encode('A partial installer write\n'),
+                  0xff,
+                  0xc3,
+                  ...utf8.encode('\nRecent package output\n'),
+                ],
+        );
+        final rechecked = await provisioner.ensureReady(
+          onProgress: (_) {},
+          resumeFrom: waiting,
+          install: false,
+          mode: EnvironmentSetupMode.automatic,
+        );
+        expect(rechecked.phase, EnvironmentSetupPhase.waitingForTerminal);
+        expect(rechecked.isReady, isFalse);
+        expect(launches, 1);
+        if (source == 'log') {
+          expect(
+            rechecked.output.join('\n'),
+            contains('Recent package output'),
+          );
+        }
+      },
+    );
+  }
+
+  test(
+    'Terminal rechecks show recent output without loading the whole log',
+    () async {
+      await createManagedHarness();
+      final provisioner = EnvironmentProvisioner(
+        harnessHome: scratch,
+        isMacOS: false,
+        isLinux: true,
+        platformEnvironment: const {'DISPLAY': ':0'},
+        openTerminal: (_) async {},
+        run: runner(tmuxPresent: () => true, xclipPresent: () => false),
+      );
+      final waiting = await provisioner.ensureReady(
+        onProgress: (_) {},
+        install: true,
+        mode: EnvironmentSetupMode.automatic,
+      );
+      final log = File(waiting.terminalLogPath!);
+      await log.writeAsString(
+        'OLDEST_PACKAGE_OUTPUT\n'
+        '${List.filled(60000, 'Package diagnostic line\n').join()}'
+        'LATEST_PACKAGE_OUTPUT\n',
+      );
+      final fullLength = await log.length();
+      final rechecked = await provisioner.ensureReady(
+        onProgress: (_) {},
+        resumeFrom: waiting,
+        install: false,
+        mode: EnvironmentSetupMode.automatic,
+      );
+      final diagnostics = rechecked.output.join('\n');
+      expect(diagnostics.length, lessThan(80 * 1024));
+      expect(diagnostics, contains('LATEST_PACKAGE_OUTPUT'));
+      expect(diagnostics, isNot(contains('OLDEST_PACKAGE_OUTPUT')));
+      expect(diagnostics, contains(log.path));
+      expect(await log.length(), fullLength);
+      expect(rechecked.phase, EnvironmentSetupPhase.waitingForTerminal);
+
+      // Some installers rewrite progress on one long line. Keep its useful tail
+      // even if the only newline is the final byte, and replace the older view.
+      await log.writeAsString('${'x' * (128 * 1024)}LONG_LINE_END\n');
+      final next = await provisioner.ensureReady(
+        onProgress: (_) {},
+        resumeFrom: rechecked,
+        install: false,
+        mode: EnvironmentSetupMode.automatic,
+      );
+      final nextDiagnostics = next.output.join('\n');
+      expect(nextDiagnostics.length, lessThan(80 * 1024));
+      expect(nextDiagnostics, contains('LONG_LINE_END'));
+      expect(nextDiagnostics, isNot(contains('LATEST_PACKAGE_OUTPUT')));
+    },
+  );
 
   test('a running Linux Terminal setup is not opened a second time', () async {
     await createManagedHarness();

@@ -16,13 +16,13 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/app_theme.dart';
-import '../../shared/widgets/app_select_field.dart';
 import '../../usage/ledger/ledger_types.dart';
 import '../../usage/ledger/usage_ledger_store.dart';
 import '../../usage/ledger/usage_overview.dart';
 import '../../usage/ledger/usage_report.dart';
 import 'usage_detail_panels.dart';
 import 'usage_panels.dart';
+import 'usage_header.dart';
 
 class UsageProviderPane extends StatefulWidget {
   const UsageProviderPane({super.key, required this.store});
@@ -68,9 +68,16 @@ class _UsageProviderPaneState extends State<UsageProviderPane> {
           onDisable: () => unawaited(store.setEnabled(false)),
         ),
         const SizedBox(height: 12),
+        if (state.hasIncompleteFigures && report.hasData) ...[
+          _Notice(message: state.message ?? 'Figures are incomplete.'),
+          const SizedBox(height: 12),
+        ],
         if (state.status == LedgerStatus.unavailable ||
-            state.status == LedgerStatus.failed)
+            state.status == LedgerStatus.failed ||
+            (state.status == LedgerStatus.partial && !report.hasData))
           _Notice(message: state.message ?? 'No figures.')
+        else if (state.status == LedgerStatus.scanning && !report.hasData)
+          UsageLoadingState(message: 'Scanning ${provider.label} logs…')
         else if (!report.hasData)
           _Notice(message: 'No ${provider.label} usage in this range.')
         else ...[
@@ -200,42 +207,28 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final scanning = state.status == LedgerStatus.scanning;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '${provider.label} usage',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-              const SizedBox(height: 2),
-              Text(
-                // The range is named here as well as in the picker, because the
-                // figures below mean nothing without it and the picker is a
-                // control the eye skips.
-                'All local ${provider.label} usage · ${range.label}',
-                style: TextStyle(
-                  fontSize: 11.5,
-                  color: AppPalette.textSecondary,
-                ),
-              ),
-            ],
+    return UsageHeader(
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${provider.label} usage',
+            style: Theme.of(context).textTheme.titleSmall,
           ),
-        ),
-        const SizedBox(width: 12),
-        AppSelectField<UsageRange>(
-          value: range,
-          width: 150,
-          options: [
-            for (final option in UsageRange.values)
-              SelectOption(value: option, label: option.label),
-          ],
-          onChanged: onRangeChanged,
-        ),
-        const SizedBox(width: 4),
+          const SizedBox(height: 2),
+          Text(
+            // The range is named here as well as in the picker, because the
+            // figures below mean nothing without it and the picker is a
+            // control the eye skips.
+            scanning
+                ? '${range.label} · Scanning local logs…'
+                : 'All local ${provider.label} usage · ${range.label}',
+            style: TextStyle(fontSize: 11.5, color: AppPalette.textSecondary),
+          ),
+        ],
+      ),
+      controls: [
+        UsageRangeField(value: range, onChanged: onRangeChanged),
         IconButton(
           onPressed: scanning ? null : onRefresh,
           iconSize: 15,

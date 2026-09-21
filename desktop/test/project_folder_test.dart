@@ -57,6 +57,22 @@ void main() {
     );
     expect(projectFolderName('***', at), 'harness-2026-12-25-00-00');
   });
+  test('long suggested names preserve the timestamp through remote name limits and collisions', () {
+    final request = ProjectFolderRequest.generated(
+      label: 'A very long descriptive name for a custom harness from the store',
+      at: DateTime(2026, 9, 20, 17, 22, 19),
+    );
+    final names = <String>[];
+    for (var i = 0; i < 105; i++) {
+      final name = request.availableGeneratedName(names);
+      expect(name.length, lessThanOrEqualTo(64));
+      expect(name, contains('-2026-09-20-17-22'));
+      expect(request.withGeneratedName(name).payload['projectName'], name);
+      names.add(name);
+    }
+    expect(names.toSet(), hasLength(105));
+    expect(names.last, endsWith('-2026-09-20-17-22-19-104'));
+  });
   test(
     'remote repository uses the existing safe clone on this computer',
     () async {

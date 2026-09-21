@@ -9,12 +9,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/command_bar.dart';
+import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/widgets/harness_command_bar.dart';
+import 'package:harness/widgets/new_harness_box.dart';
 import 'package:xterm/xterm.dart';
 
 import 'support/real_fonts.dart';
+import 'support/mixed_agents.dart';
 import 'swarm_state_test.dart' show createApp, MemoryStore;
 import 'swarm_screen_test.dart' show terminal;
 import 'swarm_interactions_test.dart' show chord;
@@ -356,10 +360,90 @@ void main() {
       tester.testTextInput.enterText('Open a fresh tab');
       await tester.testTextInput.receiveAction(TextInputAction.done);
       await tester.pumpAndSettle();
-      expect(app.activeSwarmId, isNot(previousTab));
+      expect(app.activeSwarmId, previousTab);
+      final picker = find.byKey(const ValueKey('swarm-search-input'));
+      expect(picker, findsOneWidget);
+      expect(tester.widget<TextField>(picker).focusNode!.hasFocus, isTrue);
       expect(input, findsNothing);
       // The exact app command opens the tab even without a provider decision.
       expect(calls, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'JEV hands a task to the new prompt on the chosen machine without a foreign folder',
+    (tester) async {
+      newHarnessOpensInBox = true;
+      addTearDown(() => newHarnessOpensInBox = false);
+      final app = createApp();
+      seedMixedAgents(app);
+      app.machineStates['m']!.localOnly = true;
+      final session = TerminalSession(
+        machineId: 'studio',
+        agentId: 'focus',
+        agentName: 'Remote task',
+        engineId: 'opencode',
+        send: (_, _) async => true,
+        sendBinary: (_) async => true,
+      )..status = TerminalSessionStatus.controlling;
+      app.adoptSessionForTest(session);
+      final projects = SwarmProjectStore(storage: MemoryStore());
+      addTearDown(() async {
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+        projects.dispose();
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: SwarmScreen(
+            notifier: app,
+            nativeTabs: false,
+            projectStore: projects,
+            commandResolver: (_, _) async => {
+              'selectedId': 'create:m:studio/arm',
+              'autoExecute': false,
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await chord(tester, LogicalKeyboardKey.keyJ, shift: true);
+      await tester.enterText(input, 'Plan the arm calibration');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      expect(find.byType(NewHarnessBox), findsNothing);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(input, findsNothing);
+      final prompt = tester
+          .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+          .controller;
+      expect(prompt.machineId, 'm');
+      expect(prompt.engine, 'studio/arm');
+      expect(prompt.project.folder, isNull);
+      expect(prompt.task, 'Plan the arm calibration');
+      expect(prompt.field, NewHarnessField.projectMenu);
+      expect(find.byKey(const ValueKey('new-harness-input')), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey(NewHarnessController.newProjectId)),
+      );
+      await tester.pump();
+      expect(prompt.field, NewHarnessField.projectName);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('new-harness-input')))
+            .focusNode!
+            .hasFocus,
+        isTrue,
+      );
+      // Opening the experimental prompt saves this draft and removes its dock.
+      await chord(tester, LogicalKeyboardKey.keyJ, shift: true);
+      expect(find.byType(NewHarnessBox), findsNothing);
+      expect(input, findsOneWidget);
+      expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
+      expect(app.allPanes, hasLength(1));
       expect(tester.takeException(), isNull);
     },
   );

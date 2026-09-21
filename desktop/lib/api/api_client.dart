@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:dio/dio.dart';
 
 import '../auth/auth_session.dart';
@@ -6,6 +8,13 @@ import '../core/models.dart';
 import '../logging/http_log.dart';
 import 'access_token_source.dart';
 import 'bearer_auth_interceptor.dart';
+
+/// Rows and freshness from one response, even when requests overlap.
+class MachineInventory extends UnmodifiableListView<Machine> {
+  MachineInventory(super.source, {required this.isStale});
+
+  final bool isStale;
+}
 
 /// Control-plane REST client.
 ///
@@ -141,36 +150,62 @@ class ApiClient {
   /// caller that only checked the status code would mistake an outage for a healthy, current read.
   bool lastMachinesStale = false;
   List<Machine> _sharedMachines = [];
+  int _accountRevision = 0;
+  int _machineRequestRevision = 0;
+
+  /// Sharing fallback belongs to the account that loaded it. Late responses
+  /// must not refill it after sign-out or while a new sign-in is starting.
+  void resetAccountCache() {
+    ++_accountRevision;
+    _sharedMachines = [];
+    lastMachinesStale = false;
+  }
+
+  void _requireAccount(int revision) {
+    if (revision != _accountRevision) {
+      throw StateError('Account changed while loading machines.');
+    }
+  }
 
   Future<List<Machine>> machines() async {
+    final account = _accountRevision;
+    final request = ++_machineRequestRevision;
     final res = await _dio.get('/api/machines');
+    _requireAccount(account);
     final data = unwrapApiResponse(res) as Map<String, dynamic>;
-    lastMachinesStale = data['stale'] == true;
+    var stale = data['stale'] == true;
     final list = data['machines'] as List<dynamic>? ?? [];
     final owned = list
         .map((e) => Machine.fromJson(e as Map<String, dynamic>))
         .toList();
+    var sharedMachines = _sharedMachines;
     try {
       final shared = await _dio.get('/api/harness-shares');
+      _requireAccount(account);
       if (shared.statusCode == 404) {
-        _sharedMachines = [];
+        sharedMachines = [];
       } else {
         final body = unwrapApiResponse(shared) as Map<String, dynamic>;
-        _sharedMachines = [
+        sharedMachines = [
           for (final row in body['machines'] as List? ?? const [])
             Machine.fromJson(Map<String, dynamic>.from(row as Map)),
         ];
       }
     } catch (error) {
       if (isUnauthorizedError(error)) rethrow;
-      lastMachinesStale = true;
+      stale = true;
     }
-    return [
+    _requireAccount(account);
+    if (request == _machineRequestRevision) {
+      _sharedMachines = sharedMachines;
+      lastMachinesStale = stale;
+    }
+    return MachineInventory([
       ...owned,
-      ..._sharedMachines.where(
+      ...sharedMachines.where(
         (shared) => !owned.any((own) => own.machineId == shared.machineId),
       ),
-    ];
+    ], isStale: stale);
   }
 
   Future<String?> renameMachine({

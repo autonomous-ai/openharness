@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
+import 'box_chrome.dart';
 import 'search_result_text.dart';
 import 'swarm_search_input.dart';
 import 'swarm_switcher.dart' show SwarmSearchActionLabel, swarmSearchRowHeight;
@@ -72,6 +73,7 @@ class AgentPicker extends StatefulWidget {
     this.focusNode,
     this.height = 64,
     this.width,
+    this.terminalStyle = false,
   });
 
   final String value;
@@ -104,6 +106,7 @@ class AgentPicker extends StatefulWidget {
   /// LayoutBuilder builds its children during layout, after the rest of the
   /// dialog, and Flutter orders Tab by when a focus node attached.
   final double? width;
+  final bool terminalStyle;
 
   /// What the search input says before anything is typed.
   static const hint = 'Choose an agent for what you’d like to make';
@@ -123,11 +126,13 @@ class AgentPicker extends StatefulWidget {
 
 class _AgentPickerState extends State<AgentPicker> {
   final _portal = OverlayPortalController();
-  final _link = LayerLink();
   final _query = TextEditingController();
   final _inputFocus = FocusNode(debugLabel: 'Agent search input');
   final _ownBarFocus = FocusNode(debugLabel: 'Agent search');
   final _scroll = ScrollController();
+  final _previewScroll = ScrollController();
+  final _pointer = BoxPointerGate();
+  bool _previewVisible = false;
 
   /// The search input and everything in the panel are one tap region. On a
   /// desktop, a mouse press outside a text field's region unfocuses it, and
@@ -138,16 +143,16 @@ class _AgentPickerState extends State<AgentPicker> {
 
   int _cursor = 0;
 
-  /// The bar's box when the panel opened: where the panel goes, and how much
-  /// of the window is left under it.
-  Rect _anchor = Rect.zero;
-  Size _overlaySize = Size.zero;
-
   bool get _open => _portal.isShowing;
   String get _needle => _query.text.trim().toLowerCase();
 
   /// The type in the bar and the panel's input, grown with the bar.
-  double get _fontSize => widget.height >= 88 ? 20 : 17;
+  double get _fontSize => widget.terminalStyle
+      ? 13
+      : widget.height >= 88
+      ? 20
+      : 17;
+  double get _radius => widget.terminalStyle ? 2 : AgentPicker.radius;
 
   @override
   void initState() {
@@ -173,6 +178,7 @@ class _AgentPickerState extends State<AgentPicker> {
     _inputFocus.dispose();
     _ownBarFocus.dispose();
     _scroll.dispose();
+    _previewScroll.dispose();
     super.dispose();
   }
 
@@ -247,13 +253,6 @@ class _AgentPickerState extends State<AgentPicker> {
   List<AgentChoice> get _rows => _needle.isEmpty ? _recent : _matches;
 
   void _show({String initial = ''}) {
-    final box = context.findRenderObject() as RenderBox?;
-    final overlay =
-        Overlay.maybeOf(context)?.context.findRenderObject() as RenderBox?;
-    if (box != null && box.hasSize && overlay != null && overlay.hasSize) {
-      _anchor = box.localToGlobal(Offset.zero, ancestor: overlay) & box.size;
-      _overlaySize = overlay.size;
-    }
     _query.value = TextEditingValue(
       text: initial,
       selection: TextSelection.collapsed(offset: initial.length),
@@ -316,8 +315,9 @@ class _AgentPickerState extends State<AgentPicker> {
     });
   }
 
-  static double _rowHeight(TextScaler scaler) =>
-      swarmSearchRowHeight(scaler, commands: false);
+  double _rowHeight(TextScaler scaler) => widget.terminalStyle
+      ? math.max(46, scaler.scale(13) * 1.35 + scaler.scale(12) * 1.35 + 12)
+      : swarmSearchRowHeight(scaler, commands: false);
 
   /// The closed bar opens on the keys that start a search: Return, Space,
   /// an arrow, or the first letter of what you are looking for.
@@ -358,11 +358,13 @@ class _AgentPickerState extends State<AgentPicker> {
       choice?.label ?? 'Choose an agent',
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
-      style: TextStyle(
-        fontSize: _fontSize,
-        fontWeight: FontWeight.w500,
-        color: choice == null ? Colors.white60 : Colors.white,
-      ),
+      style: widget.terminalStyle
+          ? boxMonoStyle()
+          : TextStyle(
+              fontSize: _fontSize,
+              fontWeight: FontWeight.w500,
+              color: choice == null ? Colors.white60 : Colors.white,
+            ),
     ),
   );
 
@@ -378,55 +380,65 @@ class _AgentPickerState extends State<AgentPicker> {
             ? AgentPicker.hint
             : 'Agent: ${choice.label}. Search agents',
         excludeSemantics: true,
-        child: CompositedTransformTarget(
-          link: _link,
-          child: Material(
-            key: const Key('new-agent-agent-field'),
-            color: grid.AppPalette.swarmSearchSurface,
-            surfaceTintColor: Colors.transparent,
-            elevation: 2,
-            shadowColor: Colors.black38,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(AgentPicker.radius),
-              side: BorderSide(
-                color: focused && !_open
-                    ? grid.AppPalette.swarmAccent.withValues(alpha: .7)
-                    : Colors.white.withValues(alpha: .10),
-                width: focused && !_open ? 1.5 : 1,
-              ),
+        child: Material(
+          key: const Key('new-agent-agent-field'),
+          color: grid.AppPalette.swarmSearchSurface,
+          surfaceTintColor: Colors.transparent,
+          elevation: 2,
+          shadowColor: Colors.black38,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(_radius),
+            side: BorderSide(
+              color: focused && !_open
+                  ? grid.AppPalette.swarmAccent.withValues(alpha: .7)
+                  : Colors.white.withValues(alpha: .10),
+              width: focused && !_open ? 1.5 : 1,
             ),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              canRequestFocus: false,
-              mouseCursor: SystemMouseCursors.click,
-              hoverColor: Colors.white.withValues(alpha: .03),
-              onTap: () {
-                _barFocus.requestFocus();
-                _show();
-              },
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: widget.height),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: _fontSize >= 20 ? 64 : 52,
-                      child: Icon(
-                        Icons.search,
-                        size: _fontSize + 4,
-                        color: Colors.white60,
-                      ),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            canRequestFocus: false,
+            mouseCursor: SystemMouseCursors.click,
+            hoverColor: Colors.white.withValues(alpha: .03),
+            onTap: () {
+              _barFocus.requestFocus();
+              _show();
+            },
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: widget.height),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: widget.terminalStyle
+                        ? 32
+                        : _fontSize >= 20
+                        ? 64
+                        : 52,
+                    child: widget.terminalStyle
+                        ? Center(
+                            child: Text(
+                              '>',
+                              style: boxMonoStyle(
+                                color: grid.AppPalette.swarmAccent,
+                              ),
+                            ),
+                          )
+                        : Icon(
+                            Icons.search,
+                            size: _fontSize + 4,
+                            color: Colors.white60,
+                          ),
+                  ),
+                  Expanded(child: _chosen(choice)),
+                  const Padding(
+                    padding: EdgeInsets.only(left: 12, right: 22),
+                    child: Icon(
+                      Icons.keyboard_arrow_down,
+                      size: 22,
+                      color: Colors.white60,
                     ),
-                    Expanded(child: _chosen(choice)),
-                    const Padding(
-                      padding: EdgeInsets.only(left: 12, right: 22),
-                      child: Icon(
-                        Icons.keyboard_arrow_down,
-                        size: 22,
-                        color: Colors.white60,
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -446,9 +458,20 @@ class _AgentPickerState extends State<AgentPicker> {
         composing: _composing,
         actions: {
           'picker.accept': () => run(_accept),
+          'picker.add_here': () => run(_accept),
           'picker.next': () => run(() => _move(1)),
           'picker.previous': () => run(() => _move(-1)),
           'picker.cancel': () => run(_close),
+          if (widget.terminalStyle)
+            'picker.toggle_preview': () => run(_togglePreview),
+          'picker.preview_page_down': () => run(() => _page(1)),
+          'picker.preview_page_up': () => run(() => _page(-1)),
+          // Tab is a picker command now (the box completes paths with it); a
+          // matched key is consumed, so here it must still move the focus.
+          'picker.complete': () =>
+              run(() => FocusManager.instance.primaryFocus?.nextFocus()),
+          'picker.complete_back': () =>
+              run(() => FocusManager.instance.primaryFocus?.previousFocus()),
         },
         child: Actions(
           // The panel lives in an overlay, where EditableText's Escape would
@@ -456,7 +479,21 @@ class _AgentPickerState extends State<AgentPicker> {
           actions: {
             DismissIntent: CallbackAction<DismissIntent>(onInvoke: (_) => null),
           },
-          child: child,
+          // The host gets first use of configured bindings. Any unbound
+          // modified Enter still belongs to this picker, not to the form's
+          // creation shortcut underneath it (including during composition).
+          child: CallbackShortcuts(
+            bindings: {
+              for (final key in [
+                LogicalKeyboardKey.enter,
+                LogicalKeyboardKey.numpadEnter,
+              ]) ...{
+                SingleActivator(key, meta: true): () {},
+                SingleActivator(key, control: true): () {},
+              },
+            },
+            child: child,
+          ),
         ),
       );
     }
@@ -465,6 +502,13 @@ class _AgentPickerState extends State<AgentPicker> {
         const SingleActivator(LogicalKeyboardKey.enter): () => run(_accept),
         const SingleActivator(LogicalKeyboardKey.numpadEnter): () =>
             run(_accept),
+        for (final key in [
+          LogicalKeyboardKey.enter,
+          LogicalKeyboardKey.numpadEnter,
+        ]) ...{
+          SingleActivator(key, meta: true): () => run(_accept),
+          SingleActivator(key, control: true): () => run(_accept),
+        },
         const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
             run(() => _move(1)),
         const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
@@ -478,54 +522,93 @@ class _AgentPickerState extends State<AgentPicker> {
         const SingleActivator(LogicalKeyboardKey.keyK, control: true): () =>
             run(() => _move(-1)),
         const SingleActivator(LogicalKeyboardKey.escape): () => run(_close),
+        const SingleActivator(LogicalKeyboardKey.keyC, control: true): () =>
+            run(_close),
+        if (widget.terminalStyle)
+          const SingleActivator(LogicalKeyboardKey.slash, control: true): () =>
+              run(_togglePreview),
+        const SingleActivator(LogicalKeyboardKey.pageDown): () =>
+            run(() => _page(1)),
+        const SingleActivator(LogicalKeyboardKey.pageUp): () =>
+            run(() => _page(-1)),
       },
       child: child,
     );
   }
 
-  Widget _panel(BuildContext context) {
+  void _togglePreview() => setState(() => _previewVisible = !_previewVisible);
+
+  void _queryChanged(String _) {
+    setState(() => _cursor = 0);
+    if (_scroll.hasClients) _scroll.jumpTo(0);
+  }
+
+  void _page(int direction) {
+    if (_previewScroll.hasClients) {
+      final position = _previewScroll.position;
+      _previewScroll.jumpTo(
+        (position.pixels + direction * position.viewportDimension * .9).clamp(
+          0.0,
+          position.maxScrollExtent,
+        ),
+      );
+    } else if (_scroll.hasClients) {
+      final rows =
+          (_scroll.position.viewportDimension /
+                  _rowHeight(MediaQuery.textScalerOf(context)))
+              .floor();
+      _move(direction * math.max(1, rows));
+    }
+  }
+
+  Widget _panel(BuildContext context, {required double width}) {
     final scaler = MediaQuery.textScalerOf(context);
     final rows = _rows;
     final cursor = rows.isEmpty ? 0 : _cursor.clamp(0, rows.length - 1);
     final rowHeight = _rowHeight(scaler);
-    final width = _anchor.width;
     final empty = rows.isEmpty;
     final lines = empty ? 1 : rows.length;
-    final room = math.max(
-      rowHeight * 3 + 16,
-      _overlaySize.height - _anchor.top - _anchor.height - 32,
-    );
-    final listHeight = math.min(room, lines.clamp(4, 8) * rowHeight + 16);
-    final sideBySide = width >= 760;
+    final listHeight =
+        lines.clamp(widget.terminalStyle && !_previewVisible ? 1 : 4, 8) *
+            rowHeight +
+        16;
     final highlighted = empty ? null : rows[cursor];
-    final results = SizedBox(
-      height: listHeight,
-      child: ExcludeFocus(
-        child: ListView.builder(
-          key: const ValueKey('new-agent-agent-list'),
-          controller: _scroll,
-          padding: const EdgeInsets.all(8),
-          itemExtent: rowHeight,
-          itemCount: lines,
-          itemBuilder: (context, index) => empty
-              ? Padding(
-                  key: const Key('new-agent-agent-search-empty'),
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'No agents match “${_query.text.trim()}”.',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.white60,
-                      ),
-                    ),
+    final showPreview =
+        highlighted != null &&
+        (widget.terminalStyle ? _previewVisible : width >= 760);
+    final sideBySide = showPreview && width >= 760;
+    final preview = showPreview
+        ? _AgentPreview(
+            key: const ValueKey('new-agent-agent-preview'),
+            choice: highlighted,
+            status: widget.statusOf?.call(highlighted.id),
+            current: highlighted.id == widget.value,
+            controller: _previewScroll,
+            terminalStyle: widget.terminalStyle,
+          )
+        : null;
+    final results = ExcludeFocus(
+      child: ListView.builder(
+        key: const ValueKey('new-agent-agent-list'),
+        controller: _scroll,
+        padding: const EdgeInsets.all(8),
+        itemExtent: rowHeight,
+        itemCount: lines,
+        itemBuilder: (context, index) => empty
+            ? Padding(
+                key: const Key('new-agent-agent-search-empty'),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'No agents match “${_query.text.trim()}”.',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 14, color: Colors.white60),
                   ),
-                )
-              : _row(rows[index], index, cursor, rowHeight, width),
-        ),
+                ),
+              )
+            : _row(rows[index], index, cursor, rowHeight, width),
       ),
     );
     return SizedBox(
@@ -541,64 +624,105 @@ class _AgentPickerState extends State<AgentPicker> {
           elevation: 4,
           shadowColor: Colors.black26,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AgentPicker.radius),
+            borderRadius: BorderRadius.circular(_radius),
             side: BorderSide(color: Colors.white.withValues(alpha: .10)),
           ),
           clipBehavior: Clip.antiAlias,
-          child: _keys(
-            context,
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Semantics(
-                  label: 'Search agents',
-                  child: SwarmSearchInput(
-                    inputKey: const Key('new-agent-agent-search'),
-                    controller: _query,
-                    focusNode: _inputFocus,
-                    groupId: _tapGroup,
-                    search: null,
-                    onClose: _close,
-                    onChanged: (_) {
-                      setState(() => _cursor = 0);
-                      if (_scroll.hasClients) _scroll.jumpTo(0);
-                    },
-                    autofocus: false,
-                    showClose: true,
-                    hintText: AgentPicker.hint,
-                    rounded: true,
-                    prominent: true,
-                    height: widget.height,
-                    fontSize: _fontSize,
+          child: DefaultTextStyle.merge(
+            style: widget.terminalStyle ? boxMonoStyle() : const TextStyle(),
+            child: _keys(
+              context,
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Semantics(
+                    label: 'Search agents',
+                    child: ReadlineKeys(
+                      controller: _query,
+                      onChanged: _queryChanged,
+                      child: SwarmSearchInput(
+                        inputKey: const Key('new-agent-agent-search'),
+                        controller: _query,
+                        focusNode: _inputFocus,
+                        groupId: _tapGroup,
+                        search: null,
+                        onClose: _close,
+                        onChanged: _queryChanged,
+                        autofocus: false,
+                        showClose: !widget.terminalStyle,
+                        hintText: AgentPicker.hint,
+                        rounded: !widget.terminalStyle,
+                        prominent: !widget.terminalStyle,
+                        prompt: widget.terminalStyle ? '>' : null,
+                        height: widget.height,
+                        fontSize: _fontSize,
+                      ),
+                    ),
                   ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: sideBySide && highlighted != null
-                      ? SizedBox(
-                          height: listHeight,
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Expanded(flex: 5, child: results),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                flex: 5,
-                                child: _AgentPreview(
-                                  key: const ValueKey(
-                                    'new-agent-agent-preview',
-                                  ),
-                                  choice: highlighted,
-                                  status: widget.statusOf?.call(highlighted.id),
-                                  current: highlighted.id == widget.value,
-                                ),
-                              ),
-                            ],
+                  Flexible(
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: SizedBox(
+                        height: listHeight,
+                        child: sideBySide
+                            ? Row(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Expanded(flex: 5, child: results),
+                                  const SizedBox(width: 8),
+                                  Expanded(flex: 5, child: preview!),
+                                ],
+                              )
+                            : showPreview
+                            ? Column(
+                                children: [
+                                  Expanded(flex: 11, child: results),
+                                  Expanded(flex: 9, child: preview!),
+                                ],
+                              )
+                            : results,
+                      ),
+                    ),
+                  ),
+                  if (widget.terminalStyle)
+                    ExcludeFocus(
+                      child: BoxHintStrip(
+                        hints: [
+                          BoxHint(
+                            effectiveCommandHint(
+                                  context,
+                                  'picker.accept',
+                                  contextKind: KeymapContext.picker,
+                                ) ??
+                                '',
+                            'choose',
+                            onTap: _accept,
                           ),
-                        )
-                      : results,
-                ),
-              ],
+                          BoxHint(
+                            effectiveCommandHint(
+                                  context,
+                                  'picker.toggle_preview',
+                                  contextKind: KeymapContext.picker,
+                                ) ??
+                                '',
+                            'preview',
+                            onTap: _togglePreview,
+                          ),
+                          BoxHint(
+                            effectiveCommandHint(
+                                  context,
+                                  'picker.cancel',
+                                  contextKind: KeymapContext.picker,
+                                ) ??
+                                '',
+                            'back',
+                            onTap: _close,
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -629,8 +753,10 @@ class _AgentPickerState extends State<AgentPicker> {
         (panelWidth >= 760 ? panelWidth / 2 : panelWidth) <
         380 * scaler.scale(14) / 14;
     return MouseRegion(
-      onEnter: (_) {
-        if (_cursor != index) setState(() => _cursor = index);
+      onHover: (event) {
+        if (_pointer.moved(event) && _cursor != index) {
+          setState(() => _cursor = index);
+        }
       },
       child: ListTile(
         key: ValueKey('new-agent-agent-row-${choice.id}'),
@@ -641,9 +767,21 @@ class _AgentPickerState extends State<AgentPicker> {
         selectedColor: Colors.white,
         hoverColor: Colors.transparent,
         selectedTileColor: Colors.white.withValues(alpha: .055),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(widget.terminalStyle ? 0 : 12),
+        ),
         contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-        leading: SizedBox(width: 24, child: Center(child: choice.mark(22))),
+        leading: SizedBox(
+          width: 24,
+          child: Center(
+            child: widget.terminalStyle
+                ? Text(
+                    highlighted ? '>' : ' ',
+                    style: boxMonoStyle(color: grid.AppPalette.swarmAccent),
+                  )
+                : choice.mark(22),
+          ),
+        ),
         // "MuJoCo by Google DeepMind": the name first and bright, whose it is
         // after it and quiet.
         title: Row(
@@ -654,11 +792,13 @@ class _AgentPickerState extends State<AgentPicker> {
               child: SearchResultText(
                 choice.label,
                 matches: matches(choice.label, title: true),
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
-                ),
+                style: widget.terminalStyle
+                    ? boxMonoStyle()
+                    : const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
               ),
             ),
             if (choice.creator case final creator?) ...[
@@ -669,7 +809,9 @@ class _AgentPickerState extends State<AgentPicker> {
                   key: ValueKey('new-agent-agent-row-by-${choice.id}'),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 13, color: Colors.white54),
+                  style: widget.terminalStyle
+                      ? boxMonoStyle(size: 12, color: kBoxFaint)
+                      : const TextStyle(fontSize: 13, color: Colors.white54),
                 ),
               ),
             ],
@@ -680,9 +822,13 @@ class _AgentPickerState extends State<AgentPicker> {
             : SearchResultText(
                 choice.detail!,
                 matches: matches(choice.detail, title: false),
-                style: const TextStyle(fontSize: 12, color: Colors.white60),
+                style: widget.terminalStyle
+                    ? boxMonoStyle(size: 12, color: Colors.white60)
+                    : const TextStyle(fontSize: 12, color: Colors.white60),
               ),
-        trailing: highlighted
+        trailing: widget.terminalStyle && highlighted
+            ? Text('↵', style: boxMonoStyle(color: kBoxFaint))
+            : highlighted
             ? ConstrainedBox(
                 constraints: BoxConstraints(
                   maxWidth: 170 * scaler.scale(11) / 11,
@@ -708,30 +854,52 @@ class _AgentPickerState extends State<AgentPicker> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    return OverlayPortal(
+    return OverlayPortal.overlayChildLayoutBuilder(
       controller: _portal,
-      overlayChildBuilder: (context) => Stack(
-        children: [
-          // A click anywhere the panel does not cover closes it, and lands on
-          // nothing else: the sections under the panel are not the target.
-          Positioned.fill(
-            child: GestureDetector(
-              key: const Key('new-agent-agent-barrier'),
-              behavior: HitTestBehavior.opaque,
-              onTap: _close,
+      overlayChildBuilder: (context, info) {
+        // Read the current geometry during layout. A snapshot taken on open
+        // leaves the panel outside the window after a resize or text scaling.
+        final anchor = MatrixUtils.transformRect(
+          info.childPaintTransform,
+          Offset.zero & info.childSize,
+        );
+        final width = math.min(
+          anchor.width,
+          math.max(0.0, info.overlaySize.width - 16),
+        );
+        final left = math.max(
+          8.0,
+          math.min(anchor.left, info.overlaySize.width - width - 8),
+        );
+        final top = math.max(
+          8.0,
+          math.min(anchor.top, info.overlaySize.height - 180),
+        );
+        return Stack(
+          children: [
+            // A click anywhere the panel does not cover closes it, and lands on
+            // nothing else: the sections under the panel are not the target.
+            Positioned.fill(
+              child: GestureDetector(
+                key: const Key('new-agent-agent-barrier'),
+                behavior: HitTestBehavior.opaque,
+                onTap: _close,
+              ),
             ),
-          ),
-          Positioned(
-            left: 0,
-            top: 0,
-            child: CompositedTransformFollower(
-              link: _link,
-              showWhenUnlinked: false,
-              child: _panel(context),
+            Positioned(
+              left: left,
+              top: top,
+              width: width,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: math.max(0, info.overlaySize.height - top - 16),
+                ),
+                child: _panel(context, width: width),
+              ),
             ),
-          ),
-        ],
-      ),
+          ],
+        );
+      },
       child: _bar(context),
     );
   }
@@ -745,11 +913,15 @@ class _AgentPreview extends StatelessWidget {
     required this.choice,
     required this.status,
     required this.current,
+    this.controller,
+    this.terminalStyle = false,
   });
 
   final AgentChoice choice;
   final String? status;
   final bool current;
+  final ScrollController? controller;
+  final bool terminalStyle;
 
   static const _muted = TextStyle(
     fontSize: 12,
@@ -770,33 +942,42 @@ class _AgentPreview extends StatelessWidget {
       container: true,
       label: 'Agent preview',
       child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 20, 24, 20),
+        controller: controller,
+        padding: terminalStyle
+            ? const EdgeInsets.all(12)
+            : const EdgeInsets.fromLTRB(16, 20, 24, 20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                choice.mark(28),
-                const SizedBox(width: 12),
+                if (!terminalStyle) ...[
+                  choice.mark(28),
+                  const SizedBox(width: 12),
+                ],
                 Expanded(
                   child: Text.rich(
                     TextSpan(
                       children: [
                         TextSpan(
                           text: choice.label,
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
+                          style: terminalStyle
+                              ? boxMonoStyle()
+                              : const TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white,
+                                ),
                         ),
                         if (choice.creator case final creator?)
                           TextSpan(
                             text: '  by $creator',
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Colors.white54,
-                            ),
+                            style: terminalStyle
+                                ? boxMonoStyle(size: 12, color: kBoxFaint)
+                                : const TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.white54,
+                                  ),
                           ),
                       ],
                     ),
@@ -810,47 +991,63 @@ class _AgentPreview extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 detail,
-                style: const TextStyle(
-                  fontSize: 14,
-                  height: 1.4,
-                  color: Colors.white70,
-                ),
+                style: terminalStyle
+                    ? boxMonoStyle(size: 12, color: Colors.white70)
+                    : const TextStyle(
+                        fontSize: 14,
+                        height: 1.4,
+                        color: Colors.white70,
+                      ),
               ),
             ],
             if (chips.isNotEmpty) ...[
               const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final chip in chips)
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: .06),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 4,
+              if (terminalStyle)
+                Text(
+                  chips.join(' · '),
+                  style: boxMonoStyle(size: 12, color: kBoxFaint),
+                )
+              else
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final chip in chips)
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: .06),
+                          borderRadius: BorderRadius.circular(999),
                         ),
-                        child: Text(
-                          chip,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.white70,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
+                          child: Text(
+                            chip,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.white70,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                ],
-              ),
+                  ],
+                ),
             ],
             if (description != null && description.trim().isNotEmpty) ...[
-              const SizedBox(height: 24),
-              const Text('About', style: _muted),
+              SizedBox(height: terminalStyle ? 16 : 24),
+              Text(
+                'About',
+                style: terminalStyle
+                    ? boxMonoStyle(size: 12, color: kBoxFaint)
+                    : _muted,
+              ),
               const SizedBox(height: 6),
-              Text(description.trim(), style: _body),
+              Text(
+                description.trim(),
+                style: terminalStyle ? boxMonoStyle() : _body,
+              ),
             ],
           ],
         ),

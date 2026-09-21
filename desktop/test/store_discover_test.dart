@@ -19,6 +19,8 @@ import 'package:harness/widgets/agent_picker.dart';
 import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/store/store_controller.dart';
+import 'package:harness/store/store_cover_art.dart';
+import 'package:harness/store/store_explore_widgets.dart';
 import 'package:harness/store/store_editorial.dart';
 import 'package:harness/store/store_exploration.dart';
 import 'package:harness/store/store_models.dart';
@@ -209,6 +211,7 @@ Future<(_App, GlobalKey)> _open(
     }
     for (final asset in {
       ...storeProjectAssets.values,
+      ...storeCoverArt.values.map((cover) => cover.asset),
       'assets/store/blender-studio.png',
     }) {
       await precacheImage(AssetImage(asset), context);
@@ -246,6 +249,187 @@ Future<void> _capture(WidgetTester tester, GlobalKey key, String name) async {
 }
 
 void main() {
+  test('every listed harness has a bundled cover and source record', () {
+    final listed = _listedCatalog().map((entry) => entry.id).toSet();
+    expect(storeCoverArt.keys.toSet(), listed);
+    final sources = (jsonDecode(
+      File('assets/store/covers/sources.json').readAsStringSync(),
+    ) as List).cast<Map>();
+    expect(sources.map((source) => source['harness']).toSet(), listed);
+    expect(sources.length, listed.length);
+    for (final entry in storeCoverArt.entries) {
+      final source = sources.singleWhere(
+        (source) => source['harness'] == entry.key,
+      );
+      expect(entry.value.asset, 'assets/store/covers/${source['asset']}');
+      expect(File(entry.value.asset).existsSync(), isTrue, reason: entry.key);
+      expect(source['source'], isNotEmpty, reason: entry.key);
+      if (entry.value.credit != null) {
+        expect(source['license'], isNotEmpty, reason: entry.key);
+        expect(
+          File('assets/store/covers/${source['licenseFile']}').existsSync(),
+          isTrue,
+          reason: entry.key,
+        );
+      }
+    }
+  });
+
+  testWidgets('bundled covers decode and fit thumbnail frames', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1180, 980);
+    addTearDown(tester.view.reset);
+    final ids = storeCoverArt.keys.toList();
+    for (var start = 0; start < ids.length; start += 25) {
+      final pageIds = ids.skip(start).take(25).toList();
+      final key = GlobalKey();
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: key,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: Scaffold(
+              body: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Wrap(
+                  spacing: 16,
+                  runSpacing: 18,
+                  children: [
+                    for (final id in pageIds)
+                      SizedBox(
+                        width: 212,
+                        child: Column(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: AspectRatio(
+                                aspectRatio: 1.65,
+                                child: StoreProjectArt(
+                                  entry: DshEntry(
+                                    id: id,
+                                    name: id.split('/').last,
+                                    engine: 'codex',
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(id.split('/').last),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.runAsync(() async {
+        for (final id in pageIds) {
+          final cover = storeCoverArt[id]!;
+          final bytes = await rootBundle.load(cover.asset);
+          final codec = await ui.instantiateImageCodec(
+            bytes.buffer.asUint8List(),
+          );
+          final frame = await codec.getNextFrame();
+          expect(
+            frame.image.width,
+            greaterThanOrEqualTo(400),
+            reason: cover.asset,
+          );
+          if (cover.viewport case final viewport?) {
+            expect(
+              cover.imageSize,
+              Size(frame.image.width.toDouble(), frame.image.height.toDouble()),
+              reason: cover.asset,
+            );
+            expect(viewport.left, greaterThanOrEqualTo(0), reason: cover.asset);
+            expect(viewport.top, greaterThanOrEqualTo(0), reason: cover.asset);
+            expect(
+              viewport.right,
+              lessThanOrEqualTo(frame.image.width),
+              reason: cover.asset,
+            );
+            expect(
+              viewport.bottom,
+              lessThanOrEqualTo(frame.image.height),
+              reason: cover.asset,
+            );
+            expect(viewport.shortestSide, greaterThan(0), reason: cover.asset);
+          }
+          frame.image.dispose();
+          codec.dispose();
+          await precacheImage(AssetImage(cover.asset), key.currentContext!);
+        }
+      });
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await _capture(tester, key, 'cover-selection-${start ~/ 25 + 1}');
+    }
+  });
+
+  testWidgets('covers stay separate from prompt examples', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Row(
+          children: [
+            for (final showExample in [false, true])
+              SizedBox(
+                width: 300,
+                height: 190,
+                child: StoreProjectArt(
+                  key: ValueKey(showExample ? 'proof' : 'cover'),
+                  entry: _catalog.first,
+                  showExample: showExample,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+    await tester.runAsync(() async {
+      final context = tester.element(find.byKey(const ValueKey('cover')));
+      await precacheImage(
+        const AssetImage('assets/store/covers/blender.jpg'),
+        context,
+      );
+      await precacheImage(
+        const AssetImage('assets/store/projects/blender.jpg'),
+        context,
+      );
+    });
+    await tester.pumpAndSettle();
+    final coverImage = tester.widget<Image>(
+      find.descendant(
+        of: find.byKey(const ValueKey('cover')),
+        matching: find.byType(Image),
+      ),
+    );
+    final proofImage = tester.widget<Image>(
+      find.descendant(
+        of: find.byKey(const ValueKey('proof')),
+        matching: find.byType(Image),
+      ),
+    );
+    expect(
+      (coverImage.image as AssetImage).assetName,
+      'assets/store/covers/blender.jpg',
+    );
+    expect(
+      (proofImage.image as AssetImage).assetName,
+      'assets/store/projects/blender.jpg',
+    );
+    expect(
+      find.byTooltip(
+        'DOGWALK: a snowy world made in Blender\nBlender Foundation · DOGWALK · CC BY 4.0\nView source',
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   test(
     'every listed harness has a browsing category and a discipline invitation',
     () {

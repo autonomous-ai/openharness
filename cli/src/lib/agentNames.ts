@@ -62,3 +62,11 @@ export function projectFolderName(label: string, at: Date, withSeconds = false):
   const time = `${pad(at.getHours())}-${pad(at.getMinutes())}${withSeconds ? `-${pad(at.getSeconds())}` : ''}`
   return `${slug}-${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}-${time}`
 }
+
+/** The folder for a project somebody named: their words with spaces as dashes and nothing a path or
+ *  a shell reads specially. Null when nothing usable is left. Mirrors `projectFolderSlug` in
+ *  desktop/lib/core/project_folder.dart. */
+export function projectFolderSlug(name: string): string | null {
+  const slug = name.trim().replace(/\s+/g, '-').replace(/[^A-Za-z0-9._-]+/g, '').replace(/^[.-]+|[.-]+$/g, '')
+  return slug ? slug.slice(0, 64) : null
+}

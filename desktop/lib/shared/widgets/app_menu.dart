@@ -126,6 +126,7 @@ class AppMenuItem extends StatefulWidget {
     this.trailing,
     this.focusNode,
     this.metrics = AppMenuRowMetrics.compact,
+    this.textStyle,
   });
 
   /// The leading glyph. Null for a row in a list that PICKS one of several — the
@@ -171,6 +172,7 @@ class AppMenuItem extends StatefulWidget {
   /// Which of the two row sizes this is. Defaults to a context menu's; a picker
   /// passes [AppMenuRowMetrics.roomy].
   final AppMenuRowMetrics metrics;
+  final TextStyle? textStyle;
 
   /// This row is the current choice.
   ///
@@ -265,8 +267,11 @@ class _AppMenuItemState extends State<AppMenuItem> {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: widget.danger ? error : AppPalette.textPrimary,
-                          fontFamily: AppFont.sans,
-                          fontFamilyFallback: AppFont.sansFallback,
+                          fontFamily:
+                              widget.textStyle?.fontFamily ?? AppFont.sans,
+                          fontFamilyFallback:
+                              widget.textStyle?.fontFamilyFallback ??
+                              AppFont.sansFallback,
                           fontSize: widget.metrics.fontSize,
                           height: 1.2,
                           fontWeight: widget.selected
@@ -282,8 +287,11 @@ class _AppMenuItemState extends State<AppMenuItem> {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: AppPalette.textSecondary,
-                            fontFamily: AppFont.sans,
-                            fontFamilyFallback: AppFont.sansFallback,
+                            fontFamily:
+                                widget.textStyle?.fontFamily ?? AppFont.sans,
+                            fontFamilyFallback:
+                                widget.textStyle?.fontFamilyFallback ??
+                                AppFont.sansFallback,
                             fontSize: widget.metrics.noteSize,
                             height: 1.25,
                           ),
@@ -301,8 +309,11 @@ class _AppMenuItemState extends State<AppMenuItem> {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: AppPalette.textFaint,
-                        fontFamily: AppFont.sans,
-                        fontFamilyFallback: AppFont.sansFallback,
+                        fontFamily:
+                            widget.textStyle?.fontFamily ?? AppFont.sans,
+                        fontFamilyFallback:
+                            widget.textStyle?.fontFamilyFallback ??
+                            AppFont.sansFallback,
                         fontSize: widget.metrics.noteSize,
                         height: 1.2,
                       ),

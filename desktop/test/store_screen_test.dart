@@ -519,7 +519,7 @@ void main() {
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('store-primary-action')),
-          matching: find.text('Open'),
+          matching: find.text('New Harness'),
         ),
         findsOneWidget,
       );
@@ -609,7 +609,7 @@ void main() {
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('store-card:claude')),
-          matching: find.text('Open'),
+          matching: find.text('New Harness'),
         ),
         findsOneWidget,
       );

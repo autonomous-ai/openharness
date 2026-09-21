@@ -1268,6 +1268,75 @@ describe('agent_fork RPC', () => {
     return { socket, frames }
   }
 
+  it('recovers a fork receipt with its handoff level without creating another agent', async () => {
+    const { socket, frames } = localSocket()
+    const lookup = vi.spyOn(registry, 'byAgent').mockReturnValue(FORK)
+    let finish!: () => void
+    const fork = vi.fn(() => new Promise<{ ok: true; session: RegisteredSession; level: 'handoff' }>((resolve) => {
+      finish = () => resolve({ ok: true, session: FORK, level: 'handoff' })
+    }))
+    socket.onForkAgent = fork
+    const creationId = randomUUID()
+    const ask = (type: string, requestId: string, name = 'Separate idea') => socket.handleLocalFrame('local:fork', {
+      type, payload: { requestId, creationId, agentId: 'agent-1', name, prompt: '  preserve\n  indentation  ' },
+    })
+    try {
+      ask('agent_fork', 'first')
+      await vi.waitFor(() => expect(fork).toHaveBeenCalledTimes(1))
+      ask('agent_create_status', 'pending')
+      await vi.waitFor(() => expect(frames).toContainEqual({
+        type: 'agent_create_status_result', payload: { requestId: 'pending', creationId, state: 'pending' },
+      }))
+      ask('agent_fork', 'retry')
+      finish()
+      for (const requestId of ['first', 'retry']) {
+        await vi.waitFor(() => expect(frames).toContainEqual(expect.objectContaining({
+          type: 'agent_fork_result', payload: expect.objectContaining({ requestId, creationId, state: 'created', level: 'handoff', agent: expect.objectContaining({ id: FORK.agentId }) }),
+        })))
+      }
+      expect(fork).toHaveBeenCalledWith({ agentId: 'agent-1', name: 'Separate idea', prompt: '  preserve\n  indentation  ' })
+      ask('agent_create_status', 'recovered')
+      await vi.waitFor(() => expect(frames).toContainEqual(expect.objectContaining({
+        type: 'agent_create_status_result', payload: expect.objectContaining({ requestId: 'recovered', state: 'created', level: 'handoff' }),
+      })))
+      ask('agent_fork', 'changed', 'Different intent')
+      await vi.waitFor(() => expect(frames).toContainEqual({
+        type: 'agent_fork_result', payload: { requestId: 'changed', error: 'CREATION_CONFLICT' },
+      }))
+      lookup.mockReturnValue(undefined)
+      ask('agent_fork', 'deleted')
+      await vi.waitFor(() => expect(frames).toContainEqual({
+        type: 'agent_fork_result', payload: { requestId: 'deleted', creationId, state: 'unavailable' },
+      }))
+      expect(fork).toHaveBeenCalledTimes(1)
+    } finally {
+      finish?.()
+      await socket.unregisterLocalClient('local:fork')
+      await socket.stop()
+    }
+  })
+
+  it.each(['SPAWN_FAILED', 'REGISTRATION_FAILED', 'AGENT_BUSY'])('retains the fork outcome for %s', async (error) => {
+    const { socket, frames } = localSocket()
+    const fork = vi.fn(async () => ({ ok: false as const, error, detail: 'Fixture refusal' }))
+    socket.onForkAgent = fork
+    const creationId = randomUUID()
+    const state = error === 'AGENT_BUSY' ? 'failed' : 'unconfirmed'
+    try {
+      for (const requestId of ['first', 'retry']) {
+        socket.handleLocalFrame('local:fork', { type: 'agent_fork', payload: { requestId, creationId, agentId: 'agent-1' } })
+        await vi.waitFor(() => expect(frames).toContainEqual({
+          type: 'agent_fork_result', payload: { requestId, creationId, state,
+            ...(state === 'failed' ? { failure: { code: error, detail: 'Fixture refusal' } } : {}) },
+        }))
+      }
+      expect(fork).toHaveBeenCalledTimes(1)
+    } finally {
+      await socket.unregisterLocalClient('local:fork')
+      await socket.stop()
+    }
+  })
+
   it('validates the frame before touching the daemon', async () => {
     const { socket, frames } = localSocket()
     socket.handleLocalFrame('local:fork', { type: 'agent_fork', payload: { requestId: 'r1' } })
@@ -1415,6 +1484,48 @@ describe('agent_restart RPC', () => {
       type: 'agent_restart_result',
       payload: { requestId: 'r1', error: 'RESTART_FAILED', detail: 'claude did not come back up after restart' },
     }))
+    await socket.unregisterLocalClient('local:restart')
+    await socket.stop()
+  })
+
+  it('recovers a restart receipt without replacing the process again', async () => {
+    const { socket, frames } = localSocket()
+    const creationId = 'restart-receipt-test-0001'
+    let finish!: () => void
+    const handler = vi.fn(async () => {
+      await new Promise<void>((resolve) => { finish = resolve })
+      return { ok: true as const, session: BASE_SESSION, resumed: false }
+    })
+    socket.onRestartAgent = handler
+    vi.spyOn(registry, 'byAgent').mockImplementation((id) => id === BASE_SESSION.agentId ? BASE_SESSION : undefined)
+    const request = (requestId: string, type = 'agent_restart') => socket.handleLocalFrame('local:restart', { type, payload: { requestId, agentId: 'agent-1', creationId } })
+    const response = (id: string) => frames.find((frame) => (frame.payload as { requestId?: string }).requestId === id)?.payload
+    request('first')
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1))
+    request('pending', 'agent_create_status')
+    await vi.waitFor(() => expect(response('pending')).toMatchObject({ creationId, state: 'pending' }))
+    request('joined')
+    finish()
+    await vi.waitFor(() => expect(response('joined')).toMatchObject({ creationId, state: 'created', resumed: false }))
+    request('recovered', 'agent_create_status')
+    await vi.waitFor(() => expect(response('recovered')).toMatchObject({ creationId, state: 'created', resumed: false }))
+    request('duplicate')
+    await vi.waitFor(() => expect(response('duplicate')).toMatchObject({ creationId, state: 'created' }))
+    expect(handler).toHaveBeenCalledTimes(1)
+    await socket.unregisterLocalClient('local:restart')
+    await socket.stop()
+  })
+
+  it.each(['RESTART_FAILED', 'AGENT_BUSY'])('retains %s without repeating a restart', async (error) => {
+    const { socket, frames } = localSocket()
+    const creationId = `restart-receipt-${error}`
+    const handler = vi.fn(async () => ({ ok: false as const, error, detail: 'fixture refusal' }))
+    socket.onRestartAgent = handler
+    for (const requestId of ['first', 'again']) {
+      socket.handleLocalFrame('local:restart', { type: 'agent_restart', payload: { requestId, agentId: 'agent-1', creationId } })
+      await vi.waitFor(() => expect(frames.find((frame) => (frame.payload as { requestId?: string }).requestId === requestId)?.payload).toMatchObject({ creationId, state: error === 'RESTART_FAILED' ? 'unconfirmed' : 'failed' }))
+    }
+    expect(handler).toHaveBeenCalledTimes(1)
     await socket.unregisterLocalClient('local:restart')
     await socket.stop()
   })

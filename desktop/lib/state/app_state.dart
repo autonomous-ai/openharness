@@ -7,7 +7,7 @@ import 'package:dio/dio.dart';
 import 'dart:ui' show Color;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/widgets.dart' show BuildContext;
+import 'package:flutter/widgets.dart' show BuildContext, StringCharacters;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../analytics/analytics.dart';
@@ -46,6 +46,7 @@ import '../widgets/engine_identity.dart'
     show allEngines, engineIdentity, isTerminalEngine;
 import '../store/store_screen.dart' show openStoreAgent;
 import 'dial_status.dart';
+import 'harness_placement.dart';
 import 'pane_layout_store.dart';
 import 'terminal_pane.dart';
 import 'swarm.dart';
@@ -83,11 +84,36 @@ enum MachineTransportMode { cloudE2ee, localPlaintext, localOffline }
 class RestartAgentResult {
   final String? error;
   final bool resumed;
+  final bool retryable;
 
-  const RestartAgentResult({this.error, this.resumed = true});
+  const RestartAgentResult({
+    this.error,
+    this.resumed = true,
+    this.retryable = true,
+  });
 }
 
-/// Result of [AppNotifier.forkAgent]. [error] null means the fork is open;
+/// A restart keeps its receipt when its progress prompt closes. Checking an
+/// uncertain result must not replace the process a second time.
+class AgentRestartAttempt {
+  AgentRestartAttempt._(this._machine, this.agent, this._authRevision)
+    : _removal = _machine?._agentRemovals[agent?.id],
+      _stopRevision = _machine?._agentStopRevisions[agent?.id];
+  final MachineState? _machine;
+  final Agent? agent;
+  final int _authRevision;
+  final int? _removal, _stopRevision;
+  String? _id;
+  int _startedRevision = 0;
+  bool _awaitingConfirmation = false;
+  Future<RestartAgentResult>? _pending;
+  RestartAgentResult? result;
+  bool get awaitingConfirmation => _awaitingConfirmation;
+  bool get busy => _pending != null;
+  Future<RestartAgentResult>? get pending => _pending;
+}
+
+/// Result of [AppNotifier.forkAgent]. [error] null means the fork was created;
 /// [level] then says what it got — `native` (the engine's own fork, the whole
 /// context) or `handoff` (a first message composed from what the daemon
 /// remembers of the source, for an engine that cannot fork).
@@ -95,29 +121,68 @@ class ForkAgentResult {
   final String? error;
   final String level;
   final String? agentId;
+  final String? notice;
 
-  const ForkAgentResult({this.error, this.level = 'native', this.agentId});
+  const ForkAgentResult({
+    this.error,
+    this.level = 'native',
+    this.agentId,
+    this.notice,
+  });
+}
+
+String _newCreationId() {
+  final random = Random.secure();
+  return List.generate(
+    16,
+    (_) => random.nextInt(256),
+  ).map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+}
+
+/// An in-memory draft and one deliberate fork. A lost receipt locks its
+/// choices until status is checked or the user explicitly starts another fork.
+class AgentForkAttempt {
+  AgentForkAttempt._(
+    this._machine,
+    this.source,
+    this._authRevision,
+    this._removal, {
+    this.name = '',
+    this.prompt = '',
+  });
+  final MachineState? _machine;
+  final Agent? source;
+  final int _authRevision;
+  final int? _removal;
+  String name, prompt;
+  String? _id;
+  Swarm? _target;
+  int? _focus;
+  int _startedRevision = 0;
+  bool _awaitingConfirmation = false;
+  Future<ForkAgentResult>? _inFlight;
+  ForkAgentResult? result;
+  bool get awaitingConfirmation => _awaitingConfirmation;
+  bool get busy => _inFlight != null;
+  bool get locked => busy || awaitingConfirmation;
+  Future<ForkAgentResult>? get pending => _inFlight;
 }
 
 /// One deliberate creation, retained by the form if its reply is lost. Reusing
 /// it checks the original request; opening New agent starts a fresh intent.
 class AgentCreationAttempt {
-  AgentCreationAttempt() {
-    final random = Random.secure();
-    _id = List.generate(
-      16,
-      (_) => random.nextInt(256),
-    ).map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
-  }
-
-  late final String _id;
+  String _id = _newCreationId();
   String? _machineId, _targetId;
   Map<String, dynamic>? _choices;
   PaneSplitRequest? _split;
+  HarnessPlacement? _placement;
   Future<String?>? _inFlight;
   bool _awaitingConfirmation = false, _finished = false;
   String? _outcome;
   String? _preparedFolder;
+  ProjectFolderRequest? _projectFolder;
+  String? _remoteProjectName;
+  int _projectNameRetries = 0;
 
   bool get awaitingConfirmation => _awaitingConfirmation;
 
@@ -168,6 +233,12 @@ Map<String, dynamic> eventWithClearPayload(
 
 class MachineState {
   Machine machine;
+  int _agentRevision = 0;
+  final _agentRemovals = <String, int>{};
+  final _agentStopRevisions = <String, int>{};
+  final _agentRestartRevisions = <String, int>{};
+  final _agentNames =
+      <String, ({int revision, String? sessionId, String name})>{};
   ConnectionStatus connectionStatus = ConnectionStatus.disconnected;
   MachineTransportMode transportMode = MachineTransportMode.cloudE2ee;
 
@@ -187,6 +258,7 @@ class MachineState {
   String? agentsLoadError;
   Future<void>? agentsLoadInFlight;
   Future<void>? terminalCapabilityLoadInFlight;
+  int _discoveryRevision = 0;
   String? activeAgentId;
   bool terminalCapabilityLoaded = false;
   bool terminalCapabilityAvailable = false;
@@ -301,6 +373,47 @@ class RailRow {
   int get hashCode => Object.hash(machineId, agentId);
 }
 
+class _MachineLinkAttempt {
+  _MachineLinkAttempt(this.authRevision);
+  final int authRevision;
+  final result = Completer<String?>();
+  String stage = 'connecting';
+}
+
+class _RemotePasswordChange {
+  _RemotePasswordChange(this.authRevision, {required this.clearing});
+  final int authRevision;
+  final bool clearing;
+  final result = Completer<RemotePasswordStatus>();
+}
+
+class _MachineEdit {
+  _MachineEdit(this.machine, this.authRevision, this.name);
+  final MachineState machine;
+  final int authRevision;
+  final String? name; // null deletes the machine; a string renames it.
+  final result = Completer<String?>();
+}
+
+class _AgentRename {
+  _AgentRename(this.machine, this.agent, this.authRevision, this.name)
+    : nameRevision = machine._agentRevision;
+  final MachineState machine;
+  final Agent agent;
+  final int authRevision, nameRevision;
+  final String name;
+  final result = Completer<String?>();
+}
+
+class _AgentStop {
+  _AgentStop(this.machine, this.agent, this.authRevision);
+  final MachineState machine;
+  final Agent agent;
+  final int authRevision;
+  bool confirmed = false;
+  final result = Completer<String?>();
+}
+
 class AppNotifier extends ChangeNotifier {
   final AuthSession session;
   AppConfig config;
@@ -316,6 +429,30 @@ class AppNotifier extends ChangeNotifier {
   /// viewer. THIS machine's own remote password stays on [cliLink] — a viewer is not a machine, and
   /// has no password for anyone to link to.
   late final PeerLinkClient peerLinks;
+  final _machineLinks = <String, _MachineLinkAttempt>{};
+  final _machineEdits = <String, _MachineEdit>{};
+  final _agentRenames = <(String, String), _AgentRename>{};
+  final _agentStops = <(String, String), _AgentStop>{};
+  final _agentForks = <(String, String), AgentForkAttempt>{};
+  final _agentRestarts = <(String, String), AgentRestartAttempt>{};
+  int _machineEditRevision = 0;
+  // Account edits outrank inventories requested before them, and the daemon’s
+  // offline cache. Keep per-id revisions for overlapping inventory requests.
+  final _confirmedMachineEdits = <String, (int, String?)>{};
+
+  /// Linking belongs to the machine, so closing its prompt cannot start a
+  /// second handshake when the same prompt is reopened.
+  Future<String?>? pendingMachineLink(String machineId) {
+    final attempt = _machineLinks[machineId];
+    return attempt != null && _authWorkCurrent(attempt.authRevision)
+        ? attempt.result.future
+        : null;
+  }
+
+  String? machineLinkStage(String machineId) =>
+      pendingMachineLink(machineId) == null
+      ? null
+      : _machineLinks[machineId]?.stage;
 
   /// A viewer build's stand-ins for the harness CLI (`lib/viewer/`); null on a desktop build.
   final ViewerServices? viewer;
@@ -425,13 +562,17 @@ class AppNotifier extends ChangeNotifier {
   // Update checks do not depend on the daemon or SSO. A signed-out user should
   // still be able to replace a broken desktop build from the login screen.
   Timer? _updateCheckTimer;
+  late final DesktopUpdater _updater = desktopUpdater ?? DesktopUpdater();
+  Future<ManualUpdateCheck>? _manualUpdateCheckInFlight;
+  DesktopUpdateCheck? lastUpdateCheck;
+  bool get updateChecksEnabled => viewer == null && _updater.canCheck;
   String? _skippedDesktopUpdateVersion;
   UpdateInfo? availableUpdate;
   bool isCheckingForUpdate = false;
   bool isInstallingUpdate = false;
   String? updateError;
   final Set<String> _offlinePollsInFlight = {};
-  final Set<String> _offlineRecoveryInFlight = {};
+  final Map<String, Object> _offlineRecoveryInFlight = {};
   bool _disposed = false;
 
   // Account and inventory replies belong to the session that requested them.
@@ -444,12 +585,26 @@ class AppNotifier extends ChangeNotifier {
 
   int _invalidateAuthWork() {
     _stopMachineRecovery();
+    api.resetAccountCache();
+    _sessionExpired = false;
     _machineLoadError = null;
     _resetLoginBrowser();
     _loginAuthorized = false;
     _profileInFlight = null;
     _retryInFlight = null;
     machinesLoading = false;
+    _machineInventoryLoaded = false;
+    _linkedMachinesRequest = null;
+    _unlinkRequests.clear();
+    _machineEdits.clear();
+    _agentRenames.clear();
+    _agentStops.clear();
+    _agentForks.clear();
+    _agentRestarts.clear();
+    _confirmedMachineEdits.clear();
+    linkedMachines = [];
+    linkedMachinesLoading = false;
+    linkedMachinesError = null;
     return ++_authRevision;
   }
 
@@ -466,6 +621,7 @@ class AppNotifier extends ChangeNotifier {
   String? _bootStatusMessage;
   EnvironmentReadiness environmentReadiness = EnvironmentReadiness.initial();
   bool _environmentSetupInFlight = false;
+  bool _environmentInstallRequested = false;
   // Polls a step stuck in needsTerminal/failed every 5s (see `_scheduleEnvironmentRecheck`) so a user
   // who fixes it by hand in their own terminal doesn't have to remember to click Recheck. A one-shot
   // Timer that reschedules itself rather than `Timer.periodic`, so a slow recheck can't overlap with
@@ -480,6 +636,7 @@ class AppNotifier extends ChangeNotifier {
   /// screen disable its Recheck/Start over buttons and show a spinner instead of a second click
   /// racing the first.
   bool get environmentSetupInFlight => _environmentSetupInFlight;
+  bool get environmentInstallRequested => _environmentInstallRequested;
 
   // The daemon's own advertised local-ws endpoint — the dial target for EVERY machine's data plane
   // now, not just this computer's own one (see src/lib/remoteRelay.ts in the harness CLI repo: a
@@ -835,6 +992,7 @@ class AppNotifier extends ChangeNotifier {
     final swarm = swarms.where((s) => s.id == id).firstOrNull;
     if (swarm == null) return;
     swarm.name = clean.length > 80 ? clean.substring(0, 80) : clean;
+    swarm.nameIsCustom = true;
     _persistLayout();
     notifyListeners();
   }
@@ -949,12 +1107,20 @@ class AppNotifier extends ChangeNotifier {
       selectSwarm(target.id);
       return;
     }
-    final restored = Swarm(id: saved.id, name: saved.name, kind: saved.kind)
-      ..orchestratorId = saved.orchestratorId
-      ..orchestratorMachineId = saved.orchestratorMachineId
-      ..gridColumns = saved.gridColumns
-      ..presets.addAll(saved.presets)
-      ..paneSizes.addAll(saved.paneSizes);
+    final restored =
+        Swarm(
+            id: saved.id,
+            name: saved.name,
+            kind: saved.kind,
+            nameIsCustom: saved.nameIsCustom,
+          )
+          ..titleMachineId = saved.titleMachineId
+          ..titleAgentId = saved.titleAgentId
+          ..orchestratorId = saved.orchestratorId
+          ..orchestratorMachineId = saved.orchestratorMachineId
+          ..gridColumns = saved.gridColumns
+          ..presets.addAll(saved.presets)
+          ..paneSizes.addAll(saved.paneSizes);
     for (final entry in saved.panes) {
       final pane = pool.putIfAbsent(
         (entry.machineId, entry.agentId),
@@ -1234,6 +1400,12 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// This flag spans the whole flow, so the screen the user pressed a button on stays put.
   bool signingIn = false;
+  bool _sessionExpired = false;
+  bool get sessionExpired => _sessionExpired;
+  bool signingOut = false;
+  String? signOutError;
+  Future<void>? _logoutInFlight;
+  Future<void>? _workspaceCleanup;
 
   AppNotifier({
     required AppConfig config,
@@ -1290,6 +1462,11 @@ class AppNotifier extends ChangeNotifier {
   /// and other one-off errors, and is cleared by [dismissError]. A pane asking "is this machine missing
   /// because we could not read the list?" needs the narrower question.
   String? get machineListError => _machineLoadError;
+
+  /// A completed inventory distinguishes initial waiting from an unavailable
+  /// machine. This also covers cached results; [machinesAreStale] qualifies them.
+  bool _machineInventoryLoaded = false;
+  bool get machineInventoryLoaded => _machineInventoryLoaded;
 
   /// True when the machine list on screen came from the daemon's cache because the backend could not be
   /// reached. The rows are the last known-good ones, not current.
@@ -1618,6 +1795,11 @@ class AppNotifier extends ChangeNotifier {
   /// What a machine hears the moment its socket is up — first connect, or a
   /// reconnect after its daemon restarted, which has forgotten all of it.
   void _onMachineConnected(String machineId, MachineState machine) {
+    _resetMachineDiscovery(machine);
+    _markSessionsUnreachable(
+      machine,
+      'Harness reconnected; restoring terminal…',
+    );
     machine.needsLink = false;
     _stopLinkRetry(machineId);
     // A daemon that just came up — first connect, or a reconnect after it
@@ -2031,6 +2213,7 @@ class AppNotifier extends ChangeNotifier {
     if (viewer != null) return true;
     if (_environmentSetupInFlight) return false;
     _environmentSetupInFlight = true;
+    _environmentInstallRequested = false;
     status = AppStatus.checkingEnvironment;
     environmentReadiness = EnvironmentReadiness.initial();
     notifyListeners();
@@ -2152,6 +2335,9 @@ class AppNotifier extends ChangeNotifier {
   }
 
   void selectEnvironmentSetupMode(EnvironmentSetupMode mode) {
+    if (mode == EnvironmentSetupMode.manual) {
+      _environmentInstallRequested = false;
+    }
     environmentReadiness = environmentReadiness.copyWith(mode: mode);
     notifyListeners();
   }
@@ -2164,6 +2350,7 @@ class AppNotifier extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    _environmentInstallRequested = true;
     _environmentSetupInFlight = true;
     notifyListeners();
     try {
@@ -2231,7 +2418,9 @@ class AppNotifier extends ChangeNotifier {
       // Every host step done means only the Harness CLI is left, and that
       // installs in-app without another prompt — so carry on into it.
       if (!result.isReady &&
+          _environmentInstallRequested &&
           mode == EnvironmentSetupMode.automatic &&
+          result.phase != EnvironmentSetupPhase.failed &&
           result.phase != EnvironmentSetupPhase.waitingForTerminal &&
           result.hostReady) {
         result = await _runProvisioner(
@@ -2594,53 +2783,161 @@ class AppNotifier extends ChangeNotifier {
       return; // idempotent: several sources can race here
     }
     _invalidateAuthWork();
+    cliLogin.cancel();
+    _sessionExpired = true;
     currentUser = null;
     signingIn = false;
     pendingAuthorizeUrl = null;
     _awaitingFirstMessage = null;
     analyticsAccount.clear();
-    _daemonSupervisionTimer?.cancel();
-    _daemonSupervisionTimer = null;
-    _cliEndpoint = null;
-    unawaited(_pool?.closeAll());
-    _pool = null;
+    _clearAccountWorkspace();
     _lastError = message;
     _lastErrorRetryable = true;
     status = AppStatus.unauthenticated;
     notifyListeners();
   }
 
+  /// Remove the old account's live objects without overwriting its saved desk.
+  /// In particular, multiple emptied tabs must not prevent the next restore.
+  void _clearAccountWorkspace() {
+    ++_layoutRevision;
+    _stopAllOfflineRetries();
+    _stopAllLinkRetries();
+    _stopAllAgentSyncTimers();
+    _daemonSupervisionTimer?.cancel();
+    _daemonSupervisionTimer = null;
+    _sharingDiscoveryTimer?.cancel();
+    _sharingDiscoveryTimer = null;
+    _sharingDiscoveryBusy = false;
+    _daemonGateFailed = false;
+    _bootStatusMessage = null;
+    _clearAllTurnActivity();
+    // Start all terminal detachments while their original transports exist.
+    final panesClosed = _closeAllPanes(persist: false);
+    final pool = _pool;
+    _pool = null;
+    _cliEndpoint = null;
+    _backendOnline = null;
+    machines = [];
+    machinesAreStale = false;
+    machineStates.clear();
+    sessionPreviews.clear();
+    expandedMachines.clear();
+    selectedMachineId = null;
+    _closedHistory.clear();
+    _draftSwarmReturns.clear();
+    _localMismatchReported.clear();
+    _dismissedLinkPrompts.clear();
+    for (final controller in _orchestratorProjects.values) {
+      controller.dispose();
+    }
+    _orchestratorProjects.clear();
+    final starter = Swarm(id: 'swarm-${_nextSwarmId++}');
+    swarms
+      ..clear()
+      ..add(starter);
+    _activeSwarmId = starter.id;
+    _autoPickedAgent = false;
+    late final Future<void> cleanup;
+    cleanup =
+        Future.wait<void>([
+              ?_workspaceCleanup,
+              panesClosed,
+              if (pool != null) pool.closeAll(),
+            ])
+            .then<void>(
+              (_) {},
+              onError: (Object error) {
+                debugPrint('account connection cleanup failed: $error');
+              },
+            )
+            .whenComplete(() {
+              if (identical(_workspaceCleanup, cleanup)) {
+                _workspaceCleanup = null;
+              }
+            });
+    _workspaceCleanup = cleanup;
+  }
+
   void _startUpdateChecking() {
-    _updateCheckTimer ??= (desktopUpdater ?? DesktopUpdater()).startChecking(
-      onUpdateAvailable: _handleBackgroundUpdate,
+    _updateCheckTimer ??= _updater.startChecking(
+      onCheckCompleted: (result) {
+        if (_disposed) return;
+        _recordUpdateCheck(result);
+        notifyListeners();
+      },
     );
   }
 
-  void _handleBackgroundUpdate(UpdateInfo info) {
+  void _recordUpdateCheck(DesktopUpdateCheck result, {bool manual = false}) {
     if (_disposed) return;
-    if (_skippedDesktopUpdateVersion == info.version) return;
-    if (availableUpdate?.version == info.version) return;
-    availableUpdate = info;
-    updateError = null;
-    notifyListeners();
+    lastUpdateCheck = result;
+    if (isInstallingUpdate) return;
+    final info = result.update;
+    if (info != null) {
+      if (!manual && _skippedDesktopUpdateVersion == info.version) {
+        // A manual check may already be offering this skipped version. A
+        // concurrent background answer must not withdraw that explicit offer.
+        if (availableUpdate?.version != info.version) {
+          availableUpdate = null;
+          updateError = null;
+        }
+      } else {
+        if (availableUpdate?.version != info.version) updateError = null;
+        availableUpdate = info;
+      }
+    } else if (result.status == DesktopUpdateCheckStatus.upToDate) {
+      availableUpdate = null;
+      updateError = null;
+    }
+    // Failure/disabled leaves the last known offer and any install failure
+    // intact. A check error is not an installation error or an all-clear.
   }
 
   /// A manual check deliberately returns a skipped version too, so the user
   /// can choose to install it from the account menu after changing their mind.
-  Future<ManualUpdateCheck> checkForUpdates() async {
-    if (isCheckingForUpdate) {
-      return ManualUpdateCheck(update: availableUpdate);
+  Future<ManualUpdateCheck> checkForUpdates() {
+    // Viewer builds are updated by their app store. Do not even construct a
+    // desktop updater there: those platforms have no desktop artifact channel.
+    if (viewer != null) {
+      return Future.value(
+        const ManualUpdateCheck(check: DesktopUpdateCheck.disabled()),
+      );
     }
+    final pending = _manualUpdateCheckInFlight;
+    if (pending != null) return pending;
+    if (_disposed) {
+      return Future.value(
+        const ManualUpdateCheck(check: DesktopUpdateCheck.failed()),
+      );
+    }
+    final completion = Completer<ManualUpdateCheck>();
+    _manualUpdateCheckInFlight = completion.future;
     isCheckingForUpdate = true;
-    updateError = null;
     notifyListeners();
+    unawaited(_checkForUpdates(completion));
+    return completion.future;
+  }
+
+  Future<void> _checkForUpdates(Completer<ManualUpdateCheck> completion) async {
     try {
-      final info = await (desktopUpdater ?? DesktopUpdater()).checkOnce();
-      if (info == null) return const ManualUpdateCheck();
-      final skipped = _skippedDesktopUpdateVersion == info.version;
-      availableUpdate = info;
-      return ManualUpdateCheck(update: info, isSkipped: skipped);
+      final result = await _updater.check();
+      _recordUpdateCheck(result, manual: true);
+      completion.complete(
+        ManualUpdateCheck(
+          check: result,
+          isSkipped:
+              result.update != null &&
+              _skippedDesktopUpdateVersion == result.update!.version,
+        ),
+      );
+    } catch (error) {
+      debugPrint('AppNotifier.checkForUpdates: $error');
+      const failed = DesktopUpdateCheck.failed();
+      _recordUpdateCheck(failed);
+      completion.complete(const ManualUpdateCheck(check: failed));
     } finally {
+      _manualUpdateCheckInFlight = null;
       isCheckingForUpdate = false;
       if (!_disposed) notifyListeners();
     }
@@ -2657,26 +2954,34 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> skipAvailableUpdate() async {
-    final info = availableUpdate;
-    if (info == null) return;
+  Future<void> skipAvailableUpdate({UpdateInfo? update}) async {
+    final info = update ?? availableUpdate;
+    if (_disposed || info == null || isInstallingUpdate) return;
     _skippedDesktopUpdateVersion = info.version;
     await _store?.saveSkippedDesktopUpdateVersion(info.version);
-    availableUpdate = null;
-    updateError = null;
+    if (_disposed) return;
+    if (availableUpdate?.version == info.version) {
+      availableUpdate = null;
+      updateError = null;
+    }
     notifyListeners();
   }
 
   /// Downloads, verifies, and installs only after an explicit user action.
   /// A failed operation leaves the running app untouched and retryable.
-  Future<bool> installAvailableUpdate() async {
-    final info = availableUpdate;
-    if (info == null || isInstallingUpdate) return false;
+  Future<bool> installAvailableUpdate({UpdateInfo? update}) async {
+    final info = update ?? availableUpdate;
+    if (_disposed || viewer != null || info == null || isInstallingUpdate) {
+      return false;
+    }
+    // The displayed version is the one the user chose. Later manifest
+    // responses cannot change the installation or the offer a failure retains.
+    availableUpdate = info;
     isInstallingUpdate = true;
     updateError = null;
     notifyListeners();
     try {
-      final updater = desktopUpdater ?? DesktopUpdater();
+      final updater = _updater;
       final staged = await updater.downloadAndStage(info);
       if (staged == null) {
         updateError =
@@ -2700,7 +3005,7 @@ class AppNotifier extends ChangeNotifier {
   }
 
   Future<void> login() async {
-    if (_disposed || signingIn) return;
+    if (_disposed || signingIn || signingOut || signOutError != null) return;
     final revision = _invalidateAuthWork();
     _closedHistory.clear();
     _lastError = null;
@@ -2709,6 +3014,10 @@ class AppNotifier extends ChangeNotifier {
     pendingAuthorizeUrl = null;
     notifyListeners();
     try {
+      if (_workspaceCleanup case final cleanup?) {
+        await cleanup;
+        if (!_authWorkCurrent(revision)) return;
+      }
       await cliLogin.login(
         onAuthorizeUrl: (url) {
           if (!_authWorkCurrent(revision)) return;
@@ -2830,47 +3139,61 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> logout() async {
+  Future<void> logout() {
+    if (_disposed) return Future<void>.value();
+    if (_logoutInFlight case final pending?) return pending;
+    final completion = Completer<void>();
+    final result = _logoutInFlight = completion.future;
+    unawaited(
+      _logout().then(
+        (_) {
+          _logoutInFlight = null;
+          completion.complete();
+        },
+        onError: (Object error, StackTrace stack) {
+          _logoutInFlight = null;
+          completion.completeError(error, stack);
+        },
+      ),
+    );
+    return result;
+  }
+
+  Future<void> _logout() async {
     final revision = _invalidateAuthWork();
     cliLogin.cancel();
     signingIn = false;
+    signingOut = true;
+    signOutError = null;
+    _lastError = null;
     pendingAuthorizeUrl = null;
     _closedHistory.clear();
-    // Best-effort and fire-and-forget: local state is cleared below regardless of whether the CLI
-    // process could be reached, but a real `harness logout` clears its saved session so the NEXT
-    // launch doesn't silently sign back in without ever showing the login screen.
-    unawaited(cliLogin.logout());
-    _stopAllOfflineRetries();
-    _stopAllLinkRetries();
-    _stopAllAgentSyncTimers();
-    // Tiles go, the saved layout stays: signing out and back in is the same
-    // person at the same desk, and the file is only read once machines exist.
-    await _closeAllPanes(persist: false);
-    if (!_authWorkCurrent(revision)) return;
-    _closedHistory.clear();
-    await _pool?.closeAll();
-    if (!_authWorkCurrent(revision)) return;
-    _pool = null;
-    _cliEndpoint = null;
-    // Nothing to supervise for a signed-out app — and a daemon started by hand
-    // on the login screen must not have its ready transition retry the machines.
-    _daemonSupervisionTimer?.cancel();
-    _daemonSupervisionTimer = null;
-    _daemonGateFailed = false;
-    _clearAllTurnActivity();
-    currentUser = null;
-    machines = [];
-    machineStates.clear();
-    sessionPreviews.clear();
-    expandedMachines.clear();
-    selectedMachineId = null;
     status = AppStatus.unauthenticated;
+    currentUser = null;
+    analyticsAccount.clear();
+    notifyListeners();
+    // Clear saved credentials alongside connection cleanup. A new login must
+    // wait for both, otherwise the old logout can delete its fresh session.
+    // Disconnecting a development fixture must leave the real CLI alone.
+    final cleared = localManualFixture != null
+        ? Future<bool>.value(true)
+        : Future<void>.sync(cliLogin.logout)
+              .then((_) => true, onError: (Object _) => false);
+    _clearAccountWorkspace();
     analytics.signedOut();
     // A session that ended without a message reports nothing — its absence IS
     // the finding, and a stale clock would attach that wait to whoever signs in
     // next.
     _awaitingFirstMessage = null;
     analyticsAccount.clear();
+    notifyListeners();
+    await _workspaceCleanup;
+    final didClear = await cleared;
+    if (!_authWorkCurrent(revision)) return;
+    signingOut = false;
+    signOutError = didClear
+        ? null
+        : 'Your saved sign-in could not be cleared. Try signing out again.';
     notifyListeners();
   }
 
@@ -3035,20 +3358,37 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
-  Future<void> refreshMachines() async {
+  int _machineInventoryRevision = 0;
+
+  bool _machineInventoryCurrent(int auth, int request) =>
+      _authWorkCurrent(auth) && request == _machineInventoryRevision;
+
+  /// Whether this refresh was applied, rather than superseded by another
+  /// refresh or an account change.
+  Future<bool> refreshMachines() async {
     final revision = _authRevision;
-    if (!_authWorkCurrent(revision)) return;
+    final request = await _refreshMachineInventory();
+    return request != null && _machineInventoryCurrent(revision, request);
+  }
+
+  // Return the request that published its result, so a retry's follow-up work
+  // cannot dismiss an error or reload panes for a superseded request.
+  Future<int?> _refreshMachineInventory() async {
+    final revision = _authRevision;
+    if (!_authWorkCurrent(revision)) return null;
+    final request = ++_machineInventoryRevision;
     if (localManualFixture != null) {
+      _machineInventoryLoaded = true;
       notifyListeners();
-      return;
+      return request;
     }
     if (machines.isEmpty && !machinesLoading) {
       machinesLoading = true;
       notifyListeners();
     }
     try {
-      await _refreshMachines(revision);
-      if (_authWorkCurrent(revision)) {
+      await _refreshMachines(revision, request);
+      if (_machineInventoryCurrent(revision, request)) {
         // A cached answer is readable but not current, so the job is not done: leave the recovery timer
         // running and it converges on its own once the backend is back. Without this the daemon's 200
         // would read as success, recovery would stop, and the app would sit on stale rows until
@@ -3063,20 +3403,21 @@ class AppNotifier extends ChangeNotifier {
           notifyListeners();
         }
         _machineLoadError = null;
+        return request;
       }
+      return null;
     } catch (error) {
-      if (_authWorkCurrent(revision)) {
-        if (isTransientApiError(error)) {
-          _scheduleMachineRecovery(revision);
-        } else {
-          _stopMachineRecovery();
-        }
+      if (!_machineInventoryCurrent(revision, request)) return null;
+      if (isTransientApiError(error)) {
+        _scheduleMachineRecovery(revision);
+      } else {
+        _stopMachineRecovery();
       }
       rethrow;
     } finally {
       // Said out loud: the list's own notify fires before this, so a flag
       // dropped silently here would leave the rail on its placeholders.
-      if (_authWorkCurrent(revision) && machinesLoading) {
+      if (_machineInventoryCurrent(revision, request) && machinesLoading) {
         machinesLoading = false;
         notifyListeners();
       }
@@ -3211,14 +3552,14 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  Future<void> _refreshMachines(int revision) async {
+  Future<void> _refreshMachines(int revision, int request) async {
     // No machine is "this computer" to a viewer, which has no local CLI: every one — even the one
     // it runs on — is reached through the relay.
     final discovery = viewer == null ? _discovery : null;
     // The CLI computer id is the local identity source of truth. The loopback
     // status endpoint is trusted only when it advertises that same identity.
     final localComputerId = await discovery?.computerId();
-    if (!_authWorkCurrent(revision)) return;
+    if (!_machineInventoryCurrent(revision, request)) return;
     // Null in a viewer build, which has no local CLI to probe — see `discovery` above.
     final localFuture =
         discovery?.discover(expectedComputerId: localComputerId) ??
@@ -3237,16 +3578,18 @@ class AppNotifier extends ChangeNotifier {
       },
     );
     final List<Machine> list;
+    final bool stale;
+    final editRevision = _machineEditRevision;
     try {
       list = await _fetchMachines();
-      machinesAreStale = api.lastMachinesStale;
+      stale = list is MachineInventory ? list.isStale : api.lastMachinesStale;
     } catch (_) {
       // A backend outage must not cost this computer its own transport. Without this the probe result
       // stayed unapplied, so `usesLocalTransport` went false and `_connectMachine` skipped the local
       // machine — while relayed machines, which never consult it, kept streaming. That asymmetry was the
       // bug: the local terminal stopped rendering and the relayed ones did not.
       await localSettled;
-      if (_authWorkCurrent(revision)) {
+      if (_machineInventoryCurrent(revision, request)) {
         final endpoint = probed;
         // The probe is the freshest word on the backend link — fresher than the supervisor's last
         // tick — and it decides whether this failure is an outage to report or just "offline".
@@ -3273,14 +3616,41 @@ class AppNotifier extends ChangeNotifier {
     await localSettled;
     // Both legs are in: this is the one gate that decides whether a result that arrived after a
     // sign-out or a dispose may still be published.
-    if (!_authWorkCurrent(revision)) return;
+    if (!_machineInventoryCurrent(revision, request)) return;
+    _machineInventoryLoaded = true;
+    machinesAreStale = stale;
     final localEndpoint = probed;
     if (localEndpoint != null) {
       _noteBackendOnline(localEndpoint.backendOnline, refetch: false);
     }
-    machines = list
-        .where((machine) => machine.authMode == MachineAuthMode.remote)
-        .toList();
+    machines = [];
+    for (final machine in list) {
+      if (machine.authMode != MachineAuthMode.remote) continue;
+      final edit = _confirmedMachineEdits[machine.machineId];
+      if (edit != null && (edit.$1 > editRevision || machinesAreStale)) {
+        if (edit.$2 case final name?) {
+          machines.add(machine.copyWith(name: name));
+        }
+      } else {
+        machines.add(machine);
+        if (edit != null) {
+          // A newer authoritative inventory may contain a rename performed
+          // elsewhere. Its value becomes the protection against cached reads.
+          _confirmedMachineEdits[machine.machineId] = (
+            edit.$1,
+            machine.displayName,
+          );
+        }
+      }
+    }
+    if (!machinesAreStale) {
+      final listed = list.map((machine) => machine.machineId).toSet();
+      _confirmedMachineEdits.updateAll(
+        (id, edit) => edit.$1 <= editRevision && !listed.contains(id)
+            ? (edit.$1, null)
+            : edit,
+      );
+    }
     final visible = machines.map((machine) => machine.machineId).toSet();
     for (final entry in machineStates.entries) {
       if (!visible.contains(entry.key)) {
@@ -3375,7 +3745,7 @@ class AppNotifier extends ChangeNotifier {
           notifyListeners();
         }
       } finally {
-        _sharingDiscoveryBusy = false;
+        if (_authWorkCurrent(discoveryRevision)) _sharingDiscoveryBusy = false;
       }
     });
     notifyListeners();
@@ -3444,6 +3814,7 @@ class AppNotifier extends ChangeNotifier {
     }
     _offlineRetryTimers.clear();
     _offlinePollsInFlight.clear();
+    _offlineRecoveryInFlight.clear();
   }
 
   void _startAgentSyncTimer(String machineId) {
@@ -3476,19 +3847,30 @@ class AppNotifier extends ChangeNotifier {
   /// a real connectivity problem is already surfaced by the push path and the existing offline
   /// detection in _performMachineDataLoad, and a quiet background tick should not fight either.
   Future<void> _syncAgentsIfChanged(MachineState machine) async {
+    final revision = _authRevision;
+    final discoveryRevision = machine._discoveryRevision;
+    if (!_machineWorkCurrent(machine, revision)) return;
     if (machine.connectionStatus != ConnectionStatus.connected) return;
     if (machine.agentsLoadInFlight != null) {
       return; // a real (foreground) load already owns this tick
     }
     final connection = _conn(machine.machine.machineId);
+    final nameRevision = machine._agentRevision;
     try {
       final response = await connection.request(
         'agents_list',
         timeout: const Duration(seconds: 10),
       );
-      final agents = (response['agents'] as List<dynamic>? ?? [])
-          .map((item) => Agent.fromJson(item as Map<String, dynamic>))
-          .toList();
+      if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) {
+        return;
+      }
+      final agents = _agentSnapshot(
+        machine,
+        (response['agents'] as List<dynamic>? ?? [])
+            .map((item) => Agent.fromJson(item as Map<String, dynamic>))
+            .toList(),
+        nameRevision,
+      );
       if (agentsEqual(machine.agents, agents)) return;
       _replaceAgents(machine, agents);
       notifyListeners();
@@ -3549,63 +3931,266 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String password, {
     void Function(String stage)? onProgress,
-  }) async {
-    if (password.isEmpty) return 'Enter the remote password first';
-    final result = await peerLinks.connect(
-      machineId,
-      password,
-      onProgress: onProgress,
-      displayName: machineStates[machineId]?.machine.displayName,
-    );
-    if (result.error != null) return result.error;
-    final targetId = result.linkedMachineId ?? machineId;
-    final state = machineStates[targetId];
-    if (state != null) {
-      state.needsLink = false;
-      state.agentLoadStatus = AgentLoadStatus.idle;
-      notifyListeners();
-      // The old WsConn closed itself permanently on NO_PEER_LINK — connFor() would otherwise see a
-      // matching endpointKey and hand back that dead connection instead of dialing a fresh one.
-      await _pool?.closeMachine(targetId);
-      _connectMachine(state);
+  }) {
+    final pending = pendingMachineLink(machineId);
+    if (pending != null) return pending;
+    if (password.isEmpty) {
+      return Future.value('Enter the remote password first');
     }
-    return null;
+    if (_disposed) {
+      return Future.value('This connection request is no longer active.');
+    }
+    final attempt = _MachineLinkAttempt(_authRevision);
+    _machineLinks[machineId] = attempt;
+    notifyListeners();
+    unawaited(_connectWithPassword(machineId, password, attempt, onProgress));
+    return attempt.result.future;
+  }
+
+  Future<void> _connectWithPassword(
+    String machineId,
+    String password,
+    _MachineLinkAttempt attempt,
+    void Function(String)? onProgress,
+  ) async {
+    String? error;
+    try {
+      final result = await peerLinks.connect(
+        machineId,
+        password,
+        onProgress: (stage) {
+          if (!_authWorkCurrent(attempt.authRevision)) return;
+          attempt.stage = stage;
+          onProgress?.call(stage);
+          notifyListeners();
+        },
+        displayName: machineStates[machineId]?.machine.displayName,
+      );
+      error = result.error;
+      if (!_authWorkCurrent(attempt.authRevision)) {
+        error ??= 'This connection request is no longer active.';
+        return;
+      }
+      if (error != null) return;
+      final targetId = result.linkedMachineId ?? machineId;
+      final state = machineStates[targetId];
+      if (state != null) {
+        state.needsLink = false;
+        state.agentLoadStatus = AgentLoadStatus.idle;
+        notifyListeners();
+        // NO_PEER_LINK permanently closes the old socket. Dial a fresh one.
+        await _pool?.closeMachine(targetId);
+        if (_authWorkCurrent(attempt.authRevision)) _connectMachine(state);
+      }
+    } catch (_) {
+      error = 'Could not link this machine. Try again.';
+    } finally {
+      if (identical(_machineLinks[machineId], attempt)) {
+        _machineLinks.remove(machineId);
+      }
+      attempt.result.complete(error);
+      if (_authWorkCurrent(attempt.authRevision)) notifyListeners();
+    }
   }
 
   List<LinkedMachine> linkedMachines = [];
   bool linkedMachinesLoading = false;
   String? linkedMachinesError;
+  Future<void>? _linkedMachinesRequest;
+  final _unlinkRequests = <String, Future<String?>>{};
+  _RemotePasswordChange? _remotePasswordChange;
+  int _remotePasswordRevision = 0;
+
+  /// A password change survives closing its prompt. Reopening observes the
+  /// same operation without retaining another copy of the password.
+  Future<RemotePasswordStatus>? get pendingRemotePasswordChange {
+    final change = _remotePasswordChange;
+    return change != null && _authWorkCurrent(change.authRevision)
+        ? change.result.future
+        : null;
+  }
+
+  bool get clearingRemotePassword =>
+      pendingRemotePasswordChange != null && _remotePasswordChange!.clearing;
 
   /// Sets (or replaces) THIS machine's persistent remote password (`harness remote-password
   /// set --stdin --json`) — another machine later connects with `connectWithPassword` using the
   /// same password, no token copy/paste involved.
-  Future<RemotePasswordSetResult> setRemotePassword(String password) =>
-      cliLink.setRemotePassword(password);
+  Future<RemotePasswordSetResult> setRemotePassword(String password) async {
+    final status = await _changeRemotePassword(password);
+    return RemotePasswordSetResult(
+      error: status.error,
+      fingerprint: status.fingerprint,
+    );
+  }
 
   /// Queries THIS machine's remote-password state (`harness remote-password status --json`).
-  Future<RemotePasswordStatus> remotePasswordStatus() =>
-      cliLink.remotePasswordStatus();
+  Future<RemotePasswordStatus> remotePasswordStatus() async {
+    if (pendingRemotePasswordChange case final pending?) return pending;
+    final authRevision = _authRevision;
+    final passwordRevision = _remotePasswordRevision;
+    if (!_authWorkCurrent(authRevision)) {
+      return const RemotePasswordStatus(
+        error: 'This request is no longer active.',
+      );
+    }
+    RemotePasswordStatus result;
+    try {
+      result = await cliLink.remotePasswordStatus();
+    } catch (_) {
+      result = const RemotePasswordStatus(
+        error: 'Could not read this computer’s password status. Try again.',
+      );
+    }
+    if (!_authWorkCurrent(authRevision)) {
+      return const RemotePasswordStatus(
+        error: 'This request is no longer active.',
+      );
+    }
+    // A slow read must not replace a password changed while it was running.
+    if (passwordRevision != _remotePasswordRevision) {
+      return remotePasswordStatus();
+    }
+    return result;
+  }
 
   /// Clears THIS machine's remote password (`harness remote-password clear --json`). Returns null
   /// on success.
-  Future<String?> clearRemotePassword() => cliLink.clearRemotePassword();
+  Future<String?> clearRemotePassword() async =>
+      (await _changeRemotePassword(null)).error;
+
+  Future<RemotePasswordStatus> _changeRemotePassword(String? password) {
+    if (_disposed) {
+      return Future.value(
+        const RemotePasswordStatus(error: 'This request is no longer active.'),
+      );
+    }
+    if (pendingRemotePasswordChange != null) {
+      return Future.value(
+        const RemotePasswordStatus(
+          error: 'A password change is already in progress.',
+        ),
+      );
+    }
+    final change = _RemotePasswordChange(
+      _authRevision,
+      clearing: password == null,
+    );
+    _remotePasswordChange = change;
+    _remotePasswordRevision++;
+    notifyListeners();
+    unawaited(_runRemotePasswordChange(change, password));
+    return change.result.future;
+  }
+
+  Future<void> _runRemotePasswordChange(
+    _RemotePasswordChange change,
+    String? password,
+  ) async {
+    RemotePasswordStatus result;
+    try {
+      if (password == null) {
+        result = RemotePasswordStatus(
+          error: await cliLink.clearRemotePassword(),
+        );
+      } else {
+        final set = await cliLink.setRemotePassword(password);
+        result = RemotePasswordStatus(
+          error: set.error,
+          hasPassword: set.error == null,
+          fingerprint: set.fingerprint,
+          setAt: set.error == null ? DateTime.now() : null,
+        );
+      }
+    } catch (_) {
+      result = RemotePasswordStatus(
+        error: change.clearing
+            ? 'Could not clear the password. Try again.'
+            : 'Could not set the password. Try again.',
+      );
+    }
+    if (!_authWorkCurrent(change.authRevision)) {
+      result = const RemotePasswordStatus(
+        error: 'This request is no longer active.',
+      );
+    }
+    if (identical(_remotePasswordChange, change)) _remotePasswordChange = null;
+    change.result.complete(result);
+    if (_authWorkCurrent(change.authRevision)) notifyListeners();
+  }
 
   /// Refreshes the "machines this one trusts" list (`harness link list`).
-  Future<void> refreshLinkedMachines() async {
+  Future<void> refreshLinkedMachines() {
+    if (_disposed) return Future.value();
+    if (_linkedMachinesRequest case final pending?) return pending;
+    final result = Completer<void>();
+    _linkedMachinesRequest = result.future;
+    unawaited(_loadLinkedMachines(_authRevision, result));
+    return result.future;
+  }
+
+  Future<void> _loadLinkedMachines(int revision, Completer<void> done) async {
     linkedMachinesLoading = true;
     notifyListeners();
-    final result = await peerLinks.list();
-    linkedMachinesLoading = false;
-    linkedMachinesError = result.error;
-    linkedMachines = result.machines;
-    notifyListeners();
+    try {
+      final result = await peerLinks.list();
+      if (!_authWorkCurrent(revision)) return;
+      linkedMachinesError = result.error;
+      if (result.error == null) linkedMachines = result.machines;
+    } catch (_) {
+      if (_authWorkCurrent(revision)) {
+        linkedMachinesError = 'Could not load linked machines. Try again.';
+      }
+    } finally {
+      if (identical(_linkedMachinesRequest, done.future)) {
+        _linkedMachinesRequest = null;
+      }
+      if (_authWorkCurrent(revision)) {
+        linkedMachinesLoading = false;
+        notifyListeners();
+      }
+      done.complete();
+    }
   }
 
   /// Removes a linked machine's trust pin, then refreshes the list. Returns null on success.
-  Future<String?> unlinkMachine(String machineId) async {
-    final error = await peerLinks.unlink(machineId);
-    if (error == null) await refreshLinkedMachines();
-    return error;
+  Future<String?> unlinkMachine(String machineId) {
+    if (_disposed) return Future.value('This request is no longer active.');
+    return _unlinkRequests.putIfAbsent(
+      machineId,
+      () => _unlinkMachine(machineId, _authRevision),
+    );
+  }
+
+  bool unlinkingMachine(String machineId) =>
+      _unlinkRequests.containsKey(machineId);
+
+  Future<String?> _unlinkMachine(String machineId, int revision) async {
+    try {
+      final error = await peerLinks.unlink(machineId);
+      if (!_authWorkCurrent(revision)) {
+        return 'This request is no longer active.';
+      }
+      if (error == null) {
+        // Keep a successful removal visible even if refreshing the CLI list fails.
+        await _linkedMachinesRequest;
+        if (!_authWorkCurrent(revision)) {
+          return 'This request is no longer active.';
+        }
+        linkedMachines = linkedMachines
+            .where((machine) => machine.machineId != machineId)
+            .toList();
+        await refreshLinkedMachines();
+      }
+      return error;
+    } catch (_) {
+      return 'Could not unlink this machine. Try again.';
+    } finally {
+      if (_authWorkCurrent(revision)) {
+        _unlinkRequests.remove(machineId);
+        notifyListeners();
+      }
+    }
   }
 
   Future<void> _pollOfflineMachine(String machineId) async {
@@ -3742,8 +4327,7 @@ class AppNotifier extends ChangeNotifier {
     }
     if (currentUser == null) unawaited(_loadProfile());
     try {
-      await refreshMachines();
-      if (!_authWorkCurrent(revision)) return;
+      if (!await refreshMachines() || !_authWorkCurrent(revision)) return;
       if (!automatic) _lastError = null;
     } catch (error) {
       if (!_authWorkCurrent(revision)) return;
@@ -3963,7 +4547,11 @@ class AppNotifier extends ChangeNotifier {
   /// has one, else whatever the person is looking at. Never guessed past a
   /// named machine: a picker on a remote pane that opened on this computer was
   /// the bug this argument exists to end.
-  Future<void> runLocalModel(BuildContext context, {String? machineId}) async {
+  Future<void> runLocalModel(
+    BuildContext context, {
+    String? machineId,
+    Future<void> Function(String harnessId, String machineId)? onOpenHarness,
+  }) async {
     final machine = machineId != null
         ? machineStates[machineId]
         : _localModelMachine();
@@ -3985,6 +4573,10 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     if (!context.mounted) return;
+    if (onOpenHarness != null) {
+      await onOpenHarness(gridHarness, machineId);
+      return;
+    }
     await openStoreAgent(context, this, gridHarness, machineId);
   }
 
@@ -4000,7 +4592,10 @@ class AppNotifier extends ChangeNotifier {
   /// so a copy opened on a remote machine would be describing that machine's
   /// fleet, not the one in front of the person. Not installed here → the
   /// Store, open on its page, whose Install is the way in.
-  Future<void> manageMachines(BuildContext context) async {
+  Future<void> manageMachines(
+    BuildContext context, {
+    Future<void> Function(String harnessId, String machineId)? onOpenHarness,
+  }) async {
     final machine = _localModelMachine();
     if (machine == null) {
       _lastError = 'Connect a machine before opening Machine Monitor.';
@@ -4015,6 +4610,10 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     if (!context.mounted) return;
+    if (onOpenHarness != null) {
+      await onOpenHarness(machinesHarness, machineId);
+      return;
+    }
     await openStoreAgent(context, this, machinesHarness, machineId);
   }
 
@@ -4154,6 +4753,8 @@ class AppNotifier extends ChangeNotifier {
 
   Future<void> _performMachineDataLoad(MachineState machine) async {
     final revision = _authRevision;
+    final discoveryRevision = machine._discoveryRevision;
+    final nameRevision = machine._agentRevision;
     final hadAgents = machine.agents.isNotEmpty;
     machine.agentsRefreshing = hadAgents;
     if (!hadAgents) machine.agentLoadStatus = AgentLoadStatus.loading;
@@ -4165,7 +4766,9 @@ class AppNotifier extends ChangeNotifier {
     try {
       const inventoryTimeout = Duration(seconds: 10);
       await connection.waitUntilReady(timeout: inventoryTimeout);
-      if (!_machineWorkCurrent(machine, revision)) return;
+      if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) {
+        return;
+      }
       // Keep the inventory's existing total budget, including connection time.
       // Capabilities get their own budget only once the handshake is complete.
       final remaining = inventoryTimeout - deadline.elapsed;
@@ -4176,15 +4779,22 @@ class AppNotifier extends ChangeNotifier {
         machine,
         connection,
         revision,
+        discoveryRevision,
       );
       final response = await connection.request(
         'agents_list',
         timeout: remaining,
       );
-      if (!_machineWorkCurrent(machine, revision)) return;
-      final agents = (response['agents'] as List<dynamic>? ?? [])
-          .map((item) => Agent.fromJson(item as Map<String, dynamic>))
-          .toList();
+      if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) {
+        return;
+      }
+      final agents = _agentSnapshot(
+        machine,
+        (response['agents'] as List<dynamic>? ?? [])
+            .map((item) => Agent.fromJson(item as Map<String, dynamic>))
+            .toList(),
+        nameRevision,
+      );
       _replaceAgents(machine, agents);
       machine.agentLoadStatus = AgentLoadStatus.loaded;
       machine.agentsRefreshing = false;
@@ -4203,7 +4813,9 @@ class AppNotifier extends ChangeNotifier {
       await capabilities;
       return;
     } catch (error) {
-      if (!_machineWorkCurrent(machine, revision)) return;
+      if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) {
+        return;
+      }
       machine.agentsRefreshing = false;
       // A request timing out while the local relay session still nominally reports "connected" means
       // the remote node itself has stopped answering — exactly what a REST-status flip to offline
@@ -4234,7 +4846,7 @@ class AppNotifier extends ChangeNotifier {
       }
       debugPrint('agents_list failed: ${machine.machine.machineId}: $error');
     }
-    if (!_machineWorkCurrent(machine, revision)) return;
+    if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) return;
     // Order matters: a restored tile for THIS machine claims its agent before
     // the first-run convenience gets to look, so the two can never both open.
     _attachPendingPanes(machine);
@@ -4245,6 +4857,36 @@ class AppNotifier extends ChangeNotifier {
   bool _machineWorkCurrent(MachineState machine, int revision) =>
       _authWorkCurrent(revision) &&
       identical(machineStates[machine.machine.machineId], machine);
+
+  bool _machineDiscoveryCurrent(
+    MachineState machine,
+    int auth,
+    int discovery,
+  ) =>
+      _machineWorkCurrent(machine, auth) &&
+      machine._discoveryRevision == discovery;
+
+  /// A new transport must negotiate its own capabilities and inventory. Release
+  /// the old futures immediately; their completions keep their original revision.
+  void _resetMachineDiscovery(MachineState machine) {
+    machine._discoveryRevision++;
+    _offlineRecoveryInFlight.remove(machine.machine.machineId);
+    machine.agentsLoadInFlight = null;
+    machine.terminalCapabilityLoadInFlight = null;
+    machine.agentsRefreshing = false;
+    if (machine.agentLoadStatus == AgentLoadStatus.loading) {
+      machine.agentLoadStatus = machine.agents.isEmpty
+          ? AgentLoadStatus.idle
+          : AgentLoadStatus.loaded;
+    }
+    machine.terminalCapabilityLoaded = false;
+    machine.terminalCapabilityAvailable = false;
+    machine.terminalCapabilityError = null;
+    machine.terminalPasteRawAvailable = false;
+    machine.terminalImagePasteAvailable = false;
+    machine.terminalPasteFileAvailable = false;
+    machine.mediaPreviewAvailable = false;
+  }
 
   /// Whether the app has already opened a terminal on its own.
   ///
@@ -4487,12 +5129,18 @@ class AppNotifier extends ChangeNotifier {
     MachineState machine,
     WsConn connection,
     int revision,
+    int discoveryRevision,
   ) {
     final pending = machine.terminalCapabilityLoadInFlight;
     if (pending != null) return pending;
     late final Future<void> load;
-    load = _readTerminalCapabilities(machine, connection, revision)
-        .whenComplete(() {
+    load =
+        _readTerminalCapabilities(
+          machine,
+          connection,
+          revision,
+          discoveryRevision,
+        ).whenComplete(() {
           if (identical(machine.terminalCapabilityLoadInFlight, load)) {
             machine.terminalCapabilityLoadInFlight = null;
           }
@@ -4505,6 +5153,7 @@ class AppNotifier extends ChangeNotifier {
     MachineState machine,
     WsConn connection,
     int revision,
+    int discoveryRevision,
   ) async {
     try {
       final result = await connection.request(
@@ -4512,7 +5161,9 @@ class AppNotifier extends ChangeNotifier {
         payload: {'protocolVersion': TerminalSession.protocolVersion},
         timeout: const Duration(seconds: 8),
       );
-      if (!_machineWorkCurrent(machine, revision)) return;
+      if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) {
+        return;
+      }
       machine.terminalCapabilityLoaded = true;
       machine.terminalCapabilityAvailable =
           result['protocolVersion'] == TerminalSession.protocolVersion &&
@@ -4531,7 +5182,9 @@ class AppNotifier extends ChangeNotifier {
       machine.mediaPreviewAvailable =
           features is Map && features['mediaPreview'] == true;
     } catch (_) {
-      if (!_machineWorkCurrent(machine, revision)) return;
+      if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) {
+        return;
+      }
       machine.terminalCapabilityLoaded = true;
       machine.terminalCapabilityAvailable = false;
       machine.terminalCapabilityError = 'Could not negotiate terminal protocol';
@@ -4540,7 +5193,7 @@ class AppNotifier extends ChangeNotifier {
       machine.terminalPasteFileAvailable = false;
       machine.mediaPreviewAvailable = false;
     }
-    if (!_machineWorkCurrent(machine, revision)) return;
+    if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) return;
     if (machine.agentLoadStatus != AgentLoadStatus.loading &&
         !machine.agentsRefreshing) {
       _attachPendingPanes(machine);
@@ -4549,11 +5202,85 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  List<Agent> _agentSnapshot(
+    MachineState machine,
+    List<Agent> incoming,
+    int revision,
+  ) {
+    final agents = {
+      for (final agent in incoming)
+        agent.id: _preserveNewerName(machine, agent, revision),
+    };
+    for (final restart in machine._agentRestartRevisions.entries) {
+      if (restart.value <= revision) continue;
+      final current = machine.agents
+          .where((agent) => agent.id == restart.key)
+          .firstOrNull;
+      if (current != null) agents[restart.key] = current;
+    }
+    for (final removal in machine._agentRemovals.entries) {
+      if (removal.value <= revision) continue;
+      final current = machine.agents
+          .where((agent) => agent.id == removal.key)
+          .firstOrNull;
+      if (current == null) {
+        agents.remove(removal.key);
+      } else {
+        // A new incarnation seen after the stop also outranks this old read.
+        agents[removal.key] = current;
+      }
+    }
+    return agents.values.toList();
+  }
+
+  Agent _preserveNewerName(MachineState machine, Agent agent, int revision) {
+    final observed = machine._agentNames[agent.id];
+    return observed != null &&
+            observed.revision > revision &&
+            observed.sessionId == agent.sessionId
+        ? agent.copyWith(name: observed.name)
+        : agent;
+  }
+
+  void _recordAgentName(MachineState machine, Agent agent) {
+    machine._agentNames[agent.id] = (
+      revision: ++machine._agentRevision,
+      sessionId: agent.sessionId,
+      name: agent.name,
+    );
+  }
+
+  void _syncAgentName(MachineState machine, Agent agent) {
+    for (final pane in panesFor(machine.machine.machineId)) {
+      if (pane.agentId == agent.id) {
+        pane.session?.renameAgent(agent.displayName);
+      }
+    }
+    var changed = false;
+    for (final tab in swarms) {
+      if (!tab.nameIsCustom &&
+          tab.titleMachineId == machine.machine.machineId &&
+          tab.titleAgentId == agent.id) {
+        final title = agent.displayName == kUntitledPane
+            ? Swarm.defaultName
+            : agent.displayName;
+        if (tab.name != title) {
+          tab.name = title;
+          changed = true;
+        }
+      }
+    }
+    if (changed) _persistLayout();
+  }
+
   void _replaceAgents(MachineState machine, List<Agent> agents) {
+    final previous = {for (final agent in machine.agents) agent.id: agent};
     final nextIds = agents.map((agent) => agent.id).toSet();
+    machine._agentNames.removeWhere((id, _) => !nextIds.contains(id));
     for (final old in machine.agents.where(
       (agent) => !nextIds.contains(agent.id),
     )) {
+      _agentRenames.remove((machine.machine.machineId, old.id));
       sessionPreviews.removeAgent(machine.machine.machineId, old.id);
     }
     for (final agent in agents) {
@@ -4567,6 +5294,12 @@ class AppNotifier extends ChangeNotifier {
       _cancelTurnActivity(machine.machine.machineId, agentId);
     }
     machine.agents = agents;
+    for (final agent in agents) {
+      if (previous[agent.id]?.name != agent.name) {
+        _recordAgentName(machine, agent);
+      }
+      _syncAgentName(machine, agent);
+    }
     final pending = machine.pendingOfflineAgentId;
     if (pending != null && !nextIds.contains(pending)) {
       machine.pendingOfflineAgentId = null;
@@ -4603,6 +5336,8 @@ class AppNotifier extends ChangeNotifier {
     } else {
       machine.agents = [...machine.agents]..[index] = agent;
     }
+    if (previous?.name != agent.name) _recordAgentName(machine, agent);
+    _syncAgentName(machine, agent);
     sessionPreviews.retainAgent(
       machine.machine.machineId,
       agent.id,
@@ -4643,13 +5378,17 @@ class AppNotifier extends ChangeNotifier {
     final cleanName = name.trim();
     machine.agents = [...machine.agents]
       ..[index] = machine.agents[index].copyWith(name: cleanName);
-    for (final pane in panesFor(machine.machine.machineId)) {
-      if (pane.agentId != agentId) continue;
-      pane.session?.renameAgent(cleanName);
-    }
+    _recordAgentName(machine, machine.agents[index]);
+    _syncAgentName(machine, machine.agents[index]);
   }
 
   Future<void> _removeAgent(MachineState machine, String agentId) async {
+    final stop = _agentStops[(machine.machine.machineId, agentId)];
+    final confirmedStop = stop != null && _agentStopCurrent(stop) ? stop : null;
+    confirmedStop?.confirmed = true;
+    machine._agentRemovals[agentId] = ++machine._agentRevision;
+    _agentRenames.remove((machine.machine.machineId, agentId));
+    machine._agentNames.remove(agentId);
     sessionPreviews.removeAgent(machine.machine.machineId, agentId);
     machine.agents = machine.agents
         .where((agent) => agent.id != agentId)
@@ -4665,20 +5404,32 @@ class AppNotifier extends ChangeNotifier {
     // `terminal_close`, which would be addressed to an agent the machine has
     // already destroyed.
     final machineId = machine.machine.machineId;
+    final closing = <Future<void>>[];
     for (final pane in allPanes.toList()) {
       final owned =
           pane.machineId == machineId &&
           (pane.agentId == agentId ||
               (pane.isWeb && pane.ownerAgentId == agentId));
       if (!owned) continue;
-      await _detachSession(pane, sendClose: false);
       for (final swarm in swarms) {
         swarm.remove(pane);
       }
+      closing.add(_detachSession(pane, sendClose: false));
     }
     _dismissedViewers.remove(_viewerKey(machineId, agentId));
     _persistLayout();
     _announceAppFocus();
+    try {
+      await Future.wait(closing);
+    } catch (failure) {
+      appLog.warn(
+        'agents',
+        'Agent stopped; local view cleanup failed: $failure',
+      );
+    }
+    if (confirmedStop != null && !confirmedStop.result.isCompleted) {
+      confirmedStop.result.complete(null);
+    }
   }
 
   // ── harness viewers ─────────────────────────────────────────────────────────
@@ -5186,6 +5937,7 @@ class AppNotifier extends ChangeNotifier {
     String? swarmId,
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
+    HarnessPlacement? placement,
   }) {
     final creation = attempt ?? AgentCreationAttempt();
     final choices = <String, dynamic>{
@@ -5217,6 +5969,8 @@ class AppNotifier extends ChangeNotifier {
     };
     if (creation._choices != null &&
         (creation._machineId != machineId ||
+            creation._projectFolder?.isGenerated !=
+                projectFolder?.isGenerated ||
             !mapEquals(creation._choices, choices))) {
       return Future.value(
         'Check the original request before changing its choices.',
@@ -5233,6 +5987,7 @@ class AppNotifier extends ChangeNotifier {
       // by name and wins; so does a tab other than the current one. The
       // current tab is what the dialog passes when nothing was chosen.
       if (dsh != null &&
+          placement == null &&
           split == null &&
           (swarmId == null || swarmId == activeSwarmId)) {
         final label = engineIdentity(dsh).label;
@@ -5244,23 +5999,33 @@ class AppNotifier extends ChangeNotifier {
         targetId = activeSwarmId;
       }
       creation._choices = choices;
+      creation._projectFolder = projectFolder;
       creation._machineId = machineId;
       creation._targetId = targetId;
       creation._split = split;
+      creation._placement = placement;
     }
     final work = _createAgentWithReceipt(creation);
     creation._inFlight = work;
     return work.whenComplete(() => creation._inFlight = null);
   }
 
-  String? _creationPlacementError(String targetId, PaneSplitRequest? split) {
+  String? _creationPlacementError(
+    String targetId,
+    PaneSplitRequest? split, {
+    HarnessPlacement? placement,
+  }) {
+    if (placement == HarnessPlacement.newTab) return null;
     if (split != null && !isPaneSplitCurrent(split)) {
       return 'The layout changed. Close this dialog and split the pane again.';
     }
     final target = swarms.where((s) => s.id == targetId).firstOrNull;
     if (target == null) return 'This tab was closed';
+    if (placement != null && (target.isStore || target.isOrchestrator)) {
+      return 'Open a new tab to add a harness.';
+    }
     if (target.panes.length >= maxPanes) {
-      return 'This tab is full. Open a new tab to create a harness.';
+      return 'This tab is full. Open a new tab to start a harness.';
     }
     return null;
   }
@@ -5282,7 +6047,7 @@ class AppNotifier extends ChangeNotifier {
           'Harness needs tmux to start harnesses on $machine. '
               'Install tmux there, then try again.',
         'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
-          'Update the harness CLI on this machine to create a harness',
+          'Update the harness CLI on this machine to start a harness',
         'INVALID_DSH' =>
           'This harness is not installed on $machine. '
               '${detail ?? 'Install it there, then try again.'}',
@@ -5296,13 +6061,28 @@ class AppNotifier extends ChangeNotifier {
         // fix is the same one the other UNSUPPORTED codes ask for.
         'INVALID_ENGINE' =>
           'Update the harness CLI on $machine to open this kind of pane.',
-        _ => 'Create harness failed: ${detail ?? code}',
+        _ => 'Could not start harness: ${detail ?? code}',
       };
+
+  /// A confirmed name collision happens before any process starts. Only then
+  /// may an automatic suggestion advance to another name with a fresh receipt.
+  /// Uncertain replies always keep their original receipt and never retry.
+  Future<String?> _retryGeneratedProject(AgentCreationAttempt creation) {
+    final project = creation._projectFolder!;
+    creation._remoteProjectName = project.nextGeneratedName(
+      creation._remoteProjectName ?? project.folderName!,
+    );
+    creation._projectNameRetries++;
+    creation._id = _newCreationId();
+    creation._awaitingConfirmation = false;
+    return _createAgentWithReceipt(creation);
+  }
 
   Future<String?> _createAgentWithReceipt(AgentCreationAttempt creation) async {
     final machineId = creation._machineId!;
-    final targetId = creation._targetId!;
+    var targetId = creation._targetId!;
     final split = creation._split;
+    final placement = creation._placement;
     final choices = creation._choices!;
     final machine = machineStates[machineId];
     if (machine == null) return 'Machine not found';
@@ -5310,7 +6090,11 @@ class AppNotifier extends ChangeNotifier {
     // A status check must remain possible even if the destination closed or a
     // capability probe changed while the first create was already in flight.
     if (!creation.awaitingConfirmation) {
-      final placementError = _creationPlacementError(targetId, split);
+      final placementError = _creationPlacementError(
+        targetId,
+        split,
+        placement: placement,
+      );
       if (placementError != null) return placementError;
       if (choices['codexHome'] != null) {
         if (choices['engine'] != 'codex') {
@@ -5334,9 +6118,16 @@ class AppNotifier extends ChangeNotifier {
         machine.isLocalMachine) {
       try {
         final repository = choices['repositoryUrl'];
-        final project = repository is String
-            ? ProjectFolderRequest.remote(GitHubRepository.parse(repository)!)
-            : const ProjectFolderRequest.newProject();
+        final projectName = choices['projectName'];
+        final project =
+            creation._projectFolder ??
+            (repository is String
+                ? ProjectFolderRequest.remote(
+                    GitHubRepository.parse(repository)!,
+                  )
+                : ProjectFolderRequest.newProject(
+                    name: projectName is String ? projectName : null,
+                  ));
         final dshId = choices['dsh'];
         creation._preparedFolder ??= await prepareLocalProjectFolder(
           project,
@@ -5358,7 +6149,11 @@ class AppNotifier extends ChangeNotifier {
       }
       // Preparation may be slow. Revalidate before starting a process, using
       // the original machine and split rather than the current selection.
-      final placementError = _creationPlacementError(targetId, split);
+      final placementError = _creationPlacementError(
+        targetId,
+        split,
+        placement: placement,
+      );
       if (placementError != null) return creation._complete(placementError);
       if (_disposed ||
           machineStates[machineId] != machine ||
@@ -5370,14 +6165,22 @@ class AppNotifier extends ChangeNotifier {
       launchChoices = Map.of(choices)
         ..remove('projectSource')
         ..remove('repositoryUrl')
+        ..remove('projectName')
         ..['cwd'] = creation._preparedFolder;
     }
+    if (!machine.isLocalMachine && creation._remoteProjectName != null) {
+      launchChoices = {...choices, 'projectName': creation._remoteProjectName};
+    }
+    final canAdvanceProject =
+        !machine.isLocalMachine &&
+        creation._projectFolder?.isGenerated == true &&
+        creation._projectNameRetries < 64;
     final operation = creation.awaitingConfirmation
         ? 'agent_create_status'
         : 'agent_create';
     final unconfirmed =
-        '$machineName has not confirmed the new agent yet. '
-        'Check status before creating another.';
+        '$machineName has not confirmed the new harness yet. '
+        'Check status before starting another.';
     Map<String, dynamic> result;
     creation._awaitingConfirmation = true;
     try {
@@ -5396,12 +6199,17 @@ class AppNotifier extends ChangeNotifier {
         );
       }
     } on WsRequestFailure catch (failure) {
+      if (operation == 'agent_create' &&
+          failure.code == 'PROJECT_EXISTS' &&
+          canAdvanceProject) {
+        return _retryGeneratedProject(creation);
+      }
       if (operation == 'agent_create_status') {
         if (failure.code == 'UNSUPPORTED' ||
             failure.code == 'UNSUPPORTED_ON_REMOTE' ||
             failure.code == 'E2EE_REQUIRED') {
           return '$machineName cannot check this creation. '
-              'Use Find a harness to look for it before creating another.';
+              'Use New Pane (⌘P) to look for it before starting another.';
         }
         return unconfirmed;
       }
@@ -5410,6 +6218,7 @@ class AppNotifier extends ChangeNotifier {
       const refusedBeforeLaunch = {
         'INVALID_PROJECT_SOURCE',
         'INVALID_REPOSITORY',
+        'PROJECT_EXISTS',
         'CWD_NOT_FOUND',
         'INVALID_CWD',
         'INVALID_ENGINE',
@@ -5452,20 +6261,25 @@ class AppNotifier extends ChangeNotifier {
         // receipt-aware version. Missing is not proof that nothing started.
         // Check status stays read-only, even across upgrades and reconnects.
         return '$machineName has no record of this request. '
-            'Use Find a harness to look for it before creating another.';
+            'Use New Pane (⌘P) to look for it before starting another.';
       case 'pending':
-        return '$machineName is still starting your agent. Check again in a moment.';
+        return '$machineName is still starting your harness. Check again in a moment.';
       case 'unconfirmed':
-        return '$machineName could not confirm whether this agent started. '
-            'Use Open Harness to look for it before creating another.';
+        return '$machineName could not confirm whether this harness started. '
+            'Use New Pane to look for it before starting another.';
       case 'unavailable':
         return creation._complete(
-          'This harness was created but is no longer available. '
-          'You can create a new one.',
+          'This harness started but is no longer available. '
+          'You can start a new one.',
         );
       case 'failed':
         final failure = result['failure'];
         if (failure is! Map || failure['code'] is! String) return unconfirmed;
+        if (failure['code'] == 'PROJECT_EXISTS' &&
+            result['preparedFolder'] == null &&
+            canAdvanceProject) {
+          return _retryGeneratedProject(creation);
+        }
         if (result['preparedFolder'] case final String folder
             when folder.isNotEmpty) {
           creation._preparedFolder = folder;
@@ -5504,13 +6318,20 @@ class AppNotifier extends ChangeNotifier {
     }
     harnessStats.onAgentSpawned();
     notifyListeners();
-    if (_creationPlacementError(targetId, split) != null) {
+    if (_creationPlacementError(targetId, split, placement: placement) !=
+        null) {
       _lastError =
-          'The harness was created, but its original tab or layout changed. '
-          'Use Open Harness to find it.';
+          'The harness started, but its original tab or layout changed. '
+          'Use New Pane to find it.';
       _lastErrorRetryable = false;
       notifyListeners();
       return null;
+    }
+    // Do not allocate a tab while the picker, form, or request is pending.
+    // Failed and unconfirmed requests leave the original layout intact.
+    if (placement == HarnessPlacement.newTab) {
+      newSwarm();
+      targetId = activeSwarmId;
     }
     await assignAgentToPane(
       null,
@@ -5518,208 +6339,890 @@ class AppNotifier extends ChangeNotifier {
       agent.id,
       swarmId: targetId,
       split: split,
+      autoTile: placement != null,
     );
     return null;
   }
 
-  /// Renames a machine via `PATCH /api/machines/:machineId` (control-plane REST — the machine's
-  /// `name` is backend-owned, unlike an agent's, which lives on the harness CLI). Returns null on
-  /// success, or an error message to show inline in the caller's dialog.
-  Future<String?> renameMachine(String machineId, String name) async {
-    final state = machineStates[machineId];
-    if (state == null) return 'Machine not found';
-    final trimmed = name.trim();
-    if (trimmed.isEmpty) return 'Name cannot be empty';
-    try {
-      await api.renameMachine(machineId: machineId, name: trimmed);
-    } catch (error) {
-      return 'Rename failed: $error';
-    }
-    state.machine = state.machine.copyWith(name: trimmed);
-    final index = machines.indexWhere((m) => m.machineId == machineId);
-    if (index != -1) machines[index] = state.machine;
-    notifyListeners();
-    return null;
+  _MachineEdit? _pendingMachineEdit(String machineId) {
+    final edit = _machineEdits[machineId];
+    return edit != null && _machineWorkCurrent(edit.machine, edit.authRevision)
+        ? edit
+        : null;
   }
 
-  /// Permanently deletes a machine from the account (backend `DELETE /api/machines/:id`) — not to
-  /// be confused with [unlinkMachine], which only drops this computer's local E2EE trust pin and
-  /// leaves the machine itself intact. Returns null on success, or an error message to show inline.
-  Future<String?> deleteMachine(String machineId) async {
-    final state = machineStates[machineId];
-    if (state == null) return 'Machine not found';
-    try {
-      await api.deleteMachine(machineId: machineId);
-    } catch (error) {
-      return 'Delete failed: $error';
+  Future<String?>? pendingMachineRename(String machineId) {
+    final edit = _pendingMachineEdit(machineId);
+    return edit?.name != null ? edit!.result.future : null;
+  }
+
+  String? pendingMachineName(String machineId) =>
+      _pendingMachineEdit(machineId)?.name;
+
+  Future<String?>? pendingMachineDelete(String machineId) {
+    final edit = _pendingMachineEdit(machineId);
+    return edit != null && edit.name == null ? edit.result.future : null;
+  }
+
+  /// Machine names belong to the account. Requests survive their prompt and
+  /// apply only to the machine identity/auth session that initiated them.
+  Future<String?> renameMachine(String machineId, String name) =>
+      _editMachine(machineId, name: name.trim());
+
+  /// Deletes the machine from the account and closes its views in this window.
+  /// This is separate from removing this computer's outgoing trust pin.
+  Future<String?> deleteMachine(String machineId) => _editMachine(machineId);
+
+  Future<String?> _editMachine(String machineId, {String? name}) {
+    if (_disposed) return Future.value('This request is no longer active.');
+    final machine = machineStates[machineId];
+    if (machine == null) return Future.value('Machine not found');
+    if (machine.machine.isShared) {
+      return Future.value('Shared machines are view-only.');
     }
-    // Any tile still showing this machine would otherwise sit forever in the "waiting to answer"
-    // busy state, since the machine can never be found again after this.
-    for (final pane in panesFor(machineId).toList()) {
-      for (final swarm in swarms) {
-        swarm.remove(pane);
+    if (name == null && machine.isLocalMachine) {
+      return Future.value('This computer cannot be deleted here.');
+    }
+    if (name != null && name.isEmpty) {
+      return Future.value('Name cannot be empty');
+    }
+    if (_pendingMachineEdit(machineId) case final edit?) {
+      if (edit.name == name) return edit.result.future;
+      return Future.value('A change to this machine is already in progress.');
+    }
+    if (name == machine.machine.displayName) return Future.value();
+    final edit = _MachineEdit(machine, _authRevision, name);
+    _machineEdits[machineId] = edit;
+    notifyListeners();
+    unawaited(_runMachineEdit(machineId, edit));
+    return edit.result.future;
+  }
+
+  Future<void> _runMachineEdit(String machineId, _MachineEdit edit) async {
+    String? error;
+    try {
+      if (edit.name case final name?) {
+        final savedName = await api.renameMachine(
+          machineId: machineId,
+          name: name,
+        );
+        if (!_machineWorkCurrent(edit.machine, edit.authRevision)) {
+          error = 'The machine changed while saving. Refresh and try again.';
+          return;
+        }
+        edit.machine.machine = edit.machine.machine.copyWith(
+          name: savedName?.trim().isNotEmpty == true ? savedName!.trim() : name,
+        );
+        final index = machines.indexWhere(
+          (machine) => machine.machineId == machineId,
+        );
+        if (index != -1) machines[index] = edit.machine.machine;
+        _confirmedMachineEdits[machineId] = (
+          ++_machineEditRevision,
+          edit.machine.machine.displayName,
+        );
+      } else {
+        await api.deleteMachine(machineId: machineId);
+        if (!_machineWorkCurrent(edit.machine, edit.authRevision)) {
+          error = 'The machine changed while deleting. Refresh to check its status.';
+          return;
+        }
+        final closing = <Future<void>>[];
+        for (final pane in panesFor(machineId).toList()) {
+          for (final swarm in swarms) {
+            swarm.remove(pane);
+          }
+          closing.add(_detachSession(pane, sendClose: true));
+        }
+        _clearMachineActivity(edit.machine);
+        _stopOfflineRetry(machineId);
+        _stopLinkRetry(machineId);
+        _stopAgentSyncTimer(machineId);
+        machineStates.remove(machineId);
+        machines.removeWhere((machine) => machine.machineId == machineId);
+        _confirmedMachineEdits[machineId] = (++_machineEditRevision, null);
+        if (selectedMachineId == machineId) selectedMachineId = null;
+        _persistLayout();
+        if (_pool case final pool?) closing.add(pool.closeMachine(machineId));
+        notifyListeners();
+        // Deletion is committed. A failed stream close must not offer another
+        // destructive account request; sessions still dispose in finally.
+        try {
+          await Future.wait(closing);
+        } catch (failure) {
+          appLog.warn(
+            'machines',
+            'Machine deleted; closing its local views failed: $failure',
+          );
+        }
       }
-      await _detachSession(pane, sendClose: true);
+    } catch (failure) {
+      error = failure is ApiException
+          ? '${edit.name == null ? 'Delete' : 'Rename'} failed: ${failure.message}'
+          : 'Could not ${edit.name == null ? 'delete' : 'rename'} the machine. Try again.';
+    } finally {
+      if (identical(_machineEdits[machineId], edit)) {
+        _machineEdits.remove(machineId);
+      }
+      edit.result.complete(error);
+      if (_authWorkCurrent(edit.authRevision)) notifyListeners();
     }
-    _persistLayout();
-    _stopAgentSyncTimer(machineId);
-    machineStates.remove(machineId);
-    machines.removeWhere((m) => m.machineId == machineId);
-    if (selectedMachineId == machineId) selectedMachineId = null;
-    notifyListeners();
-    return null;
   }
 
-  /// Renames an agent via `agent_update`. Returns null on success, or an error message to show
-  /// inline in the caller's dialog.
-  Future<String?> renameAgent(
-    String machineId,
-    String agentId,
-    String name,
-  ) async {
+  bool _agentRenameCurrent(_AgentRename request) =>
+      identical(
+        _agentRenames[(request.machine.machine.machineId, request.agent.id)],
+        request,
+      ) &&
+      _machineWorkCurrent(request.machine, request.authRevision) &&
+      request.machine.agents.any(
+        (agent) =>
+            agent.id == request.agent.id &&
+            agent.sessionId == request.agent.sessionId,
+      );
+
+  _AgentRename? _pendingAgentRename(String machineId, String agentId) {
+    final request = _agentRenames[(machineId, agentId)];
+    return request != null && _agentRenameCurrent(request) ? request : null;
+  }
+
+  Future<String?>? pendingAgentRename(String machineId, String agentId) =>
+      _pendingAgentRename(machineId, agentId)?.result.future;
+
+  String? pendingAgentName(String machineId, String agentId) =>
+      _pendingAgentRename(machineId, agentId)?.name;
+
+  /// Renames survive their editor. A second view joins the same request and a
+  /// late reply cannot rename a replacement machine or agent session.
+  Future<String?> renameAgent(String machineId, String agentId, String name) {
+    if (_disposed) return Future.value('This request is no longer active.');
     final machine = machineStates[machineId];
-    if (machine == null) return 'Machine not found';
+    if (machine == null) return Future.value('Machine not found');
     final trimmed = name.trim();
-    if (trimmed.isEmpty) return 'Name cannot be empty';
-    Map<String, dynamic> result;
-    try {
-      result = await _conn(
-        machineId,
-      ).request('agent_update', payload: {'agentId': agentId, 'name': trimmed});
-    } catch (error) {
-      return 'Rename failed: $error';
+    if (trimmed.isEmpty) return Future.value('Name cannot be empty');
+    if (machine.machine.isShared) {
+      return Future.value('Shared agents are view-only.');
     }
-    final error = result['error'];
-    if (error is String) return 'Rename failed: $error';
-    _renameAgent(machine, agentId, trimmed);
+    if (pendingAgentStop(machineId, agentId) != null) {
+      return Future.value('The agent is stopping.');
+    }
+    final agent = machine.agents
+        .where((agent) => agent.id == agentId)
+        .firstOrNull;
+    if (agent == null) return Future.value('Agent not found');
+    if (_pendingAgentRename(machineId, agentId) case final pending?) {
+      if (pending.name == trimmed) return pending.result.future;
+      return Future.value('A rename is already in progress for this agent.');
+    }
+    if (agent.name == trimmed) return Future.value();
+    final request = _AgentRename(machine, agent, _authRevision, trimmed);
+    _agentRenames[(machineId, agentId)] = request;
     notifyListeners();
-    return null;
+    unawaited(_runAgentRename(request));
+    return request.result.future;
   }
 
-  /// Stops an agent via the legacy `agent_delete` request, removing its active
-  /// entry while preserving files and saved history. Returns an error on failure.
-  Future<String?> deleteAgent(String machineId, String agentId) async {
-    final machine = machineStates[machineId];
-    if (machine == null) return 'Machine not found';
-    Map<String, dynamic> result;
+  Future<void> _runAgentRename(_AgentRename request) async {
+    String? error;
+    final machineId = request.machine.machine.machineId;
+    final agentId = request.agent.id;
     try {
-      result = await _conn(machineId)
-          .request('agent_delete', payload: {'agentId': agentId});
-    } catch (error) {
-      return 'Stop failed: $error';
+      final result = await _conn(machineId).request(
+        'agent_update',
+        payload: {'agentId': agentId, 'name': request.name},
+      );
+      if (!_agentRenameCurrent(request)) {
+        error = 'The agent changed while saving. Refresh and try again.';
+        return;
+      }
+      if (result['error'] case final String code) {
+        final detail = result['detail'];
+        error =
+            'Rename failed: ${detail is String && detail.isNotEmpty ? detail : code}';
+        return;
+      }
+      final returned = result['agent'];
+      final rawName = returned is Map ? returned['name'] : null;
+      final name = rawName is String && rawName.trim().isNotEmpty
+          ? rawName.trim()
+          : request.name;
+      final observed = request.machine._agentNames[agentId];
+      if (observed != null &&
+          observed.revision > request.nameRevision &&
+          observed.name != name) {
+        error =
+            'The name changed to “${observed.name}” while saving. Check it before retrying.';
+        return;
+      }
+      _renameAgent(request.machine, agentId, name);
+    } catch (failure) {
+      error = failure is WsRequestTimeout
+          ? 'Could not confirm the rename. Refresh agents to check the name.'
+          : 'Could not rename the agent. Try again.';
+    } finally {
+      if (identical(_agentRenames[(machineId, agentId)], request)) {
+        _agentRenames.remove((machineId, agentId));
+      }
+      request.result.complete(error);
+      if (_authWorkCurrent(request.authRevision)) notifyListeners();
     }
-    final error = result['error'];
-    if (error is String) return 'Stop failed: $error';
-    await _removeAgent(machine, agentId);
-    notifyListeners();
-    return null;
   }
 
-  /// Restarts an agent via `agent_restart` — exits its current engine process and relaunches it
-  /// daemon-side, resuming its session where possible.
+  bool _agentStopCurrent(_AgentStop request) {
+    if (!identical(
+      _agentStops[(request.machine.machine.machineId, request.agent.id)],
+      request,
+    )) {
+      return false;
+    }
+    if (!_machineWorkCurrent(request.machine, request.authRevision)) {
+      return false;
+    }
+    final current = request.machine.agents
+        .where((agent) => agent.id == request.agent.id)
+        .firstOrNull;
+    return request.confirmed ||
+        current == null ||
+        current.sessionId == request.agent.sessionId;
+  }
+
+  Future<String?>? pendingAgentStop(String machineId, String agentId) {
+    final request = _agentStops[(machineId, agentId)];
+    return request != null &&
+            !request.confirmed &&
+            !request.result.isCompleted &&
+            _agentStopCurrent(request)
+        ? request.result.future
+        : null;
+  }
+
+  /// Stops the process through the CLI, retaining project files and history.
+  /// The request outlives its confirmation and is shared by every view.
   ///
-  /// The reply carries the same fresh `Agent` shape `agent_synced` pushes once the new process is
-  /// confirmed, so this upserts from the reply directly — idempotent on `agent.id`, same as
-  /// [createAgent], and safe even if the CLI's own `agent_synced` push for the restart arrives
-  /// separately (fire-and-forget on the CLI side, unordered relative to this reply).
-  Future<RestartAgentResult> restartAgent(
-    String machineId,
-    String agentId,
-  ) async {
+  /// Confirmation prompts use [prepareAgentStop] to retain the identity shown
+  /// when they opened, before the person has confirmed the action.
+  Future<String?> deleteAgent(String machineId, String agentId) {
+    if (_disposed) return Future.value('This request is no longer active.');
     final machine = machineStates[machineId];
-    if (machine == null) {
-      return const RestartAgentResult(error: 'Machine not found');
+    if (machine == null) return Future.value('Machine not found');
+    if (machine.machine.isShared) {
+      return Future.value('Shared agents are view-only.');
     }
-    Map<String, dynamic> result;
-    try {
-      result = await _conn(machineId)
-          .request('agent_restart', payload: {'agentId': agentId});
-    } catch (error) {
-      return RestartAgentResult(error: 'Restart failed: $error');
+    if (pendingAgentStop(machineId, agentId) case final pending?) {
+      return pending;
     }
-    final error = result['error'];
-    if (error is String) {
-      final detail = result['detail'];
-      return RestartAgentResult(
-        error: detail is String ? detail : 'Restart failed: $error',
+    final agent = machine.agents
+        .where((agent) => agent.id == agentId)
+        .firstOrNull;
+    if (agent == null) {
+      return Future.value(
+        'The agent is no longer listed. Refresh to check its status.',
       );
     }
-    final raw = result['agent'];
-    if (raw is Map) {
-      try {
-        _upsertAgent(machine, Agent.fromJson(Map<String, dynamic>.from(raw)));
-        notifyListeners();
-      } catch (_) {
-        // Malformed reply agent — harmless, the CLI's own agent_synced push still lands.
-      }
-    }
-    // Absent (older daemon build) reads as true — assume resumed rather than warn about a fresh
-    // session that may not have happened, since this field is purely additive UI polish.
-    final resumed = result['resumed'];
-    return RestartAgentResult(resumed: resumed is bool ? resumed : true);
+    final request = _AgentStop(machine, agent, _authRevision);
+    machine._agentStopRevisions[agentId] = ++machine._agentRevision;
+    _agentStops[(machineId, agentId)] = request;
+    notifyListeners();
+    unawaited(_runAgentStop(request));
+    return request.result.future;
   }
 
-  /// Forks an agent via `agent_fork`: a second agent that starts with the
-  /// first one's whole history, in the same folder, then goes its own way.
-  ///
-  /// The fork lands beside its source — in the source's tab when that is the
-  /// tab on screen, else in the current tab — and takes focus, because the
-  /// person asked for it a moment ago and is about to give it its job. Same
-  /// upsert-from-reply rule as [restartAgent].
+  /// Captures the confirmation's target without sending a request. A changed
+  /// session, removed/recreated ID, replacement machine, or new login while the
+  /// prompt is open must not turn its Stop button into an action on another agent.
+  Future<String?> Function() prepareAgentStop(
+    String machineId,
+    String agentId,
+  ) {
+    final machine = machineStates[machineId];
+    final agent = machine?.agents
+        .where((agent) => agent.id == agentId)
+        .firstOrNull;
+    final authRevision = _authRevision;
+    final removal = machine?._agentRemovals[agentId];
+    return () {
+      final current = machineStates[machineId]?.agents
+          .where((agent) => agent.id == agentId)
+          .firstOrNull;
+      if (machine == null ||
+          agent == null ||
+          !_machineWorkCurrent(machine, authRevision) ||
+          machine._agentRemovals[agentId] != removal ||
+          current == null ||
+          current.sessionId != agent.sessionId) {
+        return Future.value(
+          'The agent changed. Close this prompt and check it before stopping.',
+        );
+      }
+      return deleteAgent(machineId, agentId);
+    };
+  }
+
+  Future<void> _runAgentStop(_AgentStop request) async {
+    String? error;
+    final machineId = request.machine.machine.machineId;
+    final agentId = request.agent.id;
+    try {
+      final result = await _conn(machineId)
+          .request('agent_delete', payload: {'agentId': agentId});
+      if (request.confirmed) return;
+      if (!_agentStopCurrent(request)) {
+        error =
+            'The agent changed while stopping. Refresh to check its status.';
+        return;
+      }
+      if (result['error'] case final String code) {
+        final detail = result['detail'];
+        error =
+            'Stop failed: ${detail is String && detail.isNotEmpty ? detail : code}';
+        return;
+      }
+      await _removeAgent(request.machine, agentId);
+    } catch (failure) {
+      if (!request.confirmed) {
+        error = failure is WsRequestTimeout
+            ? 'Could not confirm the stop. Refresh agents to check its status.'
+            : 'Could not stop the agent. Try again.';
+      }
+    } finally {
+      if (identical(_agentStops[(machineId, agentId)], request)) {
+        _agentStops.remove((machineId, agentId));
+      }
+      if (!request.result.isCompleted) request.result.complete(error);
+      if (_authWorkCurrent(request.authRevision)) notifyListeners();
+    }
+  }
+
+  bool _restartCurrent(AgentRestartAttempt attempt, {bool beforeSend = false}) {
+    final machine = attempt._machine;
+    final agent = attempt.agent;
+    if (machine == null ||
+        agent == null ||
+        !_machineWorkCurrent(machine, attempt._authRevision) ||
+        machine._agentRemovals[agent.id] != attempt._removal ||
+        machine._agentStopRevisions[agent.id] != attempt._stopRevision) {
+      return false;
+    }
+    final current = machine.agents
+        .where((item) => item.id == agent.id)
+        .firstOrNull;
+    return current != null &&
+        (!beforeSend || current.sessionId == agent.sessionId);
+  }
+
+  AgentRestartAttempt restartAttempt(String machineId, String agentId) {
+    final previous = _agentRestarts[(machineId, agentId)];
+    if (previous != null &&
+        _restartCurrent(
+          previous,
+          beforeSend: !previous.busy && !previous.awaitingConfirmation,
+        )) {
+      return previous;
+    }
+    final machine = machineStates[machineId];
+    return _agentRestarts[(machineId, agentId)] = AgentRestartAttempt._(
+      machine,
+      machine?.agents.where((agent) => agent.id == agentId).firstOrNull,
+      _authRevision,
+    );
+  }
+
+  bool discardRestartAttempt(
+    String machineId,
+    String agentId,
+    AgentRestartAttempt attempt,
+  ) {
+    if (attempt.busy ||
+        !identical(_agentRestarts[(machineId, agentId)], attempt)) {
+      return false;
+    }
+    _agentRestarts.remove((machineId, agentId));
+    return true;
+  }
+
+  /// Restart keeps the agent, every view and the current focus. Only explicit
+  /// new intent can repeat a request whose outcome is still unknown.
+  Future<RestartAgentResult> restartAgent(
+    String machineId,
+    String agentId, {
+    AgentRestartAttempt? attempt,
+  }) {
+    final operation = attempt ?? restartAttempt(machineId, agentId);
+    if (operation.result case final result? when result.error == null) {
+      return Future.value(result);
+    }
+    if (operation.pending case final pending?) return pending;
+    late final Future<RestartAgentResult> request;
+    request = _runAgentRestart(machineId, agentId, operation)
+        .then((result) {
+          operation.result = result;
+          return result;
+        })
+        .whenComplete(() {
+          if (identical(operation._pending, request)) operation._pending = null;
+          if (_authWorkCurrent(operation._authRevision)) notifyListeners();
+        });
+    operation._pending = request;
+    return request;
+  }
+
+  Future<RestartAgentResult> _runAgentRestart(
+    String machineId,
+    String agentId,
+    AgentRestartAttempt attempt,
+  ) async {
+    final machine = attempt._machine;
+    if (machine == null) {
+      return const RestartAgentResult(
+        error: 'Machine not found',
+        retryable: false,
+      );
+    }
+    if (machine.machine.isShared) {
+      return const RestartAgentResult(
+        error: 'Shared agents are view-only.',
+        retryable: false,
+      );
+    }
+    if (pendingAgentStop(machineId, agentId) != null) {
+      return const RestartAgentResult(
+        error: 'The agent is stopping.',
+        retryable: false,
+      );
+    }
+    if (machine.machine.machineId != machineId ||
+        attempt.agent?.id != agentId ||
+        !_restartCurrent(attempt, beforeSend: !attempt.awaitingConfirmation)) {
+      return const RestartAgentResult(
+        error: 'The agent changed. Close this prompt and check it before restarting.',
+        retryable: false,
+      );
+    }
+    final checking = attempt.awaitingConfirmation;
+    if (!checking) {
+      attempt._id = _newCreationId();
+      attempt._startedRevision = machine._agentRevision;
+    }
+    attempt._awaitingConfirmation = true;
+    const unknown = RestartAgentResult(
+      error: 'The restart is not confirmed yet. Check status, or close this prompt to inspect the terminal before restarting again.',
+    );
+    Map<String, dynamic> result;
+    try {
+      result = await _conn(machineId).request(
+        checking ? 'agent_create_status' : 'agent_restart',
+        payload: {'creationId': attempt._id, if (!checking) 'agentId': agentId},
+      );
+    } catch (_) {
+      return unknown;
+    }
+    if (!_restartCurrent(attempt)) {
+      return const RestartAgentResult(
+        error: 'The agent changed while restarting. Check its current status.',
+        retryable: false,
+      );
+    }
+    if ((checking ||
+            result.containsKey('creationId') ||
+            result.containsKey('state')) &&
+        result['creationId'] != attempt._id) {
+      return unknown;
+    }
+    if (result['error'] case final String code) {
+      if (checking ||
+          [
+            'INTERNAL',
+            'CREATION_STORAGE_FAILED',
+            'RESTART_FAILED',
+          ].contains(code)) {
+        return unknown;
+      }
+      attempt._awaitingConfirmation = false;
+      return RestartAgentResult(error: _restartFailure(code, result['detail']));
+    }
+    switch (result['state']) {
+      case 'pending':
+        return const RestartAgentResult(
+          error: 'The machine is still restarting the agent. Check again in a moment.',
+        );
+      case 'missing':
+      case 'unconfirmed':
+        return unknown;
+      case 'unavailable':
+        attempt._awaitingConfirmation = false;
+        return const RestartAgentResult(
+          error: 'The restarted agent is no longer available. Close this prompt and check current agents.',
+          retryable: false,
+        );
+      case 'failed':
+        final failure = result['failure'];
+        if (failure is! Map || failure['code'] is! String) return unknown;
+        attempt._awaitingConfirmation = false;
+        return RestartAgentResult(
+          error: _restartFailure(failure['code'] as String, failure['detail']),
+        );
+      case 'created':
+      case null:
+        break;
+      default:
+        return unknown;
+    }
+    final raw = result['agent'];
+    // Older daemons can acknowledge a restart without an agent projection.
+    if (raw != null || result['state'] == 'created') {
+      if (raw is! Map || raw['id'] != agentId) return unknown;
+      try {
+        var updated = Agent.fromJson(Map<String, dynamic>.from(raw));
+        final current = machine.agents
+            .where((agent) => agent.id == agentId)
+            .first;
+        // A newer observed session wins over the receipt of an older restart.
+        if (current.sessionId == attempt.agent!.sessionId ||
+            current.sessionId == updated.sessionId) {
+          updated = _preserveNewerName(
+            machine,
+            updated,
+            attempt._startedRevision,
+          );
+          final name = machine._agentNames[agentId];
+          if (name != null &&
+              name.revision > attempt._startedRevision &&
+              name.sessionId == current.sessionId) {
+            updated = updated.copyWith(name: name.name);
+          }
+          _upsertAgent(machine, updated);
+        }
+      } catch (_) {
+        return unknown;
+      }
+    } else if (!result.containsKey('resumed')) {
+      return unknown;
+    }
+    machine._agentRestartRevisions[agentId] = ++machine._agentRevision;
+    attempt._awaitingConfirmation = false;
+    if (identical(_agentRestarts[(machineId, agentId)], attempt)) {
+      _agentRestarts.remove((machineId, agentId));
+    }
+    return RestartAgentResult(
+      resumed: result['resumed'] is bool ? result['resumed'] as bool : true,
+    );
+  }
+
+  String _restartFailure(String code, Object? detail) =>
+      detail is String && detail.isNotEmpty
+      ? detail
+      : switch (code) {
+          'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
+            'Update the harness CLI on this machine to restart an agent.',
+          'AGENT_BUSY' => 'Another operation is changing this agent. Wait for it to finish, then retry.',
+          _ => 'Restart failed: $code',
+        };
+
+  bool _forkSourceCurrent(AgentForkAttempt attempt) {
+    final machine = attempt._machine;
+    final source = attempt.source;
+    if (machine == null ||
+        source == null ||
+        !_machineWorkCurrent(machine, attempt._authRevision) ||
+        machine._agentRemovals[source.id] != attempt._removal) {
+      return false;
+    }
+    final current = machine.agents
+        .where((agent) => agent.id == source.id)
+        .firstOrNull;
+    return current != null && current.sessionId == source.sessionId;
+  }
+
+  AgentForkAttempt forkAttempt(
+    String machineId,
+    String agentId, {
+    String name = '',
+    String prompt = '',
+  }) {
+    final existing = _agentForks[(machineId, agentId)];
+    if (existing != null &&
+        (_forkSourceCurrent(existing) ||
+            (existing.locked &&
+                existing._machine != null &&
+                _machineWorkCurrent(
+                  existing._machine,
+                  existing._authRevision,
+                )))) {
+      return existing;
+    }
+    final machine = machineStates[machineId];
+    final source = machine?.agents
+        .where((agent) => agent.id == agentId)
+        .firstOrNull;
+    return _agentForks[(machineId, agentId)] = AgentForkAttempt._(
+      machine,
+      source,
+      _authRevision,
+      machine?._agentRemovals[agentId],
+      name: name,
+      prompt: prompt,
+    );
+  }
+
+  /// Only an explicit New fork action may abandon an unconfirmed receipt.
+  bool discardForkAttempt(
+    String machineId,
+    String agentId,
+    AgentForkAttempt attempt,
+  ) {
+    if (attempt.busy ||
+        !identical(_agentForks[(machineId, agentId)], attempt)) {
+      return false;
+    }
+    _agentForks.remove((machineId, agentId));
+    return true;
+  }
+
+  /// A fork keeps the originating tab and creation receipt while its prompt is
+  /// closed. Reopening joins the request; checking an uncertain result never
+  /// sends a second agent_fork. Old daemons can still return their legacy reply.
   Future<ForkAgentResult> forkAgent(
     String machineId,
     String agentId, {
     String? name,
     String? prompt,
-  }) async {
-    final machine = machineStates[machineId];
+    AgentForkAttempt? attempt,
+  }) {
+    final operation = attempt ?? forkAttempt(machineId, agentId);
+    if (operation.result case final result?
+        when result.error == null && result.agentId != null) {
+      return Future.value(result);
+    }
+    if (operation.locked &&
+        ((name != null && name.trim() != operation.name.trim()) ||
+            (prompt != null && prompt != operation.prompt))) {
+      return Future.value(
+        const ForkAgentResult(
+          error: 'Check the original fork before changing its choices.',
+        ),
+      );
+    }
+    if (operation.pending case final pending?) return pending;
+    if (!operation.awaitingConfirmation) {
+      if (name != null) operation.name = name;
+      if (prompt != null) operation.prompt = prompt;
+    }
+    late final Future<ForkAgentResult> request;
+    request = _runAgentFork(machineId, agentId, operation)
+        .then((result) {
+          operation.result = result;
+          return result;
+        })
+        .whenComplete(() {
+          if (identical(operation._inFlight, request)) {
+            operation._inFlight = null;
+          }
+          if (_authWorkCurrent(operation._authRevision)) notifyListeners();
+        });
+    operation._inFlight = request;
+    return request;
+  }
+
+  Future<ForkAgentResult> _runAgentFork(
+    String machineId,
+    String agentId,
+    AgentForkAttempt attempt,
+  ) async {
+    final machine = attempt._machine;
     if (machine == null) {
       return const ForkAgentResult(error: 'Machine not found');
     }
+    if (machine.machine.machineId != machineId ||
+        attempt.source?.id != agentId) {
+      return const ForkAgentResult(
+        error: 'The source agent is no longer available.',
+      );
+    }
+    if (!_machineWorkCurrent(machine, attempt._authRevision)) {
+      return const ForkAgentResult(
+        error: 'This fork is no longer active. Reopen Fork Agent.',
+      );
+    }
+    if (machine.machine.isShared) {
+      return const ForkAgentResult(error: 'Shared agents are view-only.');
+    }
+    if (!attempt.awaitingConfirmation) {
+      if (!_forkSourceCurrent(attempt)) {
+        return const ForkAgentResult(
+          error: 'The source agent changed. Close this prompt and reopen Fork Agent.',
+        );
+      }
+      if (pendingAgentStop(machineId, agentId) != null) {
+        return const ForkAgentResult(error: 'The source agent is stopping.');
+      }
+      if (attempt.source?.canFork != true) {
+        return const ForkAgentResult(
+          error: 'This agent does not support forking.',
+        );
+      }
+      if (agentIsProcessing(machineId, agentId)) {
+        return const ForkAgentResult(
+          error:
+              'This agent is working. Wait for its turn to finish, then fork.',
+        );
+      }
+      if (attempt.name.characters.length > 80) {
+        return const ForkAgentResult(
+          error: 'Use at most 80 characters for the name.',
+        );
+      }
+      if (attempt.prompt.length > 2000) {
+        return const ForkAgentResult(
+          error: 'Use at most 2000 characters for the first task.',
+        );
+      }
+      attempt._id = _newCreationId();
+      attempt._target = activeSwarm;
+      attempt._focus = focusedPaneId;
+      attempt._startedRevision = machine._agentRevision;
+    }
+    final checking = attempt.awaitingConfirmation;
+    attempt._awaitingConfirmation = true;
+    const unknown = ForkAgentResult(
+      error: 'The fork is not confirmed yet. Check status, or use New Pane to look for it before starting another.',
+    );
     Map<String, dynamic> result;
     try {
       result = await _conn(machineId).request(
-        'agent_fork',
+        checking ? 'agent_create_status' : 'agent_fork',
         payload: {
-          'agentId': agentId,
-          if (name != null && name.trim().isNotEmpty) 'name': name.trim(),
-          if (prompt != null && prompt.trim().isNotEmpty) 'prompt': prompt,
+          'creationId': attempt._id,
+          if (!checking) ...{
+            'agentId': agentId,
+            if (attempt.name.trim().isNotEmpty) 'name': attempt.name.trim(),
+            if (attempt.prompt.trim().isNotEmpty) 'prompt': attempt.prompt,
+          },
         },
       );
-    } catch (error) {
-      return ForkAgentResult(error: 'Fork failed: $error');
+    } catch (_) {
+      return unknown;
     }
-    final error = result['error'];
-    if (error is String) {
-      final detail = result['detail'];
-      return ForkAgentResult(
-        error: detail is String
-            ? detail
-            : switch (error) {
-                'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
-                  'Update the harness CLI on this machine to fork a harness.',
-                'AGENT_BUSY' => 'This harness is in the middle of a turn. Wait for it to finish, then fork.',
-                _ => 'Fork failed: $error',
-              },
+    if (!_machineWorkCurrent(machine, attempt._authRevision)) {
+      return const ForkAgentResult(
+        error: 'The machine changed while forking. Check its agents after reconnecting.',
       );
     }
+    if ((checking ||
+            result.containsKey('creationId') ||
+            result.containsKey('state')) &&
+        result['creationId'] != attempt._id) {
+      return unknown;
+    }
+    if (result['error'] case final String code) {
+      // These are refusals before dispatch, including the legacy fork endpoint.
+      if (checking ||
+          [
+            'INTERNAL',
+            'CREATION_STORAGE_FAILED',
+            'SPAWN_FAILED',
+            'REGISTRATION_FAILED',
+          ].contains(code)) {
+        return unknown;
+      }
+      attempt._awaitingConfirmation = false;
+      return ForkAgentResult(error: _forkFailure(code, result['detail']));
+    }
+    switch (result['state']) {
+      case 'pending':
+        return const ForkAgentResult(
+          error: 'The machine is still starting the fork. Check again in a moment.',
+        );
+      case 'missing':
+      case 'unconfirmed':
+        return unknown;
+      case 'unavailable':
+        attempt._awaitingConfirmation = false;
+        return const ForkAgentResult(
+          error: 'The fork was created but is no longer available. You can start another.',
+        );
+      case 'failed':
+        final failure = result['failure'];
+        if (failure is! Map || failure['code'] is! String) return unknown;
+        attempt._awaitingConfirmation = false;
+        return ForkAgentResult(
+          error: _forkFailure(failure['code'] as String, failure['detail']),
+        );
+      case 'created':
+      case null:
+        break;
+      default:
+        return unknown;
+    }
     final raw = result['agent'];
-    if (raw is! Map) return const ForkAgentResult(error: 'Fork failed');
+    if (raw is! Map ||
+        raw['id'] is! String ||
+        (raw['id'] as String).isEmpty ||
+        raw['id'] == agentId) {
+      return unknown;
+    }
     final Agent fork;
     try {
-      fork = Agent.fromJson(Map<String, dynamic>.from(raw));
+      fork = _preserveNewerName(
+        machine,
+        Agent.fromJson(Map<String, dynamic>.from(raw)),
+        attempt._startedRevision,
+      );
     } catch (_) {
-      return const ForkAgentResult(error: 'Fork failed');
+      return unknown;
+    }
+    attempt._awaitingConfirmation = false;
+    if (identical(_agentForks[(machineId, agentId)], attempt)) {
+      _agentForks.remove((machineId, agentId));
+    }
+    if ((machine._agentRemovals[fork.id] ?? 0) > attempt._startedRevision) {
+      return ForkAgentResult(
+        agentId: fork.id,
+        level: result['level'] == 'handoff' ? 'handoff' : 'native',
+        notice: 'The fork was created but has since stopped. Use New Pane to check current agents.',
+      );
     }
     _upsertAgent(machine, fork);
     notifyListeners();
-    await placeFork(machineId, fork.id, sourceAgentId: agentId);
-    final level = result['level'];
+    var target = attempt._target;
+    final keepFocus = target == activeSwarm && focusedPaneId == attempt._focus;
+    String? notice;
+    if (target == null || !swarms.contains(target)) {
+      notice =
+          'Fork created. Its original tab closed; use New Pane to open it.';
+    } else if (target.panes.length >= maxPanes && !keepFocus) {
+      notice =
+          'Fork created. Its original tab is full; use New Tab to open it.';
+    } else {
+      if (target.panes.length >= maxPanes) {
+        newSwarm(name: fork.name);
+        target = activeSwarm;
+      }
+      await assignAgentToPane(
+        null,
+        machineId,
+        fork.id,
+        swarmId: target.id,
+        autoTile: true,
+        focus: keepFocus,
+      );
+    }
     return ForkAgentResult(
-      level: level is String ? level : 'native',
+      level: result['level'] == 'handoff' ? 'handoff' : 'native',
       agentId: fork.id,
+      notice: notice,
     );
   }
+
+  String _forkFailure(String code, Object? detail) =>
+      detail is String && detail.isNotEmpty
+      ? detail
+      : switch (code) {
+          'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
+            'Update the harness CLI on this machine to fork an agent.',
+          'AGENT_BUSY' =>
+            'This agent is working. Wait for its turn to finish, then fork.',
+          _ => 'Fork failed: $code',
+        };
 
   /// Put a fork on screen beside its source and focus it — the window's half
   /// of a fork asked for here or on the dial (`dial_forked`).
@@ -5780,6 +7283,7 @@ class AppNotifier extends ChangeNotifier {
     machine.nodeOnline = online;
 
     if (!online) {
+      if (wasOnline != false) _resetMachineDiscovery(machine);
       _markSessionsUnreachable(
         machine,
         machine.isLocalMachine
@@ -5790,11 +7294,10 @@ class AppNotifier extends ChangeNotifier {
     } else {
       _stopOfflineRetry(machineId);
       if (wasOnline == false) {
-        for (final pane in panesFor(machineId)) {
-          pane.session?.transportLost(
-            'Harness reconnected; restoring terminal…',
-          );
-        }
+        _markSessionsUnreachable(
+          machine,
+          'Harness reconnected; restoring terminal…',
+        );
       }
       final pending = machine.pendingOfflineAgentId;
       if (pending != null) {
@@ -5816,17 +7319,22 @@ class AppNotifier extends ChangeNotifier {
     String agentId,
   ) async {
     final machineId = machine.machine.machineId;
-    if (!_offlineRecoveryInFlight.add(machineId)) return;
+    if (_offlineRecoveryInFlight.containsKey(machineId)) return;
+    final owner = Object();
+    _offlineRecoveryInFlight[machineId] = owner;
+    final revision = _authRevision;
+    final discoveryRevision = machine._discoveryRevision;
+    bool current() =>
+        _machineDiscoveryCurrent(machine, revision, discoveryRevision) &&
+        machine.nodeOnline == true &&
+        machine.pendingOfflineAgentId == agentId;
     try {
       // E2EE and agents_list can become ready in separate frames after a
       // node restart. Poll briefly instead of racing a single request.
       for (var attempt = 0; attempt < 40; attempt++) {
-        if (_disposed ||
-            machine.nodeOnline != true ||
-            machine.pendingOfflineAgentId != agentId) {
-          return;
-        }
+        if (!current()) return;
         await _loadMachineData(machine, force: true);
+        if (!current()) return;
         final agent = machine.agents.cast<Agent?>().firstWhere(
           (candidate) => candidate?.id == agentId,
           orElse: () => null,
@@ -5852,7 +7360,9 @@ class AppNotifier extends ChangeNotifier {
         await Future<void>.delayed(const Duration(milliseconds: 250));
       }
     } finally {
-      _offlineRecoveryInFlight.remove(machineId);
+      if (identical(_offlineRecoveryInFlight[machineId], owner)) {
+        _offlineRecoveryInFlight.remove(machineId);
+      }
     }
   }
 
@@ -6094,6 +7604,8 @@ class AppNotifier extends ChangeNotifier {
     String agentId, {
     String? swarmId,
     PaneSplitRequest? split,
+    bool autoTile = false,
+    bool focus = true,
   }) async {
     final target = swarms
         .where((s) => s.id == (swarmId ?? activeSwarmId))
@@ -6125,12 +7637,12 @@ class AppNotifier extends ChangeNotifier {
         .where((p) => p.machineId == machineId && p.agentId == agentId)
         .firstOrNull;
     if (paneId == null && existing != null) {
-      if (target == activeSwarm) focusPane(existing.id);
+      if (focus && target == activeSwarm) focusPane(existing.id);
       return;
     }
     final replaced = targetPanes.where((p) => p.id == paneId).firstOrNull;
     if (replaced == shared && shared != null) {
-      if (target == activeSwarm) focusPane(shared.id);
+      if (focus && target == activeSwarm) focusPane(shared.id);
       return;
     }
     if (replaced == null &&
@@ -6160,6 +7672,16 @@ class AppNotifier extends ChangeNotifier {
       pane.sharedOwnerName = machine.machine.ownerName;
     }
     targetPanes.insert(insertion.clamp(0, targetPanes.length), pane);
+    if (autoTile && split == null) {
+      // A new pane reflows the whole tab. Old manual splits and remembered
+      // sizes for this count must not silently override automatic placement.
+      target.presets.remove(targetPanes.length);
+      target.paneSizes.removeWhere(
+        (key, _) => key.startsWith('${targetPanes.length}:'),
+      );
+      target.arranged = null;
+      target.arrangedKey = null;
+    }
     if (split != null) {
       target.pinnedSlots.updateAll(
         (_, slot) => slot >= insertion ? slot + 1 : slot,
@@ -6169,19 +7691,28 @@ class AppNotifier extends ChangeNotifier {
       target.arranged = split.after;
       target.arrangedKey = key;
     }
-    if (firstAgent && target.name == Swarm.defaultName) {
-      target.name = _nextHarnessName();
+    if (firstAgent && !target.nameIsCustom) {
+      final agent = machine.agents
+          .where((agent) => agent.id == agentId)
+          .firstOrNull;
+      target.titleMachineId = machineId;
+      target.titleAgentId = agentId;
+      target.name = agent == null || agent.displayName == kUntitledPane
+          ? Swarm.defaultName
+          : agent.displayName;
     }
     if (replaced != null && !allPanes.contains(replaced)) {
       // Release just the desktop stream. The CLI agent process keeps running.
       unawaited(_detachSession(replaced, sendClose: true));
     }
 
-    target.focusedPaneId = pane.id;
-    target.zoomedPaneId = null;
-    if (target == activeSwarm) selectedMachineId = machineId;
+    if (focus) {
+      target.focusedPaneId = pane.id;
+      target.zoomedPaneId = null;
+      if (target == activeSwarm) selectedMachineId = machineId;
+    }
     _dismissedLinkPrompts.remove(machineId);
-    machine.activeAgentId = agentId;
+    if (focus) machine.activeAgentId = agentId;
     _persistLayout();
     // SAID OUTRIGHT, like every other move.
     //
@@ -6196,7 +7727,7 @@ class AppNotifier extends ChangeNotifier {
     // After _persistLayout, so the daemon has the new tile roster before it is told to move onto it. A
     // duplicate with the inferred one is free: the daemon drops the second against where the dial
     // already is.
-    if (target == activeSwarm) _announceAppFocus();
+    if (focus && target == activeSwarm) _announceAppFocus();
     // The agent may already have a viewer the grid could not show until now,
     // because this tile is what it hangs beside.
     _syncViewerPane(machine, agent);
@@ -6253,7 +7784,7 @@ class AppNotifier extends ChangeNotifier {
     final terminal = TerminalSession(
       machineId: pane.machineId,
       agentId: agent.id,
-      agentName: agent.name,
+      agentName: agent.displayName,
       engineId: agent.engine,
       send: (type, payload) =>
           _conn(pane.machineId).sendTerminalFrame(type, payload),
@@ -6288,8 +7819,11 @@ class AppNotifier extends ChangeNotifier {
     pane.session = null;
     if (terminal == null) return;
     terminal.removeListener(notifyListeners);
-    if (sendClose) await terminal.close();
-    terminal.dispose();
+    try {
+      if (sendClose) await terminal.close();
+    } finally {
+      terminal.dispose();
+    }
   }
 
   /// Take a tile off the grid.
@@ -6309,7 +7843,7 @@ class AppNotifier extends ChangeNotifier {
   /// Focus follows the PANE, not the slot: `focusedPaneId` is an id, so a tile
   /// that was focused stays focused after it moves, which is what the hand that
   /// dragged it expects.
-  void reorderPane(int paneId, int targetPaneId) {
+  void reorderPane(int paneId, int targetPaneId, {bool reveal = false}) {
     if (paneId == targetPaneId) return;
     final from = panes.indexWhere((pane) => pane.id == paneId);
     final to = panes.indexWhere((pane) => pane.id == targetPaneId);
@@ -6323,6 +7857,7 @@ class AppNotifier extends ChangeNotifier {
     // broken while the state was in fact correct.
     if (isPanePinned(panes[to])) _setPin(panes[to], to);
     if (isPanePinned(panes[from])) _setPin(panes[from], from);
+    if (reveal && focusedPaneId == paneId) _paneFocusRequest++;
     _persistLayout();
     notifyListeners();
   }
@@ -6432,7 +7967,7 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// ⇧⌘h j k l — put this pane where its neighbour is, and that one here.
+  /// Shift-Command-arrows put this pane where its neighbour is, and that one here.
   ///
   /// A SWAP, not an insert. vim's `Ctrl-w H/J/K/L` — the capitals this mirrors —
   /// moves a window to the far edge, which needs a tree of splits to mean
@@ -6441,13 +7976,9 @@ class AppNotifier extends ChangeNotifier {
   void movePaneDirection({required int dx, required int dy}) {
     final id = focusedPaneId;
     if (id == null) return;
-    final at = panes.indexWhere((pane) => pane.id == id);
     final to = _neighbour(dx: dx, dy: dy);
-    if (at < 0 || to == null) return;
-    final moved = panes.removeAt(at);
-    panes.insert(to, moved);
-    _persistLayout();
-    notifyListeners();
+    if (to == null) return;
+    reorderPane(id, panes[to].id, reveal: true);
   }
 
   /// The index of the tile in the given direction, or null at the edge.
@@ -6567,7 +8098,7 @@ class AppNotifier extends ChangeNotifier {
     if (from == -1) return;
     final to = from + delta;
     if (to < 0 || to >= panes.length) return;
-    reorderPane(id, panes[to].id);
+    reorderPane(id, panes[to].id, reveal: true);
   }
 
   /// Pin this tile to the slot it is in, or let it go.
@@ -6683,9 +8214,17 @@ class AppNotifier extends ChangeNotifier {
       swarm.zoomedPaneId = null;
     }
     _announceAppFocus();
-    for (final pane in open) {
-      await _detachSession(pane, sendClose: true);
-    }
+    await Future.wait(
+      open.map((pane) async {
+        try {
+          await _detachSession(pane, sendClose: true);
+        } catch (error) {
+          // One disconnected terminal cannot prevent the others, or the saved
+          // account, from being cleared during sign-out.
+          debugPrint('sign-out terminal cleanup failed: $error');
+        }
+      }),
+    );
     if (persist) _persistLayout();
   }
 
@@ -6693,25 +8232,6 @@ class AppNotifier extends ChangeNotifier {
 
   Future<void> flushPaneLayout() =>
       _paneLayout?.flushSwarms() ?? Future<void>.value();
-
-  String _nextHarnessName() {
-    var next = BigInt.one;
-    final names = [
-      for (final swarm in swarms) swarm.name,
-      for (final entry in _closedHistory)
-        if (entry is ClosedSwarm)
-          entry.name
-        else if (entry is ClosedAgent)
-          entry.swarmName,
-    ];
-    for (final name in names) {
-      final match = RegExp(r'^harness-([1-9]\d*)$').firstMatch(name);
-      if (match == null) continue;
-      final number = BigInt.parse(match.group(1)!);
-      if (number >= next) next = number + BigInt.one;
-    }
-    return 'harness-$next';
-  }
 
   void _persistLayout() {
     _draftSwarmReturns.removeWhere((id, _) {
@@ -6750,8 +8270,9 @@ class AppNotifier extends ChangeNotifier {
     if (store == null) return;
     final initialSwarm = activeSwarm;
     final revision = _layoutRevision;
+    final authRevision = _authRevision;
     final saved = await store.loadSwarms();
-    if (_disposed || revision != _layoutRevision) return;
+    if (!_authWorkCurrent(authRevision) || revision != _layoutRevision) return;
     if (saved != null &&
         allPanes.isEmpty &&
         swarms.length == 1 &&
@@ -6774,6 +8295,7 @@ class AppNotifier extends ChangeNotifier {
         final swarm =
             Swarm(
                 id: id,
+                nameIsCustom: raw['nameIsCustom'] == true ? true : null,
                 name:
                     raw['name'] is String &&
                         (raw['name'] as String).trim().isNotEmpty
@@ -6797,6 +8319,11 @@ class AppNotifier extends ChangeNotifier {
               ..orchestratorMachineId = raw['orchestratorMachineId'] is String
                   ? raw['orchestratorMachineId'] as String
                   : null;
+        swarm.titleMachineId = raw['titleMachineId'] as String?;
+        swarm.titleAgentId = raw['titleAgentId'] as String?;
+        swarm.nameIsCustom =
+            raw['nameIsCustom'] == true ||
+            (swarm.titleAgentId == null && swarm.name != Swarm.defaultName);
         for (final item in (raw['panes'] as List).take(maxPanes)) {
           final entry = PaneLayoutEntry.fromJson(item);
           if (entry == null) continue;
@@ -6818,6 +8345,12 @@ class AppNotifier extends ChangeNotifier {
               swarm.pinnedSlots[pane.id] = entry.pinnedSlot!;
             }
           }
+        }
+        if (!swarm.nameIsCustom &&
+            swarm.titleAgentId == null &&
+            swarm.panes.isNotEmpty) {
+          swarm.titleMachineId = swarm.panes.first.machineId;
+          swarm.titleAgentId = swarm.panes.first.agentId;
         }
         int? paneAt(Object? index) =>
             index is int && index >= 0 && index < swarm.panes.length
@@ -6877,14 +8410,14 @@ class AppNotifier extends ChangeNotifier {
     // grid this run has not restored any agents into, so a window that opens
     // empty and is then filled by hand still comes up the shape it was left.
     final legacyPresets = await store.loadPresets();
-    if (_disposed || revision != _layoutRevision) return;
+    if (!_authWorkCurrent(authRevision) || revision != _layoutRevision) return;
     if (allPanes.isNotEmpty ||
         swarms.length != 1 ||
         activeSwarm != initialSwarm) {
       return;
     }
     final entries = await store.load();
-    if (_disposed || revision != _layoutRevision) return;
+    if (!_authWorkCurrent(authRevision) || revision != _layoutRevision) return;
     panePresets.addAll(legacyPresets);
     if (entries.isEmpty) {
       if (panePresets.isNotEmpty) notifyListeners();

@@ -3,7 +3,7 @@
 const storeCategoryDomains = <String, Set<String>>{
   'Coding': {'Code', 'Compute', 'Web'},
   'Design': {'3D', 'CAD', 'Architecture', 'Diagrams', 'Design', 'Original art'},
-  'Engineering': {'PCB', 'Circuits', 'Chips', 'Fabrication', 'Firmware', 'Home automation'},
+  'Engineering': {'PCB', 'Circuits', 'Chips', 'Fabrication', 'Firmware', 'Automation', 'Home automation'},
   'Media': {'Video', 'Math animation', 'Generative media'},
   'Music': {'Music', 'Audio'},
   'Productivity': {'Documents', 'Slides', 'Productivity'},
