@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/widgets/command_row.dart';
 import '../state/app_state.dart';
@@ -41,6 +42,7 @@ class _HarnessJoinGuideScreenState extends State<HarnessJoinGuideScreen> {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final isLocal = widget.machineState.isLocalMachine;
     final content = Center(
       child: ConstrainedBox(
@@ -61,9 +63,8 @@ class _HarnessJoinGuideScreenState extends State<HarnessJoinGuideScreen> {
               const SizedBox(height: 14),
               Text(
                 'Harness is offline',
-                style: TextStyle(
+                style: terminalTextStyle(
                   color: AppColors.text,
-                  fontSize: 18,
                   fontWeight: FontWeight.w700,
                 ),
               ),

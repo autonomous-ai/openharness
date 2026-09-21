@@ -823,7 +823,7 @@ class AppNotifier extends ChangeNotifier {
     await addAgentToSwarm(machineId, agentId, swarmId: activeSwarmId);
   }
 
-  // A New Tab remains temporary until it has content or a custom name.
+  // Tabs created for a pending action stay temporary until they have content.
   // The return destination is session-local; abandoned drafts are never saved.
   final _draftSwarmReturns = <String, String>{};
 
@@ -845,8 +845,8 @@ class AppNotifier extends ChangeNotifier {
     bool newTabPage = false,
   }) {
     name = Swarm.normalizeName(name);
-    // Reuse onboarding for ordinary destinations. Explicit Cmd-T opens a
-    // temporary minimal page, removed when the user cancels or leaves it.
+    // Ordinary destinations can reuse an empty tab. Explicit New Tab always
+    // creates its own tab with the same welcome content.
     if (name == Swarm.defaultName && !newTabPage) {
       final starter = activeSwarm.isEmptyStarter
           ? activeSwarm
@@ -3065,8 +3065,7 @@ class AppNotifier extends ChangeNotifier {
       final updater = _updater;
       final staged = await updater.downloadAndStage(info);
       if (staged == null) {
-        updateError =
-            'Could not download and verify Harness ${info.version}.';
+        updateError = 'Could not download and verify Harness ${info.version}.';
         return false;
       }
       final applied = await updater.applyStaged(staged, selfPid: pid);

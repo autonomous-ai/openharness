@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../state/app_state.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -220,21 +221,16 @@ class _AccountPillState extends State<_AccountPill> {
                       widget.primary,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
+                      style: terminalTextStyle(
                         color: grid.AppPalette.textPrimary,
-                        fontFamily: grid.AppFont.sans,
-                        fontFamilyFallback: grid.AppFont.sansFallback,
-                        fontSize: 13,
                         fontWeight: grid.AppFont.medium,
                       ),
                     ),
                     if (widget.secondary != null)
                       Text(
                         widget.secondary!,
-                        style: TextStyle(
+                        style: terminalTextStyle(
                           color: grid.AppPalette.textFaint,
-                          fontFamily: grid.AppFont.sans,
-                          fontSize: 11,
                           fontWeight: grid.AppFont.medium,
                         ),
                       ),
@@ -288,11 +284,8 @@ class _AccountSummary extends StatelessWidget {
                   // Semibold, not w700: the weight ladder has three steps and
                   // this is the top one. A fourth weight for one line makes it
                   // shout at the rows it is introducing.
-                  style: TextStyle(
+                  style: terminalTextStyle(
                     color: grid.AppPalette.textPrimary,
-                    fontFamily: grid.AppFont.sans,
-                    fontFamilyFallback: grid.AppFont.sansFallback,
-                    fontSize: 13.5,
                     // 1.25, not the 1.2 a row uses: this line has a second line
                     // under it, and a name and its address set solid read as one
                     // block of text rather than as a heading and its subtitle.
@@ -310,11 +303,8 @@ class _AccountSummary extends StatelessWidget {
                       (isLocal ? 'loopback backend' : 'profile unavailable'),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
+                  style: terminalTextStyle(
                     color: grid.AppPalette.textSecondary,
-                    fontFamily: grid.AppFont.sans,
-                    fontFamilyFallback: grid.AppFont.sansFallback,
-                    fontSize: 12,
                     height: 1.25,
                     letterSpacing: grid.AppFont.trackingFor(12),
                   ),
@@ -355,11 +345,10 @@ class _Avatar extends StatelessWidget {
       ),
       child: Text(
         initials,
-        style: TextStyle(
+        style: terminalTextStyle(
           // White on the accent disc — the token pair the palette is built for
           // (5.5:1). The page ink would be near-black in Light and vanish.
           color: Colors.white,
-          fontSize: large ? 12 : 11,
           fontWeight: FontWeight.w700,
         ),
       ),

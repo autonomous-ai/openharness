@@ -1,51 +1,30 @@
+import 'dart:math' as math;
+
+import 'package:harness/terminal/terminal_text.dart';
+
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../theme/app_theme.dart';
 
-/// The measurements one [AppMenuItem] is built from.
-///
-/// TWO sizes exist in this app, deliberately, and the distinction is worth
-/// stating because two sizes is otherwise exactly the drift this file was
-/// written to end:
-///
-///   [compact] — a CONTEXT menu. A short list of actions on the thing you just
-///   right-clicked or pressed ⋯ on: the machine and agent menus, the account
-///   menu. macOS sets these tight, and they are read in a glance.
-///
-///   [roomy] — a PICKER's list. The menu IS the control: it is the only place
-///   the choices are ever shown, it is read down rather than glanced at, and it
-///   is often long enough to scroll. macOS gives a popup button's list more room
-///   than a context menu for the same reason.
-///
-/// A third size would be drift. Reach for one of these two.
+/// Menus share the terminal typography. Compact and roomy variants only
+/// change padding and icon spacing.
 @immutable
 class AppMenuRowMetrics {
-  const AppMenuRowMetrics({
-    required this.fontSize,
-    required this.noteSize,
-    required this.iconSize,
-    required this.padding,
-    required this.extent,
-  });
+  const AppMenuRowMetrics({required this.iconSize, required this.padding});
 
-  final double fontSize;
-  final double noteSize;
+  double get fontSize => terminalFontStore.size;
+  double get noteSize => terminalFontStore.size;
   final double iconSize;
   final EdgeInsets padding;
 
-  /// The height a row of this size actually lays out at.
-  ///
-  /// ⚠️ MEASURED, not derived, and the difference has already cost a bug. Adding
-  /// the paddings up for [compact] gives 33.6; a laid-out row measures 34.0,
-  /// because the line box rounds up to the font's own metrics rather than taking
-  /// `fontSize × height` literally. Over seven rows that 0.4 became 2.8 — enough
-  /// to overflow a panel sized from the arithmetic and hang a scrollbar on it.
-  ///
-  /// `app_select_field_test.dart` measures a real row against this to 0.1, so a
-  /// padding that moves without this moving fails a test rather than quietly
-  /// mis-sizing every panel.
-  final double extent;
+  /// Round line metrics up before adding padding, so panels reserve enough
+  /// room at every supported terminal size. The extra two pixels are the row
+  /// border; app_select_field_test checks the result against actual layout.
+  double get extent =>
+      math.max(iconSize, (fontSize * 1.2).ceilToDouble()) +
+      padding.vertical +
+      2;
 
   /// What a row with a [AppMenuItem.detail] line lays out at instead.
   ///
@@ -54,46 +33,29 @@ class AppMenuRowMetrics {
   /// Stated rather than derived at the call site for the same reason [extent]
   /// is: a panel sized by arithmetic that disagrees with the layout by half a
   /// pixel per row wears a scrollbar it does not need.
-  double get detailExtent => extent + noteSize * 1.25 + 2;
+  double get detailExtent =>
+      math.max(
+        iconSize,
+        (fontSize * 1.2).ceilToDouble() + (noteSize * 1.25).ceilToDouble() + 2,
+      ) +
+      padding.vertical +
+      2;
 
   /// A context menu's row: the macOS control scale.
   static const compact = AppMenuRowMetrics(
-    fontSize: 13,
-    noteSize: 11.5,
     iconSize: 16,
     padding: EdgeInsets.symmetric(horizontal: 9, vertical: 8),
-    extent: 34,
   );
 
-  /// A picker's row — one step up on every axis at once, which is the only way
-  /// to change a platform convention without breaking the proportions inside it.
+  /// A picker's row has more padding, with the same font as a context menu.
   static const roomy = AppMenuRowMetrics(
-    fontSize: 14,
-    noteSize: 12.5,
     iconSize: 18,
     padding: EdgeInsets.symmetric(horizontal: 11, vertical: 10),
-    extent: 40,
   );
 }
 
-/// The height one [AppMenuItem] occupies.
-///
-/// Stated so a caller that has to SIZE a panel — see [AppSelectField] — can do
-/// the arithmetic up front instead of discovering at runtime that its list
-/// overflows by a few pixels and wears a scrollbar for no reason.
-///
-/// ⚠️ MEASURED, not derived, and the difference matters. Adding the paddings up
-///
-///   outer 1 × 2 = 2  ·  inner 8 × 2 = 16  ·  line 13 × 1.2 = 15.6   → 33.6
-///
-/// gives 33.6, which is WRONG: a laid-out row measures 34.0, because the line
-/// box rounds up to the font's own metrics rather than taking `fontSize ×
-/// height` literally. Over seven rows that 0.4 becomes 2.8 — the width of the
-/// mistake that put a scrollbar on the engine picker in the first place.
-///
-/// `app_select_field_test.dart` measures a real row against this to 0.1, so if
-/// a padding moves and this does not, a test says so.
-const double kMenuRowExtent = 34.0;
+/// Shared by menu rows and pickers that reserve space before laying them out.
+double get kMenuRowExtent => AppMenuRowMetrics.compact.extent;
 // (kept as the compact row's extent; see AppMenuRowMetrics.compact.extent)
 
 /// One row in an [AppMenu] panel.
@@ -265,14 +227,8 @@ class _AppMenuItemState extends State<AppMenuItem> {
                         widget.label,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
+                        style: terminalTextStyle(
                           color: widget.danger ? error : AppPalette.textPrimary,
-                          fontFamily:
-                              widget.textStyle?.fontFamily ?? AppFont.sans,
-                          fontFamilyFallback:
-                              widget.textStyle?.fontFamilyFallback ??
-                              AppFont.sansFallback,
-                          fontSize: widget.metrics.fontSize,
                           height: 1.2,
                           fontWeight: widget.selected
                               ? AppFont.semibold
@@ -285,14 +241,8 @@ class _AppMenuItemState extends State<AppMenuItem> {
                           detail,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
+                          style: terminalTextStyle(
                             color: AppPalette.textSecondary,
-                            fontFamily:
-                                widget.textStyle?.fontFamily ?? AppFont.sans,
-                            fontFamilyFallback:
-                                widget.textStyle?.fontFamilyFallback ??
-                                AppFont.sansFallback,
-                            fontSize: widget.metrics.noteSize,
                             height: 1.25,
                           ),
                         ),
@@ -307,14 +257,8 @@ class _AppMenuItemState extends State<AppMenuItem> {
                       widget.note!,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
+                      style: terminalTextStyle(
                         color: AppPalette.textFaint,
-                        fontFamily:
-                            widget.textStyle?.fontFamily ?? AppFont.sans,
-                        fontFamilyFallback:
-                            widget.textStyle?.fontFamilyFallback ??
-                            AppFont.sansFallback,
-                        fontSize: widget.metrics.noteSize,
                         height: 1.2,
                       ),
                     ),

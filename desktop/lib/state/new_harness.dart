@@ -189,7 +189,6 @@ class NewHarnessController extends ChangeNotifier {
     this.split,
     HarnessPlacement? placement,
     this.offersStore = false,
-    this.firstRun = false,
     String? home,
   }) : placement =
            placement ?? (split == null ? HarnessPlacement.currentTab : null),
@@ -256,11 +255,7 @@ class NewHarnessController extends ChangeNotifier {
     );
     // What the machine has is asked when the box opens, as the form does: an
     // engine installed in a terminal a minute ago is otherwise still "missing".
-    if (firstRun) {
-      unawaited(_detectInitialAgent(allowSelection: engine == null));
-    } else {
-      unawaited(app.probeEngines(_machineId, force: true));
-    }
+    unawaited(app.probeEngines(_machineId, force: true));
     unawaited(app.probeDsh(_machineId, force: true));
     unawaited(_ensureHome(_machineId));
     unawaited(_refreshGeneratedProject());
@@ -283,11 +278,8 @@ class NewHarnessController extends ChangeNotifier {
     notifyListeners();
   }
 
-  final bool firstRun;
   final bool _autoProject;
   final DateTime Function() _now;
-  bool detectingAgent = false;
-  bool _agentEdited = false;
   final String? _home;
 
   late String _engine;
@@ -483,29 +475,6 @@ class NewHarnessController extends ChangeNotifier {
 
   String get createLabel => 'Start';
 
-  Future<void> _detectInitialAgent({required bool allowSelection}) async {
-    detectingAgent = true;
-    final machineId = _machineId;
-    await Future.wait([
-      app.agentPreference.load(),
-      app.probeEngines(machineId, force: true),
-    ]);
-    if (_disposed) return;
-    detectingAgent = false;
-    if (allowSelection && !_agentEdited && machineId == _machineId) {
-      final installed = [
-        for (final identity in allEngines)
-          if (_machine?.engines[identity.id]?.installed == true) identity.id,
-      ];
-      final preferred = app.agentPreference.value;
-      final chosen = installed.contains(preferred)
-          ? preferred
-          : installed.firstOrNull ?? (_known(preferred) ? preferred : null);
-      if (chosen != null) _selectEngine(chosen);
-    }
-    _refresh();
-  }
-
   String get agentLabel => labelOf(_engine);
   String labelOf(String id) => currentHarnessName(
     id,
@@ -568,11 +537,6 @@ class NewHarnessController extends ChangeNotifier {
 
   void focusField(NewHarnessField next) {
     if (locked || field == next || !_supportsField(next)) return;
-    // Discovery may finish while somebody edits. Never change their choice
-    // or the rows they are navigating underneath their fingers.
-    if (next == NewHarnessField.agent || next == NewHarnessField.machine) {
-      _agentEdited = true;
-    }
     if (next == NewHarnessField.machine) {
       _machineOrigin = (
         field: field,
@@ -1974,7 +1938,7 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   Future<NewHarnessOutcome> create() async {
-    if (busy || linkingProfile || detectingAgent) {
+    if (busy || linkingProfile) {
       return NewHarnessOutcome.failed;
     }
     if (needsProject && !checking) {

@@ -10,6 +10,8 @@
 /// would filter on a distinction this app does not have.
 library;
 
+import 'package:harness/terminal/terminal_text.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -86,7 +88,7 @@ class _UsageProviderPaneState extends State<UsageProviderPane> {
           Text(
             'Cache reuse rate is cache read tokens / (fresh input + cache read '
             'tokens).',
-            style: TextStyle(fontSize: 11, color: AppPalette.textFaint),
+            style: terminalTextStyle(color: AppPalette.textFaint),
           ),
           const SizedBox(height: 12),
           UsageDailyChart(
@@ -122,6 +124,7 @@ class _Figures extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final totals = report.totals;
     final cards = <Widget>[
       UsageStatCard(
@@ -223,7 +226,7 @@ class _Header extends StatelessWidget {
             scanning
                 ? '${range.label} · Scanning local logs…'
                 : 'All local ${provider.label} usage · ${range.label}',
-            style: TextStyle(fontSize: 11.5, color: AppPalette.textSecondary),
+            style: terminalTextStyle(color: AppPalette.textSecondary),
           ),
         ],
       ),
@@ -279,8 +282,7 @@ class _DisabledCard extends StatelessWidget {
               'Reads the logs the ${provider.label} CLI already keeps on this '
               'computer to show token, model and session figures. Nothing is '
               'read until you switch it on.',
-              style: TextStyle(
-                fontSize: 12.5,
+              style: terminalTextStyle(
                 height: 1.45,
                 color: AppPalette.textSecondary,
               ),
@@ -293,10 +295,7 @@ class _DisabledCard extends StatelessWidget {
               minimumSize: const Size(0, 30),
               padding: const EdgeInsets.symmetric(horizontal: 14),
             ),
-            child: Text(
-              'Enable ${provider.label}',
-              style: const TextStyle(fontSize: 12.5),
-            ),
+            child: Text('Enable ${provider.label}', style: terminalTextStyle()),
           ),
         ],
       ),
@@ -306,9 +305,7 @@ class _DisabledCard extends StatelessWidget {
 
 class _Notice extends StatelessWidget {
   const _Notice({required this.message});
-
   final String message;
-
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
@@ -320,7 +317,7 @@ class _Notice extends StatelessWidget {
       ),
       child: Text(
         message,
-        style: TextStyle(fontSize: 12.5, color: AppPalette.textSecondary),
+        style: terminalTextStyle(color: AppPalette.textSecondary),
       ),
     );
   }

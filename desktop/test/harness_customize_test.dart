@@ -458,7 +458,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Color palette'), findsOneWidget);
       expect(find.byKey(const ValueKey('palette-graphite')), findsOneWidget);
-      expect(find.byKey(const Key('appearance-ui-size-field')), findsOneWidget);
+      expect(find.byKey(const Key('appearance-ui-size-field')), findsNothing);
       expect(tester.takeException(), isNull);
       await _capture(tester, boundary, '${width.toInt()}-appearance');
 

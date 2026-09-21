@@ -98,7 +98,7 @@ void main() {
     }
     await tester.tap(find.byKey(const ValueKey('customize-appearance')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('appearance-ui-size-field')), findsOneWidget);
+    expect(find.byKey(const Key('appearance-ui-size-field')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('customize-terminal')));
     await tester.pumpAndSettle();
     expect(

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../bootstrap/environment_provisioner.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -159,24 +160,19 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
     children: [
       Text(
         eyebrow.toUpperCase(),
-        style: TextStyle(
+        style: terminalTextStyle(
           color: AppColors.accent,
-          fontSize: 11,
           fontWeight: FontWeight.w700,
           letterSpacing: 1.4,
         ),
       ),
       const SizedBox(height: 6),
-      Text(
-        title,
-        style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w600),
-      ),
+      Text(title, style: terminalTextStyle(fontWeight: FontWeight.w600)),
       const SizedBox(height: 8),
       Text(lead, style: TextStyle(color: AppColors.textSoft, height: 1.55)),
       const SizedBox(height: 16),
     ],
   );
-
   Widget _preflight(EnvironmentReadiness state) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
@@ -376,7 +372,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
         'Every dependency is ready. Continue to final verification.',
       );
     }
-    final stacked = MediaQuery.textScalerOf(context).scale(1) > 1.25;
+    final stacked = terminalTextScaleOf(context) > 1.25;
     return _Panel(
       child: Column(
         children: [
@@ -387,19 +383,13 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
                 radius: 14,
                 backgroundColor: AppColors.hover,
                 foregroundColor: AppColors.text,
-                child: Text(
-                  '${index + 1}',
-                  style: const TextStyle(fontSize: 11),
-                ),
+                child: Text('${index + 1}', style: terminalTextStyle()),
               ),
-              title: Text(
-                items[index].title,
-                style: const TextStyle(fontSize: 13),
-              ),
+              title: Text(items[index].title, style: terminalTextStyle()),
               subtitle: stacked
                   ? Text(
                       items[index].detail,
-                      style: TextStyle(color: AppColors.textSoft, fontSize: 11),
+                      style: terminalTextStyle(color: AppColors.textSoft),
                     )
                   : null,
               trailing: stacked
@@ -411,7 +401,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.end,
-                        style: TextStyle(color: AppColors.muted, fontSize: 11),
+                        style: terminalTextStyle(color: AppColors.muted),
                       ),
                     ),
             ),
@@ -438,10 +428,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
               children: [
                 Text(
                   '${index + 1} · ${items[index].title}',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: terminalTextStyle(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 9),
                 CommandRow(
@@ -475,10 +462,10 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
         onExpansionChanged: (open) => setState(() => _detailsOpen = open),
         title: Row(
           children: [
-            const Expanded(
+            Expanded(
               child: Text(
                 'Setup details',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                style: terminalTextStyle(fontWeight: FontWeight.w600),
               ),
             ),
             TextButton.icon(
@@ -499,9 +486,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
               padding: const EdgeInsets.all(14),
               child: SelectableText(
                 diagnostics,
-                style: TextStyle(
-                  fontFamily: AppFonts.mono,
-                  fontSize: 11,
+                style: terminalTextStyle(
                   height: 1.55,
                   color: AppColors.textSoft,
                 ),
@@ -533,17 +518,13 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
               children: [
                 Text(
                   title,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: terminalTextStyle(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   detail,
-                  style: TextStyle(
+                  style: terminalTextStyle(
                     color: AppColors.textSoft,
-                    fontSize: 12,
                     height: 1.45,
                   ),
                 ),
@@ -633,9 +614,8 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
       liveRegion: _copyError != null,
       child: Text(
         _copyError ?? 'Next: sign in and start a harness.',
-        style: TextStyle(
+        style: terminalTextStyle(
           color: _copyError == null ? AppColors.textSoft : AppColors.danger,
-          fontSize: 11,
         ),
       ),
     );
@@ -648,7 +628,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           if (constraints.maxWidth < 600 ||
-              MediaQuery.textScalerOf(context).scale(1) > 1.25) {
+              terminalTextScaleOf(context) > 1.25) {
             return Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -674,17 +654,20 @@ class _Panel extends StatelessWidget {
   const _Panel({required this.child, this.padding = EdgeInsets.zero});
 
   @override
-  Widget build(BuildContext context) => Container(
-    width: double.infinity,
-    padding: padding,
-    clipBehavior: Clip.antiAlias,
-    decoration: BoxDecoration(
-      color: AppColors.surface,
-      border: Border.all(color: AppColors.border),
-      borderRadius: BorderRadius.circular(11),
-    ),
-    child: child,
-  );
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Container(
+      width: double.infinity,
+      padding: padding,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(11),
+      ),
+      child: child,
+    );
+  }
 }
 
 class _CheckSectionLabel extends StatelessWidget {
@@ -692,23 +675,25 @@ class _CheckSectionLabel extends StatelessWidget {
   const _CheckSectionLabel(this.label);
 
   @override
-  Widget build(BuildContext context) => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.fromLTRB(16, 11, 16, 8),
-    decoration: BoxDecoration(
-      color: AppColors.background.withValues(alpha: 0.28),
-      border: Border(bottom: BorderSide(color: AppColors.border)),
-    ),
-    child: Text(
-      label.toUpperCase(),
-      style: TextStyle(
-        color: AppColors.textSoft,
-        fontSize: 10,
-        fontWeight: FontWeight.w700,
-        letterSpacing: 1.1,
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 11, 16, 8),
+      decoration: BoxDecoration(
+        color: AppColors.background.withValues(alpha: 0.28),
+        border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
-    ),
-  );
+      child: Text(
+        label.toUpperCase(),
+        style: terminalTextStyle(
+          color: AppColors.textSoft,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 1.1,
+        ),
+      ),
+    );
+  }
 }
 
 class _CheckRow extends StatelessWidget {
@@ -725,6 +710,7 @@ class _CheckRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final color = switch (status) {
       EnvironmentStepStatus.ready => AppColors.success,
       EnvironmentStepStatus.failed => AppColors.danger,
@@ -765,16 +751,10 @@ class _CheckRow extends StatelessWidget {
               children: [
                 Text(
                   label,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                  ),
+                  style: terminalTextStyle(fontWeight: FontWeight.w500),
                 ),
                 const SizedBox(height: 3),
-                Text(
-                  detail,
-                  style: TextStyle(color: AppColors.muted, fontSize: 11),
-                ),
+                Text(detail, style: terminalTextStyle(color: AppColors.muted)),
               ],
             ),
           ),
@@ -785,7 +765,7 @@ class _CheckRow extends StatelessWidget {
             EnvironmentStepStatus.running => 'Working',
             EnvironmentStepStatus.notApplicable => 'Not applicable',
             _ => checking ? 'Checking' : 'Required',
-          }, style: TextStyle(color: color, fontSize: 11)),
+          }, style: terminalTextStyle(color: color)),
         ],
       ),
     );

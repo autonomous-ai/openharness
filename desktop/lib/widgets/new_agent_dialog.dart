@@ -5,6 +5,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../analytics/analytics.dart';
 import '../state/pane_arrangement.dart';
@@ -782,7 +783,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
           side: BorderSide(color: Colors.white.withValues(alpha: .24)),
         ),
         title: Text(_title),
-        titleTextStyle: boxMonoStyle(size: 12, color: kBoxFaint),
+        titleTextStyle: boxMonoStyle(color: kBoxFaint),
         contentTextStyle: boxMonoStyle(),
         titlePadding: EdgeInsets.fromLTRB(edgePadding, 12, edgePadding, 0),
         contentPadding: EdgeInsets.fromLTRB(edgePadding, 16, edgePadding, 16),
@@ -1005,7 +1006,10 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                     ),
                   ],
                 );
-                final scale = MediaQuery.textScalerOf(context).scale(13) / 13;
+                final scale =
+                    MediaQuery.textScalerOf(context)
+                        .scale(terminalFontStore.size) /
+                    13;
                 final stacked =
                     (_advancedOpen || _confirmationPending) &&
                     constraints.maxWidth < 740 * math.min(1.4, scale);
@@ -1093,11 +1097,11 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                 TextSpan(text: ' $prompt'),
               ],
             ),
-            style: boxMonoStyle(size: 12, color: grid.AppPalette.textSecondary),
+            style: boxMonoStyle(color: grid.AppPalette.textSecondary),
           ),
         ),
         if (helpTopic != null)
-          HarnessHelpLink(topic: helpTopic, textStyle: boxMonoStyle(size: 12)),
+          HarnessHelpLink(topic: helpTopic, textStyle: boxMonoStyle()),
       ],
     ),
   );
@@ -1106,7 +1110,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   /// but never on its width — so the task field, laid out outside the tiles'
   /// LayoutBuilder, can be the same height as they are.
   static double _tileHeight(TextScaler scaler, {required bool compactHeight}) {
-    return math.max(32, scaler.scale(13) * 1.35 + 14);
+    return math.max(32, scaler.scale(terminalFontStore.size) * 1.35 + 14);
   }
 
   Widget _choices() => LayoutBuilder(
@@ -1244,10 +1248,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                   child: Text(
                     'Couldn’t check whether ${_labelOf(_baseEngine(_engine))} is installed. '
                     'You can still try starting the harness.',
-                    style: boxMonoStyle(
-                      size: 12,
-                      color: grid.AppPalette.textSecondary,
-                    ),
+                    style: boxMonoStyle(color: grid.AppPalette.textSecondary),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -1379,7 +1380,8 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
     listenable: _task,
     builder: (context, _) {
       final radius = BorderRadius.circular(2);
-      final line = MediaQuery.textScalerOf(context).scale(13) * 1.35;
+      final line =
+          MediaQuery.textScalerOf(context).scale(terminalFontStore.size) * 1.35;
       final padding = ((minHeight - line) / 2).clamp(6.0, double.infinity);
       final tooLong = _taskTooLong;
       final errorBorder = OutlineInputBorder(
@@ -1470,7 +1472,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
           onPressed: _choicesLocked ? null : _toggleAdvanced,
           style: TextButton.styleFrom(
             foregroundColor: grid.AppPalette.textSecondary,
-            textStyle: boxMonoStyle(size: 12),
+            textStyle: boxMonoStyle(),
             minimumSize: const Size(28, 28),
             padding: const EdgeInsets.all(6),
           ),
@@ -1487,10 +1489,16 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   /// How far the agent may go without asking. The field shows the mode; the menu says what each
   /// one does, since "Accept edits" and "Plan first" mean little on their own.
   Widget _permissionModeField(List<PermissionMode> modes) => SizedBox(
-    width: 156 * math.min(1.8, MediaQuery.textScalerOf(context).scale(13) / 13),
+    width:
+        156 *
+        math.min(
+          1.8,
+          MediaQuery.textScalerOf(context).scale(terminalFontStore.size) / 13,
+        ),
     height: math.max(
       34,
-      MediaQuery.textScalerOf(context).scale(13) * 1.35 + 14,
+      MediaQuery.textScalerOf(context).scale(terminalFontStore.size) * 1.35 +
+          14,
     ),
     child: AppSelectField<String>(
       key: const Key('new-agent-permission-mode'),
@@ -1498,7 +1506,8 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
       radius: 2,
       height: math.max(
         34,
-        MediaQuery.textScalerOf(context).scale(13) * 1.35 + 14,
+        MediaQuery.textScalerOf(context).scale(terminalFontStore.size) * 1.35 +
+            14,
       ),
       menuWidth: 340,
       value: _permissionModeFor(_baseEngine(_engine)),

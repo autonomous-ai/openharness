@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../../theme/app_theme.dart';
 import '../../widgets/scroll_reveal_text.dart';
@@ -221,6 +222,7 @@ class _SidebarRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     const radius = BorderRadius.all(Radius.circular(8));
     // Weight tracks the selection itself, not the transition: it changes the
     // label's metrics, so it wants to happen once, at the start, rather than
@@ -392,17 +394,19 @@ class _RowLabel extends StatelessWidget {
   /// keeps every row's text on the same baseline whatever font falls out of the
   /// fallback chain, and a travelling label that dropped it would jump a pixel
   /// as the pointer landed.
-  static const _strut = StrutStyle(
-    fontSize: 13.5,
+  static StrutStyle get _strut => StrutStyle(
+    fontSize: terminalFontStore.size,
+    fontFamily: terminalFontStore.value.fontFamily,
+    fontFamilyFallback: terminalFontStore.value.fontFamilyFallback,
     height: 1.25,
     forceStrutHeight: true,
   );
 
   @override
   Widget build(BuildContext context) {
-    final style = TextStyle(
+    TerminalFontScope.watch(context);
+    final style = terminalTextStyle(
       color: ink,
-      fontSize: 13.7,
       height: 1.25,
       fontWeight: strong ? AppFont.medium : FontWeight.w400,
     );
@@ -454,6 +458,7 @@ class _RowIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     // A row's icon carries the accent whenever the row stands out — the selected
     // nav item and the emphasized action (New chat) both — so the accent reads
     // as "this is the one", matching the selected row's rail. Everything else
@@ -495,28 +500,31 @@ class _SelectionRail extends StatelessWidget {
   final double select;
 
   @override
-  Widget build(BuildContext context) => Positioned(
-    left: 0,
-    top: 1,
-    bottom: 1,
-    child: Center(
-      child: Transform.translate(
-        offset: Offset(-_railTravel * (1 - select), 0),
-        child: Container(
-          width: _railWidth,
-          height: 18,
-          decoration: BoxDecoration(
-            // Same reason as the icon — a mark on the row, so it takes the
-            // on-surface accent.
-            color: AppPalette.accentOnSurface.withValues(alpha: select),
-            borderRadius: const BorderRadius.horizontal(
-              right: Radius.circular(3),
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Positioned(
+      left: 0,
+      top: 1,
+      bottom: 1,
+      child: Center(
+        child: Transform.translate(
+          offset: Offset(-_railTravel * (1 - select), 0),
+          child: Container(
+            width: _railWidth,
+            height: 18,
+            decoration: BoxDecoration(
+              // Same reason as the icon — a mark on the row, so it takes the
+              // on-surface accent.
+              color: AppPalette.accentOnSurface.withValues(alpha: select),
+              borderRadius: const BorderRadius.horizontal(
+                right: Radius.circular(3),
+              ),
             ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// A quiet section label above a group of [SidebarItem]s ("Chats", "Workspace").
@@ -587,9 +595,8 @@ class _SidebarSectionLabelState extends State<SidebarSectionLabel> {
                 widget.label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
+                style: terminalTextStyle(
                   color: ink,
-                  fontSize: 11.2,
                   fontWeight: AppFont.medium,
                   letterSpacing: 0,
                 ),

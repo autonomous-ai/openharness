@@ -4,6 +4,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/color_palette.dart';
+import '../terminal/terminal_font_store.dart';
 import 'build_identity.dart';
 
 /// Whether this build runs inside a window the app is allowed to manage.
@@ -37,8 +38,12 @@ Future<void> configureDesktopWindow({
   // return before native setup finishes and detach any error from this future.
   await windowManager.waitUntilReadyToShow(options);
   if (Platform.isMacOS) {
-    await const MethodChannel('harness/swarm_tabs')
-        .invokeMethod('configure', {'palette': palette.nativeColors});
+    await const MethodChannel('harness/swarm_tabs').invokeMethod('configure', {
+      'palette': palette.nativeColors,
+      'fontFamily': terminalFontStore.value.fontFamily,
+      'fontSize': terminalFontStore.size,
+      'fontFallbacks': terminalFontStore.value.fontFamilyFallback,
+    });
   }
   // Always open filling the screen (owner, 2026-09-15): the tabs, a viewer
   // beside its terminal and the rail all want the width. The options above

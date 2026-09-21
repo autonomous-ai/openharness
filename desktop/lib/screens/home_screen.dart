@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/desktop_window.dart';
 import '../state/app_state.dart';
@@ -207,6 +208,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final notifier = widget.notifier;
     return ListenableBuilder(
       listenable: notifier,
@@ -698,6 +700,7 @@ class _ResizeHandle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return MouseRegion(
       cursor: SystemMouseCursors.resizeLeftRight,
       child: GestureDetector(
@@ -731,6 +734,7 @@ class _ErrorStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     // Pinned to the window's top edge, where the traffic lights float — so
     // the text starts past them, and the strip drags the window like the rest
     // of that edge.
@@ -748,7 +752,7 @@ class _ErrorStrip extends StatelessWidget {
                 message,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: AppColors.textSoft, fontSize: 10),
+                style: terminalTextStyle(color: AppColors.textSoft),
               ),
             ),
             // A failure already finished (an agent's launch) has nothing left

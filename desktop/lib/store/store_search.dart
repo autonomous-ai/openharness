@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
@@ -39,55 +40,58 @@ class StoreSearch extends StatelessWidget {
   final VoidCallback? onForward;
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, box) {
-      final padding = box.maxWidth < 680 ? 20.0 : 36.0;
-      // A control's height, grown with the text so a scaled label still has air.
-      final height = math.max(
-        grid.AppControl.height,
-        MediaQuery.textScalerOf(context).scale(13) + 18,
-      );
-      return Container(
-        key: const ValueKey('store-search-header'),
-        color: grid.AppPalette.windowBg,
-        padding: EdgeInsets.fromLTRB(padding, 14, padding, 6),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1440),
-            child: SizedBox(
-              height: height,
-              child: CustomMultiChildLayout(
-                delegate: _ToolbarLayout(),
-                children: [
-                  LayoutId(
-                    id: _Slot.history,
-                    child: _History(onBack: onBack, onForward: onForward),
-                  ),
-                  LayoutId(
-                    id: _Slot.search,
-                    child: _Field(
-                      controller: controller,
-                      focusNode: focusNode,
-                      onChanged: onChanged,
-                      autofocus: autofocus,
-                      onClear: onClear,
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return LayoutBuilder(
+      builder: (context, box) {
+        final padding = box.maxWidth < 680 ? 20.0 : 36.0;
+        // A control's height, grown with the text so a scaled label still has air.
+        final height = math.max(
+          grid.AppControl.height,
+          MediaQuery.textScalerOf(context).scale(terminalFontStore.size) + 18,
+        );
+        return Container(
+          key: const ValueKey('store-search-header'),
+          color: grid.AppPalette.windowBg,
+          padding: EdgeInsets.fromLTRB(padding, 14, padding, 6),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1440),
+              child: SizedBox(
+                height: height,
+                child: CustomMultiChildLayout(
+                  delegate: _ToolbarLayout(),
+                  children: [
+                    LayoutId(
+                      id: _Slot.history,
+                      child: _History(onBack: onBack, onForward: onForward),
                     ),
-                  ),
-                  LayoutId(
-                    id: _Slot.create,
-                    child: _CreateHarness(
-                      height: height,
-                      labelled: box.maxWidth >= 520,
+                    LayoutId(
+                      id: _Slot.search,
+                      child: _Field(
+                        controller: controller,
+                        focusNode: focusNode,
+                        onChanged: onChanged,
+                        autofocus: autofocus,
+                        onClear: onClear,
+                      ),
                     ),
-                  ),
-                ],
+                    LayoutId(
+                      id: _Slot.create,
+                      child: _CreateHarness(
+                        height: height,
+                        labelled: box.maxWidth >= 520,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
-        ),
-      );
-    },
-  );
+        );
+      },
+    );
+  }
 }
 
 enum _Slot { history, search, create }
@@ -138,6 +142,7 @@ class _History extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final back = effectiveCommandHint(context, 'navigation.back');
     final forward = effectiveCommandHint(context, 'navigation.forward');
     return Container(
@@ -194,6 +199,7 @@ class _Field extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final shortcut = effectiveCommandHint(context, 'terminal.find');
     return ListenableBuilder(
       listenable: Listenable.merge([focusNode, controller]),
@@ -247,16 +253,14 @@ class _Field extends StatelessWidget {
                       onChanged: onChanged,
                       textInputAction: TextInputAction.search,
                       textAlignVertical: TextAlignVertical.center,
-                      style: TextStyle(
-                        fontSize: 13,
+                      style: terminalTextStyle(
                         color: grid.AppPalette.textPrimary,
                       ),
                       // Bare: the outline around it is this field's border,
                       // so none of the theme's own may draw inside it.
                       decoration: InputDecoration(
                         hintText: 'Search harnesses',
-                        hintStyle: TextStyle(
-                          fontSize: 13,
+                        hintStyle: terminalTextStyle(
                           color: grid.AppPalette.textSecondary,
                         ),
                         isCollapsed: true,
@@ -285,8 +289,7 @@ class _Field extends StatelessWidget {
                       padding: const EdgeInsets.only(right: 5),
                       child: Text(
                         shortcut,
-                        style: TextStyle(
-                          fontSize: 12,
+                        style: terminalTextStyle(
                           color: grid.AppPalette.textFaint,
                         ),
                       ),
@@ -313,34 +316,32 @@ class _CreateHarness extends StatelessWidget {
   final bool labelled;
 
   @override
-  Widget build(BuildContext context) => Tooltip(
-    message: 'Your first harness in ten minutes, on GitHub',
-    child: FilledButton(
-      key: const ValueKey('store-create-harness'),
-      onPressed: () => unawaited(
-        launchUrl(
-          Uri.parse(kCreateHarnessGuide),
-          mode: LaunchMode.externalApplication,
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Tooltip(
+      message: 'Your first harness in ten minutes, on GitHub',
+      child: FilledButton(
+        key: const ValueKey('store-create-harness'),
+        onPressed: () => unawaited(
+          launchUrl(
+            Uri.parse(kCreateHarnessGuide),
+            mode: LaunchMode.externalApplication,
+          ),
         ),
+        style: FilledButton.styleFrom(
+          minimumSize: Size(height, height),
+          padding: EdgeInsets.symmetric(horizontal: labelled ? 14 : 0),
+          backgroundColor: grid.AppPalette.textPrimary,
+          foregroundColor: grid.AppPalette.windowBg,
+          textStyle: terminalTextStyle(fontWeight: FontWeight.w600),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(grid.AppControl.radius),
+          ),
+        ),
+        child: labelled
+            ? const Text('Create Harness')
+            : const Icon(LucideIcons.plus300, size: 16),
       ),
-      style: FilledButton.styleFrom(
-        minimumSize: Size(height, height),
-        padding: EdgeInsets.symmetric(horizontal: labelled ? 14 : 0),
-        backgroundColor: grid.AppPalette.textPrimary,
-        foregroundColor: grid.AppPalette.windowBg,
-        textStyle: TextStyle(
-          fontFamily: grid.AppFont.sans,
-          fontFamilyFallback: grid.AppFont.sansFallback,
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-        ),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(grid.AppControl.radius),
-        ),
-      ),
-      child: labelled
-          ? const Text('Create Harness')
-          : const Icon(LucideIcons.plus300, size: 16),
-    ),
-  );
+    );
+  }
 }

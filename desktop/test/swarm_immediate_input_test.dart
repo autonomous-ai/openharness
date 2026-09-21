@@ -108,13 +108,8 @@ void main() {
               expect(app.swarms, hasLength(2));
               expect(firstInput, isEmpty);
               expect(
-                tester
-                    .widget<TextField>(
-                      find.byKey(const ValueKey('swarm-search-input')),
-                    )
-                    .focusNode!
-                    .hasFocus,
-                isTrue,
+                find.byKey(const ValueKey('swarm-search-input')),
+                findsNothing,
               );
             } else if (action == 'waiting composer') {
               expect(app.focusedPane, same(first));

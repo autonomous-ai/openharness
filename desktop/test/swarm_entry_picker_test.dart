@@ -182,7 +182,7 @@ void main() {
 
     for (final dismissal in ['outside', 'escape']) {
       testWidgets(
-        'New Tab discards its empty draft after $dismissal (native=$native)',
+        'New Tab stays open after dismissing its picker with $dismissal (native=$native)',
         (tester) async {
           final app = createApp();
           final frames = <TerminalBinaryFrame>[];
@@ -193,6 +193,9 @@ void main() {
           await tester.pump();
           expect(app.activeSwarmId, isNot(original));
           expect(app.activeSwarm.isNewTabPage, isTrue);
+          final created = app.activeSwarmId;
+          expect(_results, findsNothing);
+          await chord(tester, LogicalKeyboardKey.keyO);
           expect(_results, findsOneWidget);
           expect(_startInput, findsNothing);
           if (dismissal == 'outside') {
@@ -202,9 +205,11 @@ void main() {
           }
           await tester.pump();
           expect(_results, findsNothing);
-          expect(app.activeSwarmId, original);
-          expect(app.swarms, hasLength(1));
+          expect(app.activeSwarmId, created);
+          expect(app.swarms, hasLength(2));
           expect(app.closedHistory, isEmpty);
+          app.selectSwarm(original);
+          await tester.pump();
           expect(app.focusedPane, same(pane));
           await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
           await tester.pump();

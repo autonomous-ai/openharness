@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 
@@ -232,6 +233,8 @@ class _RelayPainter extends CustomPainter {
   final double t;
   final _DiagramPalette palette;
   final _DiagramLabels labels;
+  final _textStyle = terminalTextStyle(height: 1.0);
+  double _paintScale = 1;
 
   static const Size _design = Size(440, 140);
 
@@ -252,6 +255,8 @@ class _RelayPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final scale = size.width / _design.width;
+    if (scale <= 0) return;
+    _paintScale = scale;
     canvas.save();
     canvas.scale(scale);
 
@@ -353,7 +358,6 @@ class _RelayPainter extends CustomPainter {
     // box rather than a sentence printed across the wires outside it.
     final caption = _layOutText(
       labels.hub,
-      fontSize: 9.5,
       color: palette.faint,
       maxWidth: _hub.width - eyeWidth - gap - padding * 2,
     );
@@ -416,7 +420,6 @@ class _RelayPainter extends CustomPainter {
         canvas,
         labels.nodes[i],
         Offset(r.left + 26, r.center.dy),
-        fontSize: 10.5,
         color: palette.ink,
       );
     }
@@ -542,27 +545,17 @@ class _RelayPainter extends CustomPainter {
   /// font, or the user's chosen family changes.
   TextPainter _layOutText(
     String text, {
-    required double fontSize,
     required Color color,
     double? maxWidth,
   }) {
     return TextPainter(
       text: TextSpan(
         text: text,
-        style: TextStyle(
-          fontFamily: grid.AppFont.sans,
-          fontFamilyFallback: grid.AppFont.sansFallback,
-          fontSize: fontSize,
-          color: color,
-          letterSpacing: grid.AppFont.trackingFor(fontSize),
-          height: 1.0,
-        ),
+        style: _textStyle.copyWith(color: color),
       ),
       textDirection: TextDirection.ltr,
-      // The drawing is scaled as a unit, so text inside it must not also take
-      // the platform's scaler — that would grow the labels past the boxes they
-      // sit in while the boxes stayed put.
-      textScaler: TextScaler.noScaling,
+      // Counteract only the drawing scale; labels retain the terminal size.
+      textScaler: TextScaler.linear(1 / _paintScale),
       maxLines: 1,
       ellipsis: '…',
     )..layout(maxWidth: maxWidth ?? double.infinity);
@@ -572,10 +565,9 @@ class _RelayPainter extends CustomPainter {
     Canvas canvas,
     String text,
     Offset at, {
-    required double fontSize,
     required Color color,
   }) {
-    final painter = _layOutText(text, fontSize: fontSize, color: color);
+    final painter = _layOutText(text, color: color);
     painter.paint(canvas, Offset(at.dx, at.dy - painter.height / 2));
   }
 
@@ -583,7 +575,8 @@ class _RelayPainter extends CustomPainter {
   bool shouldRepaint(covariant _RelayPainter old) =>
       old.t != t ||
       old.palette.accent != palette.accent ||
-      old.palette.isDark != palette.isDark;
+      old.palette.isDark != palette.isDark ||
+      old._textStyle != _textStyle;
 }
 
 /// A left-to-right gradient between two points on the canvas, used to give the

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../../logging/log_file.dart';
 import '../../logging/log_stream.dart';
@@ -115,7 +116,7 @@ class _DebugSectionState extends State<DebugSection> {
                     const SizedBox(height: 10),
                     TextField(
                       controller: _search,
-                      style: const TextStyle(fontSize: 13),
+                      style: terminalTextStyle(),
                       decoration:
                           labeledFieldDecoration(
                             'Search messages, categories, errors',

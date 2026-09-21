@@ -170,7 +170,7 @@ void main() {
   for (final shortcut in [
     LogicalKeyboardKey.keyN,
     LogicalKeyboardKey.keyP,
-    LogicalKeyboardKey.keyT,
+    LogicalKeyboardKey.keyO,
   ]) {
     testWidgets(
       '${shortcut.keyLabel} defaults Open in correctly and lets users change it',
@@ -182,9 +182,7 @@ void main() {
           await key(tester, LogicalKeyboardKey.enter);
         }
         final controller = box(tester);
-        final initial = shortcut == LogicalKeyboardKey.keyT
-            ? HarnessPlacement.newTab
-            : HarnessPlacement.currentTab;
+        const initial = HarnessPlacement.currentTab;
         expect(controller.placement, initial);
         final placement = find.byKey(
           const ValueKey('new-harness-field-placement'),
@@ -312,7 +310,7 @@ void main() {
     'product entry from a pane does not inherit workspace projects or search tasks',
     (tester) async {
       await mount(tester, store: false);
-      await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Review the API',
@@ -419,13 +417,13 @@ void main() {
 
   for (final newTab in [true, false]) {
     testWidgets(
-      'switching to Cmd-${newTab ? 'T' : 'P'} keeps the highlighted existing harness',
+      'switching to Cmd-${newTab ? 'O' : 'P'} keeps the highlighted existing harness',
       (tester) async {
         await mount(tester, store: false);
         final origin = app.activeSwarm;
         await key(
           tester,
-          newTab ? LogicalKeyboardKey.keyP : LogicalKeyboardKey.keyT,
+          newTab ? LogicalKeyboardKey.keyP : LogicalKeyboardKey.keyO,
           cmd: true,
         );
         final search = find.byKey(const ValueKey('swarm-search-input'));
@@ -443,7 +441,7 @@ void main() {
         expect(picker.selected?.agentId, 'a1');
         await key(
           tester,
-          newTab ? LogicalKeyboardKey.keyT : LogicalKeyboardKey.keyP,
+          newTab ? LogicalKeyboardKey.keyO : LogicalKeyboardKey.keyP,
           cmd: true,
         );
         final updated = tester
@@ -453,9 +451,8 @@ void main() {
         expect(updated.selected?.agentId, 'a1');
         await key(tester, LogicalKeyboardKey.enter);
         expect(app.focusedPane?.agentId, 'a1');
-        // Cmd-P operates on the visible tab, including a tab just opened by Cmd-T.
-        expect(app.activeSwarm, isNot(same(origin)));
-        expect(app.swarms.length, 2);
+        expect(app.activeSwarm, same(origin));
+        expect(app.swarms.length, 1);
         expect(connections.values.expand((c) => c.starts), isEmpty);
         await tester.pumpWidget(const SizedBox());
       },
@@ -463,12 +460,12 @@ void main() {
 
     for (final switchDestination in [false, true]) {
       testWidgets(
-        'Cmd-${newTab ? 'T' : 'P'} ${switchDestination ? 'switches destination' : 'repeats'} without losing the search task',
+        'Cmd-${newTab ? 'O' : 'P'} ${switchDestination ? 'switches shortcut' : 'repeats'} without losing the search task',
         (tester) async {
           await mount(tester, store: false);
           final origin = app.activeSwarm;
           final shortcut = newTab
-              ? LogicalKeyboardKey.keyT
+              ? LogicalKeyboardKey.keyO
               : LogicalKeyboardKey.keyP;
           final nextTab = switchDestination ? !newTab : newTab;
           await key(tester, shortcut, cmd: true);
@@ -483,7 +480,7 @@ void main() {
           );
           await key(
             tester,
-            nextTab ? LogicalKeyboardKey.keyT : LogicalKeyboardKey.keyP,
+            nextTab ? LogicalKeyboardKey.keyO : LogicalKeyboardKey.keyP,
             cmd: true,
           );
           final updated = tester.widget<SwarmSearchInput>(
@@ -495,15 +492,12 @@ void main() {
             const TextSelection(baseOffset: 6, extentOffset: 18),
           );
           expect(updated.focusNode.hasFocus, isTrue);
-          expect(find.text(nextTab ? 'New Tab' : 'New Pane'), findsOneWidget);
+          expect(find.text('New Pane'), findsOneWidget);
           expect(app.swarms.first, same(origin));
-          expect(app.swarms.length, newTab || nextTab ? 2 : 1);
+          expect(app.swarms.length, 1);
           await key(tester, LogicalKeyboardKey.enter);
           expect(box(tester).task, 'Check the keyboard workflow');
-          expect(
-            box(tester).placement,
-            nextTab ? HarnessPlacement.newTab : HarnessPlacement.currentTab,
-          );
+          expect(box(tester).placement, HarnessPlacement.currentTab);
           await key(tester, LogicalKeyboardKey.enter);
           expect(
             connections['m']!.starts.single['prompt'],
@@ -512,7 +506,7 @@ void main() {
           connections['m']!.created();
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 200));
-          expect(app.swarms.length, newTab || nextTab ? 2 : 1);
+          expect(app.swarms.length, 1);
           expect(app.focusedPane?.agentId, 'created-1');
           await tester.pumpWidget(const SizedBox());
         },
@@ -520,7 +514,7 @@ void main() {
     }
 
     testWidgets(
-      'Cmd-${newTab ? 'T' : 'P'} keeps drafts separate when the focused source pane changes',
+      'Cmd-${newTab ? 'O' : 'P'} keeps drafts separate when the focused source pane changes',
       (tester) async {
         await mount(tester, store: false);
         final first = app.focusedPane!;
@@ -528,7 +522,7 @@ void main() {
         app.focusPane(first.id);
         await tester.pump();
         final shortcut = newTab
-            ? LogicalKeyboardKey.keyT
+            ? LogicalKeyboardKey.keyO
             : LogicalKeyboardKey.keyP;
         await key(tester, shortcut, cmd: true);
         await key(tester, LogicalKeyboardKey.enter);
@@ -560,12 +554,12 @@ void main() {
     );
 
     testWidgets(
-      'Cmd-${newTab ? 'T' : 'P'} inherits its source and resumes edits into the requested destination',
+      'Cmd-${newTab ? 'O' : 'P'} inherits its source and resumes edits via either open shortcut',
       (tester) async {
         await mount(tester, store: false);
         final origin = app.activeSwarm;
         final shortcut = newTab
-            ? LogicalKeyboardKey.keyT
+            ? LogicalKeyboardKey.keyO
             : LogicalKeyboardKey.keyP;
         await key(tester, shortcut, cmd: true);
         await key(tester, LogicalKeyboardKey.enter);
@@ -574,7 +568,7 @@ void main() {
         expect(draft.machineId, 'm');
         expect(draft.project.folder, '/work/openharness');
         expect(app.swarms.first, same(origin));
-        expect(app.swarms.length, newTab ? 2 : 1);
+        expect(app.swarms.length, 1);
         draft.focusField(NewHarnessField.task);
         await tester.pump();
         await tester.enterText(input, 'Check keyboard focus');
@@ -585,17 +579,14 @@ void main() {
         expect(app.activeSwarm, same(origin));
         await key(
           tester,
-          newTab ? LogicalKeyboardKey.keyP : LogicalKeyboardKey.keyT,
+          newTab ? LogicalKeyboardKey.keyP : LogicalKeyboardKey.keyO,
           cmd: true,
         );
         await key(tester, LogicalKeyboardKey.enter);
         draft = box(tester);
         expect(draft.task, 'Check keyboard focus');
         expect(draft.project.name, 'keyboard-review');
-        expect(
-          draft.placement,
-          newTab ? HarnessPlacement.currentTab : HarnessPlacement.newTab,
-        );
+        expect(draft.placement, HarnessPlacement.currentTab);
         await key(tester, LogicalKeyboardKey.enter);
         final connection = connections['m']!;
         expect(connection.starts, hasLength(1));
@@ -607,7 +598,7 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 200));
         expect(find.byType(NewHarnessBox), findsNothing);
-        expect(app.swarms.length, newTab ? 1 : 2);
+        expect(app.swarms.length, 1);
         expect(app.activeSwarm.panes.last.agentId, 'created-1');
         expect(app.focusedPane?.agentId, 'created-1');
         await tester.pumpWidget(const SizedBox());
@@ -619,7 +610,7 @@ void main() {
     'switching the picker keeps its project scope and Escape goes back',
     (tester) async {
       await mount(tester, store: false);
-      await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
       final search = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(search, '# openharness');
       await key(tester, LogicalKeyboardKey.enter);

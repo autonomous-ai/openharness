@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -86,11 +87,8 @@ class _DeviceRowState extends State<DeviceRow> {
                         children: [
                           Text(
                             'DEVICE',
-                            style: TextStyle(
+                            style: terminalTextStyle(
                               color: grid.AppPalette.textFaint,
-                              fontFamily: grid.AppFont.sans,
-                              fontFamilyFallback: grid.AppFont.sansFallback,
-                              fontSize: 9.5,
                               fontWeight: grid.AppFont.semibold,
                               letterSpacing: 0.7,
                             ),
@@ -118,12 +116,7 @@ class _DeviceRowState extends State<DeviceRow> {
 
   /// The value line, in its three readings.
   Widget _line(DialStatus status, bool invite) {
-    final base = TextStyle(
-      color: grid.AppPalette.textSecondary,
-      fontFamily: grid.AppFont.sans,
-      fontFamilyFallback: grid.AppFont.sansFallback,
-      fontSize: 12.5,
-    );
+    final base = terminalTextStyle(color: grid.AppPalette.textSecondary);
     if (invite) {
       return Text.rich(
         TextSpan(
@@ -185,6 +178,7 @@ class _Dot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final color = live ? grid.AppPalette.online : grid.AppPalette.textFaint;
     return SizedBox(
       width: 32,
@@ -229,10 +223,8 @@ class _DeviceStatusCard extends StatelessWidget {
       builder: (context, _) {
         final status = notifier.dial.status;
         final updating = status.updating;
-        final sub = TextStyle(
+        final sub = terminalTextStyle(
           color: grid.AppPalette.textSecondary,
-          fontFamily: grid.AppFont.sans,
-          fontSize: 12.5,
           height: 1.45,
         );
         return Dialog(
@@ -259,10 +251,8 @@ class _DeviceStatusCard extends StatelessWidget {
                           children: [
                             Text(
                               'Harness device',
-                              style: TextStyle(
+                              style: terminalTextStyle(
                                 color: grid.AppPalette.textPrimary,
-                                fontFamily: grid.AppFont.sans,
-                                fontSize: 15,
                                 fontWeight: grid.AppFont.semibold,
                               ),
                             ),
@@ -318,10 +308,8 @@ class _DeviceStatusCard extends StatelessWidget {
                         updating != null
                             ? 'Keep it plugged in'
                             : 'Settings are on the device',
-                        style: TextStyle(
+                        style: terminalTextStyle(
                           color: grid.AppPalette.textPrimary,
-                          fontFamily: grid.AppFont.sans,
-                          fontSize: 13.5,
                         ),
                       ),
                       const SizedBox(height: 2),
@@ -329,10 +317,8 @@ class _DeviceStatusCard extends StatelessWidget {
                         updating != null
                             ? 'The update goes over the cable and takes about a minute.'
                             : 'Swipe to its last screen: brightness, voice language, reset.',
-                        style: TextStyle(
+                        style: terminalTextStyle(
                           color: grid.AppPalette.textFaint,
-                          fontFamily: grid.AppFont.sans,
-                          fontSize: 11.5,
                           height: 1.4,
                         ),
                       ),
@@ -352,10 +338,8 @@ class _DeviceStatusCard extends StatelessWidget {
                           status.attached
                               ? 'Want one for another desk?'
                               : 'Plug it into this Mac to use it.',
-                          style: TextStyle(
+                          style: terminalTextStyle(
                             color: grid.AppPalette.textFaint,
-                            fontFamily: grid.AppFont.sans,
-                            fontSize: 12,
                           ),
                         ),
                       ),
@@ -368,10 +352,8 @@ class _DeviceStatusCard extends StatelessWidget {
                         ),
                         child: Text(
                           'Get the device →',
-                          style: TextStyle(
+                          style: terminalTextStyle(
                             color: grid.AppPalette.accentOnSurface,
-                            fontFamily: grid.AppFont.sans,
-                            fontSize: 12.5,
                             fontWeight: grid.AppFont.medium,
                           ),
                         ),
@@ -396,6 +378,7 @@ class _Dial extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return Container(
       width: 56,
       height: 56,
