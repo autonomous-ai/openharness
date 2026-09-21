@@ -1618,11 +1618,11 @@ private final class SwarmTabStrip: NSView {
     let occupied = min(available, CGFloat(tabs.count) * width)
     scroll.frame = NSRect(x: leading, y: 0, width: occupied, height: bounds.height)
     document.frame = NSRect(x: 0, y: 0, width: max(occupied, CGFloat(tabs.count) * width), height: bounds.height)
-    // The chips sit 5pt above centre — a little air between the tab row and the
-    // pane titles under it (owner, 2026-09-21; the workspace adds its own 10 below).
+    // Center tab contents on the same row as the traffic lights and toolbar
+    // actions; spacing below the strip belongs to the workspace.
     for (index, tab) in tabs.enumerated() {
       tab.frame = NSRect(x: CGFloat(index) * width, y: 0, width: width, height: bounds.height - 2)
-      tab.contentCenterY = bounds.midY + 5
+      tab.contentCenterY = bounds.midY
     }
     let buttonY = (bounds.height - 28) / 2
     notificationButton.frame = NSRect(x: 0, y: buttonY, width: 28, height: 28)
