@@ -435,15 +435,6 @@ class _StoreTabState extends State<StoreTab> {
               final category = selected != null
                   ? storeCategoryFor(selected)
                   : (_shelf is _Category ? (_shelf as _Category).name : null);
-              final location =
-                  selected?.name ??
-                  switch (_shelf) {
-                    _Discover() => 'Discover',
-                    _Category(:final name) => name,
-                    _Search() => 'Search results',
-                    _All() => 'All harnesses',
-                    _Viewers() => 'Viewers',
-                  };
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -477,12 +468,6 @@ class _StoreTabState extends State<StoreTab> {
                           onClear: _clearSearch,
                           onBack: _canGoBack ? _goBack : null,
                           onForward: _place.forward.isEmpty ? null : _goForward,
-                          onDiscover: () => _show(const _Discover()),
-                          location: location,
-                          category: selected != null ? category : null,
-                          onCategory: category == null
-                              ? null
-                              : () => _show(_Category(category)),
                         ),
                         Expanded(
                           child: PageStorage(

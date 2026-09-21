@@ -87,7 +87,7 @@ class _StoreCategoryState extends State<StoreCategory> {
         final padding = box.maxWidth < 680 ? 20.0 : 36.0;
         return SingleChildScrollView(
           key: ValueKey('store-catalog:$name'),
-          padding: EdgeInsets.fromLTRB(padding, 12, padding, 40),
+          padding: EdgeInsets.fromLTRB(padding, 32, padding, 40),
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 1440),
