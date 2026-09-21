@@ -476,3 +476,25 @@ describe('restoreAgents — terminals', () => {
     expect(h.rows.get('term-1')).toMatchObject({ engine: 'terminal', launch: { state: 'ready' } })
   })
 })
+
+
+it('retains a missing strict-resume pane for explicit Open after daemon restart', async () => {
+  const entry = row({ resumeOnly: true, launch: { state: 'starting' } })
+  const h = harness([entry])
+  h.deps.retainStopped = vi.fn((saved, _paneAlive) => { h.rows.delete(saved.agentId) })
+  const summary = await restoreAgents(h.deps)
+  expect(h.deps.retainStopped).toHaveBeenCalledWith(entry, false)
+  expect(summary.restored).toEqual([])
+  expect(h.paneCreates).toBe(0)
+  expect(h.respawns).toBe(0)
+})
+
+it('archives an engine that exited while the daemon was down without overwriting its shell', async () => {
+  const entry = row()
+  const h = harness([entry], { alivePanes: ['%3'] })
+  h.deps.retainStopped = vi.fn()
+  await restoreAgents(h.deps)
+  expect(h.deps.retainStopped).toHaveBeenCalledWith(entry, true)
+  expect(h.paneCreates).toBe(0)
+  expect(h.respawns).toBe(0)
+})

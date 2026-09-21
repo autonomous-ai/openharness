@@ -43,6 +43,8 @@ export type RestoreLaunchResult = RestoreLaunch | { error: string; detail: strin
 export const GRID_CREDENTIAL_REQUIRED = 'GRID_CREDENTIAL_REQUIRED'
 
 export interface RestoreAgentsDeps {
+  retainStopped?: (entry: RegisteredSession, paneAlive: boolean) => void
+
   registry: {
     list(): RegisteredSession[]
     byAgent(agentId: string): RegisteredSession | undefined
@@ -155,9 +157,15 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
         // reconciler adopts it by process instead of treating it as an unbound route.
         if (!entry.processIdentity) deps.registry.updateProcessIdentity(entry.agentId, engineLive)
       } else if (!isTerminalEngine(entry.engine)) {
-        deps.registry.releaseEngine(entry.agentId)
+        if (deps.retainStopped) deps.retainStopped(entry, true)
+        else deps.registry.releaseEngine(entry.agentId)
         deps.log(`[restore] ${entry.engine} → terminal · agent ${entry.agentId} · its engine exited while the daemon was down`)
       }
+      continue
+    }
+    if (entry.resumeOnly && deps.retainStopped) {
+      deps.retainStopped(entry, false)
+      summary.skipped.push({ agentId: entry.agentId, reason: 'saved conversation awaits explicit Open' })
       continue
     }
     // A terminal whose pane is gone comes back as a terminal — never as the engine that was once

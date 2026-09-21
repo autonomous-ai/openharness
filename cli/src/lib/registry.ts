@@ -1021,7 +1021,7 @@ class Registry {
       existing.cwd = input.cwd ?? existing.cwd
       existing.processIdentity = processIdentity
       existing.active = true
-      if (existing.launch) existing.launch = { state: 'ready' }
+      if (existing.launch && !existing.resumeOnly) existing.launch = { state: 'ready' }
       // Only a successful read speaks: an undefined probe (ps failed, /proc unreadable) keeps whatever
       // the last good one said rather than silently downgrading a gateway agent to a vendor one.
       if (input.gateway !== undefined) existing.gateway = input.gateway
@@ -1176,6 +1176,8 @@ class Registry {
     const entry: RegisteredSession = {
       ...saved,
       resumeOnly: true,
+      boundAt: null,
+      lastHookAt: 0,
       active: true,
       launch: { state: 'starting' },
       processIdentity: null,
@@ -1278,6 +1280,14 @@ class Registry {
 
     const now = Date.now()
     const existing = this.agents.get(agentId)
+    if (existing?.resumeOnly && existing.launch && existing.launch.state !== 'ready') {
+      // A native startup hook, carrying the verified process, must confirm this exact history.
+      if (sessionId !== existing.sessionId) {
+        this.setLaunch(agentId, { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'The agent reported a different conversation. The requested conversation is still saved.' })
+        return null
+      }
+      if (!validProcessIdentity(input.processIdentity)) return null
+    }
     // `isNew` still means "this SESSION id was not bound here before" — a rotation counts as new, which is
     // what makes the caller announce the newly bound session. The agent itself may be long-lived.
     const isNew = !existing || existing.sessionId !== sessionId
@@ -1368,7 +1378,7 @@ class Registry {
       agent: existing?.agent ?? null,
       ...(existing?.bypassPermission ? { bypassPermission: true } : {}),
       ...(existing?.permissionMode ? { permissionMode: existing.permissionMode } : {}),
-      ...(existing?.resumeOnly ? { resumeOnly: true } : {}),
+      ...(existing?.resumeOnly ? { resumeOnly: true, launch: { state: 'ready' as const } } : {}),
       ...(existing?.terminalHost ? { terminalHost: true } : {}),
       processIdentity: validProcessIdentity(input.processIdentity) ? input.processIdentity : existing?.processIdentity ?? null,
       registeredAt: existing?.registeredAt ?? now,
@@ -1489,11 +1499,16 @@ class Registry {
    * pane and its name stay: this is the opposite of dormant, the terminal is live. `terminalHost`
    * is set from here on, since that is what the pane now is.
    */
-  releaseEngine(agentId: string): RegisteredSession | null {
-    const entry = this.agents.get(agentId)
-    if (!entry || isTerminalEngine(entry.engine)) return null
-    this.drop(entry)
+  releaseEngine(agentId: string, separateShell = false): RegisteredSession | null {
+    const original = this.agents.get(agentId)
+    if (!original || (isTerminalEngine(original.engine) && !separateShell)) return null
+    this.drop(original)
+    this.terminalAvailableAgents.delete(agentId)
+    // The archived conversation owns the original Harness ID. Preserve the physical shell under
+    // a new identity, without sending input, stopping processes or claiming its route twice.
+    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
     this.releaseBinding(entry)
+    delete entry.resumeOnly
     entry.engine = 'terminal'
     entry.terminalHost = true
     entry.processIdentity = null

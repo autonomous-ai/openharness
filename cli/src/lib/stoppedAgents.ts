@@ -1,5 +1,6 @@
 /** Stopped work is durable history, separate from the registry of live terminal routes. */
-import { readdirSync } from 'node:fs'
+import { closeSync, constants, fsyncSync, openSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { isTerminalEngine } from '../engines/types.js'
@@ -59,6 +60,40 @@ export class StoppedAgentStore {
     // Herdr-only snapshots omit the legacy alias just like registry persistence.
     if (!snapshot.tmuxPane) delete (snapshot as Partial<RegisteredSession>).tmuxPane
     atomicWriteJson(join(this.directory, `${session.agentId}.json`), { version: 1, session: snapshot })
+  }
+
+  /** Reserve before tmux allocation. A crash between allocation and registry persistence
+   * must not permit a second process under a new request/receipt ID. */
+  beginResume(agentId: string): string | null {
+    if (!SAFE_ID.test(agentId)) throw new Error('Invalid saved harness identity.')
+    secureStateDirectory(dirname(this.directory))
+    secureStateDirectory(this.directory)
+    const file = join(this.directory, `${agentId}.resume`)
+    let fd: number
+    try { fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return null; throw error }
+    const token = randomUUID()
+    try { writeFileSync(fd, JSON.stringify({ token })); fsyncSync(fd) } finally { closeSync(fd) }
+    this.syncDirectory()
+    return token
+  }
+
+  /** Clear only a verified outcome. Unknown allocation/readiness keeps its reservation. */
+  finishResume(agentId: string, token?: string): void {
+    if (!SAFE_ID.test(agentId)) return
+    const file = join(this.directory, `${agentId}.resume`)
+    try {
+      secureStateDirectory(this.directory, false)
+      const marker = JSON.parse(readPrivateStateFile(file, 1024))
+      if (token !== undefined && marker.token !== token) return
+      unlinkSync(file)
+      this.syncDirectory()
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+  }
+
+  private syncDirectory(): void {
+    const fd = openSync(this.directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+    try { fsyncSync(fd) } finally { closeSync(fd) }
   }
 
   /** Suppress archives whose identity or conversation is already running. */

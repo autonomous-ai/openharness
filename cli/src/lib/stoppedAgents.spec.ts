@@ -80,3 +80,32 @@ describe('stopped harness persistence', () => {
     expect(() => store.get(saved.agentId)).toThrow()
   })
 })
+
+
+it('keeps the original identity searchable while preserving the surviving shell route', async () => {
+  const { registry, saved, store } = await fixture()
+  // Use the actual row, as the daemon does after registering its session.
+  Object.assign(registry.byAgent(saved.agentId)!, saved)
+  store.save(saved)
+  const shell = registry.releaseEngine(saved.agentId, true)!
+  expect(shell.agentId).not.toBe(saved.agentId)
+  expect(shell).toMatchObject({ engine: 'terminal', sessionId: '', tmuxPane: '%8', processIdentity: null })
+  expect(registry.byAgent(saved.agentId)).toBeUndefined()
+  expect(registry.bySession(saved.sessionId)).toBeUndefined()
+  expect(store.available(registry.list()).map(row => row.agentId)).toEqual([saved.agentId])
+  const resumed = registry.resumePendingAgent(store.get(saved.agentId)!, [{ backend: 'tmux', paneId: '%99' }])!
+  expect(resumed.agentId).toBe(saved.agentId)
+  expect(registry.byRuntimeTerminal({ backend: 'tmux', paneId: '%8' })?.agentId).toBe(shell.agentId)
+  expect(registry.list()).toHaveLength(2)
+})
+
+it('reserves allocation across daemon restarts and different receipt IDs', async () => {
+  const { store, StoppedAgentStore, saved } = await fixture()
+  const token = store.beginResume(saved.agentId)!
+  const restarted = new StoppedAgentStore(join(directory, 'stopped-agents'))
+  expect(restarted.beginResume(saved.agentId)).toBeNull()
+  restarted.finishResume(saved.agentId, 'someone-else')
+  expect(store.beginResume(saved.agentId)).toBeNull()
+  restarted.finishResume(saved.agentId, token)
+  expect(store.beginResume(saved.agentId)).not.toBeNull()
+})
