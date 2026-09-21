@@ -28,6 +28,7 @@ for (key, command) in [
   ("cmd+s", "app.store"), ("cmd+shift+l", "pane.layout"),
   ("cmd+b", "task.route"), ("cmd+t", "swarm.new"),
   ("cmd+p", "agent.add"),
+  ("cmd+r", "pane.split_right"), ("cmd+d", "pane.split_down"),
   ("cmd+n", "agent.new"),
   ("cmd+h", "pane.focus_left"), ("cmd+j", "pane.focus_below"),
   ("cmd+k", "pane.focus_above"), ("cmd+l", "pane.focus_right"),

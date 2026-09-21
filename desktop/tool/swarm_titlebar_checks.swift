@@ -489,6 +489,11 @@ private extension SwarmTitlebar {
       "Native shortcuts display in the menu without duplicate hover hints")
     try checkTitlebar(addHarness.keyEquivalent == "p" && addHarness.keyEquivalentModifierMask == [.command],
       "The exported keymap keeps New Pane on Command-P")
+    for (action, key) in [("splitRight", "r"), ("splitDown", "d")] {
+      let split = agent.items.first(where: { $0.representedObject as? String == action })!
+      try checkTitlebar(split.keyEquivalent == key && split.keyEquivalentModifierMask == [.command],
+        "The exported keymap preserves the native \(action) shortcut")
+    }
     setKeymap(changed)
     try checkTitlebar(NSApp.mainMenu === main && newSwarm.keyEquivalent == "o",
       "Hot reload updates the existing menu to the remapped key")
@@ -658,7 +663,19 @@ private extension SwarmTitlebar {
     try checkTitlebar(agent.items.contains { $0.title == "New Terminal" && $0.keyEquivalent == "t" && $0.keyEquivalentModifierMask == [.command, .shift] && $0.representedObject as? String == "newTerminal" },
       "New Terminal has its Command-Shift-T menu action")
     let historyMenu = main.item(withTitle: "History")!.submenu!
-    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["new", "addAgent", "newTerminal", "renameActive", "closeActive", "separator", "zoomPane", "closePane"], "File groups tab, terminal and pane actions")
+    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["new", "addAgent", "newTerminal", "renameActive", "closeActive", "separator", "splitRight", "splitDown", "zoomPane", "closePane"], "File groups tab, terminal and pane actions")
+    for (action, title, key) in [("splitRight", "Split Right…", "r"), ("splitDown", "Split Down…", "d")] {
+      let split = agent.items.first(where: { $0.representedObject as? String == action })!
+      try checkTitlebar(split.title == title && split.keyEquivalent == key && split.keyEquivalentModifierMask == [.command],
+        "\(title) advertises its directional split shortcut")
+      actionsEnabled = true
+      canFind = false
+      try checkTitlebar(!validateMenuItem(split), "\(title) needs a focused pane")
+      canFind = true
+      try checkTitlebar(validateMenuItem(split), "\(title) is available with a focused pane")
+      menuAction(split)
+      try checkTitlebar(messenger.calls.last?.method == action, "\(title) reaches the Flutter split picker")
+    }
     try checkTitlebar(agent.items.filter { !$0.isSeparatorItem }.allSatisfy { $0.image != nil && $0.toolTip == nil },
       "Every File action has a native icon and no hover hint")
     try checkTitlebar(agent.items.contains { $0.title == "Rename Tab…" && $0.representedObject as? String == "renameActive" }, "Rename Tab preserves its command")
