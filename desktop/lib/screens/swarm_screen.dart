@@ -12,6 +12,7 @@ import '../core/desktop_window.dart';
 import '../core/harness_file_store.dart';
 import '../core/project_folder.dart';
 import '../core/test_run.dart';
+import '../logging/debug_surface.dart';
 import '../settings/settings_screen.dart';
 import '../settings/settings_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -203,9 +204,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   String? _emptyEntryTab;
 
+  bool get _isWelcomeEntry =>
+      app.activeSwarm.isEmptyStarter ||
+      (app.activeSwarm.kind == 'harness' &&
+          app.activeSwarm.name == 'Welcome' &&
+          app.activeSwarm.panes.isEmpty &&
+          app.activeSwarm.presets.isEmpty);
+
+  bool get _showsStartGuide =>
+      newHarnessOpensInBox &&
+      app.panes.isEmpty &&
+      !app.activeSwarm.isStore &&
+      !app.activeSwarm.isOrchestrator;
+
   void _observeFirstLaunch() {
     if (!mounted || !newHarnessOpensInBox || !_firstLaunch.loaded) return;
-    if (app.viewer != null || !app.activeSwarm.isEmptyStarter) {
+    if (app.viewer != null || !_isWelcomeEntry) {
       _emptyEntryTab = null;
       _firstLaunch.handle();
       return;
@@ -233,9 +247,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _firstLaunchScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _firstLaunchScheduled = false;
-      if (!mounted ||
-          app.activeSwarmId != tab ||
-          !app.activeSwarm.isEmptyStarter) {
+      if (!mounted || app.activeSwarmId != tab || !_isWelcomeEntry) {
         return;
       }
       // One offer per visit: dismissing or opening another surface keeps it closed.
@@ -271,6 +283,33 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   Widget _startGuide() =>
       WorkspaceStartGuide(onShortcuts: _showKeyboardShortcuts);
+
+  void _reviewOnboarding() {
+    if (_newHarness?.requestDismiss() == false) return;
+    _closeNewHarness(restoreFocus: false);
+    _closeSearch(restoreFocus: false);
+    _closeCommandBar(restoreFocus: false);
+    dismissTransientMenus();
+    // Reuse the welcome workspace and offer its dock again, preserving work
+    // in every other tab. The first-entry path chooses create or search.
+    final welcome = app.swarms
+        .where(
+          (tab) =>
+              tab.kind == 'harness' &&
+              tab.name == 'Welcome' &&
+              tab.panes.isEmpty &&
+              tab.presets.isEmpty,
+        )
+        .firstOrNull;
+    if (welcome == null) {
+      app.newSwarm(name: 'Welcome');
+    } else {
+      app.selectSwarm(welcome.id);
+    }
+    _preparePaneFocus();
+    _emptyEntryTab = null;
+    _observeFirstLaunch();
+  }
 
   void _showKeyboardShortcuts() {
     if (_newHarness?.requestDismiss() == false) return;
@@ -1554,6 +1593,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         );
       },
     );
+    final onWelcome = firstRun || _showsStartGuide;
     _newHarnessOverlay = OverlayEntry(
       builder: (context) => KeymapProvider(
         keymap: _keymap,
@@ -1561,7 +1601,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           listenable: box,
           builder: (context, child) => LayoutBuilder(
             builder: (context, constraints) {
-              if (firstRun) {
+              if (onWelcome) {
                 return Padding(
                   padding: EdgeInsets.only(top: _native ? 0 : _tabBarHeight),
                   child: FocusScope(
@@ -1900,7 +1940,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // Search is an overlay, so late pane attachment needs an explicit focus
     // boundary to keep its programmatic focus request out of the picker.
     _canvasFocus.descendantsAreFocusable = false;
-    _searchOnWelcome = welcome;
+    _searchOnWelcome = welcome || _showsStartGuide;
     _search = SwarmSearchController(
       app,
       _navigation.recent,
@@ -2394,6 +2434,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     'navigation.commands': _showSearchCommands,
     'app.customize': () => unawaited(_customize()),
     'app.store': _openStore,
+    if (kDebugSurfaceEnabled) 'app.onboarding_review': _reviewOnboarding,
     'agent.rename': () => _editAgent(),
     'agent.stop': () => _editAgent(stop: true),
     'agent.fork': _forkAgent,
@@ -2423,7 +2464,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     if (id == 'keyboard.open_config') return _keymap.store != null;
     if (id == 'keyboard.pause_guide') return _learning.active;
-    if (id == 'keyboard.quick_start' || id == 'keyboard.practice') {
+    if (id == 'keyboard.quick_start' ||
+        id == 'keyboard.practice' ||
+        id == 'app.onboarding_review') {
       return app.viewer == null;
     }
     if (id == 'agent.rename' ||
@@ -2542,7 +2585,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   List<SwarmDestination> _searchCommands() => [
     for (final command in harnessCommands)
-      if (command.id != 'navigation.commands' &&
+      if (!command.hidden &&
+          command.id != 'navigation.commands' &&
           command.id != 'navigation.command_bar' &&
           !_paneFocusCommand.hasMatch(command.id) &&
           _canExecuteCommand(command.id))

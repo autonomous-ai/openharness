@@ -12,6 +12,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/shortcuts/keyboard_practice.dart';
 import 'package:harness/shortcuts/keymap.dart';
+import 'package:harness/shortcuts/keymap_commands.dart';
 import 'package:harness/state/workspace_learning.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/workspace_quick_start.dart';
@@ -75,7 +76,8 @@ void main() {
       for (final context in KeymapContext.values) {
         for (final binding in map.current.bindingsFor(context)) {
           if (binding.command == 'navigation.command_bar' ||
-              binding.command == 'app.debug') {
+              binding.command == 'app.debug' ||
+              harnessCommandById[binding.command]?.hidden == true) {
             continue;
           }
           expect(

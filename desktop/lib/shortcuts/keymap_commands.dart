@@ -16,6 +16,7 @@ class HarnessCommand {
     this.nativeAction,
     this.context = KeymapContext.workspace,
     this.repeatable = false,
+    this.hidden = false,
   });
   final String id, label;
   final ShortcutGroup group;
@@ -30,6 +31,9 @@ class HarnessCommand {
   final String? nativeAction;
   final KeymapContext context;
   final bool repeatable;
+
+  /// Review commands still use the shared keymap, but stay out of normal help.
+  final bool hidden;
 }
 
 final _workspaceKeys = _readWorkspaceKeys();
@@ -407,6 +411,14 @@ final harnessCommands = <HarnessCommand>[
       'Open the debug log',
       ShortcutGroup.actions,
       action: ShortcutAction.showDebug,
+    ),
+  if (kDebugSurfaceEnabled)
+    const HarnessCommand(
+      'app.onboarding_review',
+      'Review onboarding',
+      ShortcutGroup.actions,
+      extraKeys: ['cmd+alt+shift+o'],
+      hidden: true,
     ),
   const HarnessCommand(
     'picker.next',

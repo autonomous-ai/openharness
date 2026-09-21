@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/core/repository_clone.dart';
@@ -51,6 +52,7 @@ class _Connection extends WsConn {
 
   /// The first create's reply is lost, as a dropped connection loses it.
   bool loseFirstReply = false;
+  String? createFailure;
   @override
   Future<Map<String, dynamic>> request(
     String type, {
@@ -61,6 +63,13 @@ class _Connection extends WsConn {
     if (type == 'dsh_list') return {'dsh': []};
     if (type == 'fs_list_dir') return {};
     calls.add(_Request(type, Map.of(payload)));
+    if (type == 'agent_create' && createFailure != null) {
+      return {
+        'creationId': payload['creationId'],
+        'state': 'failed',
+        'failure': {'code': 'INSTALL_FAILED', 'detail': createFailure},
+      };
+    }
     if (type == 'agent_create' && loseFirstReply) {
       loseFirstReply = false;
       throw const WsRequestTimeout('agent_create');
@@ -358,6 +367,64 @@ void main() {
     expect(create.payload['projectSource'], 'new');
     expect(create.payload['projectName'], 'my-game');
     expect(create.payload.containsKey('cwd'), isFalse);
+  });
+
+  for (final engine in [
+    'claude',
+    'codex',
+    'amp',
+    'muse',
+    'devin',
+    'commandcode',
+  ]) {
+    test('a missing $engine goes directly to the daemon launch', () async {
+      final connection = _Connection();
+      final app = createApp(connectionForTest: (_) => connection);
+      addTearDown(app.dispose);
+      app.machineStates['m']!.engines.replace([
+        EngineAvailability(engine: engine, installed: false),
+      ]);
+      final box = NewHarnessController(
+        app,
+        machineId: 'm',
+        engine: engine,
+        folder: '/work',
+      );
+      addTearDown(box.dispose);
+      box.focusField(NewHarnessField.agent);
+      final option = box.options.singleWhere((option) => option.id == engine);
+      expect(option.enabled, isTrue);
+      expect(option.detail, isNot(contains('not installed')));
+      box.accept(option);
+      expect(await box.create(), NewHarnessOutcome.created);
+      final create = connection.calls.singleWhere(
+        (call) => call.type == 'agent_create',
+      );
+      expect(create.payload['engine'], engine);
+    });
+  }
+
+  test('a failed first launch shows the daemon error', () async {
+    final connection = _Connection()
+      ..createFailure = 'Automatic installation failed.';
+    final app = createApp(connectionForTest: (_) => connection);
+    addTearDown(app.dispose);
+    app.machineStates['m']!.engines.replace([
+      const EngineAvailability(engine: 'amp', installed: false),
+    ]);
+    final box = NewHarnessController(
+      app,
+      machineId: 'm',
+      engine: 'amp',
+      folder: '/work',
+    );
+    addTearDown(box.dispose);
+    expect(await box.create(), NewHarnessOutcome.failed);
+    expect(box.error, contains('Automatic installation failed.'));
+    expect(
+      connection.calls.where((call) => call.type == 'agent_create'),
+      hasLength(1),
+    );
   });
 
   test(

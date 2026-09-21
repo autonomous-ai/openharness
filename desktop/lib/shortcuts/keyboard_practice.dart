@@ -118,7 +118,7 @@ List<KeyboardLesson> keyboardLessons(AppKeymap keymap) {
   };
   final result = <KeyboardLesson>[];
   for (final command in harnessCommands) {
-    if (excluded.contains(command.id)) continue;
+    if (command.hidden || excluded.contains(command.id)) continue;
     final context = command.context;
     final bindings = keymap.bindings(command.id, context: context).toList();
     if (command.id.startsWith('pane.focus_') &&

@@ -2993,3 +2993,172 @@ Logs are `/private/tmp/harness-pr-final-{desktop-tests,analyze,native-workspace,
 native-terminal,native-keymap,review-build,previews,herdr-real}.log` and
 `/private/tmp/harness-pr-pinned-{cli-typecheck,cli-tests,cli-bounded,hook-replay,
 focused,tmux-real}.log`.
+
+## Welcome review and stopped-harness work — 2026-09-20
+
+The welcome guide now uses a navy field so the gray Cmd-T/P dock remains
+visually distinct. The hidden debug shortcut Cmd-Option-Shift-O creates or
+reuses an empty Welcome tab, retaining the other tabs and terminal views. It
+is excluded from shortcut help and keyboard practice.
+
+The desktop asks for `agents_list.includeStopped`, includes retained stopped
+harnesses in search, and sends the new `agent_resume` request on Enter.
+Running harnesses attach directly. Resume uses the saved engine conversation,
+folder, profile and launch settings with no confirmation or automatic fresh
+conversation fallback. Immediate failures offer an explicit Start New
+Conversation draft. Durable receipts and per-agent coordination prevent
+repeated Enter or a lost response from launching duplicates. The new request
+and result are included in the CLI encrypted transport.
+
+Stopped records are stored separately from live registry routes. Stop saves
+the record before removing the runtime, and the retained deletion event
+refreshes the desktop catalog. Hook binding now preserves the strict resume
+policy through daemon reload; a regression test reproduced its loss before
+the fix.
+
+The source-level protocol and vendor-action map is in
+[issue #167](https://github.com/autonomous-ai/openharness/issues/167). It records remaining gaps:
+CLI exit into a surviving shell still becomes Terminal, historical vendor
+conversations are not imported, stopped recap lookup still needs the archive
+mapping, and asynchronous resume startup failure uses the generic Terminal
+conversion. `agent_pause` is not implemented. These limits remain relevant
+before calling the entire stopped-harness experience complete.
+
+Validation:
+
+- Full desktop suite: **2,638 passed, 10 optional tests skipped**. After the
+  dedicated `agent_resume` change: **49 focused tests passed, 1 optional
+  render skipped**. Targeted analysis reported no issues.
+- CLI lifecycle/transport checks: **299 passed across 11 files**. After the
+  hook-binding fix: **114 passed across the four affected lifecycle files**.
+  Typecheck and the development CLI build passed.
+- The normal macOS debug app rebuilt with the existing port-18478 command-bar
+  configuration. Deep/strict code signature verification passed after
+  refreshing the outer ad-hoc seal; entitlements remained byte-identical.
+- Welcome contrast was checked in the rendered widget preview. Physical
+  shortcut verification remains unverified: automatic approval review
+  rejected the UI automation documentation refresh as unrelated to the task.
+  No alternate UI automation was used to bypass that rejection.
+- The local review daemon was updated to this CLI build and reconnected with
+  discovery ready and no discovery error. **All 47 observed engine processes
+  remained alive**; it reported 89 available runtime rows. The installed CLI
+  bundle was not overwritten. The rebuilt workspace app was opened as a new
+  instance (PID 13706); no agent process was stopped for validation.
+
+Latest logs: `/private/tmp/harness-agent-resume-{desktop-tests,cli-tests,
+analyze,build,cli-build}.log`, `/private/tmp/harness-resume-binding-{red,tests,
+build}.log`, and `/private/tmp/harness-stopped-final-desktop-tests.log`.
+The daemon handoff report and private pre-handoff state backup are in
+`/private/tmp/harness-command-box-before-yoWugn`.
+
+## Welcome and picker review follow-up — 2026-09-20
+
+Welcome now opens its dock on each new visit and each use of the hidden
+Cmd-Option-Shift-O review shortcut. With no known harnesses it opens New
+Harness; with any known harness it opens search. The existing work tabs and
+terminal renderers are retained. The guide shares the available height with
+the dock, so all its content stays visible above either dock at 1280×800 and
+960×640, including when opening the dock manually from an empty tab.
+
+The guide follows the root README and `docs/ideal-users.md`: “Follow your
+curiosity. Build across disciplines.” is the main tagline. The user preferred
+the original tab-and-pane diagram with arrows, so the side-column redesign
+was replaced with that original structure. The sample project is a robot
+arm: Claude Code writes its control code in the main left pane, Blender
+designs a printable gripper above right, and KiCad designs the motor
+controller board below right. Store copy names code, 3D design, circuits,
+video and more. The full-shortcuts link is below left. At short heights the
+diagram reduces empty pane space and omits sample folder paths before
+scaling, keeping the arrows, examples and tagline above the dock. Following
+the color feedback, Welcome uses near-black charcoal (`#171717`) while the
+dock remains lighter gray.
+
+The plain-agent chooser no longer displays “not installed” or redirects a
+missing engine into the advanced form. Launch proceeds through the daemon's
+existing automatic installation path. Definite installation failures still
+appear as errors without a duplicate creation attempt.
+
+The session picker treats every saved harness as the same kind of work:
+there is no Stopped badge or special Resume action. The selected row keeps
+the enter glyph and the footer says Open. Opening a running harness in
+multiple app panes was already supported; it is a regression check, not a
+new attachment feature. Backend runtime/conversation state remains separate
+from the row's presentation.
+
+The user requested the lifecycle mapping, including registry effects, before
+further `agent_resume` work. The earlier partial backend draft is still
+present, but no additional backend implementation or daemon replacement was
+performed during this follow-up. `agent-lifecycle-map.md` distinguishes
+existing behavior from the proposed resume contract, corrects Stop's tmux
+scope to `kill-session`, and records the surviving-shell, saved-recap and
+startup-confirmation gaps. The future acceptance checks preserve the same
+user-facing Open action for every session.
+
+Picker sizing recommendation, not implemented in this build: eight visible
+sessions at normal desktop heights, five on short windows, and up to ten on
+tall windows, with creation and search fixed below the results. Linux should
+use the same structure with terminal-friendly platform shortcuts and text
+labels; the current shared workspace defaults remain Command/Meta oriented.
+
+Validation:
+
+- Before the final visual revision, the full desktop suite passed **2,646
+  tests**, with **10 optional tests skipped**.
+- Before restoring the arrow layout, **70 focused checks passed** across welcome,
+  new-harness entry/creation/settings, and saved-session behavior. Targeted
+  analysis of nine files reported no issues.
+- Four rendered previews cover search and creation docks at normal and
+  compact sizes. Normal and compact previews were visually inspected. Shortcut remapping, narrow enlarged text, the
+  arrow diagram bounds and preservation of existing work remain covered.
+- The normal macOS debug app rebuilt with the existing port-18478 command-bar
+  define. Deep/strict signature verification passed after resealing the outer
+  bundle, with entitlements unchanged. The rebuilt app was opened as another
+  instance for manual review; no agent was stopped for these checks.
+- Physical AppKit shortcuts and live vendor installation were not exercised
+  here. The earlier automatic review rejection of UI automation remains
+  recorded above; no alternative UI automation was used.
+
+Logs: `/private/tmp/harness-welcome-dock-{full-tests,build}.log` and
+`/private/tmp/harness-polymath-welcome-{analyze,tests,build}.log`.
+Rendered previews: `/private/tmp/harness-polymath-welcome-preview/`.
+The final charcoal color revision was rendered in
+`/private/tmp/harness-charcoal-welcome-preview/` and rebuilt; logs are
+`/private/tmp/harness-charcoal-welcome-{render,build}.log`.
+
+The final robot-arm arrow layout passed **12 welcome checks**, including the
+optional render fixture, after correcting minimum pane height for wrapped
+prompts. Targeted analysis passed. Final previews and normal debug-build logs
+are `/private/tmp/harness-robot-welcome-preview/` and
+`/private/tmp/harness-robot-welcome-{analyze,tests,build}.log`.
+
+## PR #165 final scope — 2026-09-20
+
+The user approved finishing `agent_resume` separately. Its daemon/protocol,
+registry, desktop routing and test changes have been moved to
+`worktree-agent-resume` in a separate worktree; none are part of this PR's
+final diff. Issue #167 retains the full design mapping and will be linked
+from the separate resume PR. Opening an existing running harness remains
+the established attachment behavior.
+
+The final Welcome retains the original tab/pane diagram and arrows. More
+space below the tagline separates it from the guide. Claude Code shows
+sample robot-arm control code; Blender and KiCad show original illustrative
+vector drawings of a gripper and motor-controller board. All fit above the
+dock in the normal and compact render previews. The new drawings are UI
+examples, not completed CAD or validated circuit outputs.
+
+The missing-engine chooser changes use the already-existing daemon installer
+path. The hidden Welcome shortcut, automatic dock choice and preserved tabs
+remain part of the completed desktop changes.
+
+Final verification for this scope: **2,639 full desktop tests passed, 10
+optional tests skipped**. Full analysis reported no errors/warnings and the
+same 18 informational findings; targeted guide/illustration analysis was
+clean. The normal debug build passed, as did deep/strict signature checking
+after the outer seal was refreshed with unchanged entitlements. Final guide
+renders were inspected at 1280×800 and 960×640. No CLI source changes are
+included in this final follow-up commit. CI in this repository is manually
+dispatched; the PR has no automatically triggered checks.
+
+Logs: `/private/tmp/harness-command-box-final-{tests,analyze,build}.log` and
+`/private/tmp/harness-welcome-art-{tests,analyze}.log`.

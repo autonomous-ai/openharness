@@ -40,7 +40,7 @@ class NewHarnessBox extends StatefulWidget {
   final VoidCallback onClose;
   final VoidCallback onCreated;
 
-  /// Open the full creation form for installation or the compatibility shortcut.
+  /// Open the full creation form for advanced options.
   final VoidCallback onNeedsForm;
 
   @override
@@ -345,8 +345,6 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     switch (await work) {
       case NewHarnessOutcome.created:
         widget.onCreated();
-      case NewHarnessOutcome.needsForm:
-        widget.onNeedsForm();
       case NewHarnessOutcome.failed:
         if (mounted) _requestFocus();
     }

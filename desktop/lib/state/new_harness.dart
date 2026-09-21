@@ -171,14 +171,7 @@ class NewHarnessOption {
   final bool enabled;
 }
 
-enum NewHarnessOutcome {
-  created,
-
-  /// Something the box does not do yet (an engine to install first): the full
-  /// form opens on the same answers rather than the box failing.
-  needsForm,
-  failed,
-}
+enum NewHarnessOutcome { created, failed }
 
 class NewHarnessController extends ChangeNotifier {
   NewHarnessController(
@@ -1541,7 +1534,6 @@ class NewHarnessController extends ChangeNotifier {
 
   List<NewHarnessOption> _agentOptions() {
     final machine = _machine;
-    final engines = machine?.engines;
     final harnesses = machine != null && machine.dsh.loaded
         ? [
             for (final entry in machine.dsh.entries)
@@ -1575,12 +1567,7 @@ class NewHarnessController extends ChangeNotifier {
             else
               null,
             if (isHarnessId(id) && machine?.dsh[id]?.installed == false)
-              'installs first'
-            else if (!isHarnessId(id) &&
-                !isTerminalEngine(id) &&
-                engines?.loaded == true &&
-                engines?[id]?.installed != true)
-              'not installed',
+              'installs first',
           ].whereType<String>().where((part) => part.isNotEmpty).join(' · '),
         ),
     ]);
@@ -1990,15 +1977,8 @@ class NewHarnessController extends ChangeNotifier {
     final base = harness == null
         ? choice
         : machine.dsh[choice]?.engine ?? knownHarnessBase[choice] ?? 'claude';
-    // An engine this machine does not have needs the form's install guidance.
-    // Never while a lost create is unresolved: that one is checked on first.
-    if (!checking &&
-        harness == null &&
-        !terminal &&
-        machine.engines.loaded &&
-        machine.engines[choice]?.installed != true) {
-      return NewHarnessOutcome.needsForm;
-    }
+    // The daemon's launch installs a missing engine inside its new terminal.
+    // A cached availability probe must not block that first launch.
     final recheck = checking;
     if (!recheck) {
       _attempt = AgentCreationAttempt();

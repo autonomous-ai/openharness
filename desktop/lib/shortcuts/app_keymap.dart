@@ -205,7 +205,8 @@ List<ShortcutRow> effectiveShortcutRows(
   final shortcuts = appShortcuts();
   return [
     for (final command in harnessCommands)
-      if ((command.context == KeymapContext.workspace ||
+      if (!command.hidden &&
+          (command.context == KeymapContext.workspace ||
               (contextKind == KeymapContext.project &&
                   command.context == KeymapContext.picker) ||
               command.context == contextKind) &&

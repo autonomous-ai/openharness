@@ -13,6 +13,9 @@ import 'package:harness/core/project_folder.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
+import 'package:harness/shortcuts/keyboard_practice.dart';
+import 'package:harness/shortcuts/keymap.dart';
+import 'package:harness/shortcuts/keymap_native.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/first_harness_launch.dart';
 import 'package:harness/state/harness_placement.dart';
@@ -20,6 +23,7 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/widgets/new_harness_box.dart';
 import 'package:harness/widgets/workspace_start_guide.dart';
+import 'package:xterm/xterm.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'swarm_screen_test.dart' show terminal;
@@ -114,8 +118,9 @@ class _FirstApp extends AppNotifier {
 Future<void> _mount(
   WidgetTester tester,
   _FirstApp app,
-  FirstHarnessLaunch entry,
-) async {
+  FirstHarnessLaunch entry, {
+  bool nativeTabs = false,
+}) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = const Size(1280, 800);
   addTearDown(tester.view.resetDevicePixelRatio);
@@ -123,7 +128,11 @@ Future<void> _mount(
   await tester.pumpWidget(
     MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.dark),
-      home: SwarmScreen(notifier: app, nativeTabs: false, firstLaunch: entry),
+      home: SwarmScreen(
+        notifier: app,
+        nativeTabs: nativeTabs,
+        firstLaunch: entry,
+      ),
     ),
   );
   await tester.pump();
@@ -258,6 +267,224 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  for (final native in [false, true]) {
+    testWidgets(
+      'onboarding review reuses a welcome tab and preserves live work (native=$native)',
+      (tester) async {
+        const channel = MethodChannel('harness/swarm_tabs');
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          (_) async => true,
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            channel,
+            null,
+          ),
+        );
+        final app = _FirstApp();
+        addTearDown(app.dispose);
+        app.machineStates['m']!.agents = [
+          for (final id in ['a0', 'a1'])
+            Agent(
+              id: id,
+              name: 'Work $id',
+              engine: 'codex',
+              terminalAvailable: true,
+            ),
+        ];
+        final first = app.activeSwarm;
+        app.renameSwarm(first.id, 'Work');
+        final session = terminal('a0', [])
+          ..terminal.write('Keep this output\r\n');
+        final pane = app.adoptSessionForTest(session);
+        app.newSwarm(name: 'Research');
+        final second = app.activeSwarm;
+        final other = app.adoptSessionForTest(terminal('a1', []));
+        app.selectSwarm(first.id);
+        await _mount(tester, app, FirstHarnessLaunch(), nativeTabs: native);
+        final view = find.byWidgetPredicate(
+          (widget) =>
+              widget is TerminalView && widget.terminal == session.terminal,
+          skipOffstage: false,
+        );
+        final renderer = tester.state<TerminalViewState>(view);
+        await tester.tap(view.hitTestable());
+        await tester.pump();
+
+        Future<void> review() async {
+          if (native) {
+            tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+              channel.name,
+              const StandardMethodCodec().encodeMethodCall(
+                const MethodCall('keymapCommand', {
+                  'command': 'app.onboarding_review',
+                }),
+              ),
+              (_) {},
+            );
+            await tester.pump();
+          } else {
+            await key(
+              tester,
+              LogicalKeyboardKey.keyO,
+              cmd: true,
+              alt: true,
+              shift: true,
+            );
+          }
+          await tester.pump(const Duration(milliseconds: 150));
+        }
+
+        await review();
+        final welcome = app.activeSwarm;
+        expect(welcome.name, 'Welcome');
+        expect(app.swarms, [first, second, welcome]);
+        expect(app.allPanes, [pane, other]);
+        expect(find.byType(WorkspaceStartGuide).hitTestable(), findsOneWidget);
+        expect(find.byType(NewHarnessBox), findsNothing);
+        expect(
+          find.byKey(const ValueKey('swarm-search-input')),
+          findsOneWidget,
+        );
+        void expectGuideAboveDock(Finder dock) {
+          final drawing = tester.getRect(
+            find.byKey(const ValueKey('workspace-welcome-diagram')).last,
+          );
+          final shortcuts = tester.getRect(
+            find.byKey(const ValueKey('workspace-all-shortcuts')).last,
+          );
+          expect(drawing.top, greaterThanOrEqualTo(0));
+          expect(drawing.bottom, lessThanOrEqualTo(tester.getTopLeft(dock).dy));
+          expect(
+            shortcuts.bottom,
+            lessThanOrEqualTo(tester.getTopLeft(dock).dy),
+          );
+          expect(tester.takeException(), isNull);
+        }
+
+        final searchDock = find.byKey(const ValueKey('swarm-search-results'));
+        expectGuideAboveDock(searchDock);
+        tester.view.physicalSize = const Size(960, 640);
+        await tester.pump();
+        expectGuideAboveDock(searchDock);
+        expect(tester.state<TerminalViewState>(view), same(renderer));
+        expect(app.launches, isEmpty);
+
+        await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+        await tester.pump(const Duration(milliseconds: 150));
+        expect(find.byType(NewHarnessBox), findsOneWidget);
+        expectGuideAboveDock(find.byKey(const ValueKey('new-harness-box')));
+        await key(tester, LogicalKeyboardKey.escape);
+        await tester.pump();
+        await review();
+        expect(
+          find.byKey(const ValueKey('swarm-search-input')),
+          findsOneWidget,
+        );
+        expect(app.activeSwarm, same(welcome));
+        expect(app.swarms, [first, second, welcome]);
+        app.selectSwarm(first.id);
+        await tester.pump();
+        await review();
+        expect(app.activeSwarm, same(welcome));
+        expect(app.swarms, [first, second, welcome]);
+
+        await key(tester, LogicalKeyboardKey.escape);
+        await key(tester, LogicalKeyboardKey.keyW, cmd: true);
+        await tester.pump();
+        expect(app.swarms, [first, second]);
+        app.selectSwarm(first.id);
+        await tester.pump();
+        expect(app.focusedPane, same(pane));
+        expect(pane.session, same(session));
+        expect(tester.state<TerminalViewState>(view), same(renderer));
+        expect(
+          session.terminal.buffer.lines[0].getText(),
+          contains('Keep this output'),
+        );
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  testWidgets('reviewing Welcome with no harnesses reopens New Harness', (
+    tester,
+  ) async {
+    final app = _FirstApp();
+    addTearDown(app.dispose);
+    await _mount(tester, app, FirstHarnessLaunch());
+    await key(tester, LogicalKeyboardKey.escape);
+    for (var visit = 0; visit < 2; visit++) {
+      await key(
+        tester,
+        LogicalKeyboardKey.keyO,
+        cmd: true,
+        alt: true,
+        shift: true,
+      );
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(app.activeSwarm.name, 'Welcome');
+      expect(app.swarms.where((tab) => tab.name == 'Welcome'), hasLength(1));
+      expect(find.byType(NewHarnessBox), findsOneWidget);
+      expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
+      expect(
+        tester
+            .getBottomRight(
+              find.byKey(const ValueKey('workspace-welcome-diagram')).last,
+            )
+            .dy,
+        lessThanOrEqualTo(
+          tester.getTopLeft(find.byKey(const ValueKey('new-harness-box'))).dy,
+        ),
+      );
+      expect(app.launches, isEmpty);
+      await key(tester, LogicalKeyboardKey.escape);
+      await tester.pump();
+    }
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
+    'onboarding review key is native-exported but absent from help and practice',
+    (tester) async {
+      final map = MemoryKeymap();
+      addTearDown(map.dispose);
+      final contexts = nativeKeymapSnapshot(map)['contexts'] as Map;
+      for (final context in ['workspace', 'terminal']) {
+        final binding = (contexts[context] as List).cast<Map>().singleWhere(
+          (binding) => binding['command'] == 'app.onboarding_review',
+        );
+        expect(binding['keys'], ['alt+cmd+shift+o']);
+      }
+      expect(
+        keyboardLessons(map)
+            .any((lesson) => lesson.command == 'app.onboarding_review'),
+        isFalse,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: KeymapProvider(
+            keymap: map,
+            child: Builder(
+              builder: (context) {
+                expect(
+                  effectiveShortcutRows(
+                    context,
+                    KeymapContext.workspace,
+                  ).any((row) => row.label == 'Review onboarding'),
+                  isFalse,
+                );
+                return const SizedBox();
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   test('installed saved preference wins; explicit editing wins over late discovery', () async {
     final app = _FirstApp()..installed = ['claude', 'codex'];
     addTearDown(app.dispose);
@@ -350,13 +577,33 @@ void main() {
         await loader.load();
       }
     });
-    final app = _FirstApp();
-    addTearDown(app.dispose);
-    await _mount(tester, app, FirstHarnessLaunch());
-    await expectLater(
-      find.byType(MaterialApp),
-      matchesGoldenFile(Uri.file('$output/first-harness.png')),
-    );
-    await tester.pumpWidget(const SizedBox());
+    for (final hasHarnesses in [false, true]) {
+      final app = _FirstApp();
+      addTearDown(app.dispose);
+      if (hasHarnesses) {
+        app.machineStates['m']!.agents = [
+          for (var index = 0; index < 20; index++)
+            Agent(
+              id: 'saved-$index',
+              name: 'Existing harness $index',
+              engine: 'codex',
+              terminalAvailable: true,
+            ),
+        ];
+      }
+      await _mount(tester, app, FirstHarnessLaunch());
+      final name = hasHarnesses ? 'welcome-search' : 'first-harness';
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile(Uri.file('$output/$name.png')),
+      );
+      tester.view.physicalSize = const Size(960, 640);
+      await tester.pump();
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile(Uri.file('$output/$name-compact.png')),
+      );
+      await tester.pumpWidget(const SizedBox());
+    }
   });
 }

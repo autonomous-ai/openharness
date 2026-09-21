@@ -5,6 +5,7 @@ import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_commands.dart';
 import 'box_chrome.dart';
+import 'welcome_project_example.dart';
 
 /// A quiet, live keyboard map for an empty workspace. The drawing illustrates
 /// tabs and panes. Only the full shortcuts link is interactive.
@@ -32,14 +33,15 @@ class WorkspaceStartGuide extends StatelessWidget {
     final accent = grid.AppPalette.swarmAccent;
     final stroke = faint.withValues(alpha: .30);
     return Material(
-      color: grid.AppPalette.swarmField,
+      color: grid.AppPalette.swarmWelcome,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final scale = MediaQuery.textScalerOf(context).scale(13) / 13;
           final compact = constraints.maxWidth < 680 * scale;
+          final short = constraints.maxHeight < 420 * scale;
           Widget callout(String command, String label, String explanation) =>
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -56,7 +58,7 @@ class WorkspaceStartGuide extends StatelessWidget {
                       ),
                       style: boxMonoStyle(size: 13, color: ink),
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 4),
                     Text(
                       explanation,
                       style: boxMonoStyle(size: 12, color: faint),
@@ -67,6 +69,18 @@ class WorkspaceStartGuide extends StatelessWidget {
           final diagram = Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: 40),
+                child: Text(
+                  'Follow your curiosity. Build across disciplines.',
+                  textAlign: TextAlign.center,
+                  style: boxMonoStyle(
+                    size: 20,
+                    color: ink,
+                    weight: FontWeight.w600,
+                  ),
+                ),
+              ),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -74,20 +88,20 @@ class WorkspaceStartGuide extends StatelessWidget {
                     child: callout(
                       'swarm.new',
                       'New Tab',
-                      'A tab holds your panes.',
+                      'Group multiple harnesses in one tab.',
                     ),
                   ),
                   Flexible(
                     child: callout(
                       'app.store',
                       'Harness Store',
-                      'Tools for new kinds of work.',
+                      'Code, 3D design, circuits, video, and more.',
                     ),
                   ),
                 ],
               ),
               SizedBox(
-                height: 24,
+                height: 14,
                 width: double.infinity,
                 child: CustomPaint(painter: _GuideArrows(stroke, top: true)),
               ),
@@ -103,7 +117,7 @@ class WorkspaceStartGuide extends StatelessWidget {
                         ),
                         padding: const EdgeInsets.symmetric(
                           horizontal: 16,
-                          vertical: 12,
+                          vertical: 8,
                         ),
                         child: Row(
                           children: [
@@ -112,7 +126,7 @@ class WorkspaceStartGuide extends StatelessWidget {
                                 children: [
                                   Flexible(
                                     child: Text(
-                                      'payments',
+                                      'robot arm',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: boxMonoStyle(
@@ -124,7 +138,7 @@ class WorkspaceStartGuide extends StatelessWidget {
                                   if (!compact) ...[
                                     const SizedBox(width: 32),
                                     Text(
-                                      'research',
+                                      'launch video',
                                       style: boxMonoStyle(
                                         size: 12,
                                         color: faint,
@@ -147,16 +161,18 @@ class WorkspaceStartGuide extends StatelessWidget {
                         ),
                       ),
                       SizedBox(
-                        height: (constraints.maxHeight - 300 * scale).clamp(
-                          240 * scale,
-                          540 * scale,
+                        height: (constraints.maxHeight - 254 * scale).clamp(
+                          (short ? 220 : 280) * scale,
+                          340 * scale,
                         ),
                         child: Row(
                           children: [
                             Expanded(
                               child: _DrawnPane(
-                                name: 'Codex',
-                                task: 'Review the API changes',
+                                name: 'Claude Code',
+                                example: WelcomeProjectExample.code,
+                                task: 'Write the robot arm control code',
+                                showLocation: !short,
                                 ink: ink,
                                 faint: faint,
                                 accent: accent,
@@ -172,8 +188,10 @@ class WorkspaceStartGuide extends StatelessWidget {
                                 children: [
                                   Expanded(
                                     child: _DrawnPane(
-                                      name: 'Claude Code',
-                                      task: 'Write regression tests',
+                                      name: 'Blender',
+                                      example: WelcomeProjectExample.gripper,
+                                      task: 'Design a printable robot gripper',
+                                      showLocation: !short,
                                       ink: ink,
                                       faint: faint,
                                       accent: accent,
@@ -186,8 +204,10 @@ class WorkspaceStartGuide extends StatelessWidget {
                                   ),
                                   Expanded(
                                     child: _DrawnPane(
-                                      name: 'Grok',
-                                      task: 'Explore edge cases',
+                                      name: 'KiCad',
+                                      example: WelcomeProjectExample.circuit,
+                                      task: 'Design the motor controller board',
+                                      showLocation: !short,
                                       ink: ink,
                                       faint: faint,
                                       accent: accent,
@@ -204,48 +224,59 @@ class WorkspaceStartGuide extends StatelessWidget {
                 ),
               ),
               SizedBox(
-                height: 28,
+                height: 14,
                 width: double.infinity,
                 child: CustomPaint(painter: _GuideArrows(stroke)),
               ),
-              Align(
-                alignment: const Alignment(.5, 0),
-                child: callout(
-                  'agent.add',
-                  'New Pane',
-                  'Each pane runs a harness.',
-                ),
-              ),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  key: const ValueKey('workspace-all-shortcuts'),
-                  onPressed: onShortcuts,
-                  style: TextButton.styleFrom(foregroundColor: faint),
-                  child: Text(
-                    '${_hint(context, 'keyboard.help')}  All Keyboard Shortcuts'
-                        .trimLeft(),
-                    style: boxMonoStyle(size: 11, color: faint),
+              Row(
+                children: [
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        key: const ValueKey('workspace-all-shortcuts'),
+                        onPressed: onShortcuts,
+                        style: TextButton.styleFrom(foregroundColor: faint),
+                        child: Text(
+                          '${_hint(context, 'keyboard.help')}  All Keyboard Shortcuts'
+                              .trimLeft(),
+                          style: boxMonoStyle(size: 11, color: faint),
+                        ),
+                      ),
+                    ),
                   ),
-                ),
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.center,
+                      child: callout(
+                        'agent.add',
+                        'New Pane',
+                        'Add a harness beside your work.',
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           );
-          return SingleChildScrollView(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: constraints.maxHeight),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxWidth: constraints.maxWidth * (compact ? 1 : .92),
+          final horizontalPadding = compact ? 16.0 : 24.0;
+          return Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: horizontalPadding,
+              vertical: 12,
+            ),
+            child: Center(
+              // The dock owns its actual height. Scale the entire original
+              // diagram together, including the tagline and all its arrows.
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: SizedBox(
+                  key: const ValueKey('workspace-welcome-diagram'),
+                  width: (constraints.maxWidth - horizontalPadding * 2).clamp(
+                    0.0,
+                    1000.0,
                   ),
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: compact ? 16 : 24,
-                      vertical: 20,
-                    ),
-                    child: diagram,
-                  ),
+                  child: diagram,
                 ),
               ),
             ),
@@ -259,53 +290,80 @@ class WorkspaceStartGuide extends StatelessWidget {
 class _DrawnPane extends StatelessWidget {
   const _DrawnPane({
     required this.name,
+    required this.example,
     required this.task,
     required this.ink,
     required this.faint,
     required this.accent,
+    this.showLocation = true,
   });
   final String name, task;
+  final WelcomeProjectExample example;
   final Color ink, faint, accent;
+  final bool showLocation;
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.all(16),
-    child: Align(
-      alignment: Alignment.topLeft,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: boxMonoStyle(size: 14, color: ink),
-          ),
+  Widget build(BuildContext context) {
+    final copy = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: boxMonoStyle(size: 14, color: ink),
+        ),
+        if (showLocation) ...[
           const SizedBox(height: 6),
           Text(
-            'This Mac:~/work/payments',
+            'This Mac:~/work/robot-arm',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: boxMonoStyle(size: 11, color: faint),
           ),
-          const SizedBox(height: 18),
-          Text.rich(
-            TextSpan(
+        ],
+        const SizedBox(height: 10),
+        Text.rich(
+          TextSpan(
+            children: [
+              TextSpan(
+                text: '› ',
+                style: TextStyle(color: accent),
+              ),
+              TextSpan(text: '$task ▏'),
+            ],
+          ),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: boxMonoStyle(size: 12, color: ink),
+        ),
+      ],
+    );
+    final output = WelcomeProjectOutput(
+      example: example,
+      ink: ink,
+      faint: faint,
+    );
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: example == WelcomeProjectExample.code
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                TextSpan(
-                  text: '› ',
-                  style: TextStyle(color: accent),
-                ),
-                TextSpan(text: '$task ▏'),
+                copy,
+                const SizedBox(height: 16),
+                Expanded(child: output),
+              ],
+            )
+          : Row(
+              children: [
+                Expanded(flex: 3, child: copy),
+                const SizedBox(width: 12),
+                Expanded(flex: 2, child: output),
               ],
             ),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: boxMonoStyle(size: 12, color: ink),
-          ),
-        ],
-      ),
-    ),
-  );
+    );
+  }
 }
 
 class _GuideArrows extends CustomPainter {
