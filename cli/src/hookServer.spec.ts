@@ -4,6 +4,7 @@ import { startHookServer, type HookServerHandlers, chooseHookAgent } from './hoo
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
 import { CommandBarService } from './lib/commandBar.js'
+import { ENGINES } from './engines/types.js'
 
 let server: Server | null = null
 
@@ -220,23 +221,33 @@ describe('the Harness Store proxy', () => {
 
 describe('chooseHookAgent', () => {
   it('prefers caller ancestry, the evidence that cannot be guessed at', () => {
-    expect(chooseHookAgent(['strong'], ['weak'])).toEqual({ agent: 'strong', reason: 'ancestry' })
+    expect(chooseHookAgent(['strong'], ['weak'], 'codex')).toEqual({ agent: 'strong', reason: 'ancestry' })
   })
 
   it('accepts the runtime alone when ancestry is unavailable and the pane is unambiguous', () => {
     // Cursor posts its hooks from outside the pane's process tree — on tmux and on Herdr alike — so
     // demanding ancestry rejected every hook it ever sent and no session bound. The pane is the proof:
     // the hook named a runtime, and that runtime carries exactly one agent of this engine.
-    expect(chooseHookAgent([], ['only-agent-on-that-pane'])).toEqual({
+    expect(chooseHookAgent([], ['only-agent-on-that-pane'], 'cursor')).toEqual({
       agent: 'only-agent-on-that-pane', reason: 'runtime',
     })
   })
 
   it('answers nothing rather than guessing', () => {
-    expect(chooseHookAgent([], [])).toEqual({ agent: null, reason: 'none' })
-    expect(chooseHookAgent([], ['a', 'b'])).toEqual({ agent: null, reason: 'ambiguous' })
-    expect(chooseHookAgent(['a', 'b'], ['c'])).toEqual({ agent: null, reason: 'ambiguous' })
+    expect(chooseHookAgent([], [], 'cursor')).toEqual({ agent: null, reason: 'none' })
+    expect(chooseHookAgent([], ['a', 'b'], 'cursor')).toEqual({ agent: null, reason: 'ambiguous' })
+    expect(chooseHookAgent(['a', 'b'], ['c'], 'cursor')).toEqual({ agent: null, reason: 'ambiguous' })
   })
+
+  it.each(ENGINES.filter((engine) => engine !== 'cursor'))(
+    'rejects a late %s hook when the pane now belongs to a replacement process',
+    (engine) => {
+      const replacement = { agentId: 'replacement-agent', sessionId: 'new-session' }
+      expect(chooseHookAgent([], [replacement], engine)).toEqual({ agent: null, reason: 'none' })
+      expect(chooseHookAgent([replacement], [replacement], engine))
+        .toEqual({ agent: replacement, reason: 'ancestry' })
+    },
+  )
 })
 
 describe('/api/status', () => {
