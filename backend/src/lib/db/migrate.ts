@@ -39,7 +39,12 @@ export function ensureSchema(): void {
 
 type MongoIndex = { name?: string; key?: Record<string, number>; unique?: boolean }
 
-async function dropLegacyUniqueIndex(collection: string, field: string): Promise<void> {
+/**
+ * Drop the unique index on `collection` whose key is EXACTLY `fields` (ascending, same count, same
+ * members). A superset or subset key is a different index — the compound replacement Prisma is
+ * about to install must never match. Idempotent: no such index, no-op.
+ */
+export async function dropLegacyUniqueIndex(collection: string, fields: string[]): Promise<void> {
   try {
     const result = (await prisma.$runCommandRaw({ listIndexes: collection, cursor: {} })) as {
       cursor?: { firstBatch?: MongoIndex[] }
@@ -47,15 +52,15 @@ async function dropLegacyUniqueIndex(collection: string, field: string): Promise
     const index = result.cursor?.firstBatch?.find((candidate) =>
       candidate.unique === true &&
       candidate.key != null &&
-      Object.keys(candidate.key).length === 1 &&
-      candidate.key[field] === 1)
+      Object.keys(candidate.key).length === fields.length &&
+      fields.every((field) => candidate.key![field] === 1))
     if (!index?.name) return
     await prisma.$runCommandRaw({ dropIndexes: collection, index: index.name })
-    logger.info('legacy environment-global unique index removed', { collection, index: index.name })
+    logger.info('legacy unique index removed', { collection, index: index.name })
   } catch (err) {
     // NamespaceNotFound is expected on a cold database. Any real failure will also be retried on the
     // next worker boot, while ensureSchema logs whether the replacement indexes could be installed.
-    logger.warn('legacy unique index cleanup skipped', { collection, field, error: String(err) })
+    logger.warn('legacy unique index cleanup skipped', { collection, fields, error: String(err) })
   }
 }
 
@@ -95,8 +100,20 @@ export async function migrateAutonomousEnvironment(): Promise<void> {
 
   // The old global constraints prevent storing the same plan name/free entitlement in both planes.
   // Drop only those exact single-field unique indexes; Prisma recreates the compound replacements.
-  await dropLegacyUniqueIndex('subscription_plans', 'name')
-  await dropLegacyUniqueIndex('machine_free_entitlements', 'userId')
+  await dropLegacyUniqueIndex('subscription_plans', ['name'])
+  await dropLegacyUniqueIndex('machine_free_entitlements', ['userId'])
+}
+
+/**
+ * `user_daily_presence` went from one row per (user, day) to one per (user, machine, day). The old
+ * `(userId, dayUtc)` unique index would E11000 the first time a person opens the app on a second
+ * computer the same day, so drop it BEFORE db push installs the `(userId, machineId, dayUtc)` unique
+ * and the non-unique `(userId, dayUtc)` that replaces it. Legacy rows are left as they are: they have
+ * no `machineId`, and were already distinct on (userId, dayUtc), so the new unique index builds over
+ * them without conflict.
+ */
+export async function migrateUserPresencePerMachine(): Promise<void> {
+  await dropLegacyUniqueIndex('user_daily_presence', ['userId', 'dayUtc'])
 }
 
 const PENDING_EMAIL_SUFFIX = '@pending.harness.invalid'

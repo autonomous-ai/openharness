@@ -1,22 +1,56 @@
 import Fastify from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+const geo = vi.hoisted(() => ({ stampUserCountry: vi.fn() }))
+vi.mock('../lib/clientGeo.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/clientGeo.js')>()),
+  stampUserCountry: geo.stampUserCountry,
+}))
+
 import { SsoAuthError } from '../lib/ssoAuth.js'
 import { registerAuthMiddleware, resolveSsoAuth, shouldSkipAuth } from './authMiddleware.js'
 
 const authenticate = vi.fn()
 
-async function request() {
+async function request(extraHeaders: Record<string, string> = {}) {
   const app = Fastify()
   registerAuthMiddleware(app, authenticate)
   app.get('/private', async (req) => ({ user: req.user }))
-  const result = await app.inject({ method: 'GET', url: '/private', headers: { authorization: 'Bearer sso-token' } })
+  const result = await app.inject({
+    method: 'GET',
+    url: '/private',
+    headers: { authorization: 'Bearer sso-token', ...extraHeaders },
+  })
   await app.close()
   return result
 }
 
 describe('control-plane SSO auth middleware', () => {
-  beforeEach(() => authenticate.mockReset())
+  beforeEach(() => {
+    authenticate.mockReset()
+    geo.stampUserCountry.mockReset()
+    geo.stampUserCountry.mockResolvedValue(undefined)
+  })
+
+  it('stamps the Cloudflare country on the authenticated user, off the request path', async () => {
+    authenticate.mockResolvedValue({ sub: 'internal-1', email: 'user@example.com', role: 'user' })
+    const res = await request({ 'cf-ipcountry': 'VN' })
+    expect(res.statusCode).toBe(200)
+    expect(geo.stampUserCountry).toHaveBeenCalledWith('internal-1', 'VN')
+  })
+
+  it('stamps nothing when the request did not come through Cloudflare', async () => {
+    authenticate.mockResolvedValue({ sub: 'internal-1', email: 'user@example.com', role: 'user' })
+    await request()
+    expect(geo.stampUserCountry).not.toHaveBeenCalled()
+  })
+
+  it('stamps nothing for a rejected token', async () => {
+    authenticate.mockRejectedValue(new SsoAuthError('expired', 'INVALID_TOKEN'))
+    const res = await request({ 'cf-ipcountry': 'VN' })
+    expect(res.statusCode).toBe(401)
+    expect(geo.stampUserCountry).not.toHaveBeenCalled()
+  })
 
   it('attaches the internal user resolved from a valid access token', async () => {
     authenticate.mockResolvedValue({ sub: 'internal-1', email: 'user@example.com', role: 'user' })
