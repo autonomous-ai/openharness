@@ -105,6 +105,44 @@ describe('local CLI WebSocket', () => {
     ws.close()
   })
 
+  // A window from before it introduced itself on `terminal_open` still gets named on the far
+  // machine's "took control" banner: this daemon knows the window is its own desktop.
+  it('introduces a silent window on a relayed terminal_open, and believes one that speaks', async () => {
+    const backend = new FakeBackend()
+    const relayed: Frame[] = []
+    const relayPool = {
+      acquire: async (_machineId: string, _env: string, _select: Frame, sink: LocalClientSink) => {
+        sink.sendFrame({ type: 'connected', payload: { machineId: 'other-machine', e2ee: false } })
+        return { send: async (frame: Frame) => { relayed.push(frame) }, sendBinary: async () => {}, detach: () => {} }
+      },
+      acquireIsolated: async () => { throw new Error('unused') },
+      invalidate: () => {},
+    }
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, {
+      machineId, backend, autonomousEnv: 'test',
+      relayPool: relayPool as unknown as NonNullable<Parameters<typeof attachLocalWsServer>[1]['relayPool']>,
+      localClient: () => ({ kind: 'desktop', name: 'This Mac', machineId }),
+    })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: 'other-machine', localProtocolVersion: 1 } }))
+    await expect(connected).resolves.toMatchObject({ type: 'connected' })
+
+    ws.send(JSON.stringify({ type: 'terminal_open', payload: { requestId: 'o1', agentId: 'a', cols: 80, rows: 24, protocolVersion: 3 } }))
+    ws.send(JSON.stringify({ type: 'terminal_open', payload: { requestId: 'o2', agentId: 'a', cols: 80, rows: 24, protocolVersion: 3, client: { kind: 'desktop', name: 'Named by the window' } } }))
+    ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'r1' } }))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(relayed).toEqual([
+      { type: 'terminal_open', payload: { requestId: 'o1', agentId: 'a', cols: 80, rows: 24, protocolVersion: 3, client: { kind: 'desktop', name: 'This Mac', machineId } } },
+      { type: 'terminal_open', payload: { requestId: 'o2', agentId: 'a', cols: 80, rows: 24, protocolVersion: 3, client: { kind: 'desktop', name: 'Named by the window' } } },
+      { type: 'agents_list', payload: { requestId: 'r1' } },
+    ])
+    ws.close()
+  })
+
   it('takes the window\'s tile roster, keeps it off the wire, and forgets it on close', async () => {
     const backend = new FakeBackend()
     const rosters: string[][] = []
