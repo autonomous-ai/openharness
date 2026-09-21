@@ -18,9 +18,8 @@ class StoreDiscover extends StatefulWidget {
     required this.entries,
     required this.loaded,
     required this.ratingFor,
-    required this.installed,
     required this.onOpen,
-    required this.onAction,
+    required this.actionsFor,
     required this.onCategory,
     required this.onAll,
     required this.onEngines,
@@ -29,9 +28,8 @@ class StoreDiscover extends StatefulWidget {
   final List<DshEntry> entries;
   final bool loaded;
   final StoreRating Function(DshEntry) ratingFor;
-  final bool Function(String) installed;
   final ValueChanged<String> onOpen;
-  final ValueChanged<DshEntry> onAction;
+  final Widget Function(DshEntry) actionsFor;
   final ValueChanged<String> onCategory;
   final VoidCallback onAll;
   final VoidCallback onEngines;
@@ -112,9 +110,8 @@ class _StoreDiscoverState extends State<StoreDiscover> {
                     const SizedBox(height: 4),
                     _CodingStart(
                       entries: engines,
-                      installed: widget.installed,
                       onOpen: widget.onOpen,
-                      onAction: widget.onAction,
+                      actionsFor: widget.actionsFor,
                       onAll: widget.onEngines,
                     ),
                   ],
@@ -178,10 +175,10 @@ class _StoreDiscoverState extends State<StoreDiscover> {
                     const SizedBox(height: 22),
                     StoreProjectGrid(
                       entries: crafts.take(6).toList(),
+                      showExamples: true,
                       ratingFor: widget.ratingFor,
-                      installed: widget.installed,
                       onOpen: widget.onOpen,
-                      onAction: widget.onAction,
+                      actionsFor: widget.actionsFor,
                     ),
                     const SizedBox(height: 40),
                     const StoreLearningNote(),
@@ -227,6 +224,14 @@ class _CuriosityHero extends StatelessWidget {
       final narrow =
           box.maxWidth < 650 || MediaQuery.textScalerOf(context).scale(14) > 20;
       final compact = box.maxWidth < 1000;
+      // The robot fits the portrait tile; wide artwork keeps its composition
+      // and lettering in the landscape tiles beside it.
+      final portrait =
+          samples
+              .where((entry) => entry.id == 'autonomous/mujoco')
+              .firstOrNull ??
+          samples.firstOrNull;
+      final landscapes = samples.where((entry) => entry != portrait).toList();
       const ink = Color(0xff182b24);
       final copy = Padding(
         padding: EdgeInsets.all(compact ? 28 : 38),
@@ -299,9 +304,9 @@ class _CuriosityHero extends StatelessWidget {
                 children: [
                   Expanded(
                     child: _HeroProject(
-                      entry: samples.first,
+                      entry: portrait!,
                       tall: samples.length > 1,
-                      onTap: () => onOpen(samples.first.id),
+                      onTap: () => onOpen(portrait.id),
                     ),
                   ),
                   if (samples.length > 1) ...[
@@ -309,12 +314,12 @@ class _CuriosityHero extends StatelessWidget {
                     Expanded(
                       child: Column(
                         children: [
-                          for (final entry in samples.skip(1)) ...[
+                          for (final entry in landscapes) ...[
                             _HeroProject(
                               entry: entry,
                               onTap: () => onOpen(entry.id),
                             ),
-                            if (entry != samples.last)
+                            if (entry != landscapes.last)
                               const SizedBox(height: 14),
                           ],
                         ],
@@ -405,15 +410,13 @@ class _HeroProject extends StatelessWidget {
 class _CodingStart extends StatelessWidget {
   const _CodingStart({
     required this.entries,
-    required this.installed,
     required this.onOpen,
-    required this.onAction,
+    required this.actionsFor,
     required this.onAll,
   });
   final List<DshEntry> entries;
-  final bool Function(String) installed;
   final ValueChanged<String> onOpen;
-  final ValueChanged<DshEntry> onAction;
+  final Widget Function(DshEntry) actionsFor;
   final VoidCallback onAll;
 
   @override
@@ -439,7 +442,7 @@ class _CodingStart extends StatelessWidget {
       LayoutBuilder(
         builder: (context, box) {
           final columns =
-              box.maxWidth >= 650 &&
+              box.maxWidth >= 1020 &&
                   MediaQuery.textScalerOf(context).scale(14) <= 18
               ? 3
               : 1;
@@ -463,29 +466,31 @@ class _CodingStart extends StatelessWidget {
                           horizontal: 14,
                           vertical: 10,
                         ),
-                        child: Row(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            EngineMark(
-                              engine: entry.id,
-                              displayName: entry.name,
-                              size: 30,
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                entry.name,
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: grid.AppPalette.textPrimary,
+                            Row(
+                              children: [
+                                EngineMark(
+                                  engine: entry.id,
+                                  displayName: entry.name,
+                                  size: 30,
                                 ),
-                              ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    entry.name,
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: grid.AppPalette.textPrimary,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-                            TextButton(
-                              key: ValueKey('store-action:${entry.id}'),
-                              onPressed: () => onAction(entry),
-                              child: Text(installed(entry.id) ? 'Open' : 'Get'),
-                            ),
+                            const SizedBox(height: 12),
+                            actionsFor(entry),
                           ],
                         ),
                       ),

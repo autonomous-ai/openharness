@@ -29,6 +29,13 @@ conversation where the engine supports it.
 matched, with a session preview on the right built from cached recent turns. Type `>` for commands
 only (also ⇧⌘P).
 
+In the **Harness Store**, installed tools offer **Resume Harness** and **New Harness**.
+Resume returns to the existing harness, including one on another machine. With one matching harness
+it opens directly; with several, a dropdown shows each harness's name, machine and project. Recent
+visits appear first. An open tab is focused; a closed tab is reopened around the same running agent.
+New Harness always opens the creation dialog for separate work. This works the same way for coding
+agents, creative tools and managers. Tools not yet installed offer **Get** first.
+
 ## Panes and layouts
 
 Hover the right or bottom edge of a pane for a split control, or ⌘R and ⌘D to split right and down;

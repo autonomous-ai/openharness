@@ -150,9 +150,11 @@ void main() {
       StoreListing(
         entries: const [_cadViewer],
         ratingFor: (entry) => StoreRating.none(entry.id),
-        installed: (_) => true,
         onOpen: opened.add,
-        onAction: (entry) => acted.add(entry.id),
+        actionsFor: (entry) => TextButton(
+          onPressed: () => acted.add(entry.id),
+          child: const Text('New Harness'),
+        ),
       ),
     );
     final action = find.byKey(
@@ -187,9 +189,8 @@ void main() {
           ],
           loaded: true,
           ratingFor: (entry) => StoreRating.none(entry.id),
-          installed: (_) => false,
           onOpen: (_) {},
-          onAction: (_) {},
+          actionsFor: (_) => const SizedBox(),
           onCategory: (category) => picked = category,
           onAll: () {},
           onEngines: () {},

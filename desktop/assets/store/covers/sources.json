@@ -1,0 +1,167 @@
+[
+  {
+    "asset": "blender.jpg",
+    "credit": "DOGWALK \u00b7 \u00a9 Blender Foundation",
+    "license": "CC BY 4.0",
+    "licenseFile": "LICENSE-blender-CC-BY-4.0",
+    "source": "https://www.blender.org/download/demo-files/",
+    "download": "https://www.cgchannel.com/wp-content/uploads/2025/07/250715_Blender45_5KeyFeatures_f.jpg",
+    "sha256": "83ca829f6e838b846756b5a5a5948611ee4fd86807e39382275ebbd8c2b9c847"
+  },
+  {
+    "asset": "kicad.png",
+    "credit": "KiCad contributors",
+    "license": "CC BY 3.0",
+    "licenseFile": "LICENSE-kicad-CC-BY-3.0",
+    "source": "https://www.kicad.org/about/licenses/",
+    "download": "https://www.kicad.org/img/frontpage/kicad_3dviewer.png",
+    "sha256": "3f0a2179fa8bcf35e15321bacb8e089e063b6b46155832939168b413e728b218"
+  },
+  {
+    "asset": "freecad.png",
+    "credit": "FreeCAD contributors",
+    "license": "LGPL 2.1",
+    "licenseFile": "LICENSE-freecad-LGPL-2.1",
+    "source": "https://github.com/FreeCAD/FreeCAD-Homepage",
+    "download": "https://raw.githubusercontent.com/FreeCAD/FreeCAD-Homepage/main/images/cover-photo.png",
+    "sha256": "e019c7bd3906a3615b2025f4e425ef42f0afe06a1f400a3d99ae72306cbe69ad"
+  },
+  {
+    "asset": "mujoco.png",
+    "credit": "MuJoCo Menagerie \u00b7 Unitree Robotics",
+    "license": "BSD 3-Clause",
+    "licenseFile": "LICENSE-mujoco-unitree-BSD-3-Clause",
+    "source": "https://github.com/google-deepmind/mujoco_menagerie/tree/main/unitree_g1",
+    "download": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/main/unitree_g1/g1.png",
+    "sha256": "72bb2dd0bf7fab732229554d1bd80b561aa161a9dabe45778ffa70193e05e1e7"
+  },
+  {
+    "asset": "marimo.png",
+    "credit": "marimo contributors",
+    "license": "Apache 2.0",
+    "licenseFile": "LICENSE-marimo-Apache-2.0",
+    "source": "https://github.com/marimo-team/marimo",
+    "download": "https://raw.githubusercontent.com/marimo-team/marimo/main/docs/_static/example-thumbs/altair.png",
+    "sha256": "e80cdae67d7a7e73077c3032fa8028ccf3b2513a603bfef9347d634ff247d8cf"
+  },
+  {
+    "asset": "workshop.jpg",
+    "source": "store/showcase/autonomous-workshop/honeycomb-desk-organizer.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "7a6c01efd6b95bde2148a5255769d02502ac7c78af10fa6c0df5071418f870ac"
+  },
+  {
+    "asset": "creative-direction.jpg",
+    "source": "store/showcase/creative-direction/stillwater.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "c5aff04056cbf73c53f47b94b6b27f793505c023a9abe4f5c33464c7fab80219"
+  },
+  {
+    "asset": "generative-art.png",
+    "source": "store/showcase/generative-art/canopy.png",
+    "credit": "OpenHarness example",
+    "sha256": "a95b23319b1b40156fc0ba2466bac02a8882dca2166875cbb30fdf89350a6c9c"
+  },
+  {
+    "asset": "voxel-worlds.jpg",
+    "source": "store/showcase/voxel-worlds/amber-vault.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "a1c23d78a5949d33343f6fa1e292fca2f927b4f235d90838f5ba7a9264738c33"
+  },
+  {
+    "asset": "music-studio.png",
+    "source": "store/showcase/music-studio/keepsake.png",
+    "credit": "OpenHarness example",
+    "sha256": "e5deb68411dfe552283cf3ef3ea06745de56e4f6d55edcde9e730f9f8bfbfefa"
+  },
+  {
+    "asset": "data-studio.jpg",
+    "source": "store/showcase/data-studio/evidence.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "34b64bfbc0b854fe1b2d2d2abae3a0b945888444d9358666756b0c575c126560"
+  },
+  {
+    "asset": "drone-pilot.jpg",
+    "source": "store/showcase/drone-pilot/works-yard.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "edce0970db7c6f406acdab1222b690c93233542bff8bbca558a18fd26f02b03a"
+  },
+  {
+    "asset": "game-master.jpg",
+    "source": "store/showcase/game-master/signal-garden.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "84030f9ae091eb270a83e52e8c932cc59f67c7939fbb1e1fbccc5ea8b42f50a9"
+  },
+  {
+    "asset": "lab-bench.jpg",
+    "source": "store/showcase/lab-bench/canopy.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "97241e98cde1f352ae2be9a3941f5376e8ab8fcf820c1f3842271474c14e1816"
+  },
+  {
+    "asset": "jev-browser.jpg",
+    "source": "store/showcase/jev-browser/jev-picks-the-columns.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "6ad1491a161e00035a755e990aff05455b8708436adb0c94df078af02fc9d6a9"
+  },
+  {
+    "asset": "jev-sheets.jpg",
+    "source": "store/showcase/jev-sheets/typed-column.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "8635a777ab9a5f0ddb25d9fdbe27cfceb9805b10a48e63f830c7c53916c7ff03"
+  },
+  {
+    "asset": "roundtable.jpg",
+    "source": "store/showcase/roundtable/claim-map-mid-round.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "afeec4a105fd44df005cae9012016bbbf98160543c2a654a15d00760f08a3c90"
+  },
+  {
+    "asset": "phaser.jpg",
+    "source": "store/showcase/phaser/sunset-fox-platformer.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "85b7e4cca0af9052a1200a4bfcde9e9c940d0cac49576943c0e9259f35904fdf"
+  },
+  {
+    "asset": "manim.jpg",
+    "source": "store/showcase/manim/fourier-knight.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "4180e989ae12fbb625a6bc14e3bc238898a5cf0fc5f0d03580a77d1f7766a03e"
+  },
+  {
+    "asset": "openmontage.jpg",
+    "source": "store/showcase/openmontage/lanterns-title-sequence.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "0d988471fdcc09e8ab1731529de92313d12954b5792be204fc4d7905bd661441"
+  },
+  {
+    "asset": "remotion.jpg",
+    "source": "store/showcase/remotion/year-in-running.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "436759f611b80d13ce8bc9640af120dd0b4413c1bd4baf1a9b7a465730653b02"
+  },
+  {
+    "asset": "strudel.jpg",
+    "source": "store/showcase/strudel/synthwave-night-drive.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "e0031b6e20746743f61d7fd08a158c0d0a75a086d994ef0b49d34a15c52d3196"
+  },
+  {
+    "asset": "typst.jpg",
+    "source": "store/showcase/typst/orbital-mechanics-guide.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "34e8d44089ba7189a0d3eba98f159a62d2537b562f0a3b766e21852f7fde0274"
+  },
+  {
+    "asset": "excalidraw.jpg",
+    "source": "store/showcase/excalidraw/url-shortener-architecture.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "6652b64c29304a9e5af2d1e243d54cc19a32fbbfdf5d9f7d6f83ae30433fb1bc"
+  },
+  {
+    "asset": "rdkit.jpg",
+    "source": "store/showcase/rdkit/ibuprofen-analogues.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "eed9fbe1857e9378b6c7117619cf0636bae64be58764e9f0157c1389568a9503"
+  }
+]

@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/engine_identity.dart';
 import 'store_editorial.dart';
+import 'store_cover_art.dart';
 import 'store_exploration.dart';
 import 'store_models.dart';
 
@@ -63,16 +65,18 @@ class StoreExploreHeading extends StatelessWidget {
   );
 }
 
-/// A real output where one is available, otherwise the package's actual mark.
-/// A failed community image never hides the harness or makes its card unusable.
+/// Curated covers for browsing; actual output images for prompt examples.
+/// A failed cover falls back to the example, then the package's mark.
 class StoreProjectArt extends StatelessWidget {
   const StoreProjectArt({
     super.key,
     required this.entry,
     this.fit = BoxFit.cover,
+    this.showExample = false,
   });
   final DshEntry entry;
   final BoxFit fit;
+  final bool showExample;
 
   @override
   Widget build(BuildContext context) {
@@ -94,9 +98,9 @@ class StoreProjectArt extends StatelessWidget {
         entry.examples.map((e) => e.image).whereType<String>().firstOrNull ??
         entry.screenshots.firstOrNull;
     final uri = url == null ? null : Uri.tryParse(url);
-    final Widget art;
+    final Widget example;
     if (asset != null) {
-      art = Image.asset(
+      example = Image.asset(
         asset,
         fit: fit,
         excludeFromSemantics: true,
@@ -104,7 +108,7 @@ class StoreProjectArt extends StatelessWidget {
         errorBuilder: (_, _, _) => fallback,
       );
     } else if (uri?.scheme == 'https' && uri!.hasAuthority) {
-      art = Image.network(
+      example = Image.network(
         url!,
         fit: fit,
         excludeFromSemantics: true,
@@ -112,14 +116,88 @@ class StoreProjectArt extends StatelessWidget {
         errorBuilder: (_, _, _) => fallback,
       );
     } else {
-      art = fallback;
+      example = fallback;
     }
+    final cover = showExample ? null : storeCoverArt[entry.id];
+    final art = cover == null
+        ? example
+        : Image.asset(
+            cover.asset,
+            fit: cover.fit,
+            alignment: cover.alignment,
+            excludeFromSemantics: true,
+            errorBuilder: (_, _, _) => example,
+            frameBuilder: (context, child, frame, _) {
+              if (frame == null) return example;
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  ColoredBox(
+                    color: cover.background ?? grid.AppPalette.panelBg,
+                    child: ClipRect(
+                      child: Transform.scale(scale: cover.scale, child: child),
+                    ),
+                  ),
+                  if (cover.credit != null && cover.source != null)
+                    Positioned(
+                      right: 8,
+                      bottom: 8,
+                      child: _CoverCredit(cover: cover),
+                    ),
+                ],
+              );
+            },
+          );
     return Semantics(
       label: '${entry.name} preview',
       image: true,
       child: SizedBox.expand(child: art),
     );
   }
+}
+
+class _CoverCredit extends StatelessWidget {
+  const _CoverCredit({required this.cover});
+  final StoreCoverArt cover;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message:
+        '${cover.description}\n${cover.credit} · ${cover.license}\nView source',
+    child: Material(
+      color: const Color(0xc91a1b1e),
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () async {
+          final messenger = ScaffoldMessenger.maybeOf(context);
+          try {
+            if (await launchUrl(
+              Uri.parse(cover.source!),
+              mode: LaunchMode.externalApplication,
+            )) {
+              return;
+            }
+          } catch (_) {
+            // Keep the card usable if an external browser is unavailable.
+          }
+          if (messenger?.mounted == true) {
+            messenger!.showSnackBar(
+              const SnackBar(content: Text('Could not open the image source')),
+            );
+          }
+        },
+        child: Semantics(
+          label: 'Image credit: ${cover.credit}. ${cover.license}. View source',
+          button: true,
+          child: const Padding(
+            padding: EdgeInsets.all(9),
+            child: Icon(LucideIcons.info300, size: 14, color: Colors.white),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class StoreExploreCard extends StatefulWidget {
@@ -192,15 +270,15 @@ class StoreProjectGrid extends StatelessWidget {
     super.key,
     required this.entries,
     required this.ratingFor,
-    required this.installed,
     required this.onOpen,
-    required this.onAction,
+    required this.actionsFor,
+    this.showExamples = false,
   });
   final List<DshEntry> entries;
   final StoreRating Function(DshEntry) ratingFor;
-  final bool Function(String) installed;
   final ValueChanged<String> onOpen;
-  final ValueChanged<DshEntry> onAction;
+  final Widget Function(DshEntry) actionsFor;
+  final bool showExamples;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -223,9 +301,9 @@ class StoreProjectGrid extends StatelessWidget {
                 key: ValueKey('store-card:${entry.id}'),
                 entry: entry,
                 rating: ratingFor(entry),
-                installed: installed(entry.id),
                 onOpen: () => onOpen(entry.id),
-                onAction: () => onAction(entry),
+                actions: actionsFor(entry),
+                showExample: showExamples,
               ),
             ),
         ],
@@ -239,21 +317,27 @@ class _ProjectCard extends StatelessWidget {
     super.key,
     required this.entry,
     required this.rating,
-    required this.installed,
     required this.onOpen,
-    required this.onAction,
+    required this.actions,
+    required this.showExample,
   });
   final DshEntry entry;
   final StoreRating rating;
-  final bool installed;
   final VoidCallback onOpen;
-  final VoidCallback onAction;
+  final Widget actions;
+  final bool showExample;
 
   @override
   Widget build(BuildContext context) {
     final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+    // Upstream covers describe the tool, not the result of our example prompt.
+    final cover = showExample ? null : storeCoverArt[entry.id];
     final prompt = storeProjectPrompt(entry);
-    final title = storeProjectTitle(entry);
+    final title = cover == null
+        ? storeProjectTitle(entry)
+        : prompt == null
+        ? null
+        : storeBenefit(entry);
     Future<void> copyPrompt() async {
       await Clipboard.setData(ClipboardData(text: prompt!));
       if (context.mounted) {
@@ -268,9 +352,12 @@ class _ProjectCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          AspectRatio(aspectRatio: 1.65, child: StoreProjectArt(entry: entry)),
+          AspectRatio(
+            aspectRatio: 1.65,
+            child: StoreProjectArt(entry: entry, showExample: showExample),
+          ),
           SizedBox(
-            height: 222 * scale,
+            height: 288 * scale,
             child: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
@@ -297,6 +384,15 @@ class _ProjectCard extends StatelessWidget {
                           ),
                         ),
                       ),
+                      if (entry.hasUpdate)
+                        Tooltip(
+                          message: 'Update available',
+                          child: Icon(
+                            LucideIcons.arrowUpCircle300,
+                            size: 16,
+                            color: grid.AppPalette.accentOnSurface,
+                          ),
+                        ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -315,7 +411,11 @@ class _ProjectCard extends StatelessWidget {
                     const SizedBox(height: 8),
                   ],
                   Text(
-                    prompt == null ? storeBenefit(entry) : '“$prompt”',
+                    prompt == null
+                        ? storeBenefit(entry)
+                        : cover == null
+                        ? '“$prompt”'
+                        : 'Try: “$prompt”',
                     maxLines: title == null ? 3 : 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -382,26 +482,10 @@ class _ProjectCard extends StatelessWidget {
                           color: grid.AppPalette.textSecondary,
                         ),
                       ],
-                      const Spacer(),
-                      TextButton(
-                        key: ValueKey('store-action:${entry.id}'),
-                        onPressed: onAction,
-                        style: TextButton.styleFrom(
-                          foregroundColor: grid.AppPalette.textPrimary,
-                          backgroundColor: grid.AppSurface.selectedFill,
-                          minimumSize: const Size(70, 34),
-                          shape: const StadiumBorder(),
-                        ),
-                        child: Text(
-                          entry.hasUpdate
-                              ? 'Update'
-                              : installed
-                              ? 'Open'
-                              : 'Get',
-                        ),
-                      ),
                     ],
                   ),
+                  const SizedBox(height: 8),
+                  actions,
                 ],
               ),
             ),
