@@ -247,12 +247,14 @@ final harnessCommands = <HarnessCommand>[
     'pane.split_right',
     'Split right…',
     ShortcutGroup.panes,
+    extraKeys: ['cmd+r'],
     nativeAction: 'splitRight',
   ),
   const HarnessCommand(
     'pane.split_down',
     'Split down…',
     ShortcutGroup.panes,
+    extraKeys: ['cmd+d'],
     nativeAction: 'splitDown',
   ),
   const HarnessCommand(

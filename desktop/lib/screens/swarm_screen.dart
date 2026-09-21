@@ -64,7 +64,6 @@ import '../widgets/swarm_search_input.dart';
 import '../widgets/swarm_attention.dart';
 import '../widgets/swarm_switcher.dart';
 import '../widgets/swarm_wallpaper.dart';
-import '../widgets/agent_action_icons.dart';
 import '../widgets/swarm_icon.dart';
 import '../widgets/task_palette.dart';
 import '../state/command_bar.dart';
@@ -1821,19 +1820,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
   }
 
-  Future<void> _splitAgent(
-    PaneResizeAxis axis, {
-    int? paneId,
-    bool create = false,
-  }) async {
+  Future<void> _splitAgent(PaneResizeAxis axis, {int? paneId}) async {
     final split = app.preparePaneSplit(axis, paneId: paneId);
     if (split == null) return;
     if (paneId != null) app.focusPane(split.paneId);
-    if (create) {
-      await _newAgent(split: split);
-    } else {
-      _openSearch(adding: true, split: split);
-    }
+    _openSearch(adding: true, split: split);
   }
 
   Future<void> _showHistory() async {
@@ -2073,7 +2064,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   Widget _buildSearchOverlay(BuildContext context) {
     final search = _search!;
-    final commandsOnly = search.isCommandMode;
     // Results sit above a stable input line in the workspace command dock.
     // The input is visually below results, but Tab still starts at the first
     // result rather than a cached, offscreen ListView row below the input.
@@ -2095,7 +2085,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     search.title,
                     style: boxMonoStyle(size: 12, color: kBoxFaint),
                   ),
-                  if (search.placement == HarnessPlacement.currentTab)
+                  if (search.placement == HarnessPlacement.currentTab ||
+                      search.split != null)
                     Expanded(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -2145,22 +2136,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     fontSize: 13,
                     terminal: true,
                     hintText: search.hint,
-                    trailing: !commandsOnly && search.split != null
-                        ? KeymapRegion(
-                            contextKind: KeymapContext.workspace,
-                            child: IconButton(
-                              key: const ValueKey('harness-picker-new'),
-                              tooltip: 'New Harness',
-                              onPressed: search.canCreate
-                                  ? () => _runShortcut('agent.new')
-                                  : null,
-                              icon: const Icon(
-                                AgentActionIcons.create,
-                                size: 18,
-                              ),
-                            ),
-                          )
-                        : null,
                   ),
                 ),
               ),
@@ -2902,6 +2877,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                         child: PaneGrid(
                                           notifier: app,
                                           swarmMode: true,
+                                          onSplit: (paneId, axis) =>
+                                              _splitAgent(axis, paneId: paneId),
                                           empty:
                                               app.panes.isEmpty &&
                                                   !app.activeSwarm.isStore &&

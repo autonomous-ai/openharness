@@ -257,6 +257,8 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     add(file, "Rename Tab…", "r", "renameActive", [.command, .shift])
     add(file, "Close Tab", "w", "closeActive")
     file.addItem(.separator())
+    add(file, "Split Right…", "r", "splitRight")
+    add(file, "Split Down…", "d", "splitDown")
     add(file, "Zoom Pane", "", "zoomPane")
     add(file, "Close Pane", "w", "closePane", [.command, .shift])
     install(file, at: 1)
