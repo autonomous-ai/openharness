@@ -164,3 +164,9 @@ compares the resume table against the daemon's own source when the two are check
 One thing the tests cannot cover: the pane has been exercised through its server and its markup, not in a
 browser. The round trip it describes — pause, then resume with the conversation intact — was verified against
 a live Claude Code session end to end.
+
+## Credit and stewardship
+
+Built by Autonomous for Harness, MIT. It reads and drives the daemon, tmux server and engines Harness
+already runs, and adds no service of its own. Issues with how the daemon records, stops or resumes an
+agent belong in the Harness CLI; the rules, `hps` and the pane belong here.
