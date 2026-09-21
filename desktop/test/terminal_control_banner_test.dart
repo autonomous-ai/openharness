@@ -222,9 +222,12 @@ void main() {
     await finish(tester);
   });
 
-  testWidgets('a closed stream gets the same band, worded as a reconnect', (
+  testWidgets('a closed stream keeps the header chip alone, no band', (
     tester,
   ) async {
+    // closed/error are usually a beat long — the app reattaches them itself —
+    // so a band there would flash; they keep the old Reconnect chip and ⏎
+    // goes to the read-only terminal as before.
     await pump(tester);
     session.handleFrame('terminal_closed', {
       'streamId': 'stream-a0',
@@ -232,14 +235,13 @@ void main() {
     });
     await tester.pump();
     expect(session.status, TerminalSessionStatus.closed);
-    expect(find.text('This terminal is disconnected'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Reconnect'), findsOneWidget);
-    expect(find.textContaining('Session exited.'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Reconnect'), findsOneWidget);
+    expect(find.byType(FilledButton), findsNothing);
+    expect(takenOverTitle, findsNothing);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
-    expect(opens(), ['terminal_open']);
-    expect(find.text('Reconnecting…'), findsOneWidget);
+    expect(opens(), isEmpty);
     await finish(tester);
   });
 

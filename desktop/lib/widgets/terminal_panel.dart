@@ -196,7 +196,6 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// through `opening` saying so. A first open, or a resync, is not that and
   /// shows nothing.
   bool _retakingControl = false;
-  TerminalSessionStatus? _retakingFrom;
 
   /// The status the last frame was built for. The grid normally rebuilds this
   /// panel on every session change, but the banner must not depend on that.
@@ -614,23 +613,17 @@ class _TerminalPanelState extends State<TerminalPanel>
         identical(primary, _composerFocus);
   }
 
-  /// The pane cannot take input and a person can do something about it:
-  /// another client took the stream ([TerminalSessionStatus.takenOver]) or it
-  /// closed/errored, and the header's chip would offer Take control /
-  /// Reconnect. Not `opening`/`resyncing` (the pane is already recovering on
-  /// its own) and not a pane-level [TerminalPanel.notice] (offline, unlinked —
-  /// nothing here would help), and never a shared read-only view.
-  bool get _inputBlocked {
-    if (widget.readOnly || widget.notice != null) return false;
-    return switch (widget.session.status) {
-      TerminalSessionStatus.takenOver ||
-      TerminalSessionStatus.closed ||
-      TerminalSessionStatus.error => true,
-      TerminalSessionStatus.opening ||
-      TerminalSessionStatus.resyncing ||
-      TerminalSessionStatus.controlling => false,
-    };
-  }
+  /// Another client took the stream ([TerminalSessionStatus.takenOver]) and
+  /// only a person can take it back. That state alone: `closed`/`error` are
+  /// usually a beat long — the app reattaches them itself
+  /// (`_paneNeedsAttach`) — and a band that flashes up for those frames is
+  /// noise, where a taken-over pane stays taken over until somebody acts.
+  /// Never a pane-level [TerminalPanel.notice] (offline, unlinked — nothing
+  /// here would help) and never a shared read-only view.
+  bool get _inputBlocked =>
+      !widget.readOnly &&
+      widget.notice == null &&
+      widget.session.status == TerminalSessionStatus.takenOver;
 
   /// Retakes the stream, the same path as the header chip: `selectAgent` on a
   /// dead pane is `reopen()`, and a repeat while it is already `opening` only
@@ -638,10 +631,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   Future<void> _takeControl() async {
     final session = widget.session;
     if (_inputBlocked && !_retakingControl) {
-      setState(() {
-        _retakingControl = true;
-        _retakingFrom = session.status;
-      });
+      setState(() => _retakingControl = true);
     }
     await widget.notifier.selectAgent(session.machineId, session.agentId);
     // `selectAgent` declines quietly when the pane cannot be attached (machine
@@ -1526,11 +1516,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                       left: 0,
                       right: 0,
                       child: _ControlBanner(
-                        status: _inputBlocked
-                            ? session.status
-                            : _retakingFrom ?? session.status,
                         busy: !_inputBlocked,
-                        errorMessage: session.errorMessage,
                         nudged: _controlNudged,
                         nudge: _controlNudge,
                         onTakeControl: _inputBlocked
@@ -1680,9 +1666,9 @@ class _TerminalHeader extends StatelessWidget {
   /// where the pane cannot name a live agent to end.
   final VoidCallback? onDelete;
 
-  /// Retakes a dead or taken-over stream. Falls back to `selectAgent` when
-  /// the panel did not supply one, which is the same call.
-  final VoidCallback? onReconnect;
+  /// Retakes a dead or taken-over stream — the panel's `_takeControl`, so the
+  /// chip and the in-pane band drive one path.
+  final VoidCallback onReconnect;
   final bool compact;
   final VoidCallback? onToggleZoom;
   final bool zoomed;
@@ -1708,7 +1694,7 @@ class _TerminalHeader extends StatelessWidget {
     this.onRestart,
     this.onFork,
     this.onDelete,
-    this.onReconnect,
+    required this.onReconnect,
     this.compact = false,
     this.onToggleZoom,
     this.zoomed = false,
@@ -1768,9 +1754,6 @@ class _TerminalHeader extends StatelessWidget {
         (session.status == TerminalSessionStatus.error ||
             session.status == TerminalSessionStatus.closed ||
             session.status == TerminalSessionStatus.takenOver);
-    void reconnect() =>
-        (onReconnect ??
-        () => notifier.selectAgent(session.machineId, session.agentId))();
     final machine = notifier.stateOf(session.machineId);
     final agent = machine?.agents
         .where((a) => a.id == session.agentId)
@@ -1876,7 +1859,7 @@ class _TerminalHeader extends StatelessWidget {
                             message: '${status.label}: ${status.detail}',
                             child: IconButton(
                               tooltip: status.label,
-                              onPressed: canReconnect ? reconnect : null,
+                              onPressed: canReconnect ? onReconnect : null,
                               icon: Icon(status.icon, size: 14),
                               style: IconButton.styleFrom(
                                 foregroundColor: color,
@@ -1904,7 +1887,7 @@ class _TerminalHeader extends StatelessWidget {
                               child: Tooltip(
                                 message: status.detail,
                                 child: TextButton(
-                                  onPressed: canReconnect ? reconnect : null,
+                                  onPressed: canReconnect ? onReconnect : null,
                                   style: TextButton.styleFrom(
                                     foregroundColor: color,
                                     disabledForegroundColor: AppColors.textSoft,
@@ -2129,22 +2112,21 @@ class _LinkModeMark extends StatelessWidget {
   }
 }
 
-/// The band over a pane whose stream is not this app's to type into: another
-/// client took it, or it closed. It says what happened, that keys go nowhere,
-/// and how to get it back — the header's chip carries the same fact, but at
-/// 11pt in a corner it was being read by nobody, and people sat typing.
+/// The band over a pane another client took the stream of. It says what
+/// happened, that keys go nowhere, and how to get it back — the header's chip
+/// carries the same fact, but at 11pt in a corner it was being read by nobody,
+/// and people sat typing. Taken-over only, not closed/error: see
+/// [_TerminalPanelState._inputBlocked] for why those keep the chip alone.
 ///
 /// ⏎ is named on the button itself and in the line under the title, always:
 /// the first cut showed it only once the terminal held focus and hid the line
 /// on a compact header, which is every pane in swarm mode — so the one thing
 /// a person needed to know was the one thing the band left out.
 ///
-/// [status] is the state that put the banner up, never `opening`: while the
-/// pane is retaking the stream [busy] is set and the band keeps its place with
-/// the button swapped for a spinner, so answering it does not jump the layout.
+/// While the pane is retaking the stream [busy] is set and the band keeps its
+/// place with the button swapped for a spinner, so answering it does not jump
+/// the layout.
 class _ControlBanner extends StatelessWidget {
-  final TerminalSessionStatus status;
-  final String? errorMessage;
   final bool busy;
 
   /// A key was just typed into the pane; see [_TerminalPanelState._nudgeControlBanner].
@@ -2157,8 +2139,6 @@ class _ControlBanner extends StatelessWidget {
   final VoidCallback? onFocusTerminal;
 
   const _ControlBanner({
-    required this.status,
-    required this.errorMessage,
     required this.busy,
     required this.nudged,
     required this.nudge,
@@ -2166,41 +2146,19 @@ class _ControlBanner extends StatelessWidget {
     required this.onFocusTerminal,
   });
 
-  bool get _takenOver => status == TerminalSessionStatus.takenOver;
-
-  String get title {
-    if (busy) return _takenOver ? 'Taking control…' : 'Reconnecting…';
-    return _takenOver
-        ? 'Another app took control of this terminal'
-        : 'This terminal is disconnected';
-  }
-
-  String get action => _takenOver ? 'Take control' : 'Reconnect';
+  String get title =>
+      busy ? 'Taking control…' : 'Another app took control of this terminal';
 
   String? get detail {
     if (busy) return null;
-    final verb = _takenOver ? 'take control' : 'reconnect';
-    if (nudged) return 'Keys are ignored — press ⏎ to $verb.';
-    if (_takenOver) {
-      return 'Typing is paused. Press ⏎ or click Take control to type here again.';
-    }
-    final reason = errorMessage ?? 'Retained output is read only.';
-    return '$reason Press ⏎ to reconnect.';
+    if (nudged) return 'Keys are ignored — press ⏎ to take control.';
+    return 'Typing is paused. Press ⏎ or click Take control to type here again.';
   }
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final ink = switch (status) {
-      TerminalSessionStatus.takenOver => AppColors.warning,
-      TerminalSessionStatus.error => AppColors.danger,
-      _ => AppColors.mutedStrong,
-    };
-    final icon = busy
-        ? null
-        : _takenOver
-        ? Icons.lock_outline
-        : Icons.refresh;
+    final ink = AppColors.warning;
     final detail = this.detail;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     // Composited over the pane's own ground, as [UpdateNotice] is over the
@@ -2244,8 +2202,8 @@ class _ControlBanner extends StatelessWidget {
                 // and the button on one line; there the button takes a line of
                 // its own under the title rather than running off the edge.
                 final narrow = constraints.maxWidth < 340;
-                final lead = icon != null
-                    ? Icon(icon, size: 16, color: ink)
+                final lead = !busy
+                    ? Icon(Icons.lock_outline, size: 16, color: ink)
                     : SizedBox(
                         width: 16,
                         height: 16,
@@ -2303,10 +2261,7 @@ class _ControlBanner extends StatelessWidget {
                 );
                 final button = busy
                     ? null
-                    : _ControlBannerButton(
-                        label: action,
-                        onPressed: onTakeControl,
-                      );
+                    : _ControlBannerButton(onPressed: onTakeControl);
                 if (narrow) {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2345,9 +2300,8 @@ class _ControlBanner extends StatelessWidget {
 /// ink rather than [KeyCap]'s well fill, which would sit as a grey square on
 /// the accent.
 class _ControlBannerButton extends StatelessWidget {
-  final String label;
   final VoidCallback? onPressed;
-  const _ControlBannerButton({required this.label, required this.onPressed});
+  const _ControlBannerButton({required this.onPressed});
 
   @override
   Widget build(BuildContext context) {
@@ -2364,7 +2318,7 @@ class _ControlBannerButton extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            label,
+            'Take control',
             style: TextStyle(
               fontFamily: AppFonts.sans,
               fontSize: 12,
