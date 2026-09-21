@@ -627,6 +627,20 @@ describe('commandSupportsFlagInInteractiveShell', () => {
     ).resolves.toBe('supported')
   })
 
+  // A shell's own failure exits 1 — as zsh's read-only `status` did — and must not read as a missing
+  // flag: only the probe's own "not in the help" exit refuses an engine.
+  it('does not read a shell failure as a missing flag', async () => {
+    const shellDir = mkdtempSync(join(tmpdir(), 'harness-engine-shell-'))
+    dirs.push(shellDir)
+    const shell = join(shellDir, 'bash')
+    writeFileSync(shell, '#!/bin/sh\nexit 1\n')
+    chmodSync(shell, 0o700)
+
+    await expect(
+      commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', shell),
+    ).resolves.toBe('unknown')
+  })
+
   it('does not reject a CLI when its help command cannot be inspected', async () => {
     const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-capability-'))
     dirs.push(binDir)

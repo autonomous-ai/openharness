@@ -799,6 +799,13 @@ export async function commandAvailableInInteractiveShell(
 export type CommandFlagSupport = 'supported' | 'unsupported' | 'unknown'
 
 /**
+ * The probe's one "help ran, the flag is not in it" exit. Not 1: that is what a shell exits with
+ * for its own failures (the zsh `status` bug was one), and each of them would be a false refusal.
+ * Shells fail with 1, 2, 126, 127 or 128+n, never this.
+ */
+const FLAG_UNSUPPORTED_EXIT = 64
+
+/**
  * Checks a CLI's own help from the same interactive shell that would launch
  * it. `unknown` is deliberately non-blocking: a broken or unusually slow help
  * command must not turn an otherwise usable engine into a false refusal.
@@ -819,7 +826,7 @@ export async function commandSupportsFlagInInteractiveShell(
     'help="$("$1" --help 2>&1)"',
     'harness_help_status=$?',
     '[ "$harness_help_status" -eq 0 ] || exit 2',
-    'case "$help" in *"$2"*) exit 0 ;; *) exit 1 ;; esac',
+    `case "$help" in *"$2"*) exit 0 ;; *) exit ${FLAG_UNSUPPORTED_EXIT} ;; esac`,
   ].join('\n')
   return await new Promise((resolve) => {
     execFile(
@@ -830,7 +837,7 @@ export async function commandSupportsFlagInInteractiveShell(
         if (!error) resolve('supported')
         else {
           const code = (error as { code?: number | string }).code
-          resolve(code === 1 || code === '1' ? 'unsupported' : 'unknown')
+          resolve(Number(code) === FLAG_UNSUPPORTED_EXIT ? 'unsupported' : 'unknown')
         }
       },
     )
