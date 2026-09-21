@@ -291,12 +291,23 @@ void main() {
   });
 
   group('describeInstallFailure', () {
-    InstallFailure describe({List<String> lines = const [], String? detail}) {
+    InstallFailure describe({
+      List<String> lines = const [],
+      String? detail,
+      String? code,
+    }) {
       final run = DshInstallRun('a/b', startedAt: _t0);
       for (final line in lines) {
         run.apply(DshInstallProgress(id: 'a/b', phase: 'doctor', line: line));
       }
-      run.apply(DshInstallProgress(id: 'a/b', phase: 'failed', detail: detail));
+      run.apply(
+        DshInstallProgress(
+          id: 'a/b',
+          phase: 'failed',
+          detail: detail,
+          code: code,
+        ),
+      );
       return describeInstallFailure(run, 'Typst');
     }
 
@@ -334,7 +345,101 @@ void main() {
       expect(unknown.title, 'disk full');
       expect(unknown.body, isNull);
       expect(unknown.command, isNull);
+      expect(unknown.kind, InstallFailureKind.unknown);
       expect(describe().title, 'Install failed');
+    });
+
+    test('the code says which kind of failure, before any wording is read', () {
+      // The network: git's words, and the daemon's own retries, both count.
+      final stalled = describe(
+        code: 'CLONE_FAILED',
+        detail: 'git clone exited 128: error: RPC failed; curl 28 Operation too slow',
+      );
+      expect(stalled.kind, InstallFailureKind.network);
+      expect(stalled.title, 'Could not download Typst.');
+      expect(stalled.hint, 'Usually the network. Try again.');
+      final gaveUp = describe(
+        code: 'CLONE_FAILED',
+        detail:
+            'git clone exited 128: fatal: early EOF · gave up after 3 attempts',
+      );
+      expect(gaveUp.kind, InstallFailureKind.network);
+      expect(
+        gaveUp.hint,
+        'Tried 3 times. Check the connection on this machine, then try again.',
+      );
+      // A repository that is not there is a failed download, but not the network.
+      final gone = describe(
+        code: 'CLONE_FAILED',
+        detail: 'git clone exited 128: fatal: repository not found',
+      );
+      expect(gone.kind, InstallFailureKind.unknown);
+      expect(gone.title, 'Could not download Typst.');
+      expect(gone.hint, isNull);
+      // A daemon too old to send a code: the same words, read from git.
+      final old = describe(detail: 'git clone exited 128: fatal: early EOF');
+      expect(old.kind, InstallFailureKind.network);
+
+      final broken = describe(
+        code: 'INVALID_MANIFEST',
+        detail: 'no harness.json in /tmp/x',
+      );
+      expect(broken.kind, InstallFailureKind.package);
+      expect(broken.title, 'The Typst package is broken.');
+      expect(broken.body, 'no harness.json in /tmp/x');
+      expect(broken.hint, contains('will not help'));
+
+      final busy = describe(
+        code: 'DSH_BUSY',
+        detail: 'a/b is already being installed, updated or removed.',
+      );
+      expect(busy.kind, InstallFailureKind.busy);
+      expect(busy.title, 'Already installing Typst on this machine.');
+
+      final lost = describe(
+        code: 'CONNECTION',
+        detail: 'Lost the connection to studio while installing.',
+      );
+      expect(lost.kind, InstallFailureKind.network);
+      expect(lost.title, 'Lost the connection to studio while installing.');
+      final lostAfterDoctor = describe(
+        code: 'CONNECTION',
+        lines: ['miss uv'],
+        detail: 'Lost the connection to studio while installing.',
+      );
+      expect(
+        lostAfterDoctor.title,
+        'Lost the connection to studio while installing.',
+      );
+
+      final setup = describe(
+        code: 'SETUP_FAILED',
+        detail: 'setup exited 1 · npm ERR! code EACCES',
+      );
+      expect(setup.kind, InstallFailureKind.runtime);
+      expect(
+        setup.title,
+        'Setting up the Typst toolchain failed on this machine.',
+      );
+      expect(setup.body, 'setup exited 1 · npm ERR! code EACCES');
+
+      // A doctor miss the table knows still wins over the generic doctor sentence.
+      final uv = describe(
+        code: 'DOCTOR_FAILED',
+        lines: ['miss uv (https://docs.astral.sh/uv)'],
+      );
+      expect(uv.kind, InstallFailureKind.runtime);
+      expect(uv.command, 'curl -LsSf https://astral.sh/uv/install.sh | sh');
+      final other = describe(
+        code: 'DOCTOR_FAILED',
+        lines: ['miss typst-cli (cargo install typst-cli)'],
+      );
+      expect(other.kind, InstallFailureKind.runtime);
+      expect(
+        other.title,
+        'Missing on this machine: typst-cli (cargo install typst-cli)',
+      );
+      expect(other.hint, 'Install it, then try again.');
     });
   });
 }

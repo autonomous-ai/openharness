@@ -1844,6 +1844,12 @@ class AppNotifier extends ChangeNotifier {
     // instead of leaving the user stuck on the empty "select a machine" placeholder.
     unawaited(_applyNodeStatus(machine, true));
     unawaited(_loadMachineData(machine, force: true));
+    // An install this socket was carrying when it dropped went on without it
+    // (the daemon never heard the socket go); its outcome is in the list, so
+    // the list is asked again now that someone is there to ask.
+    if (_dshProbeOnReconnect.remove(machineId)) {
+      unawaited(probeDsh(machineId, force: true));
+    }
     _startAgentSyncTimer(machineId);
   }
 
@@ -5031,6 +5037,11 @@ class AppNotifier extends ChangeNotifier {
   /// narrates progress through `dsh_install_status` pushes, which land in
   /// [MachineDsh.installs] for the dialog's status line. Null on success, else
   /// a sentence for the person who clicked.
+  /// Machines whose socket dropped under a `dsh_install`/`dsh_update`: the
+  /// daemon went on without us, so the list is asked once more when the
+  /// socket is back. Consumed by [_onMachineConnected].
+  final Set<String> _dshProbeOnReconnect = {};
+
   Future<String?> installDsh(String machineId, String id) =>
       _installOrUpdateDsh(machineId, id, update: false);
 
@@ -5060,12 +5071,14 @@ class AppNotifier extends ChangeNotifier {
       );
       if (result['ok'] != true) {
         final detail = result['detail'];
+        final error = result['error'];
         return _finishInstall(
           machine,
           id,
           detail is String && detail.isNotEmpty
               ? detail
               : '$action failed on $machineName',
+          code: error is String ? error : null,
         );
       }
     } on WsRequestFailure catch (failure) {
@@ -5076,15 +5089,29 @@ class AppNotifier extends ChangeNotifier {
           failure.detail?.isNotEmpty == true
               ? failure.detail!
               : '$action failed on $machineName (${failure.code})',
-      });
+      }, code: failure.code);
     } on WsRequestTimeout {
       return _finishInstall(
         machine,
         id,
         '$machineName is still ${update ? 'updating' : 'installing'}. Try again in a few minutes.',
+        code: 'TIMEOUT',
       );
-    } catch (_) {
-      return _finishInstall(machine, id, '$action failed on $machineName');
+    } catch (error) {
+      // The socket went away under the request — the daemon does not know, and
+      // is most likely still ${verb}ing. Said as that, not as "failed"; the
+      // list is asked again when the socket is back (`_onMachineConnected`), so an
+      // install that landed reads as installed without another click. (Issue
+      // #109: this was the bare "Install failed" whose retry "just worked".)
+      appLog.warn('app', 'dsh_$verb $id on $machineName', error: error);
+      _dshProbeOnReconnect.add(machineId);
+      return _finishInstall(
+        machine,
+        id,
+        'Lost the connection to $machineName while ${update ? 'updating' : 'installing'} — '
+        'it may still be finishing there. Try again in a moment.',
+        code: 'CONNECTION',
+      );
     }
     machine.dsh.applyInstall(DshInstallProgress(id: id, phase: 'done'));
     notifyListeners();
@@ -5093,10 +5120,13 @@ class AppNotifier extends ChangeNotifier {
     return null;
   }
 
-  String _finishInstall(MachineState machine, String id, String error) {
-    machine.dsh.applyInstall(
-      DshInstallProgress(id: id, phase: 'failed', detail: error),
-    );
+  String _finishInstall(
+    MachineState machine,
+    String id,
+    String error, {
+    String? code,
+  }) {
+    machine.dsh.failInstall(id, error, code: code);
     notifyListeners();
     return error;
   }

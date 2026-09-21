@@ -311,7 +311,7 @@ void main() {
         );
         expect(
           await answered(() => Future.error(StateError('socket closed'))),
-          'Install failed on Test host',
+          'Lost the connection to Test host while installing — it may still be finishing there. Try again in a moment.',
         );
         expect(catalog.installs['autonomous/typst']!.failed, isTrue);
         expect(
