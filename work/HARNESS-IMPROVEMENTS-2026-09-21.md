@@ -223,3 +223,76 @@ for the two kept designs took 0.518 and 0.578 seconds on this machine. Checked-i
 
 The full catalog review and improvement goal remains active. No installed harness, user session,
 store publication or main-worktree content was changed by this feature.
+
+## Fourth improvement: keep an actual live Strudel performance
+
+Reviewed Music Studio, Score, Generative Art, Creative Direction, Strudel, AbletonAI, JUCE Agent
+Toolkit, Drone Pilot, Autonomous Circuit, CircuitJS, Manim, Remotion, OpenMontage, and their
+relevant shared viewers. This round examined their source and authoring/export instructions;
+only Strudel received new native runtime acceptance work in this round. Music Studio and Score
+already support substantial original composition and useful source/audio exports. Fieldwork,
+Forme and Vector already have real editable artifacts and portable handoffs. Preserve those.
+The upstream media and PCB pipelines remain intact. AbletonAI's optional Live bridge is read-only;
+its starter and JUCE's starter should not be described as complete native DAW/plugin workflows.
+
+Strudel has a different strength: performing an authored program while it plays. The pane already
+had live code, voice lanes, mute and solo, but no way to keep the actual performance. Added:
+
+- **Record take → Finish take → Keep take** captures the real Superdough stereo output through
+  an AudioWorklet. The recording branch emits silence, preserving the existing speaker route.
+  Float WAV preserves the engine's samples, with no normalization or clipping.
+- During performance, mix requests, successful code versions, cycle/tempo and named moments
+  are journaled on the audio clock. A failed evaluation keeps the last successful source in the
+  journal. Markers seek the saved audio; a stereo waveform displays the captured channels.
+- A named take keeps WAV, source versions/hashes, measured audio properties, journal, README
+  and a portable ZIP in `out/takes/`. Saved takes reopen after source changes and server restart.
+  Playback stops the live instrument; restarting the instrument pauses playback.
+- Incoming agent source waits during recording and while pane edits are unsaved. Loading the
+  latest file is explicit. Reconnecting the event stream checks missed file changes too, and
+  stale fetch responses cannot overwrite a newer one. Saved sources do not enter the live picker.
+- Failed saves preserve the browser's take and WAV download. A capture identity makes a retry
+  after a lost save acknowledgement idempotent. A restarted server's token refreshes without
+  reloading the tab. Server writes are validated, bounded, token/origin protected and atomic;
+  escaping symlinks are rejected. Audio files support range requests for native playback/seek.
+- Capture is bounded to 120 seconds or six million frames. Transport stop, context suspension
+  and output replacement finish capture. Interruption keeps complete chunks received so far;
+  unsaved audio is held in the current tab. Journal limits are documented, and source is available
+  for continued agent authoring without overwriting the original take.
+
+Verified:
+
+- All 24 Node tests and 51 existing Python tests pass. New checks cover exact sample/chunk
+  boundaries, independent WAV properties, journal validation, write authentication, failed writes,
+  path confinement, archive isolation, range serving and independent Python ZIP integrity.
+- Seven real Chrome workflows use the installed, unmodified `@strudel/repl` and actual Web Audio:
+  performance/mix/code/markers, native playback/seek, restart/mobile, failed evaluation plus lost
+  save acknowledgement/restart retry, interrupted audio, deferred edits, and full-length capture.
+  No browser page errors. Remote sample maps are empty in this offline synth test; DSP is real.
+- Independent FFT/RMS analysis of a two-voice diagnostic found 220/440 Hz initially; muting the
+  left voice reduced its RMS below 1e-6 while the right voice stayed at 0.0724. A code change
+  produced the expected C4/E5 tones (262/660 Hz FFT bins at this analysis resolution).
+- The full-length take ends at exactly 5,760,000 stereo frames: 120.000 seconds at 48 kHz.
+  Its WAV is 46,080,056 bytes. FFprobe independently identifies stereo `pcm_f32le`; Python
+  verifies the ZIP and the captured WAV hash. This exercises the largest normal upload too.
+- A separately authored five-voice synth piece, **Lantern room**, was performed with four
+  markers and two code versions, then kept and reopened at 390px. It captures 18.907 seconds,
+  with peak 0.959 and RMS 0.0953. These are signal checks, not a claim of subjective listening
+  quality. Desktop/mobile visual review fixed lane sizing when opening the recorder and made
+  mobile voice names legible. Package conformance and generated catalog checks pass.
+
+The repeatable browser check is `store/agents/strudel/test/performance-browser.mjs`; use
+`LONG_CAPTURE=1` to include the two-minute test. Evidence and preserved workspaces are in
+`/private/tmp/openharness-harness-improvements-evidence/strudel-final/` and `strudel-demo/`.
+Checked-in evidence: [desktop](../docs/images/strudel-live-take.png),
+[mobile](../docs/images/strudel-live-take-mobile.png), and
+[performance walkthrough](../docs/images/strudel-live-take-demo.mp4). The MP4 pairs the screen
+recording with the saved WAV, using AAC and approximate visual/audio alignment; the original
+float WAV and source bundle remain in the evidence workspace.
+
+The WAV is the captured performance. Scheduler lookahead, effect tails, random patterns and
+external dependencies mean the journal is not a deterministic replay. Other applications, system
+volume and external MIDI instruments are outside this recorder. Browser acceptance was on Chrome;
+a 390px viewport is a layout check, not a claim of testing mobile Safari or every audio device.
+
+The full catalog review and improvement goal remains active. All implementation, demo artifacts
+and tests stayed in the improvement worktree and disposable evidence directories.

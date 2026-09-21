@@ -7,6 +7,7 @@
 // and wraps two of their methods on this instance: scheduler.setPattern, to filter muted voices out
 // of what is played, and editor.highlight, to colour the lit-up code by voice.
 import { parseVoices, voiceAt } from './voices.mjs'
+import { installPerformance } from './performance.mjs'
 
 const $ = (id) => document.getElementById(id)
 const params = new URLSearchParams(location.search)
@@ -31,6 +32,7 @@ const S = {
   playsIn: [], scanned: 0,
 }
 window.__strudelPane = S // for tests and the curious: the pane's state, read-only by convention
+let performance = null
 try { const saved = Number(localStorage.getItem('strudel-pane-span')); if (SPANS.includes(saved)) S.span = saved } catch {}
 
 const palette = () => (dark.matches ? DARK : LIGHT)
@@ -89,6 +91,7 @@ function toggle(set, v) {
   const k = keyOf(v)
   if (k == null) return
   set.has(k) ? set.delete(k) : set.add(k)
+  performance?.mix()
   renderMixer()
   S.needsDraw = true
 }
@@ -460,6 +463,7 @@ function ensureTap() {
   if (!S.started || typeof window.getSuperdoughAudioController !== 'function') return
   try {
     const node = window.getSuperdoughAudioController().output?.destinationGain
+    performance?.checkOutput(node)
     if (!node || node === S.tap) return
     const ac = window.getAudioContext()
     if (!S.analyser || S.analyser.context !== ac) {
@@ -547,6 +551,7 @@ function status(text, kind) {
 }
 
 function refreshStatus() {
+  performance?.sync()
   const play = $('play')
   play.classList.toggle('playing', S.started)
   play.title = S.started ? 'Stop (Space)' : 'Play (Space)'
@@ -668,6 +673,7 @@ function mount(text) {
     const state = e.detail || {}
     const was = S.started
     S.started = !!state.started
+    if (was !== S.started) performance?.transport(S.started)
     if (S.started) S.everStarted = true
     if (was !== S.started) S.needsDraw = true
     if (state.error !== S.error) showError(state.error)
@@ -679,12 +685,15 @@ function mount(text) {
   S.ed = el.editor
   S.sched = S.ed.repl.scheduler
   S.origSetPattern = S.sched.setPattern.bind(S.sched)
-  S.sched.setPattern = (pattern, autostart) => {
+  S.sched.setPattern = async (pattern, autostart) => {
     // The code being evaluated right now is what the hap locations point into.
-    setVoices(S.ed.repl.state.code ?? S.ed.code)
+    const code = S.ed.repl.state.code ?? S.ed.code
+    setVoices(code)
     S.raw = pattern
     invalidate()
-    return S.origSetPattern(mixed(pattern), autostart)
+    const result = await S.origSetPattern(mixed(pattern), autostart)
+    performance?.source(code)
+    return result
   }
   const highlight = S.ed.highlight.bind(S.ed)
   S.ed.highlight = (haps, time) => highlight(haps.map((hap) => {
@@ -722,8 +731,12 @@ async function renderPicker() {
 }
 $('picker').addEventListener('change', (e) => { S.file = e.target.value; S.fileText = null; load() })
 
-async function load() {
-  S.file = await pickFile()
+let loadRequest = 0
+async function load(force = false) {
+  const request = ++loadRequest
+  const file = await pickFile()
+  if (request !== loadRequest) return
+  S.file = file
   $('name').textContent = S.file
   $('editfile').textContent = S.file
   let text
@@ -739,12 +752,19 @@ async function load() {
     }
     return
   }
+  if (request !== loadRequest) return
   $('empty').hidden = true
   renderPicker()
   const lines = text.split('\n').length
   $('codemeta').textContent = `${S.file} · ${lines} line${lines === 1 ? '' : 's'}`
   if (!S.ed) { S.fileText = text; mount(text); refreshStatus(); return }
-  if (text === S.fileText) return
+  if (text === S.fileText) { $('pending').hidden = true; return }
+  if (!force && (S.dirty || performance?.busy())) {
+    $('pending').hidden = false
+    $('pending-reason').textContent = performance?.busy() ? 'Finish this take before loading it.' : 'Loading it will replace your unsaved pane edits.'
+    return
+  }
+  $('pending').hidden = true
   const hadEdits = S.dirty
   S.fileText = text
   const changed = replaceDoc(text)
@@ -810,7 +830,8 @@ function setSpan(span) {
 $('zoom').addEventListener('click', (e) => { const s = Number(e.target.dataset?.span); if (s) setSpan(s) })
 $('play').addEventListener('click', togglePlay)
 $('gate').addEventListener('click', play)
-$('clearmix').addEventListener('click', () => { S.muted.clear(); S.soloed.clear(); renderMixer(); S.needsDraw = true })
+$('clearmix').addEventListener('click', () => { S.muted.clear(); S.soloed.clear(); performance?.mix(); renderMixer(); S.needsDraw = true })
+$('apply-pending').addEventListener('click', () => { if (!performance?.busy()) load(true) })
 $('revert').addEventListener('click', () => {
   if (!S.ed || S.fileText == null) return
   replaceDoc(S.fileText)
@@ -819,7 +840,7 @@ $('revert').addEventListener('click', () => {
 })
 
 document.addEventListener('keydown', (e) => {
-  const inEditor = e.target instanceof Element && !!e.target.closest('.cm-editor, input, select, textarea')
+  const inEditor = e.target instanceof Element && !!e.target.closest('.cm-editor, input, select, textarea, button, a, audio')
   if (inEditor || e.metaKey || e.ctrlKey || e.altKey) return
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); return }
   const digit = /^Digit([1-9])$/.exec(e.code)
@@ -828,7 +849,7 @@ document.addEventListener('keydown', (e) => {
     if (v < S.voices.length) { e.preventDefault(); toggle(e.shiftKey ? S.soloed : S.muted, v) }
     return
   }
-  if (e.code === 'Digit0' || e.key === 'Escape') { S.muted.clear(); S.soloed.clear(); renderMixer(); return }
+  if (e.code === 'Digit0' || e.key === 'Escape') { S.muted.clear(); S.soloed.clear(); performance?.mix(); renderMixer(); return }
   if (e.key === '-' || e.key === '_') { const i = SPANS.indexOf(S.span); if (i < SPANS.length - 1) setSpan(SPANS[i + 1]) }
   if (e.key === '=' || e.key === '+') { const i = SPANS.indexOf(S.span); if (i > 0) setSpan(SPANS[i - 1]) }
 })
@@ -838,9 +859,14 @@ dark.addEventListener('change', () => {
   renderMixer()
 })
 new ResizeObserver(() => layoutLanes()).observe(document.body)
+new ResizeObserver(() => layoutLanes()).observe($('lanesbody'))
 window.addEventListener('strudel-offline', refreshStatus)
-new EventSource('/events').addEventListener('change', () => load())
+const changes = new EventSource('/events')
+changes.addEventListener('change', () => load())
+changes.addEventListener('takes', () => performance?.refreshTakes())
+changes.addEventListener('open', () => { load(); performance?.refreshTakes() })
 
+performance = installPerformance({ state: S, cycle: nowCycle, stop })
 setSpan(S.span)
 refreshStatus()
 load()

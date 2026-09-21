@@ -4,7 +4,7 @@
   "name": "Strudel",
   "category": "Music",
   "author": "Strudel",
-  "description": "Describe a track — a groove, a bassline, a break — and hear it in the pane. The agent writes one Strudel pattern file; Strudel's own REPL plays it live and hot-swaps on every save.",
+  "description": "Describe a track and perform it live in Strudel's own REPL. Mute voices, change code, mark a moment, and keep the actual performance as audio with its editable source.",
   "engine": "claude",
   "workspace": {
     "template": "template",

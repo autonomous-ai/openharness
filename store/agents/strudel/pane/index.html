@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Strudel</title>
+<meta name="take-token" content="__TAKE_TOKEN__">
 <link rel="stylesheet" href="/_pane/pane.css">
 </head>
 <body>
@@ -22,7 +23,28 @@
   <div id="scopebox" title="The output: waveform and spectrum"><canvas id="scope"></canvas></div>
 </header>
 
+<section id="performance" aria-label="Performance recorder">
+  <div class="take-toolbar">
+    <button id="record" disabled><span class="record-dot"></span><span id="record-label">Record take</span></button>
+    <span id="take-clock">0:00</span>
+    <span id="take-hint">Keep a performance, from first note to final drop.</span>
+    <button id="mark" hidden title="Mark a moment in this recording">Mark moment</button>
+    <button id="open-takes" aria-expanded="false" aria-controls="take-shelf">Takes <span id="take-count">0</span></button>
+  </div>
+  <div id="take-live" hidden><span id="take-live-note">Recording your mix and code changes.</span><input id="marker-note" maxlength="240" placeholder="Name a moment…" aria-label="Moment note"><button id="add-marker">Add marker</button></div>
+  <div id="take-draft" hidden>
+    <div class="draft-head"><strong>Your take</strong><span id="draft-details"></span><span class="grow"></span><button id="discard-take">Discard</button></div>
+    <canvas id="take-wave" aria-label="Recorded stereo waveform" title="Left and right channels · waveform fitted to view · click to seek"></canvas>
+    <audio id="take-audio" controls preload="metadata"></audio>
+    <div id="take-markers"></div>
+    <div class="keep-row"><input id="take-name" maxlength="100" placeholder="Name this take" aria-label="Take name"><button id="keep-take">Keep take</button><a id="download-draft" download="performance.wav">WAV</a></div>
+  </div>
+  <div id="take-shelf" hidden><div id="take-list"></div><p id="take-empty">Your performances will live here, with their audio, code and moments.</p></div>
+  <div id="take-message" role="status" hidden></div>
+</section>
+
 <div id="banners">
+  <div id="pending" class="banner edit" hidden><div class="msg"><b>A new file version is waiting.</b> <span class="sub" id="pending-reason">Your performance stays as it is.</span></div><button id="apply-pending">Load new version</button></div>
   <div id="err" class="banner err" hidden>
     <svg class="icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm0 3a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-1.5 0v-3A.75.75 0 0 1 8 4.5Zm0 7.25a.9.9 0 1 1 0-1.8.9.9 0 0 1 0 1.8Z"/></svg>
     <div class="msg"><b id="errtitle">The track does not run</b> <code id="errmsg"></code><div class="sub" id="errsub"></div></div>
