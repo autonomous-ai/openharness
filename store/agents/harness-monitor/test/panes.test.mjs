@@ -63,7 +63,7 @@ test('an open prompt is recognized, and ordinary output is not', () => {
   assert.ok(looksBlocked('Do you want to proceed?\n❯ 1. Yes\n  2. No'))
   assert.ok(looksBlocked('Allow command? (y/n)'))
   assert.ok(looksBlocked('Waiting for your approval'))
-  assert.ok(looksBlocked('Which file should I edit?'))
+  assert.equal(looksBlocked('Which file should I edit?'), false, 'a question in prose is a finished turn, not a dialog')
   assert.equal(looksBlocked('Wrote 14 files.\nDone.'), false)
   assert.equal(looksBlocked(''), false)
   assert.equal(looksBlocked('\u001b[32mAll tests passed\u001b[0m'), false)
@@ -107,4 +107,18 @@ test('an engine waiting at its own empty prompt is idle, not blocked', () => {
 test('a finished turn above an empty prompt is idle too', () => {
   const screen = ['❯ Reply with exactly one word: acorn', '⏺ acorn', '✻ Cogitated for 5s · done', '❯ '].join('\n')
   assert.equal(looksBlocked(screen), false)
+})
+
+test('a pane that no longer exists reads as gone, although tmux says nothing and exits 0', async () => {
+  // Measured: `tmux display-message -p -t %<missing>` prints an empty line and exits 0.
+  assert.equal(await paneState('%182', { run: async () => '\n' }), null)
+  assert.equal(await paneState('%182', { run: async () => '' }), null)
+  assert.deepEqual(await paneState('%1', { run: async () => '0§§zsh§§\n' }), { dead: false, command: 'zsh', engineExit: null })
+})
+
+test('a finished turn whose answer is a numbered list is not a menu', () => {
+  const screen = ['  3. Ship the fix behind a flag', '  4. Red test on main, not mine', '✻ Churned for 7s · done 7:20 PM', '❯ ', '  ⏵⏵ auto mode on (shift+tab to cycle)'].join('\n')
+  assert.equal(looksBlocked(screen), false)
+  const menu = ['Auto mode works better when it knows your environment.', '❯ 1. Yes', '  2. Not now', '  3. Don\'t show again', 'Enter to confirm · Esc to cancel'].join('\n')
+  assert.ok(looksBlocked(menu), 'the real dialog still counts')
 })

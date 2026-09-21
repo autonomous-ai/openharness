@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mergeRows, parseModel, projectOf, resolveRef, summarize, tilde } from '../lib/inventory.mjs'
+import { daemonResumes, mergeRows, parseModel, projectOf, resolveRef, summarize, tilde } from '../lib/inventory.mjs'
 import { DAY, HOME, HOUR, frame, pane, row, table } from './fixtures.mjs'
 
 const now = Date.now()
@@ -108,4 +108,64 @@ test('a shell nobody paused is a shell, not a paused agent', () => {
   assert.equal(row.state, 'terminal')
   assert.equal(summarize([row]).terminals, 1)
   assert.equal(summarize([row]).paused, 0)
+})
+
+test('a harness the daemon saved is paused, has no pane, and comes back through the daemon', () => {
+  const saved = frame({ status: 'stopped', tmuxPane: null, sessionId: 'sess-0123456789ab', engine: 'claude' })
+  const stopped = new Map([['a1', { agentId: 'a1', transcriptPath: '/nope', lastHookAt: now - 3 * DAY }]])
+  const row = mergeRows([saved], { ...base, stopped })[0]
+  assert.equal(row.state, 'paused')
+  assert.equal(row.saved, true)
+  assert.equal(row.pane, null)
+  assert.equal(row.rssBytes, 0)
+  assert.equal(row.resumeVia, 'daemon')
+  assert.equal(row.idleMs, 3 * DAY, 'idle comes from the saved record, not from now')
+})
+
+test('a saved harness on an engine the daemon cannot resume is shown, and marked as stuck', () => {
+  const saved = frame({ status: 'stopped', tmuxPane: null, engine: 'opencode' })
+  const row = mergeRows([saved], base)[0]
+  assert.equal(row.state, 'paused')
+  assert.equal(row.resumable, false)
+  assert.equal(row.resumeVia, null)
+})
+
+test('on a daemon with agent_resume, only Claude Code and Codex with a bound conversation are pausable', () => {
+  // Each one running, in a pane of its own.
+  const engines = { c: 'claude', x: 'codex', o: 'opencode', u: 'claude' }
+  const paneRows = new Map(Object.keys(engines).map((id, i) => [`%${i + 1}`, pane({ pane: `%${i + 1}`, pid: 100 + i })]))
+  const byPid = new Map(Object.entries(engines).map(([id, engine], i) => [100 + i, { pid: 100 + i, ppid: 1, rss: 1e8, cpu: 0, comm: `/usr/local/bin/${engine}` }]))
+  const rows = mergeRows([
+    frame({ id: 'c', engine: 'claude', sessionId: 'sess-0123456789ab', tmuxPane: '%1' }),
+    frame({ id: 'x', engine: 'codex', sessionId: 'sess-abcdef012345', tmuxPane: '%2' }),
+    frame({ id: 'o', engine: 'opencode', sessionId: 'sess-fedcba987654', tmuxPane: '%3' }),
+    frame({ id: 'u', engine: 'claude', sessionId: '', tmuxPane: '%4' }),
+  ], { ...base, paneRows, table: { byPid, children: new Map() }, daemonResume: true })
+  assert.ok(rows.every((r) => r.state === 'running'))
+  const by = Object.fromEntries(rows.map((r) => [r.id, r.resumeVia]))
+  assert.deepEqual(by, { c: 'daemon', x: 'daemon', o: null, u: null })
+})
+
+test('a harness paused before the daemon could save it still comes back the old way', () => {
+  const released = frame({ engine: 'terminal', sessionId: '' })
+  const state = { pins: [], paused: { a1: { sessionId: 'sess-0123456789ab', engine: 'claude', pane: '%1' } } }
+  const row = mergeRows([released], { ...base, table: table({ comm: '-zsh' }), state, daemonResume: true })[0]
+  assert.equal(row.state, 'paused')
+  assert.equal(row.resumeVia, 'legacy', 'agent_resume would attach to the shell and call it success, so it must not be used here')
+})
+
+test('the capability probe reads the daemon\'s own answer, and caches it', async () => {
+  let asked = 0
+  const has = async () => { asked += 1; const error = new Error('x'); error.code = 'MISSING_AGENT_ID'; throw error }
+  const lacks = async () => { const error = new Error('x'); error.code = 'UNSUPPORTED'; throw error }
+  assert.equal(await daemonResumes('m-new', { ask: has, now: 1 }), true)
+  assert.equal(await daemonResumes('m-new', { ask: has, now: 2 }), true)
+  assert.equal(asked, 1, 'asked once a minute, not once a refresh')
+  assert.equal(await daemonResumes('m-old', { ask: lacks, now: 1 }), false)
+})
+
+test('a closed Terminal the daemon saved is a shell, not a paused harness', () => {
+  const row = mergeRows([frame({ status: 'stopped', tmuxPane: null, engine: 'terminal' })], base)[0]
+  assert.equal(row.state, 'terminal')
+  assert.equal(row.resumable, false)
 })

@@ -155,9 +155,12 @@ export async function capture(pane, { lines = 40, run = tmux } = {}) {
 const BLOCKED_PATTERNS = [
   /\bdo you want to (proceed|continue|allow)\b/i,
   /\b(allow|approve|permit) (this )?(command|tool|edit|request)\b/i,
-  /\?\s*$/,
+  // Deliberately NOT here: any last line ending in "?". An agent that ends a turn with a question in prose is
+  // done — waiting for the next message like every idle harness — and counting those made "waiting on you"
+  // read 11 on a fleet with one open dialog. Waiting means a DIALOG: a permission prompt, a menu, a y/n.
   /\(y\/n\)|\[y\/n\]|\(yes\/no\)/i,
-  /^\s*❯?\s*1[.)]\s+\S/m,
+  // A bare "1." line is NOT here either: an agent's answer is full of numbered lists. A real menu has a
+  // cursor on one option (looksLikeMenu) and says "Enter to confirm · Esc to cancel" (below).
   /\bwaiting for (your )?(input|answer|approval)\b/i,
   /\bpress (enter|y) to\b/i,
   // How an engine tells you it is holding a choice open. Found by watching Claude Code's real trust
@@ -220,7 +223,11 @@ export async function paneState(pane, { run = tmux } = {}) {
   assertPane(pane)
   try {
     const out = await run(['display-message', '-p', '-t', pane, `#{pane_dead}${SEP}#{pane_current_command}${SEP}#{@harness_engine_exit}`])
-    const [dead, command, engineExit] = out.trim().split(SEP)
+    // tmux answers `display-message` for a pane that does not exist with an EMPTY line and exit status 0 —
+    // not an error. Read naively, a closed pane looks alive. A real pane always yields all three fields.
+    const fields = out.trim().split(SEP)
+    if (fields.length < 3 || fields[0] === '') return null
+    const [dead, command, engineExit] = fields
     return { dead: dead === '1', command: command || '', engineExit: engineExit ? Number(engineExit) : null }
   } catch { return null }
 }

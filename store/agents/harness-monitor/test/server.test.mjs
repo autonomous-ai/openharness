@@ -160,3 +160,14 @@ async function post(base, token, path, payload) {
   })
   return response.json()
 }
+
+test('the page arrives with the current fleet in it, and a title cannot break out of the data block', async (t) => {
+  const hostile = row({ id: 'x1', title: '</script><script>alert(1)</script>' })
+  const { viewer, base } = await serve([hostile])
+  t.after(() => viewer.close())
+  const html = await (await fetch(`${base}/`)).text()
+  const block = html.match(/<script type="application\/json" id="initial-snapshot">([\s\S]*?)<\/script>/)
+  assert.ok(block, 'the data block is there and closes where it should')
+  assert.equal(block[1].includes('</script>'), false)
+  assert.equal(JSON.parse(block[1]).rows[0].title, '</script><script>alert(1)</script>', 'and the title survives intact')
+})

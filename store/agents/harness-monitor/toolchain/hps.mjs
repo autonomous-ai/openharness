@@ -29,7 +29,7 @@ const USAGE = `hps — every harness on this machine, running or paused
   hps top                            the same list, refreshing
   hps [--all] [--state running|paused|shell|gone] [--project NAME] [--engine NAME]
             [--idle 4h] [--sort idle|mem|name|project] [--limit N] [--watch [SECONDS]]
-            [--machines]           also list every other machine you have linked (read-only from here)
+            [--machines]           also list every other machine you have linked
   hps show <ref>                     one harness in full, with the last thing on its pane
   hps pause <ref…>               the engine exits; pane, scrollback and conversation stay
   hps resume <ref…>                  the engine comes back where it left off
@@ -71,7 +71,7 @@ function filterRows(rows, flags, hideMs = Infinity) {
   let list = rows
   // Below the fold by default: no pane left, or nobody has touched it since `hideAfterIdle`. Both are
   // still one `--all` away — a list that hides things for good is a list people stop trusting.
-  if (!flags.all) list = list.filter((row) => row.state !== 'gone' && row.idleMs < hideMs)
+  if (!flags.all) list = list.filter((row) => row.state !== 'gone' && row.state !== 'terminal' && row.idleMs < hideMs)
   if (flags.state) list = list.filter((row) => row.state === flags.state)
   if (flags.project) list = list.filter((row) => row.project.toLowerCase().includes(String(flags.project).toLowerCase()))
   if (flags.engine) list = list.filter((row) => row.engine === flags.engine)
@@ -172,9 +172,12 @@ async function main() {
       ['folder', row.home], ['branch', row.branch ?? '—'], ['project', row.project],
       ['memory', row.rssBytes ? `${gb(row.rssBytes)} across ${row.procs} ${row.procs === 1 ? 'process' : 'processes'}` : '—'],
       ['pane', row.pane ? `${row.pane}${row.paneTarget ? ` (${row.paneTarget})` : ''}${row.dead ? ' · dead, held open' : ''}` : '—'],
-      ['machine', row.machine + (row.local ? '' : ' (remote — read-only from here)')],
+      ['machine', row.machine + (row.local ? '' : row.resumeVia === 'daemon' ? ' (another machine — paused and resumed by its daemon)' : ' (another machine — update Harness there to act on it from here)')],
       ['harness', row.dshName ?? row.dsh ?? '—'], ['agent id', row.id],
       ['pinned', row.pinned ? 'yes — the policy leaves it alone' : 'no'],
+      ['resume', row.resumeVia === 'daemon' ? 'through the daemon (agent_resume), in a new pane'
+        : row.resumeVia === 'legacy' ? 'typed into its own pane (paused before the daemon could save it)'
+          : row.sessionId ? `not possible — the daemon cannot resume ${row.engine}` : 'not possible — no conversation bound yet'],
     ]
     const width = Math.max(...pairs.map(([key]) => key.length))
     for (const [key, value] of pairs) out(`${key.padEnd(width)}  ${value}`)
@@ -227,6 +230,8 @@ async function main() {
       // The ticket is written before the receipt is printed: a pause whose session id was not recorded is
       // a harness nobody can resume, which is worse than one that is still running.
       if (result.ok && result.ticket) next = markPaused(next, row, result.ticket)
+      // The daemon holds a harness it confirmed saving; a record here would only go stale.
+      if (result.ok && result.via === 'daemon') next = clearPaused(next, row.id)
       if (result.ok && command === 'resume') next = clearPaused(next, row.id)
       results.push(result)
     }

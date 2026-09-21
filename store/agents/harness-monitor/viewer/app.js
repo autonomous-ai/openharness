@@ -1,11 +1,13 @@
 /* Harness Monitor's pane.
  *
- * One snapshot from the server, two ways to read it, and six verbs. No build step, no dependencies, no
- * inline script — the page is served with `script-src 'self'`, so everything here is plain DOM and one
- * ES module import for the arithmetic (viewer/scale.js, tested in test/scale.test.mjs).
+ * One snapshot from the server, two ways to read it — the Table and the Timeline — and two verbs. Plain DOM,
+ * one module import for the arithmetic (viewer/scale.js), no build step, served under `script-src 'self'`.
  *
- * The two views share ONE selection and ONE cursor on purpose: a fleet manager where the dense list and
- * the picture disagree about what is selected is a fleet manager that cannot be trusted with a verb.
+ * Three rules this file keeps, because they are what make a monitor trustworthy:
+ *   one selection, shared by both views and the toolbar, so what is selected is never ambiguous;
+ *   rows hold still under the pointer (Activity Monitor does the same), so a live refresh never moves the
+ *     row someone is about to click;
+ *   every verb says, before it runs, exactly what it will do and to how many.
  */
 import { HIDE_STEPS, PAUSE_STEPS, UNITS, bytes, humanIdle, idleOfX, parseDuration, snap, xOf } from './scale.js'
 
@@ -13,99 +15,290 @@ const TOKEN = document.querySelector('meta[name="hps-token"]')?.content ?? ''
 
 const el = (id) => document.getElementById(id)
 const dom = {
-  where: el('where'), gauges: el('gauges'), filter: el('filter'), refresh: el('refresh'),
+  where: el('where'), filter: el('filter'),
+  actPause: el('act-pause'), actResume: el('act-resume'), actInspect: el('act-inspect'),
+  runningValue: el('running-value'), runningBar: el('running-bar'), meterRunning: el('meter-running'),
+  memoryValue: el('memory-value'), memoryBar: el('memory-bar'), meterMemory: el('meter-memory'),
+  policyValue: el('policy-value'), policyReview: el('policy-review'),
+  table: el('table'), grid: el('grid'), tableEmpty: el('table-empty'),
   lanes: el('lanes-view'), laneList: el('lane-list'), axis: el('axis'), lanesEmpty: el('lanes-empty'),
-  table: el('table'), grid: el('grid'),
   rulePause: el('rule-pause'), ruleHide: el('rule-hide'),
-  showAll: el('show-all'), policybar: el('policybar'), policyPreview: el('policy-preview'), policySave: el('policy-save'), policyReset: el('policy-reset'),
-  statusLeft: el('status-left'), statusActions: el('status-actions'), statusRight: el('status-right'),
-  inspector: el('inspector'), toast: el('toast'),
+  policybar: el('policybar'), policyPreview: el('policy-preview'), policySave: el('policy-save'), policyReset: el('policy-reset'),
+  statusLeft: el('status-left'), statusRight: el('status-right'),
+  inspector: el('inspector'), scrim: el('scrim'), review: el('review'), toast: el('toast'),
 }
+
+/** The verbs the pane can send. The server accepts exactly these (test/page.test.mjs keeps the two equal). */
+const ACTIONS = [['pause', 'Pause'], ['resume', 'Resume']]
+
+function remember(key, fallback) { try { return localStorage.getItem(key) ?? fallback } catch { return fallback } }
+function keep(key, value) { try { localStorage.setItem(key, value) } catch { /* a private window, a preview */ } }
 
 const state = {
   snapshot: null,
-  view: 'lanes',
+  receivedAt: 0,
+  view: remember('hm.view', 'table'),
+  scope: remember('hm.scope', 'all'),
+  machines: remember('hm.machines', 'local'),
   filter: '',
-  showAll: false,
   selected: new Set(),
   cursor: null,
   inspecting: null,
-  sort: { key: 'idle', dir: 'asc' },
-  draft: null,      // policy being dragged, before it is saved
+  sort: { key: 'status', dir: 'asc' },
+  hovering: false,
+  frozen: null,     // the row order kept while the pointer is over the table
+  draft: null,      // a policy being dragged in the Timeline, before it is saved
   busy: false,
 }
 
-/* ── the fleet, filtered ──────────────────────────────────────────────────── */
+/* ── the fleet, as shown ───────────────────────────────────────────────────── */
 
-function policy() {
-  return { ...(state.snapshot?.policy ?? {}), ...(state.draft ?? {}) }
+const policy = () => ({ ...(state.snapshot?.policy ?? {}), ...(state.draft ?? {}) })
+const everyRow = () => state.snapshot?.rows ?? []
+/** Rows on the machines being shown. Only this machine by default: that is where Pause and Resume work, and a
+ *  list full of rows you cannot act on is a list that trains you to ignore its buttons. */
+const allRows = () => everyRow().filter((row) => state.machines === 'all' || row.local !== false)
+const planFor = (id) => (state.snapshot?.plan ?? []).find((entry) => entry.id === id)
+const isDue = (row) => planFor(row.id)?.action === 'pause'
+const status = (row) => row.needsInput ? 'waiting' : row.state === 'running' ? (row.working ? 'working' : 'running') : row.state
+
+/** A harness, not a shell and not a ghost. The two scopes that are about age use the hide line. */
+function inScope(row, scope) {
+  if (row.state === 'gone' || row.state === 'terminal') return false
+  if (scope === 'running') return row.state === 'running'
+  if (scope === 'paused') return row.state === 'paused'
+  if (scope === 'waiting') return Boolean(row.needsInput)
+  return row.state === 'running' || row.idleMs < parseDuration(policy().hideAfterIdle ?? '14d')
 }
 
+function matches(row, needle) {
+  return [row.title, row.name, row.project, row.engine, row.model, row.branch, row.machine]
+    .some((field) => String(field ?? '').toLowerCase().includes(needle))
+}
+
+/** What the current scope and search show. Search reaches past the scope, because someone typing a name is
+ *  looking for that harness wherever it is. */
 function rows() {
-  const all = state.snapshot?.rows ?? []
-  const hideMs = parseDuration(policy().hideAfterIdle ?? '14d')
-  // Below the fold unless you ask: a pane that opens on 146 rows is the junk drawer this was built to fix.
-  // Filtering by hand overrides it, because someone typing a name is looking for that name anywhere.
   const needle = state.filter.trim().toLowerCase()
-  const visible = state.showAll || needle
-    ? all
-    : all.filter((row) => row.state !== 'gone' && row.idleMs < hideMs)
-  if (!needle) return visible
-  return visible.filter((row) => [row.name, row.title, row.project, row.engine, row.model, row.branch, row.machine, row.state]
-    .some((field) => String(field ?? '').toLowerCase().includes(needle)))
+  if (needle) return allRows().filter((row) => row.state !== 'gone' && row.state !== 'terminal' && matches(row, needle))
+  return allRows().filter((row) => inScope(row, state.scope))
 }
 
-/** What the plan says about one row, as the server computed it — unless a line is being dragged, in
- *  which case the same idle rules are applied here so the picture answers while the mouse is moving. */
-function verdictFor(row) {
-  if (state.draft) {
-    const pause = parseDuration(state.draft.pauseAfterIdle ?? policy().pauseAfterIdle)
+const STATUS_ORDER = { waiting: 0, working: 1, running: 2, paused: 3, terminal: 4, gone: 5 }
+const SORTS = {
+  status: (a, b) => STATUS_ORDER[status(a)] - STATUS_ORDER[status(b)] || a.idleMs - b.idleMs,
+  name: (a, b) => (a.title || a.name).localeCompare(b.title || b.name),
+  project: (a, b) => a.project.localeCompare(b.project) || a.idleMs - b.idleMs,
+  engine: (a, b) => a.engine.localeCompare(b.engine) || a.idleMs - b.idleMs,
+  model: (a, b) => String(a.model ?? '~').localeCompare(String(b.model ?? '~')),
+  mem: (a, b) => (b.rssBytes || 0) - (a.rssBytes || 0),
+  cpu: (a, b) => (b.cpu || 0) - (a.cpu || 0),
+  idle: (a, b) => a.idleMs - b.idleMs,
+  age: (a, b) => (b.createdAt || 0) - (a.createdAt || 0),
+  machine: (a, b) => a.machine.localeCompare(b.machine),
+}
 
-    if (row.pinned || row.needsInput || row.working || row.attached) return null
-    if (row.state === 'gone' || row.state === 'terminal') return null
-    if (row.state === 'running' && row.idleMs >= pause) return 'pause'
-    return null
+function sorted() {
+  const list = rows()
+  if (state.hovering && state.frozen) {
+    // Hold the order the person is looking at: known rows keep their place, new ones join at the end.
+    const at = new Map(state.frozen.map((id, i) => [id, i]))
+    return [...list].sort((a, b) => (at.get(a.id) ?? 1e9) - (at.get(b.id) ?? 1e9))
   }
-  const entry = (state.snapshot?.plan ?? []).find((candidate) => candidate.id === row.id)
-  return entry && entry.action !== 'keep' ? entry.action : null
+  const by = SORTS[state.sort.key] ?? SORTS.status
+  const out = [...list].sort(by)
+  if (state.sort.dir === 'desc') out.reverse()
+  state.frozen = out.map((row) => row.id)
+  return out
 }
 
-function planTotals(list) {
-  let pause = 0, frees = 0
-  for (const row of list) {
-    if (verdictFor(row) !== 'pause') continue
-    pause += 1
-    if (row.state === 'running') frees += row.rssBytes || 0
+const selectedRows = () => allRows().filter((row) => state.selected.has(row.id))
+const targets = () => (state.selected.size ? selectedRows() : allRows().filter((row) => row.id === state.cursor))
+const protectedWhy = (row) => { const entry = planFor(row.id); return entry?.protectedBy ? entry.why : null }
+/** Offered only where it would actually happen: a protected harness (waiting on you, mid-turn, open in a
+ *  window, pinned) is refused by the server, so the button would only ever produce an apology. */
+/** This machine's harnesses, and another machine's when ITS daemon can save and resume them. */
+const reachable = (row) => row.local || row.resumeVia === 'daemon'
+const canPause = (row) => reachable(row) && row.state === 'running' && row.resumable && !protectedWhy(row)
+const canResume = (row) => reachable(row) && row.state === 'paused' && row.resumable
+
+function age(ms) { return ms ? humanIdle(Date.now() - ms) : '—' }
+function gib(value) {
+  const n = Number(value) || 0
+  if (!n) return '—'
+  return n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${Math.round(n / 1024 ** 2)} MB`
+}
+
+/* ── the toolbar and the meters ────────────────────────────────────────────── */
+
+function renderToolbar() {
+  const summary = state.snapshot?.summary
+  const counts = {
+    all: allRows().filter((row) => inScope(row, 'all')).length,
+    running: allRows().filter((row) => inScope(row, 'running')).length,
+    paused: allRows().filter((row) => inScope(row, 'paused')).length,
+    waiting: allRows().filter((row) => inScope(row, 'waiting')).length,
   }
-  return { pause, frees }
+  for (const node of document.querySelectorAll('[data-count]')) {
+    const n = counts[node.dataset.count]
+    node.textContent = node.dataset.count === 'waiting' && !n ? '' : String(n ?? '')
+  }
+  for (const button of document.querySelectorAll('[data-scope]')) button.setAttribute('aria-selected', String(button.dataset.scope === state.scope))
+  for (const button of document.querySelectorAll('[data-machines]')) button.setAttribute('aria-selected', String(button.dataset.machines === state.machines))
+  for (const button of document.querySelectorAll('.views [data-view]')) button.setAttribute('aria-selected', String(button.dataset.view === state.view))
+
+  const chosen = targets()
+  dom.actPause.disabled = state.busy || !chosen.some(canPause)
+  dom.actResume.disabled = state.busy || !chosen.some(canResume)
+  dom.actInspect.disabled = chosen.length !== 1
+  const blocked = chosen.length === 1 && chosen[0].state === 'running' ? (protectedWhy(chosen[0]) ?? (!chosen[0].resumable ? 'it could not be resumed afterwards' : null)) : null
+  dom.actPause.title = blocked ? `Not paused — ${blocked}` : chosen.length > 1 ? `Pause ${chosen.filter(canPause).length} (p)` : 'Pause — the engine exits, the conversation is kept (p)'
+  dom.actResume.title = chosen.length > 1 ? `Resume ${chosen.filter(canResume).length} (r)` : 'Resume — back where it left off (r)'
+
+  if (!summary) return
+  const here = state.snapshot.rows.find((row) => row.local)?.machine ?? 'this machine'
+  const remote = everyRow().filter((row) => !row.local).length
+  dom.where.textContent = state.machines === 'all' && remote ? `${here} and ${new Set(everyRow().filter((row) => !row.local).map((row) => row.machine)).size} more` : here
+  if (state.snapshot.status === 'degraded') dom.where.textContent = 'read from the registry — the daemon is not answering'
 }
 
-/* ── rendering ────────────────────────────────────────────────────────────── */
-
-function renderGauges() {
+function renderMeters() {
   const summary = state.snapshot?.summary
   if (!summary) return
-  const held = summary.held >= 1024 ** 3 ? `${(summary.held / 1024 ** 3).toFixed(1)} GB` : `${Math.round(summary.held / 1024 ** 2)} MB`
-  const chips = [
-    ['live', summary.running, 'running'],
-    ['', summary.paused, 'paused'],
-    ['', held, 'held'],
-    ['', summary.projects, 'projects'],
-  ]
-  if (summary.needsInput) chips.unshift(['attention', summary.needsInput, 'waiting on you'])
-  dom.gauges.replaceChildren(...chips.map(([kind, value, label]) => {
-    const node = document.createElement('span')
-    node.className = `gauge ${kind}`.trim()
-    node.innerHTML = `<b></b> <span></span>`
-    node.querySelector('b').textContent = value
-    node.querySelector('span').textContent = label
-    return node
-  }))
-  const machines = state.snapshot.rows.filter((row) => !row.local).length
-  dom.where.textContent = machines
-    ? `this machine, plus ${machines} seen elsewhere`
-    : state.snapshot.status === 'degraded' ? 'read from the registry — the daemon is not answering' : 'this machine'
+  const current = policy()
+  const ceiling = Number(current.runningCeiling) || 100
+  // The ceiling is per machine, so the meter counts this machine — whichever machines the list shows.
+  const local = everyRow().filter((row) => row.local !== false)
+  const running = local.filter((row) => row.state === 'running').length
+  dom.runningValue.textContent = `${running} of ${ceiling}`
+  dom.runningBar.style.width = `${Math.min(100, (running / ceiling) * 100)}%`
+  dom.meterRunning.classList.toggle('hot', running / ceiling >= 0.9)
+
+  const machineMemory = state.snapshot.machine?.memory || 0
+  const held = local.reduce((sum, row) => sum + (row.rssBytes || 0), 0)
+  dom.memoryValue.textContent = machineMemory ? `${gib(held)} of ${gib(machineMemory)}` : gib(held)
+  dom.memoryBar.style.width = machineMemory ? `${Math.min(100, (held / machineMemory) * 100)}%` : '0%'
+  dom.meterMemory.classList.toggle('hot', machineMemory ? held / machineMemory >= 0.6 : false)
+
+  const due = (state.snapshot.plan ?? []).filter((entry) => entry.action === 'pause')
+  const frees = due.reduce((sum, entry) => sum + (entry.frees || 0), 0)
+  dom.policyValue.textContent = `pause after ${current.pauseAfterIdle}${due.length ? ` · ${due.length} due, ${gib(frees)}` : ' · nothing due'}`
+  dom.policyReview.hidden = due.length === 0
 }
+
+/* ── the table ─────────────────────────────────────────────────────────────── */
+
+function columns(multiMachine) {
+  return [
+    { key: 'status', label: '', width: '26px', cell: stateCell, className: 'c-state', title: 'Sort by status' },
+    { key: 'name', label: 'Name', width: '33%', cell: nameCell },
+    { key: 'project', label: 'Project', width: '15%', cell: (row) => text(row.project, 'dim') },
+    { key: 'engine', label: 'Engine', width: '8%', cell: (row) => text(row.engine) },
+    { key: 'model', label: 'Model', width: '11%', cell: (row) => text(row.model ?? '—', 'dim') },
+    { key: 'mem', label: 'Memory', width: '8%', num: true, cell: (row) => text(gib(row.rssBytes), 'num') },
+    { key: 'cpu', label: 'CPU %', width: '6%', num: true, cell: (row) => text(row.state === 'running' ? (row.cpu || 0).toFixed(1) : '—', 'num') },
+    { key: 'idle', label: 'Idle', width: '6%', num: true, cell: (row) => text(humanIdle(row.idleMs), 'num'), title: 'Time since the last real turn' },
+    { key: 'age', label: 'Age', width: '6%', num: true, cell: (row) => text(age(row.createdAt), 'num dim') },
+    ...(multiMachine ? [{ key: 'machine', label: 'Machine', width: '9%', cell: (row) => text(row.machine, 'dim') }] : []),
+    { key: 'do', label: '', width: '6%', cell: actionCell },
+  ]
+}
+
+function text(value, className = '') {
+  const td = document.createElement('td')
+  td.className = className
+  td.textContent = value
+  return td
+}
+
+const STATUS_WORDS = { waiting: 'Waiting on you', working: 'Working', running: 'Running', paused: 'Paused', terminal: 'Shell' }
+
+function stateCell(row) {
+  const td = document.createElement('td')
+  td.className = 'c-state'
+  const dot = document.createElement('span')
+  dot.className = `dot ${status(row)}`
+  td.title = STATUS_WORDS[status(row)] ?? row.state
+  td.append(dot)
+  return td
+}
+
+function nameCell(row) {
+  const td = document.createElement('td')
+  const box = document.createElement('div')
+  box.className = 'c-name'
+  const title = document.createElement('span')
+  title.className = 'title'
+  title.textContent = row.title || row.name
+  box.append(title)
+  if (row.pinned) { const pin = document.createElement('span'); pin.className = 'pin'; pin.textContent = '●'; pin.title = 'pinned — the policy leaves it alone'; box.append(pin) }
+  if (isDue(row)) { const due = document.createElement('span'); due.className = 'due'; due.textContent = 'due'; due.title = `the policy would pause this: ${planFor(row.id).why}`; box.append(due) }
+  if (!row.local) { const remote = document.createElement('span'); remote.className = 'remote'; remote.textContent = '↗'; remote.title = reachable(row) ? `on ${row.machine}` : `on ${row.machine} — update Harness there to pause or resume it from here`; box.append(remote) }
+  td.append(box)
+  td.title = `${row.title || row.name}\n${row.home || row.cwd || ''}`
+  return td
+}
+
+function actionCell(row) {
+  const td = document.createElement('td')
+  td.className = 'c-do'
+  const verb = canPause(row) ? 'pause' : canResume(row) ? 'resume' : null
+  if (verb) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.dataset.verb = verb
+    button.dataset.only = row.id
+    button.textContent = ACTIONS.find(([name]) => name === verb)[1]
+    td.append(button)
+  }
+  return td
+}
+
+function renderTable() {
+  const list = sorted()
+  const multiMachine = new Set(list.map((row) => row.machine)).size > 1
+  const cols = columns(multiMachine)
+  const table = document.createElement('table')
+  const colgroup = document.createElement('colgroup')
+  for (const column of cols) { const col = document.createElement('col'); col.style.width = column.width; colgroup.append(col) }
+  const head = document.createElement('tr')
+  for (const column of cols) {
+    const th = document.createElement('th')
+    th.textContent = column.label
+    if (column.num) th.className = 'num'
+    if (column.className) th.className = column.className
+    if (column.title) th.title = column.title
+    if (column.key !== 'do') {
+      th.dataset.sort = column.key
+      if (state.sort.key === column.key) th.setAttribute('aria-sort', state.sort.dir === 'asc' ? 'ascending' : 'descending')
+    }
+    head.append(th)
+  }
+  const thead = document.createElement('thead'); thead.append(head)
+  const tbody = document.createElement('tbody')
+  for (const row of list) {
+    const tr = document.createElement('tr')
+    tr.dataset.id = row.id
+    tr.dataset.state = row.state
+    tr.setAttribute('aria-selected', String(state.selected.has(row.id) || (!state.selected.size && state.cursor === row.id)))
+    for (const column of cols) tr.append(column.cell(row))
+    tbody.append(tr)
+  }
+  table.append(colgroup, thead, tbody)
+  const scroll = dom.grid.scrollTop
+  dom.grid.replaceChildren(table)
+  dom.grid.scrollTop = scroll
+
+  dom.tableEmpty.hidden = list.length > 0
+  if (!list.length) {
+    const scopeWord = { all: 'No harnesses', running: 'Nothing is running', paused: 'Nothing is paused', waiting: 'Nothing is waiting on you' }[state.scope]
+    dom.tableEmpty.innerHTML = '<strong></strong><span></span>'
+    dom.tableEmpty.querySelector('strong').textContent = state.filter ? `No harness matches “${state.filter}”` : `${scopeWord}.`
+    dom.tableEmpty.querySelector('span').textContent = state.snapshot ? '' : 'Reading the fleet…'
+  }
+}
+
+/* ── the timeline ──────────────────────────────────────────────────────────── */
 
 function renderAxis() {
   const ticks = [['now', 0], ['1h', UNITS.h], ['6h', 6 * UNITS.h], ['1d', UNITS.d], ['3d', 3 * UNITS.d], ['1w', UNITS.w], ['2w', 2 * UNITS.w], ['4w', 4 * UNITS.w]]
@@ -134,74 +327,49 @@ function placeRules() {
   dom.laneList.style.setProperty('--hide-x', hideX)
 }
 
-function chipFor(row) {
-  const chip = document.createElement('button')
-  chip.type = 'button'
-  chip.className = 'chip'
-  chip.dataset.id = row.id
-  chip.dataset.state = row.state
-  chip.dataset.working = String(Boolean(row.working && row.state === 'running'))
-  chip.dataset.attention = String(Boolean(row.needsInput))
-  chip.dataset.selected = String(state.selected.has(row.id))
-  const doomed = verdictFor(row)
-  if (doomed) chip.dataset.doomed = 'true'
-  chip.title = `${row.title || row.name}\n${row.engine}${row.model ? ` · ${row.model}` : ''} · idle ${humanIdle(row.idleMs)}${doomed ? `\nthe policy would ${doomed} this` : ''}`
-  const dot = document.createElement('span'); dot.className = 'dot'
-  const what = document.createElement('span'); what.className = 'what'; what.textContent = row.title || row.name
-  chip.append(dot, what)
-  if (row.pinned) { const pin = document.createElement('span'); pin.className = 'pin'; pin.textContent = '📌'; chip.append(pin) }
-  if (row.rssBytes) { const mem = document.createElement('span'); mem.className = 'mem'; mem.textContent = bytes(row.rssBytes); chip.append(mem) }
-  return chip
-}
-
-/** Lay the chips out along the lane, then push any that overlap onto a second row of the same lane.
- *  Measured, not estimated: a title's width depends on the font the app is in. */
+/** Lay chips along a lane, each ending at its own moment in time; push any that overlap to a second row. */
 function stack(track) {
-  const chips = [...track.querySelectorAll('.chip')]
   const width = track.clientWidth || 1
   const placed = []
-  let rowsUsed = 1
-  for (const chip of chips) {
+  let levels = 1
+  for (const chip of track.querySelectorAll('.chip')) {
     const w = chip.offsetWidth
-    const wanted = Number(chip.dataset.x) * width
-    const left = Math.max(0, Math.min(width - w, wanted - w))   // the chip ends at its own moment in time
+    const left = Math.max(0, Math.min(width - w, Number(chip.dataset.x) * width - w))
     let level = 0
-    while (placed.some((other) => other.level === level && left < other.right + 6 && left + w > other.left - 6)) level += 1
+    while (placed.some((o) => o.level === level && left < o.right + 6 && left + w > o.left - 6)) level += 1
     placed.push({ level, left, right: left + w })
-    rowsUsed = Math.max(rowsUsed, level + 1)
+    levels = Math.max(levels, level + 1)
     chip.style.left = `${left}px`
-    chip.style.top = `${5 + level * 26}px`
+    chip.style.top = `${6 + level * 26}px`
   }
-  track.style.height = `${Math.max(34, 10 + rowsUsed * 26)}px`
+  track.style.height = `${Math.max(34, 12 + levels * 26)}px`
 }
 
 function renderLanes() {
-  const list = rows().filter((row) => row.state !== 'gone' || state.filter)
+  const list = rows()
   dom.lanesEmpty.hidden = list.length > 0
-  const lanes = new Map()
-  for (const row of list) {
-    const key = row.project || 'elsewhere'
-    if (!lanes.has(key)) lanes.set(key, [])
-    lanes.get(key).push(row)
-  }
-  // Freshest project first: the top of the hps is the working set, and the sediment sinks.
-  const ordered = [...lanes.entries()].sort((a, b) => Math.min(...a[1].map((r) => r.idleMs)) - Math.min(...b[1].map((r) => r.idleMs)))
+  if (!list.length) dom.lanesEmpty.textContent = state.snapshot ? 'Nothing in this view.' : 'Reading the fleet…'
+  const groups = new Map()
+  for (const row of list) { const key = row.project || 'elsewhere'; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(row) }
+  const ordered = [...groups.entries()].sort((a, b) => Math.min(...a[1].map((r) => r.idleMs)) - Math.min(...b[1].map((r) => r.idleMs)))
   const fragment = document.createDocumentFragment()
   for (const [project, group] of ordered) {
-    const lane = document.createElement('div')
-    lane.className = 'lane'
-    const label = document.createElement('div')
-    label.className = 'lane-label'
-    const branch = group.find((row) => row.branch)?.branch
-    label.innerHTML = '<b></b> <i></i>'
-    label.querySelector('b').textContent = project
-    label.querySelector('i').textContent = group.length > 1 ? `×${group.length}` : (branch ?? '')
-    label.title = group.map((row) => `${row.title || row.name} — ${humanIdle(row.idleMs)}`).join('\n')
-    const track = document.createElement('div')
-    track.className = 'track'
+    const lane = document.createElement('div'); lane.className = 'lane'
+    const label = document.createElement('div'); label.className = 'lane-label'
+    label.textContent = project
+    if (group.length > 1) { const n = document.createElement('i'); n.textContent = String(group.length); label.append(n) }
+    const track = document.createElement('div'); track.className = 'track'
     for (const row of [...group].sort((a, b) => a.idleMs - b.idleMs)) {
-      const chip = chipFor(row)
-      chip.dataset.x = String(xOf(row.idleMs))
+      const chip = document.createElement('button')
+      chip.type = 'button'; chip.className = 'chip'
+      chip.dataset.id = row.id; chip.dataset.state = row.state; chip.dataset.x = String(xOf(row.idleMs))
+      if (isDue(row) && !state.draft) chip.dataset.due = 'true'
+      chip.setAttribute('aria-selected', String(state.selected.has(row.id)))
+      chip.title = `${row.title || row.name} · ${row.engine} · idle ${humanIdle(row.idleMs)}`
+      const dot = document.createElement('span'); dot.className = `dot ${status(row)}`
+      const what = document.createElement('span'); what.className = 'what'; what.textContent = row.title || row.name
+      chip.append(dot, what)
+      if (row.rssBytes) { const mem = document.createElement('span'); mem.className = 'mem'; mem.textContent = bytes(row.rssBytes); chip.append(mem) }
       track.append(chip)
     }
     lane.append(label, track)
@@ -211,239 +379,200 @@ function renderLanes() {
   for (const track of dom.laneList.querySelectorAll('.track')) stack(track)
 }
 
-const COLUMNS = [
-  { key: 'n', label: '#', sortable: false, cell: (row, i) => ({ text: String(i + 1), className: 'c-num' }) },
-  { key: 'state', label: '', cell: (row) => {
-    const glyph = row.needsInput ? '!' : row.state === 'running' ? (row.working ? '◐' : '●')
-      : row.state === 'paused' ? '○' : row.state === 'terminal' ? '$' : '✕'
-    const kind = row.needsInput ? 'attention' : row.working && row.state === 'running' ? 'working' : row.state
-    return { text: glyph, className: `c-state st-${kind}`, title: row.needsInput ? 'looks like it is waiting on you' : row.state }
-  } },
-  { key: 'idle', label: 'idle', cell: (row) => ({ text: row.state === 'gone' ? '—' : humanIdle(row.idleMs), className: 'c-idle' }) },
-  { key: 'engine', label: 'engine', cell: (row) => ({ text: row.engine }) },
-  { key: 'model', label: 'model', cell: (row) => ({ text: row.model ?? '—', className: 'c-dim' }) },
-  { key: 'mem', label: 'mem', cell: (row, i, max) => ({ text: bytes(row.rssBytes), className: 'c-mem membar', bar: max ? (row.rssBytes || 0) / max : 0 }) },
-  { key: 'project', label: 'project', cell: (row) => ({ text: row.project, className: 'c-project' }) },
-  { key: 'branch', label: 'branch', cell: (row) => ({ text: row.branch ?? '—', className: 'c-dim' }) },
-  { key: 'title', label: 'title', cell: (row) => ({ text: row.title || row.name, className: 'c-title' }) },
-  // The verb, on the row. It used to appear only after selecting something, which meant a person looking
-  // for "the pause button" could not find one.
-  { key: 'do', label: '', sortable: false, cell: (row) => ({ text: '', className: 'c-do', verb: row.state === 'running' ? 'pause' : row.state === 'paused' ? 'resume' : null }) },
-]
-
-const SORTS = {
-  idle: (a, b) => a.idleMs - b.idleMs,
-  mem: (a, b) => (b.rssBytes || 0) - (a.rssBytes || 0),
-  state: (a, b) => a.state.localeCompare(b.state) || a.idleMs - b.idleMs,
-  engine: (a, b) => a.engine.localeCompare(b.engine) || a.idleMs - b.idleMs,
-  model: (a, b) => String(a.model ?? '').localeCompare(String(b.model ?? '')),
-  project: (a, b) => a.project.localeCompare(b.project) || a.idleMs - b.idleMs,
-  branch: (a, b) => String(a.branch ?? '').localeCompare(String(b.branch ?? '')),
-  title: (a, b) => String(a.title || a.name).localeCompare(String(b.title || b.name)),
-}
-
-function sortedRows() {
-  const list = [...rows()]
-  const by = SORTS[state.sort.key] ?? SORTS.idle
-  list.sort(by)
-  if (state.sort.dir === 'desc') list.reverse()
-  return list
-}
-
-function renderTable() {
-  const list = sortedRows()
-  const max = Math.max(1, ...list.map((row) => row.rssBytes || 0))
-  const table = document.createElement('table')
-  const thead = document.createElement('thead')
-  const headRow = document.createElement('tr')
-  for (const column of COLUMNS) {
-    const th = document.createElement('th')
-    th.textContent = column.label
-    if (column.sortable !== false) {
-      th.dataset.sort = column.key
-      if (state.sort.key === column.key) th.setAttribute('aria-sort', state.sort.dir === 'asc' ? 'ascending' : 'descending')
-    }
-    headRow.append(th)
-  }
-  thead.append(headRow)
-  const tbody = document.createElement('tbody')
-  list.forEach((row, index) => {
-    const tr = document.createElement('tr')
-    tr.dataset.id = row.id
-    tr.dataset.selected = String(state.selected.has(row.id))
-    tr.dataset.cursor = String(state.cursor === row.id)
-    if (verdictFor(row)) tr.dataset.doomed = 'true'
-    for (const column of COLUMNS) {
-      const td = document.createElement('td')
-      const cell = column.cell(row, index, max)
-      td.className = cell.className ?? ''
-      if (cell.title) td.title = cell.title
-      if (cell.verb) {
-        const button = document.createElement('button')
-        button.type = 'button'
-        button.dataset.verb = cell.verb
-        button.dataset.only = row.id
-        button.textContent = cell.verb === 'pause' ? 'Pause' : 'Resume'
-        td.append(button)
-      } else if (cell.bar) {
-        const bar = document.createElement('i')
-        bar.style.width = `${Math.max(2, cell.bar * 46)}px`
-        const span = document.createElement('span')
-        span.textContent = cell.text
-        td.append(bar, span)
-      } else td.textContent = cell.text
-      tr.append(td)
-    }
-    tbody.append(tr)
-  })
-  table.append(thead, tbody)
-  dom.grid.replaceChildren(table)
-}
-
-function renderStatus() {
-  const summary = state.snapshot?.summary
-  const list = rows()
-  const totals = planTotals(list)
-  const held = totals.frees >= 1024 ** 3 ? `${(totals.frees / 1024 ** 3).toFixed(1)} GB` : `${Math.round(totals.frees / 1024 ** 2)} MB`
-  const hidden = (state.snapshot?.rows ?? []).length - list.length
-  const bits = [`${list.length} shown${hidden > 0 ? ` of ${(state.snapshot?.rows ?? []).length}` : ''}`]
-  if (summary) bits.push(`${summary.running} running`, `${summary.paused} paused`)
-  if (totals.pause) bits.push(`policy: pause ${totals.pause} (${held})`)
-  for (const problem of state.snapshot?.problems ?? []) bits.push(`⚠ ${problem.machine}`)
-  dom.statusLeft.textContent = bits.join('  ·  ')
-
-  const count = state.selected.size
-  dom.statusActions.hidden = count === 0
-  if (count) {
-    dom.statusActions.replaceChildren()
-    const label = document.createElement('span')
-    label.textContent = `${count} selected`
-    dom.statusActions.append(label)
-    for (const [verb, text] of [['pause', 'Pause'], ['resume', 'Resume'], ['pin', 'Pin'], ['unpin', 'Unpin']]) {
-      const button = document.createElement('button')
-      button.type = 'button'
-      button.textContent = text
-      button.dataset.verb = verb
-      dom.statusActions.append(button)
-    }
-    const clear = document.createElement('button')
-    clear.type = 'button'; clear.textContent = 'Clear'; clear.dataset.verb = 'clear'
-    dom.statusActions.append(clear)
-  }
-  dom.statusRight.innerHTML = state.view === 'table'
-    ? '<kbd>j</kbd><kbd>k</kbd> move · <kbd>space</kbd> select · <kbd>p</kbd> pause · <kbd>r</kbd> resume · <kbd>i</kbd> pin · <kbd>/</kbd> filter'
-    : `rules: <code></code> · drag a line to try a change · <kbd>/</kbd> filter`
-  const code = dom.statusRight.querySelector('code')
-  if (code) code.textContent = state.snapshot?.configPath ?? '~/.config/harness/policy.jsonc'
-}
+/* ── the inspector ─────────────────────────────────────────────────────────── */
 
 function renderInspector() {
-  const row = (state.snapshot?.rows ?? []).find((candidate) => candidate.id === state.inspecting)
-  if (!row) { dom.inspector.hidden = true; return }
-  dom.inspector.hidden = false
-  const verdict = verdictFor(row)
-  const entry = (state.snapshot?.plan ?? []).find((candidate) => candidate.id === row.id)
+  const row = allRows().find((candidate) => candidate.id === state.inspecting)
+  dom.inspector.hidden = !row
+  if (!row) return
+  // Below the meters, whatever height the toolbar wrapped to, so the sheet never covers a reading.
+  dom.inspector.style.top = `${el('meters').getBoundingClientRect().bottom}px`
+  const entry = planFor(row.id)
   dom.inspector.replaceChildren()
+
   const header = document.createElement('header')
   const heading = document.createElement('div')
   const h2 = document.createElement('h2'); h2.textContent = row.title || row.name
   const sub = document.createElement('div'); sub.className = 'sub'
-  sub.textContent = `${row.state}${row.pinned ? ' · pinned' : ''} · ${row.engine}${row.model ? ` ${row.model}` : ''} · ${row.machine}`
+  const dot = document.createElement('span'); dot.className = `dot ${status(row)}`
+  const words = document.createElement('span')
+  words.textContent = `${STATUS_WORDS[status(row)] ?? row.state} · ${row.engine}${row.model ? ` · ${row.model}` : ''}`
+  sub.append(dot, words)
   heading.append(h2, sub)
-  const close = document.createElement('button'); close.type = 'button'; close.className = 'ghost'; close.textContent = '✕'
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'close'; close.textContent = '✕'; close.setAttribute('aria-label', 'Close')
   close.addEventListener('click', () => { state.inspecting = null; renderInspector() })
   header.append(heading, close)
   dom.inspector.append(header)
 
-  if (entry && entry.action !== 'keep') {
-    const why = document.createElement('p'); why.className = 'why'
-    why.textContent = `The policy would ${entry.action} this: ${entry.why}.`
-    dom.inspector.append(why)
-  } else if (entry?.protectedBy) {
-    const why = document.createElement('p'); why.className = 'why'
-    why.textContent = `Protected: ${entry.why}.`
-    dom.inspector.append(why)
-  }
-
-  const dl = document.createElement('dl')
-  const pairs = [
-    ['idle', `${humanIdle(row.idleMs)} — last turn ${new Date(row.lastActivity).toLocaleString()}`],
-    ['folder', row.home || '—'],
-    ['branch', row.branch ?? '—'],
-    ['memory', row.rssBytes ? `${bytes(row.rssBytes)} across ${row.procs} ${row.procs === 1 ? 'process' : 'processes'}` : '—'],
-    ['pane', row.pane ? `${row.pane}${row.dead ? ' (dead, held open)' : ''}` : '—'],
-    ['harness', row.dshName ?? row.dsh ?? '—'],
-    ['id', row.id.slice(0, 8)],
+  const facts = [
+    ['Idle', `${humanIdle(row.idleMs)} — last turn ${new Date(row.lastActivity).toLocaleString()}`],
+    ['Age', row.createdAt ? `${age(row.createdAt)} — created ${new Date(row.createdAt).toLocaleDateString()}` : '—'],
+    ['Memory', row.rssBytes ? `${gib(row.rssBytes)} across ${row.procs} ${row.procs === 1 ? 'process' : 'processes'}` : '—'],
+    ['CPU', row.state === 'running' ? `${(row.cpu || 0).toFixed(1)} %` : '—'],
+    ['Folder', row.home || row.cwd || '—'],
+    ['Branch', row.branch ?? '—'],
+    ['Machine', reachable(row) ? row.machine : `${row.machine} — update Harness there to pause or resume it from here`],
+    ['Pane', row.pane ?? (row.state === 'paused' ? 'none — resume opens a new one' : '—')],
+    ['Conversation', row.sessionId ? row.sessionId.slice(0, 8) : 'none bound yet'],
   ]
-  for (const [key, value] of pairs) {
-    const dt = document.createElement('dt'); dt.textContent = key
-    const dd = document.createElement('dd'); dd.textContent = value
-    dl.append(dt, dd)
-  }
-  dom.inspector.append(dl)
+  const overview = document.createElement('section')
+  const h3 = document.createElement('h3'); h3.textContent = 'Overview'
+  const dl = document.createElement('dl'); dl.className = 'facts'
+  for (const [key, value] of facts) { const dt = document.createElement('dt'); dt.textContent = key; const dd = document.createElement('dd'); dd.textContent = value; dl.append(dt, dd) }
+  overview.append(h3, dl)
+  dom.inspector.append(overview)
+
+  const rules = document.createElement('section')
+  const rh = document.createElement('h3'); rh.textContent = 'Policy'
+  const note = document.createElement('p'); note.className = 'note'
+  if (row.state === 'paused') note.textContent = `Paused. Idle ${humanIdle(row.idleMs)} since its last turn.`
+  else if (entry?.action === 'pause') note.textContent = `Due — the policy would pause this: ${entry.why}.`
+  else if (entry?.protectedBy) note.textContent = `Protected — ${entry.why}, so it is never paused while that is true.`
+  else note.textContent = entry?.why ? `Left alone — ${entry.why}.` : 'Left alone.'
+  const how = document.createElement('p'); how.className = 'note'
+  how.textContent = row.resumeVia === 'daemon' ? (row.state === 'paused' ? 'Resume brings its conversation back in a new pane.' : 'Pausing keeps its conversation; resuming opens it in a new pane.')
+    : row.resumeVia === 'legacy' ? 'Paused before the daemon could save harnesses; it resumes into the pane it left.'
+      : row.sessionId ? `The daemon cannot resume ${row.engine}, so it is never paused.` : 'No conversation is bound yet, so there is nothing to resume.'
+  if (!row.resumeVia) how.classList.add('warn')
+  rules.append(rh, note, how)
+  dom.inspector.append(rules)
 
   if (row.screenTail) {
-    const screen = document.createElement('pre'); screen.className = 'screen'; screen.textContent = row.screenTail
+    const screen = document.createElement('section')
+    const sh = document.createElement('h3'); sh.textContent = 'Last on its pane'
+    const pre = document.createElement('pre'); pre.className = 'screen'; pre.textContent = row.screenTail
+    screen.append(sh, pre)
     dom.inspector.append(screen)
   }
+
   const actions = document.createElement('div'); actions.className = 'row-actions'
-  // A shell has no conversation to pause or resume, so it is offered neither.
-  const verbs = row.state === 'terminal' ? [] : row.state === 'running' ? [['pause', 'Pause']] : [['resume', 'Resume']]
-  if (row.state !== 'terminal') verbs.push(row.pinned ? ['unpin', 'Unpin'] : ['pin', 'Pin'])
-  for (const [verb, text] of verbs) {
-    const button = document.createElement('button')
-    button.type = 'button'; button.className = 'ghost'; button.textContent = text
+  const verb = canPause(row) ? 'pause' : canResume(row) ? 'resume' : null
+  if (verb) {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'button primary'
+    button.textContent = ACTIONS.find(([name]) => name === verb)[1]
     button.addEventListener('click', () => act(verb, [row.id]))
     actions.append(button)
   }
   dom.inspector.append(actions)
-  if (verdict) dom.inspector.dataset.verdict = verdict
+}
+
+/* ── the policy review ─────────────────────────────────────────────────────── */
+
+function openReview() {
+  const due = (state.snapshot?.plan ?? []).filter((entry) => entry.action === 'pause')
+  if (!due.length) return
+  const byId = new Map(allRows().map((row) => [row.id, row]))
+  const chosen = new Set(due.map((entry) => entry.id))
+  dom.review.replaceChildren()
+  const header = document.createElement('header')
+  const h2 = document.createElement('h2'); h2.id = 'review-title'; h2.textContent = `Pause ${due.length} idle ${due.length === 1 ? 'harness' : 'harnesses'}`
+  const p = document.createElement('p'); p.textContent = `The policy pauses anything untouched for ${policy().pauseAfterIdle}. Each one keeps its conversation and comes back with Resume.`
+  header.append(h2, p)
+  const list = document.createElement('div'); list.className = 'list'
+  const total = document.createElement('span'); total.className = 'total'
+  const go = document.createElement('button'); go.type = 'button'; go.className = 'button primary'
+  const refresh = () => {
+    const frees = [...chosen].reduce((sum, id) => sum + (byId.get(id)?.rssBytes || 0), 0)
+    total.textContent = `${chosen.size} selected · frees ${gib(frees)}`
+    go.textContent = `Pause ${chosen.size}`
+    go.disabled = chosen.size === 0
+  }
+  for (const entry of due) {
+    const row = byId.get(entry.id)
+    const item = document.createElement('label'); item.className = 'item'
+    const box = document.createElement('input'); box.type = 'checkbox'; box.checked = true
+    box.addEventListener('change', () => { if (box.checked) chosen.add(entry.id); else chosen.delete(entry.id); refresh() })
+    const name = document.createElement('span'); name.className = 'name'; name.textContent = row?.title || entry.name
+    const why = document.createElement('span'); why.className = 'why'; why.textContent = `${row?.project ?? ''} · ${entry.why}`
+    name.append(why)
+    const idle = document.createElement('span'); idle.className = 'num'; idle.textContent = humanIdle(row?.idleMs ?? 0)
+    const mem = document.createElement('span'); mem.className = 'num'; mem.textContent = gib(row?.rssBytes)
+    item.append(box, name, idle, mem)
+    list.append(item)
+  }
+  const footer = document.createElement('footer')
+  const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'button'; cancel.textContent = 'Cancel'
+  cancel.addEventListener('click', closeReview)
+  go.addEventListener('click', () => { const ids = [...chosen]; closeReview(); act('pause', ids) })
+  footer.append(total, cancel, go)
+  dom.review.append(header, list, footer)
+  refresh()
+  dom.review.hidden = false
+  dom.scrim.hidden = false
+  go.focus()
+}
+
+function closeReview() { dom.review.hidden = true; dom.scrim.hidden = true }
+
+/* ── the status bar ────────────────────────────────────────────────────────── */
+
+function renderStatus() {
+  const summary = state.snapshot?.summary
+  const shown = rows().length
+  const fresh = Date.now() - state.receivedAt < Math.max(12_000, (state.snapshot?.intervalMs ?? 4000) * 3)
+  dom.statusLeft.innerHTML = '<span class="live"></span><span></span>'
+  dom.statusLeft.querySelector('.live').classList.toggle('stale', !fresh)
+  const bits = [`${shown} shown`]
+  if (summary) {
+    const shownRows = allRows()
+    bits.push(`${shownRows.filter((row) => row.state === 'running').length} running`, `${shownRows.filter((row) => row.state === 'paused').length} paused`)
+  }
+  if (state.selected.size) bits.push(`${state.selected.size} selected`)
+  const problems = state.snapshot?.problems ?? []
+  if (problems.length && state.machines === 'all') bits.push(`⚠ ${problems.length} ${problems.length === 1 ? 'machine' : 'machines'} not reachable`)
+  dom.statusLeft.lastChild.textContent = `${bits.join(' · ')}${fresh ? '' : ' · not updating'}`
+  dom.statusLeft.title = problems.map((problem) => `${problem.machine}: ${problem.error}`).join('\n')
+  dom.statusRight.innerHTML = state.view === 'table'
+    ? '<span class="k"><kbd>⏎</kbd>Inspect</span><span class="k"><kbd>p</kbd>Pause</span><span class="k"><kbd>r</kbd>Resume</span><span class="k"><kbd>/</kbd>Search</span><span class="k"><kbd>1</kbd><kbd>2</kbd>Views</span>'
+    : '<span class="k">Drag a line to try a policy</span><span class="k"><kbd>/</kbd>Search</span><span class="k"><kbd>1</kbd><kbd>2</kbd>Views</span>'
 }
 
 function render() {
-  if (!state.snapshot) return
-  renderGauges()
+  renderToolbar()
+  renderMeters()
   placeRules()
-  if (state.view === 'lanes') renderLanes(); else renderTable()
+  dom.table.hidden = state.view !== 'table'
+  dom.lanes.hidden = state.view !== 'lanes'
+  if (state.view === 'table') renderTable(); else renderLanes()
   renderStatus()
   renderInspector()
 }
 
-/* ── talking to the server ────────────────────────────────────────────────── */
+/* ── talking to the server ─────────────────────────────────────────────────── */
 
 function toast(message, bad = false) {
   dom.toast.textContent = message
   dom.toast.className = `toast${bad ? ' bad' : ''}`
   dom.toast.hidden = false
   clearTimeout(toast.timer)
-  toast.timer = setTimeout(() => { dom.toast.hidden = true }, 4200)
+  toast.timer = setTimeout(() => { dom.toast.hidden = true }, 5000)
 }
 
 async function post(path, payload) {
-  const response = await fetch(path, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-hps-token': TOKEN },
-    body: JSON.stringify(payload),
-  })
+  const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hps-token': TOKEN }, body: JSON.stringify(payload) })
   return response.json()
 }
 
 async function act(verb, ids) {
-  if (state.busy || !ids.length) return
+  const eligible = allRows().filter((row) => ids.includes(row.id) && (verb === 'pause' ? canPause(row) : canResume(row)))
+  if (!eligible.length || state.busy) return
   state.busy = true
+  renderToolbar()
+  toast(`${verb === 'pause' ? 'Pausing' : 'Resuming'} ${eligible.length === 1 ? (eligible[0].title || eligible[0].name) : `${eligible.length} harnesses`}…`)
   try {
-    const reply = await post('/api/act', { verb, ids })
+    const reply = await post('/api/act', { verb, ids: eligible.map((row) => row.id) })
     if (reply.error) { toast(reply.error, true); return }
     const results = reply.results ?? []
-    const ok = results.filter((result) => result.ok && !result.already).length
-    const refused = results.filter((result) => result.refused)
-    if (results.length === 1) toast(`${results[0].ok ? '' : 'not '}${verb}: ${results[0].detail}`, !results[0].ok)
-    else toast(`${verb}: ${ok} done${refused.length ? `, ${refused.length} left alone (${refused[0].detail})` : ''}`, ok === 0)
+    const done = results.filter((result) => result.ok && !result.already)
+    const failed = results.filter((result) => !result.ok)
+    if (results.length === 1) toast(`${results[0].ok ? '' : 'Could not '}${results[0].ok ? (verb === 'pause' ? 'Paused' : 'Resumed') : verb}: ${results[0].detail}`, !results[0].ok)
+    else toast(`${verb === 'pause' ? 'Paused' : 'Resumed'} ${done.length}${failed.length ? ` · ${failed.length} left alone — ${failed[0].detail}` : ''}`, done.length === 0)
     state.selected.clear()
   } catch (error) {
     toast(`Could not ${verb}: ${error.message}`, true)
   } finally {
     state.busy = false
+    render()
   }
 }
 
@@ -457,154 +586,176 @@ async function savePolicy() {
   render()
 }
 
-/* ── input ────────────────────────────────────────────────────────────────── */
+/* ── input ─────────────────────────────────────────────────────────────────── */
 
-function setView(view) {
-  state.view = view
-  dom.lanes.hidden = view !== 'lanes'
-  dom.table.hidden = view !== 'table'
-  for (const button of document.querySelectorAll('.segmented button')) {
-    button.setAttribute('aria-selected', String(button.dataset.view === view))
-  }
-  render()
-}
+function setView(view) { state.view = view; keep('hm.view', view); render() }
+function setScope(scope) { state.scope = scope; keep('hm.scope', scope); state.selected.clear(); render() }
 
-function toggle(id, additive) {
-  if (!additive) {
-    const only = state.selected.size === 1 && state.selected.has(id)
+function toggle(id, additive, range) {
+  if (range && state.cursor) {
+    const order = state.view === 'table' ? (state.frozen ?? []) : rows().map((row) => row.id)
+    const [a, b] = [order.indexOf(state.cursor), order.indexOf(id)].sort((x, y) => x - y)
+    if (a >= 0 && b >= 0) for (const pick of order.slice(a, b + 1)) state.selected.add(pick)
+  } else if (additive) {
+    if (state.selected.has(id)) state.selected.delete(id); else state.selected.add(id)
+  } else {
     state.selected.clear()
-    if (!only) state.selected.add(id)
-  } else if (state.selected.has(id)) state.selected.delete(id)
-  else state.selected.add(id)
+    state.selected.add(id)
+  }
   state.cursor = id
 }
 
-function targets() {
-  if (state.selected.size) return [...state.selected]
-  return state.cursor ? [state.cursor] : []
-}
-
 function moveCursor(delta) {
-  const list = state.view === 'table' ? sortedRows() : rows()
-  if (!list.length) return
-  const index = list.findIndex((row) => row.id === state.cursor)
-  const next = list[Math.min(list.length - 1, Math.max(0, (index < 0 ? 0 : index) + delta))]
-  state.cursor = next.id
-  state.inspecting = state.inspecting ? next.id : null
+  const order = state.view === 'table' ? sorted().map((row) => row.id) : rows().map((row) => row.id)
+  if (!order.length) return
+  const index = order.indexOf(state.cursor)
+  state.cursor = order[Math.min(order.length - 1, Math.max(0, (index < 0 ? -1 : index) + delta))]
+  state.selected.clear()
+  state.selected.add(state.cursor)
+  if (state.inspecting) state.inspecting = state.cursor
   render()
-  const node = dom.grid.querySelector(`tr[data-id="${next.id}"]`)
-  node?.scrollIntoView({ block: 'nearest' })
+  dom.grid.querySelector(`tr[data-id="${CSS.escape(state.cursor)}"]`)?.scrollIntoView({ block: 'nearest' })
 }
 
 document.addEventListener('click', (event) => {
-  const chip = event.target.closest('.chip')
-  if (chip) { toggle(chip.dataset.id, event.metaKey || event.ctrlKey || event.shiftKey); state.inspecting = chip.dataset.id; render(); return }
-  const tr = event.target.closest('#grid tbody tr')
-  if (tr) { toggle(tr.dataset.id, event.metaKey || event.ctrlKey || event.shiftKey); state.inspecting = state.inspecting ? tr.dataset.id : null; render(); return }
+  const verbButton = event.target.closest('[data-verb]')
+  if (verbButton) {
+    event.stopPropagation()
+    const ids = verbButton.dataset.only ? [verbButton.dataset.only] : targets().map((row) => row.id)
+    act(verbButton.dataset.verb, ids)
+    return
+  }
+  if (event.target.closest('#act-inspect')) { const [one] = targets(); if (one) { state.inspecting = one.id; render() } return }
+  const scope = event.target.closest('[data-scope]')?.dataset.scope
+  if (scope) return setScope(scope)
+  const machines = event.target.closest('[data-machines]')?.dataset.machines
+  if (machines) { state.machines = machines; keep('hm.machines', machines); state.selected.clear(); return render() }
+  const view = event.target.closest('.views [data-view]')?.dataset.view
+  if (view) return setView(view)
   const th = event.target.closest('#grid th[data-sort]')
   if (th) {
     const key = th.dataset.sort
     state.sort = { key, dir: state.sort.key === key && state.sort.dir === 'asc' ? 'desc' : 'asc' }
-    render(); return
+    state.frozen = null
+    return render()
   }
-  const button = event.target.closest('[data-verb]')
-  const verb = button?.dataset.verb
-  if (verb === 'clear') { state.selected.clear(); render(); return }
-  // A button on a row acts on THAT row, whatever else is selected — otherwise clicking Pause next to one
-  // harness would pause five.
-  if (verb) { event.stopPropagation(); act(verb, button.dataset.only ? [button.dataset.only] : targets()); return }
-  const view = event.target.closest('[data-view]')?.dataset.view
-  if (view) setView(view)
+  const tr = event.target.closest('#grid tbody tr')
+  const chip = event.target.closest('.chip')
+  const id = tr?.dataset.id ?? chip?.dataset.id
+  if (id) {
+    toggle(id, event.metaKey || event.ctrlKey, event.shiftKey)
+    if (state.inspecting || chip) state.inspecting = id
+    return render()
+  }
+  if (event.target === dom.scrim) closeReview()
 })
 
-dom.refresh.addEventListener('click', () => post('/api/refresh', {}).then(() => toast('Refreshed.')))
-dom.showAll.addEventListener('click', () => {
-  state.showAll = !state.showAll
-  dom.showAll.setAttribute('aria-pressed', String(state.showAll))
-  render()
+dom.grid.addEventListener('dblclick', (event) => {
+  const id = event.target.closest('tbody tr')?.dataset.id
+  if (id) { state.inspecting = id; render() }
 })
+dom.grid.addEventListener('pointerenter', () => { state.hovering = true })
+dom.grid.addEventListener('pointerleave', () => { state.hovering = false; if (state.snapshot) render() })
+dom.filter.addEventListener('input', () => { state.filter = dom.filter.value; render() })
+dom.policyReview.addEventListener('click', openReview)
 dom.policySave.addEventListener('click', savePolicy)
 dom.policyReset.addEventListener('click', () => { state.draft = null; dom.policybar.hidden = true; render() })
-dom.filter.addEventListener('input', () => { state.filter = dom.filter.value; render() })
 
-/* Dragging a rule: the hps is the only place a threshold can be judged, because the thing you are
-   judging is how many chips end up on the wrong side of it. */
 for (const rule of [dom.rulePause, dom.ruleHide]) {
   const steps = rule.dataset.rule === 'pause' ? PAUSE_STEPS : HIDE_STEPS
   const key = rule.dataset.rule === 'pause' ? 'pauseAfterIdle' : 'hideAfterIdle'
-  const begin = (event) => {
+  const preview = () => {
+    const would = rows().filter((row) => row.state === 'running' && row.resumable && !row.pinned && !row.working && !row.attached && row.idleMs >= parseDuration(policy().pauseAfterIdle))
+    const frees = would.reduce((sum, row) => sum + (row.rssBytes || 0), 0)
+    dom.policyPreview.textContent = `Pause after ${policy().pauseAfterIdle} · hide after ${policy().hideAfterIdle} → would pause ${would.length}, freeing ${gib(frees)}`
+    dom.policybar.hidden = false
+    render()
+  }
+  rule.addEventListener('pointerdown', (event) => {
     event.preventDefault()
-    rule.classList.add('dragging')
-    const track = dom.axis.getBoundingClientRect()
-    const move = (moveEvent) => {
-      const x = (moveEvent.clientX - track.left) / Math.max(1, track.width)
-      state.draft = { ...(state.draft ?? {}), [key]: snap(idleOfX(x), steps) }
-      dom.policybar.hidden = false
-      const totals = planTotals(rows())
-      const held = totals.frees >= 1024 ** 3 ? `${(totals.frees / 1024 ** 3).toFixed(1)} GB` : `${Math.round(totals.frees / 1024 ** 2)} MB`
-      dom.policyPreview.textContent = `pause after ${policy().pauseAfterIdle}, hide after ${policy().hideAfterIdle} → would pause ${totals.pause}, handing back ${held}`
-      render()
-    }
-    const end = () => {
-      rule.classList.remove('dragging')
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', end)
-    }
+    const box = dom.axis.getBoundingClientRect()
+    const move = (e) => { state.draft = { ...(state.draft ?? {}), [key]: snap(idleOfX((e.clientX - box.left) / Math.max(1, box.width)), steps) }; preview() }
+    const end = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end) }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', end)
-  }
-  rule.addEventListener('pointerdown', begin)
+  })
   rule.addEventListener('keydown', (event) => {
     const direction = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0
     if (!direction) return
     event.preventDefault()
-    const current = policy()[key]
-    const index = Math.max(0, Math.min(steps.length - 1, steps.indexOf(current) - direction))
+    const index = Math.max(0, Math.min(steps.length - 1, steps.indexOf(policy()[key]) - direction))
     state.draft = { ...(state.draft ?? {}), [key]: steps[index] }
-    dom.policybar.hidden = false
-    render()
+    preview()
   })
 }
 
 document.addEventListener('keydown', (event) => {
   if (event.target === dom.filter) {
     if (event.key === 'Escape') { dom.filter.value = ''; state.filter = ''; dom.filter.blur(); render() }
+    if (event.key === 'ArrowDown') { dom.filter.blur(); moveCursor(1) }
     return
   }
+  if (!dom.review.hidden) { if (event.key === 'Escape') closeReview(); return }
   if (event.metaKey || event.ctrlKey || event.altKey) return
   const key = event.key
   if (key === '/') { event.preventDefault(); dom.filter.focus(); return }
-  if (key === '1') return setView('lanes')
-  if (key === '2') return setView('table')
+  if (key === '1') return setView('table')
+  if (key === '2') return setView('lanes')
   if (key === 'j' || key === 'ArrowDown') { event.preventDefault(); return moveCursor(1) }
   if (key === 'k' || key === 'ArrowUp') { event.preventDefault(); return moveCursor(-1) }
-  if (key === 'g') { const list = state.view === 'table' ? sortedRows() : rows(); state.cursor = list[0]?.id ?? null; return render() }
-  if (key === 'G') { const list = state.view === 'table' ? sortedRows() : rows(); state.cursor = list.at(-1)?.id ?? null; return render() }
   if (key === ' ') { event.preventDefault(); if (state.cursor) { toggle(state.cursor, true); render() } return }
-  if (key === 'Enter') { state.inspecting = state.cursor; return render() }
+  if (key === 'Enter' || key === 'i') { if (state.cursor) { state.inspecting = state.cursor; render() } return }
   if (key === 'Escape') { state.selected.clear(); state.inspecting = null; state.draft = null; dom.policybar.hidden = true; return render() }
-  // h pause · r resume · x retire · i pin · u unpin. `p` and `w` stay bound to the same two verbs,
-  // because anyone who used this before it was renamed will reach for them.
-  const verbs = { p: 'pause', h: 'pause', r: 'resume', w: 'resume', i: 'pin', u: 'unpin' }
-  if (verbs[key]) { event.preventDefault(); act(verbs[key], targets()) }
+  if (key === 'p') { event.preventDefault(); return act('pause', targets().map((row) => row.id)) }
+  if (key === 'r') { event.preventDefault(); return act('resume', targets().map((row) => row.id)) }
 })
 
 window.addEventListener('resize', () => { if (state.view === 'lanes') renderLanes() })
+setInterval(() => { if (state.snapshot) renderStatus() }, 5000)
 
-/* ── the stream ───────────────────────────────────────────────────────────── */
+/* ── deep links ────────────────────────────────────────────────────────────── */
+
+/** `?view=lanes`, `?scope=paused`, `?machines=all`, `?inspect=<agentId>`, `?review=1` — so the agent beside
+ *  this pane, or the app, can open it on exactly the harness it is talking about. Read once, on the first
+ *  snapshot, then the URL is left alone. */
+const link = new URLSearchParams(location.search)
+if (['table', 'lanes'].includes(link.get('view'))) state.view = link.get('view')
+if (['all', 'running', 'paused', 'waiting'].includes(link.get('scope'))) state.scope = link.get('scope')
+if (['local', 'all'].includes(link.get('machines'))) state.machines = link.get('machines')
+let linkPending = Boolean(link.get('inspect') || link.get('review'))
+function followLink() {
+  if (!linkPending || !state.snapshot) return
+  linkPending = false
+  const id = link.get('inspect')
+  if (id && everyRow().some((row) => row.id === id)) { state.cursor = id; state.selected = new Set([id]); state.inspecting = id }
+  render()
+  if (link.get('review')) openReview()
+}
+
+/* ── the stream ────────────────────────────────────────────────────────────── */
 
 function listen() {
   const source = new EventSource('/events')
   source.addEventListener('snapshot', (event) => {
     try { state.snapshot = JSON.parse(event.data) } catch { return }
+    if (!state.snapshot.summary) return
+    state.receivedAt = Date.now()
     render()
+    followLink()
   })
-  source.addEventListener('error', () => {
-    dom.where.textContent = 'reconnecting…'
-    source.close()
-    setTimeout(listen, 2500)
-  })
+  source.addEventListener('error', () => { source.close(); renderStatus(); setTimeout(listen, 2500) })
 }
 
+/** Draw from the snapshot the server put in the page, before the live stream has said anything. */
+function firstPaint() {
+  try {
+    const initial = JSON.parse(document.getElementById('initial-snapshot')?.textContent || 'null')
+    if (initial?.summary) { state.snapshot = initial; state.receivedAt = Date.now() }
+  } catch { /* a page served without one draws when the stream arrives */ }
+}
+
+firstPaint()
 renderAxis()
+render()
+followLink()
 listen()

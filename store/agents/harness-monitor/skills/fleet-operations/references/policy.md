@@ -55,5 +55,5 @@ reason. There is deliberately no `projects` list any more: it was a second mecha
   runs every four seconds against sixty repositories. The agent does that check on request, and names the
   branch in `--reason`.
 - **No deleting.** There is no rule, and no flag, that removes an agent. See the skill's last section.
-- **No remote actions.** Other machines are listed, never acted on: pane facts and signals are local, and
-  a fleet manager that guesses at a machine it cannot see is not one.
+- **No remote rules.** The policy never pauses another machine's harness — that machine has its own
+  `policy.jsonc`. A person can still pause or resume one by hand, through that machine's daemon.

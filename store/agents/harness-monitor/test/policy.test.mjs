@@ -126,3 +126,24 @@ test('the default ceiling is a backstop: a normal busy day never reaches it', ()
   const { totals } = decide(rows, {})
   assert.equal(totals.pause, 0, 'sixty harnesses used today, and the default pauses none of them')
 })
+
+test('the rules never plan a pause for something that could not come back', () => {
+  const { entries, totals } = decide([
+    row({ id: 'opencode', engine: 'opencode', idleMs: 9 * DAY, resumable: false }),
+    row({ id: 'unbound', sessionId: null, idleMs: 9 * DAY, resumable: false }),
+    row({ id: 'fine', idleMs: 9 * DAY, resumable: true }),
+  ], {})
+  const byId = Object.fromEntries(entries.map((entry) => [entry.id, entry]))
+  assert.equal(byId.opencode.action, 'keep')
+  assert.match(byId.opencode.why, /cannot resume opencode/)
+  assert.equal(byId.unbound.action, 'keep')
+  assert.match(byId.unbound.why, /no conversation bound/)
+  assert.equal(byId.fine.action, 'pause')
+  assert.equal(totals.pause, 1)
+})
+
+test('another machine\'s harnesses are never planned, and never count against this machine\'s ceiling', () => {
+  const { entries, totals } = decide([row({ id: 'far', local: false, machine: 'studio', idleMs: 9 * DAY }), row({ id: 'near', idleMs: 9 * DAY })], { runningCeiling: 0 })
+  assert.equal(entries.find((entry) => entry.id === 'far').action, 'keep')
+  assert.equal(totals.pause, 1)
+})

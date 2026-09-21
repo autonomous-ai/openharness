@@ -4,7 +4,7 @@
  * UI is gone; only these two endpoints remain local.
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -288,12 +288,39 @@ function registeredHookProcess(body: RegisterInput, engine: AgentEngine): Regist
   return body.tmuxPane ? registry.byPaneEngine(body.tmuxPane, engine) : undefined
 }
 
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * The file a Claude conversation is really in, when it is not where Claude Code said.
+ *
+ * Claude Code builds `transcript_path` from the folder it is in NOW, but a conversation's file stays in
+ * the folder it was started in. So a conversation that moved — the session cd'd into a worktree, and
+ * Harness then resumed it in the folder it was last in — is announced under a folder with no such file.
+ * Measured on a real resume: announced under `-Users-example-code-app--claude-worktrees-feature/`, while
+ * the conversation, 11 MB of it, was under `-Users-example-code-app/`. The wait below gave up on it, the
+ * resume was never confirmed ("The saved conversation has not been confirmed yet"), and its reservation
+ * then answered every later resume of that harness the same way (#189).
+ *
+ * The session id is the file's name and is unique, so the file is looked for by name one level down.
+ */
+export function findClaudeTranscript(sessionId: string | undefined, projectsDir = env.CLAUDE_PROJECTS_DIR): string | null {
+  if (!sessionId || !SESSION_ID.test(sessionId)) return null
+  let folders: string[]
+  try { folders = readdirSync(projectsDir) } catch { return null }
+  for (const folder of folders) {
+    const candidate = join(projectsDir, folder, `${sessionId}.jsonl`)
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
+
 /**
  * Register once the announced transcript exists.
  *
  * Runs detached from the HTTP reply on purpose: this is a SessionStart hook, and the engine is blocked
  * until the response comes back. Bounded — an announcement whose file never appears is dropped, which is
- * the same outcome as before, just after giving the engine a fair chance to finish starting up.
+ * the same outcome as before, just after giving the engine a fair chance to finish starting up. A Claude
+ * conversation announced under the wrong folder is registered with the file it is actually in.
  */
 async function awaitTranscript(body: RegisterInput, handlers: HookServerHandlers): Promise<void> {
   for (let i = 0; i < TRANSCRIPT_WAIT_TRIES; i++) {
@@ -301,8 +328,15 @@ async function awaitTranscript(body: RegisterInput, handlers: HookServerHandlers
     const engine = body.engine ?? 'claude'
     if (!registeredHookProcess(body, engine)) return
     if (isRecentlyDeleted(body.sessionId)) return
-    if (!body.transcriptPath || !existsSync(body.transcriptPath)) continue
-    const result = registry.register(body)
+    if (!body.transcriptPath) continue
+    let announced = body
+    if (!existsSync(body.transcriptPath)) {
+      const moved = engine === 'claude' ? findClaudeTranscript(body.sessionId) : null
+      if (!moved) continue
+      console.log(`[hooks] ${sid(body.sessionId ?? '?')} announced ${body.transcriptPath}; its conversation is in ${moved}`)
+      announced = { ...body, transcriptPath: moved }
+    }
+    const result = registry.register(announced)
     if (!result) return
     console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=${result.entry.engine}`
       + ` · isNew=${result.isNew} · after waiting ${((i + 1) * TRANSCRIPT_WAIT_MS) / 1000}s for its transcript`)

@@ -33,8 +33,8 @@ gives you rather than counting rows yourself.
 |---|---|
 | `hps [--all] [--idle 4h] [--project X] [--state paused] [--machines]` | the fleet, freshest first |
 | `hps show <ref>` | one harness in full, including the last lines on its pane |
-| `hps pause <ref…>` | the engine exits; pane, scrollback and conversation stay |
-| `hps resume <ref…>` | the engine comes back where it left off |
+| `hps pause <ref…>` | the engine exits; the daemon saves its conversation; its empty shell is closed |
+| `hps resume <ref…>` | the daemon brings it back in a new pane, conversation and all |
 | `hps pause --policy` | what the rules would do right now, with a reason per row. **Dry run** |
 | `hps pause --policy --apply` | do it |
 | `hps resume --paused` | put everything paused back, in one line (dry run until `--apply`) |
@@ -43,6 +43,11 @@ gives you rather than counting rows yourself.
 `<ref>` is a row number from the last list, a `%pane`, an agent-id prefix, or part of a name.
 **Every bulk selection is a dry run until `--apply`** — `--policy`, `--idle`, `--paused`. A named ref acts
 at once, because the person typed the name. `--force` overrules a guard; never reach for it yourself.
+
+Only Claude Code and Codex harnesses with a bound conversation can be paused — those are what the daemon
+can resume. Anything else is refused with that reason; say it plainly rather than looking for a way round.
+A harness on another machine (`--machines`) is paused and resumed by that machine's own daemon; when its row
+says to update Harness there, tell the person that is the fix. The rules never pause another machine's harness.
 
 The rules live in **`~/.config/harness/policy.jsonc`** — one file per machine, commented, read on every
 refresh. There is no command that writes it: you have a text editor, and the person has two draggable lines

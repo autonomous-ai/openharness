@@ -45,7 +45,9 @@ test('the page loads only files the server is willing to serve', async () => {
 
 test('no inline script survives the CSP the server sends', async () => {
   const html = await read('viewer/index.html')
-  assert.equal(/<script(?![^>]*\bsrc=)/.test(html), false, 'an inline <script> would be blocked')
+  // The one script tag without a src is a JSON data block: never executed, so the CSP has nothing to block.
+  const inline = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>/g)].map((match) => match[0])
+  assert.deepEqual(inline, ['<script type="application/json" id="initial-snapshot">'], 'an inline <script> would be blocked')
   assert.match(html, /<script type="module" src="app\.js">/)
   const server = await read('viewer.mjs')
   assert.match(server, /script-src 'self'/)
