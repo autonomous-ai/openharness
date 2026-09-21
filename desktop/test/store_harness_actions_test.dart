@@ -60,6 +60,31 @@ void main() {
     );
   });
 
+  test('current pages resume legacy harnesses across machines without merging instances', () {
+    final app = createApp();
+    addTearDown(app.dispose);
+    app.machineStates['m']!.agents = [
+      _agent('local-models', dsh: 'local/ollama'),
+      _agent('current-models', dsh: 'autonomous/ollama'),
+      _agent('board', dsh: 'autonomous/copper'),
+    ];
+    const remote = Machine(
+      machineId: 'remote',
+      name: 'Mac mini',
+      authMode: MachineAuthMode.remote,
+    );
+    app.machineStates['remote'] = MachineState(remote)
+      ..agents = [_agent('local-models', dsh: 'local/ollama')];
+    final targets = storeResumeTargets(app, 'autonomous/ollama');
+    expect(targets, hasLength(3));
+    expect(targets.map((t) => t.destinationId).toSet(), hasLength(3));
+    expect(
+      storeResumeTargets(app, 'autonomous/autonomous-circuit').single.agent.id,
+      'board',
+    );
+    expect(storeResumeTargets(app, 'community/ollama'), isEmpty);
+  });
+
   test(
     'resume reveals an existing tab, even offline, without adding views',
     () async {

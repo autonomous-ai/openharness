@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import '../analytics/analytics.dart';
 import '../core/codex_profiles.dart';
 import '../core/dsh_catalog.dart';
+import '../core/harness_catalog.dart';
 import '../core/first_task.dart';
 import '../core/fuzzy_match.dart';
 import '../core/permission_modes.dart';
@@ -326,7 +327,9 @@ class NewHarnessController extends ChangeNotifier {
 
   /// The engine a choice launches: a store harness runs ON one of them.
   String _baseOf(String engine) => isHarnessId(engine)
-      ? _machine?.dsh[engine]?.engine ?? knownHarnessBase[engine] ?? 'claude'
+      ? _machine?.dsh[engine]?.engine ??
+            knownHarnessBase[canonicalHarnessId(engine)] ??
+            'claude'
       : engine;
   String get _base => _baseOf(_engine);
 
@@ -485,9 +488,11 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   String get agentLabel => labelOf(_engine);
-  String labelOf(String id) =>
-      _machine?.dsh[id]?.name ??
-      (id == 'claude' ? 'Claude Code' : engineIdentity(id).label);
+  String labelOf(String id) => currentHarnessName(
+    id,
+    _machine?.dsh[id]?.name ??
+        (id == 'claude' ? 'Claude Code' : engineIdentity(id).label),
+  );
 
   String get machineLabel => _machineLabel(_machineId);
   String _machineLabel(String id) =>
@@ -1540,13 +1545,22 @@ class NewHarnessController extends ChangeNotifier {
               if (!entry.isViewerPackage) entry.id,
           ]
         : [for (final identity in knownHarnesses) identity.id];
+    String operationId(String id) =>
+        harnessForOperation(
+          machine?.dsh.entries ?? const <DshEntry>[],
+          id,
+        )?.id ??
+        canonicalHarnessId(id);
     final ids = <String>{
-      // Keep the inherited choice beside the prompt, followed by recent choices.
-      _engine,
-      ...app.agentPreference.recent.where(_known),
-      for (final identity in allEngines) identity.id,
-      ...harnesses,
-      kTerminalEngine,
+      for (final id in [
+        // Keep the inherited choice beside the prompt, followed by recent choices.
+        _engine,
+        ...app.agentPreference.recent.where(_known),
+        for (final identity in allEngines) identity.id,
+        ...harnesses,
+        kTerminalEngine,
+      ])
+        operationId(id),
     };
     return _ranked([
       for (final id in ids)
@@ -1976,7 +1990,9 @@ class NewHarnessController extends ChangeNotifier {
     final terminal = isTerminalEngine(choice);
     final base = harness == null
         ? choice
-        : machine.dsh[choice]?.engine ?? knownHarnessBase[choice] ?? 'claude';
+        : machine.dsh[choice]?.engine ??
+              knownHarnessBase[canonicalHarnessId(choice)] ??
+              'claude';
     // The daemon's launch installs a missing engine inside its new terminal.
     // A cached availability probe must not block that first launch.
     final recheck = checking;

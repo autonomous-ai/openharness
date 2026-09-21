@@ -137,5 +137,79 @@
     "license": "MIT",
     "credit": "© 2026 OpenHarness contributors",
     "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/ableton-ai",
+    "file": "ableton-ai.svg",
+    "color": "#eba67d",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/autoresearch-mlx",
+    "file": "autoresearch-mlx.svg",
+    "color": "#c7b2e6",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/foam-agent",
+    "file": "foam-agent.svg",
+    "color": "#8cd0c8",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/juce-agent-toolkit",
+    "file": "juce-agent-toolkit.svg",
+    "color": "#a2c995",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/machine-monitor",
+    "file": "machine-monitor.svg",
+    "color": "#9bd9dd",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/simskill",
+    "file": "simskill.svg",
+    "color": "#8bb8d5",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
+    "id": "autonomous/harness-monitor",
+    "file": "harness-monitor.svg",
+    "color": "#add1a3",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt",
+    "catalog": "linked"
+  },
+  {
+    "id": "autonomous/harness-builder",
+    "file": "harness-builder.svg",
+    "color": "#b7a9de",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt",
+    "catalog": "linked"
   }
 ]

@@ -21,10 +21,13 @@ for (const category of categories) {
     domainCategory.set(domain, category.name);
   }
 }
-const groupFor = e => ['autonomous/autonomous-grid', 'local/ollama'].includes(e.id)
+const groupFor = e => e.id === 'autonomous/autonomous-grid'
   ? 'Local AI' : domainCategory.get(e.category?.trim().toLowerCase());
 for (const entry of agents) if (!groupFor(entry)) throw Error(`Unmapped listed harness: ${entry.id} (${entry.category})`);
 const groups = categories.map(c => ({ ...c, entries: agents.filter(e => groupFor(e) === c.name).sort((a, b) => a.name.localeCompare(b.name)) })).filter(c => c.entries.length);
+const craftGroups = groups.filter(c => c.name !== 'Coding');
+const codingHarnesses = groups.find(c => c.name === 'Coding')?.entries ?? [];
+const harnessLink = e => `[${e.name}](${e.path}/)`;
 const engines = [
   ['claude','Claude Code'],['codex','Codex'],['cursor','Cursor'],['opencode','OpenCode'],
   ['pi','Pi'],['hermes','Hermes'],['commandcode','Command Code'],['devin','Devin'],
@@ -51,8 +54,8 @@ const inventory = [
   `Start with a coding agent you already use. Explore ${agents.length} domain-specific harnesses when your`,
   'next idea takes you further.', '',
   '| Category | Agents and harnesses |', '|---|---|',
-  `| **Coding** | [${engines.map(([,name]) => name).join(', ')}](docs/engines.md) |`,
-  ...groups.map(c => `| ${c.name} | ${c.entries.map(e => `[${e.name}](${e.path}/)`).join(', ')} |`), '',
+  `| **Coding** | [${engines.map(([,name]) => name).join(', ')}](docs/engines.md)${codingHarnesses.length ? ', ' + codingHarnesses.map(harnessLink).join(', ') : ''} |`,
+  ...craftGroups.map(c => `| ${c.name} | ${c.entries.map(harnessLink).join(', ')} |`), '',
   `These are the ${agents.length} harnesses currently listed in the Store catalog. They combine upstream`,
   'open-source tools and original workflows, with instructions, setup, checks, and live views for each craft.', '',
   `The ${viewers.length} [shared viewers](store/viewers/) cover CAD, 3D models, documents, games, film, video,`,
@@ -100,13 +103,13 @@ function mark(id, label, x, y, size) {
 const width = 1280, columns = 3, gap = 20, margin = 32;
 const contentWidth = width - 2 * margin;
 const cardWidth = (contentWidth - (columns - 1) * gap) / columns;
-const rows = Math.ceil(groups.length / columns);
+const rows = Math.ceil(craftGroups.length / columns);
 const codingY = 24, codingHeight = 342;
 const craftY = codingY + codingHeight + gap, cardHeight = 244, rowStep = cardHeight + gap;
 const height = craftY + rows * rowStep - gap + margin;
 const parts = [
   `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="title desc">`,
-  `<title id="title">OpenHarness: coding first, then ${agents.length} harnesses across ${groups.length} more categories</title>`,
+  `<title id="title">OpenHarness: coding first, then ${agents.length} harnesses across ${craftGroups.length} more categories</title>`,
   '<desc id="desc">Coding is the main category, with fourteen supported agents. Below it, harnesses for Design, Engineering, Media, Music, Productivity, Science and Data, Simulation, Games, Research, and Local AI. The full catalog is in the README table.</desc>',
   '<style>text{font-family:Inter,Arial,sans-serif;fill:#172a24}</style>',
   `<rect width="${width}" height="${height}" rx="26" fill="#f3f2ec"/>`,
@@ -120,9 +123,9 @@ engines.forEach(([id,name],i) => {
   parts.push(mark(id,name,centerX-38,y,76));
   parts.push(`<text x="${centerX}" y="${y+101}" text-anchor="middle" font-size="20">${escape(name)}</text>`);
 });
-groups.forEach((c, i) => {
+craftGroups.forEach((c, i) => {
   const row = Math.floor(i / columns);
-  const cardsInRow = Math.min(columns, groups.length - row * columns);
+  const cardsInRow = Math.min(columns, craftGroups.length - row * columns);
   const rowWidth = cardsInRow * cardWidth + (cardsInRow - 1) * gap;
   const x = (width - rowWidth) / 2 + (i % columns) * (cardWidth + gap), y = craftY + row * rowStep;
   parts.push(`<rect x="${x}" y="${y}" width="${cardWidth}" height="${cardHeight}" rx="16" fill="#fff" stroke="#dddeda"/>`);
@@ -139,4 +142,4 @@ groups.forEach((c, i) => {
 });
 parts.push('</svg>\n');
 output('.github/assets/store/workshop-overview.svg', parts.join('\n'));
-console.log(`${check?'Checked':'Updated'} presentation: Coding + ${groups.length} craft categories, ${agents.length} listed harnesses, ${viewers.length} viewers.`);
+console.log(`${check?'Checked':'Updated'} presentation: Coding + ${craftGroups.length} craft categories, ${agents.length} listed harnesses, ${viewers.length} viewers.`);

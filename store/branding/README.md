@@ -31,6 +31,23 @@ The real Flutter `EngineMark` widget, rendered at 96, 16, 24 and 32 px:
 | Jev Browser | Original browser window and evidence-search lens | MIT |
 | Godogen | Original Harness package icon: game controller and creation spark | MIT |
 
+The catalog audit on 2026-09-21 added eight original wrapper marks:
+
+| Harness | Mark | Artwork license |
+|---|---|---|
+| Ableton AI | Clip pads and an automation curve | MIT |
+| autoresearch-mlx | Experiment flask and iteration arrows | MIT |
+| Foam-Agent | Flow lines around an obstacle | MIT |
+| JUCE Agent Toolkit | Audio plugin and waveform | MIT |
+| Machine Monitor | Computer display and connected machines | MIT |
+| SimSkill | Traffic intersection and a vehicle | MIT |
+| Harness Monitor | Status rows and an activity trace | MIT |
+| Harness Builder | Building block and creation spark | MIT |
+
+Harness Monitor and Harness Builder are locally linked tools, not public catalog
+entries. Their marks are recognized when a daemon reports them; bundling an icon
+does not add an installable product to the Store.
+
 [`marks.json`](marks.json) records each source, credit and license. Upstream GitHub
 sources are pinned to commits; Godot's official press asset is vendored and pinned
 by its SHA-256 in [`rendered.json`](rendered.json). The SVG originals retain their
@@ -57,6 +74,17 @@ Godogen's [upstream tree](https://github.com/htdt/godogen/tree/05cebffc8b10c5817
 contained no logo or image assets when checked on 2026-09-20. The original icon here identifies
 the Harness package; it is not presented as Godogen's official mark or the Godot Engine logo.
 
+The wrapper repositories below had no dedicated logo assets when checked on
+2026-09-21. Their original package marks above are not upstream project logos:
+
+- [Ableton AI](https://github.com/freekmurze/ableton-ai/tree/2baa8b79c00f48d925b080f3719a7b892f64d86c).
+  Ableton's [branding guidelines](https://www.ableton.com/en/legal/branding-trademark-guidelines/)
+  rule out using the Ableton logo or Live icon as a compatibility mark.
+- [autoresearch-mlx](https://github.com/trevin-creator/autoresearch-mlx/tree/766a25ff22afa799efd8d0aa450a4348e4749df2).
+- [Foam-Agent](https://github.com/csml-rpi/Foam-Agent/tree/ed8db9415eb7941e47a0a319b611f29e747087f5).
+- [JUCE Agent Toolkit](https://github.com/danielraffel/juce-agent-toolkit/tree/9089b719f7378eba28dd078cdfb8b6e1c062bf13).
+- [SimSkill](https://github.com/qiliuchn/SimSkill-V1/tree/43d65a6fe3858af682ac99f6695310ec59dd2f52).
+
 ## Regenerate and check
 
 From the repository root, using Node and an installed Playwright Chromium:
@@ -66,8 +94,8 @@ node desktop/tool/harness_marks.mjs
 node desktop/tool/harness_marks.mjs --check
 ```
 
-On macOS, AppKit can render local vector sources without a browser. The three new original
-marks were rendered this way; `--only` preserves every other recorded PNG:
+On macOS, AppKit can render local vector sources without a browser. The original
+marks can be rendered this way; `--only` preserves every other recorded PNG:
 
 ```sh
 node desktop/tool/harness_marks.mjs --appkit --only=roundtable,jev-browser,godogen

@@ -42,7 +42,7 @@ class StoreDiscover extends StatelessWidget {
     final features = [
       ?(byId['codex'] ?? byId['claude']),
       ?byId['autonomous/blender'],
-      ?(byId['autonomous/autonomous-circuit'] ?? byId['autonomous/copper']),
+      ?byId['autonomous/autonomous-circuit'],
     ];
     final engines = [
       for (final id in ['claude', 'codex', 'cursor']) ?byId[id],

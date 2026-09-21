@@ -32,7 +32,7 @@ import 'support/real_fonts.dart';
 final _catalog = [
   for (final (id, name, category) in [
     ('blender', 'Blender', '3D'),
-    ('copper', 'Copper', 'PCB'),
+    ('autonomous-circuit', 'Autonomous Circuit', 'PCB'),
     ('text-to-cad', 'text-to-cad', 'CAD'),
     ('phaser', 'Phaser', 'Games'),
     ('strudel', 'Strudel', 'Music'),
@@ -53,7 +53,7 @@ final _catalog = [
       name: name,
       engine: 'claude',
       category: category,
-      installed: ['blender', 'copper', 'marp'].contains(id),
+      installed: ['blender', 'autonomous-circuit', 'marp'].contains(id),
       viewerUse: switch (id) {
         'blender' => 'autonomous/model-viewer',
         'text-to-cad' => 'autonomous/cad-viewer',
@@ -542,7 +542,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.byKey(const ValueKey('store-card:autonomous/copper')),
+        find.byKey(const ValueKey('store-card:autonomous/autonomous-circuit')),
         findsNothing,
       );
       expect(tester.getRect(search), initialRect);
@@ -627,7 +627,7 @@ void main() {
       );
       expect(tester.widget<SidebarItem>(nav).selected, isTrue);
       final harness = find.byKey(
-        const ValueKey('store-card:autonomous/copper'),
+        const ValueKey('store-card:autonomous/autonomous-circuit'),
       );
       await tester.ensureVisible(harness);
       await tester.pumpAndSettle();
@@ -635,7 +635,7 @@ void main() {
       await tester.tap(harness);
       await tester.pumpAndSettle();
       expect(
-        find.byKey(const ValueKey('store-page:autonomous/copper')),
+        find.byKey(const ValueKey('store-page:autonomous/autonomous-circuit')),
         findsOneWidget,
       );
       expect(tester.widget<SidebarItem>(nav).selected, isTrue);
@@ -678,7 +678,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.widget<TextField>(search).controller!.text, 'copper');
       await tester.tap(
-        find.byKey(const ValueKey('store-card:autonomous/copper')),
+        find.byKey(const ValueKey('store-card:autonomous/autonomous-circuit')),
       );
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('store-back')));
@@ -919,7 +919,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.byKey(const ValueKey('store-card:autonomous/copper')),
+        find.byKey(const ValueKey('store-card:autonomous/autonomous-circuit')),
         findsNothing,
       );
       await tester.tap(find.byKey(const ValueKey('store-shelf-discover')));
@@ -932,7 +932,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(
-        find.byKey(const ValueKey('store-card:autonomous/copper')),
+        find.byKey(const ValueKey('store-card:autonomous/autonomous-circuit')),
         findsOneWidget,
       );
       expect(
@@ -945,7 +945,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(
-        find.byKey(const ValueKey('store-card:autonomous/copper')),
+        find.byKey(const ValueKey('store-card:autonomous/autonomous-circuit')),
         findsOneWidget,
       );
       expect(find.byKey(const ValueKey('store-card:codex')), findsNothing);
@@ -1024,7 +1024,9 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.byKey(const ValueKey('store-feature-art:autonomous/copper')),
+        find.byKey(
+          const ValueKey('store-feature-art:autonomous/autonomous-circuit'),
+        ),
         findsOneWidget,
       );
       final category = find.byKey(const ValueKey('store-category:Design'));
