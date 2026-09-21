@@ -840,8 +840,9 @@ pendulum browser fixture is shared as an XML file rather than duplicated in the 
 
 Verification:
 
-- All 30 MuJoCo package tests and the native WASM/server smoke checks pass, including a linked
-  package entry serving its real viewer and model API.
+- All 31 MuJoCo package tests and the native WASM/server smoke checks pass, including a linked
+  package entry serving its real viewer and model API with normal Node resolution and with
+  `--preserve-symlinks-main`.
 - Eleven native Chrome starter checks pass: a real MuJoCo gravity comparison and measured-frame
   jump, an exported experiment, audible Web Audio with a kept WAV/source/marker, actual CircuitJS
   samples, source editing and capture rendering after restart, and no browser exceptions.
@@ -851,6 +852,9 @@ Verification:
 - Seven process-lifecycle checks pass: linked CLI entry, invalid selection before mutation, an
   already-aborted launch, a reachable printed URL, Ctrl-C after readiness, retained edited source,
   and Ctrl-C during startup without a lingering runtime.
+  The same seven checks also pass when Node preserves the CLI's symbolic link. A before-fix probe
+  silently printed nothing even for `--help`; both the entry guard and repository lookup now use
+  the real module path. MuJoCo likewise canonicalizes both sides of its entry comparison.
 - The finished field guide passes all 63 browser checks again, including every actual local video,
   390/320px layouts, clipboard fallback, deep links, back navigation and JavaScript-disabled reading.
   The generated guide, 49-harness/10-viewer presentation and 59-entry catalog schema checks pass.
@@ -860,4 +864,5 @@ Verification:
 The native starter screenshots were visually inspected. Evidence: `playgrounds-browser.txt`,
 its printed `playgrounds-*/` directory, `playground-cli.txt`, its printed `playground-cli-*/` directory,
 `mujoco-linked-tests.txt`, `hands-on-browser-final.txt`, `final-store-conformance.txt`, and `hands-on/`
-under the local evidence root.
+under the local evidence root. The preserved-link CLI results are in
+`playground-cli-preserved-links.txt` and its printed evidence directory.

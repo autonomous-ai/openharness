@@ -16,10 +16,11 @@ import {
 } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
-import { basename, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const repo = resolve(fileURLToPath(new URL('../../', import.meta.url)))
+const ownPath = realpathSync(fileURLToPath(import.meta.url))
+const repo = resolve(dirname(ownPath), '../..')
 const choices = {
   mujoco: {
     name: 'MuJoCo',
@@ -273,9 +274,7 @@ export async function startPlayground({
 
 let isMain = false
 try {
-  isMain =
-    Boolean(process.argv[1]) &&
-    realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
+  isMain = Boolean(process.argv[1]) && realpathSync(process.argv[1]) === ownPath
 } catch {}
 if (isMain) {
   const args = process.argv.slice(2)

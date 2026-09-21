@@ -427,7 +427,7 @@ export function startWatching() {
 // Node canonicalizes import.meta.url. A linked DSH install or macOS's /var →
 // /private/var alias must still count as the entry point, rather than silently exit.
 let isMain = false
-try { isMain = Boolean(process.argv[1]) && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url) } catch {}
+try { isMain = Boolean(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)) } catch {}
 if (isMain) {
   server.listen(port, '127.0.0.1', () => {
     console.log(`[mujoco-viewer] listening on http://127.0.0.1:${port}/`)
