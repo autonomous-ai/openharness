@@ -43,6 +43,37 @@ interface PendingUpload {
 
 type FramePayload = Record<string, unknown>
 
+/**
+ * Who a terminal client says it is, from `terminal_open`'s optional `client` — so the incumbent it
+ * displaces can be told WHO took control ("Mac mini took control of this terminal") rather than
+ * "another app". Self-declared and trusted as such: every client on a machine is the same account's,
+ * and the daemon could not do better on its own (a local window is `local:<uuid>`, a relayed
+ * desktop's E2EE label is the literal 'harness link', a phone's is 'browser'). `machineId` is the
+ * desktop's own machine in the fleet, so the receiver can show that machine's CURRENT name.
+ */
+export interface TerminalClientDescriptor {
+  kind: string
+  name: string
+  machineId?: string
+}
+
+const CLIENT_KIND_RE = /^[a-z]{1,16}$/
+const CLIENT_MACHINE_ID_RE = /^[a-f0-9]{16,64}$/
+const CLIENT_NAME_MAX = 64
+
+/** The declared client, or undefined for a client that said nothing or said it badly — never an error. */
+export function clientDescriptorFrom(raw: unknown): TerminalClientDescriptor | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const { kind, name, machineId } = raw as Record<string, unknown>
+  if (typeof kind !== 'string' || !CLIENT_KIND_RE.test(kind)) return undefined
+  if (typeof name !== 'string') return undefined
+  // eslint-disable-next-line no-control-regex
+  const cleanName = name.replace(/[\u0000-\u001f\u007f]/g, ' ').trim()
+  if (!cleanName || cleanName.length > CLIENT_NAME_MAX) return undefined
+  if (machineId !== undefined && (typeof machineId !== 'string' || !CLIENT_MACHINE_ID_RE.test(machineId))) return undefined
+  return { kind, name: cleanName, ...(machineId ? { machineId } : {}) }
+}
+
 const PROTOCOL_VERSION = 3
 const HEARTBEAT_TIMEOUT_MS = 30_000
 const SYNC_INTERVAL_MS = 5_000
@@ -63,6 +94,8 @@ interface PendingOutput {
 
 interface ActiveStream {
   connId: string
+  /** What the client declared on open, or what `describeClient` could tell; absent when neither knew. */
+  client?: TerminalClientDescriptor
   streamId: string
   /** A stream opened as a WATCHER: it renders, but it never took the control lease and its input is
    *  refused. See the `takeover: false` branch of `open()`. */
@@ -109,6 +142,12 @@ export interface TerminalStreamManagerDeps {
   sendBinaryTarget: (connId: string, frame: TerminalBinaryClear) => boolean
   /** Whether this connection is the desktop app on THIS computer's loopback (never the cloud). */
   isLoopback?: (connId: string) => boolean
+  /**
+   * A name for a connection that declared none on `terminal_open` (an older client): the daemon's
+   * own machine name for a loopback window, a paired peer's label when it is a real one. Null when
+   * nothing better than "another app" is known.
+   */
+  describeClient?: (connId: string) => TerminalClientDescriptor | null
   streamingAvailable: boolean
   now?: () => number
   diagnostic?: (event: string, fields: Record<string, unknown>) => void
@@ -367,6 +406,9 @@ export class TerminalStreamManager {
     // it, and the client asks again, without the key, once a person actually lands there. Absent
     // (every older client) is the takeover it has always been.
     const takeover = payload.takeover !== false
+    // The fallback is read as strictly as a claim: a machine name the backend handed out is not
+    // this module's to trust with the wire shape either.
+    const client = clientDescriptorFrom(payload.client) ?? clientDescriptorFrom(this.deps.describeClient?.(connId))
     await this.withLeaseLock(reservedPlacement, async () => {
       const incumbents = this.incumbentsFor(session.agentId, reservedPlacement, connId)
       // Inside the lock, so the answer cannot go stale against an open racing this one for the
@@ -379,9 +421,10 @@ export class TerminalStreamManager {
       // keeps the terminal, and the client is told which it got by `readOnly` on `terminal_ready`.
       const watching = !this.deps.readOnly && !takeover && incumbents.length > 0
       // A terminal is single-controller. A later client explicitly wins the lease and the incumbent
-      // receives a targeted close notification; it must not be broadcast to other clients.
+      // receives a targeted close notification; it must not be broadcast to other clients. The
+      // notification names the winner when it can (`takenBy`), so the incumbent's banner can too.
       if (!this.deps.readOnly && !watching) {
-        await this.closeStreamsForTakeover(session.agentId, reservedPlacement, connId)
+        await this.closeStreamsForTakeover(session.agentId, reservedPlacement, connId, client)
       }
       // Only THIS connection's stream for THIS terminal, not every stream it holds.
       //
@@ -446,6 +489,7 @@ export class TerminalStreamManager {
       const wantsZlib = requestedCompression.includes('zlib') && !this.deps.isLoopback?.(connId)
       state = {
         connId,
+        ...(client ? { client } : {}),
         streamId,
         watching,
         agentId: session.agentId,
@@ -1145,13 +1189,19 @@ export class TerminalStreamManager {
         && (state.agentId === agentId || state.placementKey === placementKey))
   }
 
-  private async closeStreamsForTakeover(agentId: string, placementKey: string, nextConnId: string): Promise<void> {
+  private async closeStreamsForTakeover(
+    agentId: string,
+    placementKey: string,
+    nextConnId: string,
+    takenBy?: TerminalClientDescriptor,
+  ): Promise<void> {
     const incumbents = this.incumbentsFor(agentId, placementKey, nextConnId)
     await Promise.all(incumbents.map((state) => this.closeStream(
       state,
       'another client connected',
       true,
       'TERMINAL_TAKEN_OVER',
+      takenBy,
     )))
   }
 
@@ -1160,12 +1210,14 @@ export class TerminalStreamManager {
     reason: string,
     notify: boolean,
     code?: string,
+    takenBy?: TerminalClientDescriptor,
   ): Promise<void> {
     if (state.closing) return
     state.closing = true
     if (state.pausedAt != null) state.pausedMs += Math.max(0, this.now() - state.pausedAt)
     this.diagnostic(state, 'closed', {
       reason,
+      ...(takenBy ? { takenBy: takenBy.name } : {}),
       lifetimeMs: Math.max(0, this.now() - state.openedAt),
       outputFrames: state.outputFrames,
       outputPlainBytes: state.outputPlainBytes,
@@ -1189,6 +1241,7 @@ export class TerminalStreamManager {
       streamId: state.streamId,
       reason,
       ...(code ? { code } : {}),
+      ...(takenBy ? { takenBy } : {}),
     })
   }
 

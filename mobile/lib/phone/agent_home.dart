@@ -14,7 +14,6 @@ import 'agent_swipe.dart';
 import 'agent_swipe_list.dart';
 import 'agents_page.dart' show openNewAgent;
 import 'desk_groups.dart';
-import 'desk_tab_strip.dart';
 import 'machines_tab.dart';
 import 'phone_fab.dart';
 import 'phone_header.dart';
@@ -619,17 +618,6 @@ class _AgentHomeState extends State<AgentHome> {
         // Told where it has swiped to, so [_showing] follows the pager rather than the pager being
         // dragged back to where this screen last put it.
         onAgentChanged: _onAgentChanged,
-        // The way to the other tabs, now that a swipe is not one. Left off
-        // where there is nothing to choose between — one tab, or an account
-        // with no tabs at all — so a phone that has never seen a desk keeps the
-        // header it always had.
-        tabStrip: groups.length < 2
-            ? null
-            : DeskTabStrip(
-                notifier: widget.notifier,
-                groups: groups,
-                active: group,
-              ),
       );
     },
   );

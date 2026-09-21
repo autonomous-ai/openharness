@@ -179,8 +179,24 @@ function readProcField(pid: number, field: 'cmdline' | 'comm'): string | null {
   try { return readFileSync(`/proc/${pid}/${field}`, 'utf8') } catch { return null }
 }
 
+/**
+ * A `ps` that is already running answers everyone who asks while it runs. The first reconcile pass
+ * after a boot attaches a few agents at once and every attach validates its pane against the table,
+ * as does each hook that arrives in the same burst — one table serves them all. There is no cache,
+ * only the read in flight: the oldest table anyone is handed began a `ps` ago (tens of ms), never
+ * one that finished before they asked. Callers get the SAME array; none of them mutates it (every
+ * consumer maps or filters into its own), and any new one must not either.
+ */
+let processRowsInFlight: Promise<ProcessRow[] | null> | null = null
+
 /** The process table, or null when `ps` itself failed — "we could not look" is not "nothing is there". */
-export async function processRows(): Promise<ProcessRow[] | null> {
+export function processRows(): Promise<ProcessRow[] | null> {
+  if (processRowsInFlight) return processRowsInFlight
+  processRowsInFlight = readProcessRows().finally(() => { processRowsInFlight = null })
+  return processRowsInFlight
+}
+
+async function readProcessRows(): Promise<ProcessRow[] | null> {
   const rows = await new Promise<ProcessRow[] | null>((resolve) => {
     execFile('ps', ['-axo', 'pid=,ppid=,comm=,lstart=,args='], { timeout: 3000, env: psEnv() }, (err, stdout) => {
       if (err) { resolve(null); return }

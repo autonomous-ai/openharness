@@ -13,16 +13,32 @@
  *
  * All entry points are meant to be called fire-and-forget from the hot path (connection open,
  * heartbeat/ping, p2p_offer) — callers must not await them inline.
+ *
+ * `countryCode` on the device and machine touches is Cloudflare's `CF-IPCountry` read at the WS
+ * upgrade (lib/clientGeo.ts). It is last-write-wins within the day and only ever SET, never cleared:
+ * a touch without one (local dev, a relay not fronted by Cloudflare) leaves whatever the row has.
+ * `touchUserOnlineDay` takes none on purpose — its socket belongs to the daemon, not the person
+ * (see the model doc in schema.prisma); the person's country is `User.lastCountryCode`.
  */
 import { prisma } from './prisma.js'
 import { utcDayKey, utcDayStart } from '../types/analytics.js'
 
+/** Options for the device/machine presence touches. */
+export interface PresenceTouchOpts {
+  isNewConnection: boolean
+  /** ISO-2 from `CF-IPCountry` at the upgrade; omit when unknown (see module doc). */
+  countryCode?: string
+}
+
 /**
- * Mark a user online for the UTC day containing `now`. The signal is the `harness` daemon's
- * `app_presence` frame over adapter-ws (src/lib/adapterWs.ts), sent about its own loopback clients:
- * `isNewConnection: true` when a desktop window just attached to the daemon (bumps `connections`),
- * `false` for the periodic ping while one stays attached (just touches `lastSeenAt`, at most every
- * USER_PRESENCE_WRITE_MS). Not the web-ws upgrade — the app never dials that itself.
+ * Mark a user online, on `machineId`, for the UTC day containing `now`. The signal is the `harness`
+ * daemon's `app_presence` frame over adapter-ws (src/lib/adapterWs.ts), sent about its own loopback
+ * clients: `isNewConnection: true` when a desktop window just attached to the daemon (bumps
+ * `connections`), `false` for the periodic ping while one stays attached (just touches `lastSeenAt`,
+ * at most every USER_PRESENCE_WRITE_MS). Not the web-ws upgrade — the app never dials that itself.
+ *
+ * One row per (user, machine, day): a person with the app open on two computers gets two rows that
+ * day, so "users online on day X" is a distinct count of `userId`, never a row count.
  *
  * `connections` counts app sessions OPENED on that day: a touch that is the first write of a new
  * UTC day but is not an open (a session spanning midnight) creates the row with `connections: 0`,
@@ -31,13 +47,14 @@ import { utcDayKey, utcDayStart } from '../types/analytics.js'
  */
 export async function touchUserOnlineDay(
   userId: string,
+  machineId: string,
   now: Date,
   opts: { isNewConnection: boolean },
 ): Promise<void> {
   const dayUtc = utcDayStart(now)
   await prisma.userDailyPresence.upsert({
-    where: { userId_dayUtc: { userId, dayUtc } },
-    create: { userId, dayUtc, connections: opts.isNewConnection ? 1 : 0, firstSeenAt: now, lastSeenAt: now },
+    where: { userId_machineId_dayUtc: { userId, machineId, dayUtc } },
+    create: { userId, machineId, dayUtc, connections: opts.isNewConnection ? 1 : 0, firstSeenAt: now, lastSeenAt: now },
     update: {
       lastSeenAt: now,
       ...(opts.isNewConnection ? { connections: { increment: 1 } } : {}),
@@ -66,15 +83,16 @@ export async function touchDeviceOnlineDay(
   userId: string,
   deviceId: string,
   now: Date,
-  opts: { isNewConnection: boolean },
+  opts: PresenceTouchOpts,
 ): Promise<void> {
   const dayUtc = utcDayStart(now)
   await prisma.userDailyDevicePresence.upsert({
     where: { userId_deviceId_dayUtc: { userId, deviceId, dayUtc } },
-    create: { userId, deviceId, dayUtc, connections: opts.isNewConnection ? 1 : 0, firstSeenAt: now, lastSeenAt: now },
+    create: { userId, deviceId, dayUtc, connections: opts.isNewConnection ? 1 : 0, firstSeenAt: now, lastSeenAt: now, ...(opts.countryCode ? { countryCode: opts.countryCode } : {}) },
     update: {
       lastSeenAt: now,
       ...(opts.isNewConnection ? { connections: { increment: 1 } } : {}),
+      ...(opts.countryCode ? { countryCode: opts.countryCode } : {}),
     },
   })
 }
@@ -88,15 +106,16 @@ export async function touchMachineOnlineDay(
   userId: string,
   machineId: string,
   now: Date,
-  opts: { isNewConnection: boolean },
+  opts: PresenceTouchOpts,
 ): Promise<void> {
   const dayUtc = utcDayStart(now)
   await prisma.machineDailyPresence.upsert({
     where: { machineId_dayUtc: { machineId, dayUtc } },
-    create: { machineId, userId, dayUtc, connections: opts.isNewConnection ? 1 : 0, firstSeenAt: now, lastSeenAt: now },
+    create: { machineId, userId, dayUtc, connections: opts.isNewConnection ? 1 : 0, firstSeenAt: now, lastSeenAt: now, ...(opts.countryCode ? { countryCode: opts.countryCode } : {}) },
     update: {
       lastSeenAt: now,
       ...(opts.isNewConnection ? { connections: { increment: 1 } } : {}),
+      ...(opts.countryCode ? { countryCode: opts.countryCode } : {}),
     },
   })
 }

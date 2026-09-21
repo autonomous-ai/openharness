@@ -33,7 +33,6 @@ class AgentSwipeHost extends StatefulWidget {
     required this.agentId,
     required this.neighbours,
     this.onAgentChanged,
-    this.tabStrip,
   });
 
   final AppNotifier notifier;
@@ -45,14 +44,6 @@ class AgentSwipeHost extends StatefulWidget {
 
   /// Null for a page opened without neighbours, which is then simply the page.
   final AgentSwipeList? neighbours;
-
-  /// The desk's tabs, drawn under every page's header — see [DeskTabStrip].
-  ///
-  /// Handed down rather than built per page: the pages are this pager's, but the
-  /// strip is about the SCREEN, and only the home screen has a tab to be in.
-  /// Null everywhere else (a terminal opened from the Machines tab, a page
-  /// pumped on its own), and the header is then exactly what it always was.
-  final Widget? tabStrip;
 
   /// Told which agent a swipe has arrived at, for a host that has to keep up with the pager.
   ///
@@ -282,7 +273,6 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
         agentId: widget.agentId,
         voice: _voice,
         isActive: true,
-        tabStrip: widget.tabStrip,
       );
     }
     // ⚠️ **The keyboard goes at the START of the drag, not at [_onPageChanged].**
@@ -351,7 +341,6 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
               voice: _voice,
               // Exactly one mounted page, by page number — see [_page].
               isActive: i == _page,
-              tabStrip: widget.tabStrip,
             ),
           );
         },

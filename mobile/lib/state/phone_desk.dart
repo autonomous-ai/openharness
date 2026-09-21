@@ -27,7 +27,25 @@ import 'desk_sync.dart';
 /// What is NOT on the desk stays per device, as it does on a window: which tab
 /// is open ([activeTabId]) is this phone's own, and so is the agent within it.
 class PhoneDesk {
-  PhoneDesk({required this.read, required this.write, required this.onChanged});
+  PhoneDesk({
+    required this.read,
+    required this.write,
+    required this.onChanged,
+    this.pollInterval = const Duration(seconds: 15),
+  });
+
+  /// How often a phone in the FOREGROUND re-reads the desk on its own.
+  ///
+  /// ⚠️ **Not belt-and-braces on a phone: it is the main wire.** A
+  /// `desk_changed` push reaches this app only over a machine's relay socket —
+  /// the backend has no per-phone socket to send it on — so a backend that
+  /// predates that forwarding, or a moment with no machine connected, delivers
+  /// nothing at all, and the tabs would sit at whatever they were when the app
+  /// last launched. 15s is the beat the desktop reads the desk on.
+  ///
+  /// Stopped while the app is in the background ([pause]) and armed again by
+  /// the [refresh] a resume makes.
+  final Duration pollInterval;
 
   /// `GET /api/desk` — the document, or null where the backend has no desk to
   /// give (see `ApiClient.desk`).
@@ -42,6 +60,7 @@ class PhoneDesk {
 
   final DeskSyncState _state = DeskSyncState();
   Timer? _retry;
+  Timer? _poll;
   Future<void>? _joining;
   bool _disposed = false;
 
@@ -110,12 +129,34 @@ class PhoneDesk {
 
   /// Read the desk again — a `desk_changed` push, or the app coming back to the
   /// foreground after however long in somebody's pocket.
+  ///
+  /// A resume comes through here, so this is also where the poll is armed again
+  /// after [pause].
   Future<void> refresh() {
     if (!_state.enabled) {
       ensure();
       return Future<void>.value();
     }
+    _startPolling();
     return _read(first: false);
+  }
+
+  /// The app is no longer in front of anybody: stop reading the desk until it
+  /// is. iOS suspends the process anyway; Android does not always, and a phone
+  /// in a pocket has no tabs to show.
+  void pause() {
+    _poll?.cancel();
+    _poll = null;
+  }
+
+  void _startPolling() {
+    if (_poll != null || _disposed || !_state.enabled) return;
+    _poll = Timer.periodic(pollInterval, (_) {
+      // Nothing while a write of this phone's own is in the air: its answer is
+      // the document, and a read underneath it would only race that.
+      if (_state.pending.isNotEmpty || _state.inFlight) return;
+      unawaited(_read(first: false));
+    });
   }
 
   /// A `desk_changed` frame: the payload carries only the revision, so a phone
@@ -153,6 +194,7 @@ class PhoneDesk {
         'desk',
         'joined at rev ${doc.revision} · ${doc.tabs.length} tabs',
       );
+      _startPolling();
     }
     _apply(doc);
   }
@@ -281,6 +323,7 @@ class PhoneDesk {
     _generation++;
     _retry?.cancel();
     _retry = null;
+    pause();
     _joining = null;
     _activeTabId = null;
     _lastAgent.clear();
@@ -291,5 +334,6 @@ class PhoneDesk {
     _disposed = true;
     _retry?.cancel();
     _retry = null;
+    pause();
   }
 }

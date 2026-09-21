@@ -121,7 +121,9 @@ export async function setOpencodeSessionModel(
   try {
     // `-bail` stops at the first failing statement; the shell then exits with the transaction still
     // open, and SQLite rolls it back on close — so a failing second UPDATE leaves the first unapplied.
-    ({ stdout } = await execFileAsync('sqlite3', ['-batch', '-bail', dbPath, sql]))
+    // Bounded: a CLI that never answers used to hold this `agent_create` open for good. The write
+    // itself waits at most `busy_timeout` (5s, above) for opencode's lock, so 15s is generous.
+    ({ stdout } = await execFileAsync('sqlite3', ['-batch', '-bail', dbPath, sql], { timeout: 15_000, killSignal: 'SIGKILL' }))
   } catch (err) {
     const error = err as NodeJS.ErrnoException & { stderr?: string }
     if (error?.code === 'ENOENT') {

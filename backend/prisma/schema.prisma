@@ -16,23 +16,31 @@ generator client {
 /// `customer_id`. A device may connect before its owner has signed in, so that provisional row uses a
 /// deterministic non-deliverable email until the first production SSO login claims it.
 model User {
-  id             String   @id @default(auto()) @map("_id") @db.ObjectId
-  email          String   @unique // normalized SSO identity; provisional device rows use @pending.harness.invalid
-  externalId     String   @unique // production SSO subject == SDS `customer_id`; local-prod-* until known
-  stagExternalId String? // staging SSO subject; authentication still keys by email
-  passwordHash   String? // legacy only; SSO users have none
-  name           String?
-  role           String   @default("user") // user | admin
+  id              String    @id @default(auto()) @map("_id") @db.ObjectId
+  email           String    @unique // normalized SSO identity; provisional device rows use @pending.harness.invalid
+  externalId      String    @unique // production SSO subject == SDS `customer_id`; local-prod-* until known
+  stagExternalId  String? // staging SSO subject; authentication still keys by email
+  passwordHash    String? // legacy only; SSO users have none
+  name            String?
+  role            String    @default("user") // user | admin
   // Which Autonomous account plane this user signs in against. Existing rows are backfilled to
   // staging because they were created while the app used staging globally; new users default prod.
-  autonomousEnv  String   @default("prod") // prod | stag
+  autonomousEnv   String    @default("prod") // prod | stag
   // The user's private harness grid, minted on first ask and never rewritten (see routes/grid.ts).
   // Deliberately NOT @unique: on MongoDB a unique index counts nulls as values, so every user
   // without a grid would collide with every other. Global uniqueness is the grid control plane's
   // rule to enforce; ours is only one name per user, which the conditional write in the route gives.
-  gridName       String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  gridName        String?
+  // Cloudflare `CF-IPCountry` (ISO-2) of the last control-plane request this user made, stamped by
+  // middlewares/authMiddleware.ts through lib/clientGeo.ts (rate-floored, never per request). The
+  // REST call always comes from the person's own computer, so this is the "where is the user" answer;
+  // `Machine.countryCode` and the machine/device presence rows carry the CONNECTING SOCKET's country
+  // instead, which for a remote machine is the VPS, not the person.
+  // Null on rows that predate it or when the request did not come through Cloudflare.
+  lastCountryCode String?
+  lastCountryAt   DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@index([stagExternalId])
   @@map("users")
@@ -79,6 +87,10 @@ model Machine {
   // Self-declared and sanitized at the upgrade; null for a machine that never connected or a client
   // old enough not to send it.
   clientVersion                   String?
+  // Cloudflare `CF-IPCountry` (ISO-2) of the computer on its LAST adapter-ws connect — same
+  // overwrite-every-connect rule as `hostname`/`clientVersion`. Null when the upgrade did not come
+  // through Cloudflare (local dev) or the row predates the field.
+  countryCode                     String?
   // Billing lifecycle for newly-created campaign machines. Missing on old rows means legacy-active.
   // Grandfathered Remote machines are `not_required`; new paid Remote and managed machines move pending -> active only after
   // checkout verification. A cancelled paid subscription stays active until its period end, then
@@ -429,15 +441,28 @@ model AnalyticsMachineState {
 /// collector-reported; derived directly from the relays: web-ws in src/lib/webWs.ts, device-ws in
 /// src/lib/deviceWs.ts, adapter-ws in src/lib/adapterWs.ts).
 
-/// Per-day record of whether a user had the desktop app open. One row per (user, UTC day). The
-/// source is the local `harness` daemon reporting its own loopback clients over adapter-ws
-/// (`app_presence`, src/lib/adapterWs.ts) — NOT the web-ws upgrade, which the app never performs
-/// itself (only the daemon does, per foreign machine it relays) and which therefore missed every
-/// single-machine user. `connections` = times a window attached to the daemon that day; a session
-/// spanning midnight produces a row for each day it touches with `connections: 0`.
+/// Per-day record of whether a user had the desktop app open, and on which machine. One row per
+/// (user, machine, UTC day): "user online that day" is therefore a DISTINCT count of `userId`, while
+/// `connections` still sums. The source is the local `harness` daemon reporting its own loopback
+/// clients over adapter-ws (`app_presence`, src/lib/adapterWs.ts) — NOT the web-ws upgrade, which
+/// the app never performs itself (only the daemon does, per foreign machine it relays) and which
+/// therefore missed every single-machine user. `connections` = times a window attached to that
+/// daemon that day; a session spanning midnight produces a row for each day it touches with
+/// `connections: 0`.
+/// Deliberately NO `countryCode` here, unlike the device/machine rows: the signal arrives over the
+/// DAEMON's socket, so the country would be the daemon's (a VPS for a remote machine), not the
+/// person's. "Where is the user" is `User.lastCountryCode`, stamped from their own REST calls; the
+/// machine's own country sits on `machine_daily_presence`, joinable through `machineId`.
 model UserDailyPresence {
   id          String   @id @default(auto()) @map("_id") @db.ObjectId
   userId      String
+  // Machine.machineId whose daemon reported the window (the adapter-ws socket the `app_presence`
+  // frame came over). Null ONLY on rows that predate the field — those were one per (user, day).
+  // Optional rather than required for that reason: Prisma-Mongo refuses to READ a row missing a
+  // required field. The old `(userId, dayUtc)` unique index is dropped at worker boot
+  // (lib/db/migrate.ts migrateUserPresencePerMachine); the legacy rows stay distinct under the new
+  // key because they were already distinct on (userId, dayUtc).
+  machineId   String?
   dayUtc      DateTime
   connections Int      @default(0)
   firstSeenAt DateTime
@@ -445,7 +470,8 @@ model UserDailyPresence {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  @@unique([userId, dayUtc])
+  @@unique([userId, machineId, dayUtc])
+  @@index([userId, dayUtc])
   @@map("user_daily_presence")
 }
 
@@ -476,6 +502,7 @@ model UserDailyDevicePresence {
   deviceId    String
   dayUtc      DateTime
   connections Int      @default(0)
+  countryCode String? // Cloudflare `CF-IPCountry` (ISO-2) at the LAST write that carried one; null = unknown / pre-feature row
   firstSeenAt DateTime
   lastSeenAt  DateTime
   createdAt   DateTime @default(now())
@@ -501,6 +528,7 @@ model MachineDailyPresence {
   dayUtc       DateTime
   connections  Int      @default(0)
   turnsStarted Int      @default(0) // `turn_started` up-frames the daemon sent that day (adapterWs tap)
+  countryCode  String? // Cloudflare `CF-IPCountry` (ISO-2) at the LAST write that carried one; null = unknown / pre-feature row
   firstSeenAt  DateTime
   lastSeenAt   DateTime
   createdAt    DateTime @default(now())
@@ -596,4 +624,3 @@ model Desk {
 
   @@map("desks")
 }
-

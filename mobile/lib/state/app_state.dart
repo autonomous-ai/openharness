@@ -3713,7 +3713,9 @@ class AppNotifier extends ChangeNotifier {
     // assigns `machines` from the account's own answer and drops any state not
     // in it, so nothing cached outlives the round-trip it was covering.
     machines = warmMachines;
-    StartupTrace.mark('warm-started $warmed machine(s), $warmedAgents agent(s)');
+    StartupTrace.mark(
+      'warm-started $warmed machine(s), $warmedAgents agent(s)',
+    );
     notifyListeners();
   }
 
@@ -5512,6 +5514,19 @@ class AppNotifier extends ChangeNotifier {
   /// Separate from [assignAgentToPane] because a restored tile takes this path
   /// on its own, later, when its machine finally answers — the intent was
   /// settled at launch, and nothing about the selection should move again then.
+  /// How this phone introduces itself on `terminal_open`, so a desktop it
+  /// displaces can say "(this phone) took control". The OS's device name when
+  /// it will give one, else just "Phone".
+  TerminalClientDescriptor phoneClientDescriptor() {
+    final name = localHostnameOrNull() ?? 'Phone';
+    return TerminalClientDescriptor(
+      kind: 'phone',
+      name: name.length > TerminalClientDescriptor.nameMax
+          ? name.substring(0, TerminalClientDescriptor.nameMax)
+          : name,
+    );
+  }
+
   Future<void> _attachSession(
     TerminalPane pane, {
     bool takeControl = false,
@@ -5538,6 +5553,7 @@ class AppNotifier extends ChangeNotifier {
       agentId: agent.id,
       agentName: agent.name,
       engineId: agent.engine,
+      client: phoneClientDescriptor(),
       send: (type, payload) =>
           _conn(pane.machineId).sendTerminalFrame(type, payload),
       sendBinary: (frame) => _sendTerminalBinary(pane.machineId, frame),
@@ -6596,6 +6612,11 @@ class AppNotifier extends ChangeNotifier {
     // else happened to change them.
     unawaited(_desk.refresh());
   }
+
+  /// The app went into a pocket: stop the reads that only make sense in front
+  /// of somebody. The sockets are left to the OS, which suspends them anyway —
+  /// [handleAppResumed] is what puts both back.
+  void handleAppPaused() => _desk.pause();
 
   /// What the local CLI closing this machine's socket with [code] does to the
   /// model — the `WsPool.onLocalFailure` path, without a socket.

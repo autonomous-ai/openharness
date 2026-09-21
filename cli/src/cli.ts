@@ -32,6 +32,7 @@ import { homedir, hostname } from 'os'
 import { env } from './config/env.js'
 import { VERSION } from './version.js'
 import { sqlitePreflightMessage } from './lib/sqliteAvailability.js'
+import { AttachTracker } from './lib/attachTracker.js'
 import { binaryOnPath } from './lib/binaryOnPath.js'
 import { warmLoginShellEnvironment } from './lib/loginShellEnv.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
@@ -242,6 +243,8 @@ const COMPUTER_ID_FILE = env.ADAPTER_COMPUTER_ID_FILE
 // The machine's display name, mirrored from the backend (`machine_meta` on connect + web renames) by the
 // daemon so the separate `harness status` process can print it. Absent = unnamed machine.
 const MACHINE_NAME_FILE = join(env.ADAPTER_DATA_DIR, 'machine-name')
+/** Pairing labels that stand in for a name rather than being one (manager.ts `addPaired` callers). */
+const GENERIC_PAIR_LABELS: ReadonlySet<string> = new Set(['harness link', 'browser'])
 /** The name a new terminal tile greets with: the machine's display name the backend gave it, else the host's. */
 function terminalHintMachineName(): string {
   try { return readFileSync(MACHINE_NAME_FILE, 'utf-8').trim() || hostname() } catch { return hostname() }
@@ -286,6 +289,9 @@ const KILO_DB = join(env.KILO_DATA_DIR, 'kilo.db')
 const HERMES_DB = join(env.HERMES_HOME, 'state.db')
 // Devin likewise keeps all history in one SQLite store (WAL) — polled per session by DevinReader.
 const DEVIN_DB = join(env.DEVIN_HOME, 'sessions.db')
+/** How many agents' histories are read at once — the first reconcile pass after a boot asks for every
+ *  agent's, and each read is a tmux probe, a `ps`, and the whole transcript or store (see `attaches`). */
+const ATTACH_CONCURRENCY = 4
 
 // How long a control-plane call the daemon proxies for a local client (`/api/machines`, `/api/auth/me`)
 // may wait on the backend. Under the desktop app's own 30s receive timeout, so a slow backend is
@@ -1395,19 +1401,21 @@ async function runForeground(session: AuthSession): Promise<void> {
   }
   const sqliteWarning = sqlitePreflightMessage()
   if (sqliteWarning) console.warn(sqliteWarning)
-  // Capture the user's shell environment NOW, not on the first recap — paying it here, where the
-  // daemon is already doing blocking startup work, keeps it off the path of a live turn, where a
-  // slow profile (nvm, conda, …) would stall frame handling instead. Started above, alongside the
-  // tmux PATH probe, so this is usually just picking up an already-finished (or nearly so) capture
-  // rather than paying for it here — the logged "…ms" is residual wait, not the full capture time.
-  // See lib/loginShellEnv.ts: this is what lets a recap reach a credential the user exports from
-  // their rc file, which a launchd/systemd-parented daemon never read.
+  // The user's shell environment is captured at startup, not on the first recap — a slow profile
+  // (nvm, conda, …) then stalls nothing live. Started above alongside the tmux PATH probe, and LOGGED
+  // when it lands, never waited on: nothing before the control port binds needs it (lib/loginShellEnv
+  // caches the capture; engine one-shots read it through `loginShellEnvironment()`), and a second
+  // login shell held the port — and with it the app's "Starting local service…" — for as long as the
+  // slower of the two shells took. See lib/loginShellEnv.ts: this is what lets a recap reach a
+  // credential the user exports from their rc file, which a launchd/systemd-parented daemon never read.
   {
     const t0 = Date.now()
-    const captured = Object.keys(await loginShellEnvPromise).length
-    console.log(captured
-      ? `[env] read ${captured} variables from the login shell in ${Date.now() - t0}ms (engine one-shots only)`
-      : '[env] could not read a login shell environment — engine one-shots use the daemon environment only')
+    void loginShellEnvPromise.then((captured) => {
+      const count = Object.keys(captured).length
+      console.log(count
+        ? `[env] read ${count} variables from the login shell in ${Date.now() - t0}ms (engine one-shots only)`
+        : '[env] could not read a login shell environment — engine one-shots use the daemon environment only')
+    })
   }
   for (const target of herdrStartup) {
     console.log(target.state === 'available'
@@ -1760,6 +1768,15 @@ async function runForeground(session: AuthSession): Promise<void> {
     sendTarget: (connId, type, payload) => backend.sendTerminalTo(connId, type, payload),
     sendBinaryTarget: (connId, frame) => backend.sendTerminalBinaryTo(connId, frame),
     isLoopback: isLocalClientId,
+    // For a client that did not introduce itself on `terminal_open` (an older build). A loopback
+    // window can only be this computer's desktop; a paired peer is named by its pairing label unless
+    // that label is one of the placeholders pairing hands out — those name nothing.
+    describeClient: (connId) => {
+      if (isLocalClientId(connId)) return { kind: 'desktop', name: terminalHintMachineName() }
+      const label = backend.e2ee.sessionLabel(connId)
+      if (!label || GENERIC_PAIR_LABELS.has(label)) return null
+      return { kind: backend.e2ee.sessionRole(connId) === 'device' ? 'device' : 'web', name: label }
+    },
     streamingAvailable: tmuxBackend != null,
     diagnostic: (event, fields) => console.log(`[terminal-stream] ${event}`, fields),
   })
@@ -1893,7 +1910,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     })
   })
 
-  const attachSession = async (
+  const attachSessionNow = async (
     session: RegisteredSession,
     reset = false,
     replayCursorFromStart = false,
@@ -2143,6 +2160,21 @@ async function runForeground(session: AuthSession): Promise<void> {
     if (pollsQuestions(session.engine)) questionWatcher.start(session.sessionId)
     return true
   }
+
+  /** One attach per session, a few sessions at a time, and a record of what is being read — see lib/attachTracker. */
+  const attaches = new AttachTracker<AgentEngine>({
+    concurrency: ATTACH_CONCURRENCY,
+    onSlow: (session, elapsedMs) => console.warn(
+      `[agent] ${sid(session.agentId)} attach still running · engine=${session.engine} · session=${sid(session.sessionId)} · ${Math.round(elapsedMs / 1000)}s`,
+    ),
+  })
+  const attachSession = (
+    session: RegisteredSession,
+    reset = false,
+    replayCursorFromStart = false,
+    replayFromStart = false,
+  ): Promise<boolean> =>
+    attaches.attach(session, reset, () => attachSessionNow(session, reset, replayCursorFromStart, replayFromStart))
   const input = new SessionInputController({
     getSession: (id) => registry.resolve(id),
     onDelivery: (event) => {
@@ -2933,12 +2965,24 @@ async function runForeground(session: AuthSession): Promise<void> {
       if (wasDormant || wasLaunching || adopted) {
         const active = registry.byAgent(current.agentId)
         if (!active) return
-        if (active.sessionId && !await attachSession(active)) {
-          registry.setActive(active.agentId, false)
+        if (!active.sessionId) {
+          syncRecapPool()
+          announceSession(active)
           return
         }
-        syncRecapPool()
-        announceSession(active)
+        // Not awaited: the attach reads this agent's whole history, and this callback runs inside the
+        // reconcile pass whose completion is what publishes `discoveryReady`. One agent's slow store
+        // must not hold the pass — or, at boot, the app. The tracker runs a few of these at a time.
+        void attachSession(active).then((attached) => {
+          if (!attached) {
+            registry.setActive(active.agentId, false)
+            return
+          }
+          syncRecapPool()
+          announceSession(active)
+        }).catch((err) => {
+          console.error(`[discovery] ${sid(active.agentId)} attach failed:`, err instanceof Error ? err.message : err)
+        })
         return
       }
       // An agent that was already awake changed grid under us. Nobody was told: this branch wrote the
@@ -3449,6 +3493,10 @@ async function runForeground(session: AuthSession): Promise<void> {
       restarting,
       discoveryReady,
       discoveryError,
+      // Agents whose history is being read right now, and how many wait their turn. Normally empty or
+      // gone in a second; one that stays here names the store that is slow, which no other field does.
+      attaching: attaches.attaching(),
+      attachQueue: attaches.queued(),
       fingerprint: backend.e2eeFingerprint(),
       config: {
         watching: `${terminalConfig.backends.join(' + ')} terminals across all supported engines`,
@@ -3872,17 +3920,11 @@ async function runForeground(session: AuthSession): Promise<void> {
       console.error(`[cli] history handler error (session ${batch.sessionId}):`, err instanceof Error ? err.message : err)
     }
   })
-  for (const session of registry.list()) {
-    // An UNBOUND process agent has no transcript to attach to yet. Discovery keeps it visible and the
-    // hook/store repair path binds it as soon as the engine reports a session. Attaching an
-    // empty session id here would tear down an agent the user can see running in their pane, which is
-    // exactly what a self-update restart must never do.
-    if (!session.active || !session.sessionId) continue
-    if (!await attachSession(session)) registry.setActive(session.agentId, false)
-    else {
-      input.setTurnOpen(session.agentId, sessionTurnOpen(session.sessionId))
-    }
-  }
+  // Nothing re-attaches the registry's agents here. Every one of them is dormant from the moment the
+  // registry loads (see the `setActive(false)` transaction at the top of this function), and the first
+  // reconcile pass is what reactivates each one it finds a live process for — and attaches it, in the
+  // background and a few at a time (`onObserved` above, `attaches` below). Readiness never waits on an
+  // agent's history being read: one slow store used to hold the app out of every agent on the machine.
   /**
    * What the launch builder needs to know about THIS machine, read at launch time.
    *
@@ -3958,6 +4000,7 @@ async function runForeground(session: AuthSession): Promise<void> {
   }
   if (tmuxBackend) {
     const backend = tmuxBackend
+    let paneInventory: ReturnType<typeof listTmuxPanes> | null = null
     const summary = await restoreAgents({
       retainStopped: retainExitedSession,
       registry,
@@ -3967,7 +4010,10 @@ async function runForeground(session: AuthSession): Promise<void> {
       // engine, which a second pane resuming the same session would collide with.
       liveProcess: (entry, runtime) => resolvePaneEngineProcess(runtime.paneId, entry.engine),
       livePane: async (runtime) => {
-        const inventory = await listTmuxPanes()
+        // One inventory for the whole restore, not one `tmux list-panes` per row: this runs between
+        // the control port binding and the first reconcile pass, i.e. on the app's "starting" screen.
+        paneInventory ??= listTmuxPanes()
+        const inventory = await paneInventory
         // Only a harness pane counts (the inventory is already that whitelist): a new tmux server
         // hands out `%N` from zero again, and a stale id can name somebody's own shell.
         return inventory.ok && inventory.panes.some((pane) => pane.tmuxPane === runtime.paneId)

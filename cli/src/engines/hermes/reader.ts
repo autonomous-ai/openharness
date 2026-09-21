@@ -2,24 +2,21 @@
  * Hermes live tailer.
  *
  * Hermes keeps every surface's history in ONE SQLite store (`<HERMES_HOME>/state.db`, WAL), so there is
- * no file to byte-offset-tail. This polls the DB every ~1s through the `sqlite3` CLI (shelled out, like
- * tmux/git — keeps the adapter's single pure-JS bundle; no native SQLite dependency) and feeds the same
- * `emitSessionEvents` funnel the file-based engines use.
+ * no file to byte-offset-tail. This polls the DB every ~1s (through `lib/sqliteRead`: `node:sqlite`
+ * in-process, or the `sqlite3` CLI on a Node without it) and feeds the same `emitSessionEvents`
+ * funnel the file-based engines use.
  *
  * `messages.id` is an INTEGER primary key, which makes the incremental cursor trivial (`id > lastSeen`).
  * The connection is opened READ-ONLY: Hermes retries writes ~15 times on contention, and a long-held
  * reader would eat into that budget.
  */
 
-import { execFile } from 'child_process'
-import { promisify } from 'util'
 import type { LiveEvent } from '../../lib/normalize.js'
+import { sqliteReadAll } from '../../lib/sqliteRead.js'
 import {
   messageToEvents, newHermesTurnState, isTerminalFinish,
   type HermesTurnState, type HmMessage,
 } from './normalizer.js'
-
-const execFileAsync = promisify(execFile)
 
 // `YYYYMMDD_HHMMSS_<hex>` — CLI/TUI use 6 hex chars, the gateway 8.
 const SESSION_ID_RE = /^[0-9]{8}_[0-9]{6}_[0-9a-fA-F]{4,16}$/
@@ -30,7 +27,7 @@ const COLUMNS =
   'id, role, coalesce(content, \'\') AS content, tool_call_id, tool_calls, tool_name, finish_reason, reasoning'
 
 export class HermesSqliteMissing extends Error {
-  constructor() { super('sqlite3 CLI not found on PATH — Hermes sessions cannot be mirrored') }
+  constructor() { super('no SQLite reader (node:sqlite absent and no sqlite3 CLI on PATH) — Hermes sessions cannot be mirrored') }
 }
 
 function str(value: unknown): string | null {
@@ -39,7 +36,7 @@ function str(value: unknown): string | null {
 
 /**
  * Read a Hermes session's messages, optionally only those after `afterId`.
- * Throws `HermesSqliteMissing` when the `sqlite3` binary is absent; returns [] on a transient error.
+ * Throws `HermesSqliteMissing` when this machine has no way to read SQLite; returns [] on a transient error.
  */
 export async function readHermesMessages(
   dbPath: string,
@@ -47,29 +44,17 @@ export async function readHermesMessages(
   afterId?: number | null,
 ): Promise<HmMessage[]> {
   if (!SESSION_ID_RE.test(sessionId)) return []
-  const after = Number.isFinite(afterId as number) && (afterId as number) > 0 ? ` AND id > ${Math.trunc(afterId as number)}` : ''
-  const sql = `SELECT ${COLUMNS} FROM messages WHERE session_id = '${sessionId}'${after} ORDER BY id;`
+  const bounded = Number.isFinite(afterId as number) && (afterId as number) > 0
+  const sql = `SELECT ${COLUMNS} FROM messages WHERE session_id = ?${bounded ? ' AND id > ?' : ''} ORDER BY id;`
+  const params = bounded ? [sessionId, Math.trunc(afterId as number)] : [sessionId]
 
-  let stdout: string
-  try {
-    // `.timeout` is the SILENT dot-command form — `PRAGMA busy_timeout=…` prints a row under -json and
-    // would corrupt the single-array parse below. `query_only` is silent and guards against writes.
-    ;({ stdout } = await execFileAsync(
-      'sqlite3',
-      ['-json', '-cmd', '.timeout 3000', '-cmd', 'PRAGMA query_only=1', `file:${dbPath}?mode=ro`, sql],
-      { maxBuffer: MAX_BUFFER },
-    ))
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') throw new HermesSqliteMissing()
+  const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
+  if (!result.ok) {
+    if (result.reason === 'missing') throw new HermesSqliteMissing()
     return [] // db locked / mid-write — retry next tick
   }
 
-  const trimmed = stdout.trim()
-  if (!trimmed) return []
-  let rows: Array<Record<string, unknown>>
-  try { rows = JSON.parse(trimmed) } catch { return [] }
-
-  return rows.map((row) => ({
+  return result.rows.map((row) => ({
     id: Number(row.id) || 0,
     role: typeof row.role === 'string' ? row.role : '',
     content: typeof row.content === 'string' ? row.content : '',
@@ -103,34 +88,23 @@ export async function isHermesSubagentSession(dbPath: string, sessionId: string)
  * inserted its row, so an immediate lookup said "not a sub-agent" and the child took over the pane.
  * Callers that can afford to wait should treat null as "ask again shortly".
  *
- * Async, like every other query against this store: `.timeout 3000` means a contended read can park for
- * seconds, and hermes writes to this DB constantly — a synchronous spawn here would freeze the whole
- * daemon (every engine's poll, every socket, the device stream) for as long as the lock is held.
+ * Read through `lib/sqliteRead` like every other query against this store: hermes writes to this DB
+ * constantly, and the read's busy wait is bounded there so a contended lookup cannot park the daemon.
  */
 export async function hermesSessionSource(dbPath: string, sessionId: string): Promise<string | null> {
   if (!SESSION_ID_RE.test(sessionId)) return ''
-  try {
-    const { stdout: raw } = await execFileAsync(
-      'sqlite3',
-      ['-json', '-cmd', '.timeout 3000', '-cmd', 'PRAGMA query_only=1', `file:${dbPath}?mode=ro`,
-        `SELECT source FROM sessions WHERE id = '${sessionId}';`],
-      { maxBuffer: 1 << 20, timeout: 5_000 },
-    )
-    const stdout = raw.trim()
-    if (!stdout) return null
-    const rows = JSON.parse(stdout) as Array<{ source?: unknown }>
-    if (rows.length === 0) return null
-    return typeof rows[0]?.source === 'string' ? rows[0].source : ''
-  } catch {
-    return '' // sqlite3 missing / db locked — treat as a normal session, exactly as before
-  }
+  const result = await sqliteReadAll(dbPath, 'SELECT source FROM sessions WHERE id = ?;', [sessionId], { maxBuffer: 1 << 20 })
+  if (!result.ok) return '' // no reader / db locked — treat as a normal session, exactly as before
+  if (result.rows.length === 0) return null
+  const source = result.rows[0]?.source
+  return typeof source === 'string' ? source : ''
 }
 
 export interface HermesReaderDeps {
   dbPath: string
   sessionId: string
   onEvents: (events: LiveEvent[]) => void
-  /** Reports the one-time fatal "sqlite3 missing" so the caller can warn + stop the reader. */
+  /** Reports the one-time fatal "no SQLite reader" so the caller can warn + stop the reader. */
   onFatal?: (err: Error) => void
   pollMs?: number
 }

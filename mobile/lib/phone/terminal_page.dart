@@ -23,6 +23,7 @@ import 'package:harness_mobile/widgets/terminal_panel.dart';
 import 'agents_list_page.dart';
 import 'agents_page.dart' show openNewAgent;
 import 'delete_agent.dart';
+import 'desk_tabs_sheet.dart';
 import 'held_height.dart';
 import 'machines_tab.dart';
 import 'phone_navigation.dart' show phoneRoute;
@@ -51,7 +52,6 @@ class TerminalPage extends StatefulWidget {
     required this.agentId,
     required this.voice,
     this.isActive = true,
-    this.tabStrip,
   });
 
   final AppNotifier notifier;
@@ -73,19 +73,6 @@ class TerminalPage extends StatefulWidget {
   /// a page that has slid away — three terminals all resizing themselves to the layout would send
   /// SIGWINCH to three remote shells at once.
   final bool isActive;
-
-  /// The account's tabs, drawn under the header — see [DeskTabStrip], which is
-  /// what this always is. Null on every terminal that is not the home screen's,
-  /// and the header is then the row it has always been.
-  ///
-  /// ⚠️ **Handed in, not built here, and the reason is [_PageFacts].** This page
-  /// only rebuilds itself when its OWN facts move (see [_onNotifier]) — a
-  /// notifier tick that changed nothing about this agent is dropped, tabs
-  /// included. A strip built in this build would therefore go stale the moment
-  /// somebody changed the tabs on a computer. Built by [AgentHome], which does
-  /// rebuild for the account, it arrives as a new widget and simply replaces
-  /// the old one.
-  final Widget? tabStrip;
 
   @override
   State<TerminalPage> createState() => _TerminalPageState();
@@ -181,6 +168,7 @@ typedef _PageFacts = ({
   PhoneMachineStatus? machineStatus,
   bool imagePaste,
   String? machineName,
+  bool deskTabs,
 });
 
 class _TerminalPageState extends State<TerminalPage>
@@ -427,6 +415,11 @@ class _TerminalPageState extends State<TerminalPage>
       machineStatus: machine == null ? null : phoneMachineStatusOf(machine),
       imagePaste: machine?.terminalImagePasteAvailable ?? false,
       machineName: machine?.machine.displayName,
+      // ⚠️ Read here, and not in `build` alone, because this page is rebuilt
+      // only when one of these facts moves. Tabs arriving from another computer
+      // change nothing else about this agent, and the mark that opens them
+      // would not appear until something unrelated happened to redraw the page.
+      deskTabs: notifier.deskTabs.isNotEmpty,
     );
   }
 
@@ -518,9 +511,8 @@ class _TerminalPageState extends State<TerminalPage>
   /// Awaited for the same reason [_newAgent] is: the list is backed out of as often as it is tapped
   /// through, and this page gets no rebuild when it lands back on top.
   Future<void> _openAgentList() async {
-    await Navigator.of(context).push(
-      phoneRoute((_) => AgentsListPage(notifier: widget.notifier)),
-    );
+    await Navigator.of(context)
+        .push(phoneRoute((_) => AgentsListPage(notifier: widget.notifier)));
     if (mounted) setState(() {});
   }
 
@@ -849,9 +841,7 @@ class _TerminalPageState extends State<TerminalPage>
     _watchKeyBar();
     final pane = widget.notifier.panes
         .where(
-          (p) =>
-              p.machineId == widget.machineId &&
-              p.agentId == widget.agentId,
+          (p) => p.machineId == widget.machineId && p.agentId == widget.agentId,
         )
         .firstOrNull;
     if (pane != null) {
@@ -910,6 +900,11 @@ class _TerminalPageState extends State<TerminalPage>
         !agentGone &&
         session != null &&
         (session.watching || session.status == TerminalSessionStatus.takenOver);
+    final takerName = phoneTakerName(
+      session,
+      (id) => widget.notifier.stateOf(id)?.machine.displayName,
+    );
+    final takeoverNotice = phoneTakeoverNotice(session, takerName);
     // Creating needs the machine to list its folders and name its engines,
     // so one that is offline or still wants its password cannot host a new
     // agent — the same gate the Agents tab puts on its fab.
@@ -1108,14 +1103,12 @@ class _TerminalPageState extends State<TerminalPage>
                       // older CLI never advertises the binary kind, so the
                       // upload would go nowhere silently. Null leaves the
                       // buttons undrawn rather than drawn dead.
-                      onPickImage:
-                          machine?.terminalImagePasteAvailable == true
+                      onPickImage: machine?.terminalImagePasteAvailable == true
                           ? () => unawaited(
                               _sendImage(session, ImageSource.gallery),
                             )
                           : null,
-                      onTakePhoto:
-                          machine?.terminalImagePasteAvailable == true
+                      onTakePhoto: machine?.terminalImagePasteAvailable == true
                           ? () => unawaited(
                               _sendImage(session, ImageSource.camera),
                             )
@@ -1158,7 +1151,10 @@ class _TerminalPageState extends State<TerminalPage>
                     children: [
                       TerminalHeader(
                         agent: agent,
-                        status: phoneSessionSummary(session),
+                        status: phoneSessionSummary(
+                          session,
+                          takerName: takerName,
+                        ),
                         trailing: [
                           // Read-only is a state to get OUT of, so its way
                           // out is a labelled button in the header rather
@@ -1171,7 +1167,8 @@ class _TerminalPageState extends State<TerminalPage>
                           // finger's width under this one, and two "Take
                           // control"s stacked read as two different offers.
                           // The band is the better of the two — it says WHY
-                          // typing stopped — so this one gives way to it.
+                          // typing stopped, and by whom — so this one gives
+                          // way to it.
                           //
                           // Kept for the states the band does not cover:
                           // "Reconnect", for a stream that died with nobody
@@ -1182,6 +1179,33 @@ class _TerminalPageState extends State<TerminalPage>
                               // The same call the band's button makes — see
                               // [_takeControl].
                               onPressed: () => unawaited(_takeControl()),
+                            ),
+                          // The account's tabs, one mark before `⋯` — the
+                          // only way to another tab now that a swipe stays
+                          // inside the one you are in (see [showDeskTabsSheet]).
+                          //
+                          // ⚠️ **A mark, not a rail of tabs across the top.**
+                          // The terminal is the screen; chrome above it is
+                          // somebody's session not being shown, and this is a
+                          // choice made a few times a day.
+                          //
+                          // Undrawn for an account with no tabs at all: there
+                          // would be one row in the sheet, naming every agent
+                          // on the account, which is what a swipe already does.
+                          if (widget.notifier.deskTabs.isNotEmpty)
+                            _HeaderAction(
+                              icon: LucideIcons.layoutGrid300,
+                              tooltip: 'Tabs',
+                              onPressed: () => unawaited(
+                                showDeskTabsSheet(
+                                  context,
+                                  widget.notifier,
+                                  showing: (
+                                    machineId: widget.machineId,
+                                    agentId: widget.agentId,
+                                  ),
+                                ),
+                              ),
                             ),
                           // Null while the agent is not loaded: there is
                           // nothing to act on yet, and a menu of actions
@@ -1195,20 +1219,13 @@ class _TerminalPageState extends State<TerminalPage>
                               // the header's own right inset.
                               last: true,
                               onPressed: () => _showActions(
-                                machineName:
-                                    machine?.machine.displayName ?? '',
+                                machineName: machine?.machine.displayName ?? '',
                                 agentName: agent.name,
                                 project: agent.project,
                               ),
                             ),
                         ],
                       ),
-                      // Under the names and above the divider: one bar, which
-                      // slides away as one. Which tab the phone is in is part
-                      // of where this terminal IS — the swipe either side of it
-                      // stays inside that tab — so it belongs with the identity
-                      // rather than beside the floating buttons.
-                      ?widget.tabStrip,
                       Divider(height: 1, color: AppGlass.hair),
                       // ⚠️ Inside the header's own slide, not under it: the two are one bar as far
                       // as a scroll is concerned, and a band left behind while the header left
@@ -1217,6 +1234,7 @@ class _TerminalPageState extends State<TerminalPage>
                         _ControlBanner(
                           watching: session?.watching ?? false,
                           busy: !blocked,
+                          takeoverNotice: takeoverNotice,
                           onTakeControl: _takeControl,
                         ),
                     ],
@@ -1535,11 +1553,13 @@ class _AgentGone extends StatelessWidget {
 /// Covers both ways a pane goes read-only. A WATCHER never held the terminal — the page attached
 /// to an agent the desktop was already driving, output and all (see [TerminalSession.watching]) —
 /// while `takenOver` is a terminal this phone HAD and lost. One sentence each, because "another
-/// app has it, press this" is the part that matters either way.
+/// app has it, press this" is the part that matters either way; the lost one names the taker when
+/// the daemon said who.
 class _ControlBanner extends StatelessWidget {
   const _ControlBanner({
     required this.watching,
     required this.busy,
+    required this.takeoverNotice,
     required this.onTakeControl,
   });
 
@@ -1549,13 +1569,16 @@ class _ControlBanner extends StatelessWidget {
   /// The take is in flight — its `terminal_open` is out and this pane is waiting to hear.
   final bool busy;
 
+  /// Who took it, as the one sentence [phoneTakeoverNotice] writes. Null for a watcher, which
+  /// never lost a terminal, and while a take is in flight.
+  final String? takeoverNotice;
+
   final VoidCallback onTakeControl;
 
   String get _title {
     if (busy) return 'Taking control…';
-    return watching
-        ? 'Another app is using this terminal'
-        : 'Another app took control of this terminal';
+    if (watching) return 'Another app is using this terminal';
+    return takeoverNotice ?? 'Another app took control of this terminal';
   }
 
   @override
@@ -1563,6 +1586,7 @@ class _ControlBanner extends StatelessWidget {
     AppTheme.watch(context);
     final ink = phoneToneColor(PhoneTone.attention);
     return Semantics(
+      key: const ValueKey('phone-takeover-strip'),
       container: true,
       liveRegion: true,
       child: DecoratedBox(

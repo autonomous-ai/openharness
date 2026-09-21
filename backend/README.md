@@ -102,4 +102,21 @@ Prisma over the **same MongoDB** as the agent-manager (no migration files — `p
 startup). The backend owns the `users` + `agent_bindings` collections; it never manages the
 manager-owned `agent_nodes`/`managers` (read those via raw queries when status enrichment is needed).
 
+### Client country (Cloudflare)
+
+Production DNS is proxied through Cloudflare, so every request and WebSocket upgrade arrives with a
+`CF-IPCountry` header. `src/lib/clientGeo.ts` is the only reader; it feeds:
+
+- `users.lastCountryCode` / `lastCountryAt` — from the owner's own control-plane calls
+  (`middlewares/authMiddleware.ts`), rate-floored to one write per user per hour unless the country
+  changes. This is the "where is the user" answer.
+- `machines.countryCode` — the computer's country on its last `/api/adapter-ws` connect.
+- `machine_daily_presence.countryCode` / `user_daily_device_presence.countryCode` — same header on the
+  daily presence rows. `user_daily_presence` deliberately has none: it is keyed by
+  (user, machine, day) and its socket is the daemon's, so the machine's country is the one on
+  `machine_daily_presence` for that `machineId`.
+
+Off Cloudflare (local dev, direct origin hits) the header is absent and nothing is written; a value
+is only ever set, never cleared.
+
 Historical architecture notes still live in `autonomous-code/docs`.

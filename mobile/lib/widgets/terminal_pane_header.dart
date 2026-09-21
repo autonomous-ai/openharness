@@ -109,7 +109,8 @@ class TerminalPaneHeader extends StatelessWidget {
           TerminalSessionStatus.takenOver => (
             label: 'Take control',
             icon: Icons.lock_outline,
-            detail: 'Read only: another app controls this terminal. Take control moves input ownership to this app.',
+            detail:
+                'Read only: ${session.takenOverBy?.name ?? 'another app'} controls this terminal. Take control moves input ownership to this app.',
           ),
           TerminalSessionStatus.error || TerminalSessionStatus.closed => (
             label: 'Reconnect',
