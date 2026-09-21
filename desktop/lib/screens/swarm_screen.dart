@@ -3013,7 +3013,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             StoreTab(
                               key: ValueKey('store-tab:${app.activeSwarmId}'),
                               notifier: app,
-                                recentHarnesses: _navigation.recent,
+                              recentHarnesses: _navigation.recent,
                               source: 'tab',
                             ),
                           if (_hasCommandBar && _commandBarOpen)

@@ -33,8 +33,8 @@ In the **Harness Store**, installed tools offer **Resume Harness** and **New Har
 Resume returns to the existing harness, including one on another machine. With one matching harness
 it opens directly; with several, a dropdown shows each harness's name, machine and project. Recent
 visits appear first. An open tab is focused; a closed tab is reopened around the same running agent.
-New Harness always opens the creation dialog for separate work. This works the same way for coding
-agents, creative tools and managers. Tools not yet installed offer **Get** first.
+New Harness opens the command dock with the tool and machine selected; Start creates separate work.
+This works the same way for coding agents, creative tools and managers. Tools not yet installed offer **Get** first.
 
 ## Panes and layouts
 
