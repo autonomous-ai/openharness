@@ -29,6 +29,8 @@ In the New Tab and New Pane pickers, New agent is selected when the query is emp
 
 Hover near a pane’s right or bottom edge to reveal its **+** button, or use **File → Split Right… / Split Down…**. The picker shows **New Pane to the Right** or **New Pane Below**. The split is applied after choosing or creating a harness; Escape leaves the layout unchanged.
 
+When a split needs more room, the workspace expands and scrolls to keep both panes readable. Keyboard focus brings the selected pane into view. Splitting remains available up to the tab’s 64-pane limit.
+
 In a picker: ↓ ⌃N ⌃J and ↑ ⌃P ⌃K move, ⏎ accepts, and Esc, ⌃C, or ⌃G closes. In the New Tab and New Pane pickers, ⌘⏎ accepts into the same requested destination. Preview starts hidden; ⌃/ toggles it and Page Up/Down scroll it without leaving the search input.
 The terminal keeps ⌘C, ⌘V, ⌘A, Esc, ⌥⏎ and ⌃C for itself. `pane.pin`, `pane.focus_1…9`,
 `pane.resize`, `pane.reset_sizes`, `machine.link` and a few others ship unbound and are in the palette.

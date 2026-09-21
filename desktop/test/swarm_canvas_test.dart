@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/pane_preset.dart';
 import 'package:harness/terminal/terminal_font_store.dart';
 import 'package:harness/widgets/pane_grid.dart';
@@ -104,7 +105,7 @@ void main() {
   );
 
   testWidgets(
-    'scroll positions restore on the first frame across different Swarm sizes',
+    'both scroll positions restore on the first frame across different Swarm sizes',
     (tester) async {
       final app = createApp();
       app.machineStates['m']!.nodeOnline = true;
@@ -112,16 +113,24 @@ void main() {
         app.adoptSessionForTest(terminal('a$i', []));
       }
       app.setPreset(12, PanePreset.cols2);
+      app.activeSwarm.savePaneSizes(
+        '12:manual',
+        PaneArrangement(PanePreset.cols2.tilesFor(12)),
+      );
       final first = app.activeSwarmId;
       app.newSwarm();
       for (var i = 12; i < 18; i++) {
         app.adoptSessionForTest(terminal('a$i', []));
       }
       app.setPreset(6, PanePreset.cols2);
+      app.activeSwarm.savePaneSizes(
+        '6:manual',
+        PaneArrangement(PanePreset.cols2.tilesFor(6)),
+      );
       final second = app.activeSwarmId;
       app.selectSwarm(first);
       tester.view.devicePixelRatio = 1;
-      tester.view.physicalSize = const Size(1000, 500);
+      tester.view.physicalSize = const Size(600, 500);
       addTearDown(tester.view.reset);
       await tester.pumpWidget(
         MaterialApp(home: PaneGrid(notifier: app, swarmMode: true)),
@@ -135,28 +144,49 @@ void main() {
       scroll.jumpTo(600);
       await tester.pump();
       expect(scroll.position.maxScrollExtent, greaterThan(600));
+      final horizontal = tester
+          .widgetList<SingleChildScrollView>(find.byType(SingleChildScrollView))
+          .singleWhere((view) => view.scrollDirection == Axis.horizontal)
+          .controller!;
+      expect(horizontal.position.maxScrollExtent, greaterThan(200));
+      // The horizontal thumb remains reachable while vertically scrolled.
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.dragFrom(const Offset(60, 497), const Offset(80, 0));
+      await tester.pump();
+      expect(horizontal.offset, greaterThan(0));
+      expect(scroll.offset, 600);
+      horizontal.jumpTo(200);
+      await tester.pump();
       app.selectSwarm(second);
       await tester.pump();
       expect(scroll.offset, 0);
+      expect(horizontal.offset, 0);
       scroll.jumpTo(120);
+      horizontal.jumpTo(90);
       await tester.pump();
       app.selectSwarm(first);
       await tester.pump();
       expect(scroll.offset, 600);
+      expect(horizontal.offset, 200);
       app.selectSwarm(second);
       await tester.pump();
       expect(scroll.offset, 120);
+      expect(horizontal.offset, 90);
       app.newSwarm();
       await tester.pump();
       expect(scroll.offset, 0);
       expect(scroll.position.maxScrollExtent, 0);
+      expect(horizontal.offset, 0);
+      expect(horizontal.position.maxScrollExtent, 0);
       app.selectSwarm(first);
       await tester.pump();
       expect(scroll.offset, 600);
+      expect(horizontal.offset, 200);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       app.dispose();
     },
+    variant: TargetPlatformVariant.only(TargetPlatform.macOS),
   );
 
   testWidgets(
