@@ -102,6 +102,28 @@ class ApiClient {
     return unwrapApiResponse(res) as Map<String, dynamic>?;
   }
 
+  // -- the desk: the account's tabs, the same on every computer (proxied by the local CLI) --
+
+  /// `{revision, tabs}` as the backend holds it; null when the daemon predates the desk (404) or is
+  /// signed out (401) — the app then keeps its tabs to itself, as it did before the desk existed.
+  Future<Map<String, dynamic>?> desk() async {
+    final res = await _dio.get('/api/desk');
+    if (res.statusCode == 404 || res.statusCode == 401) return null;
+    return unwrapApiResponse(res) as Map<String, dynamic>?;
+  }
+
+  /// Apply [ops] to the desk (backend routes/desk.ts); answers the desk as it is afterwards. Null
+  /// under the same two conditions as [desk].
+  Future<Map<String, dynamic>?> deskOps(List<Map<String, dynamic>> ops) async {
+    final res = await _dio.post(
+      '/api/desk/ops',
+      data: {'ops': ops},
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    if (res.statusCode == 404 || res.statusCode == 401) return null;
+    return unwrapApiResponse(res) as Map<String, dynamic>?;
+  }
+
   // -- the Harness Store: ratings and reviews (control plane, proxied by the local CLI) --
   Future<Map<String, dynamic>?> storeRatings() async {
     final res = await _dio.get('/api/store/ratings');

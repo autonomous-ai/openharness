@@ -578,3 +578,22 @@ model HarnessShare {
   @@index([ownerId, machineId])
   @@map("harness_shares")
 }
+
+/// The account's DESK: its tabs, in order, and the agents each holds — one document per user, the
+/// same on every computer the person signs in on (owner, 2026-09-21: "tab là global"). Holds only
+/// what the person would call "my tabs": ids, names, order, `(machineId, agentId)` pairs. Nothing
+/// about a window — focus, zoom, pane sizes, which tab is on screen — those differ per computer and
+/// stay in each app's own state file. Written through `POST /api/desk/ops` (routes/desk.ts): small
+/// idempotent operations applied in order under `revision`, so two windows racing merge by rule
+/// rather than by whoever saved last. Plaintext, like `Machine.name` and `MachineAgent.name`: the
+/// doc adds no class of data the backend does not already hold.
+model Desk {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @unique
+  revision  Int      @default(0)
+  tabs      Json     @default("[]")
+  updatedAt DateTime @updatedAt
+
+  @@map("desks")
+}
+

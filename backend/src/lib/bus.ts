@@ -582,6 +582,20 @@ export function subscribeDeviceMachineListChanged(userId: string, cb: (msg: Devi
   return addSub(deviceMachineListChannel(userId), cb as Cb)
 }
 
+// Per-USER desk invalidation: the account's tabs changed (routes/desk.ts) on some REST worker; every
+// adapter socket of that user — one per computer, possibly on other workers — is told to re-fetch.
+export interface DeskChangedMsg { revision: number }
+
+const deskChannel = (userId: string): string => `desk:${userId}`
+
+export function publishDeskChanged(userId: string, msg: DeskChangedMsg): Promise<number> {
+  return safePublish(deskChannel(userId), JSON.stringify(msg))
+}
+
+export function subscribeDeskChanged(userId: string, cb: (msg: DeskChangedMsg) => void): Promise<() => void> {
+  return addSub(deskChannel(userId), cb as Cb)
+}
+
 export interface DeviceE2eePairMsg {
   kind: 'pending' | 'cleared'
   machineId: string

@@ -181,7 +181,7 @@ export type DownTransport = 'relay' | 'local' | 'p2p'
  * backend blocks its OWN `__`-prefixed control frames from web clients for the same reason; these
  * two escaped that rule because they are not `__`-prefixed.
  */
-const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked'])
+const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed'])
 
 interface QueueItem {
   id: number
@@ -1428,6 +1428,15 @@ export class BackendSocket {
     // The machine was deleted/revoked from the web → stop for good (don't reconnect) and let the CLI
     // clear the saved token. `closed` blocks the reconnect that would otherwise fire on socket drop.
     if (type === 'machine_revoked') { this.closed = true; this.onRevoked?.(); return }
+
+    // The account's tabs changed on another computer (or in another window of this one): hand the
+    // window the revision and let it fetch `/api/desk` through this daemon. Backend-only, like
+    // machine_meta — a local client cannot make the window re-read anything by sending this.
+    if (type === 'desk_changed') {
+      const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
+      this.sendLocal({ type: 'desk_changed', payload: { revision: typeof revision === 'number' ? revision : 0 } })
+      return
+    }
 
     // Machine display name (seed on connect + web renames) — mirrored locally for `harness status`.
     if (type === 'machine_meta') {

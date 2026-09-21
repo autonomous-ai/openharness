@@ -3471,6 +3471,10 @@ async function runForeground(session: AuthSession): Promise<void> {
     onMachineDelete: (machineId) => proxyBackend('DELETE', `/api/machines/${encodeURIComponent(machineId)}`),
     onAuthMe: () => proxyBackend('GET', '/api/auth/me'),
     onSharedHarnesses: () => proxyBackend('GET', '/api/harness-shares'),
+    // The account's desk — see backend routes/desk.ts. The window edits its tabs through the ops
+    // route and hears about everyone else's edits as `desk_changed` (backendSocket.ts).
+    onDeskRead: () => proxyBackend('GET', '/api/desk'),
+    onDeskOps: (body) => proxyBackend('POST', '/api/desk/ops', body),
     onStore: (method, path, body) => proxyBackend(method, path, body),
   })
   // Claim the pid file for OURSELVES, and only now that the control port is bound. It used to be
