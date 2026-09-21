@@ -6,6 +6,7 @@ import {
 } from '../services/UserService.js'
 import {
   autonomousEnvironmentConfig,
+  ssoIdentityUrlFor,
   storedAutonomousEnvironment,
   type AutonomousEnvironment,
 } from './autonomousEnvironment.js'
@@ -69,21 +70,30 @@ export async function fetchSsoProfile(
   // always supplies the environment explicitly.
   const autonomousEnv = typeof autonomousEnvOrFetch === 'function' ? 'prod' : autonomousEnvOrFetch
   const fetchImpl = typeof autonomousEnvOrFetch === 'function' ? autonomousEnvOrFetch : (fetchOverride ?? fetch)
-  let res: Response
-  try {
-    res = await fetchImpl(autonomousEnvironmentConfig(autonomousEnv).ssoProfileUrl, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        Location: 'en-US',
-        Authorization: `Bearer ${token}`,
-      },
-      signal: AbortSignal.timeout(env.SSO_PROFILE_TIMEOUT_MS),
-    })
-  } catch {
-    throw new SsoAuthError('SSO profile service unavailable', 'AUTH_SERVICE_UNAVAILABLE')
+  const { ssoProfileUrl, ssoIdentityUrlOverride } = autonomousEnvironmentConfig(autonomousEnv)
+  const ssoIdentityUrl = ssoIdentityUrlFor(ssoProfileUrl, ssoIdentityUrlOverride)
+  const ask = async (url: string): Promise<Response> => {
+    try {
+      return await fetchImpl(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Location: 'en-US',
+          Authorization: `Bearer ${token}`,
+        },
+        signal: AbortSignal.timeout(env.SSO_PROFILE_TIMEOUT_MS),
+      })
+    } catch {
+      throw new SsoAuthError('SSO profile service unavailable', 'AUTH_SERVICE_UNAVAILABLE')
+    }
   }
+
+  // The identity endpoint answers from the token alone; the profile endpoint costs the storefront a
+  // customer read and a cart read per call. Same envelope, same two fields. A 404 means the BFF in
+  // front of us predates the identity route — and ONLY a 404 falls back: a 401 there is the answer.
+  let res = await ask(ssoIdentityUrl ?? ssoProfileUrl)
+  if (ssoIdentityUrl && res.status === 404) res = await ask(ssoProfileUrl)
 
   if (res.status === 401 || res.status === 403) {
     throw new SsoAuthError('Invalid or expired SSO access token', 'INVALID_TOKEN')

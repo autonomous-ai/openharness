@@ -93,12 +93,16 @@ const envSchema = z.object({
   SSO_CLIENT_SECRET: z.string().optional(), // public client (PKCE, auth method 'none') → leave unset
   SSO_SCOPE: z.string().default('openid profile email roles'),
   SSO_PROFILE_URL: z.string().default('https://apiv2.autonomous.ai/api/v1/me/profile'),
+  // The cheap way to prove a token: same answer shape as the profile URL, no customer or cart read
+  // behind it. Unset = derived from the profile URL (…/me/profile → …/me/identity); '' = never used.
+  SSO_IDENTITY_URL: z.string().optional(),
   // Per-user staging override. Production remains the default; these are consulted only after the
   // login transaction/user record explicitly selects `stag`.
   STAGING_SSO_ISSUER: z.string().default('https://auth.staging.autonomousdev.xyz'),
   STAGING_SSO_CLIENT_ID: z.string().optional(),
   STAGING_SSO_CLIENT_SECRET: z.string().optional(),
   STAGING_SSO_PROFILE_URL: z.string().default('https://apiv2.staging.autonomousdev.xyz/api/v1/me/profile'),
+  STAGING_SSO_IDENTITY_URL: z.string().optional(),
   SSO_PROFILE_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
   // How long a token the profile API just accepted is trusted without asking again (0 = ask every
   // time). This is also the longest a token revoked at the SSO keeps working here.

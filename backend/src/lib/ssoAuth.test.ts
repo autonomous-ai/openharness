@@ -11,6 +11,7 @@ vi.mock('../services/UserService.js', () => ({
 }))
 
 import { authenticateAccessToken, clearSsoProfileCache, fetchSsoProfile, SsoAuthError } from './ssoAuth.js'
+import { ssoIdentityUrlFor } from './autonomousEnvironment.js'
 
 function response(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -51,6 +52,50 @@ describe('SSO profile authentication', () => {
 
     const malformed = vi.fn<typeof fetch>().mockResolvedValue(response(200, { status: -1, message: 'missing location' }))
     await expect(fetchSsoProfile('token', malformed)).rejects.toMatchObject({ code: 'AUTH_SERVICE_UNAVAILABLE' } satisfies Partial<SsoAuthError>)
+  })
+})
+
+describe('which endpoint proves a token', () => {
+  const ok = () => response(200, { status: 1, data: { id: 'external-1', email: 'user@example.com' } })
+  const calledUrls = (mock: ReturnType<typeof vi.fn<typeof fetch>>) => mock.mock.calls.map(([url]) => String(url))
+
+  it('asks the identity endpoint, which costs the storefront no customer or cart read', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => ok())
+
+    await expect(fetchSsoProfile('token', fetchMock)).resolves.toEqual({ id: 'external-1', email: 'user@example.com' })
+
+    expect(calledUrls(fetchMock)).toEqual(['https://apiv2.autonomous.ai/api/v1/me/identity'])
+  })
+
+  it('falls back to the profile endpoint while the identity endpoint is not deployed', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(404, { message: 'page not found' }))
+      .mockResolvedValueOnce(ok())
+
+    await expect(fetchSsoProfile('token', fetchMock)).resolves.toEqual({ id: 'external-1', email: 'user@example.com' })
+
+    expect(calledUrls(fetchMock)).toEqual([
+      'https://apiv2.autonomous.ai/api/v1/me/identity',
+      'https://apiv2.autonomous.ai/api/v1/me/profile',
+    ])
+  })
+
+  it('takes the identity endpoint at its word when it rejects the token', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => response(401, { message: 'Invalid or expired JWT' }))
+
+    await expect(fetchSsoProfile('expired', fetchMock)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('derives the identity endpoint from a stock profile URL and from nothing else', () => {
+    expect(ssoIdentityUrlFor('https://apiv2.autonomous.ai/api/v1/me/profile')).toBe('https://apiv2.autonomous.ai/api/v1/me/identity')
+    expect(ssoIdentityUrlFor('https://apiv2.staging.autonomousdev.xyz/api/v1/me/profile')).toBe('https://apiv2.staging.autonomousdev.xyz/api/v1/me/identity')
+    // A test rig's stand-in (scripts point SSO_PROFILE_URL at a local mock) has no identity sibling.
+    expect(ssoIdentityUrlFor('http://127.0.0.1:4010/profile')).toBeUndefined()
+    // An explicit URL wins; an explicit empty string turns the identity endpoint off.
+    expect(ssoIdentityUrlFor('https://apiv2.autonomous.ai/api/v1/me/profile', 'https://id.example/me')).toBe('https://id.example/me')
+    expect(ssoIdentityUrlFor('https://apiv2.autonomous.ai/api/v1/me/profile', '')).toBeUndefined()
   })
 })
 
