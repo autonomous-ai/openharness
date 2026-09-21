@@ -1536,7 +1536,7 @@ export class BackendSocket {
           // Older clients/devices keep their live-only contract. The desktop picker
           // explicitly asks for stopped work and receives no stale terminal routes.
           if (payload.includeStopped === true && this.e2ee.sessionRole(connId) !== 'device') {
-            projects.push(...await Promise.all(stoppedAgents.available(registry.list()).map(s => this.toStoppedProject(s))))
+            projects.push(...await Promise.all(stoppedAgents.available(registry.advertised()).map(s => this.toStoppedProject(s))))
           }
           // Ordered by creation time, oldest → newest — a stable tab order that doesn't reshuffle as
           // sessions become active (createdAt = the session's registeredAt). The id breaks a tie so the
@@ -2297,7 +2297,7 @@ export class BackendSocket {
                 if (result.ok) return { state: 'created', agentId: result.session.agentId, resumed: result.resumed }
                 // RESTART_FAILED can follow an unobserved relaunch. Never silently
                 // replace that process again when a caller checks this intent.
-                if (result.error === 'RESTART_FAILED') return { state: 'unconfirmed' }
+                if (result.error === 'RESTART_FAILED' || result.error === 'RESUME_UNCONFIRMED') return { state: 'unconfirmed' }
                 return { state: 'failed', error: result.error, ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
               }).then(async (status) => {
                 reply(type, requestId, { creationId, ...await this.creationStatusPayload(status) })
@@ -2535,6 +2535,11 @@ export class BackendSocket {
       return { state: 'failed', ...(status.preparedFolder ? { preparedFolder: status.preparedFolder } : {}), failure: { code: status.error, ...(status.detail ? { detail: status.detail } : {}) } }
     }
     return status
+  }
+
+  async publishStoppedAgent(s: RegisteredSession): Promise<void> {
+    this.send({ type: 'agent_synced', payload: { agent: await this.toStoppedProject(s) } })
+    this.sendCommander({ type: 'agent_deleted', payload: { agentId: s.agentId } })
   }
 
   private async toStoppedProject(s: RegisteredSession): Promise<AgentFrame> {

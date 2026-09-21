@@ -157,6 +157,71 @@ void main() {
     },
   );
 
+  test(
+    'repeated Enter joins one request; a lost reply checks its receipt',
+    () async {
+      final first = app.resumeAgent('m', 'saved');
+      final second = app.resumeAgent('m', 'saved');
+      expect(identical(first, second), isTrue);
+      expect(connection.types, ['agent_resume']);
+      final creationId = connection.requests.single['creationId'];
+      connection.restartReplies.single.completeError(
+        Exception('lost response'),
+      );
+      expect((await first).error, isNotNull);
+      final checking = app.resumeAgent('m', 'saved');
+      expect(connection.types, ['agent_resume']);
+      expect(connection.checks, hasLength(1));
+      expect(connection.checks.single['creationId'], creationId);
+      connection.checkReplies.single.complete(
+        restartReceipt(
+          creationId as String,
+          agentId: 'saved',
+          sessionId: 'original-conversation',
+        ),
+      );
+      expect((await checking).error, isNull);
+    },
+  );
+
+  test('never accepts a fresh conversation as a successful resume', () async {
+    final opening = app.resumeAgent('m', 'saved');
+    connection.restartReplies.single.complete(
+      restartReceipt(
+        connection.requests.single['creationId'] as String,
+        agentId: 'saved',
+        sessionId: 'unexpected-conversation',
+      ),
+    );
+    expect((await opening).error, isNotNull);
+    expect(
+      app.stateOf('m')!.agents.firstWhere((a) => a.id == 'saved').sessionId,
+      'original-conversation',
+    );
+    expect(app.allPanes, isEmpty);
+  });
+
+  test(
+    'retained-session pushes preserve existing pane intent and searchability',
+    () async {
+      await app.handleEventForTest('m', {
+        'type': 'agent_synced',
+        'payload': {
+          'agent': {
+            'id': 'saved',
+            'name': 'Saved work',
+            'engine': 'codex',
+            'sessionId': 'original-conversation',
+            'status': 'stopped',
+            'terminal': {'available': false},
+          },
+        },
+      });
+      expect(row().agentId, 'saved');
+      expect(connection.requests, isEmpty);
+    },
+  );
+
   testWidgets('Enter submits resume immediately with no confirmation dialog', (
     tester,
   ) async {

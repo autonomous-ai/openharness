@@ -6928,7 +6928,9 @@ class AppNotifier extends ChangeNotifier {
         return unknown;
       }
       attempt._awaitingConfirmation = false;
-      return RestartAgentResult(error: _restartFailure(code, result['detail']));
+      return RestartAgentResult(
+        error: _restartFailure(code, result['detail'], resuming: resuming),
+      );
     }
     switch (result['state']) {
       case 'pending':
@@ -6951,7 +6953,11 @@ class AppNotifier extends ChangeNotifier {
         if (failure is! Map || failure['code'] is! String) return unknown;
         attempt._awaitingConfirmation = false;
         return RestartAgentResult(
-          error: _restartFailure(failure['code'] as String, failure['detail']),
+          error: _restartFailure(
+            failure['code'] as String,
+            failure['detail'],
+            resuming: resuming,
+          ),
         );
       case 'created':
       case null:
@@ -6965,6 +6971,13 @@ class AppNotifier extends ChangeNotifier {
       if (raw is! Map || raw['id'] != agentId) return unknown;
       try {
         var updated = Agent.fromJson(Map<String, dynamic>.from(raw));
+        if (resuming &&
+            (result['resumed'] == false ||
+                updated.sessionId != attempt.agent!.sessionId ||
+                updated.launchState == 'starting' ||
+                updated.launchState == 'failed')) {
+          return unknown;
+        }
         final current = machine.agents
             .where((agent) => agent.id == agentId)
             .first;
@@ -6987,7 +7000,7 @@ class AppNotifier extends ChangeNotifier {
       } catch (_) {
         return unknown;
       }
-    } else if (!result.containsKey('resumed')) {
+    } else if (resuming || !result.containsKey('resumed')) {
       return unknown;
     }
     machine._agentRestartRevisions[agentId] = ++machine._agentRevision;
@@ -7000,14 +7013,22 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
-  String _restartFailure(String code, Object? detail) =>
-      detail is String && detail.isNotEmpty
+  String _restartFailure(
+    String code,
+    Object? detail, {
+    bool resuming = false,
+  }) => detail is String && detail.isNotEmpty
       ? detail
       : switch (code) {
           'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
-            'Update the harness CLI on this machine to restart an agent.',
+            resuming
+                ? 'Update the harness CLI on this machine to open saved harnesses.'
+                : 'Update the harness CLI on this machine to restart an agent.',
           'AGENT_BUSY' => 'Another operation is changing this agent. Wait for it to finish, then retry.',
-          _ => 'Restart failed: $code',
+          _ =>
+            resuming
+                ? 'Could not open this harness: $code'
+                : 'Restart failed: $code',
         };
 
   bool _forkSourceCurrent(AgentForkAttempt attempt) {

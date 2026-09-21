@@ -1,13 +1,9 @@
 # Harness requests and Claude Code / Codex actions
 
-Source review: 2026-09-20, `worktree-command-box`. This describes the current
-working tree. `agent_resume`, the stopped-harness archive, and
-`agents_list.includeStopped` are local changes under review, not existing
-released protocol guarantees. Commands below omit profile, permissions,
-provider, installation and shell-wrapper arguments. A partial resume draft was
-already loaded into the local review build during the earlier work. The user
-has now requested this review before further resume implementation; this
-review changes documentation only.
+Implementation review: `worktree-agent-resume`, [WIP PR #168](https://github.com/autonomous-ai/openharness/pull/168).
+The original proposal and pre-change mapping are preserved in [issue #167](https://github.com/autonomous-ai/openharness/issues/167).
+The command dock and welcome screen were merged separately in #165. This branch adds CLI/daemon lifecycle behavior and remains unmerged for team review.
+Commands below omit existing profile, permissions, provider, installer and shell-wrapper arguments.
 
 ## Three identities
 
@@ -30,18 +26,18 @@ three pushes discussed below run in the opposite direction.
 | Request | tmux action | Claude Code / Codex action | Registry and persisted state |
 | --- | --- | --- | --- |
 | `agent_create` | `new-session -d`: new session and initial pane | Launch `claude [prompt]` / `codex [prompt]`; install a missing executable through the existing launch wrapper | `openPendingAgent` creates a new Harness ID with the new route, saved launch settings, `launch: starting`, and no engine conversation yet. Hooks/discovery bind `sessionId` and the process identity. |
-| `agent_delete` | **`kill-session` for the session containing the registered pane** | In parallel, validate the engine PID identity; SIGTERM if still alive, then SIGKILL after the grace period if needed | Remove the live row and its route/process/conversation indexes through `removeAgent`; clear runtime tracking. Vendor history, recaps and name overrides remain. The local resume draft additionally saves a durable archive **before removal**. |
+| `agent_delete` | **`kill-session` for the session containing the registered pane** | In parallel, validate the engine PID identity; SIGTERM if still alive, then SIGKILL after the grace period if needed | Remove the live row and its route/process/conversation indexes through `removeAgent`; clear runtime tracking. Vendor history, recaps and name overrides remain. Save a durable archive **before removal**; a storage failure refuses the explicit stop before mutation. |
 | `agent_restart` | Enable `remain-on-exit`; terminate the engine; `respawn-pane -k` in the existing pane | `claude --resume ID` / `codex resume ID` when known; existing fallback can launch fresh | Retain Harness ID and route. Hold reconciliation during replacement; update process identity and provider observations, then persist. A fresh fallback's new conversation is bound by a later hook. No missing-pane recreation. |
 | `agent_fork` | New session and pane; source untouched | `claude --resume ID --fork-session` / `codex fork ID` | New pending row and Harness ID, initially carrying `forkedFrom`; bind the newly forked engine conversation later. Source row remains. |
 | `agent_retarget` | Existing pane, same process-swap mechanism as restart | Relaunch with changed provider/grid configuration and native resume arguments | Retain Harness ID and route; replace process identity, save the new grid launch configuration and any remembered subscription model. Inherits restart's possible fresh fallback. |
 | `agent_update` with `name` | `select-pane -T` changes the pane title | No native conversation rename command | `registry.rename` persists a name override keyed by engine `sessionId`, or `agentId` before a session is bound. Does not replace the row, process or conversation. |
 | `agent_update` with `selectedModel` | Send terminal input in the existing pane | Claude `/model <model>` and `/effort <effort>`; Codex `/model` menus | Keep registry identity, route and process. Runtime profile state/observations are updated and announced; no lifecycle row replacement. |
-| `agents_list` | No mutation | None | Reads `registry.advertised()` (verified available terminal routes). The draft's `includeStopped` merges eligible archive records into the response without adding stale routes back to the live registry. |
+| `agents_list` | No mutation | None | Reads `registry.advertised()` (verified available terminal routes). `includeStopped: true` merges eligible archive records into the response without adding stale routes back to the live registry. |
 | `agent_create_status` | No mutation | None | Reads a separate durable operation receipt, optionally resolving its resulting live row. Does not launch or recreate a registry entry. |
-| `agent_recent` | No mutation | None | Resolves Harness ID to engine `sessionId` and reads stored recaps/recent user asks. Current provider uses the live registry; the draft still needs archive lookup for sessions with no live row. |
+| `agent_recent` | No mutation | None | Resolves Harness ID to engine `sessionId` and reads stored recaps/recent user asks. Providers resolve through the live registry or the archive, so recaps and recent asks work before Open. |
 | `agent_files` | No mutation | None | Reads the live row's `cwd`, then lists project files. No registry change. |
 | `agent_read_file` | No mutation | None | Reads the live row's `cwd`, then a bounded project file/media chunk. No registry change. |
-| `agent_resume` **(proposed contract; partial local draft)** | Keep a verified running runtime; otherwise allocate a new session and pane for saved work | `claude --resume <savedSessionId>` / `codex resume <savedSessionId>`; no fresh fallback | If running, return the existing row. Otherwise restore the **same Harness ID and conversation ID** into the live registry using a new route, cleared old process identity and `launch: starting`; bind the new process when observed. Keep the durable saved record available for failures and future resumes. |
+| `agent_resume` **(this PR)** | Keep a verified running runtime; otherwise allocate a new session and pane for saved work | `claude --resume <savedSessionId>` / `codex resume <savedSessionId>`; no fresh fallback | Return a verified running engine. Otherwise reserve the operation, restore the **same Harness ID and conversation ID** on a new route with no stale PID and `launch: starting`, and await the exact conversation hook from the new process. Keep the saved record on failure. No fresh fallback. |
 
 
 Harness normally creates one tmux session per harness, initially with one
@@ -73,11 +69,11 @@ In-process model changes are in
 
 The live registry is persisted, but it is an index of runtimes and their
 current conversation bindings, not a complete history of every conversation.
-The resume draft adds a separate durable saved-session store. Old pane IDs and
+This PR adds a separate durable saved-session store. Old pane IDs and
 PIDs can be retained there as historical evidence, but must not be reinserted
 as live routes/processes when resuming.
 
-The proposed stop/resume transition is:
+The stop/resume transition is:
 
 1. Save the Harness ID, engine conversation ID, cwd, name, profile and launch
    settings before removing the live row.
@@ -88,13 +84,7 @@ The proposed stop/resume transition is:
 4. Confirm startup separately from pane allocation. Failure retains the saved
    session and reports an error, without silently starting fresh.
 
-There is a related existing transition to resolve: when the engine exits but
-its shell survives, `releaseEngine` retains the row/route as a Terminal and
-clears its conversation binding, PID and observed model/provider fields.
-The draft archives before this conversion, but currently hides that archive
-because a live row has the same Harness ID. The finished design must preserve
-access to the original conversation while distinguishing the surviving shell
-from the running engine. This is still under review.
+When an engine exits into a surviving shell, its conversation is archived under the original Harness ID. `releaseEngine(agentId, true)` removes its process, route and conversation indexes, then preserves that physical shell under a new Terminal ID. No input is sent and no shell process is replaced. The saved conversation remains searchable under the original ID; Open creates a new runtime for it. Archives written by the early prototype behind a same-ID Terminal are separated on startup or Open.
 
 A rename uses the separate name-override file, so it outlives removal from the
 live registry. A new conversation created through `/clear` or `/new` rebinds
@@ -113,7 +103,7 @@ the app tab, Harness ID or tmux route.
 | Claude `SessionEnd` | Requests reconciliation. Process discovery decides whether the engine actually exited; this hook alone does not remove the Harness. |
 | Codex `task_started` / user-message events | Feed turn tracking. In the normalizer, `task_started` marks a pending task and the user-message event opens `turn_started`. |
 | Codex `task_complete` / `turn_aborted` | Close the open turn as `turn_ended`. They do not imply process death. |
-| Engine process exits while its shell survives | `onDormant` calls `releaseEngine`: the existing row becomes a live **Terminal**, clearing its current engine-session binding. The new archive captures the conversation before that conversion. |
+| Engine process exits while its shell survives | Archive the conversation under its original ID; preserve the shell under a new Terminal ID. Send a retained-session snapshot and a separate terminal snapshot. |
 | Terminal route disappears | Reconciliation removes the live row. The new archive retains its saved resume information. |
 
 Evidence: [`notify.mjs`](../../cli/hook/notify.mjs),
@@ -124,58 +114,44 @@ Evidence: [`notify.mjs`](../../cli/hook/notify.mjs),
 | Daemon push | Meaning for clients | tmux / engine action caused by the push |
 | --- | --- | --- |
 | `agent_synced` | Upsert the current Harness row, including identity, launch state and terminal availability. Used for newly observed and updated agents. | None; reports a change already observed or performed. |
-| `agent_deleted` | Remove the row/view from the receiving client's live inventory. The draft's `retained` flag tells desktop to reload the stopped catalog. | None. It is not itself a kill command or proof that the engine exited; terminal unavailability can also produce it. |
+| `agent_deleted` | Remove the row/view from the receiving client's live inventory. The `retained` flag tells desktop to reload the stopped catalog. | None. It is not itself a kill command or proof that the engine exited; terminal unavailability can also produce it. |
 | `agent_renamed` | Update the Harness display name. | None; name/title mutation happened separately. |
 
-For example, `agent_synced` can report an engine becoming a live Terminal in
-desktop, while the device receives `agent_deleted` because it does not list
-bare terminals.
+Natural engine exit sends `agent_synced` with `status: stopped` and no terminal route for the original identity. The separate shell is announced as a Terminal. Devices receive a deletion for the engine because they list live agents. Explicit Stop still sends `agent_deleted` with `retained: true`, so desktop closes its live views and refreshes the saved catalog.
 
-## Consequences for Cmd-P/T
+## Cmd-P/T contract
 
-1. All saved harness sessions use the same row presentation, enter symbol and
-   Open action. Running/stopped is backend state, with no Stopped badge or
-   special Resume action. Enter on a verified running engine attaches to it.
-2. Enter on a retained stopped conversation should use `agent_resume` directly.
-   `agent_restart` is unsuitable because its existing contract permits fresh
-   fallback. Restoring history does not continue an interrupted tool call or
-   automatically send another prompt.
-3. A CLI that exited into its surviving shell still appears as **Terminal**.
-   The archive currently hides entries with the same live Harness ID, so this
-   case is not yet presented as a stopped Claude/Codex row.
-4. Historical vendor conversations that were never retained by Harness are not
-   populated by `agents_list`. Supporting that requires a separate history
-   import/index rather than merely adding a lifecycle verb.
-5. The current recent-summary providers resolve conversation IDs through the
-   live registry. They also need the archive mapping if stopped rows are to
-   show their saved recaps before being resumed.
-6. Launch allocation and confirmed conversation readiness are distinct. The
-   new resume path still uses the generic asynchronous new-pane watcher;
-   an early engine exit becomes a Terminal. A dedicated failed-resume state
-   would make that case clearer than treating allocation as full success.
-7. The draft currently treats any row returned by `registry.byAgent` as
-   attachable. The final resume contract must verify the engine/conversation
-   and runtime, rather than mistake a surviving shell or stale row for the
-   original running agent.
+- All retained harnesses use the same row, Enter glyph and **Open** action. No Stopped badge, separate Resume action or confirmation dialog.
+- Running sessions keep their existing process and conversation; opening multiple app views was already supported.
+- Stopped Claude Code and Codex sessions use native resume with the exact saved conversation. Required cwd, Codex profile, permission mode, DSH and provider configuration are preserved. Missing history, project, DSH or provider credentials produce explicit errors.
+- Pane allocation publishes `launch: starting`. Process discovery alone does not mark strict resume ready. A verified native hook must bind the requested conversation and the readiness poll must observe that same process. A different session ID fails instead of rebinding to a new conversation.
+- Resume does not submit a prompt, restore process memory or promise to continue an interrupted tool call.
+- An explicit **Start New Conversation** action remains available after failure; it is never invoked automatically.
 
-## Resume contract to finish after this review
+## Concurrency and recovery
 
-- A confirmed running instance of the requested conversation: return that
-  runtime for attachment, without restarting it.
-- A retained stopped conversation whose old process is confirmed gone:
-  allocate a new tmux session/pane and run the engine's native resume command.
-  Preserve Harness ID, conversation ID, cwd, profile and launch settings.
-- Repeated requests and lost replies: share one operation receipt and one
-  per-agent launch, rather than create another process.
-- Missing history, an unconfirmed old process, or failed startup: report the
-  specific state. Never silently start a new conversation or overwrite a
-  live terminal. Enter needs no confirmation.
-- A surviving shell remains a separate design case: it must not be reported
-  as successful attachment to the original engine. The existing row-to-
-  terminal conversion and archive visibility need to be resolved together.
-- Publish progress through `agent_synced`; creating a pane alone does not
-  prove that the engine resumed the requested conversation.
+- Resume and Restart share an agent coordinator. Repeated requests for the same operation join; conflicting operations return `AGENT_BUSY`. Stop cancels a pending operation before its next mutation. Retarget checks this coordinator and its terminal control lease.
+- Conversation reservations match the registry's conversation uniqueness constraint, including requests through different retained Harness IDs.
+- `creationId` uses the existing durable receipt protocol and `agent_create_status`. A retry of the same intent returns its recorded result or uncertainty, never a new process.
+- A private, fsynced per-agent `.resume` reservation is written **before** history preparation and tmux allocation. It protects the gap between starting tmux and persisting a new registry row, including requests with a different receipt ID after daemon restart.
+- Confirmed native binding, verified completion or a confirmed stop clears the reservation. Unknown allocation/readiness keeps it; startup failure keeps history and preserves the shell/output when available.
+- On daemon restart, a strict-resume row whose pane disappeared is archived for explicit Open. It never enters restore's fresh fallback. A surviving engine is re-observed, and a surviving shell is separated from the saved conversation.
 
-If a Pause action is added, its product contract should distinguish stopping
-the CLI while retaining the conversation from interrupting a turn. Neither
-turn completion nor an idle CLI should automatically be labelled paused.
+## Scope and review limits
+
+- Conversation resume supports **Claude Code and Codex on tmux**. A retained Terminal can open a new shell; shell process memory is not restored. Other engines' saved rows remain discoverable and return an explicit unsupported-history error on Open.
+- The catalog contains histories retained by this daemon, not vendor conversations that Harness never recorded. Previously deleted histories are not imported.
+- `agent_recent` works from the archive. Other file/model/edit RPCs still use a live row; open the harness before using them.
+- Unknown tmux allocation is intentionally conservative. If the daemon died before any runtime was registered and no native hook later confirms it, the reservation remains blocked for operator investigation. There is no automatic force-clear, destructive retry or terminal takeover in this PR.
+- Unit, protocol, persistence and desktop tests use isolated fixture state. Native Claude/Codex login, trust prompts, and resume hooks across installed vendor versions still need team acceptance testing before merge. The running user daemon is not replaced by verification.
+
+## Suggested manual acceptance checks
+
+1. Open a running Claude Code/Codex harness in a second app pane; its process and conversation should be unchanged.
+2. Stop a disposable harness, find the same name in Cmd-T/P, and press Enter. Check the same conversation, folder and permissions; no confirmation or fresh conversation.
+3. Exit the engine into its shell, start harmless shell work there, then Open the retained conversation. The shell must remain untouched; the resumed engine gets another pane under its original Harness ID.
+4. Press Enter repeatedly or from two clients. Confirm one runtime and identical receipt outcomes.
+5. Make a disposable history unavailable, or make its native resume command fail. Check the explicit error, retained saved row and separate Start New Conversation action.
+6. Restart the daemon during startup and repeat the same receipt. Check confirmed recovery or explicit uncertainty, with no duplicate engine or fresh fallback.
+
+`agent_pause` is outside this PR. Turn completion/cancellation is separate from process stop and conversation resume.
