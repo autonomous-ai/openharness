@@ -90,8 +90,8 @@ Future<bool> resumeStoreHarness(
   return true;
 }
 
-/// The same two launch actions for every installed engine and domain harness.
-/// One target resumes directly; multiple targets always ask which one.
+/// Launch actions on a harness page. Resume appears only with an existing
+/// target: one resumes directly, and multiple targets ask which one.
 class StoreHarnessActions extends StatefulWidget {
   const StoreHarnessActions({
     super.key,
@@ -195,157 +195,175 @@ class _StoreHarnessActionsState extends State<StoreHarnessActions> {
         fontSize: size,
         fontWeight: FontWeight.w600,
       );
-      final tooltip = targets.isEmpty
-          ? 'No harness to resume yet. Start a new harness.'
-          : multiple
+      final tooltip = multiple
           ? 'Choose a harness to resume'
-          : targets.single.tooltip;
+          : targets.firstOrNull?.tooltip ?? '';
       final menuWidth = math.min(420.0, MediaQuery.sizeOf(context).width - 40);
-      return Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        alignment: widget.prominent
-            ? WrapAlignment.center
-            : WrapAlignment.start,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          MenuAnchor(
-            controller: _menu,
-            childFocusNode: _buttonFocus,
-            consumeOutsideTap: true,
-            alignmentOffset: const Offset(0, grid.AppControl.menuGap),
-            style: grid.AppMenu.style(maxHeight: 360),
-            menuChildren: [
-              SizedBox(
-                width: menuWidth,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 12, 18, 8),
-                  child: Text(
-                    'Recent harnesses',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: grid.AppPalette.textSecondary,
-                    ),
-                  ),
-                ),
-              ),
-              for (var i = 0; i < targets.length; i++)
-                SizedBox(
-                  width: menuWidth,
-                  child: Tooltip(
-                    message: targets[i].tooltip,
-                    child: AppMenuItem(
-                      key: ValueKey(
-                        'store-resume-choice:${targets[i].destinationId}',
-                      ),
-                      focusNode: i == 0 ? _firstChoiceFocus : null,
-                      metrics: AppMenuRowMetrics.roomy,
-                      icon: LucideIcons.history300,
-                      label: targets[i].title,
-                      detail: targets[i].detail,
-                      trailing: targets[i].machine.nodeOnline == false
-                          ? Tooltip(
-                              message: 'Machine offline',
-                              child: Icon(
-                                LucideIcons.cloudOff300,
-                                size: 14,
-                                color: grid.AppPalette.textFaint,
-                              ),
-                            )
-                          : null,
-                      onPressed: () => _resume(targets[i]),
-                    ),
-                  ),
-                ),
-            ],
-            builder: (context, controller, _) => Focus(
-              onKeyEvent: (_, event) {
-                if (event is KeyDownEvent &&
-                    event.logicalKey == LogicalKeyboardKey.arrowDown &&
-                    multiple &&
-                    !_busy) {
-                  _openMenu();
-                  return KeyEventResult.handled;
-                }
-                return KeyEventResult.ignored;
-              },
-              child: Tooltip(
-                message: tooltip,
-                child: OutlinedButton(
-                  key: ValueKey('store-resume:${widget.harnessId}'),
-                  focusNode: _buttonFocus,
-                  onPressed: _busy || targets.isEmpty
-                      ? null
-                      : () {
-                          if (multiple) {
-                            if (controller.isOpen) {
-                              controller.close();
-                            } else {
-                              _openMenu();
-                            }
-                          } else {
-                            _resume(targets.single);
-                          }
-                        },
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: Size(0, height),
-                    padding: padding,
-                    foregroundColor: targets.isEmpty
-                        ? grid.AppPalette.textPrimary
-                        : grid.AppPalette.windowBg,
-                    backgroundColor: targets.isEmpty
-                        ? Colors.transparent
-                        : grid.AppPalette.textPrimary,
-                    side: BorderSide(color: grid.AppPalette.divider),
-                    textStyle: textStyle,
-                    shape: const StadiumBorder(),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Flexible(child: Text('Resume Harness')),
-                      if (multiple) ...[
-                        const SizedBox(width: 6),
-                        Icon(
-                          LucideIcons.chevronDown300,
-                          key: ValueKey(
-                            'store-resume-chevron:${widget.harnessId}',
+      // Measure the longer label at the user's text size. Matching fixed widths
+      // keep the pair balanced, while Wrap stacks them on narrow pages.
+      final label = TextPainter(
+        text: TextSpan(text: 'Resume Harness', style: textStyle),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout();
+      final preferredWidth = math.max(
+        widget.prominent ? 190.0 : 145.0,
+        label.width.ceilToDouble() + padding.horizontal + (multiple ? 20 : 0),
+      );
+      label.dispose();
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final buttonWidth = math.min(preferredWidth, constraints.maxWidth);
+          return Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: widget.prominent
+                ? WrapAlignment.center
+                : WrapAlignment.start,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (targets.isNotEmpty)
+                MenuAnchor(
+                  controller: _menu,
+                  childFocusNode: _buttonFocus,
+                  consumeOutsideTap: true,
+                  alignmentOffset: const Offset(0, grid.AppControl.menuGap),
+                  style: grid.AppMenu.style(maxHeight: 360),
+                  menuChildren: [
+                    SizedBox(
+                      width: menuWidth,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(18, 12, 18, 8),
+                        child: Text(
+                          'Recent harnesses',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: grid.AppPalette.textSecondary,
                           ),
-                          size: 14,
                         ),
-                      ],
-                    ],
+                      ),
+                    ),
+                    for (var i = 0; i < targets.length; i++)
+                      SizedBox(
+                        width: menuWidth,
+                        child: Tooltip(
+                          message: targets[i].tooltip,
+                          child: AppMenuItem(
+                            key: ValueKey(
+                              'store-resume-choice:${targets[i].destinationId}',
+                            ),
+                            focusNode: i == 0 ? _firstChoiceFocus : null,
+                            metrics: AppMenuRowMetrics.roomy,
+                            icon: LucideIcons.history300,
+                            label: targets[i].title,
+                            detail: targets[i].detail,
+                            trailing: targets[i].machine.nodeOnline == false
+                                ? Tooltip(
+                                    message: 'Machine offline',
+                                    child: Icon(
+                                      LucideIcons.cloudOff300,
+                                      size: 14,
+                                      color: grid.AppPalette.textFaint,
+                                    ),
+                                  )
+                                : null,
+                            onPressed: () => _resume(targets[i]),
+                          ),
+                        ),
+                      ),
+                  ],
+                  builder: (context, controller, _) => Focus(
+                    onKeyEvent: (_, event) {
+                      if (event is KeyDownEvent &&
+                          event.logicalKey == LogicalKeyboardKey.arrowDown &&
+                          multiple &&
+                          !_busy) {
+                        _openMenu();
+                        return KeyEventResult.handled;
+                      }
+                      return KeyEventResult.ignored;
+                    },
+                    child: Tooltip(
+                      message: tooltip,
+                      child: OutlinedButton(
+                        key: ValueKey('store-resume:${widget.harnessId}'),
+                        focusNode: _buttonFocus,
+                        onPressed: _busy || targets.isEmpty
+                            ? null
+                            : () {
+                                if (multiple) {
+                                  if (controller.isOpen) {
+                                    controller.close();
+                                  } else {
+                                    _openMenu();
+                                  }
+                                } else {
+                                  _resume(targets.single);
+                                }
+                              },
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: Size(buttonWidth, height),
+                          maximumSize: Size(buttonWidth, double.infinity),
+                          padding: padding,
+                          foregroundColor: targets.isEmpty
+                              ? grid.AppPalette.textPrimary
+                              : grid.AppPalette.windowBg,
+                          backgroundColor: targets.isEmpty
+                              ? Colors.transparent
+                              : grid.AppPalette.textPrimary,
+                          side: BorderSide(color: grid.AppPalette.divider),
+                          textStyle: textStyle,
+                          shape: const StadiumBorder(),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Flexible(child: Text('Resume Harness')),
+                            if (multiple) ...[
+                              const SizedBox(width: 6),
+                              Icon(
+                                LucideIcons.chevronDown300,
+                                key: ValueKey(
+                                  'store-resume-chevron:${widget.harnessId}',
+                                ),
+                                size: 14,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ),
+              FilledButton(
+                key:
+                    widget.newButtonKey ??
+                    ValueKey('store-new:${widget.harnessId}'),
+                onPressed: _busy || widget.onNew == null
+                    ? null
+                    : () {
+                        _menu.close();
+                        unawaited(_run(widget.onNew!));
+                      },
+                style: FilledButton.styleFrom(
+                  minimumSize: Size(buttonWidth, height),
+                  maximumSize: Size(buttonWidth, double.infinity),
+                  padding: padding,
+                  foregroundColor: targets.isEmpty
+                      ? grid.AppPalette.windowBg
+                      : grid.AppPalette.textPrimary,
+                  backgroundColor: targets.isEmpty
+                      ? grid.AppPalette.textPrimary
+                      : grid.AppSurface.selectedFill,
+                  textStyle: textStyle,
+                  shape: const StadiumBorder(),
+                ),
+                child: const Text('New Harness'),
               ),
-            ),
-          ),
-          FilledButton(
-            key:
-                widget.newButtonKey ??
-                ValueKey('store-new:${widget.harnessId}'),
-            onPressed: _busy || widget.onNew == null
-                ? null
-                : () {
-                    _menu.close();
-                    unawaited(_run(widget.onNew!));
-                  },
-            style: FilledButton.styleFrom(
-              minimumSize: Size(0, height),
-              padding: padding,
-              foregroundColor: targets.isEmpty
-                  ? grid.AppPalette.windowBg
-                  : grid.AppPalette.textPrimary,
-              backgroundColor: targets.isEmpty
-                  ? grid.AppPalette.textPrimary
-                  : grid.AppSurface.selectedFill,
-              textStyle: textStyle,
-              shape: const StadiumBorder(),
-            ),
-            child: const Text('New Harness'),
-          ),
-        ],
+            ],
+          );
+        },
       );
     },
   );

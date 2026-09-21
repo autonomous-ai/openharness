@@ -4,22 +4,23 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/skeleton.dart';
-import '../widgets/engine_identity.dart';
+import 'store_collections.dart';
 import 'store_editorial.dart';
 import 'store_exploration.dart';
 import 'store_explore_widgets.dart';
+import 'store_featured_art.dart';
+import 'store_listing.dart';
 import 'store_models.dart';
 
-/// Invitations to explore, backed by the catalog on this machine. No invented
-/// availability, popularity, or ratings; each preview opens its actual harness.
-class StoreDiscover extends StatefulWidget {
+/// Three editorial features invite exploration before the icon collections. The catalog itself
+/// uses the same recognizable icons and rows as categories and search.
+class StoreDiscover extends StatelessWidget {
   const StoreDiscover({
     super.key,
     required this.entries,
     required this.loaded,
     required this.ratingFor,
     required this.onOpen,
-    required this.actionsFor,
     required this.onCategory,
     required this.onAll,
     required this.onEngines,
@@ -29,65 +30,41 @@ class StoreDiscover extends StatefulWidget {
   final bool loaded;
   final StoreRating Function(DshEntry) ratingFor;
   final ValueChanged<String> onOpen;
-  final Widget Function(DshEntry) actionsFor;
   final ValueChanged<String> onCategory;
   final VoidCallback onAll;
   final VoidCallback onEngines;
 
   @override
-  State<StoreDiscover> createState() => _StoreDiscoverState();
-}
-
-class _StoreDiscoverState extends State<StoreDiscover> {
-  final _paths = GlobalKey();
-
-  void _explore() {
-    final target = _paths.currentContext;
-    if (target == null) return;
-    Scrollable.ensureVisible(
-      target,
-      alignment: .03,
-      duration: MediaQuery.disableAnimationsOf(context)
-          ? Duration.zero
-          : const Duration(milliseconds: 350),
-      curve: Curves.easeOutCubic,
-    );
-  }
-
-  @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final byId = {for (final entry in widget.entries) entry.id: entry};
-    final samples = [
-      for (final id in [
-        'autonomous/blender',
-        'autonomous/text-to-cad',
-        'autonomous/mujoco',
-        'autonomous/godogen',
-        'autonomous/phaser',
-        'autonomous/marimo',
-      ])
-        ?byId[id],
-    ].take(3).toList();
+    final byId = {for (final entry in entries) entry.id: entry};
+    // Editorial stories share an art direction and open actual catalog entries.
+    final features = [
+      ?(byId['codex'] ?? byId['claude']),
+      ?byId['autonomous/blender'],
+      ?(byId['autonomous/autonomous-circuit'] ?? byId['autonomous/copper']),
+    ];
     final engines = [
       for (final id in ['claude', 'codex', 'cursor']) ?byId[id],
     ];
-    final crafts = widget.entries
-        .where((e) => !e.isEngine && !e.isViewerPackage)
+    final crafts = entries
+        .where((entry) => !entry.isEngine && !entry.isViewerPackage)
         .toList();
     const picks = [
       'autonomous/text-to-cad',
-      'autonomous/score',
+      'autonomous/strudel',
       'autonomous/marimo',
-      'autonomous/mujoco',
       'autonomous/remotion',
       'autonomous/roundtable',
+      'autonomous/marp',
     ];
     crafts.sort((a, b) {
       final ai = picks.indexOf(a.id), bi = picks.indexOf(b.id);
       final rank = (ai < 0 ? 999 : ai).compareTo(bi < 0 ? 999 : bi);
       return rank == 0 ? a.name.compareTo(b.name) : rank;
     });
+    final recent = storeRecentlyUpdated(crafts).take(6).toList();
+    final topRated = storeTopRated(entries, ratingFor).take(6).toList();
     final categories = [
       for (final name in [...storeCategoryDomains.keys, 'Other'])
         if (name != 'Coding' &&
@@ -106,52 +83,151 @@ class _StoreDiscoverState extends State<StoreDiscover> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (engines.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    _CodingStart(
-                      entries: engines,
-                      onOpen: widget.onOpen,
-                      actionsFor: widget.actionsFor,
-                      onAll: widget.onEngines,
-                    ),
-                  ],
-                  const SizedBox(height: 22),
-                  _CuriosityHero(
-                    samples: samples,
-                    onOpen: widget.onOpen,
-                    onExplore: categories.isEmpty ? widget.onEngines : _explore,
+                  Column(
+                    key: const ValueKey('store-curiosity-hero'),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Follow your curiosity.',
+                        style: TextStyle(
+                          fontSize: 34,
+                          height: 1.15,
+                          letterSpacing: -1.1,
+                          fontWeight: FontWeight.w700,
+                          color: grid.AppPalette.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Start with code. Build across disciplines.',
+                        style: TextStyle(
+                          fontSize: 15,
+                          height: 1.4,
+                          color: grid.AppPalette.textSecondary,
+                        ),
+                      ),
+                    ],
                   ),
-                  if (categories.isNotEmpty) ...[
-                    const SizedBox(height: 40),
-                    StoreExploreHeading(
-                      key: _paths,
-                      title: 'Choose your next superpower.',
-                      subtitle: 'Same curiosity. New tools. What do you want to make next?',
-                      action: 'Browse all',
-                      onAction: widget.onAll,
-                    ),
-                    const SizedBox(height: 22),
+                  if (features.isNotEmpty) ...[
+                    const SizedBox(height: 24),
                     LayoutBuilder(
                       builder: (context, constraints) {
                         final scale =
                             MediaQuery.textScalerOf(context).scale(14) / 14;
-                        final columns =
-                            constraints.maxWidth >= 1080 && scale <= 1.25
-                            ? 3
-                            : constraints.maxWidth >= 620 && scale <= 1.5
-                            ? 2
-                            : 1;
+                        final wide =
+                            constraints.maxWidth >= 980 &&
+                            scale <= 1.25 &&
+                            features.length == 3;
+                        final width = wide
+                            ? (constraints.maxWidth - 40) / 3
+                            : (constraints.maxWidth * .86).clamp(280.0, 520.0);
+                        final cards = [
+                          for (final entry in features)
+                            SizedBox(
+                              width: width,
+                              child: _FeaturedStory(
+                                entry: entry,
+                                onTap: () => onOpen(entry.id),
+                              ),
+                            ),
+                        ];
+                        return SingleChildScrollView(
+                          key: const PageStorageKey('store-featured-scroll'),
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              for (var i = 0; i < cards.length; i++) ...[
+                                if (i > 0) const SizedBox(width: 20),
+                                cards[i],
+                              ],
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                  if (engines.isNotEmpty) ...[
+                    const SizedBox(height: 24),
+                    StoreExploreHeading(
+                      title: 'Your starting point: code.',
+                      action: 'All coding agents',
+                      onAction: onEngines,
+                    ),
+                    const SizedBox(height: 6),
+                    StoreListing(
+                      entries: engines,
+                      ratingFor: ratingFor,
+                      onOpen: onOpen,
+                    ),
+                  ],
+                  if (recent.isNotEmpty) ...[
+                    const SizedBox(height: 28),
+                    const StoreExploreHeading(
+                      title: 'New & updated',
+                      subtitle:
+                          'The latest additions and updates in this release.',
+                    ),
+                    const SizedBox(height: 8),
+                    StoreListing(
+                      key: const ValueKey('store-recent-collection'),
+                      rowKeyPrefix: 'store-recent',
+                      entries: recent,
+                      ratingFor: ratingFor,
+                      onOpen: onOpen,
+                    ),
+                  ],
+                  if (topRated.length >= 2) ...[
+                    const SizedBox(height: 28),
+                    const StoreExploreHeading(
+                      title: 'Top rated',
+                      subtitle: 'Rated by the people building with them.',
+                    ),
+                    const SizedBox(height: 8),
+                    StoreListing(
+                      key: const ValueKey('store-top-rated-collection'),
+                      rowKeyPrefix: 'store-top-rated',
+                      showRanks: true,
+                      entries: topRated,
+                      ratingFor: ratingFor,
+                      onOpen: onOpen,
+                    ),
+                  ],
+                  if (crafts.isNotEmpty) ...[
+                    const SizedBox(height: 32),
+                    StoreExploreHeading(
+                      title: 'A little beyond your comfort zone.',
+                      subtitle: 'Pick a tool. Try a small idea. See where it takes you.',
+                      action: 'Browse all',
+                      onAction: onAll,
+                    ),
+                    const SizedBox(height: 8),
+                    StoreListing(
+                      entries: crafts.take(6).toList(),
+                      ratingFor: ratingFor,
+                      onOpen: onOpen,
+                    ),
+                    const SizedBox(height: 32),
+                    const StoreExploreHeading(title: 'Explore disciplines'),
+                    const SizedBox(height: 16),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final scale =
+                            MediaQuery.textScalerOf(context).scale(14) / 14;
+                        final columns = (constraints.maxWidth / (320 * scale))
+                            .floor()
+                            .clamp(1, 3);
                         final width =
-                            (constraints.maxWidth - (columns - 1) * 20) /
+                            (constraints.maxWidth - (columns - 1) * 16) /
                             columns;
                         return Wrap(
-                          spacing: 20,
-                          runSpacing: 20,
+                          spacing: 16,
+                          runSpacing: 16,
                           children: [
                             for (final name in categories)
                               SizedBox(
                                 width: width,
-                                child: _CuriosityPath(
+                                child: _DisciplineLink(
                                   key: ValueKey('store-category:$name'),
                                   name: name,
                                   entries: crafts
@@ -160,32 +236,35 @@ class _StoreDiscoverState extends State<StoreDiscover> {
                                             storeCategoryFor(entry) == name,
                                       )
                                       .toList(),
-                                  onTap: () => widget.onCategory(name),
+                                  onTap: () => onCategory(name),
                                 ),
                               ),
                           ],
                         );
                       },
                     ),
-                    const SizedBox(height: 42),
-                    const StoreExploreHeading(
-                      title: 'It started with a prompt.',
-                      subtitle: 'Borrow a starting point. Make it your own.',
+                    const SizedBox(height: 32),
+                    Text(
+                      'For polymaths in the making.',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: grid.AppPalette.textPrimary,
+                      ),
                     ),
-                    const SizedBox(height: 22),
-                    StoreProjectGrid(
-                      entries: crafts.take(6).toList(),
-                      showExamples: true,
-                      ratingFor: widget.ratingFor,
-                      onOpen: widget.onOpen,
-                      actionsFor: widget.actionsFor,
+                    const SizedBox(height: 6),
+                    Text(
+                      'Learn the next craft through the things you build.',
+                      style: TextStyle(
+                        fontSize: 14,
+                        height: 1.5,
+                        color: grid.AppPalette.textSecondary,
+                      ),
                     ),
-                    const SizedBox(height: 40),
-                    const StoreLearningNote(),
-                  ] else if (!widget.loaded) ...[
+                  ] else if (!loaded) ...[
                     const SizedBox(height: 32),
                     const SkeletonBlock(
-                      child: Skeleton(height: 240, radius: 20),
+                      child: Skeleton(height: 160, radius: 16),
                     ),
                   ] else ...[
                     const SizedBox(height: 32),
@@ -208,305 +287,101 @@ class _StoreDiscoverState extends State<StoreDiscover> {
   }
 }
 
-class _CuriosityHero extends StatelessWidget {
-  const _CuriosityHero({
-    required this.samples,
-    required this.onOpen,
-    required this.onExplore,
-  });
-  final List<DshEntry> samples;
-  final ValueChanged<String> onOpen;
-  final VoidCallback onExplore;
-
-  @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, box) {
-      final narrow =
-          box.maxWidth < 650 || MediaQuery.textScalerOf(context).scale(14) > 20;
-      final compact = box.maxWidth < 1000;
-      // The robot fits the portrait tile; wide artwork keeps its composition
-      // and lettering in the landscape tiles beside it.
-      final portrait =
-          samples
-              .where((entry) => entry.id == 'autonomous/mujoco')
-              .firstOrNull ??
-          samples.firstOrNull;
-      final landscapes = samples.where((entry) => entry != portrait).toList();
-      const ink = Color(0xff182b24);
-      final copy = Padding(
-        padding: EdgeInsets.all(compact ? 28 : 38),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'FOR POLYMATHS IN THE MAKING',
-              style: TextStyle(
-                fontSize: 10,
-                letterSpacing: 1.6,
-                fontWeight: FontWeight.w700,
-                color: Color(0xff45543a),
-              ),
-            ),
-            const SizedBox(height: 24),
-            Text(
-              'Follow your\ncuriosity.',
-              style: TextStyle(
-                fontSize: compact ? 43 : 54,
-                height: .98,
-                letterSpacing: -2.5,
-                fontWeight: FontWeight.w700,
-                color: ink,
-              ),
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'Start with code. Build across disciplines.',
-              style: TextStyle(
-                fontSize: 16,
-                height: 1.4,
-                fontWeight: FontWeight.w600,
-                color: ink,
-              ),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              'Your ideas can take you into unfamiliar crafts.\nThis is a place to follow them.',
-              style: TextStyle(
-                fontSize: 14,
-                height: 1.6,
-                color: Color(0xff45543a),
-              ),
-            ),
-            const SizedBox(height: 26),
-            FilledButton.icon(
-              onPressed: onExplore,
-              iconAlignment: IconAlignment.end,
-              style: FilledButton.styleFrom(
-                backgroundColor: ink,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 22,
-                  vertical: 18,
-                ),
-              ),
-              icon: const Icon(LucideIcons.arrowDown300, size: 16),
-              label: const Text('Explore disciplines'),
-            ),
-          ],
-        ),
-      );
-      final art = samples.isEmpty
-          ? null
-          : Padding(
-              padding: const EdgeInsets.all(24),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Expanded(
-                    child: _HeroProject(
-                      entry: portrait!,
-                      tall: samples.length > 1,
-                      onTap: () => onOpen(portrait.id),
-                    ),
-                  ),
-                  if (samples.length > 1) ...[
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        children: [
-                          for (final entry in landscapes) ...[
-                            _HeroProject(
-                              entry: entry,
-                              onTap: () => onOpen(entry.id),
-                            ),
-                            if (entry != landscapes.last)
-                              const SizedBox(height: 14),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            );
-      return Container(
-        key: const ValueKey('store-curiosity-hero'),
-        decoration: BoxDecoration(
-          color: const Color(0xffdfefbc),
-          borderRadius: BorderRadius.circular(24),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: narrow || art == null
-            ? Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [copy, ?art],
-              )
-            : Row(
-                children: [
-                  Expanded(flex: 11, child: copy),
-                  Expanded(flex: 10, child: art),
-                ],
-              ),
-      );
-    },
-  );
-}
-
-class _HeroProject extends StatelessWidget {
-  const _HeroProject({
-    required this.entry,
-    required this.onTap,
-    this.tall = false,
-  });
+class _FeaturedStory extends StatelessWidget {
+  const _FeaturedStory({required this.entry, required this.onTap});
   final DshEntry entry;
   final VoidCallback onTap;
-  final bool tall;
 
   @override
-  Widget build(BuildContext context) => Material(
-    key: ValueKey('store-feature:${entry.id}'),
-    color: const Color(0xff22302b),
-    borderRadius: BorderRadius.circular(14),
-    clipBehavior: Clip.antiAlias,
-    child: InkWell(
+  Widget build(BuildContext context) {
+    final category = entry.isEngine
+        ? 'Coding'
+        : entry.id == 'autonomous/blender'
+        ? 'Design'
+        : 'Engineering';
+    final headline = switch (category) {
+      'Coding' => 'Build what comes next.',
+      'Design' => 'Give your ideas shape.',
+      _ => 'Build something real.',
+    };
+    final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+    return StoreExploreCard(
+      key: ValueKey('store-feature:${entry.id}'),
+      color: storeDiscipline(category).color,
       onTap: onTap,
+      semanticLabel: 'Explore ${entry.name}',
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          AspectRatio(
-            aspectRatio: tall ? .94 : 1.65,
-            child: StoreProjectArt(entry: entry),
-          ),
           Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
+                Text(
+                  category.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 10,
+                    letterSpacing: 1.1,
+                    fontWeight: FontWeight.w700,
+                    color: grid.AppPalette.accentOnSurface,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 50 * scale,
                   child: Text(
-                    entry.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
+                    headline,
+                    style: TextStyle(
+                      fontSize: 21,
+                      height: 1.15,
+                      letterSpacing: -.4,
+                      fontWeight: FontWeight.w700,
+                      color: grid.AppPalette.textPrimary,
                     ),
                   ),
                 ),
-                const SizedBox(width: 4),
-                const Icon(
-                  LucideIcons.arrowUpRight300,
-                  size: 14,
-                  color: Color(0xffdfefbc),
+                Row(
+                  children: [
+                    StoreAppIcon(entry: entry, size: 24),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Explore ${entry.name}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: grid.AppPalette.textSecondary,
+                        ),
+                      ),
+                    ),
+                    Icon(
+                      LucideIcons.arrowRight300,
+                      size: 15,
+                      color: grid.AppPalette.textSecondary,
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
-        ],
-      ),
-    ),
-  );
-}
-
-class _CodingStart extends StatelessWidget {
-  const _CodingStart({
-    required this.entries,
-    required this.onOpen,
-    required this.actionsFor,
-    required this.onAll,
-  });
-  final List<DshEntry> entries;
-  final ValueChanged<String> onOpen;
-  final Widget Function(DshEntry) actionsFor;
-  final VoidCallback onAll;
-
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      Row(
-        children: [
-          Expanded(
-            child: Text(
-              'Your starting point: code.',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: grid.AppPalette.textSecondary,
-              ),
+          AspectRatio(
+            aspectRatio: 2,
+            child: StoreFeaturedArt(
+              key: ValueKey('store-feature-art:${entry.id}'),
+              category: category,
+              entry: entry,
             ),
           ),
-          TextButton(onPressed: onAll, child: const Text('All coding agents')),
         ],
       ),
-      const SizedBox(height: 8),
-      LayoutBuilder(
-        builder: (context, box) {
-          final columns =
-              box.maxWidth >= 1020 &&
-                  MediaQuery.textScalerOf(context).scale(14) <= 18
-              ? 3
-              : 1;
-          final width = (box.maxWidth - (columns - 1) * 12) / columns;
-          return Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: [
-              for (final entry in entries)
-                SizedBox(
-                  width: width,
-                  child: Material(
-                    key: ValueKey('store-card:${entry.id}'),
-                    color: grid.AppSurface.recess,
-                    borderRadius: BorderRadius.circular(14),
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      onTap: () => onOpen(entry.id),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                EngineMark(
-                                  engine: entry.id,
-                                  displayName: entry.name,
-                                  size: 30,
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    entry.name,
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      color: grid.AppPalette.textPrimary,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            actionsFor(entry),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          );
-        },
-      ),
-    ],
-  );
+    );
+  }
 }
 
-class _CuriosityPath extends StatelessWidget {
-  const _CuriosityPath({
+class _DisciplineLink extends StatelessWidget {
+  const _DisciplineLink({
     super.key,
     required this.name,
     required this.entries,
@@ -520,90 +395,47 @@ class _CuriosityPath extends StatelessWidget {
   Widget build(BuildContext context) {
     final discipline = storeDiscipline(name);
     final example = discipline.example(entries)!;
-    final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
-    final marks = [
-      example,
-      ...entries.where((entry) => entry.id != example.id),
-    ].take(3);
     return StoreExploreCard(
       color: discipline.color,
       onTap: onTap,
       semanticLabel: 'Explore $name',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          AspectRatio(aspectRatio: 2.1, child: StoreProjectArt(entry: example)),
-          Container(height: 3, color: discipline.color),
-          SizedBox(
-            height: 151 * scale,
-            child: Padding(
-              padding: const EdgeInsets.all(20),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Row(
+          children: [
+            StoreAppIcon(entry: example, size: 48),
+            const SizedBox(width: 14),
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 22,
-                            height: 1.15,
-                            letterSpacing: -.4,
-                            fontWeight: FontWeight.w700,
-                            color: grid.AppPalette.textPrimary,
-                          ),
-                        ),
-                      ),
-                      Icon(
-                        LucideIcons.arrowUpRight300,
-                        size: 18,
-                        color: grid.AppPalette.textSecondary,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
                   Text(
-                    discipline.headline.replaceAll('\n', ' '),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
+                    name,
                     style: TextStyle(
-                      fontSize: 13,
-                      height: 1.4,
-                      color: grid.AppPalette.textSecondary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: grid.AppPalette.textPrimary,
                     ),
                   ),
-                  const Spacer(),
-                  Row(
-                    children: [
-                      for (final entry in marks) ...[
-                        Tooltip(
-                          message: entry.name,
-                          child: EngineMark(
-                            engine: entry.id,
-                            displayName: entry.name,
-                            size: 24,
-                          ),
-                        ),
-                        const SizedBox(width: 7),
-                      ],
-                      const Spacer(),
-                      Text(
-                        '${entries.length} ${entries.length == 1 ? 'harness' : 'harnesses'}',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: grid.AppPalette.textSecondary,
-                        ),
-                      ),
-                    ],
+                  const SizedBox(height: 5),
+                  Text(
+                    '${entries.length} ${entries.length == 1 ? 'harness' : 'harnesses'}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: grid.AppPalette.textSecondary,
+                    ),
                   ),
                 ],
               ),
             ),
-          ),
-        ],
+            const SizedBox(width: 8),
+            Icon(
+              LucideIcons.chevronRight300,
+              size: 16,
+              color: grid.AppPalette.textSecondary,
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -195,6 +195,38 @@ const storeStories = <String, StoreStory>{
   ),
 };
 
+/// Brief captions for icon lists. Full technical descriptions stay on each
+/// harness page and in package metadata; community tools retain their own copy.
+const _browseBenefits = <String, String>{
+  'autonomous/ableton-ai': 'Turn a small loop into a whole mood.',
+  'autonomous/autoresearch-mlx': 'Train, compare, and follow the evidence.',
+  'autonomous/bonsai-mcp': 'Shape a building. Explore its spaces.',
+  'autonomous/comfy-mcp': 'Explore images. Keep the recipe.',
+  'autonomous/creative-direction': 'Give your next idea an identity.',
+  'autonomous/dimos': 'Send a rover on a new adventure.',
+  'autonomous/drone-pilot': 'Plan a flight. See the bigger picture.',
+  'autonomous/foam-agent': 'Change a shape. Follow the flow.',
+  'autonomous/freecad': 'Make a custom part that fits your idea.',
+  'autonomous/game-master': 'Invent a game. Play with the rules.',
+  'autonomous/generative-art': 'Draw with code. Explore the variations.',
+  'autonomous/godogen': 'Build a world you can play.',
+  'autonomous/home-assistant': 'Make your home work your way.',
+  'autonomous/jev-browser': 'Turn web pages into answers you can use.',
+  'autonomous/juce-agent-toolkit': 'Shape a synth. Find your sound.',
+  'autonomous/kicad': 'Design a board. Explore every connection.',
+  'autonomous/lab-bench': 'Turn a good question into an experiment.',
+  'autonomous/mlx-lm': 'Explore language models on your Mac.',
+  'autonomous/openscad': 'Code a shape. Make it your own.',
+  'autonomous/orca-slicer': 'Prepare your next 3D print.',
+  'autonomous/score': 'Put the music in your head on the page.',
+  'autonomous/simskill': 'Change the lights. Make a city flow.',
+  'autonomous/vllm': 'Put your own models to work.',
+  'autonomous/voxel-worlds': 'Build a place you can step inside.',
+};
+
+String storeBrowseBenefit(DshEntry entry) =>
+    _browseBenefits[entry.id] ?? storeBenefit(entry);
+
 String storeBenefit(DshEntry entry) =>
     storeStories[entry.id]?.benefit ??
     entry.description ??
@@ -212,6 +244,7 @@ bool storeMatches(DshEntry entry, String query) {
     entry.description,
     entry.tagline,
     storeBenefit(entry),
+    storeBrowseBenefit(entry),
     ...?storeStories[entry.id]?.prompts,
     storeProjectExamples[entry.id]?.prompt,
     storeProjectExamples[entry.id]?.title,
