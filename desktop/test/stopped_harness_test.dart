@@ -11,13 +11,14 @@ import 'package:harness/state/swarm_search.dart';
 
 import 'support/restart_connection.dart';
 import 'swarm_interactions_test.dart' show chord;
-import 'swarm_screen_test.dart' show mount;
+import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late AppNotifier app;
   late RestartConnection connection;
+  var disposed = false;
   const stopped = Agent(
     id: 'saved',
     name: 'Saved work',
@@ -27,11 +28,14 @@ void main() {
     project: AgentProject(name: 'Project', cwd: '/work/project'),
   );
   setUp(() {
+    disposed = false;
     connection = RestartConnection();
     app = createApp(connectionForTest: (_) => connection);
     app.machineStates['m']!.agents.add(stopped);
   });
-  tearDown(() => app.dispose());
+  tearDown(() {
+    if (!disposed) app.dispose();
+  });
 
   SwarmDestination row() =>
       swarmDestinations(app).firstWhere((row) => row.agentId == stopped.id);
@@ -184,6 +188,74 @@ void main() {
     },
   );
 
+  test('native login or hook review is visible while conversation confirmation is pending', () async {
+    final opening = activateSwarmSearchSelection(
+      app,
+      SwarmSearchSelection(row()),
+      destinationSwarmId: app.activeSwarmId,
+      placement: HarnessPlacement.currentTab,
+    );
+    await app.handleEventForTest('m', {
+      'type': 'agent_synced',
+      'payload': {
+        'agent': {
+          'id': 'saved',
+          'name': 'Saved work',
+          'engine': 'codex',
+          'sessionId': 'original-conversation',
+          'launch': {'state': 'starting'},
+          'terminal': {'available': true},
+        },
+      },
+    });
+    expect(await opening, isTrue);
+    expect(app.allPanes.single.agentId, 'saved');
+    expect(connection.restartReplies.single.isCompleted, isFalse);
+    connection.restartReplies.single.complete(
+      restartReceipt(
+        connection.requests.single['creationId'] as String,
+        agentId: 'saved',
+        sessionId: 'original-conversation',
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(connection.types, ['agent_resume']);
+  });
+
+  test(
+    'a different conversation push cannot open an unconfirmed resume',
+    () async {
+      final opening = activateSwarmSearchSelection(
+        app,
+        SwarmSearchSelection(row()),
+        destinationSwarmId: app.activeSwarmId,
+        placement: HarnessPlacement.newTab,
+      );
+      final failed = expectLater(opening, throwsA(isA<SwarmResumeFailure>()));
+      await app.handleEventForTest('m', {
+        'type': 'agent_synced',
+        'payload': {
+          'agent': {
+            'id': 'saved',
+            'name': 'Different work',
+            'engine': 'codex',
+            'sessionId': 'other-conversation',
+            'launch': {'state': 'starting'},
+            'terminal': {'available': true},
+          },
+        },
+      });
+      expect(app.allPanes, isEmpty);
+      connection.restartReplies.single.complete({
+        'creationId': connection.requests.single['creationId'],
+        'state': 'failed',
+        'failure': {'code': 'RESUME_SESSION_MISMATCH'},
+      });
+      await failed;
+      expect(app.allPanes, isEmpty);
+    },
+  );
+
   test('never accepts a fresh conversation as a successful resume', () async {
     final opening = app.resumeAgent('m', 'saved');
     connection.restartReplies.single.complete(
@@ -221,6 +293,48 @@ void main() {
       expect(connection.requests, isEmpty);
     },
   );
+
+  for (final key in [LogicalKeyboardKey.keyP, LogicalKeyboardKey.keyT]) {
+    testWidgets(
+      '${key.keyLabel} opens retained work with Enter and preserves other panes',
+      (tester) async {
+        final existing = app.adoptSessionForTest(terminal('a0', []));
+        final originalTab = app.activeSwarmId;
+        await mount(tester, app);
+        await chord(tester, key);
+        await tester.pump();
+        await tester.enterText(
+          find.byKey(const ValueKey('swarm-search-input')),
+          'Saved work',
+        );
+        await tester.pump();
+        expect(find.textContaining('Stopped'), findsNothing);
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump();
+        expect(connection.types, ['agent_resume']);
+        expect(find.byType(AlertDialog), findsNothing);
+        connection.restartReplies.single.complete(
+          restartReceipt(
+            connection.requests.single['creationId'] as String,
+            agentId: 'saved',
+            sessionId: 'original-conversation',
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(app.allPanes.any((pane) => pane.agentId == 'saved'), isTrue);
+        expect(app.allPanes.contains(existing), isTrue);
+        expect(
+          app.activeSwarmId == originalTab,
+          key == LogicalKeyboardKey.keyP,
+        );
+        expect(connection.types, ['agent_resume']);
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+        disposed = true;
+      },
+    );
+  }
 
   testWidgets('Enter submits resume immediately with no confirmation dialog', (
     tester,

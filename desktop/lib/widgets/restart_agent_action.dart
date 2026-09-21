@@ -204,7 +204,7 @@ class _RestartAgentPromptState extends State<_RestartAgentPrompt> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Text(
-                        _terminal ? 'Restart Terminal' : 'Restart Agent',
+                        _terminal ? 'Restart Terminal' : 'Restart Harness',
                         style: boxMonoStyle(size: 12, color: kBoxFaint),
                       ),
                       const SizedBox(height: 12),
@@ -224,7 +224,7 @@ class _RestartAgentPromptState extends State<_RestartAgentPrompt> {
                       if (!_confirmAgain) ...[
                         const SizedBox(height: 10),
                         Text(
-                          _terminal ? 'Starts a fresh shell in the same pane.' : 'Relaunches the agent in the same pane and tries to resume its conversation.',
+                          _terminal ? 'Starts a fresh shell in the same pane.' : 'Restarts the harness in the same pane and tries to resume its conversation.',
                           style: boxMonoStyle(size: 12, color: Colors.white70),
                         ),
                         if (_busy) ...[

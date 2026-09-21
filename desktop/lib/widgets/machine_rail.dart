@@ -1229,7 +1229,7 @@ class _AgentRowState extends State<_AgentRow> {
                         icon: LucideIcons.refreshCw300,
                         label: isTerminalEngine(agent.engine)
                             ? 'Restart Terminal'
-                            : 'Restart Agent',
+                            : 'Restart Harness',
                         onPressed: () {
                           _agentMenu.close();
                           _restartAgent();
@@ -1238,7 +1238,7 @@ class _AgentRowState extends State<_AgentRow> {
                       if (agent.canFork)
                         AppMenuItem(
                           icon: LucideIcons.gitFork300,
-                          label: 'Fork Agent',
+                          label: 'Fork Harness',
                           onPressed: () {
                             _agentMenu.close();
                             _forkAgent();
@@ -1247,7 +1247,7 @@ class _AgentRowState extends State<_AgentRow> {
                       const AppMenuDivider(),
                       AppMenuItem(
                         icon: Icons.stop_rounded,
-                        label: 'Stop Agent',
+                        label: 'Stop Harness',
                         danger: true,
                         onPressed: () {
                           _agentMenu.close();

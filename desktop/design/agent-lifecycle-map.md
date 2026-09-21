@@ -1,8 +1,8 @@
 # Harness requests and Claude Code / Codex actions
 
-Implementation review: `worktree-agent-resume`, [WIP PR #168](https://github.com/autonomous-ai/openharness/pull/168).
+Implementation review: `worktree-agent-resume`, [PR #168](https://github.com/autonomous-ai/openharness/pull/168).
 The original proposal and pre-change mapping are preserved in [issue #167](https://github.com/autonomous-ai/openharness/issues/167).
-The command dock and welcome screen were merged separately in #165. This branch adds CLI/daemon lifecycle behavior and remains unmerged for team review.
+The original command dock and welcome screen were merged in #165. This branch adds CLI/daemon lifecycle behavior and the follow-up desktop changes described below. It remains unmerged for team review.
 Commands below omit existing profile, permissions, provider, installer and shell-wrapper arguments.
 
 ## Three identities
@@ -57,8 +57,7 @@ allocates a replacement tmux session.
 `agent_pause` is not implemented. No native pause operation is wired here.
 
 Request dispatch lives in [`backendSocket.ts`](../../cli/src/backendSocket.ts).
-The daemon callbacks live in [`cli.ts`](../../cli/src/cli.ts). Exact resume and
-fork argv are in [`engineLaunch.ts`](../../cli/src/lib/engineLaunch.ts).
+The daemon wires its callbacks in [`cli.ts`](../../cli/src/cli.ts). The production Stop and Resume handlers are [`stopAgentService.ts`](../../cli/src/lib/stopAgentService.ts) and [`resumeAgentService.ts`](../../cli/src/lib/resumeAgentService.ts); the native acceptance fixture uses these same handlers. Exact resume and fork argv are in [`engineLaunch.ts`](../../cli/src/lib/engineLaunch.ts).
 Process replacement and fallback are in
 [`restartAgent.ts`](../../cli/src/lib/restartAgent.ts); strict stopped resume is
 in [`resumeStoppedAgent.ts`](../../cli/src/lib/resumeStoppedAgent.ts).
@@ -121,11 +120,17 @@ Natural engine exit sends `agent_synced` with `status: stopped` and no terminal 
 
 ## Cmd-P/T contract
 
+- Cmd-T immediately opens a temporary tab with a full-tab Leonardo-inspired invention wallpaper, **Follow your curiosity.** fixed at the center, and the dock. Each new tab randomly selects one of three bundled still illustrations, avoiding an immediate repeat; filtering and editing do not move the tagline or change the artwork. Escape cancels an untouched draft and returns to its previous tab; if that tab has since closed, the final empty workspace returns to onboarding with its dock. The full diagram is reserved for onboarding.
+- Cmd-P opens the dock over the current tab. Both pickers show up to ten recent sessions plus New Harness, with a smaller visible viewport on short windows; typing searches the full catalog.
+- The New Harness form has **Open in** after Task and before Start. Cmd-N and Cmd-P default to New Pane; Cmd-T defaults to New Tab and fills the tab already created. Enter or a click toggles directly between the two destinations. Creation in flight or awaiting its receipt keeps its destination.
+- Stop closes tabs emptied by that harness and its owned viewers. Occupied tabs, other machines' panes, unrelated tabs, presets and pending creation destinations are preserved. If no tabs remain, one onboarding page opens with the dock.
+- Pane menus and corresponding dialogs call the whole session a **Harness**. Agent remains the engine choice inside New Harness.
 - All retained harnesses use the same row, Enter glyph and **Open** action. No Stopped badge, separate Resume action or confirmation dialog.
 - Running sessions keep their existing process and conversation; opening multiple app views was already supported.
 - Stopped Claude Code and Codex sessions use native resume with the exact saved conversation. Required cwd, Codex profile, permission mode, DSH and provider configuration are preserved. Missing history, project, DSH or provider credentials produce explicit errors.
 - Pane allocation publishes `launch: starting`. Process discovery alone does not mark strict resume ready. A verified native hook must bind the requested conversation and the readiness poll must observe that same process. A different session ID fails instead of rebinding to a new conversation.
-- Resume does not submit a prompt, restore process memory or promise to continue an interrupted tool call.
+- Desktop can open the newly allocated terminal while its receipt is pending, so native login, trust review and input remain usable. The terminal must match the selected machine, Harness ID and saved conversation; a mismatched or failed launch cannot replace the selected view.
+- **Codex 0.154.0 defers its SessionStart hook until the first submitted message.** Native history is visible before that input, but daemon confirmation remains pending until the exact hook arrives. After ten minutes without confirmation, the receipt reports `RESUME_UNCONFIRMED` and retains the runtime/reservation; it does not launch a replacement. The acceptance fixture verifies this order. Production does not submit a prompt, restore process memory or promise to continue an interrupted tool call.
 - An explicit **Start New Conversation** action remains available after failure; it is never invoked automatically.
 
 ## Concurrency and recovery
@@ -143,7 +148,22 @@ Natural engine exit sends `agent_synced` with `status: stopped` and no terminal 
 - The catalog contains histories retained by this daemon, not vendor conversations that Harness never recorded. Previously deleted histories are not imported.
 - `agent_recent` works from the archive. Other file/model/edit RPCs still use a live row; open the harness before using them.
 - Unknown tmux allocation is intentionally conservative. If the daemon died before any runtime was registered and no native hook later confirms it, the reservation remains blocked for operator investigation. There is no automatic force-clear, destructive retry or terminal takeover in this PR.
-- Unit, protocol, persistence and desktop tests use isolated fixture state. Native Claude/Codex login, trust prompts, and resume hooks across installed vendor versions still need team acceptance testing before merge. The running user daemon is not replaced by verification.
+- Native acceptance passed with Claude Code 2.1.278 and Codex 0.154.0 on macOS/tmux. Login with real accounts, other vendor versions and Linux remain team acceptance checks. Verification uses isolated profiles and a separate tmux server; it does not replace the running user daemon.
+
+## Repeatable verification
+
+From `cli/`:
+
+```sh
+npm run test:resume
+npm run test:resume-native
+```
+
+`test:resume` runs 109 tests and enforces **100% lines, statements, branches and functions** for four production modules: `resumeAgentService.ts`, `resumeStoppedAgent.ts`, `stopAgentService.ts` and `stoppedAgents.ts`. This is measured coverage of those modules, not a claim of 100% coverage of the repository or every runtime environment. The complete CLI suite passed **3,757 tests, with 63 skipped**. TypeScript checking and the normal `build.mjs` build passed.
+
+`test:resume-native` requires installed Claude Code, Codex and tmux. It launches the real vendor CLIs against synthetic saved conversations using the production BackendSocket, Stop/Resume handlers, registry/archive, launch arguments and native hook server. It verifies visible saved history, exact conversation IDs, live attach without process replacement, operation receipts, Stop persistence across a registry reload, new tmux runtimes on resume, and preservation of a surviving shell after engine exit. It uses a separate tmux socket, isolated data/config directories and unavailable loopback model endpoints, without real credentials or paid model calls. Only after restored Codex history is visible does the fixture submit a harmless test message to trigger its deferred native hook. No such message is submitted by production resume.
+
+Desktop regression coverage includes Cmd-P/T selection of retained sessions, pending native terminals, receipt and identity races, creation placement, repeated Cmd-T, Escape from search and creation, occupied-tab preservation, and the last-tab onboarding exception. The final full desktop suite passed **2,671 tests, with 10 skipped**. The analyzer reported no errors or warnings, with 17 existing informational findings. The three wallpapers were visually reviewed with the real dock at 1280×800 and 960×640; a widget regression verifies the full-tab artwork and centered tagline remain fixed during filtering and form editing. Artwork, sources, and generation prompts are recorded in [assets/welcome/README.md](../assets/welcome/README.md).
 
 ## Suggested manual acceptance checks
 

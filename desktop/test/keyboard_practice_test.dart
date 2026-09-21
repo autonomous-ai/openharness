@@ -124,13 +124,13 @@ void main() {
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
       expect(find.text('[x] New Tab'), findsOneWidget);
       await key(tester, LogicalKeyboardKey.escape);
-      await openLesson(tester, 'Stop Agent');
+      await openLesson(tester, 'Stop Harness');
       await tester.enterText(
         find.byKey(const ValueKey('practice-command')),
-        'Stop Agent',
+        'Stop Harness',
       );
       await key(tester, LogicalKeyboardKey.enter);
-      expect(find.text('[x] Stop Agent'), findsOneWidget);
+      expect(find.text('[x] Stop Harness'), findsOneWidget);
       expect(app.swarms, [original]);
       expect(original.panes, panes);
       expect(input, isEmpty);

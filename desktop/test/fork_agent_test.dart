@@ -195,7 +195,7 @@ void main() {
     );
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    expect(find.text('Fork Agent'), findsOneWidget);
+    expect(find.text('Fork Harness'), findsOneWidget);
     expect(find.textContaining('same project folder'), findsOneWidget);
     final name = tester.widget<TextField>(
       find.byKey(const ValueKey('fork-name')),
@@ -241,6 +241,6 @@ void main() {
 
   test('forkNameFor is the source name with " - fork"', () {
     expect(forkNameFor('Kinh Te'), 'Kinh Te - fork');
-    expect(forkNameFor(' '), 'Agent - fork');
+    expect(forkNameFor(' '), 'Harness - fork');
   });
 }

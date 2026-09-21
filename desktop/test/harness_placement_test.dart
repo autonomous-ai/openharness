@@ -244,7 +244,8 @@ void main() {
           'New harness launch',
         );
         expect(connection.requests, isEmpty);
-        expect(app.swarms, [original]);
+        expect(app.swarms, contains(original));
+        expect(app.swarms, hasLength(2));
 
         // Returning to advanced options preserves an explicit Default choice,
         // even when discovery finds one profile and would normally select it.
@@ -375,7 +376,8 @@ void main() {
       await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
       await tester.pump();
       expect(box.task, 'Keep this first task');
-      expect(app.swarms, [original]);
+      expect(app.swarms, contains(original));
+      expect(app.swarms, hasLength(2));
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       expect(connection.requests, hasLength(2));
@@ -474,7 +476,8 @@ void main() {
           find.descendant(of: mode, matching: find.text('Read only')),
           findsOneWidget,
         );
-        expect(app.swarms, [original]);
+        expect(app.swarms, contains(original));
+        expect(app.swarms, hasLength(2));
         final create = find.byKey(const ValueKey('create-agent-submit'));
         await tester.ensureVisible(create);
         await tester.tap(create);
@@ -806,7 +809,8 @@ void main() {
             tester.widget<NewHarnessBox>(find.byType(NewHarnessBox)).controller,
             same(box),
           );
-          expect(app.swarms, [original]);
+          expect(app.swarms, contains(original));
+          expect(app.swarms, hasLength(2));
         }
         await tester.tapAt(const Offset(12, 650));
         await tester.pump();
@@ -939,7 +943,8 @@ void main() {
             : LogicalKeyboardKey.keyP;
         await chord(tester, key);
         await tester.pump();
-        expect(app.swarms, [original]);
+        expect(app.swarms, contains(original));
+        expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);
         expect(find.text(placement.title), findsWidgets);
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pump();
@@ -955,7 +960,8 @@ void main() {
         expect(box.engine, 'codex');
         expect(box.machineId, 'm');
         expect(box.project.folder, '/work/project');
-        expect(app.swarms, [original]);
+        expect(app.swarms, contains(original));
+        expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pump();
         expect(app.activeSwarm, same(original));

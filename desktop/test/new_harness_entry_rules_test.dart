@@ -167,6 +167,83 @@ void main() {
     await key(tester, LogicalKeyboardKey.enter);
   }
 
+  for (final shortcut in [
+    LogicalKeyboardKey.keyN,
+    LogicalKeyboardKey.keyP,
+    LogicalKeyboardKey.keyT,
+  ]) {
+    testWidgets(
+      '${shortcut.keyLabel} defaults Open in correctly and lets users change it',
+      (tester) async {
+        await mount(tester, store: false);
+        final origin = app.activeSwarm;
+        await key(tester, shortcut, cmd: true);
+        if (shortcut != LogicalKeyboardKey.keyN) {
+          await key(tester, LogicalKeyboardKey.enter);
+        }
+        final controller = box(tester);
+        final initial = shortcut == LogicalKeyboardKey.keyT
+            ? HarnessPlacement.newTab
+            : HarnessPlacement.currentTab;
+        expect(controller.placement, initial);
+        final placement = find.byKey(
+          const ValueKey('new-harness-field-placement'),
+        );
+        expect(placement.hitTestable(), findsOneWidget);
+        expect(
+          tester.getTopLeft(placement).dy,
+          greaterThan(
+            tester
+                .getTopLeft(
+                  find.byKey(const ValueKey('new-harness-field-task')),
+                )
+                .dy,
+          ),
+        );
+        expect(
+          tester.getTopLeft(placement).dy,
+          lessThan(
+            tester
+                .getTopLeft(
+                  find.byKey(const ValueKey('new-harness-field-create')),
+                )
+                .dy,
+          ),
+        );
+        final choice = initial == HarnessPlacement.newTab
+            ? HarnessPlacement.currentTab
+            : HarnessPlacement.newTab;
+        await key(tester, LogicalKeyboardKey.arrowUp);
+        await key(tester, LogicalKeyboardKey.enter);
+        expect(controller.placement, choice);
+        expect(
+          find.descendant(of: placement, matching: find.text(choice.title)),
+          findsOneWidget,
+        );
+        await key(tester, LogicalKeyboardKey.enter);
+        expect(controller.placement, initial);
+        await tester.tap(placement);
+        await tester.pump();
+        expect(controller.placement, choice);
+        expect(
+          find.descendant(of: placement, matching: find.text(choice.title)),
+          findsOneWidget,
+        );
+        expect(connections['m']!.starts, isEmpty);
+        await key(tester, LogicalKeyboardKey.arrowDown);
+        await key(tester, LogicalKeyboardKey.enter);
+        expect(connections['m']!.starts, hasLength(1));
+        connections['m']!.created();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+        expect(app.swarms.length, 2);
+        expect(origin.panes.single.agentId, 'a0');
+        expect(app.activeSwarm.panes.single.agentId, 'created-1');
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
   for (final closeFirst in [false, true]) {
     for (final task in [null, 'Model a reading nook']) {
       testWidgets(
@@ -376,8 +453,9 @@ void main() {
         expect(updated.selected?.agentId, 'a1');
         await key(tester, LogicalKeyboardKey.enter);
         expect(app.focusedPane?.agentId, 'a1');
-        expect(app.activeSwarm == origin, !newTab);
-        expect(app.swarms.length, newTab ? 2 : 1);
+        // Cmd-P operates on the visible tab, including a tab just opened by Cmd-T.
+        expect(app.activeSwarm, isNot(same(origin)));
+        expect(app.swarms.length, 2);
         expect(connections.values.expand((c) => c.starts), isEmpty);
         await tester.pumpWidget(const SizedBox());
       },
@@ -418,7 +496,8 @@ void main() {
           );
           expect(updated.focusNode.hasFocus, isTrue);
           expect(find.text(nextTab ? 'New Tab' : 'New Pane'), findsOneWidget);
-          expect(app.swarms, [origin]);
+          expect(app.swarms.first, same(origin));
+          expect(app.swarms.length, newTab || nextTab ? 2 : 1);
           await key(tester, LogicalKeyboardKey.enter);
           expect(box(tester).task, 'Check the keyboard workflow');
           expect(
@@ -433,7 +512,7 @@ void main() {
           connections['m']!.created();
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 200));
-          expect(app.swarms.length, nextTab ? 2 : 1);
+          expect(app.swarms.length, newTab || nextTab ? 2 : 1);
           expect(app.focusedPane?.agentId, 'created-1');
           await tester.pumpWidget(const SizedBox());
         },
@@ -494,13 +573,16 @@ void main() {
         expect(draft.engine, 'codex');
         expect(draft.machineId, 'm');
         expect(draft.project.folder, '/work/openharness');
-        expect(app.swarms, [origin]);
+        expect(app.swarms.first, same(origin));
+        expect(app.swarms.length, newTab ? 2 : 1);
         draft.focusField(NewHarnessField.task);
         await tester.pump();
         await tester.enterText(input, 'Check keyboard focus');
         await key(tester, LogicalKeyboardKey.escape);
         await nameProject(tester, 'keyboard-review');
         await dismiss(tester);
+        expect(app.swarms, [origin]);
+        expect(app.activeSwarm, same(origin));
         await key(
           tester,
           newTab ? LogicalKeyboardKey.keyP : LogicalKeyboardKey.keyT,

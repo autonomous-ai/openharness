@@ -33,7 +33,7 @@ class PaneHeaderActions extends StatelessWidget {
   final bool zoomed, composerVisible;
 
   /// The pane is a shell, not a harness: Restart and Stop say so, because
-  /// "Stop Agent" over a terminal reads as a button for something else.
+  /// "Stop Harness" over a terminal reads as a button for something else.
   final bool terminal;
   final bool compact;
   final VoidCallback? onShare;
@@ -138,13 +138,13 @@ class PaneHeaderActions extends StatelessWidget {
                   if (onShare != null)
                     (label: 'Share harness', callback: onShare),
                   (
-                    label: terminal ? 'Restart Terminal' : 'Restart Agent',
+                    label: terminal ? 'Restart Terminal' : 'Restart Harness',
                     callback: onRestart,
                   ),
-                  if (onFork != null) (label: 'Fork Agent', callback: onFork),
+                  if (onFork != null) (label: 'Fork Harness', callback: onFork),
                   (label: 'Close Pane', callback: onClose),
                   (
-                    label: terminal ? 'Stop Terminal' : 'Stop Agent',
+                    label: terminal ? 'Stop Terminal' : 'Stop Harness',
                     callback: onDelete,
                   ),
                 ],
@@ -176,17 +176,17 @@ class PaneHeaderActions extends StatelessWidget {
               ),
               const SizedBox(width: 2),
               action(
-                terminal ? 'Restart Terminal' : 'Restart Agent',
+                terminal ? 'Restart Terminal' : 'Restart Harness',
                 LucideIcons.refreshCw,
                 onRestart,
               ),
               const SizedBox(width: 2),
               if (onFork != null) ...[
-                action('Fork Agent', LucideIcons.gitFork, onFork),
+                action('Fork Harness', LucideIcons.gitFork, onFork),
                 const SizedBox(width: 2),
               ],
               action(
-                terminal ? 'Stop Terminal' : 'Stop Agent',
+                terminal ? 'Stop Terminal' : 'Stop Harness',
                 Icons.stop_rounded,
                 onDelete,
               ),

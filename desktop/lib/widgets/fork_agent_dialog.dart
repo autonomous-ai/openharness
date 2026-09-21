@@ -176,8 +176,7 @@ class _ForkAgentPromptState extends State<_ForkAgentPrompt> {
       result = await request;
     } catch (_) {
       result = const ForkAgentResult(
-        error:
-            'Could not confirm the fork. Check agents before starting another.',
+        error: 'Could not confirm the fork. Check harnesses before starting another.',
       );
     }
     if (!mounted) return;
@@ -347,7 +346,7 @@ class _ForkAgentPromptState extends State<_ForkAgentPrompt> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Text(
-                        'Fork Agent',
+                        'Fork Harness',
                         style: boxMonoStyle(size: 12, color: kBoxFaint),
                       ),
                       const SizedBox(height: 10),

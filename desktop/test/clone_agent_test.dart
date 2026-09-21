@@ -132,7 +132,7 @@ void main() {
 
   test('a clone is named after its source the way a fork is', () {
     expect(cloneNameFor('Reviewer'), 'Reviewer - clone');
-    expect(cloneNameFor(' '), 'Agent - clone');
+    expect(cloneNameFor(' '), 'Harness - clone');
     expect(forkNameFor('Reviewer'), 'Reviewer - fork');
   });
 
