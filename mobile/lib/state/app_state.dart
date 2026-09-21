@@ -3290,12 +3290,17 @@ class AppNotifier extends ChangeNotifier {
       // real launch measured four of those, `10002ms` apiece, while the one
       // live machine had been ready since 3s.
       //
-      // Nothing is lost by skipping them. `_applyNodeStatus` has already put
-      // each one on the 5-second offline poll (`_startOfflineRetry`), which
-      // dials the moment it comes back, and a pull-to-refresh still reaches
-      // every machine through `refreshMachines`. The tiles say "Offline", which
-      // is both true and immediate, instead of "Connecting…" for ten seconds
-      // before saying the same thing.
+      // The tiles say "Offline", which is both true and immediate, instead of
+      // "Connecting…" for ten seconds before saying the same thing.
+      //
+      // ⚠️ **This is NOT covered by the 5-second offline poll, whatever it
+      // looks like.** `_startOfflineRetry` bails for a REMOTE machine unless
+      // something is already waiting on one of its agents
+      // (`pendingOfflineAgentId`) — and on a phone every machine is remote. So
+      // a machine skipped here is not dialled again by anything on a timer: it
+      // stays invisible, its agents included, until a pull-to-refresh
+      // (`retryMachines`) or the search asks ([reachAllMachines]). That gap is
+      // what "it only shows the sessions on one machine" was.
       //
       // A null answer means the account did not say — an older backend, or a
       // status this app does not recognise. That still dials: silence is not
@@ -4321,6 +4326,46 @@ class AppNotifier extends ChangeNotifier {
     if (machine == null) return;
     _connectMachine(machine);
     await _loadMachineData(machine, force: true);
+  }
+
+  /// Dial and re-ask EVERY machine on the account, whatever the account last
+  /// said about any of them.
+  ///
+  /// For the screen that offers the whole fleet in one list — the search, which
+  /// is the one place somebody asks "where is that agent" without knowing which
+  /// machine holds it, and so the one place a missing machine is a wrong answer
+  /// rather than a shorter list.
+  ///
+  /// ⚠️ **This deliberately dials machines [_autoConnectAndLoadMachines]
+  /// skipped.** Not dialling a machine the account reported down is right at
+  /// launch — finding out costs the full inventory budget EACH, and four dead
+  /// machines held the screen ten seconds apiece — and wrong here. That status
+  /// is a snapshot from before the app was opened; a machine that has come up
+  /// since contributes nothing, because [agentIndex] lists only a machine that
+  /// is answering. Reported as "it only shows the sessions on one machine".
+  ///
+  /// ⚠️ Contrast [_canFetchPreview], which must never dial, and still must not.
+  /// That one is per AGENT — dozens of reads, each able to wake a relay socket
+  /// for one row's subtitle. This is one `agents_list` per machine, and the
+  /// list is what the search has nothing to offer without.
+  ///
+  /// ⚠️ **No `/api/machines` round trip.** It asks the machines the app already
+  /// knows, so a phone on two bars still reaches all of them; an account fetch
+  /// that failed would otherwise take the dials down with it, which is exactly
+  /// what [retryMachines] does when it returns early. A machine ADDED to the
+  /// account since launch is therefore not found here — it arrives through the
+  /// Machines tab's pull-to-refresh, the screen whose job is listing them.
+  ///
+  /// Nothing on screen waits for this: each machine publishes as it answers,
+  /// and the rows already drawn keep their places (`PhoneSearchOrder`).
+  Future<void> reachAllMachines() async {
+    // No transport yet — before sign-in, or in a test with no fake connection.
+    // The same guard [_canFetchPreview] uses, and for the same reason: `_conn`
+    // would build one out of a null pool.
+    if (_disposed || (_pool == null && connectionForTest == null)) return;
+    await Future.wait([
+      for (final machine in machines) reloadMachineData(machine.machineId),
+    ]);
   }
 
   /// What every connected REMOTE machine's agent accounts have spent, asked in

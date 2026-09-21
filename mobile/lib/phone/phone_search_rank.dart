@@ -93,10 +93,11 @@ const _contentScore = 256;
 /// needed the content to match rank after every row that matched on the agent
 /// itself, as on the desktop.
 ///
-/// ⚠️ Ties break on the row's position in the index, never on anything that
-/// moves by itself. An agent that starts working sorts upward in [agentIndex],
-/// and that is the one reshuffle worth having; a second, unstable tiebreak on
-/// top of it would let two idle rows swap places on an unrelated rebuild.
+/// ⚠️ Ties break on the row's position in [all], never on anything that moves
+/// by itself — and [all] is held still for the length of one search by
+/// `PhoneSearchOrder`, so a tie settled on this keystroke is settled the same
+/// way on the next one. A second, unstable tiebreak on top of it would let two
+/// idle rows swap places on an unrelated rebuild.
 List<PhoneSearchResult> rankPhoneSearch(
   List<PhoneSearchResult> all,
   String query,

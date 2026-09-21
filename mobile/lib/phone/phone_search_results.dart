@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -10,6 +12,7 @@ import 'phone_navigation.dart';
 import 'phone_search_folder_header.dart';
 import 'phone_search_groups.dart';
 import 'phone_search_index.dart';
+import 'phone_search_order.dart';
 import 'phone_search_rank.dart';
 import 'phone_search_row.dart';
 import 'phone_section_label.dart';
@@ -28,6 +31,11 @@ import 'phone_section_label.dart';
 /// Keystrokes only ever read it, so typing stays instant and costs no data;
 /// opening the search just moves the agents offered first to the front of its
 /// background reads.
+///
+/// Opening it also re-reaches every machine on the account
+/// ([AppNotifier.reachAllMachines]) and pins the rows where they are drawn
+/// ([PhoneSearchOrder]) — the list fills out, and never reorders while it is
+/// being read.
 class PhoneSearchResults extends StatefulWidget {
   const PhoneSearchResults({
     super.key,
@@ -57,10 +65,21 @@ class _PhoneSearchResultsState extends State<PhoneSearchResults> {
     widget.notifier.sessionPreviews,
   ]);
 
+  /// Holds the rows where they were first drawn — see [PhoneSearchOrder]. Owned
+  /// by the State, so it lives exactly as long as one search.
+  final _order = PhoneSearchOrder();
+
   @override
   void initState() {
     super.initState();
     final notifier = widget.notifier;
+    // ⚠️ **Opening the search is what re-reaches the fleet.** Until here the app
+    // has only the machines that happened to answer at launch, and a machine the
+    // account reported down was never even dialled — so the one screen that
+    // claims to search EVERY agent was the one screen quietly missing whole
+    // machines of them. Asked on the way in, not awaited: what is already known
+    // draws immediately, and each machine adds its agents as it answers.
+    unawaited(notifier.reachAllMachines());
     notifier.sessionPreviews.warm([
       for (final entry in recentAgents(agentIndex(notifier)))
         notifier.previewKey(entry.machineId, entry.agent),
@@ -72,7 +91,7 @@ class _PhoneSearchResultsState extends State<PhoneSearchResults> {
     listenable: _changes,
     builder: (context, _) {
       AppTheme.watch(context);
-      final all = phoneSearchIndex(widget.notifier);
+      final all = _order.arrange(phoneSearchIndex(widget.notifier));
       if (all.isEmpty) {
         return const EmptyState(
           icon: LucideIcons.laptopMinimal300,
@@ -93,7 +112,9 @@ class _PhoneSearchResultsState extends State<PhoneSearchResults> {
     },
   );
 
-  /// Every agent in one run, the one that moved last on top.
+  /// Every agent in one run, the one that had moved last WHEN THE SEARCH OPENED
+  /// on top — and still on top a minute later, whatever has moved since. See
+  /// [PhoneSearchOrder].
   ///
   /// No folder headers here. Before a word is typed the question is "which one
   /// was I just on", and grouping answers a different one: a folder with one

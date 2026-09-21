@@ -94,6 +94,10 @@ class PhoneSearchResult {
 /// Everything one query can reach, unfiltered: agents most recent first (see
 /// [recentAgents]).
 ///
+/// Recomputed on every rebuild, so the recency in it is live — which is why the
+/// screen drawing it pins the order down rather than following it. See
+/// `PhoneSearchOrder`.
+///
 /// Agents come from [agentIndex], so only machines that are LINKED and answering
 /// contribute — a row offered here has to be openable, and an offline machine's
 /// last-seen agent list is not. Machines are not listed: they are reached from
