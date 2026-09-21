@@ -40,7 +40,7 @@ function tempDir(prefix) {
 /** A package root: the real viewer, page and checker; a stand-in upstream/war unless told not to. */
 function packageRoot({ war = true } = {}) {
   const root = tempDir('circuitjs-viewer-')
-  for (const name of ['viewer.mjs', 'viewer.html', 'toolchain']) symlinkSync(join(PKG, name), join(root, name))
+  for (const name of ['viewer.mjs', 'viewer.html', 'toolchain', 'lab', 'VERSIONS']) symlinkSync(join(PKG, name), join(root, name))
   if (war) {
     const dir = join(root, 'upstream', 'war')
     mkdirSync(join(dir, 'circuitjs1'), { recursive: true })
@@ -97,9 +97,9 @@ async function startViewer(workspace, { war = true, fastTimers = false, path = p
   }
 }
 
-function http(port, path, { method = 'GET', body } = {}) {
+function http(port, path, { method = 'GET', body, headers = {} } = {}) {
   return new Promise((ok, fail) => {
-    const req = httpRequest({ host: '127.0.0.1', port, path, method }, (res) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path, method, headers }, (res) => {
       const chunks = []
       res.on('data', (c) => chunks.push(c))
       res.on('end', () => ok({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }))
@@ -166,6 +166,28 @@ describe('the pane server', () => {
     assert.equal(page.headers['cache-control'], 'no-store')
     assert.ok(!page.body.includes('__BLANK__'))
     assert.ok(page.body.includes(`cct=${encodeURIComponent(BLANK)}`))
+  })
+
+  test('Scope Lab serves only public modules and protects bounded writes with a process token', async () => {
+    const metadata = await http(viewer.port, '/__lab/api')
+    assert.equal(metadata.status, 200)
+    const state = JSON.parse(metadata.body)
+    assert.equal(state.runtime.engine, 'CircuitJS1')
+    assert.equal(state.runtime.compiledFiles.length, 1)
+    assert.equal((await http(viewer.port, '/__lab/ui.mjs')).headers['content-type'], 'text/javascript')
+    assert.equal((await http(viewer.port, '/__lab/store.mjs')).status, 404)
+    assert.equal((await http(viewer.port, '/__lab/..%2fviewer.mjs')).status, 404)
+    assert.equal((await http(viewer.port, '/__lab/api', { headers: { host: 'evil.example' } })).status, 403)
+    const headers = { 'x-circuit-lab': state.token, 'content-type': 'application/json' }
+    assert.equal((await http(viewer.port, '/__lab/api', { method: 'POST', body: '{}' })).status, 403)
+    assert.equal((await http(viewer.port, '/__lab/api', { method: 'POST', headers: { ...headers, origin: 'https://evil.example' }, body: '{}' })).status, 403)
+    assert.equal((await http(viewer.port, '/__lab/api', { method: 'POST', headers: { ...headers, 'sec-fetch-site': 'cross-site' }, body: '{}' })).status, 403)
+    assert.equal((await http(viewer.port, '/__lab/api', { method: 'POST', headers, body: 'not json' })).status, 400)
+    assert.equal((await http(viewer.port, '/__lab/api', { method: 'POST', headers, body: '{}' })).status, 400)
+    assert.equal((await http(viewer.port, '/__lab/api', { method: 'POST', headers, body: 'a'.repeat(4 * 1024 * 1024 + 1) })).status, 413)
+    assert.equal((await http(viewer.port, '/__lab/api', { method: 'DELETE' })).status, 405)
+    assert.equal((await http(viewer.port, '/__lab/api/nope')).status, 400)
+    assert.ok(viewer.alive())
   })
 
   test('/app/circuitjs.html is upstream\'s page without its manifest path and service worker, read once', async () => {

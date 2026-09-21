@@ -555,3 +555,75 @@ results, downloaded ZIP, raw recording, separate demo script and workspaces are 
 
 The full catalog objective remains active. Continue the detailed source review of the unlisted
 experiments, then prioritize the next interaction or correctness gap supported by that evidence.
+
+## Eighth improvement — CircuitJS Scope Lab
+
+Reviewed the full native JavaScript interface and the existing CircuitJS wrapper. Also revisited
+Video Viewer, Manim, Generative Art/Web Viewer, Yosys and Home Assistant: those already expose
+substantial native timeline, seed, waveform, hardware-flow and scenario controls. CircuitJS had
+excellent live manipulation but no durable comparison between the circuits a person actually tried.
+
+Added **Scope Lab** with up to eight named-node/component voltage/current probes, 1 ms–5 s windows,
+reference overlays, two measured cursors, cursor zoom, keyboard sample stepping, notes and a saved
+capture shelf. It snapshots the visible simulator's exact export, including in-pane edits, then
+runs a separate real CircuitJS instance. Only display/iteration pacing changes; the actual solver
+still supplies every observation through `ontimestep`. The visible circuit, run state and source
+file are untouched. Source edits during capture cannot change the isolated experiment.
+
+Each immutable `.harness/circuit-captures/<id>/` includes the original native export, the isolated
+instance's native export, all stored timestamped measurements in CSV/JSON, sampled statistics,
+standalone SVG, notes, runtime source/build fingerprints, file checksums and a downloadable ZIP.
+Source/build metadata at capture and save are kept separately. Original circuits and kept takes
+remain available after source deletion and restart. Save retries recover lost responses without
+creating another packet; a server restart refreshes the write token. Unsaved takes can be discarded.
+
+This is explicitly a new simulation, not a full checkpoint of every internal solver state. Native
+imports can produce different transients. Comparison follows node names or component type/index.
+RMS/mean use trapezoidal weighting of stored samples, and can miss fast signals or narrow spikes.
+The UI and packet keep these limits visible. Native XML stays in the packet; agent instructions
+continue to require the editable plaintext workspace format. Limits bound probes, elements,
+circuit bytes, samples, callbacks, wall time, request bytes, open takes and kept packets. Partial
+captures retain their actual reason. Token/Origin/Host checks protect writes; real workspace
+folders, staged publication, symlink rejection and content/ZIP checksums protect stored evidence.
+
+Verification:
+
+- **30 Node checks** pass, including the original viewer/server behavior plus pacing preservation,
+  solver sampling, adaptive timestep handling, between-sample clock reversal, stopping, non-finite
+  probes, time-weighted statistics, cursor lookup, comparison identity, source immutability,
+  idempotent keep, corrupt packets/ZIPs, failed-write cleanup, symlinks and bounded HTTP requests.
+  An existing missing-workspace regression caught an eager `realpath` startup failure; the viewer
+  again starts and serves its waiting pane when the workspace is absent.
+- **54 Python checks** pass for the real format judge, setup fixtures, doctor, initialization and
+  viewer launcher. Package conformance, the installed native-runtime doctor and catalog
+  presentation checks pass.
+- **Eight native Chrome journeys** pass with no page errors. An original RC fixture uses the real
+  100 Hz sine source, 1 µF capacitor and 1/2 kΩ resistors. Measured steady-state gains were about
+  0.8466 and 0.6225, versus independent analytic 0.846733 and 0.622677. Resistor current agrees
+  with `(Vin−Vout)/R` to the checked tolerance (the first run's maximum difference was zero).
+  A 500 ms capture recorded 100,001 native solver callbacks in about 1.6 seconds in the isolated
+  single-browser run, while the paused visible circuit's clock and export were exactly unchanged.
+- The unchanged 555 starter, a different topology without labeled nodes, captures timing-capacitor
+  voltage and an output swinging from approximately 0 to 9.98 V. The native sequence also checks
+  source changes during a running capture, stopped partial traces, exact in-pane edits, reference
+  selection, zoom, keyboard cursors, lost acknowledgements, restart, discard, deleted source,
+  readonly saved notes, phone layout and Escape. Downloaded ZIP CRCs and every SHA-256 checksum were
+  independently checked with Python; CSV numeric values equal JSON sample values exactly.
+- Visually checked desktop, zoom, timer and narrow layouts. Corrected clipped right-axis labels and
+  snapped cursor markers to the actual measured sample, including the endpoints after zoom.
+  Recorded a separate paced **13.48-second H.264 walkthrough**, 1440×1040, from actual native
+  browser interactions, with no page errors.
+
+Evidence: [RC comparison](../docs/images/scope-lab.png),
+[timer capture](../docs/images/scope-lab-timer.png),
+[narrow traces](../docs/images/scope-lab-mobile.png),
+[native walkthrough](../docs/images/scope-lab-demo.mp4).
+Repeatable acceptance: `store/agents/circuitjs/test/scope-lab-browser.mjs`. Native results, workspaces,
+exact ZIPs, test logs and the recording script are under
+`/private/tmp/openharness-harness-improvements-evidence/scope-lab*`.
+
+The remaining review is examining delayed model answers in older unlisted Jev experiments. Source
+inspection suggests reset/configuration races in some loops; reproduce them before changing the
+behavior. Compactor and Firehose already carry session/batch revisions, and Launcher/Guard already
+serialize substantial parts of their decision flow. These are source findings, not new live-model
+performance claims.

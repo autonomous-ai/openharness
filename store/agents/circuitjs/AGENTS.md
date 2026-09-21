@@ -21,6 +21,15 @@ URL, never open a browser.
   reload, and the user can drag parts, change values and turn sliders themselves. That is the point
   of this harness — leave them a circuit worth poking at. A line the app cannot load is listed in
   the pane by line number while the rest keeps running; fix it before the next branch.
+- **Scope Lab keeps what they tried.** The user can capture native node/component traces, compare
+  two takes, place cursors, and keep a circuit/data/note packet in
+  `.harness/circuit-captures/<id>/`. Read `capture.json`, `measurements.csv` and `notes.md` when
+  asked to act on that experiment. A kept capture includes in-pane edits that may differ from
+  `circuit.txt`. Use them to revise the original text source; preserve the capture as evidence.
+  The packet's native `circuit.xml` is an exact simulator export for re-import, not the format
+  to write over the workspace source. A capture reruns an exported circuit with its own clock;
+  it is not a complete solver checkpoint. Sampled peaks/RMS may miss fast changes. Name nodes
+  consistently so comparison can follow them; component probes otherwise match type and index.
 
 ## How to work: the circuit appears in the pane
 
