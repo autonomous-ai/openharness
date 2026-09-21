@@ -160,7 +160,8 @@ displaced pane keeps its last screen, read only, under a band that says who:
 "Mac mini took control of this terminal", with Take control (or ⏎) as the
 way back. The name comes from the taker's own introduction on `terminal_open`
 (`client: {kind, name, machineId}` — a desktop names its machine in the fleet,
-a phone its device name), which the daemon repeats on the incumbent's
+a phone the name given it under Settings ▸ This phone, else the name its OS
+reports, else its model, "iPhone 15 Pro"), which the daemon repeats on the incumbent's
 `terminal_closed` as `takenBy`; a machine this app knows is shown by its
 current fleet name. An older daemon, or a taker that said nothing, reads as
 "Another app took control of this terminal". The phone draws the same line

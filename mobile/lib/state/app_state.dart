@@ -21,6 +21,7 @@ import '../core/viewer_mode.dart';
 import '../core/config.dart';
 import '../core/agent_preference.dart';
 import '../core/engine_availability.dart';
+import '../core/device_name.dart';
 import '../core/local_hostname.dart';
 import '../core/local_git_projects.dart';
 import '../core/last_opened_agent.dart';
@@ -52,6 +53,7 @@ import 'pane_arrangement.dart';
 import 'pending_question.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
+import '../phone/phone_name_store.dart';
 
 enum AppStatus {
   bootstrapping,
@@ -5353,24 +5355,27 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// How this phone introduces itself on `terminal_open`, so a desktop it
+  /// displaces can say "(this phone) took control": the name given it in
+  /// Settings, else the OS's, else its model — `core/device_name.dart` has the
+  /// order and why `Platform.localHostname` ("localhost" on iOS) is not it.
+  TerminalClientDescriptor phoneClientDescriptor() {
+    final user = currentUser;
+    return TerminalClientDescriptor(
+      kind: 'phone',
+      name: composePhoneName(
+        override: phoneNameStore.value,
+        device: NativeDeviceInfo.cached,
+        userName: user == null || user.isLocalSession ? null : user.name,
+      ),
+    );
+  }
+
   /// Open the stream for a tile that already knows what it wants.
   ///
   /// Separate from [assignAgentToPane] because a restored tile takes this path
   /// on its own, later, when its machine finally answers — the intent was
   /// settled at launch, and nothing about the selection should move again then.
-  /// How this phone introduces itself on `terminal_open`, so a desktop it
-  /// displaces can say "(this phone) took control". The OS's device name when
-  /// it will give one, else just "Phone".
-  TerminalClientDescriptor phoneClientDescriptor() {
-    final name = localHostnameOrNull() ?? 'Phone';
-    return TerminalClientDescriptor(
-      kind: 'phone',
-      name: name.length > TerminalClientDescriptor.nameMax
-          ? name.substring(0, TerminalClientDescriptor.nameMax)
-          : name,
-    );
-  }
-
   Future<void> _attachSession(TerminalPane pane) async {
     if (_disposed || !allPanes.contains(pane) || pane.session != null) return;
     final wantedAgentId = pane.agentId;
