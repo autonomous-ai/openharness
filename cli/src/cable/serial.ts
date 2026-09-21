@@ -62,27 +62,35 @@ async function findDarwin(): Promise<DialPort | null> {
   }
 
   const lines = dump.split('\n')
-  let armedAt: number | null = null
+  // Arm on the IOUSBHostDevice that carries 303a:1001, not on a child interface. Composite CDC
+  // exposes several IOUSBHostInterface siblings at the same depth; treating the first as the
+  // subtree root unarmed before IOCalloutDevice (under interface@1) was reached, so the opener
+  // skipped USB and jumped to mDNS unpaired.
+  let hostDepth: number | null = null
+  let hostMatch = false
   let sawVendor = false
   let sawProduct = false
-  let nodeDepth = 0
 
   for (const line of lines) {
-    // A new node resets what we have seen about the current one. `+-o` opens a node in this dump.
     if (line.includes('+-o')) {
       const d = depthOf(line)
-      if (armedAt !== null && d <= armedAt) armedAt = null // left the armed subtree without a path
-      nodeDepth = d
-      sawVendor = false
-      sawProduct = false
+      if (hostMatch && hostDepth !== null && d <= hostDepth) {
+        hostMatch = false
+        hostDepth = null
+      }
+      if (line.includes('IOUSBHostDevice')) {
+        hostDepth = d
+        sawVendor = false
+        sawProduct = false
+        hostMatch = false
+      }
       continue
     }
-
+    if (hostDepth === null) continue
     if (line.includes('"idVendor"')) sawVendor = Number(line.split('=')[1]?.trim()) === DIAL_VENDOR_ID
     if (line.includes('"idProduct"')) sawProduct = Number(line.split('=')[1]?.trim()) === DIAL_PRODUCT_ID
-    if (sawVendor && sawProduct && armedAt === null) armedAt = nodeDepth
-
-    if (armedAt !== null && line.includes('"IOCalloutDevice"')) {
+    if (sawVendor && sawProduct) hostMatch = true
+    if (hostMatch && line.includes('"IOCalloutDevice"')) {
       const path = line.split('=')[1]?.trim().replace(/^"|"$/g, '')
       if (path) return { path, vendorId: DIAL_VENDOR_ID, productId: DIAL_PRODUCT_ID }
     }

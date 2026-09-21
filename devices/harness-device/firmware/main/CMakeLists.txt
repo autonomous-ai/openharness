@@ -4,8 +4,26 @@
 # drivers (managed components; declared in idf_component.yml, unused/link-pruned on the dial).
 set(CORES3_PRIV_REQUIRES "")
 if(DEVICE_BOARD_M5CORES3)
-    set(CORES3_PRIV_REQUIRES espressif__esp_lcd_ili9341 espressif__esp_lcd_touch_ft5x06)
+    set(CORES3_PRIV_REQUIRES espressif__esp_lcd_ili9341 espressif__esp_lcd_touch_ft5x06 espressif__mdns)
 endif()
+# Geist on every board. CoreS3 briefly aliased these names to Montserrat while the
+# compositor was packing panel rows wrong; that looked like a font bug. The packed
+# flush is fixed, and Montserrat does not contain the UI symbols (› ✓ ✗ …) Geist does.
+set(GEIST_SRCS
+    "ui/geist_reg_20.c"
+    "ui/geist_reg_25.c"
+    "ui/geist_med_28.c"
+    "ui/geist_med_32.c"
+    "ui/geist_reg_34.c"
+    "ui/geist_reg_38.c"
+    "ui/geist_reg_16.c"
+    "ui/geist_reg_24.c"
+    "ui/geist_reg_32.c"
+    "ui/geist_med_48.c"
+    "ui/geist_med_64.c"
+    "ui/geist_sem_24.c"
+    "ui/geist_med_38.c"
+)
 idf_component_register(
     SRCS
         "app_main.c"
@@ -29,19 +47,7 @@ idf_component_register(
         "ui/touch.c"
         "ui/ui_screens.c"
         "ui/carousel_ring.c"
-        "ui/geist_reg_20.c"
-        "ui/geist_reg_25.c"
-        "ui/geist_med_28.c"
-        "ui/geist_med_32.c"
-        "ui/geist_reg_34.c"
-        "ui/geist_reg_38.c"
-        "ui/geist_reg_16.c"
-        "ui/geist_reg_24.c"
-        "ui/geist_reg_32.c"
-        "ui/geist_med_48.c"
-        "ui/geist_med_64.c"
-        "ui/geist_sem_24.c"
-        "ui/geist_med_38.c"
+        ${GEIST_SRCS}
         "ui/icons_settings.c"
         "ui/spinner_spokes.c"
         "ui/icons_engine.c"
@@ -83,6 +89,8 @@ if(DEVICE_BOARD_M5CORES3)
     target_sources(${COMPONENT_LIB} PRIVATE
         "board/cores3_board.c"
         "ui/display_cores3.c"
+        "wifi_sta.c"
+        "wifi_cable.c"
     )
 endif()
 

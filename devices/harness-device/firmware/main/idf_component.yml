@@ -30,3 +30,5 @@ dependencies:
   # SHA-2, HKDF/HMAC). Backs devices/harness-device/firmware/main/e2ee/e2ee_core.c (byte-identical twin of the web/adapter
   # TS core). The Espressif port wires randombytes to the hardware RNG. See e2ee_core.h.
   espressif/libsodium: "^1.0.20"
+  # IDF 5.5 moved mDNS out of the tree. CoreS3 `_harness-dial._tcp` uses this; unused on the dial.
+  espressif/mdns: "~1.8.2"

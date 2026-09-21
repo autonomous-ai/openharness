@@ -105,6 +105,16 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.0.22~1
+  espressif/mdns:
+    component_hash: 3ec0af5f6bce310512e90f482388d21cc7c0e99668172d2f895356165fc6f7c5
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.8.2
   idf:
     source:
       type: idf
@@ -138,9 +148,10 @@ direct_dependencies:
 - espressif/esp_lcd_touch_ft5x06
 - espressif/esp_websocket_client
 - espressif/libsodium
+- espressif/mdns
 - idf
 - lvgl/lvgl
 - waveshare/esp_lcd_touch_cst9217
-manifest_hash: 7b5a0eaf7a4530c68552d69cd7b4ea7a4200d80cc3d5c7a4418b943b55775c71
+manifest_hash: c6f1e650764eedb1f3060c0bfd573b9f59905b0be6f1518dafcbb0f1392d3d31
 target: esp32s3
 version: 2.0.0

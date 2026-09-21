@@ -42,5 +42,20 @@ bool config_check_lock(const char *pattern);
 void config_set_lock(const char *pattern);
 void config_clear_lock(void);
 
+// CoreS3 STA credentials. Empty ssid = none saved. The PSK is stored as-is in NVS (same
+// namespace as the rest of the dial settings); never logged.
+#define CFG_WIFI_SSID_MAX 33
+#define CFG_WIFI_PASS_MAX 65
+bool config_load_wifi(char *ssid, size_t ssid_cap, char *pass, size_t pass_cap);
+void config_save_wifi(const char *ssid, const char *pass);
+void config_clear_wifi(void);
+
+// USB-pairing token (64 hex chars). WiFi welcome must present the same value.
+#define CFG_BIND_MAX 65
+void config_save_bind(const char *hex);
+void config_clear_bind(void);
+bool config_has_bind(void);
+bool config_bind_matches(const char *hex);
+
 // Factory reset (BOOT held at power-on, or Settings → Reset): forget all of the above.
 bool config_clear_all(void);

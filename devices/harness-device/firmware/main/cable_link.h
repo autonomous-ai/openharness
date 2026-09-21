@@ -79,6 +79,13 @@ bool cable_link_host_present(void);
 // the two sides disagree about the format or the cable is bad. Without a count those look identical.
 void cable_link_counters(uint32_t *corrupt_frames, uint32_t *discarded_bytes);
 
+// Replay log lines buffered while no transport was up, then forget them.
+//
+// Call it as soon as a peer can receive: a USB session coming up, or a TCP client connecting. On a dial
+// with no cable in it this is the ONLY way the lines around a WiFi drop are ever seen — the drop itself
+// is what took the transport away, so nothing could carry them at the time.
+void cable_link_flush_backlog(void);
+
 // Drop any half-received frame. For the layer above to call when it decides a session has ended and a
 // new one begun — leftover bytes belong to the old one, and carrying them across puts a stale half-frame
 // in front of the first real frame of the new session.
@@ -86,3 +93,8 @@ void cable_link_counters(uint32_t *corrupt_frames, uint32_t *discarded_bytes);
 // Call it FROM THE FRAME CALLBACK. The decoder has one reader — the link task — and no lock; resetting
 // it from another task while that task is mid-feed corrupts the very buffer meant to be cleared.
 void cable_link_reset_decoder(void);
+
+// Feed bytes from a second transport (CoreS3 TCP). Same decoder as USB; `from_tcp` is sticky until
+// the next feed so the message layer can require welcome.bind on LAN and not on the cable.
+void cable_link_feed(const uint8_t *data, size_t n, bool from_tcp);
+bool cable_link_rx_is_tcp(void);

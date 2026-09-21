@@ -25,6 +25,8 @@ import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { FirmwareTransfer } from './fwPush.js'
 import { SerialLink, findDialPort } from './serial.js'
+import { TcpLink, findDialTcp } from './tcpLink.js'
+import { bindTokenForTcp, bindTokenForUsb, isTcpDialPath } from './dialBind.js'
 
 /** Bumped when the VOCABULARY changes. Separate from the frame version, which is the envelope. */
 export const CABLE_PROTO_VERSION = 3   // 3: + question.close (a question answered on another client)
@@ -338,11 +340,13 @@ export type PortOpener = (
   onClosed: (why: string) => void,
 ) => Promise<CablePort | null>
 
-/** The real one: find the tty by USB id, open it raw. */
+/** USB first. If the cable is out, browse `_harness-dial._tcp` — welcome still requires a USB-minted bind. */
 export const openDialPort: PortOpener = async (onData, onClosed) => {
   const port = await findDialPort()
-  if (!port) return null
-  return SerialLink.open(port.path, onData, onClosed)
+  if (port) return SerialLink.open(port.path, onData, onClosed)
+  const tcp = await findDialTcp()
+  if (!tcp) return null
+  return TcpLink.open(tcp.host, tcp.port, onData, onClosed)
 }
 
 export class CableSession {
@@ -702,6 +706,17 @@ export class CableSession {
           return
         }
         const mac = str('mac') ?? ''
+        const tcp = isTcpDialPath(this.link?.path ?? '')
+        const bind = tcp ? bindTokenForTcp(mac) : bindTokenForUsb(mac)
+        if (tcp && !bind) {
+          // Another OpenHarness on this LAN, or this Mac never USB-paired the dial.
+          this.log(`cable: tcp dial ${mac || '?'} is not USB-paired to this machine — releasing`)
+          this.foreignPort = this.link?.path ?? null
+          this.foreignRetryAt = Date.now() + 60_000
+          await this.link?.close('not usb-paired')
+          this.link = null
+          return
+        }
         // Rule 1: every greeting is answered, but only an unfamiliar dial gets the full state.
         await this.send({
           t: 'welcome',
@@ -714,6 +729,7 @@ export class CableSession {
           // matters after a dial reboot that lands mid-session on a remote selection.
           selected: this.host.selectedMachine(),
           voiceLang: this.host.voiceLang(),
+          ...(bind ? { bind } : {}),
         })
         // Log a dial that is new OR that came back running something else. The version half of that test
         // is not decoration: a dial reboots into its new image after an update and greets with the SAME
@@ -1039,7 +1055,8 @@ export class CableSession {
         await this.send({
           t: 'voice.transcript',
           routeId: '',
-          text: transcript,
+          // Dial ignores `text` for routing; keep the frame under JSON_MAX (was 2 KiB on device).
+          text: transcript.length > 400 ? `${transcript.slice(0, 400)}…` : transcript,
           agentId: inWindow.agentId,
           // Only a name the DIAL's own list knows: it draws this, and an agent the window reached on a
           // machine the carousel has not been told about yet has no tile here to put a name on. The ring
@@ -1078,7 +1095,14 @@ export class CableSession {
     }
     const text = turn.cmd ? `/${turn.cmd} ${transcript}` : transcript
     this.host.sendTurn(agentId, text)
-    await this.send({ t: 'voice.transcript', routeId: '', text: transcript, agentId, agentName, needsConfirm: false })
+    await this.send({
+      t: 'voice.transcript',
+      routeId: '',
+      text: transcript.length > 400 ? `${transcript.slice(0, 400)}…` : transcript,
+      agentId,
+      agentName,
+      needsConfirm: false,
+    })
   }
 
   // ── outbound ──────────────────────────────────────────────────────────────────────────────────────

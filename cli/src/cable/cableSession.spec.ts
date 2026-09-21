@@ -14,10 +14,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { CableSession, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
 import { DialLog } from './dialLog.js'
+import { bindTokenForUsb, setDialBindDirForTest } from './dialBind.js'
 
 /** A port whose two ends are both in this process. */
 class LoopbackPort implements CablePort {
-  readonly path = '/dev/loopback'
   isOpen = true
   /** Everything the daemon wrote, decoded back into messages. */
   readonly sent: Array<Record<string, unknown>> = []
@@ -30,6 +30,7 @@ class LoopbackPort implements CablePort {
   constructor(
     private readonly onData: (chunk: Buffer) => void,
     private readonly onClosed: (why: string) => void = () => {},
+    readonly path = '/dev/loopback',
   ) {}
 
   async write(bytes: Uint8Array): Promise<void> {
@@ -113,6 +114,7 @@ function makeHost(over: Partial<CableHost> = {}) {
 function tmpLog() { return new DialLog(mkdtempSync(join(tmpdir(), 'cable-'))) }
 
 async function connect(host: CableHost = makeHost(), log = tmpLog()) {
+  setDialBindDirForTest(mkdtempSync(join(tmpdir(), 'bind-')))
   let port!: LoopbackPort
   const session = new CableSession(host, log, async (onData, onClosed) => {
     port = new LoopbackPort(onData, onClosed)
@@ -140,9 +142,45 @@ describe('cable session', () => {
     )
     const welcome = port.sent[0]
     expect(welcome).toMatchObject({ t: 'welcome', app: 'harness', machine: { name: 'MacBook Pro' } })
+    expect(welcome.bind).toMatch(/^[0-9a-f]{64}$/)
     // Streamed one per message: a hundred agents do not fit in one 8 KB frame, and the dial must not have
     // to reassemble anything.
     expect(port.sent.find((m) => m.t === 'agent')).toMatchObject({ t: 'agent', id: 'a1', name: 'Fix login screen', engine: 'claude' })
+    await session.stop()
+  })
+
+  it('refuses a tcp dial this computer never USB-paired', async () => {
+    setDialBindDirForTest(mkdtempSync(join(tmpdir(), 'bind-')))
+    let port!: LoopbackPort
+    const session = new CableSession(makeHost(), tmpLog(), async (onData, onClosed) => {
+      port = new LoopbackPort(onData, onClosed, 'tcp:10.0.0.8:17420')
+      return port
+    })
+    session.start()
+    await vi.waitFor(() => expect(port).toBeDefined())
+    await settle()
+    port.say({ t: 'hello', product: 'harness', mac: 'AA:BB:CC:DD:EE:FF' })
+    await vi.waitFor(() => expect(port.closedWith).toBe('not usb-paired'))
+    expect(port.types()).toEqual([])
+    await session.stop()
+  })
+
+  it('welcomes a tcp dial after USB pairing minted the bind', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bind-'))
+    setDialBindDirForTest(dir)
+    bindTokenForUsb('AA:BB:CC:DD:EE:FF')
+    let port!: LoopbackPort
+    const session = new CableSession(makeHost(), tmpLog(), async (onData, onClosed) => {
+      port = new LoopbackPort(onData, onClosed, 'tcp:10.0.0.8:17420')
+      return port
+    })
+    session.start()
+    await vi.waitFor(() => expect(port).toBeDefined())
+    await settle()
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb:cc:dd:ee:ff' })
+    await vi.waitFor(() => expect(port.types()).toContain('welcome'))
+    expect(port.sent[0]).toMatchObject({ t: 'welcome' })
+    expect((port.sent[0] as { bind: string }).bind).toBe(bindTokenForUsb('AA:BB:CC:DD:EE:FF'))
     await session.stop()
   })
 
