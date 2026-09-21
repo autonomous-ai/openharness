@@ -54,9 +54,16 @@ and it is deliberately not the window's:
   the tab the phone is in, and one deleted here leaves every tab that held it.
 - Which tab is open, and where you were inside it, stay on the device — as they do per window.
 
-What the person sees of it is `lib/phone/desk_tab_strip.dart`, the chip rail under the terminal's
-header, and a swipe that walks that tab's agents rather than the whole account
-(`lib/phone/desk_groups.dart`).
+What the person sees of it is one mark beside `⋯` in the terminal's header, which opens the tabs as
+a sheet (`lib/phone/desk_tabs_sheet.dart`), and a swipe that walks that tab's agents rather than the
+whole account (`lib/phone/desk_groups.dart`). **The terminal keeps the screen**: a rail of tabs
+across the top was tried and taken out again — it cost a line and a half of somebody's session,
+permanently, for a choice made a few times a day.
+
+The tabs are re-read every 15s while the app is in the foreground (`PhoneDesk.pollInterval`), and
+that is not belt-and-braces here: `desk_changed` reaches a phone only over a machine's relay socket,
+so a backend that does not forward it, or a moment with no machine connected, delivers nothing at
+all.
 
 ## It is a VIEWER build, always
 

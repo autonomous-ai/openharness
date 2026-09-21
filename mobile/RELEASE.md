@@ -69,8 +69,9 @@ icon size in thirty seconds instead of in an email twenty minutes later.
 | `1.0.0 (18)` | 2026-09-18 | TestFlight. Tab, clear and `/` on the terminal's key bar; account-wide agents list in the terminal sheet; the phone sheet no longer cuts off its last rows |
 | `1.0.0 (19)` | 2026-09-18 | TestFlight. The floating mic, Search and + sit on frosted glass, so they stand out from the output under them |
 | `1.0.0 (20)` | 2026-09-21 | TestFlight. The phone holds only the agent on screen: the two beside it are no longer opened in advance, and the one swiped away from is closed — each hands its terminal back to the desktop. Voice keeps the audio at both ends of a take |
+| `1.0.0 (21)` | 2026-09-21 | TestFlight. The account's tabs reach the phone: a swipe stays inside the tab you are in, the tabs themselves sit behind a mark beside `⋯`, and an agent started here joins that tab |
 
-`pubspec.yaml` is therefore at `1.0.0+21`: the repo always holds the NEXT build number, so a release
+`pubspec.yaml` is therefore at `1.0.0+22`: the repo always holds the NEXT build number, so a release
 runs clean without anyone having to remember the last one.
 
 ### Why the app is iPhone-only
