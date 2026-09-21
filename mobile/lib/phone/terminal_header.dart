@@ -131,8 +131,9 @@ class _BadgedMark extends StatelessWidget {
 
 /// The two lines: *agent*, then *folder ⑂ branch*.
 ///
-/// On the second line the folder is kept whole where it can be and the branch
-/// gives way — see [projectPathLabel].
+/// On the second line each name takes only the width it needs, and only the
+/// overflow is shared out — see [_PlaceLine]. The folder is the one kept whole
+/// where the two cannot both fit — see [projectPathLabel].
 class _Identity extends StatelessWidget {
   const _Identity({required this.agent});
 
@@ -162,37 +163,10 @@ class _Identity extends StatelessWidget {
         ),
         if (hasPlace) ...[
           const SizedBox(height: 2),
-          Row(
-            children: [
-              if (project != null)
-                Flexible(
-                  flex: 3,
-                  child: Text(
-                    projectPathLabel(project.cwd),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: _placeStyle,
-                  ),
-                ),
-              if (branch != null) ...[
-                if (project != null) const SizedBox(width: 8),
-                Icon(
-                  LucideIcons.gitBranch300,
-                  size: 12,
-                  color: AppPalette.textFaint,
-                ),
-                const SizedBox(width: 3),
-                Flexible(
-                  flex: 2,
-                  child: Text(
-                    branch,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: _placeStyle,
-                  ),
-                ),
-              ],
-            ],
+          _PlaceLine(
+            folder: project == null ? null : projectPathLabel(project.cwd),
+            branch: branch,
+            style: _placeStyle,
           ),
         ],
       ],
@@ -205,6 +179,143 @@ class _Identity extends StatelessWidget {
     fontWeight: FontWeight.w500,
     height: 1.2,
   );
+}
+
+/// The second line: *folder ⑂ branch*, each name given the width it asks for.
+///
+/// ⚠️ **A `flex` here would ellipsis a name with the room to spare beside it.**
+/// Two `Flexible`s split the line in their own fixed ratio whatever they hold,
+/// so a short folder hands its slack back to the empty end of the row rather
+/// than to the branch, and `worktree-command-box` is cut next to a gap. This
+/// lays both out at their natural width and shortens them only when the two
+/// together overrun the line.
+///
+/// ⚠️ **The folder is the one kept whole.** It is what tells two of an owner's
+/// agents apart; a branch is read to its end far less often, so the overflow
+/// comes off the branch first and the folder only gives way once the branch is
+/// down to its own floor.
+class _PlaceLine extends StatelessWidget {
+  const _PlaceLine({
+    required this.folder,
+    required this.branch,
+    required this.style,
+  });
+
+  /// Null leaves the folder out, and the branch then has the whole line.
+  final String? folder;
+
+  /// Null leaves the branch and its mark out.
+  final String? branch;
+
+  final TextStyle style;
+
+  /// What a shortened branch is never cut below, so it keeps enough characters
+  /// to be told from its neighbours rather than becoming a bare `…`.
+  static const double _branchFloor = 54;
+
+  /// The gap left of the branch mark, and the one between mark and name.
+  static const double _gapBeforeMark = 8;
+  static const double _gapAfterMark = 3;
+  static const double _markSize = 12;
+
+  @override
+  Widget build(BuildContext context) {
+    final folder = this.folder;
+    final branch = this.branch;
+    if (branch == null) {
+      if (folder == null) return const SizedBox.shrink();
+      return Text(
+        folder,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: style,
+      );
+    }
+
+    final mark = Icon(
+      LucideIcons.gitBranch300,
+      size: _markSize,
+      color: AppPalette.textFaint,
+    );
+    final branchText = Text(
+      branch,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: style,
+    );
+
+    if (folder == null) {
+      return Row(
+        children: [
+          mark,
+          const SizedBox(width: _gapAfterMark),
+          Flexible(child: branchText),
+        ],
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final line = constraints.maxWidth;
+        // The mark and its two gaps are spent before either name gets a say.
+        final free = math.max(
+          0.0,
+          line - _markSize - _gapBeforeMark - _gapAfterMark,
+        );
+        final folderWanted = _measure(context, folder, line);
+        final branchWanted = _measure(context, branch, line);
+
+        final double folderWidth;
+        if (folderWanted + branchWanted <= free) {
+          // Both fit whole. The folder is laid out at its own width so the
+          // slack falls at the end of the line, not between the two names.
+          folderWidth = folderWanted;
+        } else {
+          // The branch gives way first: it is left whatever the folder does
+          // not want, but never less than its floor — and never more than it
+          // wants, so a short branch beside a long folder still hands its
+          // slack back to the folder.
+          final forBranch = math.min(
+            branchWanted,
+            math.max(_branchFloor, free - folderWanted),
+          );
+          folderWidth = math.max(0.0, free - forBranch);
+        }
+
+        return Row(
+          children: [
+            SizedBox(
+              width: math.min(folderWidth, free),
+              child: Text(
+                folder,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: style,
+              ),
+            ),
+            const SizedBox(width: _gapBeforeMark),
+            mark,
+            const SizedBox(width: _gapAfterMark),
+            Flexible(child: branchText),
+          ],
+        );
+      },
+    );
+  }
+
+  /// How wide [text] wants to be on one line, capped at [limit] so a very long
+  /// name does not measure out to something the arithmetic cannot use.
+  double _measure(BuildContext context, String text, double limit) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      maxLines: 1,
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout();
+    final width = painter.width;
+    painter.dispose();
+    return math.min(width, limit);
+  }
 }
 
 /// Where an agent runs, as the `⋯` sheet shows it under the agent's name, one
