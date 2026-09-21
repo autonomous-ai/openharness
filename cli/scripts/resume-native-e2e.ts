@@ -10,6 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSy
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { createServer } from 'node:http'
 import assert from 'node:assert/strict'
 const exec = promisify(execCallback)
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'harness-resume-native-')))
@@ -35,6 +36,8 @@ const { createStopAgentService } = await import('../src/lib/stopAgentService.js'
 const { createResumeAgentService } = await import('../src/lib/resumeAgentService.js')
 const { AgentRestartCoordinator } = await import('../src/lib/restartAgent.js')
 const { resolvePaneEngineProcess, checkSessionRuntime } = await import('../src/lib/tmux.js')
+const { captureResumeIdentity } = await import('../src/lib/captureResumeIdentity.js')
+const { claudeProcessSession } = await import('../src/lib/sessionRepair.js')
 const { checkPidRuntime } = await import('../src/lib/deleteAgentFallback.js')
 const { startHookServer } = await import('../src/hookServer.js')
 const { BackendSocket } = await import('../src/backendSocket.js')
@@ -54,6 +57,7 @@ const server = await startHookServer(0, {
     return registry.openProcessAgent({ engine: input.engine, processIdentity: identity, runtimes: row.runtimes, primaryRuntimeKey: row.primaryRuntimeKey, cwd: row.cwd })?.entry ?? null
   },
 })
+const fixtures: Array<{ agentId: string; engine: string; sessionId: string; marker: string }> = []
 const replies = new Map<string, any>()
 socketBackend.registerLocalClient('local:resume-e2e', { sendFrame: frame => { const f = frame as any; if (f.payload?.requestId) replies.set(f.payload.requestId, f.payload); return true }, sendBinary: () => true })
 const rpc = async (type: string, payload: Record<string, unknown>) => {
@@ -102,6 +106,7 @@ try {
     const old = registry.openPendingAgent({ engine, runtimes: [{ backend: 'tmux', paneId: '%99999' }], cwd, codexHome: engine === 'codex' ? profile : null, defaultName: `Native ${engine} fixture` })!
     const saved = { ...old, sessionId, transcriptPath, launch: { state: 'ready' as const }, processIdentity: null }
     stoppedAgents.save(saved); registry.removeAgent(old.agentId)
+    fixtures.push({ agentId: old.agentId, engine, sessionId, marker })
     const launchEnv: Record<string, string> = {
       CLAUDE_CONFIG_DIR: join(root, 'claude'), CODEX_HOME: join(root, 'codex'), ZDOTDIR: root,
       DISABLE_AUTOUPDATER: '1', DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1',
@@ -182,6 +187,18 @@ try {
     assert.equal((await rpc('agent_resume', { agentId: old.agentId, creationId: randomUUID() })).resumed, true)
     assert.equal(registry.byAgent(old.agentId)!.processIdentity!.pid, pid); assert.equal(registry.byAgent(old.agentId)!.tmuxPane, route)
     assert.equal((await rpc('agent_create_status', { creationId })).state, 'created')
+    // Reproduce a legacy daemon row whose hook binding was lost. Remove the earlier
+    // archive too, so Stop must recover from the real process, not the seeded snapshot.
+    registry.unbindSession(sessionId)
+    rmSync(join(root, 'data', 'stopped-agents', `${old.agentId}.json`))
+    const unbound = registry.byAgent(old.agentId)!
+    assert.equal(unbound.sessionId, '')
+    assert.equal((await captureResumeIdentity(unbound)).sessionId, sessionId)
+    if (engine === 'claude') {
+      assert.equal((await claudeProcessSession(unbound.processIdentity!.pid, cwd,
+        Date.parse(unbound.processIdentity!.startMarker)))?.sessionId, sessionId,
+      'Claude native process metadata identifies the conversation before Stop')
+    }
     // Stop uses a known fixture-owned tmux session; its saved row survives a registry reload.
     assert.equal((await rpc('agent_delete', { agentId: live.agentId })).deleted, true)
     assert.equal((await checkPidRuntime(live)).state, 'gone')
@@ -215,7 +232,94 @@ try {
     assert.equal((await tmux('display-message', '-p', '-t', exited.tmuxPane, '#{pane_pid}')).trim(), shellPid)
     assert((await tmux('capture-pane', '-p', '-t', exited.tmuxPane)).includes(shellMarker))
     assert.equal((await rpc('agent_delete', { agentId: old.agentId })).deleted, true)
-    log(`PASS ${engine}: native history + hook, new tmux runtime, same id, attach same PID, receipt replay, stop persistence, surviving shell preserved`)
+    log(`PASS ${engine}: native history + hook, new tmux runtime, same id, attach same PID, receipt replay, missing-ID recovery before Stop, stop persistence, surviving shell preserved`)
+  }
+  if (process.argv.includes('--serve')) {
+    // The desktop acceptance test uses the real local WS transport and terminal streams.
+    // HTTP supplies only fixture metadata and assertions, never fabricated RPC results.
+    const { attachLocalWsServer } = await import('../src/localWsServer.js')
+    const { TerminalStreamManager } = await import('../src/lib/terminalStreamManager.js')
+    const { TerminalBackendCoordinator } = await import('../src/lib/terminalBackendCoordinator.js')
+    const { agentFrame } = await import('../src/lib/agentFrame.js')
+    const streams = new TerminalStreamManager({
+      terminals: new TerminalBackendCoordinator([backend], ['tmux'], []),
+      resolveAgent: id => registry.byAgent(id), streamingAvailable: true,
+      sendTarget: (id, type, payload) => socketBackend.sendTerminalTo(id, type, payload),
+      sendBinaryTarget: (id, frame) => socketBackend.sendTerminalBinaryTo(id, frame),
+      isLoopback: () => true,
+    })
+    socketBackend.setTerminalStreamManager(streams)
+    const anchorPane = (await tmux('display-message', '-p', '-t', 'fixture-anchor', '#{pane_id}')).trim()
+    const anchor = registry.openPendingAgent({ engine: 'terminal', runtimes: [{ backend: 'tmux', paneId: anchorPane }], cwd: root, defaultName: 'Keep this work open' })!
+    registry.setLaunch(anchor.agentId, { state: 'ready' })
+    const resume = socketBackend.onResumeAgent!
+    socketBackend.onResumeAgent = async id => {
+      const fixture = fixtures.find(f => f.agentId === id); assert(fixture, 'only fixture sessions may resume')
+      let done = false, submitted = false
+      const result = resume(id).finally(() => { done = true })
+      let announced = ''
+      while (!done) {
+        const row = registry.byAgent(id)
+        if (row) {
+          const state = `${row.tmuxPane}:${row.launch?.state}`
+          if (state !== announced) {
+            announced = state
+            socketBackend.send({ type: 'agent_synced', payload: { agent: await agentFrame(row, { selectedModel: null, terminalAvailable: true, dsh: null }) } })
+          }
+          if (fixture.engine === 'codex' && !submitted) {
+            const screen = await tmux('capture-pane', '-p', '-S', '-500', '-t', row.tmuxPane)
+            if (screen.includes(fixture.marker) && /Ask Codex/.test(screen)) {
+              submitted = true
+              await tmux('send-keys', '-t', row.tmuxPane, '-l', 'Fixture verification only. Do not use tools.')
+              await new Promise(r => setTimeout(r, 600))
+              await tmux('send-keys', '-t', row.tmuxPane, 'Enter')
+            }
+          }
+        }
+        await new Promise(r => setTimeout(r, 100))
+      }
+      return result
+    }
+    const stop = socketBackend.onDeleteAgent!
+    socketBackend.onDeleteAgent = async id => {
+      assert(fixtures.some(f => f.agentId === id), 'never stop the anchor or a non-fixture session')
+      await stop(id)
+      socketBackend.send({ type: 'agent_deleted', payload: { agentId: id, retained: true } })
+    }
+    let finish!: () => void
+    const finished = new Promise<void>(resolve => { finish = resolve })
+    const http = createServer((req, res) => { void (async () => {
+      res.setHeader('content-type', 'application/json')
+      const url = new URL(req.url!, 'http://127.0.0.1')
+      if (url.pathname === '/fixtures') { res.end(JSON.stringify({ fixtures, anchorId: anchor.agentId })); return }
+      if (url.pathname === '/shutdown' && req.method === 'POST') { res.end('{}'); finish(); return }
+      if (url.pathname === '/verify') {
+        const id = url.searchParams.get('id')!
+        const fixture = fixtures.find(f => f.agentId === id); assert(fixture)
+        const row = registry.byAgent(id)
+        const saved = stoppedAgents.get(id)
+        assert.equal(saved?.sessionId, fixture.sessionId)
+        if (row) {
+          assert.equal(row.sessionId, fixture.sessionId)
+          const screen = await tmux('capture-pane', '-p', '-S', '-500', '-t', row.tmuxPane)
+          assert(screen.includes(fixture.marker), 'native terminal must show original history')
+        }
+        const persisted = JSON.parse(readFileSync(join(root, 'data', 'registry.json'), 'utf8'))
+        assert.equal(persisted.some((r: any) => r.agentId === id), !!row)
+        res.end(JSON.stringify({ stopped: !row, sessionId: saved!.sessionId, pane: row?.tmuxPane, pid: row?.processIdentity?.pid, ready: row?.launch?.state === 'ready' })); return
+      }
+      res.statusCode = 404; res.end('{}')
+    })().catch(error => { res.statusCode = 500; res.end(JSON.stringify({ error: String(error) })) }) })
+    const local = attachLocalWsServer(http, { machineId: 'm', backend: socketBackend })
+    await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve))
+    const endpoint = `http://127.0.0.1:${(http.address() as { port: number }).port}`
+    writeFileSync(join(tmpdir(), 'harness-resume-ui-endpoint.json'), JSON.stringify({ endpoint, root }))
+    log(`desktop fixture ready: ${endpoint}`)
+    const expiry = setTimeout(finish, 10 * 60_000)
+    process.once('SIGINT', finish); process.once('SIGTERM', finish)
+    await finished
+    clearTimeout(expiry); process.off('SIGINT', finish); process.off('SIGTERM', finish)
+    await local.close(); http.closeAllConnections(); await new Promise<void>(resolve => http.close(() => resolve()))
   }
 } finally {
   await tmux('kill-server').catch(() => {})

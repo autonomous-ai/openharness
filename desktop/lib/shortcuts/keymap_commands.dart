@@ -310,7 +310,11 @@ final harnessCommands = <HarnessCommand>[
     nativeAction: 'cloneAgent',
     keywords: ['duplicate', 'another', 'fresh'],
   ),
-  const HarnessCommand('agent.restart', 'Restart Harness', ShortcutGroup.actions),
+  const HarnessCommand(
+    'agent.restart',
+    'Restart Harness',
+    ShortcutGroup.actions,
+  ),
   const HarnessCommand(
     'terminal.new',
     'New Terminal',

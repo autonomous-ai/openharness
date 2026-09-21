@@ -2658,7 +2658,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ?mode('terminal.new', 'New terminal', 'A shell where you are'),
       ?mode(
         'agent.clone',
-        'Clone Agent',
+        'Clone Harness',
         'Another of this one, fresh conversation',
       ),
       ?mode('navigation.needs_input', 'Agents needing input', 'Who is waiting'),

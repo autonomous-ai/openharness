@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { createStopAgentService, type StopAgentServiceDeps } from './stopAgentService.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { stoppedAgents } from './stoppedAgents.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
 import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js'
+vi.mock('./captureResumeIdentity.js', () => ({ captureResumeIdentity: vi.fn(async session => session) }))
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn(), terminateDeletedAgent: vi.fn() }))
 let row: RegisteredSession
 let deps: StopAgentServiceDeps
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(captureResumeIdentity).mockReset().mockImplementation(async session => session)
   row = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%44' }], cwd: '/tmp' })!
   Object.assign(row, { sessionId: 'saved', processIdentity: { pid: 77, executable: 'codex', startMarker: 'fixture' } })
   deps = { registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
@@ -57,4 +60,36 @@ it('only signals through the validated process deleter and does not erase a newe
   await createStopAgentService(deps)(row.agentId)
   expect(signal).toHaveBeenCalledExactlyOnceWith(77, 'SIGTERM'); expect(deps.stopJobs.has(row.agentId)).toBe(true)
   expect(deps.tmuxBackend!.kill).toHaveBeenCalledExactlyOnceWith({ backend: 'tmux', paneId: '%44' })
+})
+
+it.each(['claude', 'codex'] as const)('captures an unbound %s conversation before deleting its process', async engine => {
+  Object.assign(row, { engine, sessionId: '', transcriptPath: null })
+  vi.mocked(captureResumeIdentity).mockImplementation(async session => {
+    expect(registry.byAgent(row.agentId)).toBe(row)
+    expect(deps.tmuxBackend!.kill).not.toHaveBeenCalled()
+    return { ...session, sessionId: 'recovered', transcriptPath: '/history.jsonl', boundAt: 1, source: 'stop-repair' }
+  })
+  await createStopAgentService(deps)(row.agentId)
+  expect(stoppedAgents.get(row.agentId)).toMatchObject({ engine, sessionId: 'recovered', transcriptPath: '/history.jsonl' })
+  expect(deps.markDeleted).toHaveBeenCalledWith('recovered')
+})
+it.each(['removed', 'replaced'] as const)('does not stop a process that was %s during identity capture', async mode => {
+  vi.mocked(captureResumeIdentity).mockImplementation(async session => {
+    if (mode === 'removed') registry.removeAgent(row.agentId)
+    else row.processIdentity = { ...row.processIdentity!, pid: 88 }
+    return session
+  })
+  await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('Harness changed')
+  expect(deps.tmuxBackend!.kill).not.toHaveBeenCalled()
+  expect(terminateDeletedAgent).not.toHaveBeenCalled()
+  expect(stoppedAgents.get(row.agentId)).toBeNull()
+})
+it('keeps the newer hook binding that arrives during capture', async () => {
+  row.sessionId = ''
+  vi.mocked(captureResumeIdentity).mockImplementation(async session => {
+    row.sessionId = 'latest'
+    return { ...session, sessionId: 'older' }
+  })
+  await createStopAgentService(deps)(row.agentId)
+  expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('latest')
 })
