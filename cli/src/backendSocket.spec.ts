@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'fs'
 import { homedir } from 'os'
 import { fileURLToPath } from 'url'
@@ -2153,5 +2153,44 @@ describe('agent_recent replies', () => {
     const reply = await recentReplyFor('device')
     expect(reply.events).toHaveLength(1)
     expect(reply.events[0]).not.toHaveProperty('fullText')
+  })
+})
+
+describe('machines_changed relay', () => {
+  // Earlier suites in this file leave their sockets in the mock's list; index 0 must be ours.
+  beforeEach(() => { wsMock.instances.length = 0 })
+  afterEach(() => {
+    wsMock.instances.length = 0
+    vi.restoreAllMocks()
+  })
+
+  it('hands the backend\'s machines_changed to the window, and only the backend\'s', async () => {
+    const socket = new BackendSocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:machines', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: 'machines_changed', payload: { reason: 'updated' } } })
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'machines_changed', payload: { reason: 'updated' } }))
+    // A local client cannot make every window of this computer re-read the list by saying so.
+    socket.handleLocalFrame('local:machines', { type: 'machines_changed', payload: { reason: 'forged' } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(frames.filter((f) => f.type === 'machines_changed')).toHaveLength(1)
+    await socket.unregisterLocalClient('local:machines')
+    await socket.stop()
+  })
+
+  it('relays a reason it can show and nothing else from the payload', async () => {
+    const socket = new BackendSocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:machines', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: 'machines_changed', payload: { reason: 42, extra: 'x' } } })
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'machines_changed', payload: { reason: 'updated' } }))
+    await socket.unregisterLocalClient('local:machines')
+    await socket.stop()
   })
 })

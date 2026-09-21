@@ -9,6 +9,7 @@ import {
   storedAutonomousEnvironment,
   type AutonomousEnvironment,
 } from './autonomousEnvironment.js'
+import { createSsoProfileCache, type SharedProfileStore } from './ssoProfileCache.js'
 
 /** Internal identity attached to authenticated backend requests and user WebSockets. */
 export interface AuthUser {
@@ -42,6 +43,28 @@ export function bearerToken(header: string | undefined): string | undefined {
 
 type FetchLike = typeof fetch
 
+// The cross-process store is attached by the server at startup rather than imported here: the Redis
+// module connects on import, and this file is imported by everything that authenticates.
+let sharedProfileStore: SharedProfileStore | null = null
+const profileCache = createSsoProfileCache({
+  ttlMs: env.SSO_PROFILE_CACHE_TTL_MS,
+  shared: () => sharedProfileStore,
+})
+
+export function useSharedSsoProfileStore(store: SharedProfileStore | null): void {
+  sharedProfileStore = store
+}
+
+// A BFF that predates the identity route answers it 404 every time. Remember that per account plane
+// for a few minutes rather than asking twice before every validation.
+const IDENTITY_MISSING_TTL_MS = 5 * 60_000
+const identityMissingUntil = new Map<AutonomousEnvironment, number>()
+
+export function clearSsoProfileCache(): void {
+  profileCache.clear()
+  identityMissingUntil.clear()
+}
+
 /** Validate the SSO access token against the Autonomous profile service. */
 export async function fetchSsoProfile(
   token: string,
@@ -52,21 +75,38 @@ export async function fetchSsoProfile(
   // always supplies the environment explicitly.
   const autonomousEnv = typeof autonomousEnvOrFetch === 'function' ? 'prod' : autonomousEnvOrFetch
   const fetchImpl = typeof autonomousEnvOrFetch === 'function' ? autonomousEnvOrFetch : (fetchOverride ?? fetch)
-  let res: Response
-  try {
-    res = await fetchImpl(autonomousEnvironmentConfig(autonomousEnv).ssoProfileUrl, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        Location: 'en-US',
-        Authorization: `Bearer ${token}`,
-      },
-      signal: AbortSignal.timeout(env.SSO_PROFILE_TIMEOUT_MS),
-    })
-  } catch {
-    throw new SsoAuthError('SSO profile service unavailable', 'AUTH_SERVICE_UNAVAILABLE')
+  const { ssoProfileUrl, ssoIdentityUrl } = autonomousEnvironmentConfig(autonomousEnv)
+  const ask = async (url: string): Promise<Response> => {
+    try {
+      return await fetchImpl(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Location: 'en-US',
+          Authorization: `Bearer ${token}`,
+        },
+        signal: AbortSignal.timeout(env.SSO_PROFILE_TIMEOUT_MS),
+      })
+    } catch {
+      throw new SsoAuthError('SSO profile service unavailable', 'AUTH_SERVICE_UNAVAILABLE')
+    }
   }
+
+  // The identity endpoint answers from the token alone; the profile endpoint costs the storefront a
+  // customer read and a cart read per call. Same envelope, same two fields.
+  //
+  // Identity is an optimisation, never a dependency: whenever it cannot give an ANSWER — not deployed
+  // (404), failing (5xx), unreachable — the profile URL is asked instead, exactly as before it existed.
+  // A 401/403 is an answer, and is final.
+  const useIdentity = !!ssoIdentityUrl && (identityMissingUntil.get(autonomousEnv) ?? 0) <= Date.now()
+  let res: Response | undefined
+  if (useIdentity) {
+    res = await ask(ssoIdentityUrl!).catch(() => undefined)
+    if (res?.status === 404) identityMissingUntil.set(autonomousEnv, Date.now() + IDENTITY_MISSING_TTL_MS)
+    if (res && (res.status === 404 || res.status >= 500)) res = undefined
+  }
+  res ??= await ask(ssoProfileUrl)
 
   if (res.status === 401 || res.status === 403) {
     throw new SsoAuthError('Invalid or expired SSO access token', 'INVALID_TOKEN')
@@ -141,7 +181,7 @@ export async function authenticateAccessToken(
   autonomousEnv: AutonomousEnvironment = 'prod',
   { enforceEnv = true }: { enforceEnv?: boolean } = {},
 ): Promise<AuthUser> {
-  const profile = await fetchSsoProfile(token, autonomousEnv)
+  const profile = await profileCache.resolve(token, autonomousEnv, () => fetchSsoProfile(token, autonomousEnv))
   const metadata = accessTokenMetadata(token)
   const email = normalizeUserEmail(profile.email)
   if (!email) throw new SsoAuthError('SSO profile service returned an invalid profile', 'AUTH_SERVICE_UNAVAILABLE')

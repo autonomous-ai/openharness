@@ -182,7 +182,7 @@ export type DownTransport = 'relay' | 'local' | 'p2p'
  * backend blocks its OWN `__`-prefixed control frames from web clients for the same reason; these
  * two escaped that rule because they are not `__`-prefixed.
  */
-const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed'])
+const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'machines_changed'])
 
 interface QueueItem {
   id: number
@@ -1447,6 +1447,15 @@ export class BackendSocket {
     if (type === 'desk_changed') {
       const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
       this.sendLocal({ type: 'desk_changed', payload: { revision: typeof revision === 'number' ? revision : 0 } })
+      return
+    }
+
+    // The account's machine list changed on some worker — a machine created / renamed / deleted, or a
+    // shared harness invited / taken back. The window re-reads `/api/machines` through this daemon; this
+    // push is why it does not have to poll for that. Backend-only for the same reason as desk_changed.
+    if (type === 'machines_changed') {
+      const reason = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { reason?: unknown }).reason : undefined)
+      this.sendLocal({ type: 'machines_changed', payload: { reason: typeof reason === 'string' ? reason : 'updated' } })
       return
     }
 

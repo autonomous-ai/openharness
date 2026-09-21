@@ -9,10 +9,12 @@ import { BACKEND_ONLY_DOWN_TYPES } from './webWs.js'
  * dropped during a tidy-up, which reopens the hole silently.
  */
 describe('frames a web client may never forge', () => {
-  it('refuses the two backend-authoritative frames that are not `__`-prefixed', () => {
+  it('refuses the backend-authoritative frames that are not `__`-prefixed', () => {
     // machine_meta names the account's private grid — the inference endpoint every agent on that
     // computer is then pointed at. machine_revoked makes the adapter clear its session and exit.
-    expect([...BACKEND_ONLY_DOWN_TYPES].sort()).toEqual(['machine_meta', 'machine_revoked'])
+    // desk_changed / machines_changed make every window on that computer re-read from the backend:
+    // forged in a loop, that is request amplification against our own API.
+    expect([...BACKEND_ONLY_DOWN_TYPES].sort()).toEqual(['desk_changed', 'machine_meta', 'machine_revoked', 'machines_changed'])
   })
 
   it('covers only frames that are NOT already caught by the `__` rule', () => {

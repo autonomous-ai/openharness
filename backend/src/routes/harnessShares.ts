@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma, machineAlive } from '../lib/prisma.js'
-import { getAgentPresenceMany, publishShareChanged } from '../lib/bus.js'
+import { getAgentPresenceMany, publishDeviceMachineListChanged, publishShareChanged } from '../lib/bus.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { validateBody, validateParams } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
@@ -22,6 +22,21 @@ const body = z.object({
 }).strict()
 
 /** Used again at socket admission and throughout a live connection. Never disclose another grant. */
+/**
+ * Shared harnesses arrive in the invited account's machine list, so an invitation given or taken back
+ * is a list change for THAT account: poke its open apps (web tabs, and each computer's daemon → app)
+ * to re-read. This is what lets the app stop polling `/api/harness-shares` to discover invitations.
+ * Best effort — the invitation is already persisted, and an address with no account has nobody to tell.
+ */
+async function tellRecipient(shareId: string): Promise<void> {
+  try {
+    const share = await prisma.harnessShare.findUnique({ where: { id: shareId } })
+    if (!share) return
+    const recipient = await prisma.user.findUnique({ where: { email: share.recipientEmail }, select: { id: true } })
+    if (recipient) await publishDeviceMachineListChanged(recipient.id, { reason: 'updated' })
+  } catch { /* best effort */ }
+}
+
 export async function recipientShare(id: string, user: AuthUser) {
   const share = await prisma.harnessShare.findFirst({ where: {
     id, recipientEmail: user.email.trim().toLowerCase(), autonomousEnv: user.autonomousEnv,
@@ -83,6 +98,7 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
       await prisma.harnessShare.upsert({ where: { id: req.params.id },
         create: { id: req.params.id, ...data }, update: data })
       await publishShareChanged(req.params.id)
+      await tellRecipient(req.params.id)
       sendSuccess(reply, { id: req.params.id })
     },
   )
@@ -94,6 +110,7 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
       }, data: { revokedAt: new Date() } })
       if (!changed.count) return sendError(reply, 'Invitation not found.', 'NOT_FOUND', 404)
       await publishShareChanged(req.params.id)
+      await tellRecipient(req.params.id)
       sendSuccess(reply, { removed: true })
     })
 }
