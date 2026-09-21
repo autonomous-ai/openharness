@@ -724,3 +724,33 @@ records why each warning occurs and the verification boundary. They were not sup
 misrepresented as cold-install/native-runtime passes. Eight setup-created paths were also found
 in the separately installed Circuit, Workshop, Godogen and Remotion packages; KiCad's cold setup
 and the OpenMontage production pipeline were not rerun for that structural review.
+
+## Eleventh improvement: inspect the physics behind a measurement
+
+Recording the robot walkthrough exposed a useful missing interaction: the lab reported the
+largest separation but left the user to search for its frame. The **Farthest apart** measurement
+is now a button that pauses both native worlds at the first stored frame with that maximum.
+**Apart at the finish** similarly jumps to the final moment. Saved experiment metrics include
+`maxSeparationFrame` and the actual `maxSeparationTime`, so an agent can locate the same observation.
+The wording explicitly describes sampled frames, not a continuous-time extremum search.
+
+A shared seek path also fixes a real return-to-comparison error: preview initialization used to
+reset the slider before reading the user's requested value, so scrubbing a retained comparison
+after returning live could jump back to zero. The requested frame is now captured before preview
+initialization, then both real MuJoCo data instances are positioned there without changing the
+live simulation.
+
+- All 29 viewer tests and its native WASM/server smoke checks pass. The analytical freefall check
+  now verifies the maximum is at its final sampled time; an identical-world comparison verifies
+  the first frame wins a zero-valued tie.
+- Twelve native browser journey checks pass, including keyboard activation of the maximum,
+  exact qpos for both displayed native poses, unchanged live state, the final-frame jump and
+  a nonzero seek after returning to the simulation. Existing downloads, deferred edits, narrow
+  layout and cancellation remain verified.
+- The refreshed Go2 recording shows the 6.586 cm maximum at its actual 0.252 s sample (frame 14),
+  then playback and portable exports. The new packet again reproduces with native MuJoCo.
+  Its 14.04-second H.264 video and native screenshot replace the previous guide demo; the guide
+  now describes the direct jump. Both controls and the timeline were visually inspected together.
+
+Evidence: `mujoco-peak-tests.txt`, `mujoco-peak-browser.txt`, `mujoco-peak/` and
+`mujoco-peak-demo/` under the local evidence root.

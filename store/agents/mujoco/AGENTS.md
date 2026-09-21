@@ -45,6 +45,9 @@ as a mint wireframe alongside the changed world, with paths, a shared timeline a
 separation. Invite a specific experiment that suits the task: “try a 20 N shove on the base” or
 “compare the same landing with less grip.” Keep the user's model and controller useful beyond the
 demo; the lab also works on their own MJCF.
+Click **Farthest apart** to inspect the first stored frame with the greatest body separation, or
+**Apart at the finish** for the final moment. These are paused views of both actual sampled poses;
+the saved metrics carry the peak's frame index and sample time for follow-up analysis.
 
 Both futures replay the same recorded control tape (or hold the current actuator values). A Python
 controller or learned policy is **not** making new decisions in the lab. Explain that distinction

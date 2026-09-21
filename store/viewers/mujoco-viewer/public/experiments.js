@@ -113,6 +113,7 @@ export async function compareFutures(engine, {
   check()
   const baseline = runs[0], variant = runs[1]
   const distances = baseline.frames.map((frame, i) => Math.hypot(...frame.position.map((x, axis) => x - variant.frames[i].position[axis])))
+  const maxSeparation = Math.max(...distances), maxSeparationFrame = distances.indexOf(maxSeparation)
   return {
     version: 1, kind: 'mujoco-counterfactual', model: engine.path, mujocoVersion: engine.version,
     body, bodyName: engine.info?.bodies[body]?.name || `body ${body}`, timestep: model.opt.timestep,
@@ -121,7 +122,8 @@ export async function compareFutures(engine, {
     originalPhysics: original, startingState: snapshot,
     controls: tape ? { kind: 'recorded-open-loop', tape } : { kind: 'held-at-start' },
     baseline, variant,
-    metrics: { finalSeparation: distances.at(-1), maxSeparation: Math.max(...distances),
+    metrics: { finalSeparation: distances.at(-1), maxSeparation,
+      maxSeparationFrame, maxSeparationTime: baseline.frames[maxSeparationFrame].t,
       baselineMinHeight: Math.min(...baseline.frames.map((f) => f.position[2])), variantMinHeight: Math.min(...variant.frames.map((f) => f.position[2])) },
   }
 }

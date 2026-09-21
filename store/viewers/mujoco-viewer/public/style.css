@@ -352,8 +352,11 @@ body.no-model #panel { display: none; }
 .experiment-legend span::before, #comparison-legend span::before { content: ''; display: inline-block; width: 13px; height: 0; border-top: 2px solid currentColor; margin-right: 6px; vertical-align: middle; }
 .experiment-legend .original::before, #comparison-legend .original::before { border-top-style: dashed; }
 .experiment-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0; }
+.experiment-metrics button { min-width: 0; text-align: left; padding: 8px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--bg); cursor: pointer; }
+.experiment-metrics button:hover:not(:disabled) { background: var(--accent-wash); border-color: var(--accent); }
 .experiment-metrics strong { font: 24px/1.3 var(--mono); letter-spacing: -1px; display: block; }
 .experiment-metrics span { font-size: 10px; color: var(--text-2); }
+.experiment-metrics small { display: block; margin-top: 6px; font-size: 9px; line-height: 1.5; color: var(--accent); }
 #experiment-chart { width: 100%; height: auto; display: block; stroke: none; }
 #experiment-chart .original { stroke: #0b8472; }
 #experiment-chart .changed { stroke: #b5680a; }

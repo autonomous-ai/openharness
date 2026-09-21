@@ -29,7 +29,7 @@ A harness points at it with
 | **Video** (`V`) | the rollout's mp4 on the same transport, when there is one |
 | **Live** | a new rollout, an edited scene or a recompiled model reloads in place — camera, selection, panel kept; while the agent is recording, the header says so and the timeline fills in; a scene that does not compile yet keeps the last good model running and says why |
 | **Model picker** | click the title: the agent's rollout, every MJCF in the workspace, every Menagerie robot |
-| **What if…** | pin a full simulation state; compare 1–10 seconds with changed gravity, friction and a 0.15 s sideways force; overlay both futures, scrub their shared timeline and inspect body-height and separation measurements |
+| **What if…** | pin a full simulation state; compare 1–10 seconds with changed gravity, friction and a 0.15 s sideways force; overlay both futures, scrub their shared timeline, or click a separation measurement to inspect the greatest sampled difference or the final moment |
 | **Keep an experiment** | download the exact compiled model inputs and assets, runtime patch, starting state, controls and measured frames as JSON, plus a measurements CSV; reproduce the JSON with the harness's native `toolchain/experiments.py` |
 
 Light and dark follow the system; the panel docks beside the stage in a wide pane and floats over it
@@ -41,6 +41,9 @@ mint wireframe is the original world; the solid model is the changed one. Both u
 controls (holding the last row after the tape ends), or the actuator values captured at the start.
 This is an open-loop comparison, not a new execution of the agent's Python controller. Measurement
 paths follow the selected body's centre of mass, in metres. A shove acts in world +X or −X.
+Click **Farthest apart** to pause at the first stored frame with the greatest measured separation;
+**Apart at the finish** jumps to the final frame. The saved metrics include the maximum's frame
+index and actual sample time. Both measurements describe stored frames, not a continuous-time search.
 
 Agent saves wait while a comparison is active. Returning to simulation applies the pending update;
 an invalid source edit keeps the previous model and its captured inputs. A new compiled model clears

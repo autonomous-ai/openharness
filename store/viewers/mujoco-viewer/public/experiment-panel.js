@@ -40,7 +40,7 @@ export class ExperimentPanel {
         <div class="experiment-legend"><span class="original">Original world · wireframe</span><span class="changed">Changed world · solid</span></div>
         <button type="button" id="experiment-frame">Frame both futures</button>
         <h3 id="experiment-result-title"></h3><p id="experiment-result-change" class="experiment-detail"></p>
-        <div class="experiment-metrics"><div><strong id="experiment-separation"></strong><span>Apart at the finish</span></div><div><strong id="experiment-maximum"></strong><span>Farthest apart</span></div></div>
+        <div class="experiment-metrics"><button type="button" id="experiment-finish" title="Pause at the final stored frame"><strong id="experiment-separation"></strong><span>Apart at the finish</span><small>Show final moment →</small></button><button type="button" id="experiment-peak" title="Pause at the first stored frame with the greatest body separation"><strong id="experiment-maximum"></strong><span>Farthest apart</span><small id="experiment-peak-time"></small></button></div>
         <svg id="experiment-chart" viewBox="0 0 260 100" role="img" aria-label="Body height over time in the original and changed world"></svg>
         <div class="experiment-playback"><button type="button" id="experiment-play">Pause comparison</button><output id="experiment-clock">0.00 s</output></div>
         <input id="experiment-scrub" aria-label="Comparison frame" type="range" min="0" max="0" step="1" value="0">
@@ -74,12 +74,9 @@ export class ExperimentPanel {
       }
       this.playLabel()
     }
-    $('experiment-scrub').oninput = () => {
-      if (!this.previewing && this.result) this.preview()
-      this.playing = false; this.cursor = Number($('experiment-scrub').value)
-      this.playTime = this.result.baseline.frames[this.cursor].t
-      this.showFrame(); this.playLabel()
-    }
+    $('experiment-scrub').oninput = () => this.seek(Number($('experiment-scrub').value))
+    $('experiment-peak').onclick = () => this.seek(this.result?.metrics.maxSeparationFrame)
+    $('experiment-finish').onclick = () => this.seek((this.result?.baseline.frames.length ?? 0) - 1)
     $('experiment-json').onclick = () => this.result && download('physics-experiment.json', JSON.stringify(this.result, null, 2), 'application/json')
     $('experiment-csv').onclick = () => this.result && download('physics-measurements.csv', comparisonCsv(this.result), 'text/csv')
     // Range keys and keyboard button activation belong to these controls, not the live transport.
@@ -185,6 +182,7 @@ export class ExperimentPanel {
     $('experiment-result-change').textContent = `${c.gravityScale}× gravity · ${c.frictionScale}× friction · ${c.pushNewtons} N shove`
     $('experiment-separation').textContent = distance(r.metrics.finalSeparation)
     $('experiment-maximum').textContent = distance(r.metrics.maxSeparation)
+    $('experiment-peak-time').textContent = `At ${r.metrics.maxSeparationTime.toFixed(2)} s · Show moment →`
     $('experiment-control-note').textContent = r.controls.kind === 'recorded-open-loop'
       ? 'Both worlds use the recorded control tape, then hold its last values. The controller is not making new decisions.'
       : 'Both worlds hold the actuator values from your pinned moment.'
@@ -235,6 +233,18 @@ export class ExperimentPanel {
     const x = 5 + t / this.result.duration * 250
     $('experiment-chart-cursor').setAttribute('x1', String(x)); $('experiment-chart-cursor').setAttribute('x2', String(x))
     this.context.legend(`${this.result.bodyName} · ${t.toFixed(2)} s`)
+  }
+
+  seek(index) {
+    if (this.running || !this.result || !Number.isInteger(index) || index < 0 || index >= this.result.baseline.frames.length) return
+    // Capture the requested frame before preview() resets the slider to its start.
+    // This also lets a kept-on-screen comparison be inspected after returning live.
+    if (!this.previewing) this.preview()
+    if (!this.previewing) return
+    this.playing = false
+    this.cursor = index
+    this.playTime = this.result.baseline.frames[index].t
+    this.showFrame(); this.playLabel()
   }
 
   tick(elapsed) {

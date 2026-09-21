@@ -20,7 +20,7 @@ A real MuJoCo session: a 100 N sideways force for 0.15 seconds, with the same re
 > Load the Unitree Go2 and make it stand, then do three slow squats. Record the motion so I can open What if, change the surface friction and compare what happens from the same moment.
 
 1. **Catch a moment.** Open What if, choose a body to follow and pin the current state.
-2. **Change one thing.** Try Slippery ground or Lunar gravity, then Compare futures. Scrub both worlds together and inspect where they separate.
+2. **Change one thing.** Try Slippery ground or Lunar gravity, then Compare futures. Scrub both worlds together, or click Farthest apart to inspect the greatest sampled difference.
 3. **Keep the experiment.** Save experiment preserves the model, its assets, the starting state, controls and measured frames. Measurements CSV keeps the numbers too.
 
 **Yours to keep:** A reproducible physics experiment and measurements CSV.
