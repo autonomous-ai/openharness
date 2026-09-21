@@ -100,7 +100,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["select", "close", "new", "rename", "commands", "notifications", "store", "addAgent", "newAgent", "newTerminal", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
+    guard ["select", "close", "new", "rename", "commands", "notifications", "store", "addAgent", "newAgent", "newTerminal", "cloneAgent", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -237,6 +237,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       item.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + action)
       let symbols = [
         "new": "plus.square", "newAgent": "plus", "addAgent": "plus", "newTerminal": "terminal",
+        "cloneAgent": "plus.square.on.square",
         "renameActive": "pencil", "closeActive": "xmark",
         "splitRight": "rectangle.split.2x1", "splitDown": "rectangle.split.1x2",
         "zoomPane": "viewfinder", "closePane": "xmark",
@@ -260,6 +261,8 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // row and loses its default chord — the Dart keymap (`swarm.reopen`) is where both are decided,
     // and applyMenuKeys rewrites every equivalent here from it.
     add(file, "New Terminal", "t", "newTerminal", [.command, .shift])
+    // ⌘⇧N: another agent like the focused pane's, fresh conversation (Dart: `agent.clone`).
+    add(file, "Clone Agent", "n", "cloneAgent", [.command, .shift])
     add(file, "Rename Tab…", "r", "renameActive", [.command, .shift])
     add(file, "Close Tab", "w", "closeActive")
     file.addItem(.separator())

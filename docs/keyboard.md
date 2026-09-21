@@ -14,6 +14,7 @@ The defaults, in the workspace:
 | ⌘B | Boss mode: describe a task, it picks the agent |
 | ⌘W · ⇧⌘R | Close tab · rename tab |
 | ⇧⌘T | New terminal in the current project |
+| ⇧⌘N | Clone Agent — another agent like the focused pane's (same machine, project, harness, Codex profile, permission mode, named agent) with a fresh conversation. No dialog; fork minus the context |
 | ⌘1 … ⌘9 | Select tab by position |
 | ⇧⌘] · ⇧⌘[ · ⌃Tab · ⌃⇧Tab | Next · previous tab |
 | ⌘] · ⌘[ · ⌘Y | Forward · back through visited agents · full history |
