@@ -3166,9 +3166,9 @@ async function runForeground(session: AuthSession): Promise<void> {
        * process that POSTs is not a descendant of the pane's engine, so no session ever binds. It is not
        * a Herdr problem; tmux fails identically.
        *
-       * The pane is itself proof: the hook knew a runtime id, that runtime carries exactly one agent of
-       * this engine, and the caller already had to read the 0600 hook credential to be heard at all. So
-       * fall back to that, and only when it is unambiguous.
+       * Keep that exception specific to Cursor. A delayed hook from an exited process can still name
+       * a pane now owned by its replacement; the pane and hook credential alone cannot prove that a
+       * Codex (or other engine's) old transcript belongs to the new process.
        */
       const onHintedRuntime = new Map<string, RegisteredSession>()
       for (const runtime of resolved) {
@@ -3192,7 +3192,7 @@ async function runForeground(session: AuthSession): Promise<void> {
           }
         }
       }
-      const choice = chooseHookAgent([...candidates.values()], [...onHintedRuntime.values()])
+      const choice = chooseHookAgent([...candidates.values()], [...onHintedRuntime.values()], engine)
       if (choice.agent) {
         if (choice.reason === 'runtime') {
           console.log(`[hooks] ${engine} hook accepted on runtime evidence alone`
