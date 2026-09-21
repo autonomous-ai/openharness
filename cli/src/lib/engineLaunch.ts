@@ -810,10 +810,15 @@ export async function commandSupportsFlagInInteractiveShell(
 ): Promise<CommandFlagSupport> {
   const interactive = interactiveEngineShell(shell)
   if (!interactive) return 'unknown'
+  // `harness_help_status`, not `status`: in zsh `status` is a read-only special parameter (an alias
+  // of `$?`), so `status=$?` is a fatal error there and the shell dies with exit 1 — which this
+  // function would read as `unsupported` and refuse an engine that does support the flag. macOS
+  // defaults $SHELL to zsh, so the bare name made every Auto-approval probe on a Mac a false
+  // refusal. Same reason `engineFallbackPrelude` namespaces its own `harness_status`.
   const script = [
     'help="$("$1" --help 2>&1)"',
-    'status=$?',
-    '[ "$status" -eq 0 ] || exit 2',
+    'harness_help_status=$?',
+    '[ "$harness_help_status" -eq 0 ] || exit 2',
     'case "$help" in *"$2"*) exit 0 ;; *) exit 1 ;; esac',
   ].join('\n')
   return await new Promise((resolve) => {
