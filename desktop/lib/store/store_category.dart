@@ -5,12 +5,13 @@ import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/skeleton.dart';
 import 'store_listing.dart';
+import 'store_featured_art.dart';
 import 'store_exploration.dart';
 import 'store_explore_widgets.dart';
 import 'store_models.dart';
 
-/// A discipline has its own invitation, real examples, and tools to try. Search
-/// and the complete index keep their compact rows; individual pages are unchanged.
+/// A short invitation and an icon-led catalog. Product details and examples
+/// remain one click away; browsing never turns into a wall of screenshots.
 class StoreCategory extends StatefulWidget {
   const StoreCategory({
     super.key,
@@ -22,7 +23,6 @@ class StoreCategory extends StatefulWidget {
     required this.ratingFor,
     required this.installed,
     required this.onOpen,
-    required this.actionsFor,
   });
 
   final String name;
@@ -33,7 +33,6 @@ class StoreCategory extends StatefulWidget {
   final StoreRating Function(DshEntry) ratingFor;
   final bool Function(String) installed;
   final ValueChanged<String> onOpen;
-  final Widget Function(DshEntry) actionsFor;
 
   @override
   State<StoreCategory> createState() => _StoreCategoryState();
@@ -73,7 +72,6 @@ class _StoreCategoryState extends State<StoreCategory> {
     final ratingFor = widget.ratingFor;
     final installed = widget.installed;
     final onOpen = widget.onOpen;
-    final actionsFor = widget.actionsFor;
     final installedCount = widget.entries.where((e) => installed(e.id)).length;
     final entries = _installedOnly
         ? widget.entries.where((e) => installed(e.id)).toList()
@@ -98,20 +96,17 @@ class _StoreCategoryState extends State<StoreCategory> {
                 children: [
                   _DisciplineHero(
                     name: name,
-                    discipline: discipline,
                     entry: example,
                     headline: discipline.headline,
                     description: discipline.description,
                     onOpen: example == null ? null : () => onOpen(example.id),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 26),
                   StoreExploreHeading(
-                    title: coding
-                        ? 'The agents you already know.'
-                        : discipline.invitation,
+                    title: coding ? 'Coding agents' : 'Explore $name',
                     subtitle: entries.isEmpty && !loaded
                         ? null
-                        : '${entries.length} ${coding ? (entries.length == 1 ? 'coding agent' : 'coding agents') : (entries.length == 1 ? 'harness' : 'harnesses')} to explore.',
+                        : '${entries.length} ${coding ? (entries.length == 1 ? 'coding agent' : 'coding agents') : (entries.length == 1 ? 'harness' : 'harnesses')}',
                   ),
                   const SizedBox(height: 14),
                   Wrap(
@@ -191,20 +186,13 @@ class _StoreCategoryState extends State<StoreCategory> {
                               ),
                             ],
                           )
-                  else if (coding)
+                  else
                     StoreListing(
                       entries: entries,
                       ratingFor: ratingFor,
                       onOpen: onOpen,
-                      actionsFor: actionsFor,
-                    )
-                  else
-                    StoreProjectGrid(
-                      entries: entries,
-                      ratingFor: ratingFor,
-                      onOpen: onOpen,
-                      actionsFor: actionsFor,
                     ),
+
                   if (related.isNotEmpty) ...[
                     const SizedBox(height: 36),
                     const StoreExploreHeading(
@@ -229,10 +217,6 @@ class _StoreCategoryState extends State<StoreCategory> {
                       ],
                     ),
                   ],
-                  if (entries.isNotEmpty && !coding) ...[
-                    const SizedBox(height: 40),
-                    const StoreLearningNote(),
-                  ],
                 ],
               ),
             ),
@@ -246,112 +230,127 @@ class _StoreCategoryState extends State<StoreCategory> {
 class _DisciplineHero extends StatelessWidget {
   const _DisciplineHero({
     required this.name,
-    required this.discipline,
     required this.entry,
     required this.headline,
     required this.description,
     required this.onOpen,
   });
   final String name;
-  final StoreDiscipline discipline;
   final DshEntry? entry;
   final String headline;
   final String description;
   final VoidCallback? onOpen;
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, box) {
-      final narrow =
-          box.maxWidth < 650 || MediaQuery.textScalerOf(context).scale(14) > 20;
-      final compact = box.maxWidth < 1000;
-      final copy = Padding(
-        padding: EdgeInsets.all(compact ? 26 : 36),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              name.toUpperCase(),
-              style: const TextStyle(
-                fontSize: 11,
-                letterSpacing: 2,
-                fontWeight: FontWeight.w700,
-                color: Color(0xff344437),
-              ),
-            ),
-            const SizedBox(height: 22),
-            Text(
-              headline,
-              style: TextStyle(
-                fontSize: compact ? 35 : 43,
-                height: 1.05,
-                letterSpacing: -1.6,
-                fontWeight: FontWeight.w700,
-                color: const Color(0xff182b24),
-              ),
-            ),
-            const SizedBox(height: 18),
-            Text(
-              description,
-              style: const TextStyle(
-                fontSize: 14,
-                height: 1.6,
-                color: Color(0xff37473d),
-              ),
-            ),
-            if (entry != null) ...[
-              const SizedBox(height: 22),
-              TextButton.icon(
-                key: const ValueKey('store-category-feature'),
-                onPressed: onOpen,
-                iconAlignment: IconAlignment.end,
-                icon: const Icon(LucideIcons.arrowUpRight300, size: 16),
-                style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xff182b24),
-                  backgroundColor: Colors.white.withValues(alpha: .55),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 14,
+  Widget build(BuildContext context) => Column(
+    key: const ValueKey('store-category-hero'),
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text(
+        name,
+        style: TextStyle(
+          fontSize: 34,
+          height: 1.15,
+          letterSpacing: -1,
+          fontWeight: FontWeight.w700,
+          color: grid.AppPalette.textPrimary,
+        ),
+      ),
+      const SizedBox(height: 20),
+      LayoutBuilder(
+        builder: (context, box) {
+          final compact =
+              box.maxWidth < 740 ||
+              MediaQuery.textScalerOf(context).scale(14) > 20;
+          final copy = Padding(
+            padding: const EdgeInsets.all(26),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'GET STARTED',
+                  style: TextStyle(
+                    fontSize: 10,
+                    letterSpacing: 1.2,
+                    fontWeight: FontWeight.w700,
+                    color: grid.AppPalette.accentOnSurface,
                   ),
-                  shape: const StadiumBorder(),
                 ),
-                label: Text('Explore ${entry!.name}'),
-              ),
-            ],
-          ],
-        ),
-      );
-      final art = entry == null
-          ? null
-          : AspectRatio(
-              aspectRatio: narrow ? 1.8 : 1.35,
-              child: Padding(
-                padding: const EdgeInsets.all(18),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
-                  child: StoreProjectArt(entry: entry!),
+                const SizedBox(height: 12),
+                Text(
+                  headline.replaceAll('\n', ' '),
+                  style: TextStyle(
+                    fontSize: 27,
+                    height: 1.15,
+                    letterSpacing: -.5,
+                    fontWeight: FontWeight.w700,
+                    color: grid.AppPalette.textPrimary,
+                  ),
                 ),
-              ),
-            );
-      return Container(
-        key: const ValueKey('store-category-hero'),
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: discipline.color,
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: narrow || art == null
-            ? Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [copy, ?art],
-              )
-            : Row(
-                children: [
-                  Expanded(flex: 11, child: copy),
-                  Expanded(flex: 10, child: art),
+                const SizedBox(height: 12),
+                Text(
+                  description,
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1.5,
+                    color: grid.AppPalette.textSecondary,
+                  ),
+                ),
+                if (entry != null) ...[
+                  const SizedBox(height: 20),
+                  Row(
+                    children: [
+                      StoreAppIcon(entry: entry!, size: 30),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Explore ${entry!.name}',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: grid.AppPalette.textPrimary,
+                          ),
+                        ),
+                      ),
+                      Icon(
+                        LucideIcons.arrowRight300,
+                        size: 16,
+                        color: grid.AppPalette.textSecondary,
+                      ),
+                    ],
+                  ),
                 ],
-              ),
-      );
-    },
+              ],
+            ),
+          );
+          final art = entry == null
+              ? null
+              : AspectRatio(
+                  aspectRatio: 2,
+                  child: StoreFeaturedArt(category: name, entry: entry!),
+                );
+          final body = compact || art == null
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [copy, ?art],
+                )
+              : Row(
+                  children: [
+                    Expanded(child: copy),
+                    Expanded(child: art),
+                  ],
+                );
+          return entry == null
+              ? body
+              : StoreExploreCard(
+                  key: const ValueKey('store-category-feature'),
+                  color: storeDiscipline(name).color,
+                  onTap: onOpen!,
+                  semanticLabel: 'Explore ${entry!.name}',
+                  child: body,
+                );
+        },
+      ),
+    ],
   );
 }

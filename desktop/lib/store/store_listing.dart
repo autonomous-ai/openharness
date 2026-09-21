@@ -6,41 +6,70 @@ import '../widgets/engine_identity.dart';
 import 'store_editorial.dart';
 import 'store_models.dart';
 
-/// Compact, responsive rows for search, the complete index, and coding agents.
+/// One consistent app identity across discovery, categories, and search.
+/// Vendor marks retain their aspect ratio and their light/dark treatments.
+class StoreAppIcon extends StatelessWidget {
+  const StoreAppIcon({super.key, required this.entry, this.size = 56});
+  final DshEntry entry;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: size,
+    height: size,
+    padding: EdgeInsets.all(size * .12),
+    decoration: BoxDecoration(
+      color: grid.AppSurface.recess,
+      borderRadius: BorderRadius.circular(size * .23),
+      border: Border.all(color: grid.AppPalette.divider),
+    ),
+    child: EngineMark(
+      engine: entry.id,
+      displayName: entry.name,
+      size: size * .76,
+    ),
+  );
+}
+
+/// Icon rows are the default catalog presentation. Reserve large imagery for
+/// editorial features, so tools with different output formats scan alike.
 class StoreListing extends StatelessWidget {
   const StoreListing({
     super.key,
     required this.entries,
     required this.ratingFor,
     required this.onOpen,
-    required this.actionsFor,
+    this.rowKeyPrefix = 'store-card',
+    this.showRanks = false,
   });
   final List<DshEntry> entries;
   final StoreRating Function(DshEntry) ratingFor;
   final ValueChanged<String> onOpen;
-  final Widget Function(DshEntry) actionsFor;
+  final String rowKeyPrefix;
+  final bool showRanks;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, box) {
-      final columns = box.maxWidth >= 1120
-          ? 3
-          : box.maxWidth >= 720
-          ? 2
-          : 1;
-      final width = (box.maxWidth - (columns - 1) * 24) / columns;
+      final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+      final columns = (box.maxWidth / (340 * scale)).floor().clamp(1, 3);
+      final width = (box.maxWidth - (columns - 1) * 28) / columns;
+      final reserveRating = entries.any((entry) => !ratingFor(entry).isEmpty);
+      final reserveUpdate = entries.any((entry) => entry.hasUpdate);
       return Wrap(
-        spacing: 24,
+        spacing: 28,
         children: [
           for (final entry in entries)
             SizedBox(
               width: width,
               child: _ProductRow(
-                key: ValueKey('store-card:${entry.id}'),
+                key: ValueKey('$rowKeyPrefix:${entry.id}'),
+                rank: showRanks ? entries.indexOf(entry) + 1 : null,
                 entry: entry,
                 rating: ratingFor(entry),
+                reserveRating: reserveRating,
+                reserveUpdate: reserveUpdate,
                 onOpen: () => onOpen(entry.id),
-                actions: actionsFor(entry),
               ),
             ),
         ],
@@ -54,39 +83,62 @@ class _ProductRow extends StatelessWidget {
     super.key,
     required this.entry,
     required this.rating,
+    required this.reserveRating,
+    required this.reserveUpdate,
     required this.onOpen,
-    required this.actions,
+    this.rank,
   });
   final DshEntry entry;
   final StoreRating rating;
+  final bool reserveRating;
+  final bool reserveUpdate;
   final VoidCallback onOpen;
-  final Widget actions;
+  final int? rank;
 
   @override
-  Widget build(BuildContext context) => Material(
-    color: Colors.transparent,
-    child: InkWell(
-      onTap: onOpen,
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        constraints: const BoxConstraints(minHeight: 94),
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 6),
-        decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: grid.AppPalette.divider)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                EngineMark(engine: entry.id, displayName: entry.name, size: 42),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
+  Widget build(BuildContext context) {
+    final scale = MediaQuery.textScalerOf(context).scale(12) / 12;
+    final benefit = entry.isEngine
+        ? entry.tagline ??
+              engineIdentity(entry.id).tagline ??
+              storeBenefit(entry)
+        : storeBrowseBenefit(entry);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onOpen,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 4),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: grid.AppPalette.divider)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (rank != null) ...[
+                SizedBox(
+                  width: 18,
+                  child: Text(
+                    '$rank',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: grid.AppPalette.textSecondary,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+              ],
+              StoreAppIcon(entry: entry),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Tooltip(
+                      message: entry.name,
+                      child: Text(
                         entry.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -96,9 +148,12 @@ class _ProductRow extends StatelessWidget {
                           color: grid.AppPalette.textPrimary,
                         ),
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        storeBenefit(entry),
+                    ),
+                    const SizedBox(height: 4),
+                    SizedBox(
+                      height: 32 * scale,
+                      child: Text(
+                        benefit,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -107,53 +162,49 @@ class _ProductRow extends StatelessWidget {
                           color: grid.AppPalette.textSecondary,
                         ),
                       ),
-                      if (entry.hasUpdate) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          'Update available',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: grid.AppPalette.accentOnSurface,
-                          ),
+                    ),
+                    if (reserveUpdate) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        entry.hasUpdate ? 'Update available' : ' ',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: grid.AppPalette.accentOnSurface,
                         ),
-                      ],
-                      if (!rating.isEmpty) ...[
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.star_rounded,
-                              size: 12,
-                              color: grid.AppPalette.textSecondary,
-                            ),
-                            const SizedBox(width: 3),
-                            Text(
-                              '${rating.average.toStringAsFixed(1)} · ${rating.count}',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: grid.AppPalette.textSecondary,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                      ),
                     ],
-                  ),
+                    if (reserveRating) ...[
+                      const SizedBox(height: 4),
+                      SizedBox(
+                        height: 14 * scale,
+                        child: rating.isEmpty
+                            ? null
+                            : Row(
+                                children: [
+                                  Icon(
+                                    Icons.star_rounded,
+                                    size: 12,
+                                    color: grid.AppPalette.textSecondary,
+                                  ),
+                                  const SizedBox(width: 3),
+                                  Text(
+                                    '${rating.average.toStringAsFixed(1)} · ${rating.count}',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: grid.AppPalette.textSecondary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                      ),
+                    ],
+                  ],
                 ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            if (entry.isViewerPackage)
-              TextButton(
-                key: ValueKey('store-action:${entry.id}'),
-                onPressed: onOpen,
-                child: const Text('View'),
-              )
-            else
-              actions,
-          ],
+              ),
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

@@ -29,7 +29,16 @@ conversation where the engine supports it.
 matched, with a session preview on the right built from cached recent turns. Type `>` for commands
 only (also ⇧⌘P).
 
-In the **Harness Store**, installed tools offer **Resume Harness** and **New Harness**.
+The **Harness Store** keeps search at the top while you browse. Discover opens with three
+illustrated features, then icon collections for coding, new and updated harnesses in this
+release, and other crafts. A Top rated collection appears once at least two tools have
+three community reviews each. Each discipline has one feature and compact icon rows.
+Open a tool for its full examples and details.
+
+Store rows open details without starting work. A tool's page shows **Get** if it is not
+installed on this computer, **Update** when an update is available, or **New Harness**
+when it is ready. **Resume Harness** appears beside New only when existing work can
+be resumed; the two buttons have equal widths. Launch buttons appear only on this page.
 Resume returns to the existing harness, including one on another machine. With one matching harness
 it opens directly; with several, a dropdown shows each harness's name, machine and project. Recent
 visits appear first. An open tab is focused; a closed tab is reopened around the same running agent.

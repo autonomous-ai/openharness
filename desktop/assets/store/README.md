@@ -1,8 +1,20 @@
 # Store previews
 
-These are bundled example outputs, so Discover works without external image services.
-They illustrate existing harnesses; editorial features are only shown when their package
-is present in the live catalog. They are not claims of automatic engineering validation.
+All Store artwork is bundled, so browsing needs no external image service. Featured
+stories only appear when their tool is present in the live catalog.
+
+## Editorial illustrations
+
+`editorial-*.png` are eleven original illustrations generated with the built-in
+imagegen tool. The exact prompts and file mapping are in
+[`editorial-prompts.json`](../../tool/store_artwork/editorial-prompts.json).
+Discover uses three features (coding, 3D design, circuits); each discipline uses
+one feature. All catalog rows use app icons. These illustrations depict a craft,
+not an app screenshot or a claimed agent result.
+
+## Original example outputs
+
+These assets are real example outputs, not claims of automatic engineering validation.
 
 - `blender-studio.png`: original procedural Blender scene, made for Harness. Reproduce with
   `desktop/tool/store_artwork/render.py` using the Blender harness's `bpy` environment.
@@ -28,7 +40,8 @@ source is `desktop/tool/render_store_mark.swift`; regenerate from `desktop/` wit
 ## Exploration previews
 
 `projects/` contains unaltered copies of the repository's showcase outputs.
-Discovery and category pages use these; individual harness pages keep their existing artwork.
+These remain available for deliberate editorial features. Discovery and categories now use
+app icons for browsing; individual harness pages keep their existing artwork.
 
 | Bundled image | Source under `store/showcase/` |
 | --- | --- |
@@ -46,18 +59,19 @@ Discovery and category pages use these; individual harness pages keep their exis
 | `projects/yosys.jpg` | `yosys/fibonacci-cpu.jpg` |
 | `projects/orca-slicer.jpg` | `orca-slicer/spacer.jpg` |
 
-New packages can supply example images in their Store metadata. If no preview is available,
-the card displays the package mark. Shared viewers never appear as creative projects.
+New packages can supply example images in their Store metadata for their detail pages.
+Shared viewers never appear as creative projects.
 
-## Browse covers
+## Curated artwork library
 
-Every currently listed domain harness has an explicit cover in `store_cover_art.dart`.
-The 48 covers include 13 upstream images and 35 original Harness outputs or viewer captures.
-Coding agents keep their compact engine marks. Individual harness pages and the prompt
-showcase retain their existing example images.
+The 48 covers in `store_cover_art.dart` include 13 upstream images and 35 original Harness
+outputs or viewer captures. They are retained as a sourced artwork library, not displayed
+as a thumbnail grid. Discover and category features use the editorial illustrations
+above; their browsing collections use app icons. Individual harness pages retain their
+existing examples and artwork.
 
 The UI frames useful image regions without modifying the bundled originals. Upstream
-covers illustrate the tool, not the result of the adjacent suggested prompt. Their image
+covers illustrate the tool, not a claimed result of a suggested prompt. Their image
 credit control links to the source; license notices are bundled alongside the images.
 `sources.json` records the catalog ID, exact source, retrieval URL, and SHA-256 for each file.
 Retrieved 2026-09-20. Source artwork retains its own terms; the repository's MIT license
@@ -132,7 +146,7 @@ screenshots, with the corresponding software notices preserved.
 
 For wrapped tools with no useful published artwork, the cover shows an original project
 output or Harness's own viewer. For example, Godogen's upstream thumbnail is a text title
-card; the Store shows our playable Neon Drift game. The local AI runtimes are command-line
+card; the library includes our playable Neon Drift game. The local AI runtimes are command-line
 tools, so their covers show the original Harness model-control interfaces. Selection
 notes for these cases are in `sources.json`.
 

@@ -611,14 +611,14 @@ void main() {
           of: find.byKey(const ValueKey('store-card:claude')),
           matching: find.text('New Harness'),
         ),
-        findsOneWidget,
+        findsNothing,
       );
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('store-card:codex')),
           matching: find.text('Get'),
         ),
-        findsOneWidget,
+        findsNothing,
       );
 
       await tester.ensureVisible(
