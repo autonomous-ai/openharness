@@ -10,7 +10,7 @@ import 'box_chrome.dart';
 import 'terminal_prompt.dart';
 
 String forkNameFor(String name) =>
-    '${name.trim().isEmpty ? 'Agent' : name.trim()} - fork';
+    '${name.trim().isEmpty ? 'Harness' : name.trim()} - fork';
 
 /// The model retains the draft, receipt and destination across dismissal.
 Future<void> forkHarness(
@@ -176,8 +176,7 @@ class _ForkAgentPromptState extends State<_ForkAgentPrompt> {
       result = await request;
     } catch (_) {
       result = const ForkAgentResult(
-        error:
-            'Could not confirm the fork. Check agents before starting another.',
+        error: 'Could not confirm the fork. Check harnesses before starting another.',
       );
     }
     if (!mounted) return;
@@ -347,7 +346,7 @@ class _ForkAgentPromptState extends State<_ForkAgentPrompt> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Text(
-                        'Fork Agent',
+                        'Fork Harness',
                         style: boxMonoStyle(size: 12, color: kBoxFaint),
                       ),
                       const SizedBox(height: 10),

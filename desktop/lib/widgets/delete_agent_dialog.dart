@@ -118,7 +118,7 @@ class _StopAgentPromptState extends State<_StopAgentPrompt> {
     try {
       error = await request;
     } catch (_) {
-      error = 'Could not stop the agent. Try again.';
+      error = 'Could not stop the harness. Try again.';
     }
     if (!mounted) return;
     if (error == null) {
@@ -154,7 +154,7 @@ class _StopAgentPromptState extends State<_StopAgentPrompt> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      widget.terminal ? 'Stop Terminal' : 'Stop Agent',
+                      widget.terminal ? 'Stop Terminal' : 'Stop Harness',
                       style: boxMonoStyle(size: 12, color: kBoxFaint),
                     ),
                     const SizedBox(height: 12),
@@ -177,7 +177,7 @@ class _StopAgentPromptState extends State<_StopAgentPrompt> {
                     Text(
                       widget.terminal
                           ? 'End this shell and anything running in it? Files are kept.'
-                          : 'End the running agent? Project files and saved conversation history are kept.',
+                          : 'Stop this harness? Project files and saved conversation history are kept.',
                       style: boxMonoStyle(size: 12, color: Colors.white70),
                     ),
                     const SizedBox(height: 8),

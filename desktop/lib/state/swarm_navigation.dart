@@ -349,9 +349,41 @@ Future<void> _resumeStoppedDestination(
       .where((agent) => agent.id == agentId)
       .firstOrNull;
   if (agent?.isStopped != true) return;
-  final result = await app.resumeAgent(machineId, agentId);
-  if (result.error case final error?) {
-    throw SwarmResumeFailure(destination, error);
+  final machine = app.stateOf(machineId);
+  final terminalReady = Completer<void>();
+  void observeRuntime() {
+    if (terminalReady.isCompleted ||
+        !identical(machine, app.stateOf(machineId)) ||
+        app.pendingAgentStop(machineId, agentId) != null) {
+      return;
+    }
+    final current = app
+        .stateOf(machineId)
+        ?.agents
+        .where((row) => row.id == agentId)
+        .firstOrNull;
+    // This opens a view of the allocated terminal, not a claim that history
+    // has loaded. The native CLI may need login or hook review before it can
+    // confirm the conversation; the receipt keeps verifying in the background.
+    if (current?.terminalAvailable == true &&
+        current?.sessionId == agent!.sessionId &&
+        current?.launchState != 'failed' &&
+        current?.isStopped == false) {
+      terminalReady.complete();
+    }
+  }
+
+  app.addListener(observeRuntime);
+  try {
+    final confirmed = app.resumeAgent(machineId, agentId).then((result) {
+      if (result.error case final error?) {
+        throw SwarmResumeFailure(destination, error);
+      }
+    });
+    observeRuntime();
+    await Future.any([confirmed, terminalReady.future]);
+  } finally {
+    app.removeListener(observeRuntime);
   }
 }
 
@@ -732,8 +764,8 @@ Future<bool> activateSwarmSearchSelection(
         return false;
       }
     } else {
-      // Validate and resume before allocation, so a stale row or a failed
-      // resume cannot leave an empty tab behind.
+      // Validate the saved target and wait for its terminal before allocating
+      // a tab, so a refusal cannot leave an empty tab behind.
       app.newSwarm();
       target = app.activeSwarm;
     }

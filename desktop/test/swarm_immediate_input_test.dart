@@ -103,8 +103,9 @@ void main() {
             await tester.pump(const Duration(milliseconds: 10));
             expect(secondInput, isEmpty, reason: 'The old agent owns no input');
             if (action == 'new tab') {
-              expect(app.panes, [first, second]);
-              expect(app.swarms, hasLength(1));
+              expect(app.panes, isEmpty);
+              expect(app.swarms.first.panes, [first, second]);
+              expect(app.swarms, hasLength(2));
               expect(firstInput, isEmpty);
               expect(
                 tester

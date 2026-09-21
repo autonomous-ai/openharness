@@ -200,8 +200,8 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-    expect(app.swarms, hasLength(1));
-    expect(app.activeSwarm, same(original));
+    expect(app.swarms, hasLength(2));
+    expect(app.activeSwarm, isNot(same(original)));
     expect(
       tester
           .widget<TextField>(find.byKey(const ValueKey('swarm-search-input')))
@@ -748,7 +748,7 @@ void main() {
       tester.testTextInput.updateEditingValue(TextEditingValue.empty);
       await tester.pump();
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-      expect(app.swarms, hasLength(1));
+      expect(app.swarms, hasLength(2));
       expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
       app.dispose();

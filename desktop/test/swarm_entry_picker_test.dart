@@ -182,7 +182,7 @@ void main() {
 
     for (final dismissal in ['outside', 'escape']) {
       testWidgets(
-        'New Tab has a usable page after $dismissal (native=$native)',
+        'New Tab discards its empty draft after $dismissal (native=$native)',
         (tester) async {
           final app = createApp();
           final frames = <TerminalBinaryFrame>[];
@@ -191,7 +191,8 @@ void main() {
           await mount(tester, app, nativeTabs: native);
           await chord(tester, LogicalKeyboardKey.keyT);
           await tester.pump();
-          expect(app.activeSwarmId, original);
+          expect(app.activeSwarmId, isNot(original));
+          expect(app.activeSwarm.isNewTabPage, isTrue);
           expect(_results, findsOneWidget);
           expect(_startInput, findsNothing);
           if (dismissal == 'outside') {

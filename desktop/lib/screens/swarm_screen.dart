@@ -203,9 +203,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool _firstLaunchScheduled = false;
 
   String? _emptyEntryTab;
+  final _newTabSources = <String, TerminalPane>{};
 
   bool get _isWelcomeEntry =>
-      app.activeSwarm.isEmptyStarter ||
+      (app.activeSwarm.isEmptyStarter && !app.activeSwarm.isNewTabPage) ||
       (app.activeSwarm.kind == 'harness' &&
           app.activeSwarm.name == 'Welcome' &&
           app.activeSwarm.panes.isEmpty &&
@@ -281,8 +282,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     });
   }
 
-  Widget _startGuide() =>
-      WorkspaceStartGuide(onShortcuts: _showKeyboardShortcuts);
+  Widget _startGuide() => app.activeSwarm.isNewTabPage
+      ? NewTabStartPage(wallpaper: app.activeSwarm.wallpaper)
+      : WorkspaceStartGuide(onShortcuts: _showKeyboardShortcuts);
 
   void _reviewOnboarding() {
     if (_newHarness?.requestDismiss() == false) return;
@@ -1344,7 +1346,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final focused =
         source == _NewHarnessSource.workspace &&
             (newHarnessOpensInBox || requestedSplit != null)
-        ? app.focusedPane
+        ? app.focusedPane ?? _newTabSources[target]
         : null;
     final machine = focused == null ? null : app.stateOf(focused.machineId);
     final agent = machine?.agents
@@ -1423,6 +1425,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     required String swarmId,
     PaneSplitRequest? split,
     HarnessPlacement? placement,
+    HarnessPlacement? returnedPlacement,
     String? task,
     NewHarnessDraft? initialDraft,
     _NewHarnessContext? draftContext,
@@ -1459,13 +1462,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
         draftContext: draftContext,
         swarmId: swarmId,
         split: split,
-        placement: placement,
+        placement: returnedPlacement ?? placement,
       );
       return;
     }
     if (returning != null && draftContext != null) {
       _rememberNewHarnessDraft(draftContext, returning!);
     }
+    app.cancelSwarmDraft(swarmId);
     await _ensureEmptyEntry();
   }
 
@@ -1565,7 +1569,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final content = NewHarnessBox(
       docked: true,
       controller: box,
-      onClose: _closeNewHarness,
+      onClose: () {
+        final target = box.swarmId ?? app.activeSwarmId;
+        _closeNewHarness();
+        app.cancelSwarmDraft(target);
+      },
       onCreated: () {
         _closeNewHarness(restoreFocus: false, keepDraft: false);
         unawaited(_focusCreatedPane());
@@ -1588,7 +1596,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
             returnToPrompt: true,
             swarmId: swarmId,
             split: split,
-            placement: placement,
+            placement: box.effectivePlacement,
+            returnedPlacement: box.placement,
           ),
         );
       },
@@ -1601,7 +1610,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           listenable: box,
           builder: (context, child) => LayoutBuilder(
             builder: (context, constraints) {
-              if (onWelcome) {
+              if (onWelcome && !app.activeSwarm.isNewTabPage) {
                 return Padding(
                   padding: EdgeInsets.only(top: _native ? 0 : _tabBarHeight),
                   child: FocusScope(
@@ -1635,13 +1644,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
                         key: const ValueKey('new-harness-dismiss'),
                         behavior: HitTestBehavior.opaque,
                         onTap: () {
-                          if (box.requestDismiss()) _closeNewHarness();
+                          if (box.requestDismiss()) {
+                            final target = box.swarmId ?? app.activeSwarmId;
+                            _closeNewHarness();
+                            app.cancelSwarmDraft(target);
+                          }
                         },
                       ),
                     ),
                   ),
                   CommandDock(
-                    topClearance: _native ? 0 : _tabBarHeight,
+                    topClearance: app.activeSwarm.isBlankNewTab
+                        ? constraints.maxHeight * .56
+                        : (_native ? 0 : _tabBarHeight),
                     expanded: box.field == NewHarnessField.projectMenu,
                     child: content,
                   ),
@@ -2066,7 +2081,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
   }
 
-  void _dismissSearch() => _closeSearch();
+  void _dismissSearch() {
+    final target = _search?.targetId;
+    _closeSearch();
+    if (target != null) app.cancelSwarmDraft(target);
+  }
 
   Future<void> _ensureEmptyEntry() async {
     if (!mounted || app.panes.isNotEmpty) return;
@@ -2094,7 +2113,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     _closeSearch(restoreFocus: choice.destination.isCommand);
-    await _activateSearch(choice, target, split: split, placement: placement);
+    // Cmd-T allocated its visible destination before the picker opened. Pin
+    // selection to that tab, including while an exact resume is still pending.
+    final targetTab = app.swarms.where((tab) => tab.id == target).firstOrNull;
+    await _activateSearch(
+      choice,
+      target,
+      split: split,
+      placement:
+          placement == HarnessPlacement.newTab &&
+              targetTab?.isBlankNewTab == true
+          ? HarnessPlacement.currentTab
+          : placement,
+    );
     if (mounted) {
       if (app.activeSwarmId != target) app.cancelSwarmDraft(target);
       await _ensureEmptyEntry();
@@ -2239,7 +2270,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
             onRefocus: _focusSearch,
             child: scoped,
           );
-          if (_searchOnWelcome) {
+          if (_searchOnWelcome && !app.activeSwarm.isNewTabPage) {
             return Padding(
               padding: EdgeInsets.only(top: _native ? 0 : _tabBarHeight),
               child: BlockSemantics(
@@ -2275,7 +2306,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 ),
               ),
               CommandDock(
-                topClearance: _native ? 0 : _tabBarHeight,
+                expanded: true,
+                topClearance: (_native ? 0.0 : _tabBarHeight).clamp(
+                  constraints.maxHeight *
+                      (app.activeSwarm.isBlankNewTab ? .56 : .35),
+                  double.infinity,
+                ),
                 child: contents,
               ),
             ],
@@ -2306,12 +2342,47 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _openPlacementPicker(HarnessPlacement.currentTab);
   }
 
-  void _newTab() => _openPlacementPicker(HarnessPlacement.newTab);
+  void _newTab() {
+    if (!mounted || _dialogOpen || _spokenPaletteOpen || !_routeIsCurrent) {
+      return;
+    }
+    if (_newHarness case final box?) {
+      if (box.busy || box.checking) {
+        box.warn('Check the pending creation before opening another picker.');
+        return;
+      }
+      if (!box.requestDismiss()) return;
+    }
+    final source = app.focusedPane ?? _newTabSources[app.activeSwarmId];
+    final draft = _search?.adding == true && _search?.isCommandMode == false
+        ? _search?.draft
+        : null;
+    final editing = _searchText.value;
+    _closeNewHarness(restoreFocus: false);
+    _closeSearch(restoreFocus: false);
+    _closeCommandBar(restoreFocus: false);
+    dismissTransientMenus();
+    _preparePaneFocus();
+    app.newSwarm(newTabPage: true, draft: true);
+    _newTabSources.removeWhere(
+      (id, _) => !app.swarms.any((tab) => tab.id == id),
+    );
+    if (source != null) _newTabSources[app.activeSwarmId] = source;
+    _openSearch(adding: true, placement: HarnessPlacement.newTab);
+    if (draft != null) {
+      _search?.restoreDraft(draft, newTab: true);
+      _searchText.value = editing;
+    }
+  }
 
   void _openPlacementPicker(HarnessPlacement requested) {
-    final placement = app.activeSwarm.isStore || app.activeSwarm.isOrchestrator
-        ? HarnessPlacement.newTab
-        : requested;
+    if (requested == HarnessPlacement.newTab ||
+        app.activeSwarm.isStore ||
+        app.activeSwarm.isOrchestrator) {
+      _newTab();
+      return;
+    }
+    final placement = requested;
     if (_search?.changePlacement(placement) == true) {
       _focusSearch();
       return;
@@ -2938,7 +3009,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                                   !app
                                                       .activeSwarm
                                                       .isOrchestrator
-                                              ? newHarnessOpensInBox
+                                              ? newHarnessOpensInBox ||
+                                                        app
+                                                            .activeSwarm
+                                                            .isNewTabPage
                                                     ? _startGuide()
                                                     : HarnessStartPage(
                                                         key: ValueKey(

@@ -186,11 +186,17 @@ class NewHarnessController extends ChangeNotifier {
     NewHarnessDraft? draft,
     this.swarmId,
     this.split,
-    this.placement,
+    HarnessPlacement? placement,
     this.offersStore = false,
     this.firstRun = false,
     String? home,
-  }) : _machineId = draft?.machineId ?? machineId,
+  }) : placement =
+           placement ?? (split == null ? HarnessPlacement.currentTab : null),
+       _targetId = swarmId ?? app.activeSwarmId,
+       _usesNewTabPage = app.swarms.any(
+         (tab) => tab.id == (swarmId ?? app.activeSwarmId) && tab.isBlankNewTab,
+       ),
+       _machineId = draft?.machineId ?? machineId,
        _autoProject = autoProject || draft?.project.generated != null,
        _now = now ?? DateTime.now,
        _home = home ?? Platform.environment['HOME'] {
@@ -262,7 +268,20 @@ class NewHarnessController extends ChangeNotifier {
   final AppNotifier app;
   final String? swarmId;
   final PaneSplitRequest? split;
-  final HarnessPlacement? placement;
+  HarnessPlacement? placement;
+  final String _targetId;
+  final bool _usesNewTabPage;
+  HarnessPlacement? get effectivePlacement =>
+      placement == HarnessPlacement.newTab && _usesNewTabPage
+      ? HarnessPlacement.currentTab
+      : placement;
+
+  void changePlacement(HarnessPlacement value) {
+    if (locked || split != null || placement == value) return;
+    placement = value;
+    notifyListeners();
+  }
+
   final bool firstRun;
   final bool _autoProject;
   final DateTime Function() _now;
@@ -2018,9 +2037,9 @@ class NewHarnessController extends ChangeNotifier {
       engine: base,
       folder: terminal ? folder : folder ?? '',
       projectFolder: projectFolderRequest,
-      swarmId: swarmId,
+      swarmId: _targetId,
       split: split,
-      placement: placement,
+      placement: effectivePlacement,
       bypassPermission: bypass,
       permissionMode: permissionMode,
       codexHome: base == 'codex' ? _profile?.path : null,

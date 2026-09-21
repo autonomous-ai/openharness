@@ -1,5 +1,5 @@
-/// A requested destination, not an allocated tab or pane. Resolving it waits
-/// until an existing harness is chosen or a new harness is successfully made.
+/// Where a harness should open. Cmd-T allocates a temporary destination first;
+/// other entry points allocate a new tab only when a harness is ready.
 enum HarnessPlacement {
   currentTab,
   newTab;

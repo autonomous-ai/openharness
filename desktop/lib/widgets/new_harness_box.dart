@@ -9,11 +9,12 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../state/new_harness.dart';
+import '../state/harness_placement.dart';
 import 'box_chrome.dart';
 import 'pane_menu.dart';
 import 'terminal_prompt.dart';
 
-enum _LaunchChoice { agent, machine, project, task, create }
+enum _LaunchChoice { agent, machine, project, task, placement, create }
 
 /// A launch menu and focused completion prompts with shared arrow navigation.
 /// Create is selected initially; arrows and Enter edit a displayed default.
@@ -73,6 +74,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     _LaunchChoice.machine,
     _LaunchChoice.project,
     _LaunchChoice.task,
+    if (box.split == null) _LaunchChoice.placement,
     _LaunchChoice.create,
   ];
   String get _launchCreateLabel => box.checking
@@ -98,9 +100,22 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
         box.focusField(NewHarnessField.projectMenu);
       case _LaunchChoice.task:
         _editTask();
+      case _LaunchChoice.placement:
+        _togglePlacement();
       case _LaunchChoice.create:
         unawaited(_finish(box.create()));
     }
+    _requestFocus();
+  }
+
+  void _togglePlacement() {
+    if (box.locked || box.split != null) return;
+    _selectLaunchChoice(_LaunchChoice.placement);
+    box.changePlacement(
+      box.placement == HarnessPlacement.newTab
+          ? HarnessPlacement.currentTab
+          : HarnessPlacement.newTab,
+    );
     _requestFocus();
   }
 
@@ -208,6 +223,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     box.status,
     box.error,
     box.task,
+    box.placement,
     box.query.trim().isEmpty,
     box.matchCount,
     box.total,
@@ -276,6 +292,8 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
               (_launching
                   ? _launchChoice == _LaunchChoice.create
                         ? _summaryText()
+                        : _launchChoice == _LaunchChoice.placement
+                        ? 'Open in ${box.placement!.title}. Enter to switch.'
                         : '${_launchChoice.name}. Enter to edit.'
                   : box.field == NewHarnessField.task
                   // No row to read here: read what Return will do instead.
@@ -844,7 +862,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                       ? 'Codex profile on ${box.machineLabel}'
                       : box.field == NewHarnessField.mode
                       ? 'Permissions for ${box.agentSettingsLabel}'
-                      : 'New Harness${box.placement == null ? '' : ' / ${box.placement!.title}'}',
+                      : 'New Harness',
                   style: boxMonoStyle(size: 12, color: kBoxFaint),
                 ),
               ),
@@ -874,6 +892,12 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                       : box.task.trim().replaceAll(RegExp(r'\s+'), ' '),
                   muted: !box.takesTask,
                   onTap: _editTask,
+                ),
+              if (_launching && box.split == null)
+                _default(
+                  'placement',
+                  box.placement!.title,
+                  onTap: _togglePlacement,
                 ),
               if (_launching) ...[
                 const SizedBox(height: 8),
@@ -922,7 +946,9 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     final disabled = name == 'create'
         ? box.busy || box.detectingAgent
         : box.locked;
-    final fieldLabel = '${name[0].toUpperCase()}${name.substring(1)}';
+    final fieldLabel = name == 'placement'
+        ? 'Open in'
+        : '${name[0].toUpperCase()}${name.substring(1)}';
     return MouseRegion(
       onHover: (event) {
         if (choice != null && _pointer.moved(event)) {
@@ -1466,7 +1492,9 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                   _ => 'use project',
                 }
               : _launching && _launchChoice != _LaunchChoice.create
-              ? 'edit ${_launchChoice.name}'
+              ? _launchChoice == _LaunchChoice.placement
+                    ? 'switch'
+                    : 'edit ${_launchChoice.name}'
               : _launching && box.needsProject
               ? 'choose project'
               : box.returnCreates

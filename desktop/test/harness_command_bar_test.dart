@@ -360,7 +360,8 @@ void main() {
       tester.testTextInput.enterText('Open a fresh tab');
       await tester.testTextInput.receiveAction(TextInputAction.done);
       await tester.pumpAndSettle();
-      expect(app.activeSwarmId, previousTab);
+      expect(app.activeSwarmId, isNot(previousTab));
+      expect(app.activeSwarm.isBlankNewTab, isTrue);
       final picker = find.byKey(const ValueKey('swarm-search-input'));
       expect(picker, findsOneWidget);
       expect(tester.widget<TextField>(picker).focusNode!.hasFocus, isTrue);
