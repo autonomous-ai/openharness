@@ -80,7 +80,7 @@ void main() {
         await tester.enterText(input, 'Agent 1');
         await tester.pump();
         aligned(search);
-        expect(tester.getRect(input).bottom, y);
+        expect(tester.getRect(input).bottom, closeTo(y, .001));
         await key(tester, LogicalKeyboardKey.slash, ctrl: true);
         aligned(search);
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);

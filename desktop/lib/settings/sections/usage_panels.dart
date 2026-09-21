@@ -6,6 +6,8 @@
 /// handed — none reads a store — so the pane can be driven from a fixture.
 library;
 
+import 'package:harness/terminal/terminal_text.dart';
+
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -36,15 +38,15 @@ class UsageLoadingState extends StatelessWidget {
           children: [
             Text(
               message,
-              style: TextStyle(fontSize: 12.5, color: AppPalette.textSecondary),
+              style: terminalTextStyle(color: AppPalette.textSecondary),
             ),
             const SizedBox(height: 12),
-            const SkeletonText(
-              style: TextStyle(fontSize: 20, height: 1.1),
+            SkeletonText(
+              style: terminalTextStyle(height: 1.1),
               widthFactor: .45,
             ),
             const SizedBox(height: 8),
-            const SkeletonText(style: TextStyle(fontSize: 12), widthFactor: .7),
+            SkeletonText(style: terminalTextStyle(), widthFactor: .7),
           ],
         ),
       ),
@@ -60,9 +62,7 @@ class UsageLoadingState extends StatelessWidget {
 /// keeping for the sake of matching.
 class StatsSummaryCards extends StatelessWidget {
   const StatsSummaryCards({super.key, required this.summary});
-
   final StatsSummary summary;
-
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
@@ -78,12 +78,11 @@ class StatsSummaryCards extends StatelessWidget {
         child: Center(
           child: Text(
             'Start your first agent to begin tracking.',
-            style: TextStyle(fontSize: 12.5, color: AppPalette.textSecondary),
+            style: terminalTextStyle(color: AppPalette.textSecondary),
           ),
         ),
       );
     }
-
     final cards = [
       UsageStatCard(
         label: 'Agents spawned',
@@ -101,7 +100,6 @@ class StatsSummaryCards extends StatelessWidget {
         icon: LucideIcons.messagesSquare300,
       ),
     ];
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -122,7 +120,7 @@ class StatsSummaryCards extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             'Tracking since ${_trackingDate(since)}',
-            style: TextStyle(fontSize: 11, color: AppPalette.textFaint),
+            style: terminalTextStyle(color: AppPalette.textFaint),
           ),
         ],
       ],
@@ -173,7 +171,6 @@ class UsageStatCard extends StatelessWidget {
     required this.icon,
     this.footnote,
   });
-
   final String label;
   final String value;
   final IconData icon;
@@ -182,7 +179,6 @@ class UsageStatCard extends StatelessWidget {
   /// because most figures need none and a card that always carried one would
   /// train the eye to skip it.
   final String? footnote;
-
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
@@ -204,10 +200,7 @@ class UsageStatCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   label,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    color: AppPalette.textSecondary,
-                  ),
+                  style: terminalTextStyle(color: AppPalette.textSecondary),
                 ),
               ),
             ],
@@ -215,8 +208,7 @@ class UsageStatCard extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             value,
-            style: TextStyle(
-              fontSize: 20,
+            style: terminalTextStyle(
               fontWeight: FontWeight.w600,
               color: AppPalette.textPrimary,
               height: 1.1,
@@ -226,7 +218,7 @@ class UsageStatCard extends StatelessWidget {
             const SizedBox(height: 3),
             Text(
               footnote!,
-              style: TextStyle(fontSize: 11, color: AppPalette.textFaint),
+              style: terminalTextStyle(color: AppPalette.textFaint),
             ),
           ],
         ],
@@ -305,12 +297,12 @@ class DailyIntensityGrid extends StatelessWidget {
             children: [
               Text(
                 days.isEmpty ? '' : _shortDate(days.first.day),
-                style: TextStyle(fontSize: 11, color: AppPalette.textFaint),
+                style: terminalTextStyle(color: AppPalette.textFaint),
               ),
               const Spacer(),
               Text(
                 'Less',
-                style: TextStyle(fontSize: 11, color: AppPalette.textFaint),
+                style: terminalTextStyle(color: AppPalette.textFaint),
               ),
               const SizedBox(width: 6),
               for (var level = 0; level <= 4; level++) ...[
@@ -320,12 +312,12 @@ class DailyIntensityGrid extends StatelessWidget {
               const SizedBox(width: 3),
               Text(
                 'More',
-                style: TextStyle(fontSize: 11, color: AppPalette.textFaint),
+                style: terminalTextStyle(color: AppPalette.textFaint),
               ),
               const Spacer(),
               Text(
                 days.isEmpty ? '' : _shortDate(days.last.day),
-                style: TextStyle(fontSize: 11, color: AppPalette.textFaint),
+                style: terminalTextStyle(color: AppPalette.textFaint),
               ),
             ],
           ),
@@ -345,6 +337,7 @@ class _IntensityCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     // Step 0 is the recess the empty grid is made of; the rest climb the accent.
     // Discrete steps rather than a ramp, because a heatmap is read by comparing
     // squares and a smooth gradient gives the eye nothing to compare.
@@ -439,10 +432,7 @@ class TokenMixBar extends StatelessWidget {
                     child: Text(
                       '${slice.label}: ${formatTokens(slice.tokens)}',
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppPalette.textSecondary,
-                      ),
+                      style: terminalTextStyle(color: AppPalette.textSecondary),
                     ),
                   ),
                 ],
@@ -506,8 +496,7 @@ class _PanelCard extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       subtitle,
-                      style: TextStyle(
-                        fontSize: 11.5,
+                      style: terminalTextStyle(
                         height: 1.35,
                         color: AppPalette.textSecondary,
                       ),
@@ -528,8 +517,7 @@ class _PanelCard extends StatelessWidget {
                   ),
                   child: Text(
                     label,
-                    style: TextStyle(
-                      fontSize: 10.5,
+                    style: terminalTextStyle(
                       height: 1.25,
                       color: AppPalette.textSecondary,
                     ),
@@ -621,7 +609,7 @@ class ProviderUsageRow extends StatelessWidget {
                 ),
                 child: Text(
                   state.enabled ? 'Turn off' : 'Enable',
-                  style: const TextStyle(fontSize: 12),
+                  style: terminalTextStyle(),
                 ),
               ),
             ],
@@ -630,14 +618,11 @@ class ProviderUsageRow extends StatelessWidget {
           if (_detail() case final detail?)
             Text(
               detail,
-              style: TextStyle(fontSize: 11.5, color: AppPalette.textSecondary),
+              style: terminalTextStyle(color: AppPalette.textSecondary),
             ),
           if (state.status == LedgerStatus.scanning && !ledger.hasData) ...[
             const SizedBox(height: 10),
-            const SkeletonText(
-              style: TextStyle(fontSize: 12),
-              widthFactor: .55,
-            ),
+            SkeletonText(style: terminalTextStyle(), widthFactor: .55),
           ],
           if (state.enabled &&
               (state.status == LedgerStatus.ok ||
@@ -650,16 +635,12 @@ class ProviderUsageRow extends StatelessWidget {
                 Expanded(
                   child: Text(
                     '${formatTokens(ledger.totals.total)} tokens',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: AppPalette.textPrimary,
-                    ),
+                    style: terminalTextStyle(color: AppPalette.textPrimary),
                   ),
                 ),
                 Text(
                   formatCost(ledger.costUsd),
-                  style: TextStyle(
-                    fontSize: 12,
+                  style: terminalTextStyle(
                     color: AppPalette.textPrimary,
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
@@ -743,10 +724,7 @@ class _StatusPill extends StatelessWidget {
         color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(6),
       ),
-      child: Text(
-        label,
-        style: TextStyle(fontSize: 10.5, color: color, height: 1.3),
-      ),
+      child: Text(label, style: terminalTextStyle(color: color, height: 1.3)),
     );
   }
 }
@@ -758,9 +736,7 @@ class _StatusPill extends StatelessWidget {
 /// somebody hunting for the switch it is describing.
 class UsageEmptyState extends StatelessWidget {
   const UsageEmptyState({super.key, required this.onEnable});
-
   final ValueChanged<LedgerProvider> onEnable;
-
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
@@ -795,8 +771,7 @@ class UsageEmptyState extends StatelessWidget {
               'Switch on a provider to read the logs its CLI already keeps on '
               'this computer, and build the token ledger from them. Nothing is '
               'read until you do, and nothing leaves this machine.',
-              style: TextStyle(
-                fontSize: 12.5,
+              style: terminalTextStyle(
                 height: 1.45,
                 color: AppPalette.textSecondary,
               ),
@@ -816,7 +791,7 @@ class UsageEmptyState extends StatelessWidget {
                   ),
                   child: Text(
                     'Enable ${provider.label}',
-                    style: const TextStyle(fontSize: 12.5),
+                    style: terminalTextStyle(),
                   ),
                 ),
             ],

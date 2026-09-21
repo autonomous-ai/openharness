@@ -1,8 +1,11 @@
 import 'dart:async';
 
+import '../shared/widgets/labeled_field.dart';
+
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../analytics/analytics.dart';
 import '../core/dsh_catalog.dart';
@@ -585,11 +588,9 @@ class _StoreNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final shelf = this.shelf;
-    final textScale = (MediaQuery.textScalerOf(context).scale(14) / 14).clamp(
-      1.0,
-      1.5,
-    );
+    final textScale = (terminalTextScaleOf(context)).clamp(1.0, 1.5);
     return Container(
       width:
           (MediaQuery.sizeOf(context).width < 1000 ? 184 : 216) +
@@ -620,8 +621,7 @@ class _StoreNav extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
                   child: Text(
                     'DISCIPLINES',
-                    style: TextStyle(
-                      fontSize: 10,
+                    style: terminalTextStyle(
                       letterSpacing: 1.4,
                       fontWeight: FontWeight.w600,
                       color: grid.AppPalette.textFaint,
@@ -641,8 +641,7 @@ class _StoreNav extends StatelessWidget {
                         ? null
                         : Text(
                             '${counts[name]}',
-                            style: TextStyle(
-                              fontSize: 11,
+                            style: terminalTextStyle(
                               color: grid.AppPalette.textFaint,
                             ),
                           ),
@@ -726,6 +725,7 @@ class _Shelf$View extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     if (shelf is _Category) {
       return StoreCategory(
         name: _title,
@@ -750,8 +750,7 @@ class _Shelf$View extends StatelessWidget {
             children: [
               Text(
                 _title,
-                style: TextStyle(
-                  fontSize: 28,
+                style: terminalTextStyle(
                   fontWeight: FontWeight.w700,
                   letterSpacing: -.6,
                   color: grid.AppPalette.textPrimary,
@@ -760,10 +759,7 @@ class _Shelf$View extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 _subtitle,
-                style: TextStyle(
-                  fontSize: 13,
-                  color: grid.AppPalette.textSecondary,
-                ),
+                style: terminalTextStyle(color: grid.AppPalette.textSecondary),
               ),
               const SizedBox(height: 24),
               if (entries.isEmpty)
@@ -775,8 +771,7 @@ class _Shelf$View extends StatelessWidget {
                         : loaded
                         ? 'Nothing here yet.'
                         : 'Asking this computer…',
-                    style: TextStyle(
-                      fontSize: 14,
+                    style: terminalTextStyle(
                       height: 1.5,
                       color: grid.AppPalette.textSecondary,
                     ),
@@ -824,6 +819,7 @@ class _Stars extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1159,8 +1155,7 @@ class _ProductPageState extends State<_ProductPage> {
                     Text(
                       entry.name,
                       textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: wide ? 64 : 42,
+                      style: terminalTextStyle(
                         height: 1.02,
                         fontWeight: FontWeight.w700,
                         letterSpacing: wide ? -2.2 : -1.2,
@@ -1175,8 +1170,7 @@ class _ProductPageState extends State<_ProductPage> {
                           child: Text(
                             description,
                             textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: wide ? 19 : 16,
+                            style: terminalTextStyle(
                               height: 1.45,
                               color: grid.AppPalette.textSecondary,
                             ),
@@ -1197,8 +1191,7 @@ class _ProductPageState extends State<_ProductPage> {
                           'Runs on $baseLabel',
                       ].join(' · '),
                       textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 13,
+                      style: terminalTextStyle(
                         color: grid.AppPalette.textFaint,
                       ),
                     ),
@@ -1264,10 +1257,7 @@ class _ProductPageState extends State<_ProductPage> {
                             foregroundColor: grid.AppPalette.windowBg,
                             minimumSize: const Size(148, 50),
                             padding: const EdgeInsets.symmetric(horizontal: 30),
-                            textStyle: TextStyle(
-                              fontFamily: grid.AppFont.sans,
-                              fontFamilyFallback: grid.AppFont.sansFallback,
-                              fontSize: 16,
+                            textStyle: terminalTextStyle(
                               fontWeight: FontWeight.w600,
                             ),
                             shape: const StadiumBorder(),
@@ -1288,8 +1278,7 @@ class _ProductPageState extends State<_ProductPage> {
                       Text(
                         'Your projects and files are kept.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 12.5,
+                        style: terminalTextStyle(
                           color: grid.AppPalette.textSecondary,
                         ),
                       ),
@@ -1313,8 +1302,7 @@ class _ProductPageState extends State<_ProductPage> {
                       child: local == null
                           ? Text(
                               'Connecting to this computer…',
-                              style: TextStyle(
-                                fontSize: 12.5,
+                              style: terminalTextStyle(
                                 color: grid.AppPalette.textFaint,
                               ),
                             )
@@ -1374,8 +1362,7 @@ class _ProductPageState extends State<_ProductPage> {
                         Text(
                           'Ratings and reviews',
                           textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 28,
+                          style: terminalTextStyle(
                             fontWeight: FontWeight.w700,
                             letterSpacing: -0.6,
                             color: grid.AppPalette.textPrimary,
@@ -1400,8 +1387,7 @@ class _ProductPageState extends State<_ProductPage> {
                           Text(
                             'Reviews are unavailable right now.',
                             textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 12,
+                            style: terminalTextStyle(
                               color: grid.AppPalette.textSecondary,
                             ),
                           ),
@@ -1411,8 +1397,7 @@ class _ProductPageState extends State<_ProductPage> {
                           Text(
                             'No reviews yet. Be the first.',
                             textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 13,
+                            style: terminalTextStyle(
                               color: grid.AppPalette.textFaint,
                             ),
                           ),
@@ -1527,7 +1512,7 @@ class _InstallLine extends StatelessWidget {
     } else {
       status = 'Not installed';
     }
-    final faint = TextStyle(fontSize: 12.5, color: grid.AppPalette.textFaint);
+    final faint = terminalTextStyle(color: grid.AppPalette.textFaint);
     return Wrap(
       alignment: WrapAlignment.center,
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -1547,8 +1532,7 @@ class _InstallLine extends StatelessWidget {
           Text(
             status,
             key: const ValueKey('store-install-status'),
-            style: TextStyle(
-              fontSize: 12.5,
+            style: terminalTextStyle(
               color: run?.failed == true
                   ? grid.AppPalette.warn
                   : grid.AppPalette.textSecondary,
@@ -1617,7 +1601,7 @@ class _QuietLinkState extends State<_QuietLink> {
         ? grid.AppPalette.textPrimary
         : grid.AppPalette.textSecondary;
     final content = DefaultTextStyle.merge(
-      style: TextStyle(fontSize: 13, color: color),
+      style: terminalTextStyle(color: color),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1650,6 +1634,7 @@ class _RatingSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final max = rating.histogram.fold<int>(0, (a, b) => a > b ? a : b);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1659,8 +1644,7 @@ class _RatingSummary extends StatelessWidget {
           children: [
             Text(
               rating.average.toStringAsFixed(1),
-              style: TextStyle(
-                fontSize: 40,
+              style: terminalTextStyle(
                 fontWeight: FontWeight.w700,
                 height: 1,
                 color: grid.AppPalette.textPrimary,
@@ -1669,7 +1653,7 @@ class _RatingSummary extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               'out of 5 · ${rating.count} rating${rating.count == 1 ? '' : 's'}',
-              style: TextStyle(fontSize: 12, color: grid.AppPalette.textFaint),
+              style: terminalTextStyle(color: grid.AppPalette.textFaint),
             ),
           ],
         ),
@@ -1687,8 +1671,7 @@ class _RatingSummary extends StatelessWidget {
                         child: Text(
                           '$stars',
                           textAlign: TextAlign.right,
-                          style: TextStyle(
-                            fontSize: 11,
+                          style: terminalTextStyle(
                             color: grid.AppPalette.textFaint,
                           ),
                         ),
@@ -1736,6 +1719,7 @@ class _ReviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -1756,8 +1740,7 @@ class _ReviewCard extends StatelessWidget {
                     review.title!,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13.5,
+                    style: terminalTextStyle(
                       fontWeight: FontWeight.w600,
                       color: grid.AppPalette.textPrimary,
                     ),
@@ -1780,14 +1763,13 @@ class _ReviewCard extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             '${review.mine ? 'You' : review.authorName} · ${_when(review.updatedAt)}',
-            style: TextStyle(fontSize: 11.5, color: grid.AppPalette.textFaint),
+            style: terminalTextStyle(color: grid.AppPalette.textFaint),
           ),
           if (review.body != null) ...[
             const SizedBox(height: 8),
             Text(
               review.body!,
-              style: TextStyle(
-                fontSize: 13,
+              style: terminalTextStyle(
                 height: 1.45,
                 color: grid.AppPalette.textPrimary,
               ),
@@ -1837,6 +1819,7 @@ class _ReviewDialogState extends State<_ReviewDialog> {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return _DialogCard(
       width: 460,
       child: Column(
@@ -1847,8 +1830,7 @@ class _ReviewDialogState extends State<_ReviewDialog> {
             widget.existing == null
                 ? 'Rate ${widget.name}'
                 : 'Your review of ${widget.name}',
-            style: TextStyle(
-              fontSize: 17,
+            style: terminalTextStyle(
               fontWeight: FontWeight.w600,
               color: grid.AppPalette.textPrimary,
             ),
@@ -1861,27 +1843,22 @@ class _ReviewDialogState extends State<_ReviewDialog> {
             onPick: (n) => setState(() => _rating = n),
           ),
           const SizedBox(height: 14),
+          const FieldLabel('Title (optional)'),
           TextField(
             key: const ValueKey('store-review-title'),
             controller: _title,
             maxLength: 80,
-            decoration: const InputDecoration(
-              labelText: 'Title (optional)',
-              counterText: '',
-            ),
+            decoration: const InputDecoration(counterText: ''),
           ),
           const SizedBox(height: 10),
+          const FieldLabel('What was it like?'),
           TextField(
             key: const ValueKey('store-review-body'),
             controller: _body,
             maxLength: 2000,
             minLines: 3,
             maxLines: 8,
-            decoration: const InputDecoration(
-              labelText: 'What was it like?',
-              counterText: '',
-              alignLabelWithHint: true,
-            ),
+            decoration: const InputDecoration(counterText: ''),
           ),
           const SizedBox(height: 16),
           Row(
@@ -1936,6 +1913,7 @@ class _ConfirmCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return _DialogCard(
       width: 420,
       child: Column(
@@ -1944,8 +1922,7 @@ class _ConfirmCard extends StatelessWidget {
         children: [
           Text(
             title,
-            style: TextStyle(
-              fontSize: 16,
+            style: terminalTextStyle(
               fontWeight: FontWeight.w600,
               color: grid.AppPalette.textPrimary,
             ),
@@ -1953,8 +1930,7 @@ class _ConfirmCard extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             detail,
-            style: TextStyle(
-              fontSize: 13,
+            style: terminalTextStyle(
               height: 1.4,
               color: grid.AppPalette.textSecondary,
             ),
@@ -1991,6 +1967,7 @@ class _DialogCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return Center(
       child: Material(
         color: grid.AppPalette.panelBg,

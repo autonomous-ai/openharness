@@ -10,7 +10,7 @@ import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_commands.dart' show describeKeyBinding;
 import '../state/app_state.dart';
-import '../terminal/terminal_font_store.dart';
+import '../terminal/terminal_text.dart';
 import 'box_chrome.dart';
 import 'link_machine_dialog.dart';
 import 'link_machine_screen.dart';
@@ -469,7 +469,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
     onPressed: action,
     style: TextButton.styleFrom(
       foregroundColor: Colors.white70,
-      textStyle: boxMonoStyle(size: 12),
+      textStyle: boxMonoStyle(),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
       minimumSize: const Size(0, 28),
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -516,10 +516,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
                           weight: selected ? FontWeight.w600 : null,
                         ),
                       ),
-                      Text(
-                        entry.detail,
-                        style: boxMonoStyle(size: 11, color: kBoxFaint),
-                      ),
+                      Text(entry.detail, style: boxMonoStyle(color: kBoxFaint)),
                     ],
                   ),
                 ),
@@ -552,7 +549,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
           _command('2. Sign in as $email', kLinkServerLoginCommand),
           Text(
             'Open the printed sign-in link in a browser on any device.',
-            style: boxMonoStyle(size: 11, color: kBoxFaint),
+            style: boxMonoStyle(color: kBoxFaint),
           ),
           _command(
             '3. Start Harness and set a remote password',
@@ -571,14 +568,11 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
             ),
           ),
         ] else ...[
-          Text(
-            '1. Install Harness for macOS or Linux.',
-            style: boxMonoStyle(size: 12),
-          ),
+          Text('1. Install Harness for macOS or Linux.', style: boxMonoStyle()),
           const SizedBox(height: 4),
           SelectableText(
             kHarnessDownloadUrl.toString(),
-            style: boxMonoStyle(size: 12, color: Colors.white70),
+            style: boxMonoStyle(color: Colors.white70),
           ),
           Wrap(
             spacing: 8,
@@ -597,16 +591,16 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
             ],
           ),
           const SizedBox(height: 10),
-          Text('2. Sign in as $email.', style: boxMonoStyle(size: 12)),
+          Text('2. Sign in as $email.', style: boxMonoStyle()),
           const SizedBox(height: 10),
           Text(
             '3. Open commands → Link machine → This computer’s password.',
-            style: boxMonoStyle(size: 12),
+            style: boxMonoStyle(),
           ),
           const SizedBox(height: 4),
           Text(
             'Set a remote password there, then enter it here.',
-            style: boxMonoStyle(size: 11, color: kBoxFaint),
+            style: boxMonoStyle(color: kBoxFaint),
           ),
         ],
         const SizedBox(height: 16),
@@ -614,7 +608,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
           remotes.isEmpty
               ? 'After sign-in, the machine appears here. Refresh to check now.'
               : 'Available to link',
-          style: boxMonoStyle(size: 12, color: kBoxFaint),
+          style: boxMonoStyle(color: kBoxFaint),
         ),
         for (final state in remotes)
           _machineRow(
@@ -635,12 +629,9 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(title, style: boxMonoStyle(size: 12)),
+            Text(title, style: boxMonoStyle()),
             const SizedBox(height: 4),
-            SelectableText(
-              command,
-              style: boxMonoStyle(size: 12, color: Colors.white70),
-            ),
+            SelectableText(command, style: boxMonoStyle(color: Colors.white70)),
             Align(
               alignment: Alignment.centerLeft,
               child: _button(
@@ -655,187 +646,191 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
       );
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([app, terminalFontStore]),
-    builder: (context, _) {
-      final rows = _entries;
-      final selected = _selected;
-      final message = _message ?? app.machineListError;
-      return Offstage(
-        offstage: _nested,
-        child: Dialog(
-          alignment: Alignment.topCenter,
-          insetPadding: const EdgeInsets.fromLTRB(16, 56, 16, 18),
-          elevation: 0,
-          backgroundColor: Colors.transparent,
-          child: _keys(
-            Focus(
-              onKeyEvent: _key,
-              child: SizedBox(
-                width: 760,
-                child: TerminalBox(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: Text(
-                                'Link another machine${_guide == null
-                                    ? ''
-                                    : _guide == _Guide.server
-                                    ? ' / SSH'
-                                    : ' / desktop'}',
-                                style: boxMonoStyle(size: 12, color: kBoxFaint),
-                              ),
-                            ),
-                            if (_guide == null)
-                              Text(
-                                '${rows.length}/${_remotes.length + 3}',
-                                style: boxMonoStyle(size: 11, color: kBoxFaint),
-                              ),
-                          ],
-                        ),
-                      ),
-                      if (_guide == null)
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return ListenableBuilder(
+      listenable: Listenable.merge([app, terminalFontStore]),
+      builder: (context, _) {
+        final rows = _entries;
+        final selected = _selected;
+        final message = _message ?? app.machineListError;
+        return Offstage(
+          offstage: _nested,
+          child: Dialog(
+            alignment: Alignment.topCenter,
+            insetPadding: const EdgeInsets.fromLTRB(16, 56, 16, 18),
+            elevation: 0,
+            backgroundColor: Colors.transparent,
+            child: _keys(
+              Focus(
+                onKeyEvent: _key,
+                child: SizedBox(
+                  width: 760,
+                  child: TerminalBox(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
                         Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 14),
-                          child: ReadlineKeys(
-                            controller: _query,
-                            onChanged: _changed,
-                            child: TextField(
-                              key: const Key('link-machine-search'),
+                          padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Link another machine${_guide == null
+                                      ? ''
+                                      : _guide == _Guide.server
+                                      ? ' / SSH'
+                                      : ' / desktop'}',
+                                  style: boxMonoStyle(color: kBoxFaint),
+                                ),
+                              ),
+                              if (_guide == null)
+                                Text(
+                                  '${rows.length}/${_remotes.length + 3}',
+                                  style: boxMonoStyle(color: kBoxFaint),
+                                ),
+                            ],
+                          ),
+                        ),
+                        if (_guide == null)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 14),
+                            child: ReadlineKeys(
                               controller: _query,
-                              focusNode: _inputFocus,
-                              autofocus: true,
-                              style: boxMonoStyle(),
-                              textAlignVertical: TextAlignVertical.center,
-                              decoration: InputDecoration(
-                                hintText: 'find a machine / desktop / SSH',
-                                hintStyle: boxMonoStyle(color: kBoxFaint),
-                                border: InputBorder.none,
-                                enabledBorder: InputBorder.none,
-                                focusedBorder: InputBorder.none,
-                                filled: false,
-                                isDense: true,
-                                prefixIcon: Padding(
-                                  padding: const EdgeInsets.only(right: 10),
-                                  child: Center(
-                                    widthFactor: 1,
-                                    heightFactor: 1,
-                                    child: Text(
-                                      'machine >',
-                                      style: boxMonoStyle(
-                                        color: Colors.white70,
+                              onChanged: _changed,
+                              child: TextField(
+                                key: const Key('link-machine-search'),
+                                controller: _query,
+                                focusNode: _inputFocus,
+                                autofocus: true,
+                                style: boxMonoStyle(),
+                                textAlignVertical: TextAlignVertical.center,
+                                decoration: InputDecoration(
+                                  hintText: 'find a machine / desktop / SSH',
+                                  hintStyle: boxMonoStyle(color: kBoxFaint),
+                                  border: InputBorder.none,
+                                  enabledBorder: InputBorder.none,
+                                  focusedBorder: InputBorder.none,
+                                  filled: false,
+                                  isDense: true,
+                                  prefixIcon: Padding(
+                                    padding: const EdgeInsets.only(right: 10),
+                                    child: Center(
+                                      widthFactor: 1,
+                                      heightFactor: 1,
+                                      child: Text(
+                                        'machine >',
+                                        style: boxMonoStyle(
+                                          color: Colors.white70,
+                                        ),
                                       ),
                                     ),
                                   ),
-                                ),
-                                prefixIconConstraints: const BoxConstraints(
-                                  minHeight: 36,
-                                ),
-                                contentPadding: EdgeInsets.zero,
-                              ),
-                              onChanged: _changed,
-                              onEditingComplete: () {},
-                              onSubmitted: (_) => unawaited(_open(_selected)),
-                            ),
-                          ),
-                        ),
-                      Flexible(
-                        child: SingleChildScrollView(
-                          key: ValueKey(_guide),
-                          padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
-                          child: _guide != null
-                              ? Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
+                                  prefixIconConstraints: const BoxConstraints(
+                                    minHeight: 36,
                                   ),
-                                  child: _guideBody(),
-                                )
-                              : Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    if (rows.isEmpty)
-                                      Padding(
-                                        padding: const EdgeInsets.all(8),
-                                        child: Text(
-                                          'No matching machines. Clear the search to see setup options.',
-                                          style: boxMonoStyle(
-                                            size: 12,
-                                            color: kBoxFaint,
-                                          ),
-                                        ),
-                                      ),
-                                    for (final entry in rows)
-                                      _machineRow(entry, picker: true),
-                                    if (selected != null && !selected.enabled)
-                                      Padding(
-                                        padding: const EdgeInsets.all(8),
-                                        child: Text(
-                                          'Already linked. Open its agents from New Tab or New Pane.',
-                                          style: boxMonoStyle(
-                                            size: 11,
-                                            color: kBoxFaint,
-                                          ),
-                                        ),
-                                      ),
-                                  ],
+                                  contentPadding: EdgeInsets.zero,
                                 ),
+                                onChanged: _changed,
+                                onEditingComplete: () {},
+                                onSubmitted: (_) => unawaited(_open(_selected)),
+                              ),
+                            ),
+                          ),
+                        Flexible(
+                          child: SingleChildScrollView(
+                            key: ValueKey(_guide),
+                            padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
+                            child: _guide != null
+                                ? Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                    ),
+                                    child: _guideBody(),
+                                  )
+                                : Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      if (rows.isEmpty)
+                                        Padding(
+                                          padding: const EdgeInsets.all(8),
+                                          child: Text(
+                                            'No matching machines. Clear the search to see setup options.',
+                                            style: boxMonoStyle(
+                                              color: kBoxFaint,
+                                            ),
+                                          ),
+                                        ),
+                                      for (final entry in rows)
+                                        _machineRow(entry, picker: true),
+                                      if (selected != null && !selected.enabled)
+                                        Padding(
+                                          padding: const EdgeInsets.all(8),
+                                          child: Text(
+                                            'Already linked. Open its agents from New Tab or New Pane.',
+                                            style: boxMonoStyle(
+                                              color: kBoxFaint,
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                          ),
                         ),
-                      ),
-                      BoxHintStrip(
-                        message: _refreshing || app.machinesRefreshing
-                            ? 'Refreshing machines…'
-                            : message,
-                        isError:
-                            !_refreshing &&
-                            !app.machinesRefreshing &&
-                            (_error ||
-                                (_message == null &&
-                                    app.machineListError != null)),
-                        hints: [
-                          if (_guide == null)
+                        BoxHintStrip(
+                          message: _refreshing || app.machinesRefreshing
+                              ? 'Refreshing machines…'
+                              : message,
+                          isError:
+                              !_refreshing &&
+                              !app.machinesRefreshing &&
+                              (_error ||
+                                  (_message == null &&
+                                      app.machineListError != null)),
+                          hints: [
+                            if (_guide == null)
+                              BoxHint(
+                                '${_hint('picker.previous', '↑')}/${_hint('picker.next', '↓')}',
+                                'select',
+                              ),
+                            if (_guide == null && selected?.enabled == true)
+                              BoxHint(
+                                _hint('picker.accept', 'enter'),
+                                'open',
+                                onTap: () => unawaited(_open(selected)),
+                              ),
+                            if (_guide != null)
+                              BoxHint(
+                                _hint('picker.complete', 'tab'),
+                                'controls',
+                              ),
                             BoxHint(
-                              '${_hint('picker.previous', '↑')}/${_hint('picker.next', '↓')}',
-                              'select',
+                              _hint(
+                                'picker.refresh',
+                                _mac ? 'cmd-r' : 'ctrl-r',
+                              ),
+                              'refresh',
+                              onTap: () => unawaited(_refresh()),
                             ),
-                          if (_guide == null && selected?.enabled == true)
                             BoxHint(
-                              _hint('picker.accept', 'enter'),
-                              'open',
-                              onTap: () => unawaited(_open(selected)),
+                              _hint('picker.cancel', 'esc'),
+                              _guide == null ? 'close' : 'back',
+                              onTap: _back,
                             ),
-                          if (_guide != null)
-                            BoxHint(
-                              _hint('picker.complete', 'tab'),
-                              'controls',
-                            ),
-                          BoxHint(
-                            _hint('picker.refresh', _mac ? 'cmd-r' : 'ctrl-r'),
-                            'refresh',
-                            onTap: () => unawaited(_refresh()),
-                          ),
-                          BoxHint(
-                            _hint('picker.cancel', 'esc'),
-                            _guide == null ? 'close' : 'back',
-                            onTap: _back,
-                          ),
-                        ],
-                      ),
-                    ],
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
-      );
-    },
-  );
+        );
+      },
+    );
+  }
 }

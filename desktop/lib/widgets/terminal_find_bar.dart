@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../terminal/terminal_font_store.dart';
+import '../terminal/terminal_text.dart';
 import '../terminal/terminal_search.dart';
 import 'box_chrome.dart';
 import 'pane_menu.dart';
@@ -172,9 +172,9 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                 ),
                 child: Row(
                   children: [
-                    Expanded(child: Text(label, style: boxMonoStyle(size: 12))),
+                    Expanded(child: Text(label, style: boxMonoStyle())),
                     const SizedBox(width: 16),
-                    Text(hint, style: boxMonoStyle(size: 11, color: kBoxFaint)),
+                    Text(hint, style: boxMonoStyle(color: kBoxFaint)),
                   ],
                 ),
               ),
@@ -199,10 +199,13 @@ class TerminalFindBarState extends State<TerminalFindBar> {
   }
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: terminalFontStore,
-    builder: (context, _) => _buildBar(context),
-  );
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return ListenableBuilder(
+      listenable: terminalFontStore,
+      builder: (context, _) => _buildBar(context),
+    );
+  }
 
   Widget _buildBar(BuildContext context) => FocusScope(
     node: _scope,
@@ -332,7 +335,6 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: boxMonoStyle(
-                              size: 11,
                               color:
                                   count == 0 && query.isNotEmpty && !searching
                                   ? const Color(0xffffb4a9)
@@ -357,7 +359,6 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                         Text(
                           'Aa',
                           style: boxMonoStyle(
-                            size: 12,
                             color: sensitive ? Colors.white : Colors.white54,
                             weight: sensitive
                                 ? FontWeight.w700

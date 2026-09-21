@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -46,9 +47,8 @@ class _ShortcutsSheetState extends State<_ShortcutsSheet> {
               padding: const EdgeInsets.fromLTRB(18, 17, 18, 4),
               child: Text(
                 'Keyboard shortcuts',
-                style: TextStyle(
+                style: terminalTextStyle(
                   color: grid.AppPalette.textPrimary,
-                  fontSize: 15,
                   fontWeight: grid.AppFont.semibold,
                 ),
               ),

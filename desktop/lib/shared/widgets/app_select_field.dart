@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../theme/app_theme.dart';
 import 'app_menu.dart';
@@ -660,11 +661,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                                     overflow: TextOverflow.ellipsis,
                                     style:
                                         widget.textStyle ??
-                                        TextStyle(
-                                          fontFamily: AppFont.sans,
-                                          fontFamilyFallback:
-                                              AppFont.sansFallback,
-                                          fontSize: AppControl.fontSize,
+                                        terminalTextStyle(
                                           fontWeight: AppControl.fontWeight,
                                           letterSpacing: AppFont.trackingFor(
                                             AppControl.fontSize,
@@ -680,11 +677,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                                       current!.note!,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontFamily: AppFont.sans,
-                                        fontFamilyFallback:
-                                            AppFont.sansFallback,
-                                        fontSize: 11.5,
+                                      style: terminalTextStyle(
                                         color: AppPalette.textFaint,
                                       ),
                                     ),

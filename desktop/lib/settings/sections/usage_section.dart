@@ -20,6 +20,8 @@
 /// silently excluded most of a team's work would be worse than no total.
 library;
 
+import 'package:harness/terminal/terminal_text.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -182,7 +184,7 @@ class _UsageSectionState extends State<UsageSection> {
               if (states.values.any((state) => state.hasIncompleteFigures)) ...[
                 Text(
                   'Some usage could not be read. Totals are incomplete.',
-                  style: TextStyle(fontSize: 12.5, color: AppPalette.warn),
+                  style: terminalTextStyle(color: AppPalette.warn),
                 ),
                 const SizedBox(height: 12),
               ],
@@ -200,10 +202,7 @@ class _UsageSectionState extends State<UsageSection> {
                   ))
                 Text(
                   'No figures available.',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    color: AppPalette.textSecondary,
-                  ),
+                  style: terminalTextStyle(color: AppPalette.textSecondary),
                 )
               else ...[
                 _cards(overview),
@@ -212,10 +211,7 @@ class _UsageSectionState extends State<UsageSection> {
                     padding: const EdgeInsets.only(top: 8),
                     child: Text(
                       'The cost is a lower bound because some model prices are unavailable.',
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        color: AppPalette.textSecondary,
-                      ),
+                      style: terminalTextStyle(color: AppPalette.textSecondary),
                     ),
                   ),
                 if (overview.hasAnyData) ...[
@@ -357,24 +353,27 @@ class _PanelPair extends StatelessWidget {
   final Widget mix;
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      if (constraints.maxWidth < 680) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [intensity, const SizedBox(height: 12), mix],
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 680) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [intensity, const SizedBox(height: 12), mix],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(flex: 12, child: intensity),
+            const SizedBox(width: 12),
+            Expanded(flex: 8, child: mix),
+          ],
         );
-      }
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(flex: 12, child: intensity),
-          const SizedBox(width: 12),
-          Expanded(flex: 8, child: mix),
-        ],
-      );
-    },
-  );
+      },
+    );
+  }
 }
 
 /// The "Usage analytics" caption and the lens picker beside it.
@@ -438,7 +437,7 @@ class _OverviewHeader extends StatelessWidget {
           const SizedBox(height: 2),
           Text(
             _updatedLine(),
-            style: TextStyle(fontSize: 11.5, color: AppPalette.textSecondary),
+            style: terminalTextStyle(color: AppPalette.textSecondary),
           ),
         ],
       ),
@@ -505,10 +504,7 @@ class _ProvidersHeading extends StatelessWidget {
                 // panel impossible to read.
                 '${overview.enabledCount} enabled'
                 '${hasFigures ? ' · ${overview.dataProviderCount} with data' : ''}',
-                style: TextStyle(
-                  fontSize: 11.5,
-                  color: AppPalette.textSecondary,
-                ),
+                style: terminalTextStyle(color: AppPalette.textSecondary),
               ),
             ],
           ),
@@ -517,7 +513,7 @@ class _ProvidersHeading extends StatelessWidget {
           Text(
             '${overview.sessionCount} '
             '${overview.sessionCount == 1 ? 'session' : 'sessions'}',
-            style: TextStyle(fontSize: 11.5, color: AppPalette.textFaint),
+            style: terminalTextStyle(color: AppPalette.textFaint),
           ),
       ],
     );

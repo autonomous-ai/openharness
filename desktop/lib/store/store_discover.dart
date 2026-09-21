@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -86,8 +87,7 @@ class StoreDiscover extends StatelessWidget {
                   Text(
                     'Follow your curiosity.',
                     key: const ValueKey('store-curiosity-hero'),
-                    style: TextStyle(
-                      fontSize: 34,
+                    style: terminalTextStyle(
                       height: 1.15,
                       letterSpacing: -1.1,
                       fontWeight: FontWeight.w700,
@@ -98,8 +98,7 @@ class StoreDiscover extends StatelessWidget {
                     const SizedBox(height: 24),
                     LayoutBuilder(
                       builder: (context, constraints) {
-                        final scale =
-                            MediaQuery.textScalerOf(context).scale(14) / 14;
+                        final scale = terminalTextScaleOf(context);
                         final wide =
                             constraints.maxWidth >= 980 &&
                             scale <= 1.25 &&
@@ -200,8 +199,7 @@ class StoreDiscover extends StatelessWidget {
                     const SizedBox(height: 16),
                     LayoutBuilder(
                       builder: (context, constraints) {
-                        final scale =
-                            MediaQuery.textScalerOf(context).scale(14) / 14;
+                        final scale = terminalTextScaleOf(context);
                         final columns = (constraints.maxWidth / (320 * scale))
                             .floor()
                             .clamp(1, 3);
@@ -234,8 +232,7 @@ class StoreDiscover extends StatelessWidget {
                     const SizedBox(height: 32),
                     Text(
                       'For polymaths in the making.',
-                      style: TextStyle(
-                        fontSize: 16,
+                      style: terminalTextStyle(
                         fontWeight: FontWeight.w600,
                         color: grid.AppPalette.textPrimary,
                       ),
@@ -243,8 +240,7 @@ class StoreDiscover extends StatelessWidget {
                     const SizedBox(height: 6),
                     Text(
                       'Learn the next craft through the things you build.',
-                      style: TextStyle(
-                        fontSize: 14,
+                      style: terminalTextStyle(
                         height: 1.5,
                         color: grid.AppPalette.textSecondary,
                       ),
@@ -258,8 +254,7 @@ class StoreDiscover extends StatelessWidget {
                     const SizedBox(height: 32),
                     Text(
                       'Start with a coding agent. More disciplines will appear here as harnesses become available.',
-                      style: TextStyle(
-                        fontSize: 14,
+                      style: terminalTextStyle(
                         height: 1.5,
                         color: grid.AppPalette.textSecondary,
                       ),
@@ -282,6 +277,7 @@ class _FeaturedStory extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final category = entry.isEngine
         ? 'Coding'
         : entry.id == 'autonomous/blender'
@@ -292,7 +288,7 @@ class _FeaturedStory extends StatelessWidget {
       'Design' => 'Give your ideas shape.',
       _ => 'Build something real.',
     };
-    final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+    final scale = terminalTextScaleOf(context);
     return StoreExploreCard(
       key: ValueKey('store-feature:${entry.id}'),
       color: storeDiscipline(category).color,
@@ -308,8 +304,7 @@ class _FeaturedStory extends StatelessWidget {
               children: [
                 Text(
                   category.toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 10,
+                  style: terminalTextStyle(
                     letterSpacing: 1.1,
                     fontWeight: FontWeight.w700,
                     color: grid.AppPalette.accentOnSurface,
@@ -320,8 +315,7 @@ class _FeaturedStory extends StatelessWidget {
                   height: 50 * scale,
                   child: Text(
                     headline,
-                    style: TextStyle(
-                      fontSize: 21,
+                    style: terminalTextStyle(
                       height: 1.15,
                       letterSpacing: -.4,
                       fontWeight: FontWeight.w700,
@@ -338,8 +332,7 @@ class _FeaturedStory extends StatelessWidget {
                         'Explore ${entry.name}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
+                        style: terminalTextStyle(
                           color: grid.AppPalette.textSecondary,
                         ),
                       ),
@@ -381,6 +374,7 @@ class _DisciplineLink extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final discipline = storeDiscipline(name);
     final example = discipline.example(entries)!;
     return StoreExploreCard(
@@ -399,8 +393,7 @@ class _DisciplineLink extends StatelessWidget {
                 children: [
                   Text(
                     name,
-                    style: TextStyle(
-                      fontSize: 16,
+                    style: terminalTextStyle(
                       fontWeight: FontWeight.w600,
                       color: grid.AppPalette.textPrimary,
                     ),
@@ -408,8 +401,7 @@ class _DisciplineLink extends StatelessWidget {
                   const SizedBox(height: 5),
                   Text(
                     '${entries.length} ${entries.length == 1 ? 'harness' : 'harnesses'}',
-                    style: TextStyle(
-                      fontSize: 12,
+                    style: terminalTextStyle(
                       color: grid.AppPalette.textSecondary,
                     ),
                   ),

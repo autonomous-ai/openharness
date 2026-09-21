@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../usage/usage_accounts.dart';
@@ -82,9 +83,8 @@ class UsagePanelContent extends StatelessWidget {
         const SizedBox(height: 10),
         Text(
           reading.message ?? 'No usage to show',
-          style: TextStyle(
+          style: terminalTextStyle(
             color: grid.AppPalette.textFaint,
-            fontSize: 11.5,
             height: 1.35,
           ),
         ),
@@ -113,16 +113,18 @@ class _AccountCaption extends StatelessWidget {
   final String? machineName;
 
   @override
-  Widget build(BuildContext context) => Text(
-    _caption,
-    maxLines: 1,
-    overflow: TextOverflow.ellipsis,
-    style: TextStyle(
-      color: grid.AppPalette.textSecondary,
-      fontSize: 11,
-      fontWeight: grid.AppFont.medium,
-    ),
-  );
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Text(
+      _caption,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: terminalTextStyle(
+        color: grid.AppPalette.textSecondary,
+        fontWeight: grid.AppFont.medium,
+      ),
+    );
+  }
 
   String get _caption {
     if (!account.isLocal) return account.machines.join(', ');
@@ -145,8 +147,7 @@ class _PanelScope extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final style = TextStyle(
-      fontSize: 11,
+    final style = terminalTextStyle(
       height: 1.35,
       color: grid.AppPalette.textSecondary,
     );
@@ -180,6 +181,7 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final fetchedAt = reading.fetchedAt;
     return Row(
       children: [
@@ -190,9 +192,8 @@ class _Header extends StatelessWidget {
         const SizedBox(width: 7),
         Text(
           reading.provider.label,
-          style: TextStyle(
+          style: terminalTextStyle(
             color: grid.AppPalette.textPrimary,
-            fontSize: 12.5,
             fontWeight: grid.AppFont.semibold,
           ),
         ),
@@ -207,10 +208,7 @@ class _Header extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.right,
-              style: TextStyle(
-                color: grid.AppPalette.textFaint,
-                fontSize: 10.5,
-              ),
+              style: terminalTextStyle(color: grid.AppPalette.textFaint),
             ),
           ),
       ],
@@ -240,6 +238,7 @@ class _WindowRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final resetsIn = window.resetsInLabel();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -247,9 +246,8 @@ class _WindowRow extends StatelessWidget {
       children: [
         Text(
           window.label,
-          style: TextStyle(
+          style: terminalTextStyle(
             color: grid.AppPalette.textPrimary,
-            fontSize: 11.5,
             fontWeight: grid.AppFont.medium,
           ),
         ),
@@ -260,10 +258,7 @@ class _WindowRow extends StatelessWidget {
           children: [
             Text(
               '${window.usedPercent.round()}% used',
-              style: TextStyle(
-                color: grid.AppPalette.textSecondary,
-                fontSize: 11,
-              ),
+              style: terminalTextStyle(color: grid.AppPalette.textSecondary),
             ),
             const Spacer(),
             // No reset time means no countdown — never "resets in 0m", which
@@ -271,10 +266,7 @@ class _WindowRow extends StatelessWidget {
             if (resetsIn != null)
               Text(
                 'Resets in $resetsIn',
-                style: TextStyle(
-                  color: grid.AppPalette.textFaint,
-                  fontSize: 11,
-                ),
+                style: terminalTextStyle(color: grid.AppPalette.textFaint),
               ),
           ],
         ),

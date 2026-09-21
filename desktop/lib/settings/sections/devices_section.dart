@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../../autonomous_device/autonomous_device_cli.dart';
 import '../../core/test_run.dart';
@@ -132,14 +133,7 @@ class _DevicesSectionState extends State<DevicesSection> {
           title: Text(title),
           content: SizedBox(
             width: 360,
-            child: Text(
-              detail,
-              style: TextStyle(
-                fontFamily: grid.AppFont.sans,
-                fontSize: 13.5,
-                height: 1.4,
-              ),
-            ),
+            child: Text(detail, style: terminalTextStyle(height: 1.4)),
           ),
           actions: [
             TextButton(
@@ -303,11 +297,7 @@ class _DevicesSectionState extends State<DevicesSection> {
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 child: Text(
                   _actionError ?? _error!,
-                  style: TextStyle(
-                    fontFamily: grid.AppFont.sans,
-                    fontSize: 13,
-                    color: grid.AppPalette.dangerFill,
-                  ),
+                  style: terminalTextStyle(color: grid.AppPalette.dangerFill),
                 ),
               ),
             if (!_unsupported && !_loading) ...[
@@ -397,9 +387,7 @@ class _DevicesSectionState extends State<DevicesSection> {
                         obscureText: true,
                         autocorrect: false,
                         enableSuggestions: false,
-                        style: TextStyle(
-                          fontFamily: grid.AppFont.sans,
-                          fontSize: 13,
+                        style: terminalTextStyle(
                           color: grid.AppPalette.textPrimary,
                         ),
                         decoration: labeledFieldDecoration(
@@ -420,11 +408,7 @@ class _DevicesSectionState extends State<DevicesSection> {
               const SizedBox(height: 10),
               Text(
                 'Harness CLI keeps the connection running when you close Desktop.',
-                style: TextStyle(
-                  fontFamily: grid.AppFont.sans,
-                  fontSize: 12,
-                  color: grid.AppPalette.textSecondary,
-                ),
+                style: terminalTextStyle(color: grid.AppPalette.textSecondary),
               ),
               const SizedBox(height: 10),
             ],

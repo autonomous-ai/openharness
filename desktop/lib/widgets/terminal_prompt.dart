@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/widgets/app_dialog.dart';
 import '../shortcuts/app_keymap.dart';
@@ -178,6 +179,7 @@ class TerminalPromptKeys extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final focused = Focus(
       focusNode: focusNode,
       autofocus: true,
@@ -217,16 +219,24 @@ class TerminalPrompt extends StatelessWidget {
   final Widget child;
   final double width;
   @override
-  Widget build(BuildContext context) => Dialog(
-    alignment: Alignment.topCenter,
-    insetPadding: const EdgeInsets.fromLTRB(16, 56, 16, 18),
-    elevation: 0,
-    backgroundColor: Colors.transparent,
-    child: SizedBox(
-      width: width,
-      child: TerminalBox(child: child),
-    ),
-  );
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Dialog(
+      alignment: Alignment.topCenter,
+      insetPadding: EdgeInsets.fromLTRB(
+        16,
+        (MediaQuery.sizeOf(context).height * .08).clamp(16.0, 56.0),
+        16,
+        18,
+      ),
+      elevation: 0,
+      backgroundColor: Colors.transparent,
+      child: SizedBox(
+        width: width,
+        child: TerminalBox(child: child),
+      ),
+    );
+  }
 }
 
 Widget terminalPromptButton(
@@ -241,7 +251,7 @@ Widget terminalPromptButton(
   onPressed: onPressed,
   style: TextButton.styleFrom(
     foregroundColor: danger ? Colors.orangeAccent : Colors.white70,
-    textStyle: boxMonoStyle(size: 12),
+    textStyle: boxMonoStyle(),
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
     minimumSize: const Size(0, 30),
     tapTargetSize: MaterialTapTargetSize.shrinkWrap,

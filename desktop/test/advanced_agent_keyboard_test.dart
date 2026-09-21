@@ -216,6 +216,7 @@ void main() {
     app.adoptSessionForTest(terminal('a0', []));
     await mount(tester, app);
     await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
     await key(tester, LogicalKeyboardKey.enter);
     await key(tester, LogicalKeyboardKey.period, cmd: true);
     await tester.pumpAndSettle();

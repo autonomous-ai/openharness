@@ -1,4 +1,5 @@
 import 'package:flutter/widgets.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../state/app_state.dart';
@@ -85,30 +86,22 @@ class _Hint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
           keys,
-          style: TextStyle(
-            fontSize: 10.5,
+          style: terminalTextStyle(
             // The chord is the brighter half. Someone scanning this is looking
             // for a key, not reading a sentence — the word after it only has to
             // confirm what they guessed.
             color: grid.AppPalette.textSecondary,
-            fontFamily: grid.AppFont.sans,
             fontWeight: grid.AppFont.medium,
           ),
         ),
         const SizedBox(width: 5),
-        Text(
-          what,
-          style: TextStyle(
-            fontSize: 10.5,
-            color: grid.AppPalette.textFaint,
-            fontFamily: grid.AppFont.sans,
-          ),
-        ),
+        Text(what, style: terminalTextStyle(color: grid.AppPalette.textFaint)),
       ],
     );
   }

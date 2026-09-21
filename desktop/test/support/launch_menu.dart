@@ -11,7 +11,13 @@ Future<void> openLaunchRow(WidgetTester tester, String name) async {
       .widget<NewHarnessBox>(find.byType(NewHarnessBox))
       .controller;
   expect(box.field, NewHarnessField.launch);
-  final index = ['agent', 'machine', 'project', 'task'].indexOf(name);
+  final index = [
+    'agent',
+    'machine',
+    'project',
+    if (box.isGitProject) 'branch',
+    if (box.canUseWorktree || box.gitError != null) 'worktree',
+  ].indexOf(name);
   expect(index, greaterThanOrEqualTo(0));
   await tester.sendKeyEvent(LogicalKeyboardKey.pageUp);
   await tester.pump();
@@ -47,4 +53,14 @@ Future<void> openAgentSetting(
   );
   await tester.pump();
   await mouse.removePointer();
+}
+
+/// Exercises compatibility for carried tasks and advanced drafts. Task is no
+/// longer a visible launch row.
+Future<void> openLegacyTaskEditor(WidgetTester tester) async {
+  tester
+      .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+      .controller
+      .focusField(NewHarnessField.task);
+  await tester.pump();
 }

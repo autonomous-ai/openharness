@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/harness_catalog.dart';
 import '../core/models.dart';
@@ -932,6 +933,7 @@ class EngineMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final identity = engineIdentity(engine, displayName: displayName);
     final mark = identity.asset != null
         ? Image.asset(
@@ -1001,6 +1003,7 @@ class _InitialMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return SizedBox.square(
       dimension: size,
       child: Center(
@@ -1011,14 +1014,11 @@ class _InitialMark extends StatelessWidget {
           // glyph would grow while its 17px square did not, and the letter would
           // clip out of its own mark.
           textScaler: TextScaler.noScaling,
-          style: TextStyle(
+          style: terminalTextStyle(
             color: identity.color,
             // The app's mono stack, not a literal: `Menlo` names nothing on
             // Linux, so this initial was drawn in the proportional default
             // while every mark beside it was monospaced.
-            fontFamily: AppFonts.mono,
-            fontFamilyFallback: AppFonts.monoFallback,
-            fontSize: size * 0.68,
             height: 1,
             fontWeight: FontWeight.w700,
           ),

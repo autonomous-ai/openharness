@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../../core/reveal_folder.dart';
 import '../../widgets/export_logs_dialog.dart';
@@ -28,7 +29,7 @@ class DebugToolbar extends StatelessWidget {
         Expanded(
           child: Text(
             '$total ${total == 1 ? 'entry' : 'entries'}',
-            style: TextStyle(fontSize: 12.5, color: AppPalette.textSecondary),
+            style: terminalTextStyle(color: AppPalette.textSecondary),
           ),
         ),
         const _ExportLogsPill(),
@@ -64,6 +65,7 @@ class _ExportLogsPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return ToolbarPill(
       onTap: () => unawaited(showExportLogsDialog(context)),
       rimmed: true,
@@ -98,6 +100,7 @@ class _OpenLogsPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return ToolbarPill(
       onTap: () => unawaited(_open(context)),
       rimmed: true,
@@ -135,11 +138,7 @@ class DebugPillLabel extends StatelessWidget {
         const SizedBox(width: 6),
         Text(
           label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: AppFont.medium,
-            color: ink,
-          ),
+          style: terminalTextStyle(fontWeight: AppFont.medium, color: ink),
         ),
       ],
     );
