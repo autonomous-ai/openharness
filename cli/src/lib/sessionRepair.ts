@@ -14,10 +14,8 @@
  *     unbound until its next turn, which is recoverable — mis-binding is not.
  */
 
-import { execFile } from 'child_process'
 import { open, readdir, readFile, realpath, stat } from 'fs/promises'
 import { basename, dirname, join, sep } from 'path'
-import { promisify } from 'util'
 import { env } from '../config/env.js'
 import { museEvent, museWorkspaceRoot } from '../engines/muse/normalizer.js'
 import type { AgentEngine } from '../engines/types.js'
@@ -25,8 +23,7 @@ import { readCodexRolloutMeta, resolveCodexRollout } from '../engines/codex/roll
 import { agyConversationForPid, findAgyTranscript } from '../engines/agy/session.js'
 import { copilotSessionCwd, copilotSessionForPid, findCopilotTranscript } from '../engines/copilot/session.js'
 import { sqlitePreflightMessage } from './sqliteAvailability.js'
-
-const execFileAsync = promisify(execFile)
+import { sqliteReadAll, type SqliteParam } from './sqliteRead.js'
 
 /**
  * Clock granularity only. `ps` reports start time to the second, so a file created in the same second
@@ -175,41 +172,31 @@ async function fileEngineSession(
 
 let missingSqliteReported = false
 
-/** The store-backed repair branch cannot work without the `sqlite3` CLI; warn on the first miss only. */
+/** The store-backed repair branch cannot work without a SQLite reader; warn on the first miss only. */
 function reportMissingSqliteOnce(): void {
   if (missingSqliteReported) return
   missingSqliteReported = true
-  console.warn(sqlitePreflightMessage() ?? '[preflight] sqlite3 CLI not found on PATH')
+  console.warn(sqlitePreflightMessage() ?? '[preflight] no SQLite reader available')
 }
 
-async function dbEngineSession(dbPath: string, sql: string): Promise<RepairedSession | null> {
-  let stdout: string
-  try {
-    // Same invocation the readers use: `.timeout` as a dot-command (the PRAGMA form prints a row under
-    // -json and corrupts the parse), and query_only so a repair can never write to the user's store.
-    ({ stdout } = await execFileAsync(
-      'sqlite3',
-      ['-json', '-cmd', '.timeout 3000', '-cmd', 'PRAGMA query_only=1', dbPath, sql],
-      { maxBuffer: 1024 * 1024 },
-    ))
-  } catch (err) {
-    // A missing binary is not a transient DB lock, and repair returning null forever with no signal is
+/** Read-only, through the same helper the readers use, so a repair can never write to the user's store. */
+async function dbEngineSession(dbPath: string, sql: string, params: SqliteParam[]): Promise<RepairedSession | null> {
+  const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: 1024 * 1024 })
+  if (!result.ok) {
+    // No reader at all is not a transient DB lock, and repair returning null forever with no signal is
     // how "my opencode agents never appear on Ubuntu" looks from the outside. Say it once.
-    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') reportMissingSqliteOnce()
+    if (result.reason === 'missing') reportMissingSqliteOnce()
     return null
   }
-  const trimmed = stdout.trim()
-  if (!trimmed) return null
-  let rows: Array<Record<string, unknown>>
-  try { rows = JSON.parse(trimmed) as Array<Record<string, unknown>> } catch { return null }
+  const rows = result.rows
   if (rows.length !== 1) return null // 0 = nothing to adopt, >1 = ambiguous
   const id = rows[0].id
   return typeof id === 'string' && id ? { sessionId: id } : null
 }
 
-/** SQL-escape a directory for a literal comparison (the readers build literals the same way). */
-function quote(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`
+/** One `?` per directory, for an `IN (…)` over both spellings of the cwd. */
+function placeholders(count: number): string {
+  return Array.from({ length: count }, () => '?').join(', ')
 }
 
 /**
@@ -250,7 +237,7 @@ export async function findLiveSession(
   // The DB engines match on a directory STRING, so ask for both spellings of it (see sameDir).
   const real = await realpath(cwd).catch(() => cwd)
   const dirs = real === cwd ? [cwd] : [cwd, real]
-  const dirList = dirs.map(quote).join(', ')
+  const dirList = placeholders(dirs.length)
   switch (engine) {
     case 'claude': {
       // Native Claude publishes a PID-to-conversation record even before a hook binds it.
@@ -317,8 +304,9 @@ export async function findLiveSession(
       return dbEngineSession(
         join(env.OPENCODE_DATA_DIR, 'opencode.db'),
         `SELECT id FROM session WHERE directory IN (${dirList}) AND parent_id IS NULL`
-          + ` AND (time_created >= ${Math.trunc(sinceMs)} OR time_updated >= ${Math.trunc(sinceMs)})`
-          + ` ORDER BY time_updated DESC LIMIT 2;`,
+          + ' AND (time_created >= ? OR time_updated >= ?)'
+          + ' ORDER BY time_updated DESC LIMIT 2;',
+        [...dirs, Math.trunc(sinceMs), Math.trunc(sinceMs)],
       )
     case 'kilo':
       // Same store shape as opencode (measured: `session` is byte-identical between the two DBs), and
@@ -326,15 +314,17 @@ export async function findLiveSession(
       return dbEngineSession(
         join(env.KILO_DATA_DIR, 'kilo.db'),
         `SELECT id FROM session WHERE directory IN (${dirList}) AND parent_id IS NULL`
-          + ` AND (time_created >= ${Math.trunc(sinceMs)} OR time_updated >= ${Math.trunc(sinceMs)})`
-          + ` ORDER BY time_updated DESC LIMIT 2;`,
+          + ' AND (time_created >= ? OR time_updated >= ?)'
+          + ' ORDER BY time_updated DESC LIMIT 2;',
+        [...dirs, Math.trunc(sinceMs), Math.trunc(sinceMs)],
       )
     case 'hermes':
       // started_at is epoch SECONDS (fractional).
       return dbEngineSession(
         join(env.HERMES_HOME, 'state.db'),
-        `SELECT id FROM sessions WHERE cwd IN (${dirList}) AND started_at >= ${Math.trunc(sinceMs / 1000)}`
-          + ` ORDER BY started_at DESC LIMIT 2;`,
+        `SELECT id FROM sessions WHERE cwd IN (${dirList}) AND started_at >= ?`
+          + ' ORDER BY started_at DESC LIMIT 2;',
+        [...dirs, Math.trunc(sinceMs / 1000)],
       )
     case 'devin':
       // created_at is epoch SECONDS (integer).
@@ -343,8 +333,9 @@ export async function findLiveSession(
         // created_at is when the session began; last_activity_at moves when devin resumes into it, which
         // is the only marker a continued session leaves behind.
         `SELECT id FROM sessions WHERE working_directory IN (${dirList})`
-          + ` AND (created_at >= ${Math.trunc(sinceMs / 1000)} OR last_activity_at >= ${Math.trunc(sinceMs / 1000)})`
-          + ` ORDER BY last_activity_at DESC LIMIT 2;`,
+          + ' AND (created_at >= ? OR last_activity_at >= ?)'
+          + ' ORDER BY last_activity_at DESC LIMIT 2;',
+        [...dirs, Math.trunc(sinceMs / 1000), Math.trunc(sinceMs / 1000)],
       )
     case 'copilot': {
       // The lock the process holds is the only thing a `/resume` leaves behind, and it is exact.

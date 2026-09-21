@@ -2,13 +2,15 @@ import { describe, expect, it, afterEach } from 'vitest'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { hasSqliteCli, resetSqliteAvailabilityCache, sqlitePreflightMessage } from './sqliteAvailability.js'
+import { hasSqliteCli, hasSqliteReader, resetSqliteAvailabilityCache, sqlitePreflightMessage } from './sqliteAvailability.js'
+import { overrideBuiltinSqlite } from './sqliteRead.js'
 
 const dirs: string[] = []
 const realPath = process.env.PATH
 
 afterEach(() => {
   process.env.PATH = realPath
+  overrideBuiltinSqlite(undefined)
   resetSqliteAvailabilityCache()
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
@@ -35,14 +37,27 @@ describe('sqlite3 preflight', () => {
   // Ubuntu does not ship sqlite3 (measured on a stock ubuntu:24.04 image), so on Linux this is the
   // default state, not an exotic one. The line must name the affected engines AND the fix — a bare
   // "sqlite3 not found" leaves the user with four engines that mirror nothing and no idea why.
-  it('names the affected engines and the fix when it is absent', () => {
+  it('names the affected engines and the fix when neither reader is available', () => {
     process.env.PATH = pathWith(false)
+    overrideBuiltinSqlite(null) // a Node without node:sqlite
     resetSqliteAvailabilityCache()
     expect(hasSqliteCli()).toBe(false)
+    expect(hasSqliteReader()).toBe(false)
     const message = sqlitePreflightMessage()
     expect(message).toContain('sqlite3')
     for (const engine of ['opencode', 'kilo', 'hermes', 'devin']) expect(message).toContain(engine)
     expect(message).toMatch(/apt install sqlite3|on PATH/)
+  })
+
+  // The installers' Node carries node:sqlite, and a daemon on it has nothing to warn about even on a
+  // Linux box with no CLI at all.
+  it('stays silent without the CLI when this Node has node:sqlite', () => {
+    process.env.PATH = pathWith(false)
+    overrideBuiltinSqlite(class { prepare(): never { throw new Error('unused') } exec(): void {} close(): void {} } as never)
+    resetSqliteAvailabilityCache()
+    expect(hasSqliteCli()).toBe(false)
+    expect(hasSqliteReader()).toBe(true)
+    expect(sqlitePreflightMessage()).toBeNull()
   })
 
   it('ignores a non-executable file of the same name', () => {
