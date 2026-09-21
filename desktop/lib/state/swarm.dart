@@ -1,7 +1,6 @@
 import 'dart:ui' show Size;
 
 import '../core/models.dart' show isAutomaticHarnessName;
-import 'new_tab_wallpaper.dart';
 import 'pane_preset.dart';
 import 'pane_arrangement.dart';
 import 'terminal_pane.dart';
@@ -15,7 +14,6 @@ class Swarm {
     String name = defaultName,
     this.kind = 'harness',
     this.isNewTabPage = false,
-    this.wallpaper = NewTabWallpaper.flight,
     bool? nameIsCustom,
   }) : name = nameIsCustom == true ? name : normalizeName(name),
        nameIsCustom = nameIsCustom ?? (normalizeName(name) != defaultName);
@@ -29,7 +27,6 @@ class Swarm {
 
   /// A deliberately opened tab has a minimal landing page, separate from onboarding.
   bool isNewTabPage;
-  NewTabWallpaper wallpaper;
   bool get isBlankNewTab =>
       isNewTabPage && kind == 'harness' && panes.isEmpty && presets.isEmpty;
   bool get isStore => kind == 'store';
@@ -128,7 +125,6 @@ class Swarm {
       'name': name,
       if (nameIsCustom) 'nameIsCustom': true,
       if (isNewTabPage) 'newTabPage': true,
-      if (isNewTabPage) 'newTabWallpaper': wallpaper.name,
       if (titleMachineId != null) 'titleMachineId': titleMachineId,
       if (titleAgentId != null) 'titleAgentId': titleAgentId,
       if (kind != 'harness') 'kind': kind,

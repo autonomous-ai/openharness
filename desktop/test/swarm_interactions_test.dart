@@ -114,7 +114,6 @@ void main() {
           expect(replied, isTrue);
         }
 
-        Object? previousWallpaper;
         for (final action in <Future<void> Function()>[
           () => chord(tester, LogicalKeyboardKey.keyT),
           newFromChrome,
@@ -134,11 +133,6 @@ void main() {
           await tester.pumpAndSettle();
           expect(app.activeSwarmId, isNot(work));
           expect(app.activeSwarm.isNewTabPage, isTrue);
-          final wallpaper = app.activeSwarm.wallpaper;
-          if (previousWallpaper != null) {
-            expect(wallpaper, isNot(previousWallpaper));
-          }
-          previousWallpaper = wallpaper;
           expect(app.swarms, hasLength(3));
           expect(find.text('Follow your curiosity.'), findsWidgets);
           expect(
@@ -149,10 +143,7 @@ void main() {
           expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
           await tester.enterText(input, 'Agent 1');
           await tester.pump();
-          expect(app.activeSwarm.wallpaper, wallpaper);
           await chord(tester, LogicalKeyboardKey.keyT);
-          expect(app.activeSwarm.wallpaper, isNot(wallpaper));
-          previousWallpaper = app.activeSwarm.wallpaper;
           expect(app.swarms, hasLength(3));
           expect(tester.widget<TextField>(input).controller!.text, 'Agent 1');
           await tester.sendKeyEvent(LogicalKeyboardKey.escape);

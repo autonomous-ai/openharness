@@ -51,7 +51,6 @@ import 'harness_placement.dart';
 import 'pane_layout_store.dart';
 import 'terminal_pane.dart';
 import 'swarm.dart';
-import 'new_tab_wallpaper.dart';
 import '../terminal/terminal_binary.dart';
 import '../update/desktop_updater.dart';
 import '../update/manual_update_check.dart';
@@ -817,9 +816,6 @@ class AppNotifier extends ChangeNotifier {
         swarm.presets.isEmpty;
   }
 
-  final _wallpaperRandom = Random();
-  NewTabWallpaper? _lastNewTabWallpaper;
-
   void newSwarm({
     String name = Swarm.defaultName,
     bool draft = false,
@@ -845,13 +841,6 @@ class AppNotifier extends ChangeNotifier {
       name: name,
       isNewTabPage: newTabPage,
     );
-    if (newTabPage) {
-      final choices = NewTabWallpaper.values
-          .where((wallpaper) => wallpaper != _lastNewTabWallpaper)
-          .toList(growable: false);
-      swarm.wallpaper = choices[_wallpaperRandom.nextInt(choices.length)];
-      _lastNewTabWallpaper = swarm.wallpaper;
-    }
     if (draft) {
       _draftSwarmReturns[swarm.id] =
           _draftSwarmReturns[activeSwarmId] ?? activeSwarmId;
@@ -8567,7 +8556,6 @@ class AppNotifier extends ChangeNotifier {
                   ? raw['orchestratorMachineId'] as String
                   : null;
         swarm.isNewTabPage = raw['newTabPage'] == true;
-        swarm.wallpaper = NewTabWallpaper.fromName(raw['newTabWallpaper']);
         swarm.titleMachineId = raw['titleMachineId'] as String?;
         swarm.titleAgentId = raw['titleAgentId'] as String?;
         swarm.nameIsCustom =

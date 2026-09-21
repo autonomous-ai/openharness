@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
-import '../state/new_tab_wallpaper.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_commands.dart';
@@ -10,9 +9,7 @@ import 'welcome_project_example.dart';
 
 /// The everyday New Tab page leaves the dock as the only action surface.
 class NewTabStartPage extends StatelessWidget {
-  const NewTabStartPage({super.key, required this.wallpaper});
-
-  final NewTabWallpaper wallpaper;
+  const NewTabStartPage({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -20,51 +17,20 @@ class NewTabStartPage extends StatelessWidget {
     return ColoredBox(
       key: const ValueKey('new-tab-start-page'),
       color: grid.AppPalette.swarmWelcome,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          IgnorePointer(
-            child: ExcludeSemantics(
-              child: Image.asset(
-                wallpaper.asset,
-                fit: BoxFit.cover,
-                filterQuality: FilterQuality.medium,
-              ),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text(
+            'Follow your curiosity.',
+            key: const ValueKey('new-tab-tagline'),
+            textAlign: TextAlign.center,
+            style: boxMonoStyle(
+              size: 24,
+              color: const Color(0xffd3d0ca),
+              weight: FontWeight.w600,
             ),
           ),
-          // Preserve a quiet center even when a narrow window crops the art.
-          const IgnorePointer(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  colors: [Color(0x99171717), Color(0x00171717)],
-                  stops: [.1, 1],
-                  radius: .65,
-                ),
-              ),
-            ),
-          ),
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Text(
-                'Follow your curiosity.',
-                key: const ValueKey('new-tab-tagline'),
-                textAlign: TextAlign.center,
-                style:
-                    boxMonoStyle(
-                      size: 24,
-                      color: const Color(0xffd3d0ca),
-                      weight: FontWeight.w600,
-                    ).copyWith(
-                      shadows: [
-                        const Shadow(color: Color(0xaa171717), blurRadius: 18),
-                      ],
-                    ),
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

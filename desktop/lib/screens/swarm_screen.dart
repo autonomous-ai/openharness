@@ -282,7 +282,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   Widget _startGuide() => app.activeSwarm.isNewTabPage
-      ? NewTabStartPage(wallpaper: app.activeSwarm.wallpaper)
+      ? const NewTabStartPage()
       : WorkspaceStartGuide(onShortcuts: _showKeyboardShortcuts);
 
   void _reviewOnboarding() {
@@ -1597,7 +1597,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           listenable: box,
           builder: (context, child) => LayoutBuilder(
             builder: (context, constraints) {
-              if (onWelcome && !app.activeSwarm.isNewTabPage) {
+              if (onWelcome) {
                 return Padding(
                   padding: EdgeInsets.only(top: _native ? 0 : _tabBarHeight),
                   child: FocusScope(
@@ -1641,9 +1641,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     ),
                   ),
                   CommandDock(
-                    topClearance: app.activeSwarm.isBlankNewTab
-                        ? constraints.maxHeight * .56
-                        : (_native ? 0 : _tabBarHeight),
+                    topClearance: _native ? 0 : _tabBarHeight,
                     expanded: box.field == NewHarnessField.projectMenu,
                     child: content,
                   ),
@@ -2259,7 +2257,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
             onRefocus: _focusSearch,
             child: scoped,
           );
-          if (_searchOnWelcome && !app.activeSwarm.isNewTabPage) {
+          if (_searchOnWelcome) {
             return Padding(
               padding: EdgeInsets.only(top: _native ? 0 : _tabBarHeight),
               child: BlockSemantics(
@@ -2297,8 +2295,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               CommandDock(
                 expanded: true,
                 topClearance: (_native ? 0.0 : _tabBarHeight).clamp(
-                  constraints.maxHeight *
-                      (app.activeSwarm.isBlankNewTab ? .56 : .35),
+                  constraints.maxHeight * .35,
                   double.infinity,
                 ),
                 child: contents,
