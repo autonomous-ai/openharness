@@ -358,6 +358,7 @@ final harnessCommands = <HarnessCommand>[
     'app.customize',
     'Customize OpenHarness',
     ShortcutGroup.actions,
+    nativeAction: 'customize',
   ),
   const HarnessCommand(
     'app.store',

@@ -23,6 +23,7 @@ import 'package:harness/shared/widgets/app_select_field.dart';
 import 'package:harness/shared/theme/app_theme.dart';
 import 'package:harness/shortcuts/keymap.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/widgets/harness_customize_pane.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -71,25 +72,45 @@ void main() {
     return notifier;
   }
 
-  testWidgets(
-    'Settings lists its remaining sections after customization moves',
-    (tester) async {
-      await openSettings(tester);
-      expect(find.text('Preferences'), findsOneWidget);
-      expect(find.text('Help'), findsOneWidget);
-      expect(find.text('Usage'), findsNWidgets(2));
-      expect(find.text('Keyboard shortcuts'), findsOneWidget);
-      expect(find.text('About'), findsOneWidget);
-      expect(find.text('Back to app'), findsOneWidget);
-      expect(find.text('Appearance'), findsNothing);
-      expect(find.text('Terminal'), findsNothing);
-      expect(find.byKey(const Key('appearance-ui-size-field')), findsNothing);
-      expect(
-        find.byKey(const Key('terminal-font-family-dropdown')),
-        findsNothing,
-      );
-    },
-  );
+  testWidgets('Settings lists customization under Preferences', (tester) async {
+    await openSettings(tester);
+    expect(find.text('Preferences'), findsOneWidget);
+    expect(find.text('Help'), findsOneWidget);
+    expect(find.text('Usage'), findsNWidgets(2));
+    expect(find.text('Customize'), findsOneWidget);
+    expect(find.text('Keyboard shortcuts'), findsOneWidget);
+    expect(find.text('About'), findsOneWidget);
+    expect(find.text('Back to app'), findsOneWidget);
+    expect(find.text('Appearance'), findsNothing);
+    expect(find.text('Terminal'), findsNothing);
+    expect(find.byKey(const Key('appearance-ui-size-field')), findsNothing);
+    expect(
+      find.byKey(const Key('terminal-font-family-dropdown')),
+      findsNothing,
+    );
+    await tester.tap(find.text('Customize'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SettingsScreen), findsNothing);
+    expect(find.byType(Placeholder), findsOneWidget);
+    expect(find.byType(HarnessCustomizePane), findsOneWidget);
+    for (final label in ['Pane', 'Appearance', 'Terminal']) {
+      expect(find.text(label), findsOneWidget);
+    }
+    await tester.tap(find.byKey(const ValueKey('customize-appearance')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('appearance-ui-size-field')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('customize-terminal')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('terminal-font-family-dropdown')),
+      findsOneWidget,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byType(SettingsScreen), findsNothing);
+    expect(find.byType(HarnessCustomizePane), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('About prints the running version', (tester) async {
     await openSettings(tester);

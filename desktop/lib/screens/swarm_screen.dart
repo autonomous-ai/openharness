@@ -1109,6 +1109,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         unawaited(_notifications());
       case 'settings':
         await _settings();
+      case 'customize':
+        await _customize();
     }
     if (mounted &&
         const {
@@ -1254,25 +1256,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       keymap: _keymap,
     );
   });
-  Future<void> _customize() => _dialog(() async {
-    await showAppDialog<void>(
-      context: context,
-      veilTint: Colors.transparent,
-      veilBlur: 0,
-      transitionDuration: Duration.zero,
-      builder: (context) => Align(
-        alignment: Alignment.centerRight,
-        child: SizedBox(
-          width: (440 * MediaQuery.textScalerOf(context).scale(13) / 13).clamp(
-            0,
-            MediaQuery.sizeOf(context).width,
-          ),
-          height: double.infinity,
-          child: HarnessCustomizePane(onClose: () => Navigator.pop(context)),
-        ),
-      ),
-    );
-  });
+  Future<void> _customize() => _dialog(() => showHarnessCustomizePane(context));
 
   Future<void> _settings([SettingsSection? section]) => _dialog(
     () => showSettingsScreen(
