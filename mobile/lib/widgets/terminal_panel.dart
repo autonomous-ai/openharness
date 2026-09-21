@@ -1457,7 +1457,17 @@ class _TerminalPanelState extends State<TerminalPanel>
                             grid.AppTheme.palette.value,
                             terminalThemeStore.value,
                           ),
-                          padding: const EdgeInsets.all(10),
+                          // ⚠️ **Nothing top or bottom, and that is the whole
+                          // point of writing it out rather than `all(10)`.**
+                          // This padding is laid OUTSIDE the scroll view (see
+                          // xterm's `TerminalView.build`: a `Container` wraps
+                          // the `Scrollable`), so a vertical inset is a strip
+                          // the terminal can never draw into — scrolled to
+                          // either end, the last line stopped 10px short of the
+                          // edge and the gap travelled with the content rather
+                          // than staying put like a margin. The sides are
+                          // margins beside chrome, not under it, and stay.
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
                           textStyle: terminalFontStore.value,
                           // ⚠️ The terminal is NOT app chrome, and the user said so:
                           // it carries its own font settings (Settings ▸ Terminal,
