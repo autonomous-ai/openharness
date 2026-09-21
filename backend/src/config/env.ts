@@ -100,6 +100,9 @@ const envSchema = z.object({
   STAGING_SSO_CLIENT_SECRET: z.string().optional(),
   STAGING_SSO_PROFILE_URL: z.string().default('https://apiv2.staging.autonomousdev.xyz/api/v1/me/profile'),
   SSO_PROFILE_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  // How long a token the profile API just accepted is trusted without asking again (0 = ask every
+  // time). This is also the longest a token revoked at the SSO keeps working here.
+  SSO_PROFILE_CACHE_TTL_MS: z.coerce.number().int().min(0).default(60_000),
   // Forces the SSO account picker so users can switch accounts (not silently auto-login the last one).
   // Set to '' to disable, or 'login' to force re-entering credentials.
   SSO_PROMPT: z.string().default('select_account'),

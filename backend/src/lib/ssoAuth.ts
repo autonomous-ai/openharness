@@ -9,6 +9,7 @@ import {
   storedAutonomousEnvironment,
   type AutonomousEnvironment,
 } from './autonomousEnvironment.js'
+import { createSsoProfileCache, type SharedProfileStore } from './ssoProfileCache.js'
 
 /** Internal identity attached to authenticated backend requests and user WebSockets. */
 export interface AuthUser {
@@ -41,6 +42,22 @@ export function bearerToken(header: string | undefined): string | undefined {
 }
 
 type FetchLike = typeof fetch
+
+// The cross-process store is attached by the server at startup rather than imported here: the Redis
+// module connects on import, and this file is imported by everything that authenticates.
+let sharedProfileStore: SharedProfileStore | null = null
+const profileCache = createSsoProfileCache({
+  ttlMs: env.SSO_PROFILE_CACHE_TTL_MS,
+  shared: () => sharedProfileStore,
+})
+
+export function useSharedSsoProfileStore(store: SharedProfileStore | null): void {
+  sharedProfileStore = store
+}
+
+export function clearSsoProfileCache(): void {
+  profileCache.clear()
+}
 
 /** Validate the SSO access token against the Autonomous profile service. */
 export async function fetchSsoProfile(
@@ -141,7 +158,7 @@ export async function authenticateAccessToken(
   autonomousEnv: AutonomousEnvironment = 'prod',
   { enforceEnv = true }: { enforceEnv?: boolean } = {},
 ): Promise<AuthUser> {
-  const profile = await fetchSsoProfile(token, autonomousEnv)
+  const profile = await profileCache.resolve(token, autonomousEnv, () => fetchSsoProfile(token, autonomousEnv))
   const metadata = accessTokenMetadata(token)
   const email = normalizeUserEmail(profile.email)
   if (!email) throw new SsoAuthError('SSO profile service returned an invalid profile', 'AUTH_SERVICE_UNAVAILABLE')

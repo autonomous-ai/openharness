@@ -10,7 +10,7 @@ vi.mock('../services/UserService.js', () => ({
   isProvisionalUserEmail: (email: string) => email.endsWith('@pending.harness.invalid'),
 }))
 
-import { authenticateAccessToken, fetchSsoProfile, SsoAuthError } from './ssoAuth.js'
+import { authenticateAccessToken, clearSsoProfileCache, fetchSsoProfile, SsoAuthError } from './ssoAuth.js'
 
 function response(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -58,6 +58,7 @@ describe('authenticated user resolution', () => {
   afterEach(() => {
     vi.clearAllMocks()
     vi.unstubAllGlobals()
+    clearSsoProfileCache()
   })
 
   function profileFetch(id: string, email: string): void {
@@ -140,5 +141,26 @@ describe('authenticated user resolution', () => {
       requiredEnv: 'stag',
     })
     expect(upsertFromSso).not.toHaveBeenCalled()
+  })
+
+  it('asks the profile service once for a token used on back-to-back requests', async () => {
+    profileFetch('prod-sub-1', 'owner@example.com')
+    const existing = { id: 'u1', email: 'owner@example.com', externalId: 'prod-sub-1', role: 'user', autonomousEnv: 'prod' }
+    findByEmail.mockResolvedValue(existing)
+    upsertFromSso.mockResolvedValue(existing)
+
+    await expect(authenticateAccessToken('a.e30.c', 'prod')).resolves.toMatchObject({ sub: 'u1' })
+    await expect(authenticateAccessToken('a.e30.c', 'prod')).resolves.toMatchObject({ sub: 'u1' })
+
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('asks the profile service again for a token it rejected', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async () => response(401, { message: 'Invalid or expired JWT' })))
+
+    await expect(authenticateAccessToken('a.e30.c', 'prod')).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+    await expect(authenticateAccessToken('a.e30.c', 'prod')).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 })
