@@ -627,3 +627,46 @@ inspection suggests reset/configuration races in some loops; reproduce them befo
 behavior. Compactor and Firehose already carry session/batch revisions, and Launcher/Guard already
 serialize substantial parts of their decision flow. These are source findings, not new live-model
 performance claims.
+
+## Ninth improvement — keep Jev decisions attached to the session they read
+
+Finished the deeper driver review of the 17 unlisted Jev experiments. The control-loop games use
+real local simulation rules, while Launcher remains an explicitly simulated command palette,
+Trader a synthetic paper market, Shopper a synthetic price board and Conductor a typed-decision
+music loop. Compactor's own-transcript path preserves messages, supports pins and writes an
+analysis plan without changing a live session; Firehose's own-data path writes row results and
+uses batch revisions. Guard reads real project diffs and runs the local project's test command,
+but its model judgment is not proof that a change is safe. None was relisted or represented as a
+newly verified live-model benchmark. Existing queue/session guards in Archer, Catcher, Slalom,
+Blocks, Launcher, Compactor and Firehose informed the focused fixes below.
+
+Reproduced **nine reset failures** through the actual viewer servers and production Jev clients,
+using a held local HTTP response, an explicit dummy key and an isolated credential path. Trader,
+Shopper, Arena and FPS applied an old answer to the replacement simulation; Duel added an old
+referee result to the new board; Conductor restored an obsolete bar after reset. Lander, Pendulum
+and Pong cleared their decision counters before waiting for the old queued answer, so a fresh
+reset still reported a completed decision. All nine original reproductions failed for the observed
+state/counter mismatch before the fixes.
+
+- Results and errors now verify the world/board/revision they belong to before being applied.
+  Fresh simulations clear the displayed decision and old error as appropriate.
+- Resets invalidate the rest of an old manual batch. Queued physics resets clear counters after
+  old work settles; watched workspace replacements invalidate pending results too.
+- Conductor queues complete bar work, snapshots the audience request across harmony and notes,
+  skips an obsolete notes call, and makes the newest request produce two fresh bars. A reset
+  again returns two consistently numbered initial bars. Duel queues rethinking so a reset or
+  changed board still gets its first valid move, instead of silently losing that work to `busy`.
+- Existing model telemetry remains a record of calls that actually happened. This does not abort
+  an already sent provider request or claim to undo its cost.
+
+**28 delayed-protocol checks** now pass: each of the nine experiments survives a late success and
+late failure across reset, stops the old three-step batch, runs again, and handles a watched source
+edit while an answer is pending. A separate overlapping-audience test verifies two fresh bars for
+the newest mood request and no obsolete second-stage notes call. **All 123 existing tests** for
+these nine packages also pass in explicit offline mode. Shared Jev kit copies remain unchanged
+and in sync. Added reusable session-lifecycle guidance to the kit README.
+
+Repeatable test: `store/tools/jev-kit/test/async-sessions.test.mjs`. Before/after logs and the original
+package results are in `/private/tmp/openharness-harness-improvements-evidence/jev-async-*.txt`
+and `jev-existing-tests.txt`. These checks verify real wrapper/client protocol behavior using
+local fixture answers; they do not establish live Jev speed, judgment or calibration.

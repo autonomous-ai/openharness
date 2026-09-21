@@ -40,19 +40,22 @@ export async function startPendulumViewer({ workspace, port = 0 } = {}) {
   let stopped = false, running = false
   let timer = null, salt = 1, lastVerdictAt = 0
   let queue = Promise.resolve()
+  let resetRevision = 0
   let overrides = {}
-  let decision = { action: 'CENTER', probs: {}, conf: 0, steady: 0.5 }
+  const blankDecision = () => ({ action: 'CENTER', probs: {}, conf: 0, steady: 0.5 })
+  let decision = blankDecision()
   let text = ''
   let error = null
   let server = null
   let history = [] // per decision: { step, deg (unsigned), tilt (signed), action, conf, gust }
   const session = { decisions: 0 }
 
-  const cfgWatch = watchConfig(join(workspace, 'pendulum.json'), DEFAULT, () => { overrides = {}; restart(); push(true) })
+  const cfgWatch = watchConfig(join(workspace, 'pendulum.json'), DEFAULT, () => { resetRevision++; overrides = {}; restart(); push(true) })
   const cfg = () => sanitize({ ...cfgWatch.get(), ...overrides })
 
   function restart() {
     world = createWorld(cfg())
+    decision = blankDecision(); error = null
     history = []
     text = stateText(world, cfg())
   }
@@ -110,11 +113,13 @@ export async function startPendulumViewer({ workspace, port = 0 } = {}) {
 
   async function decideOnce() {
     if (stopped) return
+    const askedWorld = world
     try {
       const c = cfg()
       if (world.phase === 'fallen') { step(world, c, 'CENTER'); text = stateText(world, c); return } // the rod is down: nothing to ask
       text = stateText(world, c)
       const res = await evaluate({ state: text, questions: QUESTIONS, salt: salt++, model: process.env.JEV_MODEL || 'jev-latest' })
+      if (stopped || world !== askedWorld) return
       const a = res.answers
       const action = ORDER.includes(a.action?.choice) ? a.action.choice : 'CENTER'
       decision = { action, probs: a.action?.probabilities ?? {}, conf: Number(a.action?.confidence ?? 0), steady: Number(a.conf?.noul ?? 0.5) }
@@ -125,6 +130,7 @@ export async function startPendulumViewer({ workspace, port = 0 } = {}) {
       text = stateText(world, c)
       error = null
     } catch (e) {
+      if (stopped || world !== askedWorld) return
       error = clean(e?.message ?? String(e))
     }
   }
@@ -137,8 +143,13 @@ export async function startPendulumViewer({ workspace, port = 0 } = {}) {
   async function control(cmd, body) {
     if (cmd === 'pause') { running = false; clearTimeout(timer) }
     else if (cmd === 'start') { if (!running) { running = true; schedule() } }
-    else if (cmd === 'reset') { overrides = {}; salt = 1; session.decisions = 0; await queue; restart() }
-    else if (cmd === 'tick') { const n = Math.round(clampN(body.n, 1, 20000, 1)); for (let i = 0; i < n; i++) await decide() }
+    else if (cmd === 'reset') {
+      resetRevision++
+      // Reset is a queued operation too; counters clear after the last old answer settles.
+      const reset = () => { overrides = {}; salt = 1; session.decisions = 0; restart() }
+      queue = queue.then(reset, reset); await queue
+    }
+    else if (cmd === 'tick') { const n = Math.round(clampN(body.n, 1, 20000, 1)); for (let i = 0, revision = resetRevision; i < n && !stopped && revision === resetRevision; i++) await decide() }
     else if (cmd === 'set') {
       const range = DIALS[body.key]
       if (range) overrides = { ...overrides, [body.key]: clampN(body.value, range[0], range[1], cfg()[body.key]) }
