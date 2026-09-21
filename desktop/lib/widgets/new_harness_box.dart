@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/permission_modes.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -61,13 +62,11 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
   int get _pinnedCount => _profilePicker && box.supportsProfiles ? 2 : 0;
   bool get _hasInput => !_launching;
   _LaunchChoice _launchChoice = _LaunchChoice.create;
-  String get _agentSummary => box.detectingAgent
-      ? 'Detecting installed agents…'
-      : [
-          box.agentLabel,
-          if (box.hasModes && box.mode != kDefaultPermissionMode) box.modeLabel,
-          if (box.profileLabel case final profile?) 'profile $profile',
-        ].join(' · ');
+  String get _agentSummary => [
+    box.agentLabel,
+    if (box.hasModes && box.mode != kDefaultPermissionMode) box.modeLabel,
+    if (box.profileLabel case final profile?) 'profile $profile',
+  ].join(' · ');
   List<_LaunchChoice> get _launchChoices => [
     _LaunchChoice.agent,
     _LaunchChoice.machine,
@@ -132,6 +131,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
       selection: TextSelection.collapsed(offset: box.query.length),
     );
     box.addListener(_changed);
+    terminalFontStore.addListener(_fontChanged);
     HardwareKeyboard.instance.addHandler(_watchAlt);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -145,6 +145,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     _closeSettingsMenu?.call();
     HardwareKeyboard.instance.removeHandler(_watchAlt);
     box.removeListener(_changed);
+    terminalFontStore.removeListener(_fontChanged);
     _text.dispose();
     _focus.dispose();
     _launchFocus.dispose();
@@ -205,7 +206,6 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     box.options,
     box.cursor,
     box.busy,
-    box.detectingAgent,
     box.checking,
     box.listing,
     box.status,
@@ -568,6 +568,8 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     _requestFocus();
   }
 
+  void _fontChanged() => setState(() {});
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -578,7 +580,9 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
             box.field == NewHarnessField.projectName ||
             box.field == NewHarnessField.projectRepository ||
             _projectMenu)
-        ? scale.scale(13) * 1.35 + scale.scale(12) * 1.35 + 10
+        ? scale.scale(terminalFontStore.size) * 1.35 +
+              scale.scale(terminalFontStore.size) * 1.35 +
+              10
         : boxRowHeight(scale);
     final input = Semantics(
       label: '${_fieldName(box.field)}. ${box.hint}',
@@ -775,7 +779,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
             NewHarnessField.mode => 'Permissions',
             _ => _fieldName(box.field),
           }.padRight(8)} ',
-          style: boxMonoStyle(size: 12, color: grid.AppPalette.swarmAccent),
+          style: boxMonoStyle(color: grid.AppPalette.swarmAccent),
         ),
         suffixIconConstraints: const BoxConstraints(minHeight: 38),
         suffixIcon: !onTask && box.query.trim().isNotEmpty && box.matchCount > 0
@@ -838,7 +842,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
               Expanded(
                 child: Text(
                   'Projects on ${box.machineLabel}',
-                  style: boxMonoStyle(size: 12, color: kBoxFaint),
+                  style: boxMonoStyle(color: kBoxFaint),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -850,10 +854,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                     : () => box.focusField(NewHarnessField.machine),
                 child: Text(
                   'Change Machine',
-                  style: boxMonoStyle(
-                    size: 12,
-                    color: grid.AppPalette.swarmAccent,
-                  ),
+                  style: boxMonoStyle(color: grid.AppPalette.swarmAccent),
                 ),
               ),
             ],
@@ -881,7 +882,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                         : box.field == NewHarnessField.mode
                         ? 'Permissions for ${box.agentSettingsLabel}'
                         : 'New Harness',
-                    style: boxMonoStyle(size: 12, color: kBoxFaint),
+                    style: boxMonoStyle(color: kBoxFaint),
                   ),
                 ),
               if (!_agentPicker &&
@@ -972,9 +973,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
         ? _LaunchChoice.values.where((item) => item.name == name).firstOrNull
         : null;
     final highlighted = choice != null && choice == _launchChoice;
-    final disabled =
-        !enabled ||
-        (name == 'create' ? box.busy || box.detectingAgent : box.locked);
+    final disabled = !enabled || (name == 'create' ? box.busy : box.locked);
     final fieldLabel = '${name[0].toUpperCase()}${name.substring(1)}';
     final checkbox =
         name == 'worktree' && !box.checkingGit && box.gitError == null;
@@ -1013,7 +1012,6 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                       Text(
                         '${fieldLabel.padRight(8)} ',
                         style: boxMonoStyle(
-                          size: 12,
                           color: active
                               ? grid.AppPalette.swarmAccent
                               : kBoxFaint,
@@ -1025,7 +1023,6 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: boxMonoStyle(
-                          size: 12,
                           color: risky
                               ? grid.AppPalette.warn
                               : disabled
@@ -1115,7 +1112,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                                 box.tildePath(folder),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: boxMonoStyle(size: 12, color: kBoxFaint),
+                                style: boxMonoStyle(color: kBoxFaint),
                               ),
                             ),
                           ],
@@ -1133,7 +1130,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                               padding: const EdgeInsets.only(left: 8),
                               child: Text(
                                 _keys['picker.accept'] ?? '↵',
-                                style: boxMonoStyle(size: 12, color: kBoxFaint),
+                                style: boxMonoStyle(color: kBoxFaint),
                               ),
                             ),
                         ],
@@ -1166,7 +1163,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                   : 'recent · ${recents.length}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: boxMonoStyle(size: 12, color: kBoxFaint),
+              style: boxMonoStyle(color: kBoxFaint),
             ),
           ),
           if (recents.isNotEmpty)
@@ -1215,7 +1212,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
             box.query.trim().isEmpty
                 ? 'Clone to ${box.machineLabel}:~/harnesses/<repository>'
                 : 'Paste a GitHub repository URL, or try openai/codex',
-            style: boxMonoStyle(size: 12, color: kBoxFaint),
+            style: boxMonoStyle(color: kBoxFaint),
           ),
         ),
       );
@@ -1228,7 +1225,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
           heightFactor: 1,
           child: Text(
             "${box.machineLabel}:~/harnesses/<name>",
-            style: boxMonoStyle(size: 12, color: kBoxFaint),
+            style: boxMonoStyle(color: kBoxFaint),
           ),
         ),
       );
@@ -1251,7 +1248,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                 : 'Nothing matches “${box.query.trim()}” in '
                       '${_fieldName(box.field)}. Escape goes back.',
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 13, color: kBoxFaint),
+            style: terminalTextStyle(color: kBoxFaint),
           ),
         ),
       );
@@ -1266,7 +1263,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               child: Text(
                 'No agents match “${box.query.trim()}”.',
-                style: boxMonoStyle(size: 12, color: kBoxFaint),
+                style: boxMonoStyle(color: kBoxFaint),
               ),
             ),
           ),
@@ -1394,7 +1391,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                         option.detail,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: boxMonoStyle(size: 12, color: kBoxFaint),
+                        style: boxMonoStyle(color: kBoxFaint),
                       ),
                   ],
                 )
@@ -1424,7 +1421,6 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: boxMonoStyle(
-                            size: 12,
                             color: option.risky
                                 ? grid.AppPalette.warn
                                 : kBoxFaint,
@@ -1468,7 +1464,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                 Text(
                   _keys['picker.accept'] ?? '↵',
                   key: const ValueKey('new-harness-row-action'),
-                  style: boxMonoStyle(size: 12, color: kBoxFaint),
+                  style: boxMonoStyle(color: kBoxFaint),
                 ),
               if (_agentPicker)
                 SizedBox(
@@ -1561,7 +1557,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                     box.field == NewHarnessField.projectName
               ? 'use project'
               : 'choose',
-          onTap: box.detectingAgent && box.returnCreates ? null : _enter,
+          onTap: _enter,
         ),
         if (_launching &&
             !box.checking &&
@@ -1614,22 +1610,25 @@ class _AgentSettingsButtonState extends State<_AgentSettingsButton> {
   bool _focused = false;
 
   @override
-  Widget build(BuildContext context) => Focus(
-    onFocusChange: (focused) => setState(() => _focused = focused),
-    child: Opacity(
-      opacity: widget.visible || _focused ? 1 : 0,
-      alwaysIncludeSemantics: true,
-      child: IconButton(
-        tooltip: widget.label,
-        onPressed: widget.onPressed,
-        icon: const Icon(LucideIcons.settings, size: 14, color: kBoxFaint),
-        style: IconButton.styleFrom(
-          padding: EdgeInsets.zero,
-          minimumSize: const Size(28, 28),
-          maximumSize: const Size(28, 28),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Focus(
+      onFocusChange: (focused) => setState(() => _focused = focused),
+      child: Opacity(
+        opacity: widget.visible || _focused ? 1 : 0,
+        alwaysIncludeSemantics: true,
+        child: IconButton(
+          tooltip: widget.label,
+          onPressed: widget.onPressed,
+          icon: const Icon(LucideIcons.settings, size: 14, color: kBoxFaint),
+          style: IconButton.styleFrom(
+            padding: EdgeInsets.zero,
+            minimumSize: const Size(28, 28),
+            maximumSize: const Size(28, 28),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

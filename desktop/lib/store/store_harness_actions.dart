@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart';
 import '../core/harness_catalog.dart';
@@ -187,18 +188,12 @@ class _StoreHarnessActionsState extends State<StoreHarnessActions> {
         recent: widget.recent,
       );
       final multiple = targets.length > 1;
-      final size = widget.prominent ? 15.0 : 12.0;
       final height = widget.prominent ? 46.0 : 34.0;
       final padding = EdgeInsets.symmetric(
         horizontal: widget.prominent ? 20 : 12,
         vertical: 8,
       );
-      final textStyle = TextStyle(
-        fontFamily: grid.AppFont.sans,
-        fontFamilyFallback: grid.AppFont.sansFallback,
-        fontSize: size,
-        fontWeight: FontWeight.w600,
-      );
+      final textStyle = terminalTextStyle(fontWeight: FontWeight.w600);
       final tooltip = multiple
           ? 'Choose a harness to resume'
           : targets.firstOrNull?.tooltip ?? '';
@@ -240,8 +235,7 @@ class _StoreHarnessActionsState extends State<StoreHarnessActions> {
                         padding: const EdgeInsets.fromLTRB(18, 12, 18, 8),
                         child: Text(
                           'Recent harnesses',
-                          style: TextStyle(
-                            fontSize: 12,
+                          style: terminalTextStyle(
                             fontWeight: FontWeight.w600,
                             color: grid.AppPalette.textSecondary,
                           ),

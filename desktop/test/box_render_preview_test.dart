@@ -212,6 +212,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await shot('02-new-pane-typed');
       await chord(tester, LogicalKeyboardKey.keyT);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await shot('03-new-tab-empty');
       await type(search, 'Agent 12');
       await shot('04-new-tab-typed');
@@ -404,6 +405,7 @@ void main() {
       tester.platformDispatcher.textScaleFactorTestValue = 1.7;
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       await chord(tester, LogicalKeyboardKey.keyT);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       final largeBox = tester
@@ -530,6 +532,7 @@ void main() {
       pendingApp.adoptSessionForTest(terminal('a0', []));
       await mount(tester, pendingApp);
       await chord(tester, LogicalKeyboardKey.keyT);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);

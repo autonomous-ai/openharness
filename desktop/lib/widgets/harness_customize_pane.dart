@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../settings/sections/appearance_section.dart';
 import '../settings/sections/terminal_section.dart';
@@ -20,7 +21,7 @@ Future<void> showHarnessCustomizePane(BuildContext context) =>
       builder: (context) => Align(
         alignment: Alignment.centerRight,
         child: SizedBox(
-          width: (440 * MediaQuery.textScalerOf(context).scale(13) / 13).clamp(
+          width: (440 * terminalTextScaleOf(context)).clamp(
             0,
             MediaQuery.sizeOf(context).width,
           ),
@@ -59,7 +60,6 @@ class HarnessCustomizePane extends StatelessWidget {
                         child: Text(
                           'Customize Harness',
                           style: boxMonoStyle(
-                            size: 14,
                             color: grid.AppPalette.textPrimary,
                             weight: FontWeight.w600,
                           ),
@@ -82,7 +82,7 @@ class HarnessCustomizePane extends StatelessWidget {
                   unselectedLabelColor: grid.AppPalette.textSecondary,
                   indicatorColor: grid.AppPalette.swarmAccent,
                   dividerColor: grid.AppPalette.divider,
-                  labelStyle: boxMonoStyle(size: 12),
+                  labelStyle: boxMonoStyle(),
                   tabs: const [
                     Tab(key: ValueKey('customize-prompt'), text: 'Pane'),
                     Tab(

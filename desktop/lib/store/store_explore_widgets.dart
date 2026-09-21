@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -23,43 +24,44 @@ class StoreExploreHeading extends StatelessWidget {
   final VoidCallback? onAction;
 
   @override
-  Widget build(BuildContext context) => Row(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: TextStyle(
-                fontSize: 21,
-                height: 1.15,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -.4,
-                color: grid.AppPalette.textPrimary,
-              ),
-            ),
-            if (subtitle != null) ...[
-              const SizedBox(height: 8),
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
               Text(
-                subtitle!,
-                style: TextStyle(
-                  fontSize: 14,
-                  height: 1.5,
-                  color: grid.AppPalette.textSecondary,
+                title,
+                style: terminalTextStyle(
+                  height: 1.15,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -.4,
+                  color: grid.AppPalette.textPrimary,
                 ),
               ),
+              if (subtitle != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  subtitle!,
+                  style: terminalTextStyle(
+                    height: 1.5,
+                    color: grid.AppPalette.textSecondary,
+                  ),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
-      ),
-      if (onAction != null) ...[
-        const SizedBox(width: 16),
-        TextButton(onPressed: onAction, child: Text(action!)),
+        if (onAction != null) ...[
+          const SizedBox(width: 16),
+          TextButton(onPressed: onAction, child: Text(action!)),
+        ],
       ],
-    ],
-  );
+    );
+  }
 }
 
 /// Curated covers for browsing; actual output images for prompt examples.
@@ -77,6 +79,7 @@ class StoreProjectArt extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final color = storeDiscipline(storeCategoryFor(entry)).color;
     final fallback = DecoratedBox(
       decoration: BoxDecoration(
@@ -181,43 +184,49 @@ class _CoverCredit extends StatelessWidget {
   final StoreCoverArt cover;
 
   @override
-  Widget build(BuildContext context) => Tooltip(
-    message:
-        '${cover.description}\n${cover.credit} · ${cover.license}\nView source',
-    child: Material(
-      color: const Color(0xc91a1b1e),
-      borderRadius: BorderRadius.circular(16),
-      child: InkWell(
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Tooltip(
+      message:
+          '${cover.description}\n${cover.credit} · ${cover.license}\nView source',
+      child: Material(
+        color: const Color(0xc91a1b1e),
         borderRadius: BorderRadius.circular(16),
-        onTap: () async {
-          final messenger = ScaffoldMessenger.maybeOf(context);
-          try {
-            if (await launchUrl(
-              Uri.parse(cover.source!),
-              mode: LaunchMode.externalApplication,
-            )) {
-              return;
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () async {
+            final messenger = ScaffoldMessenger.maybeOf(context);
+            try {
+              if (await launchUrl(
+                Uri.parse(cover.source!),
+                mode: LaunchMode.externalApplication,
+              )) {
+                return;
+              }
+            } catch (_) {
+              // Keep the card usable if an external browser is unavailable.
             }
-          } catch (_) {
-            // Keep the card usable if an external browser is unavailable.
-          }
-          if (messenger?.mounted == true) {
-            messenger!.showSnackBar(
-              const SnackBar(content: Text('Could not open the image source')),
-            );
-          }
-        },
-        child: Semantics(
-          label: 'Image credit: ${cover.credit}. ${cover.license}. View source',
-          button: true,
-          child: const Padding(
-            padding: EdgeInsets.all(9),
-            child: Icon(LucideIcons.info300, size: 14, color: Colors.white),
+            if (messenger?.mounted == true) {
+              messenger!.showSnackBar(
+                const SnackBar(
+                  content: Text('Could not open the image source'),
+                ),
+              );
+            }
+          },
+          child: Semantics(
+            label:
+                'Image credit: ${cover.credit}. ${cover.license}. View source',
+            button: true,
+            child: const Padding(
+              padding: EdgeInsets.all(9),
+              child: Icon(LucideIcons.info300, size: 14, color: Colors.white),
+            ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class StoreExploreCard extends StatefulWidget {
@@ -243,6 +252,7 @@ class _StoreExploreCardState extends State<StoreExploreCard> {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final active = _hovered || _focused;
     final radius = BorderRadius.circular(16);
     return AnimatedContainer(

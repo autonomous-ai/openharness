@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -368,11 +369,10 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
                         '${task.harness} · ${question != null ? 'needs input' : task.state}${task.attempt > 1 ? ' · attempt ${task.attempt}' : ''}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
+                        style: terminalTextStyle(
                           color: task.error == null && question == null
                               ? grid.AppPalette.textSecondary
                               : grid.AppPalette.warn,
-                          fontSize: 12,
                         ),
                       ),
                     ],
@@ -475,9 +475,8 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
                             : role == 'assistant'
                             ? 'Director'
                             : 'Project update',
-                        style: TextStyle(
+                        style: terminalTextStyle(
                           color: grid.AppPalette.textSecondary,
-                          fontSize: 12,
                         ),
                       ),
                       const SizedBox(height: 6),
@@ -497,9 +496,8 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
                       ].contains(message['delivery']))
                         Text(
                           'Queued for the agent',
-                          style: TextStyle(
+                          style: terminalTextStyle(
                             color: grid.AppPalette.textSecondary,
-                            fontSize: 12,
                           ),
                         ),
                     ],
@@ -516,10 +514,7 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
               alignment: Alignment.centerLeft,
               child: Text(
                 'Director is working…',
-                style: TextStyle(
-                  color: grid.AppPalette.textSecondary,
-                  fontSize: 12,
-                ),
+                style: terminalTextStyle(color: grid.AppPalette.textSecondary),
               ),
             ),
           ),
@@ -568,9 +563,8 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
                     children: [
                       Text(
                         'Shift ↵ for a new line',
-                        style: TextStyle(
+                        style: terminalTextStyle(
                           color: grid.AppPalette.textSecondary,
-                          fontSize: 11,
                         ),
                       ),
                       const SizedBox(width: 10),

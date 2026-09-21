@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/widgets.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/desktop_window.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -59,8 +60,7 @@ class HarnessTopBar extends StatelessWidget {
         alignment: Alignment.centerLeft,
         child: Text(
           'Harness',
-          style: TextStyle(
-            fontSize: 12.5,
+          style: terminalTextStyle(
             fontWeight: FontWeight.w600,
             color: grid.AppPalette.textSecondary,
           ),
@@ -92,6 +92,7 @@ class WindowDragArea extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return GestureDetector(
       // Translucent, like DragToMoveArea: the drag has to be available from
       // the gaps between whatever the region draws.
@@ -114,6 +115,7 @@ class WindowDragStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return DragToMoveArea(
       child: SizedBox(
         height: Platform.isMacOS ? windowDragBandHeight : 0,
@@ -136,6 +138,7 @@ class FullWindowScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return Stack(
       children: [
         Positioned.fill(child: child),

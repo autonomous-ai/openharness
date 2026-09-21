@@ -239,7 +239,7 @@ void main() {
       find.descendant(of: row, matching: find.text('System')),
     );
     expect(note.style?.color, isNot(label.style?.color));
-    expect(note.style!.fontSize!, lessThan(label.style!.fontSize!));
+    expect(note.style!.fontSize!, equals(label.style!.fontSize!));
   });
 
   testWidgets('a row mark gets its own slot, so labels never shift', (
@@ -335,8 +335,7 @@ void main() {
   testWidgets('the picker uses the roomy row, a context menu keeps compact', (
     tester,
   ) async {
-    // Two sizes exist on purpose (see AppMenuRowMetrics). This is the line
-    // between them: a picker's list is read down, a ⋯ menu is glanced at.
+    // Both variants use the terminal font; only spacing and icon size differ.
     await tester.pumpWidget(
       _host(
         Column(
@@ -369,7 +368,7 @@ void main() {
     expect(pickerRow.metrics, AppMenuRowMetrics.roomy);
     expect(
       AppMenuRowMetrics.roomy.fontSize,
-      greaterThan(AppMenuRowMetrics.compact.fontSize),
+      equals(AppMenuRowMetrics.compact.fontSize),
     );
     expect(
       AppMenuRowMetrics.roomy.iconSize,

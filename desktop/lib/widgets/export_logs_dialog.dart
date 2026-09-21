@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/harness_cli_runner.dart';
 import '../core/reveal_folder.dart';
@@ -120,18 +121,16 @@ class _ExportLogsDialogState extends State<_ExportLogsDialog> {
               const SizedBox(height: 12),
               Text(
                 title,
-                style: TextStyle(
+                style: terminalTextStyle(
                   color: grid.AppPalette.textPrimary,
-                  fontSize: 15,
                   fontWeight: grid.AppFont.semibold,
                 ),
               ),
               const SizedBox(height: 5),
               SelectableText(
                 body,
-                style: TextStyle(
+                style: terminalTextStyle(
                   color: grid.AppPalette.textSecondary,
-                  fontSize: 12.5,
                   height: 1.5,
                 ),
               ),
@@ -172,10 +171,10 @@ class _Label extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return Text(
       text,
-      style: TextStyle(
-        fontSize: 13,
+      style: terminalTextStyle(
         fontWeight: grid.AppFont.medium,
         color: ToolbarPill.tint(tinted: tinted, enabled: true),
       ),

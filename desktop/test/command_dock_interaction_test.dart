@@ -582,10 +582,16 @@ void main() {
         await key(tester, LogicalKeyboardKey.slash, ctrl: true);
         expect(preview, findsNothing);
         expect(search.selected, same(best));
-        expect(tester.getRect(input), queryBounds);
+        expect(
+          tester.getRect(input),
+          rectMoreOrLessEquals(queryBounds, epsilon: .001),
+        );
         await key(tester, LogicalKeyboardKey.slash, ctrl: true);
         expect(preview, findsOneWidget);
-        expect(tester.getRect(input), queryBounds);
+        expect(
+          tester.getRect(input),
+          rectMoreOrLessEquals(queryBounds, epsilon: .001),
+        );
         await key(tester, LogicalKeyboardKey.arrowUp);
         expect(search.cursor, 2);
         final selectedRow = find.byKey(ValueKey(search.selected!.id));
@@ -610,16 +616,25 @@ void main() {
         expect(search.selected, same(best));
         await key(tester, LogicalKeyboardKey.keyJ, ctrl: true);
         expect(search.selected!.isCreate, isTrue);
-        expect(tester.getRect(createRow), createBounds);
+        expect(
+          tester.getRect(createRow),
+          rectMoreOrLessEquals(createBounds, epsilon: .001),
+        );
         await tester.drag(
           find.byKey(const ValueKey('swarm-search-result-list')),
           const Offset(0, 180),
         );
         await tester.pumpAndSettle();
-        expect(tester.getRect(createRow), createBounds);
+        expect(
+          tester.getRect(createRow),
+          rectMoreOrLessEquals(createBounds, epsilon: .001),
+        );
         await tester.enterText(input, '');
         await tester.pump();
-        expect(tester.getRect(createRow), createBounds);
+        expect(
+          tester.getRect(createRow),
+          rectMoreOrLessEquals(createBounds, epsilon: .001),
+        );
         await key(tester, LogicalKeyboardKey.tab);
         expect(
           FocusManager.instance.primaryFocus?.context

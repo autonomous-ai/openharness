@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart';
 import '../core/fuzzy_match.dart';
@@ -245,16 +246,14 @@ class _AgentSwitcherState extends State<_AgentSwitcher> {
                       controller: _query,
                       focusNode: _field,
                       autofocus: true,
-                      style: TextStyle(
-                        fontSize: 17,
+                      style: terminalTextStyle(
                         color: grid.AppPalette.textPrimary,
                       ),
                       decoration: InputDecoration(
                         border: InputBorder.none,
                         isDense: true,
                         hintText: 'Find a harness',
-                        hintStyle: TextStyle(
-                          fontSize: 17,
+                        hintStyle: terminalTextStyle(
                           color: grid.AppPalette.textFaint,
                         ),
                       ),
@@ -271,8 +270,7 @@ class _AgentSwitcherState extends State<_AgentSwitcher> {
                       padding: const EdgeInsets.fromLTRB(16, 18, 16, 20),
                       child: Text(
                         'No agent matches that.',
-                        style: TextStyle(
-                          fontSize: 13,
+                        style: terminalTextStyle(
                           color: grid.AppPalette.textFaint,
                         ),
                       ),
@@ -295,8 +293,7 @@ class _AgentSwitcherState extends State<_AgentSwitcher> {
                     padding: const EdgeInsets.fromLTRB(16, 9, 16, 10),
                     child: Text(
                       '↑↓ or ⌃n ⌃p to move · ⏎ to go · ⇧⏎ in a new tile · esc',
-                      style: TextStyle(
-                        fontSize: 11,
+                      style: terminalTextStyle(
                         color: grid.AppPalette.textFaint,
                       ),
                     ),
@@ -339,10 +336,7 @@ class _Row extends StatelessWidget {
                 entry.agent.name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13.5,
-                  color: grid.AppPalette.textPrimary,
-                ),
+                style: terminalTextStyle(color: grid.AppPalette.textPrimary),
               ),
             ),
             const SizedBox(width: 12),
@@ -350,7 +344,7 @@ class _Row extends StatelessWidget {
               entry.machineName,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 12, color: grid.AppPalette.textFaint),
+              style: terminalTextStyle(color: grid.AppPalette.textFaint),
             ),
             // A dot, not the word "open": the list is read at a glance and a
             // second column of text would compete with the machine's name.

@@ -1,34 +1,34 @@
 # New Harness entry rules
 
-All workspace entry points use the command dock. Start Harness submits the
-reviewed draft. Opening or cancelling it never starts a harness. Cmd-T allocates
-a temporary tab that is removed on cancellation if it remains untouched.
+Startup and Cmd-T show the same quiet welcome page. Cmd-T creates a blank tab;
+Escape leaves that tab open. The command dock opens only after an explicit
+Cmd-N, Cmd-O, or Cmd-P action. Start Harness submits the reviewed draft;
+opening or cancelling the dock never starts a harness.
 
 The launch form starts with Agent, Machine, and Project, followed by Start
 Harness, which is selected initially. There is no heading, Task row, or Open In
-row. Cmd-T and Cmd-P pickers also omit their heading and result-count row.
+row. Cmd-O and Cmd-P pickers also omit their heading and result-count row.
 Tasks carried from search or Store examples remain part of the draft.
 
 | Entry | Initial values | Destination after a successful start |
 | --- | --- | --- |
-| Cmd-T → New Harness | Focused pane's agent, machine, and project | New tab |
-| Cmd-P → New Harness | Same defaults as Cmd-T | Current tab |
+| Cmd-T, then Cmd-N | Previous pane's agent, machine, and project | The blank tab opened by Cmd-T |
+| Cmd-O or Cmd-P → New Harness | Focused pane's agent, machine, and project | Current tab |
 | Cmd-N or the New Harness command | Focused pane's defaults; retain a task and destination already chosen in search | Current tab unless its source requests a new tab |
 | Explicit pane split | Focused pane's defaults | Requested split in that tab |
 | Store New Harness, or a product's Open action in the pane or native Models menu | Explicit product and machine; suggested project named for that product | New tab |
 | Store Resume Harness | Existing harness and its machine; choose from a menu when several match | Focus its existing tab or reopen a view of the same harness |
 | Store Try this prompt | Same as Open, with the example as the editable task | New tab |
-| First empty workspace | Installed/preferred agent, local machine, suggested project | New tab |
+| First empty workspace | No automatic action; show the welcome page | User chooses with Cmd-N, Cmd-O, or Cmd-S |
 
 The Store and orchestration tabs cannot host a terminal pane. Generic creation
 from either uses a new tab. Command-bar requests keep the workspace context and
 apply any agent or machine explicitly named by the request.
 
-While the harness picker is open, Cmd-T and Cmd-P change only the destination.
-They preserve the query, text selection, highlighted result, and project or
-machine filter. Repeating either shortcut refocuses the same input. The Enter
-action and available capacity update together. Cancelling still leaves
-the workspace unchanged.
+Cmd-O and Cmd-P open the same picker. Repeating either shortcut preserves the
+query, selection, highlighted result, and filters, then refocuses the input.
+Cmd-T closes the dock and opens a quiet blank tab. Creation remains blocked
+while a pending start needs confirmation.
 
 ## Git projects
 
@@ -52,8 +52,8 @@ its receipt, and retrying a confirmed launch failure reuses its prepared folder.
 
 - Workspace drafts belong to their original machine, focused source harness,
   and project context. A different focused harness does not inherit their edits.
-- Cmd-T and Cmd-P can resume the same workspace draft. The shortcut just used
-  controls placement; a saved draft cannot redirect it to an old destination.
+- Cmd-O and Cmd-P can resume the same workspace draft. The current tab controls
+  placement; a saved draft cannot redirect it to an old destination.
 - Store drafts belong to the explicitly requested product and machine. Opening
   Blender cannot restore Workshop's agent, task, or generated project name.
 - Escape preserves edits. Reopening the same source without a new task resumes
@@ -88,7 +88,7 @@ never silently renamed, and existing files are never overwritten.
 - `test/new_harness_entry_rules_test.dart`: product changes with an open or
   dismissed dock, Open/Try, edited names, machine changes, explicit agent
   precedence, search isolation, exact launch payloads, pending receipts, source
-  pane changes, and Cmd-T/Cmd-P draft recovery and placement. Repeated/switched
+  pane changes, and Cmd-O/Cmd-P draft recovery and placement. Repeated/switched
   shortcuts retain typed tasks, text selection, existing results, and project
   scope; starting then uses the displayed destination.
 - `test/harness_placement_test.dart`, `test/box_flows_test.dart`,

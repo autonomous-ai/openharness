@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -22,34 +23,36 @@ class StoreViewers extends StatelessWidget {
   final bool loaded;
 
   @override
-  Widget build(BuildContext context) => ListView(
-    key: const ValueKey('store-viewers'),
-    padding: const EdgeInsets.all(28),
-    children: [
-      Text(
-        'Viewers',
-        style: TextStyle(
-          fontSize: 28,
-          fontWeight: FontWeight.w700,
-          color: grid.AppPalette.textPrimary,
-        ),
-      ),
-      const SizedBox(height: 8),
-      Text(
-        'Shared previews and the agents that use them.',
-        style: TextStyle(fontSize: 13, color: grid.AppPalette.textSecondary),
-      ),
-      const SizedBox(height: 24),
-      if (viewers.isEmpty)
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return ListView(
+      key: const ValueKey('store-viewers'),
+      padding: const EdgeInsets.all(28),
+      children: [
         Text(
-          loaded
-              ? 'No viewers reported by this computer.'
-              : 'Asking this computer…',
-          style: TextStyle(color: grid.AppPalette.textSecondary),
+          'Viewers',
+          style: terminalTextStyle(
+            fontWeight: FontWeight.w700,
+            color: grid.AppPalette.textPrimary,
+          ),
         ),
-      for (final viewer in viewers) _viewer(context, viewer),
-    ],
-  );
+        const SizedBox(height: 8),
+        Text(
+          'Shared previews and the agents that use them.',
+          style: terminalTextStyle(color: grid.AppPalette.textSecondary),
+        ),
+        const SizedBox(height: 24),
+        if (viewers.isEmpty)
+          Text(
+            loaded
+                ? 'No viewers reported by this computer.'
+                : 'Asking this computer…',
+            style: TextStyle(color: grid.AppPalette.textSecondary),
+          ),
+        for (final viewer in viewers) _viewer(context, viewer),
+      ],
+    );
+  }
 
   Widget _viewer(BuildContext context, DshEntry viewer) {
     final machines = installedOn(viewer.id);
@@ -84,8 +87,7 @@ class StoreViewers extends StatelessWidget {
               Expanded(
                 child: Text(
                   viewer.name,
-                  style: TextStyle(
-                    fontSize: 16,
+                  style: terminalTextStyle(
                     fontWeight: FontWeight.w600,
                     color: grid.AppPalette.textPrimary,
                   ),
@@ -102,8 +104,7 @@ class StoreViewers extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               viewer.description!,
-              style: TextStyle(
-                fontSize: 13,
+              style: terminalTextStyle(
                 height: 1.4,
                 color: grid.AppPalette.textSecondary,
               ),
@@ -114,16 +115,12 @@ class StoreViewers extends StatelessWidget {
             machines.isEmpty
                 ? 'Not installed'
                 : 'Installed on ${machines.join(', ')}',
-            style: TextStyle(
-              fontSize: 12,
-              color: grid.AppPalette.textSecondary,
-            ),
+            style: terminalTextStyle(color: grid.AppPalette.textSecondary),
           ),
           const SizedBox(height: 14),
           Text(
             'Used by',
-            style: TextStyle(
-              fontSize: 12,
+            style: terminalTextStyle(
               fontWeight: FontWeight.w600,
               color: grid.AppPalette.textSecondary,
             ),
@@ -132,10 +129,7 @@ class StoreViewers extends StatelessWidget {
           if (uses.isEmpty)
             Text(
               'No agents reported in this catalog.',
-              style: TextStyle(
-                fontSize: 13,
-                color: grid.AppPalette.textSecondary,
-              ),
+              style: terminalTextStyle(color: grid.AppPalette.textSecondary),
             )
           else
             Wrap(

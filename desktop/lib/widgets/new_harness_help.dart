@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart';
 import '../shared/widgets/app_dialog.dart';
@@ -55,13 +56,7 @@ class _HarnessHelpLinkState extends State<HarnessHelpLink> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             textStyle:
                 widget.textStyle ??
-                TextStyle(
-                  fontFamily: AppFont.sans,
-                  fontFamilyFallback: AppFont.sansFallback,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w400,
-                  height: 1.4,
-                ),
+                terminalTextStyle(fontWeight: FontWeight.w400, height: 1.4),
             side: BorderSide.none,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(6),
@@ -170,8 +165,7 @@ class _HarnessHelpDialogState extends State<_HarnessHelpDialog> {
                       header: true,
                       child: Text(
                         title,
-                        style: TextStyle(
-                          fontSize: compact ? 28 : 32,
+                        style: terminalTextStyle(
                           height: 1.2,
                           fontWeight: AppFont.semibold,
                           color: AppPalette.textPrimary,
@@ -181,8 +175,7 @@ class _HarnessHelpDialogState extends State<_HarnessHelpDialog> {
                     const SizedBox(height: 20),
                     Text(
                       intro,
-                      style: TextStyle(
-                        fontSize: 16,
+                      style: terminalTextStyle(
                         height: 1.5,
                         color: AppPalette.textSecondary,
                       ),
@@ -317,8 +310,7 @@ class _HelpOption extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: TextStyle(
-                        fontSize: 18,
+                      style: terminalTextStyle(
                         height: 1.4,
                         fontWeight: AppFont.semibold,
                         color: AppPalette.textPrimary,
@@ -327,8 +319,7 @@ class _HelpOption extends StatelessWidget {
                     const SizedBox(height: 8),
                     Text(
                       description,
-                      style: TextStyle(
-                        fontSize: 16,
+                      style: terminalTextStyle(
                         height: 1.5,
                         color: AppPalette.textSecondary,
                       ),

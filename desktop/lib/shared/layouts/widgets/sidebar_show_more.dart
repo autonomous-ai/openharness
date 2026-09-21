@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../../theme/app_theme.dart';
 import 'sidebar_item.dart';
@@ -148,9 +149,8 @@ class _SidebarShowMoreState extends State<SidebarShowMore> {
                 ),
                 child: Text(
                   'Show more',
-                  style: TextStyle(
+                  style: terminalTextStyle(
                     color: ink,
-                    fontSize: 12.5,
                     fontWeight: AppFont.medium,
                   ),
                 ),

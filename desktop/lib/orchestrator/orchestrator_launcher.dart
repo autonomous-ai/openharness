@@ -1,8 +1,11 @@
 import 'dart:async';
 
+import '../shared/widgets/labeled_field.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -260,11 +263,11 @@ class _OrchestratorLauncherState extends State<OrchestratorLauncher> {
                 ),
                 if (_advanced) ...[
                   const SizedBox(height: 18),
+                  const FieldLabel('Project folder (optional)'),
                   TextField(
                     controller: _folder,
                     readOnly: _attempt != null,
                     decoration: const InputDecoration(
-                      labelText: 'Project folder (optional)',
                       hintText: 'Absolute path to an existing folder',
                     ),
                   ),
@@ -286,9 +289,8 @@ class _OrchestratorLauncherState extends State<OrchestratorLauncher> {
                 const SizedBox(height: 18),
                 Text(
                   'Runs on this computer with installed harnesses. Each specialist gets its own folder; no automatic installs.',
-                  style: TextStyle(
+                  style: terminalTextStyle(
                     color: grid.AppPalette.textSecondary,
-                    fontSize: 12,
                   ),
                 ),
                 if (_error != null)

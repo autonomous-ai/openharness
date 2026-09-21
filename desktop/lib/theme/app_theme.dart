@@ -58,44 +58,10 @@ abstract final class AppColors {
       grid.AppTheme.pick(const Color(0xFFB3261E), const Color(0xFFF2544B));
 }
 
-/// The app's two font stacks — adapters over the design system's, exactly like
-/// [AppColors] above.
-///
-/// Mono is for strings the user copies (a token, a path, terminal output);
-/// everything else is read, not copied, and reads faster in the system's own UI
-/// face. Which face that is belongs to `grid.AppFont`, which answers per
-/// platform — these used to re-declare the macOS names as `const`, which is how
-/// the whole app came to be drawn in Noto Sans on Ubuntu (nothing in the Apple
-/// stack resolves there) and how `mono` here drifted to `'Menlo'` while the
-/// token said `.AppleSystemUIFontMonospaced`. Nothing is `const` for the same
-/// reason nothing in [AppColors] is: freezing the value is what breaks the
-/// second platform.
+/// Legacy names resolve to the single Terminal font preference.
 abstract final class AppFonts {
   static String get sans => grid.AppFont.sans;
   static List<String> get sansFallback => grid.AppFont.sansFallback;
   static String get mono => grid.AppFont.mono;
   static List<String> get monoFallback => grid.AppFont.monoFallback;
 }
-
-/// The app's ThemeData now comes from `grid.buildAppTheme` — see `main.dart`.
-///
-/// ⚠️ DO NOT REBUILD ONE HERE. What used to live at this spot was a second,
-/// hand-written `ThemeData` (`AppTheme.terminalLight/terminalDark`), and it was
-/// the one the app actually wore: `grid.buildAppTheme` had ZERO call sites in
-/// `lib/` and was reached only from two tests. Everything the design system
-/// defines was therefore dead at runtime —
-///
-///   * all ten `TextTheme` steps were assigned the SAME style (family and colour
-///     only), so size, weight and `AppFont.trackingFor` fell through to
-///     Material's Roboto metrics. That is why ~150 call sites hand-type
-///     `fontSize:` across 14 different values: the theme gave them nothing, so
-///     each screen re-measured the ramp by eye.
-///   * `AppControl` had 0 references outside the token file — no call site could
-///     see the 32/28/36 control heights or the radius ladder.
-///   * `menuTheme` was null, so a `MenuAnchor` that passed no style of its own
-///     opened Material's raw default.
-///
-/// [AppColors] and [AppFonts] above stay: they are thin aliases onto
-/// `grid.AppPalette`, which is what let the swap be two lines in `main.dart`
-/// instead of renaming 500 call sites. Adding chrome back here would recreate
-/// exactly the split this deletion closed.

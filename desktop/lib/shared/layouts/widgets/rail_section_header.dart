@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../../theme/app_theme.dart';
 
@@ -39,9 +40,8 @@ class RailSectionHeader extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Text(
         label,
-        style: TextStyle(
+        style: terminalTextStyle(
           color: AppPalette.textFaint,
-          fontSize: 11,
           fontWeight: AppFont.medium,
           letterSpacing: 0.2,
         ),

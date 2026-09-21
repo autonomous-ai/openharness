@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import 'window_chrome.dart';
 
@@ -34,10 +35,8 @@ import 'machines_manager.dart';
 /// metrics: `skeleton_sites_test.dart` measures a placeholder machine row
 /// against a real one, and a caption whose type drifts from its placeholder
 /// makes the rail resize the moment the list lands.
-TextStyle _machineCaptionStyle(Color color) => TextStyle(
+TextStyle _machineCaptionStyle(Color color) => terminalTextStyle(
   color: color,
-  fontFamily: grid.AppFont.sans,
-  fontSize: 11,
   fontWeight: grid.AppFont.semibold,
   letterSpacing: 0.3,
 );
@@ -229,9 +228,8 @@ class _MachineRailState extends State<MachineRail> {
                               Expanded(
                                 child: Text(
                                   'Harness',
-                                  style: TextStyle(
+                                  style: terminalTextStyle(
                                     color: grid.AppPalette.textPrimary,
-                                    fontSize: 16,
                                     // Semibold, not bold. A wordmark at this size
                                     // already out-ranks everything below it.
                                     fontWeight: grid.AppFont.semibold,
@@ -305,9 +303,8 @@ class _MachineRailState extends State<MachineRail> {
                       Expanded(
                         child: Text(
                           'Offline copy — backend unreachable',
-                          style: TextStyle(
+                          style: terminalTextStyle(
                             color: grid.AppPalette.textSecondary,
-                            fontSize: 11,
                           ),
                         ),
                       ),
@@ -325,10 +322,8 @@ class _MachineRailState extends State<MachineRail> {
                           : Center(
                               child: Text(
                                 'no remote machines',
-                                style: TextStyle(
+                                style: terminalTextStyle(
                                   color: grid.AppPalette.textFaint,
-                                  fontFamily: grid.AppFont.sans,
-                                  fontSize: 13.5,
                                 ),
                               ),
                             )
@@ -397,41 +392,44 @@ class _CaptionActions extends StatelessWidget {
   static const double _drift = 10;
 
   @override
-  Widget build(BuildContext context) => TweenAnimationBuilder<double>(
-    // No `begin`: a row built already hovered is settled, not animating in.
-    tween: Tween(end: shown ? 1.0 : 0.0),
-    duration: grid.AppMotion.hover,
-    curve: grid.AppMotion.curve,
-    builder: (context, t, child) => ClipRect(
-      child: Align(
-        // Pinned right, so the pair grows out of the row's edge rather than
-        // sliding along it — and clipped, so nothing is clickable while it is
-        // still folded away.
-        alignment: Alignment.centerRight,
-        widthFactor: t,
-        child: Opacity(
-          opacity: t,
-          child: Transform.translate(
-            offset: Offset((1 - t) * _drift, 0),
-            child: child,
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return TweenAnimationBuilder<double>(
+      // No `begin`: a row built already hovered is settled, not animating in.
+      tween: Tween(end: shown ? 1.0 : 0.0),
+      duration: grid.AppMotion.hover,
+      curve: grid.AppMotion.curve,
+      builder: (context, t, child) => ClipRect(
+        child: Align(
+          // Pinned right, so the pair grows out of the row's edge rather than
+          // sliding along it — and clipped, so nothing is clickable while it is
+          // still folded away.
+          alignment: Alignment.centerRight,
+          widthFactor: t,
+          child: Opacity(
+            opacity: t,
+            child: Transform.translate(
+              offset: Offset((1 - t) * _drift, 0),
+              child: child,
+            ),
           ),
         ),
       ),
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        menu,
-        const SizedBox(width: 2),
-        AppIconButton(
-          icon: LucideIcons.plus300,
-          size: 16,
-          tooltip: 'New Harness here…',
-          onPressed: onNewAgent,
-        ),
-      ],
-    ),
-  );
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          menu,
+          const SizedBox(width: 2),
+          AppIconButton(
+            icon: LucideIcons.plus300,
+            size: 16,
+            tooltip: 'New Harness here…',
+            onPressed: onNewAgent,
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _MachineNode extends StatefulWidget {
@@ -678,10 +676,8 @@ class _MachineNodeState extends State<_MachineNode> {
                                 padding: const EdgeInsets.only(left: 6),
                                 child: Text(
                                   '${state.agents.length}',
-                                  style: TextStyle(
+                                  style: terminalTextStyle(
                                     color: grid.AppPalette.textFaint,
-                                    fontFamily: grid.AppFont.sans,
-                                    fontSize: 11,
                                     fontFeatures: const [
                                       FontFeature.tabularFigures(),
                                     ],
@@ -917,11 +913,7 @@ class _AgentTree extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(38, 2, 12, 8),
             child: Text(
               state.terminalCapabilityError ?? 'terminal unavailable',
-              style: TextStyle(
-                color: grid.AppPalette.dangerFill,
-                fontFamily: grid.AppFont.sans,
-                fontSize: 11.2,
-              ),
+              style: terminalTextStyle(color: grid.AppPalette.dangerFill),
             ),
           ),
       ],
@@ -1340,9 +1332,8 @@ class _DragChip extends StatelessWidget {
             const SizedBox(width: 7),
             Text(
               name,
-              style: TextStyle(
+              style: terminalTextStyle(
                 color: grid.AppPalette.textPrimary,
-                fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -1364,16 +1355,19 @@ class _MachineListSkeleton extends StatelessWidget {
   static const _labels = [0.56, 0.42, 0.64];
 
   @override
-  Widget build(BuildContext context) => SkeletonList(
-    rows: 3,
-    semanticsLabel: 'Loading machines',
-    itemBuilder: (context, i) => SidebarTimeline(
-      role: SidebarTimelineRole.node,
-      above: i > 0,
-      below: false,
-      child: _MachineCaptionSkeleton(labelFactor: _labels[i]),
-    ),
-  );
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return SkeletonList(
+      rows: 3,
+      semanticsLabel: 'Loading machines',
+      itemBuilder: (context, i) => SidebarTimeline(
+        role: SidebarTimelineRole.node,
+        above: i > 0,
+        below: false,
+        child: _MachineCaptionSkeleton(labelFactor: _labels[i]),
+      ),
+    );
+  }
 }
 
 /// A machine caption with nothing in it yet.
@@ -1388,28 +1382,31 @@ class _MachineCaptionSkeleton extends StatelessWidget {
   final double labelFactor;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: _machineCaptionPadding,
-    child: SizedBox(
-      height: _machineCaptionHeight,
-      child: Row(
-        children: [
-          Skeleton(
-            width: _machineMarkSize,
-            height: _machineMarkSize,
-            radius: 5,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: SkeletonText(
-              style: _machineCaptionStyle(grid.AppPalette.textFaint),
-              widthFactor: labelFactor,
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Padding(
+      padding: _machineCaptionPadding,
+      child: SizedBox(
+        height: _machineCaptionHeight,
+        child: Row(
+          children: [
+            Skeleton(
+              width: _machineMarkSize,
+              height: _machineMarkSize,
+              radius: 5,
             ),
-          ),
-        ],
+            const SizedBox(width: 10),
+            Expanded(
+              child: SkeletonText(
+                style: _machineCaptionStyle(grid.AppPalette.textFaint),
+                widthFactor: labelFactor,
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// A machine's agents before `agents_list` has answered: two rows where the
@@ -1421,24 +1418,27 @@ class _AgentRowsSkeleton extends StatelessWidget {
   static const _labels = [0.48, 0.36];
 
   @override
-  Widget build(BuildContext context) => SkeletonList(
-    rows: _rows,
-    fadeDepth: skeletonFadeLight,
-    semanticsLabel: 'Loading agents',
-    itemBuilder: (context, i) => SidebarTimeline(
-      role: SidebarTimelineRole.branch,
-      below: i < _rows - 1,
-      child: Padding(
-        // Where a nested row's box starts — see [_AgentRow].
-        padding: const EdgeInsets.only(left: 28),
-        child: _SidebarRowSkeleton(
-          leading: 16,
-          leadingRadius: 4,
-          labelFactor: _labels[i],
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return SkeletonList(
+      rows: _rows,
+      fadeDepth: skeletonFadeLight,
+      semanticsLabel: 'Loading agents',
+      itemBuilder: (context, i) => SidebarTimeline(
+        role: SidebarTimelineRole.branch,
+        below: i < _rows - 1,
+        child: Padding(
+          // Where a nested row's box starts — see [_AgentRow].
+          padding: const EdgeInsets.only(left: 28),
+          child: _SidebarRowSkeleton(
+            leading: 16,
+            leadingRadius: 4,
+            labelFactor: _labels[i],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// A [SidebarItem] with nothing in it yet: the same 1px margin, 36px box,
@@ -1457,32 +1457,38 @@ class _SidebarRowSkeleton extends StatelessWidget {
   final double labelFactor;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 1),
-    child: SizedBox(
-      height: 36,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(SidebarItem.iconGutter, 0, 5, 0),
-        child: Row(
-          children: [
-            Skeleton(width: leading, height: leading, radius: leadingRadius),
-            const SizedBox(width: 10),
-            Expanded(
-              child: SkeletonText(
-                style: const TextStyle(fontSize: 13.7, height: 1.25),
-                strutStyle: const StrutStyle(
-                  fontSize: 13.5,
-                  height: 1.25,
-                  forceStrutHeight: true,
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: SizedBox(
+        height: 36,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(SidebarItem.iconGutter, 0, 5, 0),
+          child: Row(
+            children: [
+              Skeleton(width: leading, height: leading, radius: leadingRadius),
+              const SizedBox(width: 10),
+              Expanded(
+                child: SkeletonText(
+                  style: terminalTextStyle(height: 1.25),
+                  strutStyle: StrutStyle(
+                    fontSize: terminalFontStore.size,
+                    fontFamily: terminalFontStore.value.fontFamily,
+                    fontFamilyFallback:
+                        terminalFontStore.value.fontFamilyFallback,
+                    height: 1.25,
+                    forceStrutHeight: true,
+                  ),
+                  widthFactor: labelFactor,
                 ),
-                widthFactor: labelFactor,
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _AgentStatusRow extends StatelessWidget {
@@ -1506,11 +1512,7 @@ class _AgentStatusRow extends StatelessWidget {
           Expanded(
             child: Text(
               label,
-              style: TextStyle(
-                color: grid.AppPalette.textFaint,
-                fontFamily: grid.AppFont.sans,
-                fontSize: 11.2,
-              ),
+              style: terminalTextStyle(color: grid.AppPalette.textFaint),
             ),
           ),
         ],
@@ -1535,10 +1537,8 @@ class _OfflineWord extends StatelessWidget {
       padding: const EdgeInsets.only(left: 8),
       child: Text(
         'offline',
-        style: TextStyle(
+        style: terminalTextStyle(
           color: grid.AppPalette.textFaint,
-          fontFamily: grid.AppFont.sans,
-          fontSize: 10,
           letterSpacing: 0.2,
         ),
       ),
@@ -1559,10 +1559,8 @@ class _OnlineWord extends StatelessWidget {
       padding: const EdgeInsets.only(left: 8),
       child: Text(
         'online',
-        style: TextStyle(
+        style: terminalTextStyle(
           color: grid.AppPalette.textFaint,
-          fontFamily: grid.AppFont.sans,
-          fontSize: 10,
           letterSpacing: 0.2,
         ),
       ),
@@ -1601,12 +1599,7 @@ class _MachineOfflineNote extends StatelessWidget {
             : "Harness isn't running on $where.",
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          color: grid.AppPalette.textFaint,
-          fontFamily: grid.AppFont.sans,
-          fontSize: 11.2,
-          height: 1.4,
-        ),
+        style: terminalTextStyle(color: grid.AppPalette.textFaint, height: 1.4),
       ),
     );
   }
@@ -1636,11 +1629,7 @@ class _AgentLoadError extends StatelessWidget {
               state.agentsLoadError ?? 'Could not load agents',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: grid.AppPalette.dangerFill,
-                fontFamily: grid.AppFont.sans,
-                fontSize: 11.2,
-              ),
+              style: terminalTextStyle(color: grid.AppPalette.dangerFill),
             ),
           ),
           IconButton(
@@ -1813,6 +1802,7 @@ class _EmptyAgents extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     // No sentence, and nothing framed. An empty list says it is empty by being empty; what it cannot say
     // on its own is that a row can be added, and that is exactly what this row is. See [_NewAgentRow] for
     // what it replaces and why.

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../theme/app_theme.dart';
 
@@ -58,9 +59,8 @@ class EmptyState extends StatelessWidget {
             Text(
               title,
               textAlign: TextAlign.center,
-              style: TextStyle(
+              style: terminalTextStyle(
                 color: AppPalette.textPrimary,
-                fontSize: compact ? 13 : 14.5,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -71,9 +71,8 @@ class EmptyState extends StatelessWidget {
                 child: Text(
                   message!,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
+                  style: terminalTextStyle(
                     color: AppPalette.textSecondary,
-                    fontSize: compact ? 12 : 13,
                     height: 1.4,
                   ),
                 ),

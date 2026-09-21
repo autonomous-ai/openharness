@@ -24,7 +24,7 @@ import 'terminal_find_bar.dart';
 import '../terminal/terminal_search.dart';
 import '../terminal/terminal_snapshot.dart';
 import '../terminal/terminal_binary.dart';
-import '../terminal/terminal_font_store.dart';
+import '../terminal/terminal_text.dart';
 import '../terminal/terminal_link_opener.dart';
 import '../terminal/remote_media_download.dart';
 import '../terminal/terminal_links.dart';
@@ -1512,22 +1512,9 @@ class _TerminalPanelState extends State<TerminalPanel>
                           ),
                           padding: const EdgeInsets.all(10),
                           textStyle: terminalFontStore.value,
-                          // ⚠️ The terminal is NOT app chrome, and the user said so:
-                          // it carries its own font settings (Settings ▸ Terminal,
-                          // [terminalFontStore]) precisely because its type is a grid
-                          // a remote program is drawing into, not a label.
-                          //
-                          // Without this, `TerminalView` falls back to
-                          // `MediaQuery.textScalerOf(context)` (xterm's
-                          // terminal_view.dart:257), so the app-wide UI size would
-                          // change the cell size — and a changed cell size is not
-                          // cosmetic here: it re-derives `rows`, which fires
-                          // `Terminal.resize` → `session.resize` → a `terminal_resize`
-                          // frame on the wire and a real SIGWINCH at the far end.
-                          //
-                          // Read in `createRenderObject`, not only on update, so this
-                          // holds from the very first frame — no scaled first paint
-                          // and no startup resize.
+                          // The chosen point size already sizes each terminal cell.
+                          // Applying the OS text scale again would change rows/cols
+                          // and resize the remote terminal unexpectedly.
                           textScaler: TextScaler.noScaling,
                           onKeyEvent: _onTerminalKey,
                           onTapDown: _onLinkTapDown,
@@ -1548,8 +1535,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                       ),
                     ),
                   ),
-                  // The header's status chip is 11pt in a corner; a person
-                  // mid-sentence never sees it. This band sits over the
+                  // Keep the control notice beside the work. This band covers the
                   // frozen output itself, where the eyes already are, and
                   // stays through `opening` so the pane does not jump when
                   // it is answered.
@@ -1754,6 +1740,7 @@ class _TerminalHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final color = switch (session.status) {
       TerminalSessionStatus.controlling => AppColors.success,
       TerminalSessionStatus.opening ||
@@ -1856,7 +1843,7 @@ class _TerminalHeader extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: _stripPadding),
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final scale = MediaQuery.textScalerOf(context).scale(13) / 13;
+              final scale = terminalTextScaleOf(context);
               final narrow = constraints.maxWidth < 560 * math.max(1, scale);
               final rightWidth = narrow
                   ? math.max(
@@ -1898,7 +1885,7 @@ class _TerminalHeader extends StatelessWidget {
                                 overflow: TextOverflow.ellipsis,
                                 style: boxMonoStyle(
                                   color: AppColors.text,
-                                  size: 12,
+
                                   weight: FontWeight.w600,
                                 ),
                               ),
@@ -1962,7 +1949,7 @@ class _TerminalHeader extends StatelessWidget {
                                           status.label,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(fontSize: 11),
+                                          style: terminalTextStyle(),
                                         ),
                                       ),
                                     ],
@@ -2082,7 +2069,6 @@ class _TerminalHeader extends StatelessWidget {
                           machineName,
                         ].join('\n'),
                         child: PromptContextView(
-                          size: narrow ? 11 : 12,
                           contextData: PromptContext(
                             machine: machineName,
                             project: narrow ? null : folder,
@@ -2141,6 +2127,7 @@ class _LinkModeMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final (icon, color, label) = switch (mode) {
       'p2p' => (
         LucideIcons.link2,
@@ -2263,7 +2250,8 @@ class _ControlBanner extends StatelessWidget {
                 // A quarter-width tile at large text cannot seat the sentence
                 // and the button on one line; there the button takes a line of
                 // its own under the title rather than running off the edge.
-                final narrow = constraints.maxWidth < 340;
+                final narrow =
+                    constraints.maxWidth < 340 * terminalTextScaleOf(context);
                 final lead = !busy
                     ? Icon(Icons.lock_outline, size: 16, color: ink)
                     : SizedBox(
@@ -2282,10 +2270,8 @@ class _ControlBanner extends StatelessWidget {
                       title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
+                      style: terminalTextStyle(
                         color: AppColors.text,
-                        fontFamily: AppFonts.sans,
-                        fontSize: 12,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -2295,10 +2281,8 @@ class _ControlBanner extends StatelessWidget {
                         detail,
                         maxLines: narrow ? 1 : 2,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
+                        style: terminalTextStyle(
                           color: nudged ? ink : AppColors.textSoft,
-                          fontFamily: AppFonts.sans,
-                          fontSize: 11,
                           height: 1.3,
                         ),
                       ),
@@ -2332,13 +2316,7 @@ class _ControlBanner extends StatelessWidget {
                       prose,
                       if (button != null) ...[
                         const SizedBox(height: 8),
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: button,
-                          ),
-                        ),
+                        Align(alignment: Alignment.centerRight, child: button),
                       ],
                     ],
                   );
@@ -2367,6 +2345,7 @@ class _ControlBannerButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final onAccent = Theme.of(context).colorScheme.onPrimary;
     return FilledButton(
       onPressed: onPressed,
@@ -2379,12 +2358,10 @@ class _ControlBannerButton extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            'Take control',
-            style: TextStyle(
-              fontFamily: AppFonts.sans,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+          Flexible(
+            child: Text(
+              'Take control',
+              style: terminalTextStyle(fontWeight: FontWeight.w600),
             ),
           ),
           const SizedBox(width: 8),
@@ -2439,10 +2416,8 @@ class _TransferProgressBadge extends StatelessWidget {
                 child: Text(
                   '$label$percentLabel',
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
+                  style: terminalTextStyle(
                     color: AppColors.textSoft,
-                    fontFamily: AppFonts.sans,
-                    fontSize: 10,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -2452,10 +2427,8 @@ class _TransferProgressBadge extends StatelessWidget {
                 onTap: onCancel,
                 child: Text(
                   'CANCEL',
-                  style: TextStyle(
+                  style: terminalTextStyle(
                     color: AppColors.textSoft,
-                    fontFamily: AppFonts.sans,
-                    fontSize: 10,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -2540,10 +2513,8 @@ class _PaneGhost extends StatelessWidget {
                 child: Center(
                   child: Text(
                     session.agentName,
-                    style: TextStyle(
+                    style: terminalTextStyle(
                       color: AppColors.mutedStrong,
-                      fontFamily: AppFonts.sans,
-                      fontSize: 15,
                       fontWeight: FontWeight.w600,
                     ),
                   ),

@@ -33,7 +33,8 @@ class StatusRail extends StatefulWidget {
 
   /// Tall enough for an 11.5pt figure with a hit target around it, short enough
   /// to stay furniture.
-  static const double height = 26;
+  static double get height =>
+      (grid.AppFont.codeSize * 1.35 + 8).clamp(26, double.infinity);
 
   @override
   State<StatusRail> createState() => _StatusRailState();
@@ -67,7 +68,13 @@ class _StatusRailState extends State<StatusRail> {
             // The keys had nowhere to live that was not a modal. See [KeyHints]
             // for why a strip beats a sheet for the ones nobody knows to go
             // looking for.
-            KeyHints(notifier: widget.notifier),
+            Flexible(
+              flex: 3,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: KeyHints(notifier: widget.notifier),
+              ),
+            ),
           ],
         ),
       ),

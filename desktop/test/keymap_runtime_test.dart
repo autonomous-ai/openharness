@@ -114,17 +114,20 @@ void main() {
             : LogicalKeyboardKey.keyL;
         await key(tester, shortcut, cmd: true, shift: !remapped);
         await tester.pumpAndSettle();
-        if (remapped)
+        if (remapped) {
           await key(tester, LogicalKeyboardKey.keyL, cmd: true, shift: true);
+        }
         // Fast repeated chords can arrive before the next rendered frame.
         await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
-        if (!remapped)
+        if (!remapped) {
           await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+        }
         await tester.sendKeyEvent(shortcut);
         await tester.sendKeyEvent(shortcut);
         await tester.sendKeyEvent(shortcut);
-        if (!remapped)
+        if (!remapped) {
           await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+        }
         await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
         await tester.pump();
         expect(find.byType(Dialog), findsOneWidget);
@@ -202,6 +205,8 @@ void main() {
     await key(tester, LogicalKeyboardKey.keyT, cmd: true);
     expect(app.swarms, hasLength(2));
     expect(app.activeSwarm, isNot(same(original)));
+    expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
+    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
     expect(
       tester
           .widget<TextField>(find.byKey(const ValueKey('swarm-search-input')))
@@ -749,7 +754,7 @@ void main() {
       await tester.pump();
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
       expect(app.swarms, hasLength(2));
-      expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
+      expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
       await tester.pumpWidget(const SizedBox());
       app.dispose();
       map.dispose();
@@ -800,6 +805,9 @@ void main() {
       await native(tester, 'keymapCommand', {'command': 'swarm.new'});
       await tester.pump();
       final field = find.byKey(const ValueKey('swarm-search-input'));
+      expect(field, findsNothing);
+      await native(tester, 'keymapCommand', {'command': 'agent.open'});
+      await tester.pump();
       await tester.tap(field);
       await tester.enterText(field, 'Agent 0');
       await tester.pump();

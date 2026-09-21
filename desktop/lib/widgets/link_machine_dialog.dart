@@ -9,7 +9,7 @@ import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_commands.dart' show describeKeyBinding;
 import '../state/app_state.dart';
-import '../terminal/terminal_font_store.dart';
+import '../terminal/terminal_text.dart';
 import 'box_chrome.dart';
 
 /// This computer's incoming password and, separately, its outgoing links.
@@ -451,7 +451,7 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
     onPressed: action,
     style: TextButton.styleFrom(
       foregroundColor: danger ? Colors.orangeAccent : Colors.white70,
-      textStyle: boxMonoStyle(size: 12),
+      textStyle: boxMonoStyle(),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       minimumSize: const Size(0, 30),
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -554,7 +554,7 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
       if (_editing) ...[
         Text(
           'Use this password on the other machine to link to this computer.',
-          style: boxMonoStyle(size: 12, color: Colors.white70),
+          style: boxMonoStyle(color: Colors.white70),
         ),
         const SizedBox(height: 12),
         _field(confirm: false),
@@ -579,20 +579,20 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
         const SizedBox(height: 8),
         Text(
           'On the other machine: Link machine → select this computer → enter its password.',
-          style: boxMonoStyle(size: 12, color: Colors.white70),
+          style: boxMonoStyle(color: Colors.white70),
         ),
         if (_status!.fingerprint case final fingerprint?) ...[
           const SizedBox(height: 12),
-          Text('fingerprint', style: boxMonoStyle(size: 11, color: kBoxFaint)),
+          Text('fingerprint', style: boxMonoStyle(color: kBoxFaint)),
           SelectableText(
             fingerprint,
-            style: boxMonoStyle(size: 12, color: Colors.white70),
+            style: boxMonoStyle(color: Colors.white70),
           ),
         ],
         if (_status!.setAt case final date?)
           Text(
             'set ${date.toLocal().toIso8601String().substring(0, 16).replaceFirst('T', ' ')}',
-            style: boxMonoStyle(size: 11, color: kBoxFaint),
+            style: boxMonoStyle(color: kBoxFaint),
           ),
         const SizedBox(height: 10),
         Wrap(
@@ -616,7 +616,7 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
         const SizedBox(height: 8),
         Text(
           'This operation continues if you close the prompt.',
-          style: boxMonoStyle(size: 11, color: kBoxFaint),
+          style: boxMonoStyle(color: kBoxFaint),
         ),
       ],
       const SizedBox(height: 12),
@@ -634,7 +634,7 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
   List<Widget> _linksBody() => [
     Text(
       'Machines this computer can connect to.',
-      style: boxMonoStyle(size: 12, color: Colors.white70),
+      style: boxMonoStyle(color: Colors.white70),
     ),
     const SizedBox(height: 8),
     Align(
@@ -654,11 +654,11 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
             Text(_name(machine), style: boxMonoStyle()),
             SelectableText(
               machine.fingerprint,
-              style: boxMonoStyle(size: 11, color: kBoxFaint),
+              style: boxMonoStyle(color: kBoxFaint),
             ),
             Text(
               'linked ${machine.linkedAt}',
-              style: boxMonoStyle(size: 11, color: kBoxFaint),
+              style: boxMonoStyle(color: kBoxFaint),
             ),
             _button(
               app.unlinkingMachine(machine.machineId)
@@ -681,7 +681,7 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
         clear
             ? 'Prevent new links using this password? Existing links and sessions stay connected.'
             : 'Remove this computer’s saved link to ${_name(_unlinkTarget!)}? A new connection will need that machine’s password.',
-        style: boxMonoStyle(size: 12, color: Colors.white70),
+        style: boxMonoStyle(color: Colors.white70),
       ),
       const SizedBox(height: 14),
       Wrap(
@@ -708,111 +708,116 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([
-      app,
-      terminalFontStore,
-      _passwordFocus,
-      _confirmFocus,
-    ]),
-    builder: (context, _) => Dialog(
-      alignment: Alignment.topCenter,
-      insetPadding: const EdgeInsets.fromLTRB(16, 56, 16, 18),
-      elevation: 0,
-      backgroundColor: Colors.transparent,
-      child: _keys(
-        Focus(
-          autofocus: true,
-          onKeyEvent: _key,
-          child: SizedBox(
-            width: 660,
-            child: TerminalBox(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Flexible(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(switch (_page) {
-                            _Page.password => 'This computer’s password',
-                            _Page.clear => 'Clear remote password',
-                            _Page.links => 'Links from this computer',
-                            _Page.unlink => 'Unlink machine',
-                          }, style: boxMonoStyle(size: 12, color: kBoxFaint)),
-                          const SizedBox(height: 14),
-                          ...switch (_page) {
-                            _Page.password => _passwordBody(),
-                            _Page.links => _linksBody(),
-                            _Page.clear || _Page.unlink => _confirmationBody(),
-                          },
-                        ],
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        app,
+        terminalFontStore,
+        _passwordFocus,
+        _confirmFocus,
+      ]),
+      builder: (context, _) => Dialog(
+        alignment: Alignment.topCenter,
+        insetPadding: const EdgeInsets.fromLTRB(16, 56, 16, 18),
+        elevation: 0,
+        backgroundColor: Colors.transparent,
+        child: _keys(
+          Focus(
+            autofocus: true,
+            onKeyEvent: _key,
+            child: SizedBox(
+              width: 660,
+              child: TerminalBox(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(switch (_page) {
+                              _Page.password => 'This computer’s password',
+                              _Page.clear => 'Clear remote password',
+                              _Page.links => 'Links from this computer',
+                              _Page.unlink => 'Unlink machine',
+                            }, style: boxMonoStyle(color: kBoxFaint)),
+                            const SizedBox(height: 14),
+                            ...switch (_page) {
+                              _Page.password => _passwordBody(),
+                              _Page.links => _linksBody(),
+                              _Page.clear ||
+                              _Page.unlink => _confirmationBody(),
+                            },
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                  BoxHintStrip(
-                    message: _busy
-                        ? (_page == _Page.unlink
-                              ? 'Unlinking machine…'
-                              : _clearing
-                              ? 'Clearing password…'
-                              : 'Setting password…')
-                        : _message ??
-                              (_page == _Page.links
-                                  ? app.linkedMachinesLoading
-                                        ? 'Loading linked machines…'
-                                        : app.linkedMachinesError
-                                  : null),
-                    isError:
-                        !_busy &&
-                        (_error ||
-                            _page == _Page.links &&
-                                app.linkedMachinesError != null),
-                    hints: [
-                      if (!_busy && !_loading)
-                        BoxHint(
-                          _hint('picker.accept', 'enter'),
-                          _page == _Page.password &&
-                                  _editing &&
-                                  _passwordFocus.hasFocus
-                              ? 'confirm password'
-                              : _page == _Page.password &&
+                    BoxHintStrip(
+                      message: _busy
+                          ? (_page == _Page.unlink
+                                ? 'Unlinking machine…'
+                                : _clearing
+                                ? 'Clearing password…'
+                                : 'Setting password…')
+                          : _message ??
+                                (_page == _Page.links
+                                    ? app.linkedMachinesLoading
+                                          ? 'Loading linked machines…'
+                                          : app.linkedMachinesError
+                                    : null),
+                      isError:
+                          !_busy &&
+                          (_error ||
+                              _page == _Page.links &&
+                                  app.linkedMachinesError != null),
+                      hints: [
+                        if (!_busy && !_loading)
+                          BoxHint(
+                            _hint('picker.accept', 'enter'),
+                            _page == _Page.password &&
                                     _editing &&
-                                    _confirmFocus.hasFocus
-                              ? 'set password'
-                              : 'select',
-                        ),
-                      if (!_busy && !_loading)
-                        BoxHint(_hint('picker.complete', 'tab'), 'controls'),
-                      if (!_busy &&
-                          !_loading &&
-                          (_page == _Page.links ||
-                              _page == _Page.password && !_editing))
+                                    _passwordFocus.hasFocus
+                                ? 'confirm password'
+                                : _page == _Page.password &&
+                                      _editing &&
+                                      _confirmFocus.hasFocus
+                                ? 'set password'
+                                : 'select',
+                          ),
+                        if (!_busy && !_loading)
+                          BoxHint(_hint('picker.complete', 'tab'), 'controls'),
+                        if (!_busy &&
+                            !_loading &&
+                            (_page == _Page.links ||
+                                _page == _Page.password && !_editing))
+                          BoxHint(
+                            _hint('picker.refresh', _mac ? 'cmd-r' : 'ctrl-r'),
+                            'refresh',
+                            onTap: _refresh,
+                          ),
                         BoxHint(
-                          _hint('picker.refresh', _mac ? 'cmd-r' : 'ctrl-r'),
-                          'refresh',
-                          onTap: _refresh,
+                          _hint('picker.cancel', 'esc'),
+                          _busy ||
+                                  _page == _Page.password &&
+                                      (!_editing ||
+                                          _status?.hasPassword != true)
+                              ? 'close'
+                              : 'back',
+                          onTap: _back,
                         ),
-                      BoxHint(
-                        _hint('picker.cancel', 'esc'),
-                        _busy ||
-                                _page == _Page.password &&
-                                    (!_editing || _status?.hasPassword != true)
-                            ? 'close'
-                            : 'back',
-                        onTap: _back,
-                      ),
-                    ],
-                  ),
-                ],
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

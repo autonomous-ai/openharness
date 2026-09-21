@@ -363,8 +363,7 @@ void main() {
       expect(app.activeSwarmId, isNot(previousTab));
       expect(app.activeSwarm.isBlankNewTab, isTrue);
       final picker = find.byKey(const ValueKey('swarm-search-input'));
-      expect(picker, findsOneWidget);
-      expect(tester.widget<TextField>(picker).focusNode!.hasFocus, isTrue);
+      expect(picker, findsNothing);
       expect(input, findsNothing);
       // The exact app command opens the tab even without a provider decision.
       expect(calls, 1);

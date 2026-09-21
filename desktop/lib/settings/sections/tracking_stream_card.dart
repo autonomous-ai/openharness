@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../../analytics/analytics_sink.dart';
 import '../../shared/theme/app_theme.dart';
@@ -69,8 +70,7 @@ class _TrackingStreamCardState extends State<TrackingStreamCard> {
             const SizedBox(height: 6),
             Text(
               reason,
-              style: TextStyle(
-                fontSize: 12,
+              style: terminalTextStyle(
                 height: 1.4,
                 color: AppPalette.textSecondary,
               ),
@@ -113,11 +113,7 @@ class _StatePill extends StatelessWidget {
       ),
       child: Text(
         enabled ? 'Reporting' : 'Off',
-        style: TextStyle(
-          fontSize: 11.5,
-          fontWeight: AppFont.medium,
-          color: ink,
-        ),
+        style: terminalTextStyle(fontWeight: AppFont.medium, color: ink),
       ),
     );
   }
@@ -144,17 +140,14 @@ class _Row extends StatelessWidget {
             width: 72,
             child: Text(
               label,
-              style: TextStyle(fontSize: 12, color: AppPalette.textFaint),
+              style: terminalTextStyle(color: AppPalette.textFaint),
             ),
           ),
           Expanded(
             child: SelectableText(
               value,
-              style: TextStyle(
-                fontSize: 12,
+              style: terminalTextStyle(
                 height: 1.4,
-                fontFamily: AppFont.mono,
-                fontFamilyFallback: AppFont.monoFallback,
                 color: muted
                     ? AppPalette.textSecondary
                     : AppPalette.textPrimary,
