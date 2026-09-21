@@ -323,7 +323,7 @@ void main() {
     );
   });
 
-  testWidgets('Store Get, Open and Remove use only the local daemon', (
+  testWidgets('Store Get, New Harness and Remove use the local daemon', (
     tester,
   ) async {
     tester.view.devicePixelRatio = 1;
@@ -406,7 +406,7 @@ void main() {
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('store-primary-action')),
-        matching: find.text('Open'),
+        matching: find.text('New Harness'),
       ),
       findsOneWidget,
     );

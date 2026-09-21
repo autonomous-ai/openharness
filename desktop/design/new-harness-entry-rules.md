@@ -10,7 +10,8 @@ allocates a tab.
 | Cmd-P → New Harness | Same defaults as Cmd-T | Current tab |
 | Cmd-N or the New Harness command | Focused pane's defaults; retain a task and destination already chosen in search | Current tab unless its source requests a new tab |
 | Explicit pane split | Focused pane's defaults | Requested split in that tab |
-| Store Open, Store quick Open, or a product's Open action in the pane or native Models menu | Explicit product and machine; suggested project named for that product | New tab |
+| Store New Harness, or a product's Open action in the pane or native Models menu | Explicit product and machine; suggested project named for that product | New tab |
+| Store Resume Harness | Existing harness and its machine; choose from a menu when several match | Focus its existing tab or reopen a view of the same harness |
 | Store Try this prompt | Same as Open, with the example as the editable task | New tab |
 | First empty workspace | Installed/preferred agent, local machine, suggested project | New tab |
 

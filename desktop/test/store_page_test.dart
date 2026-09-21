@@ -328,7 +328,7 @@ void main() {
   }
 
   testWidgets(
-    'an Update on a shelf opens its page and a linked checkout offers Open',
+    'launch actions stay available with an update; the page handles package updates',
     (tester) async {
       const entry = DshEntry(
         id: 'acme/updateable',
@@ -346,10 +346,10 @@ void main() {
       await tester.enterText(_key('store-search'), 'Updateable');
       await tester.pumpAndSettle();
       expect(
-        _in('store-action:${entry.id}', find.text('Update')),
+        _in('store-action:${entry.id}', find.text('New Harness')),
         findsOneWidget,
       );
-      await tester.tap(_key('store-action:${entry.id}'));
+      await tester.tap(_key('store-card:${entry.id}'));
       await tester.pumpAndSettle();
       expect(_key('store-page:${entry.id}'), findsOneWidget);
       expect(app.updates, isEmpty);
@@ -365,7 +365,7 @@ void main() {
       ]);
       app.changed();
       await tester.pumpAndSettle();
-      expect(_in('store-primary-action', find.text('Open')), findsOneWidget);
+      expect(_in('store-primary-action', find.text('New Harness')), findsOneWidget);
     },
   );
   // Real glyph widths: the review dialog's buttons are laid out against Arial,
@@ -577,7 +577,7 @@ void main() {
       (tester) async {
         final (app, _) = await _open(tester, initialHarness: 'autonomous/marp');
         final tabs = app.swarms.length;
-        expect(_in('store-primary-action', find.text('Open')), findsOneWidget);
+        expect(_in('store-primary-action', find.text('New Harness')), findsOneWidget);
         await tester.tap(_key('store-primary-action'));
         await tester.pumpAndSettle();
         expect(
@@ -720,7 +720,7 @@ void main() {
       app.changed();
       await tester.pumpAndSettle();
       says('Installed · linked to a checkout');
-      expect(_in('store-primary-action', find.text('Open')), findsOneWidget);
+      expect(_in('store-primary-action', find.text('New Harness')), findsOneWidget);
       expect(_key('store-remove:machine-1'), findsOneWidget);
     },
   );
@@ -829,7 +829,7 @@ void main() {
       ]);
       app.changed();
       await tester.pumpAndSettle();
-      expect(_in('store-primary-action', find.text('Open')), findsOneWidget);
+      expect(_in('store-primary-action', find.text('New Harness')), findsOneWidget);
     },
   );
 
@@ -1269,7 +1269,7 @@ void main() {
       app.changed();
       await tester.pumpAndSettle();
       expect(
-        _in('store-action:autonomous/typst', find.text('Open')),
+        _in('store-action:autonomous/typst', find.text('New Harness')),
         findsOneWidget,
       );
       await tester.ensureVisible(_key('store-action:autonomous/typst'));
