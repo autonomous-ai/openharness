@@ -201,7 +201,7 @@ class _Body extends StatelessWidget {
     message: notifier.machines.isEmpty
         ? 'Link a machine and its agents will be listed here.'
         : 'Agents appear here once a machine is linked and answering. '
-              'Start one from a machine, or from OpenHarness on it.',
+              'Start one from a machine, or from Harness on it.',
   );
 
   /// Opens the agent as a pager over the other rows on screen.

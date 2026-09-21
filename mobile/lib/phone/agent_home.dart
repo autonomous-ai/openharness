@@ -924,7 +924,7 @@ class _AgentHomeEmpty extends StatelessWidget {
                 icon: LucideIcons.squareTerminal300,
                 title: 'No agents yet',
                 message:
-                    'Tap + to start one, or launch an agent from OpenHarness on a '
+                    'Tap + to start one, or launch an agent from Harness on a '
                     'machine and it will appear here.',
               ),
             ),

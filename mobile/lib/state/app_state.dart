@@ -2554,18 +2554,18 @@ class AppNotifier extends ChangeNotifier {
       final staged = await updater.downloadAndStage(info);
       if (staged == null) {
         updateError =
-            'Could not download and verify OpenHarness ${info.version}.';
+            'Could not download and verify Harness ${info.version}.';
         return false;
       }
       final applied = await updater.applyStaged(staged, selfPid: pid);
       if (!applied) {
         updateError =
-            'This copy of OpenHarness cannot install updates automatically.';
+            'This copy of Harness cannot install updates automatically.';
         return false;
       }
       exit(0);
     } catch (error) {
-      updateError = 'Could not install OpenHarness ${info.version}: $error';
+      updateError = 'Could not install Harness ${info.version}: $error';
       return false;
     } finally {
       isInstallingUpdate = false;
