@@ -1,4 +1,5 @@
 /** Stop retains the logical session before retiring its process and terminal. */
+import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { isTerminalEngine } from '../engines/types.js'
 import type { registry as liveRegistry, RegisteredSession } from './registry.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
@@ -27,8 +28,18 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
     if (existing) return existing
     restartJobs.cancel(sessionId)
     const job = Promise.resolve().then(async () => {
-      const s = registry.resolve(sessionId)
-      if (!s) return
+      const live = registry.resolve(sessionId)
+      if (!live) return
+      const identity = JSON.stringify([live.engine, live.processIdentity, live.runtimes])
+      const captured = await captureResumeIdentity({ ...live })
+      // Discovery or a hook may have updated this row while reading the native store.
+      // A replacement process must never be stopped using an older snapshot.
+      if (registry.resolve(sessionId) !== live
+        || JSON.stringify([live.engine, live.processIdentity, live.runtimes]) !== identity) {
+        throw new Error('Harness changed while saving its conversation. Try Stop again.')
+      }
+      const s = live.sessionId && live.sessionId !== captured.sessionId ? { ...live } : { ...live, sessionId: captured.sessionId,
+        transcriptPath: captured.transcriptPath, boundAt: captured.boundAt, source: captured.source }
       // Saving precedes every mutation. A storage failure leaves the live agent alone.
       stoppedAgents.save(s)
       markDeleted(sessionId)

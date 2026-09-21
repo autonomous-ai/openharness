@@ -74,8 +74,13 @@ as live routes/processes when resuming.
 
 The stop/resume transition is:
 
-1. Save the Harness ID, engine conversation ID, cwd, name, profile and launch
-   settings before removing the live row.
+1. Capture the conversation before stopping the process. If its binding is missing,
+   verify the PID/start marker and recover from Claude's native process record,
+   explicit resume arguments, or an unambiguous newly created native transcript.
+   Never select a different conversation merely because it shares the project.
+   Save the Harness ID, conversation ID, cwd, name, profile and launch settings
+   before removing the live row. An unbound snapshot of the same process cannot
+   overwrite a previously confirmed conversation.
 2. End the old runtime. The saved record remains searchable in the user-facing
    harness catalog; it has no user-facing Stopped badge or different action.
 3. On Enter, either return a verified running instance of that conversation or
@@ -159,11 +164,32 @@ npm run test:resume
 npm run test:resume-native
 ```
 
-`test:resume` runs 109 tests and enforces **100% lines, statements, branches and functions** for four production modules: `resumeAgentService.ts`, `resumeStoppedAgent.ts`, `stopAgentService.ts` and `stoppedAgents.ts`. This is measured coverage of those modules, not a claim of 100% coverage of the repository or every runtime environment. The complete CLI suite passed **3,757 tests, with 63 skipped**. TypeScript checking and the normal `build.mjs` build passed.
+`test:resume` runs 181 tests and enforces **100% lines, statements, branches and functions** for five production modules: `captureResumeIdentity.ts`, `resumeAgentService.ts`, `resumeStoppedAgent.ts`, `stopAgentService.ts` and `stoppedAgents.ts`. This is measured coverage of those modules, not a claim of 100% coverage of the repository or every runtime environment. The complete CLI suite passed **3,820 tests, with 63 skipped**. TypeScript checking and the normal `build.mjs` build passed.
 
-`test:resume-native` requires installed Claude Code, Codex and tmux. It launches the real vendor CLIs against synthetic saved conversations using the production BackendSocket, Stop/Resume handlers, registry/archive, launch arguments and native hook server. It verifies visible saved history, exact conversation IDs, live attach without process replacement, operation receipts, Stop persistence across a registry reload, new tmux runtimes on resume, and preservation of a surviving shell after engine exit. It uses a separate tmux socket, isolated data/config directories and unavailable loopback model endpoints, without real credentials or paid model calls. Only after restored Codex history is visible does the fixture submit a harmless test message to trigger its deferred native hook. No such message is submitted by production resume.
+`test:resume-native` requires installed Claude Code, Codex and tmux. It launches the real vendor CLIs against synthetic saved conversations using the production BackendSocket, Stop/Resume handlers, registry/archive, launch arguments and native hook server. It verifies visible saved history, exact conversation IDs, live attach without process replacement, operation receipts, Stop persistence across a registry reload, new tmux runtimes on resume, preservation of a surviving shell after engine exit, and recovery when the live row and archive have deliberately lost their conversation binding before Stop. It uses a separate tmux socket, isolated data/config directories and unavailable loopback model endpoints, without real credentials or paid model calls. Only after restored Codex history is visible does the fixture submit a harmless test message to trigger its deferred native hook. No such message is submitted by production resume.
 
-Desktop regression coverage includes Cmd-P/T selection of retained sessions, pending native terminals, receipt and identity races, creation placement, repeated Cmd-T, Escape from search and creation, occupied-tab preservation, and the last-tab onboarding exception. The final full desktop suite passed **2,671 tests, with 10 skipped**. The analyzer reported no errors or warnings, with 17 existing informational findings. The plain New Tab and onboarding layouts were visually reviewed with the real dock at 1280×800 and 960×640; a widget regression verifies the tagline stays centered in the visible area above search and creation docks.
+The native desktop acceptance test also passed using the production local WebSocket,
+terminal stream manager, tmux backend and installed CLIs. For **each** Claude/Codex
+session it stops and reopens through both Cmd-P and Cmd-T, verifies the original
+history in the desktop terminal buffer, checks the live registry and archive,
+confirms replacement PID/pane IDs after Stop and unchanged IDs for live attach,
+and keeps an unrelated tab open. Run it with the fixture isolated from real work:
+
+```sh
+# cli/ — prints its loopback URL; keep this process running
+npm run test:resume-native -- --serve
+# desktop/ — replace the port with the printed fixture port
+FLUTTER_TEST=1 flutter test -d macos --no-pub integration_test/native_resume_e2e_test.dart \
+  --dart-define=RESUME_FIXTURE_URL=http://127.0.0.1:PORT
+# Stop the disposable fixture after testing (or press Ctrl-C in its terminal)
+curl -X POST http://127.0.0.1:PORT/shutdown
+```
+
+This fixture build replaces the local debug app; rebuild the normal `lib/main.dart`
+review artifact afterward. Its injected keyboard events verify Flutter commands,
+not physical OS keyboard/IME delivery.
+
+Desktop regression coverage includes Cmd-P/T selection of retained sessions, pending native terminals, receipt and identity races, creation placement, repeated Cmd-T, Escape from search and creation, occupied-tab preservation, and the last-tab onboarding exception. The final full desktop suite passed **2,739 tests, with 10 skipped**. The analyzer reported no errors or warnings, with 17 existing informational findings. The plain New Tab and onboarding layouts were visually reviewed with the real dock at 1280×800 and 960×640; a widget regression verifies the tagline stays centered in the visible area above search and creation docks.
 
 ## Suggested manual acceptance checks
 

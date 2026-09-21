@@ -172,3 +172,21 @@ it('does not allocate when reserving disk space fails', async () => {
   expect(() => store.beginResume(saved.agentId)).toThrow('disk full')
   expect(store.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
 })
+
+it('an unbound observation of the same process keeps its confirmed conversation', async () => {
+  const { saved, store } = await fixture()
+  saved.transcriptPath = '/history.jsonl'; saved.boundAt = 1; saved.source = 'hook'; store.save(saved)
+  store.save({ ...saved, sessionId: '', transcriptPath: null, title: 'Renamed', boundAt: null, source: null })
+  expect(store.get(saved.agentId)).toMatchObject({ sessionId: saved.sessionId, transcriptPath: '/history.jsonl', title: 'Renamed', boundAt: 1, source: 'hook' })
+})
+it.each(['engine', 'missing', 'previous missing', 'pid', 'start', 'executable'])('does not transfer a binding to a different process: %s', async mode => {
+  const { saved, store } = await fixture()
+  store.save(mode === 'previous missing' ? { ...saved, processIdentity: null } : saved)
+  const next = { ...saved, sessionId: '', processIdentity: { ...saved.processIdentity! } } as RegisteredSession
+  if (mode === 'engine') next.engine = 'claude'
+  if (mode === 'missing') next.processIdentity = null
+  if (mode === 'pid') next.processIdentity!.pid++
+  if (mode === 'start') next.processIdentity!.startMarker = 'new'
+  if (mode === 'executable') next.processIdentity!.executable = 'other'
+  store.save(next); expect(store.get(saved.agentId)?.sessionId).toBe('')
+})

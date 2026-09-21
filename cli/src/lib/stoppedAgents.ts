@@ -47,7 +47,18 @@ export class StoppedAgentStore {
     if (!SAFE_ID.test(session.agentId)) throw new Error('Invalid stopped harness identity.')
     // An exited engine leaves its pane as a shell. Stopping that shell must keep
     // the conversation saved before releaseEngine cleared its binding/profile.
-    if (isTerminalEngine(session.engine) && this.get(session.agentId)) return
+    const previous = this.get(session.agentId)
+    if (isTerminalEngine(session.engine) && previous) return
+    // A temporarily unbound observation of the SAME process cannot erase a known conversation.
+    // A replacement process must earn its own binding; never carry history across PID reuse.
+    if (!session.sessionId && previous?.sessionId && previous.engine === session.engine
+      && session.processIdentity && previous.processIdentity
+      && session.processIdentity.pid === previous.processIdentity.pid
+      && session.processIdentity.startMarker === previous.processIdentity.startMarker
+      && session.processIdentity.executable === previous.processIdentity.executable) {
+      session = { ...session, sessionId: previous.sessionId, transcriptPath: previous.transcriptPath,
+        boundAt: previous.boundAt, source: previous.source }
+    }
     secureStateDirectory(dirname(this.directory))
     secureStateDirectory(this.directory)
     const snapshot = {
