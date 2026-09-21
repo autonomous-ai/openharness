@@ -1,6 +1,9 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import type { Server } from 'node:http'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { startHookServer, type HookServerHandlers, chooseHookAgent } from './hookServer.js'
+import { startHookServer, type HookServerHandlers, chooseHookAgent, findClaudeTranscript } from './hookServer.js'
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
 import { CommandBarService } from './lib/commandBar.js'
@@ -282,5 +285,27 @@ describe('/api/status', () => {
     const response = await fetch(`${base}/api/status`)
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ pid: process.pid, connected: false, restarting: false, discoveryReady: true })
+  })
+})
+
+describe('findClaudeTranscript', () => {
+  it('finds a conversation announced under a folder it was never written to', () => {
+    const projects = mkdtempSync(join(tmpdir(), 'claude-projects-'))
+    try {
+      const id = '146b7626-b391-48bd-b1ef-593d9f4cd9b9'
+      // Started in the repository, resumed in one of its worktrees: Claude Code announces the worktree's
+      // folder, and the file is still in the repository's.
+      mkdirSync(join(projects, '-Users-example-code-repo'))
+      mkdirSync(join(projects, '-Users-example-code-repo--claude-worktrees-feature'))
+      writeFileSync(join(projects, '-Users-example-code-repo', `${id}.jsonl`), '{}\n')
+      expect(findClaudeTranscript(id, projects)).toBe(join(projects, '-Users-example-code-repo', `${id}.jsonl`))
+      expect(findClaudeTranscript('0bab2c25-0000-4000-8000-000000000000', projects)).toBeNull()
+      // Only a session id is ever looked up — never a path someone could steer.
+      expect(findClaudeTranscript('../../etc/passwd', projects)).toBeNull()
+      expect(findClaudeTranscript(undefined, projects)).toBeNull()
+      expect(findClaudeTranscript(id, join(projects, 'missing'))).toBeNull()
+    } finally {
+      rmSync(projects, { recursive: true, force: true })
+    }
   })
 })

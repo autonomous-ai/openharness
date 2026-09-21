@@ -17,7 +17,7 @@
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { cpus, homedir, totalmem } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { pause, resume } from './lib/actions.mjs'
@@ -73,7 +73,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, now = () 
     await Promise.all(candidates.map(async (row) => {
       const screen = await scan(row.pane, { lines: 30 })
       row.needsInput = looksBlocked(screen)
-      row.screenTail = screen.split('\n').filter((line) => line.trim()).slice(-3).join('\n').slice(0, 600)
+      row.screenTail = screen.split('\n').filter((line) => line.trim()).slice(-8).join('\n').slice(0, 1200)
     }))
 
     const plan = decide(rows, policy, { home: homedir(), now: now() })
@@ -90,6 +90,8 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, now = () 
       problems,
       pins: state.pins,
       configPath: tilde(state.configPath, homedir()),
+      // For the memory meter: what the engines hold, against what this machine has.
+      machine: { memory: totalmem(), cpus: cpus().length },
       log: await readLog(workspace, { limit: 30 }),
       observedAt: now(),
       intervalMs,
@@ -132,6 +134,8 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, now = () 
       const ticket = state.paused?.[row.id] ?? null
       const result = verb === 'pause' ? await verbs.pause(row, { policy }) : await verbs.resume(row, { ticket })
       if (result.ok && result.ticket) next = markPaused(next, row, result.ticket)
+      // The daemon holds a harness it confirmed saving; a record here would only go stale.
+      if (result.ok && result.via === 'daemon') next = clearPaused(next, row.id)
       if (result.ok && verb === 'resume') next = clearPaused(next, row.id)
       results.push(result)
     }
@@ -196,7 +200,13 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, now = () 
       let content = await readFile(join(PACKAGE, 'viewer', file), 'utf8')
       // The page is served the token in a meta tag rather than a cookie or an inline script: no script
       // source changes, so the CSP stays script-src 'self' with no nonce and no 'unsafe-inline'.
-      if (file === 'index.html') content = content.replace('__HPS_TOKEN__', token)
+      if (file === 'index.html') {
+        content = content.replace('__HPS_TOKEN__', token)
+        // The first paint comes with the page, so it opens populated rather than on "reading the fleet".
+        // A JSON data block is never executed, so the CSP still allows no inline script; every "<" is
+        // escaped so a session title containing </script> cannot close the block early.
+        content = content.replace('__HPS_SNAPSHOT__', snapshot.summary ? JSON.stringify(snapshot).replace(/</g, '\\u003c') : 'null')
+      }
       res.writeHead(200, {
         ...headers,
         'content-type': contentType,

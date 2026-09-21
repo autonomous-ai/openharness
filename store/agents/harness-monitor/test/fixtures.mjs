@@ -55,6 +55,8 @@ export function row(overrides = {}) {
     attached: false, working: false, needsInput: false, pinned: false, workspaceGone: false,
     rssBytes: 400 * 1024 * 1024, procs: 1, cpu: 0.1, enginePid: 100,
     machine: 'this machine', machineId: 'm1', local: true, dead: false,
+    // The typed-resume path unless a test says otherwise; the daemon path has its own tests.
+    resumeVia: 'legacy', resumable: true,
     ...overrides,
   }
 }

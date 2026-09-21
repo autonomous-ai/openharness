@@ -88,15 +88,26 @@ export async function withBridge(machineId, fn, { env = process.env, timeoutMs =
       if (!entry || type !== `${entry.type}_result`) return
       pending.delete(payload.requestId)
       clearTimeout(entry.deadline)
-      if (payload.error) entry.reject(new Error(String(payload.error)))
-      else entry.resolve(payload)
+      if (payload.error) {
+        // Keep the daemon's own code and sentence: `RESUME_UNAVAILABLE` plus why is something a person can
+        // act on; a bare code is not.
+        const error = new Error(payload.detail ? `${payload.detail}` : String(payload.error))
+        error.code = String(payload.error)
+        error.detail = payload.detail ?? null
+        entry.reject(error)
+      } else entry.resolve(payload)
     })
   })
 
   const rpc = (type, payload = {}, { callTimeoutMs = timeoutMs } = {}) => new Promise((resolve, reject) => {
     if (closed) { reject(closed); return }
     const requestId = randomUUID()
-    const deadline = setTimeout(() => { pending.delete(requestId); reject(new Error(`The daemon did not answer ${type} in time.`)) }, callTimeoutMs)
+    // Marked, because for some requests no answer yet is not a failure: a resume the daemon is still
+    // confirming has a receipt to ask about instead.
+    const deadline = setTimeout(() => {
+      pending.delete(requestId)
+      reject(Object.assign(new Error(`The daemon did not answer ${type} in time.`), { timedOut: true }))
+    }, callTimeoutMs)
     pending.set(requestId, { type, resolve, reject, deadline })
     socket.send(JSON.stringify({ type, payload: { ...payload, requestId } }))
   })
@@ -110,10 +121,44 @@ export async function withBridge(machineId, fn, { env = process.env, timeoutMs =
   }
 }
 
-/** The fleet as the daemon sees it, for one machine. */
-export function listAgents(machineId, options) {
+/**
+ * The fleet as the daemon sees it: running rows, and — `includeStopped` — every saved harness whose engine
+ * has exited, as `status: 'stopped'` with no pane. An older daemon ignores the flag and sends live rows only;
+ * the caller tells the two apart by whether stopped rows ever appear, never by guessing a version.
+ */
+export function listAgents(machineId, { includeStopped = true, ...options } = {}) {
   return withBridge(machineId, async (rpc) => {
-    const reply = await rpc('agents_list', {})
+    const reply = await rpc('agents_list', includeStopped ? { includeStopped: true } : {})
     return Array.isArray(reply.agents) ? reply.agents : []
   }, options)
+}
+
+/**
+ * Resume a saved harness through the daemon.
+ *
+ * The daemon rebuilds the launch itself — the engine's own resume command plus the profile, permissions,
+ * folder and provider the harness was created with — in a new pane, under the same agent id. A
+ * `creationId` makes it idempotent: a repeated click, a second client or a lost reply all land on the same
+ * operation, so at most one engine is started. The reply's `state` is `created`, `unconfirmed` (started,
+ * conversation not confirmed yet) or `failed`, with the daemon's own `error` and `detail`.
+ */
+export function resumeAgent(machineId, agentId, { creationId = randomUUID(), replyMs = 120_000, ...options } = {}) {
+  return withBridge(machineId, (rpc) => rpc('agent_resume', { agentId, creationId }, { callTimeoutMs: replyMs }), options)
+}
+
+/**
+ * Stop a harness on the machine it lives on, through that machine's daemon: `agent_delete`, which is the
+ * app's own Stop Harness. On a daemon with `agent_resume` it SAVES the conversation and launch settings
+ * before it touches anything ("saving precedes every mutation"), then closes the pane and ends the engine —
+ * so what it leaves is exactly a paused harness, listed as `stopped` and resumable with `agent_resume`.
+ * On an older daemon the same request deletes for real, which is why callers send it only to a machine
+ * that answered the `agent_resume` probe.
+ */
+export function stopAgent(machineId, agentId, options) {
+  return withBridge(machineId, (rpc) => rpc('agent_delete', { agentId }, { callTimeoutMs: 60_000 }), options)
+}
+
+/** How an earlier resume, named by its `creationId`, turned out. */
+export function resumeStatus(machineId, creationId, options) {
+  return withBridge(machineId, (rpc) => rpc('agent_create_status', { creationId }), options)
 }

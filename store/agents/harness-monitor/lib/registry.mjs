@@ -11,7 +11,7 @@
  * working from this file alone.
  */
 
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -50,4 +50,23 @@ export function registryAsFrames(rows) {
     verdict: null,
     codexHome: row.codexHome ?? null,
   }))
+}
+
+/**
+ * The daemon's saved harnesses: `stopped-agents/<agentId>.json`, each `{ version: 1, session }`. Read for one
+ * reason — a saved harness is no longer in the registry, so this is where its transcript path and hook times
+ * are, and without them its idle time could not be told. Never written.
+ */
+export async function readStopped(env = process.env) {
+  const dir = join(env.HARNESS_HOME || join(homedir(), '.harness'), 'cli', 'data', 'stopped-agents')
+  const byId = new Map()
+  let names = []
+  try { names = (await readdir(dir)).filter((name) => name.endsWith('.json')) } catch { return byId }
+  await Promise.all(names.map(async (name) => {
+    try {
+      const parsed = JSON.parse(await readFile(join(dir, name), 'utf8'))
+      if (parsed?.version === 1 && parsed.session?.agentId) byId.set(parsed.session.agentId, parsed.session)
+    } catch { /* one unreadable record must not hide the others */ }
+  }))
+  return byId
 }

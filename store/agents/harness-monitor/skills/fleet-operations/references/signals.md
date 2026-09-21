@@ -37,12 +37,13 @@ Harness already has, not one Harness Monitor invented.
 CPU on the engine subtree above 5%, or a turn in the last 90 seconds, or output drawn in the last 60. All
 proxies, and all used only to *refuse* an action, never to claim in the interface that an agent is busy.
 
-## waiting on you — a guess, and labelled as one
+## waiting on you — a dialog, and labelled as a guess
 
-Read from the pane's last screen against a list of prompt shapes (`(y/n)`, a numbered choice list, "do you
-want to proceed"). Broad on purpose: a false positive costs a harness that stays running, a false negative
-costs a question paused before it was read. The app's own **Agents needing input** (⇧⌘I) is the authority —
-say so when it matters.
+Read from the pane's last screen, and it means a **dialog**: a cursor on one option of a menu, "Enter to
+confirm · Esc to cancel", a y/n, a permission prompt, a folder-trust question. Two things are deliberately
+*not* counted: a last line ending in "?" (an agent that asks a question in prose has finished its turn) and a
+line starting "1." (an agent's answer is full of numbered lists). Both once made the count read 11 on a fleet
+with one open dialog. The app's own **Agents needing input** (⇧⌘I) is the authority.
 
 ## Where each fact comes from
 
@@ -55,5 +56,6 @@ say so when it matters.
 | the policy and pins | `~/.config/harness/policy.jsonc` |
 | resume tickets, the log | `~/.harness/monitor/` |
 
-Other machines answer `agents_list` through the same bridge, so they appear in the list — but pane facts,
-memory and every action are local to this computer. A remote row says so.
+Other machines answer `agents_list` through the same bridge, so they appear in the list. Pane facts and
+memory are local to this computer; pause and resume on another machine go through that machine's own
+daemon, and only when it can save a harness for resuming — otherwise the row says to update Harness there.

@@ -4,65 +4,98 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="hps-token" content="__HPS_TOKEN__">
-  <title>Harness Monitor · your fleet</title>
+  <title>Harness Monitor</title>
   <link rel="stylesheet" href="app.css">
+  <script type="application/json" id="initial-snapshot">__HPS_SNAPSHOT__</script>
   <script type="module" src="app.js"></script>
 </head>
 <body>
   <div id="app">
-    <header class="bar">
+    <header class="toolbar" role="toolbar" aria-label="Harness Monitor">
       <div class="identity">
-        <span class="mark" aria-hidden="true"></span>
         <h1>Harness Monitor</h1>
         <span class="where" id="where">reading the fleet…</span>
       </div>
-      <div class="gauges" id="gauges" aria-live="polite"></div>
-      <div class="tools">
-        <div class="segmented" role="tablist" aria-label="View">
-          <button type="button" id="view-lanes" role="tab" aria-selected="true" data-view="lanes">Lanes</button>
-          <button type="button" id="view-table" role="tab" aria-selected="false" data-view="table">Table</button>
-        </div>
-        <div class="filter">
-          <span aria-hidden="true">/</span>
-          <input id="filter" type="search" placeholder="filter by name, project, engine" autocomplete="off" spellcheck="false" aria-label="Filter harnesses">
-        </div>
-        <button type="button" class="ghost toggle" id="show-all" aria-pressed="false" title="Also show what the policy hides: idle past the hide line, and harnesses whose pane is gone">show all</button>
-        <button type="button" class="ghost" id="refresh" title="Refresh now">↻</button>
+      <div class="scopes" role="tablist" aria-label="Show">
+        <button type="button" role="tab" data-scope="all" aria-selected="true">All <span class="count" data-count="all"></span></button>
+        <button type="button" role="tab" data-scope="running" aria-selected="false">Running <span class="count" data-count="running"></span></button>
+        <button type="button" role="tab" data-scope="paused" aria-selected="false">Paused <span class="count" data-count="paused"></span></button>
+        <button type="button" role="tab" data-scope="waiting" aria-selected="false">Waiting <span class="count" data-count="waiting"></span></button>
+      </div>
+      <div class="machines" role="tablist" aria-label="Machines">
+        <button type="button" role="tab" data-machines="local" aria-selected="true" title="Only this machine">This machine</button>
+        <button type="button" role="tab" data-machines="all" aria-selected="false" title="Every linked machine — each one pauses and resumes its own harnesses">All machines</button>
+      </div>
+      <div class="search">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+        <input id="filter" type="search" placeholder="Search" autocomplete="off" spellcheck="false" aria-label="Search harnesses">
+      </div>
+      <div class="actions">
+        <button type="button" class="tool" id="act-pause" data-verb="pause" disabled title="Pause — the engine exits, the conversation is kept (p)">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="3" width="2.6" height="10" rx="1"/><rect x="9.4" y="3" width="2.6" height="10" rx="1"/></svg><span>Pause</span>
+        </button>
+        <button type="button" class="tool" id="act-resume" data-verb="resume" disabled title="Resume — back where it left off (r)">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.2v9.6a.6.6 0 0 0 .9.5l7.4-4.8a.6.6 0 0 0 0-1L5.9 2.7a.6.6 0 0 0-.9.5z"/></svg><span>Resume</span>
+        </button>
+        <button type="button" class="tool icon" id="act-inspect" disabled title="Inspect (⏎)" aria-label="Inspect">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 7.2V11.2M8 4.8v.1"/></svg>
+        </button>
+      </div>
+      <div class="views" role="tablist" aria-label="View">
+        <button type="button" role="tab" id="view-table" data-view="table" aria-selected="true" title="Table (1)">Table</button>
+        <button type="button" role="tab" id="view-lanes" data-view="lanes" aria-selected="false" title="Timeline (2)">Timeline</button>
       </div>
     </header>
 
-    <section class="view" id="lanes-view" aria-label="The lanes">
+    <section class="meters" id="meters" aria-label="Fleet">
+      <div class="meter" id="meter-running">
+        <span class="meter-label">Running</span>
+        <span class="meter-value" id="running-value">—</span>
+        <span class="bar"><i id="running-bar"></i></span>
+      </div>
+      <div class="meter" id="meter-memory">
+        <span class="meter-label">Memory</span>
+        <span class="meter-value" id="memory-value">—</span>
+        <span class="bar"><i id="memory-bar"></i></span>
+      </div>
+      <div class="meter policy" id="meter-policy">
+        <span class="meter-label">Policy</span>
+        <span class="meter-value" id="policy-value">—</span>
+        <button type="button" class="link" id="policy-review" hidden>Review</button>
+      </div>
+    </section>
+
+    <section class="view" id="table" aria-label="Harnesses">
+      <div class="grid" id="grid" role="grid" tabindex="0"></div>
+      <div class="empty" id="table-empty" hidden></div>
+    </section>
+
+    <section class="view" id="lanes-view" hidden aria-label="Timeline">
       <div class="lanes-head">
-        <div class="axis-label">PROJECT</div>
+        <div class="axis-label">Project</div>
         <div class="axis" id="axis">
-          <div class="rule" id="rule-pause" data-rule="pause" tabindex="0" role="slider" aria-label="Pause after" aria-valuetext="4h"><span class="rule-grip"></span><span class="rule-tag">pause</span></div>
+          <div class="rule" id="rule-pause" data-rule="pause" tabindex="0" role="slider" aria-label="Pause after" aria-valuetext="1d"><span class="rule-grip"></span><span class="rule-tag">pause</span></div>
           <div class="rule" id="rule-hide" data-rule="hide" tabindex="0" role="slider" aria-label="Hide after" aria-valuetext="14d"><span class="rule-grip"></span><span class="rule-tag">hide</span></div>
         </div>
       </div>
       <div class="lanes" id="lane-list"></div>
-      <div class="lanes-empty" id="lanes-empty" hidden>
-        <p class="big">Nothing is running here yet.</p>
-        <p>Ask the agent beside this pane to show your fleet, or open a harness and come back.</p>
-      </div>
-    </section>
-
-    <section class="view" id="table" hidden aria-label="The table">
-      <div class="grid" id="grid" role="grid" tabindex="0"></div>
+      <div class="empty" id="lanes-empty" hidden></div>
     </section>
 
     <div class="policybar" id="policybar" hidden>
       <span class="policy-preview" id="policy-preview"></span>
-      <button type="button" class="primary" id="policy-save">Save policy</button>
-      <button type="button" class="ghost" id="policy-reset">Reset</button>
+      <button type="button" class="button" id="policy-reset">Cancel</button>
+      <button type="button" class="button primary" id="policy-save">Save to policy.jsonc</button>
     </div>
 
     <footer class="statusbar" id="statusbar">
-      <span id="status-left" class="mono"></span>
-      <span id="status-actions" class="actions" hidden></span>
-      <span id="status-right" class="keys mono"></span>
+      <span id="status-left"></span>
+      <span id="status-right" class="keys"></span>
     </footer>
 
-    <aside class="inspector" id="inspector" hidden aria-label="Harness details"></aside>
+    <aside class="sheet inspector" id="inspector" hidden aria-label="Harness details"></aside>
+    <div class="scrim" id="scrim" hidden></div>
+    <div class="dialog" id="review" role="dialog" aria-modal="true" aria-labelledby="review-title" hidden></div>
     <div class="toast" id="toast" role="status" hidden></div>
   </div>
 </body>

@@ -14,7 +14,7 @@ fix is not to start killing them. It is to make idleness free.
 | state | what it is |
 |---|---|
 | **running** | the engine process is running — an ordinary Harness agent |
-| **paused** | pane, scrollback and conversation intact, engine gone. Waking resumes the conversation |
+| **paused** | engine gone, conversation saved. Resume brings it back in a new pane |
 | **terminal** | a shell somebody opened. Nothing to pause |
 | **gone** | no pane left; the daemon dropped it. History only |
 
@@ -64,18 +64,25 @@ policy: pause after 1d · hide after 14d · ceiling 100 running
 
 ## The pane
 
-Two views over the same fleet, one selection between them.
+Built to feel like Activity Monitor with htop's density. It opens populated, updates live, and holds rows
+still while the pointer is over them, so a refresh never moves what you're about to click.
 
-**Lanes** is the picture: one lane per project, oldest work on the left, *now* hard against the right edge,
-on a log scale so the useful hours are visible instead of squeezed. Running chips glow, working chips
-breathe, paused chips are outlined, a chip waiting on you rings amber. Two vertical lines are the policy —
-**drag one** and the count updates as you move it: *would pause 58, handing back 13.7 GB*.
-Save it and it is written to `~/.config/harness/policy.jsonc`, comments intact. A threshold you cannot see the effect of is a threshold nobody
-should run.
+- **Toolbar.** Scopes — **All · Running · Paused · Waiting** — with counts; **This machine / All machines**
+  (this machine by default, since that is where Pause and Resume work); search; and **Pause**, **Resume**
+  and **Inspect**, which act on the selection. Pause is offered only where it would actually happen: a
+  harness that is waiting on you, mid-turn, open in a window or pinned says why instead.
+- **Meters.** Running against the ceiling, what the engines hold against the machine's memory, and what the
+  policy would do now — *"pause after 1d · 7 due, 1.9 GB"* — with **Review**: a dialog listing each one
+  with its reason and memory, all ticked, and one button, *Pause 7*.
+- **Table.** Status, name, project, engine, model, memory, CPU, idle (since the last real turn) and age;
+  sortable; machine appears when there is more than one. Double-click or ⏎ opens the **inspector**: every
+  fact, what the policy thinks and why, how it would come back, and the last lines on its pane.
+- **Timeline.** One lane per project on a log time axis, *now* at the right. The two lines are the policy
+  — **drag one** to see what it would pause, then save it into `policy.jsonc` with comments intact.
 
-**Table** is htop: fixed columns, tabular numerals, a memory bar behind the number, sortable headers,
-`j`/`k` to move, `space` to select, `p` to pause, `r` to resume, `i` to pin, `/` to
-filter. The footer shows what is selected and what the policy would do.
+Keys: `j`/`k` or arrows to move, `space` to select more, `⏎` to inspect, `p` pause, `r` resume, `/` search,
+`1`/`2` for the two views. Deep links open it on one harness: `?inspect=<agent id>`, `?scope=paused`,
+`?view=lanes`, `?review=1`.
 
 ## The rules
 
@@ -132,25 +139,30 @@ whose session the daemon has not bound yet, stays running.
   file's mtime and not the registry's `updatedAt` — both of those say "now" for conversations nobody has
   touched in days. [`skills/fleet-operations/references/signals.md`](skills/fleet-operations/references/signals.md)
   has the measurements.
-- **Pausing** arms `remain-on-exit` on the pane, then SIGTERMs the engine and waits. No SIGKILL unless you
-  ask. The pane survives either as a dead pane holding its scrollback or as the fallback shell Harness's
-  own launch wrapper hands it.
-- **Waking** types that engine's resume command into the pane — `claude --resume <id>`, `codex resume
-  <id>` — and the daemon's adoption loop rebinds the row. It deliberately does **not** use the daemon's
-  `agent_restart`: when an engine exits, the daemon rewrites the row as a *terminal*, so restarting it
-  gives you a fresh shell, which is exactly what happened the first time this was tried.
-- **The ticket.** That same rewrite clears the row's `sessionId`, `transcriptPath` and `title` — measured,
-  not assumed. So `pause` writes what it needs to come back (engine, session id, pane, title) into
-  `~/.harness/monitor/paused.json` before it reports success. That file is the only record a paused harness has, which is why
-  it is worth keeping; if you lose it, a paused harness is still resumable by hand with
-  `claude --resume <id>` from its own transcript.
-- **Other machines** are listed through the same bridge and marked as remote. Pane facts, memory and every
-  action are local to this computer — a fleet manager that guesses about a machine it cannot see is not one.
+- **Pausing** sends the engine SIGTERM — never Ctrl-C, which only cancels a turn — and waits for it to exit
+  (SIGKILL only with `--force`). The daemon then saves the harness: conversation id, folder, profile and
+  permissions, listed as `stopped` under the same id. Once it has, the empty shell the engine left behind is
+  closed, so a pause never leaves a stray Terminal tile. Only Claude Code and Codex are paused, since those
+  are what the daemon can bring back, and only once a conversation is bound.
+- **Resuming** is the daemon's `agent_resume`, with a receipt so a double click or a lost reply can never
+  start two engines. It relaunches the engine with its own resume command and the settings it was created
+  with, in a new pane, under the same id. A resume the daemon started but hasn't confirmed is reported as
+  exactly that, never as success.
+- **Harnesses paused before the daemon could save them** (a daemon without `agent_resume`) come back the old
+  way: their conversation id is kept in `~/.harness/monitor/paused.json`, and resume types
+  `claude --resume <id>` into the pane they left. `agent_resume` is deliberately not used for those — it would
+  find their leftover shell and report success.
+- **Other machines** are listed through the same bridge. Pane facts and memory are local to this computer, so
+  another machine's harness is paused and resumed by that machine's own daemon: Pause sends its Stop
+  (`agent_delete`), which saves the conversation before it touches anything, and Resume sends `agent_resume`.
+  That Stop deletes on a daemon older than `agent_resume`, so it is only sent to a machine that answered the
+  probe; any other machine's rows stay read-only and say to update Harness there. The policy on this machine
+  never pauses another machine's harness — each machine has its own `policy.jsonc`.
 
 ## Develop and verify
 
 ```sh
-npm test --prefix store/agents/harness-monitor      # 109 tests, no network, no daemon, no tmux required
+npm test --prefix store/agents/harness-monitor      # 133 tests, hermetic; three render the pane in headless Chrome
 harness dsh check "$PWD/store/agents/harness-monitor"
 
 # The pane against any workspace; the port is printed.

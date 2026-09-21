@@ -16,10 +16,31 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname } from 'node:path'
 import { lastTurns } from './activity.mjs'
-import { listAgents, machines } from './bridge.mjs'
+import { listAgents, machines, withBridge } from './bridge.mjs'
 import { engineProcess, panes, processTable } from './panes.mjs'
 import { humanIdle } from './policy.mjs'
-import { readRegistry, registryAsFrames } from './registry.mjs'
+import { canResume } from './resume.mjs'
+import { readRegistry, readStopped, registryAsFrames } from './registry.mjs'
+
+/** Engines the daemon's `agent_resume` restores. Anything else it answers `RESUME_UNAVAILABLE`, so a running
+ *  harness on another engine is never paused by this package: pausing it would strand its conversation. */
+export const DAEMON_RESUMES = new Set(['claude', 'codex'])
+
+const probes = new Map()
+/**
+ * Does this machine's daemon have `agent_resume`? Asked, not guessed from a version: a request with no id
+ * gets `MISSING_AGENT_ID` from a daemon that has it and `UNSUPPORTED` from one that does not. Cached per
+ * machine for a minute — a daemon that updates itself picks up the answer on the next refresh after that.
+ */
+export async function daemonResumes(machineId, { now = Date.now(), ask = withBridge } = {}) {
+  const hit = probes.get(machineId)
+  if (hit && now - hit.at < 60_000) return hit.value
+  let value = false
+  try { await ask(machineId, (rpc) => rpc('agent_resume', {}, { callTimeoutMs: 4000 })) }
+  catch (error) { value = error?.code === 'MISSING_AGENT_ID' }
+  probes.set(machineId, { at: now, value })
+  return value
+}
 
 /** `runtime-v1:<agentId>:<engine>:<model>@<effort>` — the runtime profile's answer, as the daemon
  *  sends it. A plain model name (older daemons) is passed through untouched. */
@@ -82,10 +103,11 @@ function firstTime(candidates, fallback) {
  * Harness Monitor's own list as a nameless shell, and nothing would know which conversation to resume. The ticket
  * `pause()` wrote into `monitor.json` is the only record, and it is overlaid here.
  */
-export function mergeRows(agents, { paneRows = new Map(), table = { byPid: new Map(), children: new Map() }, state = {}, machine = null, local = true, now = Date.now(), home = homedir(), turns = new Map(), registry = new Map() } = {}) {
+export function mergeRows(agents, { paneRows = new Map(), table = { byPid: new Map(), children: new Map() }, state = {}, machine = null, local = true, now = Date.now(), home = homedir(), turns = new Map(), registry = new Map(), stopped = new Map(), daemonResume = false } = {}) {
   const pauseTickets = state.paused ?? {}
   const pins = new Set(state.pins ?? [])
   return agents.map((agent) => {
+    if (agent.status === 'stopped') return savedRow(agent, { machine, local, now, home, turns, stopped, pins })
     const pane = agent.tmuxPane && local ? paneRows.get(agent.tmuxPane) ?? null : null
     const ticket = pauseTickets[agent.id] ?? null
     // A paused row describes itself from its ticket: the daemon has already forgotten what it was.
@@ -108,6 +130,12 @@ export function mergeRows(agents, { paneRows = new Map(), table = { byPid: new M
     // is shown as what it is and left out of every rule.
     if (stateName === 'paused' && engine === 'terminal' && !ticket) stateName = 'terminal'
     const { model, effort } = parseModel(agent.selectedModel)
+    // How this one would come back if it were paused — the question the policy and the Pause button both
+    // have to answer before they touch it. The daemon path for the engines it restores; this package's own
+    // typed resume only for a harness paused before the daemon could save one (its ticket says so).
+    const resumeVia = stateName === 'paused' ? 'legacy'
+      : daemonResume ? (DAEMON_RESUMES.has(engine) && sessionId ? 'daemon' : null)
+        : (canResume(engine) && sessionId ? 'legacy' : null)
     return {
       id: agent.id,
       sessionId,
@@ -147,8 +175,47 @@ export function mergeRows(agents, { paneRows = new Map(), table = { byPid: new M
       machineId: machine?.machineId ?? null,
       local,
       dead: Boolean(pane?.dead),
+      resumeVia,
+      resumable: Boolean(resumeVia),
     }
   })
+}
+
+/**
+ * A harness the daemon saved when its engine exited: `status: 'stopped'`, no pane, no process. Everything
+ * but idle comes off the wire; idle comes from the saved record's own transcript, like every other row.
+ */
+function savedRow(agent, { machine, local, now, home, turns, stopped, pins }) {
+  const record = stopped.get(agent.id)
+  const lastActivity = firstTime([turns.get(agent.id), record?.lastHookAt, Date.parse(agent.updatedAt), Date.parse(agent.createdAt)], now)
+  const idleMs = Math.max(0, now - lastActivity)
+  const { project, cwd, branch, remote } = projectOf(agent)
+  const { model, effort } = parseModel(agent.selectedModel)
+  const resumable = DAEMON_RESUMES.has(agent.engine) && Boolean(agent.sessionId)
+  // The daemon saves closed Terminal agents too. A shell has no conversation — "resuming" one opens a new
+  // shell — so it is a shell here, not a paused harness, and it stays out of every rule and the default list.
+  const shell = agent.engine === 'terminal'
+  return {
+    id: agent.id, sessionId: agent.sessionId || null,
+    name: agent.name || 'agent', title: agent.title || null,
+    engine: agent.engine, model, effort,
+    state: shell ? 'terminal' : 'paused', stateSince: lastActivity, pausedAt: null,
+    pane: null, paneTarget: null,
+    project, cwd, home: tilde(cwd, home), branch, remote,
+    lastActivity, idleMs, idle: humanIdle(idleMs),
+    createdAt: firstTime([agent.createdAt], null),
+    attached: false, working: false, lastOutput: null,
+    transcript: record?.transcriptPath ?? null,
+    needsInput: false, pinned: pins.has(agent.id),
+    workspaceGone: Boolean(cwd) && local && !existsSync(cwd),
+    rssBytes: 0, procs: 0, cpu: 0, enginePid: null, cwdWas: null,
+    dsh: agent.dsh ?? null, dshName: agent.dshName ?? null, verdict: null,
+    machine: machine?.name ?? 'this machine', machineId: machine?.machineId ?? null,
+    local, dead: false,
+    resumeVia: resumable && !shell ? 'daemon' : null,
+    resumable: resumable && !shell,
+    saved: true,
+  }
 }
 
 /**
@@ -158,8 +225,12 @@ export function mergeRows(agents, { paneRows = new Map(), table = { byPid: new M
  * linked laptop is asleep is worse than one that says which machine it could not reach.
  */
 export async function collect({ state = {}, now = Date.now(), includeRemote = true, timeoutMs = 8000, home = homedir(), cache = new Map() } = {}) {
-  const [paneRows, table, machineList, registry] = await Promise.all([panes(), processTable(), machines(), readRegistry()])
-  const turns = await lastTurns(registry.rows.map((row) => ({ id: row.agentId, transcriptPath: row.transcriptPath })), { cache })
+  const [paneRows, table, machineList, registry, stopped] = await Promise.all([panes(), processTable(), machines(), readRegistry(), readStopped()])
+  const transcripts = [
+    ...registry.rows.map((row) => ({ id: row.agentId, transcriptPath: row.transcriptPath })),
+    ...[...stopped.values()].map((row) => ({ id: row.agentId, transcriptPath: row.transcriptPath })),
+  ]
+  const turns = await lastTurns(transcripts, { cache })
   const current = machineList.find((m) => m.current) ?? null
   const targets = [current, ...(includeRemote ? machineList.filter((m) => !m.current && m.online) : [])].filter(Boolean)
   const problems = []
@@ -177,8 +248,8 @@ export async function collect({ state = {}, now = Date.now(), includeRemote = tr
 
   await Promise.all(targets.map(async (machine) => {
     try {
-      const agents = await listAgents(machine.machineId, { timeoutMs })
-      rows = rows.concat(mergeRows(agents, { paneRows, table, state, machine, local: machine.current === true, now, home, turns, registry: registry.byId }))
+      const [agents, daemonResume] = await Promise.all([listAgents(machine.machineId, { timeoutMs }), daemonResumes(machine.machineId, { now })])
+      rows = rows.concat(mergeRows(agents, { paneRows, table, state, machine, local: machine.current === true, now, home, turns, registry: registry.byId, stopped, daemonResume }))
     } catch (error) {
       problems.push({ machine: machine.name, error: error instanceof Error ? error.message : String(error) })
     }

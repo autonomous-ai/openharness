@@ -137,12 +137,21 @@ export function decide(rows, rawPolicy, { now = Date.now(), home = '' } = {}) {
         : keep(row, 'no pane left; kept in history for now'))
       continue
     }
+    // Another machine's harness is shown, never planned: signals and panes are local to this computer.
+    if (row.local === false) { entries.push(keep(row, `on ${row.machine || 'another machine'}`)); continue }
+
     // A shell somebody opened is not an agent: no conversation, nothing to resume, no rule applies.
     if (row.state === 'terminal') { entries.push(keep(row, 'a shell, not an engine — nothing to pause')); continue }
 
     const protection = protectionFor(row, policy)
     if (protection) {
       entries.push(keep(row, protection.why, { protectedBy: protection.by }))
+      continue
+    }
+    // Never plan a pause for something that could not come back: an engine the daemon cannot resume, or a
+    // harness with no conversation bound yet. Known-false only — a row that does not say is not second-guessed.
+    if (RUNNING.has(row.state) && row.resumable === false) {
+      entries.push(keep(row, row.sessionId ? `the daemon cannot resume ${row.engine}` : 'no conversation bound yet, so nothing to resume'))
       continue
     }
     if (policy.pauseWhenWorkspaceGone && row.workspaceGone && RUNNING.has(row.state)) {
@@ -159,7 +168,8 @@ export function decide(rows, rawPolicy, { now = Date.now(), home = '' } = {}) {
   // The ceiling runs last, over whatever is still running after the idle rules. Protected rows hold a
   // slot but are never paused: a person with 20 pinned agents has said what they want, and a rule
   // that overruled that would make pinning worthless. Freshest activity keeps its slot (LRU out).
-  const survivors = rows.filter((row, i) => RUNNING.has(row.state) && entries[i].action === 'keep')
+  // The ceiling is per machine, so it counts only this machine's harnesses — and only those can be paused.
+  const survivors = rows.filter((row, i) => RUNNING.has(row.state) && row.local !== false && entries[i].action === 'keep')
   const byId = new Map(rows.map((row, i) => [row.id, entries[i]]))
   const ranked = [...survivors].sort((a, b) => (a.idleMs ?? 0) - (b.idleMs ?? 0))
   let slots = policy.runningCeiling
@@ -181,7 +191,7 @@ function totals(entries, rows) {
   const count = (action) => entries.filter((entry) => entry.action === action).length
   const frees = entries.filter((entry) => entry.action === 'pause')
     .reduce((sum, entry) => sum + (rss.get(entry.id) || 0), 0)
-  const runningNow = rows.filter((row) => row.state === 'running').length
+  const runningNow = rows.filter((row) => row.state === 'running' && row.local !== false).length
   return {
     rows: rows.length,
     pause: count('pause'),
