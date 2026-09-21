@@ -2,6 +2,23 @@
 
 Branch: `codex/harness-improvements`, starting from `735471a1`.
 
+## Start here
+
+- [Eight hands-on experiences](../docs/hands-on.md), with an
+  [interactive local guide](../docs/hands-on.html), original native demo videos and starting prompts.
+- [Three runnable starters](../docs/try-hands-on.md) for the physics, music and circuit panes.
+  They use this checkout's source with already installed native assets.
+- [All 82 packages](HARNESS-INVENTORY-2026-09-21.md): 72 harnesses and 10 shared viewers, including
+  the reviewed explanation for each of the 17 structural warnings.
+
+The eight main additions are MuJoCo's alternative futures, Godogen's rewindable playtests,
+Blender's named design variants, Strudel's recorded performances, RDKit's bond-energy studies,
+Typst/Doc Viewer's anchored revision reviews, Jev Sheets' paired question trials, and CircuitJS's
+saved trace comparisons. Each has native runtime evidence and an editable handoff. Nine Jev
+viewers also reject decisions from superseded sessions; Video Viewer preserves a captured
+frame's identity and earlier saved images. The sections below record implementation and test
+boundaries for each change. Jev's provider checks use local practice responses, not paid live calls.
+
 ## Product brief
 
 Read the repository README, `docs/ideal-users.md`, the Store authoring guide, and the previous
@@ -42,9 +59,11 @@ current files and fresh runtime checks decide the next action.
 ## Verification ledger
 
 - Initial branch and worktree verified clean.
-- Manifest/template/viewer/test inventory completed. Detailed domain and browser review ongoing.
+- Manifest/template/viewer/test inventory and structural warning review completed for all 82 packages.
+- Native runtime journeys were exercised for the implemented experiences; this is not a cold-install
+  or full runtime pass for all 82 packages.
 - No installed package, running user session, published catalog, or existing project changed.
-- New implementation and test results will be recorded below as they are verified.
+- Implementation, actual native measurements, browser checks and remaining limits are recorded below.
 
 ## First improvement: MuJoCo's What if lab
 
@@ -797,3 +816,48 @@ Verification:
 Evidence: `video-stills-before.txt`, `video-stills-before/`, `video-stills-tests-final.txt`,
 `video-stills-final.txt`, and `video-stills-final/` under the local evidence root. The reproducible
 native browser check and its original Manim source are included in the Video Viewer package.
+
+## Thirteenth improvement: try a native starter from the checkout
+
+Added `node store/tools/try-hands-on.mjs mujoco|strudel|circuitjs`. Each launch opens this branch's
+viewer source on an editable, original starter: a pendulum, the Lantern room synth composition,
+or the named-node RC circuit. The command prints a loopback URL, project directory and first action.
+`--workspace` resumes a chosen folder without replacing its source; `--runtime-root` selects an
+existing harness cache. The README and both field guides link to the short launcher instructions.
+
+The launcher checks native assets and exact pinned Node dependency versions before creating the
+project. It copies viewer code into an owned temporary runtime and links existing dependencies;
+it does not install or update packages. Shutdown and startup cancellation stop the owned server
+process group and remove only that runtime. Source and saved work remain in the project. The
+instructions explain that default projects live under the system temporary directory and a durable
+`--workspace` is preferable for ongoing work. A preview starts no agent chat.
+
+Native startup exposed an existing MuJoCo bug: Node canonicalizes a linked entry's `import.meta.url`,
+but the viewer compared it with an uncanonicalized process argument. The program silently exited
+when launched through a linked package or macOS's `/var` alias. The main-module guard now compares
+the real entry path, with an actual linked-package HTTP regression check. The original native
+pendulum browser fixture is shared as an XML file rather than duplicated in the launcher.
+
+Verification:
+
+- All 30 MuJoCo package tests and the native WASM/server smoke checks pass, including a linked
+  package entry serving its real viewer and model API.
+- Eleven native Chrome starter checks pass: a real MuJoCo gravity comparison and measured-frame
+  jump, an exported experiment, audible Web Audio with a kept WAV/source/marker, actual CircuitJS
+  samples, source editing and capture rendering after restart, and no browser exceptions.
+- Those three journeys also pass with external requests blocked. Strudel's unchanged REPL attempts
+  optional sample-index requests; its built-in synth composition continues to play and record.
+  The checked native entry-asset hashes remain unchanged, and every owned preview runtime is removed.
+- Seven process-lifecycle checks pass: linked CLI entry, invalid selection before mutation, an
+  already-aborted launch, a reachable printed URL, Ctrl-C after readiness, retained edited source,
+  and Ctrl-C during startup without a lingering runtime.
+- The finished field guide passes all 63 browser checks again, including every actual local video,
+  390/320px layouts, clipboard fallback, deep links, back navigation and JavaScript-disabled reading.
+  The generated guide, 49-harness/10-viewer presentation and 59-entry catalog schema checks pass.
+- All 431 existing Store/conformance tests pass on the final source, covering all 82 package
+  manifests, declared instructions and skills, registry membership, licenses and Store facts.
+
+The native starter screenshots were visually inspected. Evidence: `playgrounds-browser.txt`,
+its printed `playgrounds-*/` directory, `playground-cli.txt`, its printed `playground-cli-*/` directory,
+`mujoco-linked-tests.txt`, `hands-on-browser-final.txt`, `final-store-conformance.txt`, and `hands-on/`
+under the local evidence root.

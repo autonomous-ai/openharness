@@ -103,7 +103,7 @@ const html = `<!doctype html>
   <div id="experiences">${articles}</div>
   <noscript><p class="no-script">All eight experiences are shown below. Starting prompts can be selected and copied; open a Video file link to watch a recording.</p></noscript>
 </main>
-<footer><p>Eight experiences in this source checkout. <a href="../README.md#run-it">Get started with Harness</a> · <a href="../README.md#domain-specific-harnesses-dsh">Browse all harnesses</a></p><p>Videos and images are recorded native sessions, authored separately from these suggested prompts. This guide runs locally without a service; media plays only when you choose it. Jev's demonstration uses offline practice answers.</p></footer>
+<footer><p>Eight experiences in this source checkout. <a href="../README.md#run-it">Get started with Harness</a> · <a href="try-hands-on.md">Run a native starter</a> · <a href="../README.md#domain-specific-harnesses-dsh">Browse all harnesses</a></p><p>Videos and images are recorded native sessions, authored separately from these suggested prompts. This guide runs locally without a service; media plays only when you choose it. Jev's demonstration uses offline practice answers.</p></footer>
 </body></html>
 `
 
@@ -115,6 +115,8 @@ The agent brings the tools of a craft. You bring the idea, the taste and the nex
 [Interactive guide](hands-on.html) — open this HTML file from the checkout in a browser for the craft picker, copyable prompts and local video players. [Start a Harness project](../README.md#run-it).
 
 These eight experiences are included in this source checkout. The recorded demos show separately authored projects; the prompts below are starting ideas for your own work. Jev's demo uses offline practice answers.
+
+[Run a native starter](try-hands-on.md) to try the physics, music or circuit panes directly from this checkout with installed harness assets.
 
 ${experiences
   .map(

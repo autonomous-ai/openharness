@@ -7,6 +7,8 @@ The agent brings the tools of a craft. You bring the idea, the taste and the nex
 
 These eight experiences are included in this source checkout. The recorded demos show separately authored projects; the prompts below are starting ideas for your own work. Jev's demo uses offline practice answers.
 
+[Run a native starter](try-hands-on.md) to try the physics, music or circuit panes directly from this checkout with installed harness assets.
+
 ## MuJoCo: Try a different world.
 
 Take one moment in a robot's run and see two futures unfold together. Change the ground, gravity or a sideways shove, then scrub to the moment they part ways.

@@ -12,15 +12,7 @@ const output = resolve(process.env.EXPERIMENT_OUTPUT || 'test-results/experiment
 mkdirSync(output, { recursive: true })
 const workspace = mkdtempSync(join(tmpdir(), 'mujoco-experiments-'))
 mkdirSync(join(workspace, 'scenes'))
-const xml = `<mujoco model="Pendulum laboratory"><option timestep=".002" gravity="0 0 -9.81"/>
-<visual><global azimuth="130" elevation="-18"/><headlight ambient=".4 .4 .4" diffuse=".7 .7 .7"/></visual>
-<asset><texture name="grid" type="2d" builtin="checker" width="128" height="128" rgb1=".1 .15 .2" rgb2=".14 .2 .26"/><material name="ground" texture="grid" texrepeat="4 4"/></asset>
-<worldbody><light pos="0 -2 4"/><geom type="plane" size="3 3 .1" material="ground"/>
-<geom type="cylinder" size=".04 1" pos="0 .15 1" rgba=".3 .4 .5 1" contype="0" conaffinity="0"/>
-<body name="Pendulum" pos="0 0 2"><joint name="swing" type="hinge" axis="0 1 0" damping=".02"/>
-<geom type="capsule" fromto="0 0 0 0 0 -1" size=".035" rgba=".5 .6 .7 1" mass=".1"/>
-<geom type="sphere" pos="0 0 -1" size=".13" mass="1" rgba=".95 .5 .16 1"/></body></worldbody>
-<keyframe><key name="Release" qpos="1.1"/></keyframe></mujoco>`
+const xml = readFileSync(new URL('./fixtures/pendulum.xml', import.meta.url), 'utf8')
 writeFileSync(join(workspace, 'scenes/pendulum.xml'), xml)
 writeFileSync(join(output, 'pendulum.xml'), xml)
 let viewer, browser

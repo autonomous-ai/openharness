@@ -13,7 +13,7 @@
 // One namespace for model paths, the same one the rollout's `model` field uses: `menagerie/…` is a
 // robot from the harness, anything else is workspace-relative.
 import { createServer } from 'node:http'
-import { createReadStream, existsSync, readdirSync, readFileSync, statSync, watch } from 'node:fs'
+import { createReadStream, existsSync, readdirSync, readFileSync, realpathSync, statSync, watch } from 'node:fs'
 import { dirname, extname, join, normalize, posix, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -424,7 +424,11 @@ export function startWatching() {
   setInterval(() => { for (const client of clients) client.write(': ping\n\n') }, 20_000).unref()
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Node canonicalizes import.meta.url. A linked DSH install or macOS's /var →
+// /private/var alias must still count as the entry point, rather than silently exit.
+let isMain = false
+try { isMain = Boolean(process.argv[1]) && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url) } catch {}
+if (isMain) {
   server.listen(port, '127.0.0.1', () => {
     console.log(`[mujoco-viewer] listening on http://127.0.0.1:${port}/`)
     console.log(`[mujoco-viewer] workspace: ${workspace}`)

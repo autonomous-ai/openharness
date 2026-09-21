@@ -73,6 +73,8 @@ track, turn a molecular bond, review a draft, sharpen a question, or compare a c
 The [hands-on field guide](docs/hands-on.md) has eight native demos, starting prompts and ways to
 keep your decisions. Open [the interactive guide](docs/hands-on.html) from this checkout in a browser
 to pick a craft and watch the local recordings.
+For a live preview from this checkout, [run a native starter](docs/try-hands-on.md) for physics,
+music or circuits using your installed harness assets.
 
 <!-- store-catalog:start -->
 ### Coding and beyond
