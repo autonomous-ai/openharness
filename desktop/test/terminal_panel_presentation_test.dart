@@ -89,7 +89,12 @@ void main() {
       session.status = TerminalSessionStatus.takenOver;
       revision.value = 3;
       await tester.pump();
-      expect(find.text('Take control'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Take control'), findsOneWidget);
+      expect(
+        find.widgetWithText(FilledButton, 'Take control'),
+        findsOneWidget,
+        reason: 'the in-pane banner offers it too',
+      );
       expect(
         find.byTooltip(
           'Read only: another app controls this terminal. Take control moves input ownership to this app.',
