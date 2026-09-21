@@ -95,6 +95,12 @@ CLAUDE.local.md
 .scratch/
 service-account*.json
 
+# Agent workspace state. This repo is a project agents are run IN, and a DSH's own scripts write
+# their result to `.harness/verdict.json` in the project they ran on (cli/src/dsh/manifest.ts,
+# DEFAULT_VERDICT_PATH). It is output, never source, and it reappears whenever an agent works here —
+# which is enough to block a release, since every release script refuses a dirty tree.
+.harness/
+
 # Local scratch — notes, experiments, throwaway scripts
 scratch/
 tmp/
