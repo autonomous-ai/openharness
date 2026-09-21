@@ -170,7 +170,7 @@ void main() {
           .widget<NewHarnessBox>(find.byType(NewHarnessBox))
           .controller;
       expect(box.detectingAgent, isTrue);
-      expect(find.text('Start'), findsOneWidget);
+      expect(find.text('Start Harness'), findsOneWidget);
       expect(find.text('Detecting installed agents…'), findsOneWidget);
       final start = find.byKey(const ValueKey('new-harness-field-create'));
       expect(tester.widget<InkWell>(start).onTap, isNull);
@@ -186,9 +186,12 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 150));
       expect(box.engine, 'codex');
-      expect(find.text('Start'), findsOneWidget);
-      expect(find.text('New Harness'), findsOneWidget);
-      expect(find.text('New Tab'), findsOneWidget);
+      expect(find.text('Start Harness'), findsOneWidget);
+      expect(find.text('New Harness'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('new-harness-field-placement')),
+        findsNothing,
+      );
       await key(tester, LogicalKeyboardKey.enter);
       await tester.pump();
       expect(app.launches, hasLength(1));

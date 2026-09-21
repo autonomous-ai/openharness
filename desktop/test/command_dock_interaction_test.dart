@@ -63,7 +63,6 @@ void main() {
         (1, 'agent', NewHarnessField.agent),
         (2, 'machine', NewHarnessField.machine),
         (3, 'project', NewHarnessField.projectMenu),
-        (4, 'task', NewHarnessField.task),
       ]) {
         for (var i = 0; i < steps; i++) {
           await key(tester, LogicalKeyboardKey.arrowDown);
@@ -75,9 +74,9 @@ void main() {
         highlighted('create');
       }
       await key(tester, LogicalKeyboardKey.arrowUp);
-      highlighted('placement');
+      highlighted('worktree');
       await key(tester, LogicalKeyboardKey.arrowUp);
-      highlighted('task');
+      highlighted('project');
       expect(
         find.byKey(const ValueKey('new-harness-field-options')),
         findsNothing,
@@ -139,7 +138,7 @@ void main() {
           .controller;
       final original = box.project;
       final input = find.byKey(const ValueKey('new-harness-input'));
-      await openLaunchRow(tester, 'task');
+      await openLegacyTaskEditor(tester);
       await tester.enterText(input, 'Inspect the project');
       await key(tester, LogicalKeyboardKey.escape);
       await openLaunchRow(tester, 'machine');
@@ -401,9 +400,7 @@ void main() {
     },
   );
 
-  testWidgets('Pi keeps a task row and explains its launch limitation', (
-    tester,
-  ) async {
+  testWidgets('Pi and Codex both use the compact launch form', (tester) async {
     final app = createApp();
     seedMixedAgents(app);
     addTearDown(app.dispose);
@@ -416,26 +413,21 @@ void main() {
         .widget<NewHarnessBox>(find.byType(NewHarnessBox))
         .controller;
     final input = find.byKey(const ValueKey('new-harness-input'));
-    await openLaunchRow(tester, 'agent');
-    await tester.enterText(input, 'Pi');
-    box.accept(box.options.firstWhere((row) => row.id == 'pi'));
-    await tester.pump();
-    expect(
-      find.byKey(const ValueKey('new-harness-field-task')),
-      findsOneWidget,
-    );
-    expect(find.text('Enter a task in Pi after launch'), findsOneWidget);
-    await openLaunchRow(tester, 'task');
-    expect(box.error, contains('not supported yet'));
-    expect(box.field, NewHarnessField.launch);
-    await openLaunchRow(tester, 'agent');
-    await tester.enterText(input, 'Codex');
-    await key(tester, LogicalKeyboardKey.enter);
-    await openLaunchRow(tester, 'task');
-    expect(box.field, NewHarnessField.task);
-    await tester.enterText(input, 'Make a product video');
-    await key(tester, LogicalKeyboardKey.escape);
-    expect(box.task, 'Make a product video');
+    for (final agent in ['pi', 'codex']) {
+      await openLaunchRow(tester, 'agent');
+      await tester.enterText(input, agent);
+      box.accept(box.options.firstWhere((row) => row.id == agent));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('new-harness-field-task')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('new-harness-field-placement')),
+        findsNothing,
+      );
+      expect(find.text('Start Harness'), findsOneWidget);
+    }
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -473,7 +465,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.enter);
       expect(box.engine, 'opencode');
       expect(box.field, NewHarnessField.launch);
-      await openLaunchRow(tester, 'task');
+      await openLegacyTaskEditor(tester);
       await tester.enterText(input, 'a project to open');
       await key(tester, LogicalKeyboardKey.escape);
       expect(box.task, 'a project to open');
@@ -553,7 +545,7 @@ void main() {
         await key(tester, LogicalKeyboardKey.keyP, cmd: true);
         final input = find.byKey(const ValueKey('swarm-search-input'));
         final preview = find.byKey(const ValueKey('swarm-search-preview'));
-        expect(find.text('· Feature work'), findsOneWidget);
+        expect(find.text('· Feature work'), findsNothing);
         // The create row already explains itself; only real agents need preview.
         expect(preview, findsNothing);
         await tester.enterText(input, 'Agent 1');

@@ -1142,9 +1142,8 @@ class SwarmSearchHints extends StatelessWidget {
               accept,
               selected?.isCreate == true
                   ? 'new harness'
-                  // The dock title already names the destination. Keep this
-                  // hint short so filtering does not wrap the footer and move
-                  // the input above it on narrow windows.
+                  // Keep this hint short so filtering does not wrap the
+                  // footer and move the input above it on narrow windows.
                   : search.placement != null && action == search.primaryAction
                   ? 'open'
                   : action.toLowerCase(),

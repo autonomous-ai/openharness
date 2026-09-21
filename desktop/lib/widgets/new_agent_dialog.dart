@@ -680,10 +680,16 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
     Navigator.of(context).pop(NewAgentDialogResult.created);
   }
 
+  bool get _sameGitProject =>
+      _machineId == widget.initialDraft?.machineId &&
+      _folder == widget.initialDraft?.project.folder &&
+      _preparedFolder == null;
+
   ProjectFolderRequest? get _projectFolder => switch (_folderSource) {
     _FolderSource.newProject =>
       _generatedProject ?? ProjectFolderRequest.newProject(name: _projectName),
-    _FolderSource.local => null,
+    _FolderSource.local =>
+      _sameGitProject ? widget.initialDraft?.projectFolderRequest : null,
     _FolderSource.remote => switch (_repository) {
       final repository? => ProjectFolderRequest.remote(repository),
       null => null,
@@ -708,6 +714,13 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
           : NewHarnessProject.fresh(_projectName),
       task: _task.text,
       permissionMode: _permissionMode,
+      worktree: _preparedFolder != null
+          ? false
+          : _sameGitProject
+          ? widget.initialDraft?.worktree
+          : null,
+      branchRef: _sameGitProject ? widget.initialDraft?.branchRef : null,
+      gitProject: _sameGitProject ? widget.initialDraft?.gitProject : null,
       profile: _codexProfile,
       profileChosen: _codexProfileChosen,
       attempt: _creation,

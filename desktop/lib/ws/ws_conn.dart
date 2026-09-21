@@ -450,6 +450,8 @@ class WsConn {
     'agent_read_file_result',
     'project_preview',
     'project_preview_result',
+    'git_project_info',
+    'git_project_info_result',
     'terminal_output',
     'terminal_input',
     'terminal_resize',

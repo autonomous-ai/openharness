@@ -173,7 +173,7 @@ void main() {
     LogicalKeyboardKey.keyT,
   ]) {
     testWidgets(
-      '${shortcut.keyLabel} defaults Open in correctly and lets users change it',
+      '${shortcut.keyLabel} starts a pane with no extra launch controls',
       (tester) async {
         await mount(tester, store: false);
         final origin = app.activeSwarm;
@@ -186,59 +186,28 @@ void main() {
             ? HarnessPlacement.newTab
             : HarnessPlacement.currentTab;
         expect(controller.placement, initial);
-        final placement = find.byKey(
-          const ValueKey('new-harness-field-placement'),
-        );
-        expect(placement.hitTestable(), findsOneWidget);
-        expect(
-          tester.getTopLeft(placement).dy,
-          greaterThan(
-            tester
-                .getTopLeft(
-                  find.byKey(const ValueKey('new-harness-field-task')),
-                )
-                .dy,
-          ),
-        );
-        expect(
-          tester.getTopLeft(placement).dy,
-          lessThan(
-            tester
-                .getTopLeft(
-                  find.byKey(const ValueKey('new-harness-field-create')),
-                )
-                .dy,
-          ),
-        );
-        final choice = initial == HarnessPlacement.newTab
-            ? HarnessPlacement.currentTab
-            : HarnessPlacement.newTab;
-        await key(tester, LogicalKeyboardKey.arrowUp);
-        await key(tester, LogicalKeyboardKey.enter);
-        expect(controller.placement, choice);
-        expect(
-          find.descendant(of: placement, matching: find.text(choice.title)),
-          findsOneWidget,
-        );
-        await key(tester, LogicalKeyboardKey.enter);
-        expect(controller.placement, initial);
-        await tester.tap(placement);
-        await tester.pump();
-        expect(controller.placement, choice);
-        expect(
-          find.descendant(of: placement, matching: find.text(choice.title)),
-          findsOneWidget,
-        );
+        for (final removed in ['task', 'placement']) {
+          expect(
+            find.byKey(ValueKey('new-harness-field-$removed')),
+            findsNothing,
+          );
+        }
+        expect(find.text('New Harness'), findsNothing);
+        expect(find.text('Start Harness'), findsOneWidget);
         expect(connections['m']!.starts, isEmpty);
-        await key(tester, LogicalKeyboardKey.arrowDown);
         await key(tester, LogicalKeyboardKey.enter);
         expect(connections['m']!.starts, hasLength(1));
         connections['m']!.created();
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 200));
-        expect(app.swarms.length, 2);
-        expect(origin.panes.single.agentId, 'a0');
-        expect(app.activeSwarm.panes.single.agentId, 'created-1');
+        if (shortcut == LogicalKeyboardKey.keyT) {
+          expect(app.swarms.length, 2);
+          expect(origin.panes.single.agentId, 'a0');
+          expect(app.activeSwarm.panes.single.agentId, 'created-1');
+        } else {
+          expect(app.activeSwarm, same(origin));
+          expect(origin.panes.map((pane) => pane.agentId), ['a0', 'created-1']);
+        }
         await tester.pumpWidget(const SizedBox());
       },
     );
@@ -495,7 +464,7 @@ void main() {
             const TextSelection(baseOffset: 6, extentOffset: 18),
           );
           expect(updated.focusNode.hasFocus, isTrue);
-          expect(find.text(nextTab ? 'New Tab' : 'New Pane'), findsOneWidget);
+          expect(find.text(nextTab ? 'New Tab' : 'New Pane'), findsNothing);
           expect(app.swarms.first, same(origin));
           expect(app.swarms.length, newTab || nextTab ? 2 : 1);
           await key(tester, LogicalKeyboardKey.enter);
