@@ -64,14 +64,20 @@ class TerminalPaneHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = switch (session.status) {
-      TerminalSessionStatus.controlling => AppColors.success,
-      TerminalSessionStatus.opening ||
-      TerminalSessionStatus.resyncing => AppColors.warning,
-      TerminalSessionStatus.takenOver => AppColors.warning,
-      TerminalSessionStatus.error => AppColors.danger,
-      TerminalSessionStatus.closed => AppColors.mutedStrong,
-    };
+    // A WATCHER renders the terminal without holding it (see [TerminalSession.watching]), and its
+    // status is `controlling` — so every switch below has to ask about it FIRST, or it reads as a
+    // pane that takes typing when it does not.
+    final watching = session.watching;
+    final color = watching
+        ? AppColors.warning
+        : switch (session.status) {
+            TerminalSessionStatus.controlling => AppColors.success,
+            TerminalSessionStatus.opening ||
+            TerminalSessionStatus.resyncing => AppColors.warning,
+            TerminalSessionStatus.takenOver => AppColors.warning,
+            TerminalSessionStatus.error => AppColors.danger,
+            TerminalSessionStatus.closed => AppColors.mutedStrong,
+          };
     final profile = notifier
         .stateOf(session.machineId)
         ?.agents
@@ -80,6 +86,13 @@ class TerminalPaneHeader extends StatelessWidget {
         ?.codexHome;
     final status =
         notice ??
+        (watching
+            ? (
+                label: 'Take control',
+                icon: Icons.lock_outline,
+                detail: 'Read only: another app controls this terminal. Take control moves input ownership to this app.',
+              )
+            : null) ??
         switch (session.status) {
           TerminalSessionStatus.controlling => null,
           TerminalSessionStatus.opening => (
@@ -110,7 +123,8 @@ class TerminalPaneHeader extends StatelessWidget {
     final canReconnect =
         notice == null &&
         !readOnly &&
-        (session.status == TerminalSessionStatus.error ||
+        (watching ||
+            session.status == TerminalSessionStatus.error ||
             session.status == TerminalSessionStatus.closed ||
             session.status == TerminalSessionStatus.takenOver);
     final machine = notifier.stateOf(session.machineId);
@@ -192,9 +206,13 @@ class TerminalPaneHeader extends StatelessWidget {
                         message: status.detail,
                         child: TextButton(
                           onPressed: canReconnect
+                              // The press is the claim: nothing else takes a
+                              // terminal another app holds. See
+                              // [AppNotifier.selectAgent].
                               ? () => notifier.selectAgent(
                                   session.machineId,
                                   session.agentId,
+                                  takeControl: true,
                                 )
                               : null,
                           style: TextButton.styleFrom(

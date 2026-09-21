@@ -114,23 +114,31 @@ PhoneSummary phoneAgentSummary(MachineState machine, Agent agent) {
 
 /// The terminal's own state, for the header over it. No session yet reads as attaching: the
 /// page opens before the pane has one.
-PhoneSummary phoneSessionSummary(
-  TerminalSession? session,
-) => switch (session?.status) {
-  null ||
-  TerminalSessionStatus.opening => (label: 'Attaching…', tone: PhoneTone.busy),
-  TerminalSessionStatus.resyncing => (
-    label: 'Resyncing…',
-    tone: PhoneTone.busy,
-  ),
-  TerminalSessionStatus.controlling => (label: 'Live', tone: PhoneTone.good),
-  TerminalSessionStatus.takenOver => (
-    label: 'Taken over',
-    tone: PhoneTone.attention,
-  ),
-  TerminalSessionStatus.error => (label: 'Disconnected', tone: PhoneTone.bad),
-  TerminalSessionStatus.closed => (label: 'Closed', tone: PhoneTone.quiet),
-};
+PhoneSummary phoneSessionSummary(TerminalSession? session) {
+  // ⚠️ Checked BEFORE the status, because a watcher's status is `controlling` — it holds a live
+  // stream and renders every byte; what it does not hold is the terminal. "Live" would promise a
+  // prompt that ignores typing. See [TerminalSession.watching].
+  if (session != null && session.watching) {
+    return (label: 'Watching', tone: PhoneTone.attention);
+  }
+  return switch (session?.status) {
+    null || TerminalSessionStatus.opening => (
+      label: 'Attaching…',
+      tone: PhoneTone.busy,
+    ),
+    TerminalSessionStatus.resyncing => (
+      label: 'Resyncing…',
+      tone: PhoneTone.busy,
+    ),
+    TerminalSessionStatus.controlling => (label: 'Live', tone: PhoneTone.good),
+    TerminalSessionStatus.takenOver => (
+      label: 'Taken over',
+      tone: PhoneTone.attention,
+    ),
+    TerminalSessionStatus.error => (label: 'Disconnected', tone: PhoneTone.bad),
+    TerminalSessionStatus.closed => (label: 'Closed', tone: PhoneTone.quiet),
+  };
+}
 
 /// The way back into a session this device is not driving, or is no longer
 /// driving — and what the button offers to do about it.
@@ -142,13 +150,19 @@ PhoneSummary phoneSessionSummary(
 /// The desktop puts the same two words on the same two states, in the tile
 /// header it draws (`widgets/terminal_panel.dart`); a phone hides that header
 /// and draws its own, which is how the way out went missing here.
-PhoneSummary? phoneReclaimAction(TerminalSession? session) =>
-    switch (session?.status) {
-      TerminalSessionStatus.takenOver => (
-        label: 'Take control',
-        tone: PhoneTone.attention,
-      ),
-      TerminalSessionStatus.error ||
-      TerminalSessionStatus.closed => (label: 'Reconnect', tone: PhoneTone.bad),
-      _ => null,
-    };
+PhoneSummary? phoneReclaimAction(TerminalSession? session) {
+  // A watcher is the ordinary way onto an agent another app is driving: output is already on
+  // screen, and this is the button that asks for the keyboard. See [TerminalSession.watching].
+  if (session != null && session.watching) {
+    return (label: 'Take control', tone: PhoneTone.attention);
+  }
+  return switch (session?.status) {
+    TerminalSessionStatus.takenOver => (
+      label: 'Take control',
+      tone: PhoneTone.attention,
+    ),
+    TerminalSessionStatus.error ||
+    TerminalSessionStatus.closed => (label: 'Reconnect', tone: PhoneTone.bad),
+    _ => null,
+  };
+}

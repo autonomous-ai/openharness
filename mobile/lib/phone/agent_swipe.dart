@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/terminal/terminal_session.dart'
+    show TerminalSessionStatus;
 
 import 'agent_pane_prune.dart';
 import 'agent_swipe_list.dart';
@@ -94,11 +96,12 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
   /// Recorded rather than recomputed: by the time this page is disposed the list may have moved on,
   /// and the panes to close are the ones actually opened, not the ones a fresh list would name.
   ///
-  /// ⚠️ **Attaching ahead of the swipe takes those agents' terminals away from the desktop**, and
-  /// they are agents nobody has asked for yet. That was once the reason not to; the phone is the
-  /// primary now, and the desktop wins them back the moment it opens one (see
-  /// `AppNotifier.warmAgentPane` for what a taken-over warm page does — nothing). What bounds it
-  /// is [_keepSet]: a few agents around the one on screen, never a lap of the list.
+  /// ⚠️ **Attaching ahead of the swipe must not cost another app its terminal**: these are agents
+  /// nobody has asked for yet, and the daemon keeps one controller per agent. So a page attached
+  /// ahead of time asks only for a terminal that is FREE (`AppNotifier.warmAgentPane`) — one the
+  /// desktop, or anyone else, is driving stays theirs, and that page simply attaches when it is
+  /// landed on, as every page did before. What the phone already holds is left as it is. What
+  /// bounds the rest is [_keepSet]: a few agents around the one on screen, never a lap of the list.
   final Set<AgentRef> _attached = {};
 
   /// Closes every agent outside [_keepSet], a beat after each swipe. Null for a passthrough page,
@@ -478,18 +481,25 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
 
   /// Completes once [agent]'s session has drawn its first keyframe — or after [limit], or as soon
   /// as [run] is stale, whichever comes first.
+  ///
+  /// Also once the session is `takenOver`: another app is driving that terminal and the page asked
+  /// not to take it (see `AppNotifier.warmAgentPane`), so there is no keyframe coming and nothing
+  /// for the next ring to wait behind.
   Future<void> _awaitRendered(
     AgentRef agent,
     int run, {
     Duration limit = _renderWait,
   }) async {
     final notifier = widget.notifier;
-    bool rendered() =>
-        notifier
-            .paneOfAgent(agent.machineId, agent.agentId)
-            ?.session
-            ?.hasRenderedFrame ??
-        false;
+    bool rendered() {
+      final session = notifier
+          .paneOfAgent(agent.machineId, agent.agentId)
+          ?.session;
+      if (session == null) return false;
+      return session.hasRenderedFrame ||
+          session.status == TerminalSessionStatus.takenOver;
+    }
+
     if (rendered()) return;
     final done = Completer<void>();
     void check() {

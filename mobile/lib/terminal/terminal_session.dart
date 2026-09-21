@@ -104,9 +104,40 @@ class TerminalSession extends ChangeNotifier {
     required this.sendBinary,
     this.onOpenStalled,
     this.resyncTimeout = const Duration(seconds: 4),
+    this.takeover = true,
   }) {
     terminal = _newTerminal();
   }
+
+  /// Whether opening this session may take the terminal away from another app that is driving it.
+  ///
+  /// True is what an open has always been: the daemon keeps one controller per agent, and the
+  /// latest `terminal_open` wins. False is for a session nobody is looking at yet — the phone's
+  /// pager attaching the agents a swipe away (see `AppNotifier.warmAgentPane`) — which asks only
+  /// for a terminal that is FREE, and is answered `CONTROL_LEASE_HELD` while anyone else holds it.
+  ///
+  /// Read by every open this session sends, its own recoveries included, so a polite session never
+  /// turns into a takeover behind a reconnect. The ONLY thing that sets it is a person pressing
+  /// "Take control" (`AppNotifier.selectAgent`'s `takeControl`) — arriving on a page does not, and
+  /// a refusal that arrives after a press asks again, properly — see the `terminal_error` branch of
+  /// [handleFrame].
+  ///
+  /// ⚠️ Only meaningful against a daemon that advertises `noTakeover`: an older one ignores the key
+  /// and takes over regardless. The caller checks — `MachineState.terminalNoTakeoverAvailable`.
+  bool takeover;
+
+  /// What the open now in flight asked for — [takeover] as it was when that `terminal_open` was
+  /// built. The two differ when a person lands on the page while its polite open is still out.
+  bool _openAskedTakeover = true;
+
+  /// Whether the stream this session holds is a WATCHER: it renders the terminal, live, but does
+  /// not hold it — another app does, and the daemon refuses anything this one tries to type (see
+  /// `terminalStreamManager.ts`). Told by `readOnly` on `terminal_ready`.
+  ///
+  /// ⚠️ **This is a normal, useful state, not a failure.** The page shows real output and the
+  /// header offers "Take control"; pressing it is what asks for the terminal itself. Reset by every
+  /// open, so it can never outlive the stream it describes.
+  bool watching = false;
 
   late Terminal terminal;
   TerminalSessionStatus status = TerminalSessionStatus.closed;
@@ -188,7 +219,19 @@ class TerminalSession extends ChangeNotifier {
   Future<void> _inputSendTail = Future<void>.value();
 
   bool get acceptsInput =>
-      status == TerminalSessionStatus.controlling && streamId != null;
+      status == TerminalSessionStatus.controlling &&
+      streamId != null &&
+      // A watcher draws the terminal but never types into it — the daemon would refuse the frame
+      // anyway, and a keystroke that vanishes reads as a broken pane. See [watching].
+      !watching;
+
+  /// Whether this session is the one driving the far terminal right now — the claim [takeover] is
+  /// about, held rather than asked for. A session opening or resyncing is on its way to it and is
+  /// counted, so an open in flight is not lowered to a polite one behind its own back.
+  bool get holdsTerminal =>
+      status == TerminalSessionStatus.controlling ||
+      status == TerminalSessionStatus.opening ||
+      status == TerminalSessionStatus.resyncing;
 
   /// Grok's CLI declares terminal mouse-tracking (so tmux defers wheel bytes to it, same as any
   /// alt-buffer program) but doesn't correctly handle wheel reports itself — confirmed live: it
@@ -219,11 +262,17 @@ class TerminalSession extends ChangeNotifier {
 
   /// Reconnect the same agent without discarding its last usable screen.
   /// Input resumes only after the replacement stream's first keyframe.
-  Future<void> reopen() async {
-    if (_disposed ||
-        status == TerminalSessionStatus.opening ||
-        status == TerminalSessionStatus.controlling ||
-        status == TerminalSessionStatus.resyncing) {
+  ///
+  /// [force] reopens a stream that is perfectly alive, which is normally the one thing this must
+  /// not do. The case for it is a WATCHER being promoted: it is `controlling` a read-only stream
+  /// and a person has just asked for the keyboard, so the only way to get it is a fresh open that
+  /// takes the lease. See [watching] and `AppNotifier.selectAgent`.
+  Future<void> reopen({bool force = false}) async {
+    if (_disposed) return;
+    if (!force &&
+        (status == TerminalSessionStatus.opening ||
+            status == TerminalSessionStatus.controlling ||
+            status == TerminalSessionStatus.resyncing)) {
       return;
     }
     await _open(
@@ -257,6 +306,7 @@ class TerminalSession extends ChangeNotifier {
     _inputSendTail = Future<void>.value();
     streamId = null;
     linkMode = null;
+    watching = false;
     errorCode = null;
     errorMessage = null;
     _expectedSeq = null;
@@ -306,6 +356,7 @@ class TerminalSession extends ChangeNotifier {
       return;
     }
 
+    _openAskedTakeover = takeover;
     final openPayload = {
       'protocolVersion': protocolVersion,
       'requestId': _openRequestId,
@@ -313,6 +364,8 @@ class TerminalSession extends ChangeNotifier {
       'cols': cols,
       'rows': rows,
       'compression': const ['zlib', 'none'],
+      // Only ever sent as `false`: absent is the takeover every daemon understands — see [takeover].
+      if (!takeover) 'takeover': false,
     };
     var sent = await send('terminal_open', openPayload);
     if (!_isCurrent(generation) ||
@@ -436,6 +489,9 @@ class TerminalSession extends ChangeNotifier {
           _fail('TERMINAL_READY_INVALID', 'Harness returned no stream id');
           return true;
         }
+        // The daemon's answer to a polite open on a terminal somebody else holds: it opened, it
+        // renders, and it may not type. See [watching].
+        watching = payload['readOnly'] == true;
         _resyncTimer?.cancel();
         _resyncTimer = null;
         _heartbeat = Timer.periodic(
@@ -557,6 +613,33 @@ class TerminalSession extends ChangeNotifier {
           } else {
             _inputBytes.clear();
             unawaited(_recoverByReopen(reason: 'TERMINAL_INPUT_INVALID'));
+          }
+          return true;
+        }
+        // A polite open, refused: another app is driving this terminal and this session asked not
+        // to take it from them — see [takeover]. Not a failure, and it must not read as one:
+        // `error` is what the notifier's reattach sweep retries, which would ask again for as long
+        // as the other app stayed. `takenOver` is the state that already means "someone else has
+        // it, and only a person gets it back".
+        //
+        // Only for an open that ASKED to be polite. The daemon also answers this code to an
+        // ordinary open that lost a race for the placement, and that one keeps the retry it has
+        // always had, below.
+        if (errorCode == 'CONTROL_LEASE_HELD' && !_openAskedTakeover) {
+          if (takeover) {
+            // Landed on while that open was still out: somebody is looking at this page now, so
+            // it asks again the way a page being read always has.
+            unawaited(
+              _open(
+                initialCols: _measuredViewport?.cols ?? cols,
+                initialRows: _measuredViewport?.rows ?? rows,
+                waitForViewportSize: false,
+                resetRecovery: true,
+                preserveTerminal: true,
+              ),
+            );
+          } else {
+            _heldElsewhere(errorCode);
           }
           return true;
         }
@@ -1427,6 +1510,22 @@ class TerminalSession extends ChangeNotifier {
     status = TerminalSessionStatus.error;
     errorCode = 'TERMINAL_DISCONNECTED';
     errorMessage = message;
+    _abortActiveUpload();
+    notifyListeners();
+  }
+
+  /// A polite open was refused — see [takeover]. The same dead end as a stream that was taken
+  /// over, for the same reason: reopening is a person's call, never this session's.
+  void _heldElsewhere(String code) {
+    if (_disposed) return;
+    _generation++;
+    _cancelTimers();
+    _inputBytes.clear();
+    streamId = null;
+    linkMode = null;
+    status = TerminalSessionStatus.takenOver;
+    errorCode = code;
+    errorMessage = 'Another client controls this terminal.';
     _abortActiveUpload();
     notifyListeners();
   }

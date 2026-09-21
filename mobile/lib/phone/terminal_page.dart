@@ -1012,6 +1012,14 @@ class _TerminalPageState extends State<TerminalPage>
                         // waited in front of was a mounted terminal with an
                         // empty buffer: a black rectangle, for as long as the
                         // keyframe took.
+                        //
+                        // ⚠️ **A page on a terminal another app holds still
+                        // renders.** It attaches as a WATCHER — live output,
+                        // no typing (see [TerminalSession.watching]) — so the
+                        // keyframe this covers arrives exactly as it does for
+                        // any other page, and nothing here needs to know the
+                        // difference. The header says who has it and offers
+                        // "Take control"; the body is the terminal.
                         if (session != null && !session.hasRenderedFrame)
                           const Positioned.fill(child: _Attaching()),
                         // The mic, Search and New agent, floating in the
@@ -1113,9 +1121,16 @@ class _TerminalPageState extends State<TerminalPage>
                           if (reclaim != null)
                             _ReclaimButton(
                               action: reclaim,
+                              // ⚠️ `takeControl` — the press IS the claim. Merely
+                              // swiping to this page does not take a terminal
+                              // another app is driving; this button is the whole
+                              // way in, which is why it sits in the header rather
+                              // than in the actions sheet. See
+                              // [AppNotifier.selectAgent].
                               onPressed: () => widget.notifier.selectAgent(
                                 widget.machineId,
                                 widget.agentId,
+                                takeControl: true,
                               ),
                             ),
                           // Null while the agent is not loaded: there is
