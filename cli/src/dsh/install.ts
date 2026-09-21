@@ -39,6 +39,8 @@ export interface DshInstallProgress {
    * installDsh itself (which reports lines through `onLine`), throttled to a few a second.
    */
   line?: string
+  /** On `failed`: the code the reply carries (`CLONE_FAILED`, `SETUP_FAILED`…), so a client can say what kind of failure it was. */
+  error?: string
 }
 
 export interface DshInstallOptions {
@@ -60,6 +62,8 @@ export interface DshInstallOptions {
   setupTimeoutMs?: number
   /** Where a `viewer.use` id resolves to a repo; the bundled registry by default. Test seam. */
   registry?: (id: string) => DshRegistryEntry | undefined
+  /** Waits between fetch attempts; [[CLONE_RETRY_DELAYS_MS]] by default. Test seam. */
+  cloneRetryDelaysMs?: readonly number[]
 }
 
 export interface DshDoctorResult {
@@ -115,12 +119,60 @@ function linkInstall(source: string): { ok: true; realDir: string; manifest: Dsh
   return { ok: true, realDir, manifest: manifest.manifest }
 }
 
+/**
+ * Between fetch attempts, in order; the length is how many retries a transient failure gets. A stalled
+ * transfer already cost the low-speed window, so these are short — the point is a second connection,
+ * not a long wait.
+ */
+export const CLONE_RETRY_DELAYS_MS: readonly number[] = [2_000, 5_000]
+
+/**
+ * Whether what git said is the network, not the repository: the wording curl and git's transport use
+ * for a stall, a reset, a resolver miss or a 5xx. A repo that is not there, a ref that does not exist,
+ * a refused credential and our own ten-minute stop are not — a second try answers the same.
+ */
+export function isTransientGitFailure(detail: string): boolean {
+  if (/was still running after \d+ min/.test(detail)) return false
+  // A 4xx rides the same `RPC failed; curl 22` prefix as a stall; a repo that is not there or a
+  // credential that was refused answers the same on every try.
+  if (/returned error: 4\d\d|HTTP 4\d\d|Authentication failed|could not read Username|Repository not found|Permission denied/i.test(detail)) return false
+  return /\bcurl \d+\b|RPC failed|early EOF|unexpected disconnect|remote end hung up|Could not resolve host|Connection (?:reset|refused|timed out)|Operation too slow|Timeout was reached|Failed to connect to|The requested URL returned error: 5\d\d|GnuTLS recv error|SSL_read|Connection closed|TLS connect error|Empty reply from server/i.test(detail)
+}
+
+export type CloneInstallResult = { ok: true; tmpDir: string; manifest: DshManifest; commit: string | null; revision: string | null } | { ok: false; error: string; detail: string }
+
+/**
+ * Fetch the package into a fresh temporary directory. A fetch that failed the way a bad connection
+ * fails is tried again, a bounded number of times, each from nothing (the failed attempt's directories
+ * are gone): a clone is idempotent, and a Store install that stalled once on a WSL link and worked the
+ * next time should not have needed a person to click.
+ */
 export async function cloneInstall(
   source: string,
   ref: string | undefined,
   path: string | undefined,
   onLine: ((line: string) => void) | undefined,
-): Promise<{ ok: true; tmpDir: string; manifest: DshManifest; commit: string | null; revision: string | null } | { ok: false; error: string; detail: string }> {
+  retryDelaysMs: readonly number[] = CLONE_RETRY_DELAYS_MS,
+): Promise<CloneInstallResult> {
+  const attempts = retryDelaysMs.length + 1
+  for (let attempt = 1; ; attempt++) {
+    const result = await cloneOnce(source, ref, path, onLine)
+    if (result.ok || result.error !== 'CLONE_FAILED' || !isTransientGitFailure(result.detail)) return result
+    if (attempt >= attempts) {
+      return { ...result, detail: `${result.detail} · gave up after ${attempts} attempts`.slice(0, 2000) }
+    }
+    const delay = retryDelaysMs[attempt - 1] ?? 0
+    onLine?.(`fetch failed · ${result.detail} · retrying (${attempt + 1}/${attempts})`)
+    await new Promise<void>((resolve) => setTimeout(resolve, delay))
+  }
+}
+
+async function cloneOnce(
+  source: string,
+  ref: string | undefined,
+  path: string | undefined,
+  onLine: ((line: string) => void) | undefined,
+): Promise<CloneInstallResult> {
   const root = dshRootDir()
   mkdirSync(root, { recursive: true, mode: 0o700 })
   const tmpDir = join(root, `.tmp-${randomUUID()}`)
@@ -166,6 +218,18 @@ export async function cloneInstall(
 /** How long one git command may take: a clone of a large repository over a slow link, not a hang. */
 const GIT_TIMEOUT_MS = 10 * 60_000
 
+/**
+ * What git is run with, on top of the daemon's environment. A transfer under 1 KiB/s for a minute is
+ * a stalled connection, and curl gives it up then (`RPC failed; curl 28`) rather than sitting silent
+ * until the ten-minute stop — which is what "Fetching…" for a quarter of an hour on a WSL link was.
+ * No stdin here, so a credential prompt could only hang: git is told not to ask.
+ */
+const GIT_ENV: NodeJS.ProcessEnv = {
+  GIT_HTTP_LOW_SPEED_LIMIT: '1024',
+  GIT_HTTP_LOW_SPEED_TIME: '60',
+  GIT_TERMINAL_PROMPT: '0',
+}
+
 /** Catalogs pin built-ins to the commit they describe; `git clone --branch` cannot take a SHA. */
 async function cloneRepo(source: string, ref: string | undefined, dir: string, sparse: boolean, onLine: DshInstallOptions['onLine']): Promise<{ ok: true } | { ok: false; detail: string }> {
   if (!ref || !/^[a-f0-9]{40}$/i.test(ref)) {
@@ -188,7 +252,7 @@ async function cloneRepo(source: string, ref: string | undefined, dir: string, s
 /** Run git, handing each stderr line (and each carriage-return progress segment) to `onLine` as it lands. */
 function streamGit(args: string[], onLine: ((line: string) => void) | undefined): Promise<{ ok: true } | { ok: false; detail: string }> {
   return new Promise((resolve) => {
-    const child = spawn('git', args, { stdio: ['ignore', 'ignore', 'pipe'] })
+    const child = spawn('git', args, { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, ...GIT_ENV } })
     const tail: string[] = []
     let rest = ''
     let timedOut = false
@@ -263,7 +327,7 @@ export async function installDsh(opts: DshInstallOptions): Promise<DshInstallRes
   const progress = (p: DshInstallProgress): void => opts.onProgress?.(p)
   const wrongId = (actual: string): DshInstallResult => {
     const detail = `Catalog requested ${opts.expectedId}, but the package declares ${actual}`
-    progress({ id: opts.expectedId ?? null, phase: 'failed', detail })
+    progress({ id: opts.expectedId ?? null, phase: 'failed', detail, error: 'PACKAGE_ID_MISMATCH' })
     return { ok: false, error: 'PACKAGE_ID_MISMATCH', detail }
   }
   let manifest: DshManifest
@@ -278,7 +342,7 @@ export async function installDsh(opts: DshInstallOptions): Promise<DshInstallRes
     progress({ id: null, phase: 'clone', detail: opts.link ? `linking ${opts.source}` : `cloning ${opts.source}${opts.path ? ` · ${opts.path}` : ''}` })
     if (opts.link) {
       const linked = linkInstall(opts.source)
-      if (!linked.ok) { progress({ id: null, phase: 'failed', detail: linked.detail }); return linked }
+      if (!linked.ok) { progress({ id: null, phase: 'failed', detail: linked.detail, error: linked.error }); return linked }
       manifest = linked.manifest
       if (opts.expectedId && manifest.id !== opts.expectedId) return wrongId(manifest.id)
       unlock = lockDsh(manifest.id)
@@ -287,8 +351,8 @@ export async function installDsh(opts: DshInstallOptions): Promise<DshInstallRes
       dir = placeAt(manifest.id, { linkTo: realDir })
       commit = await gitHead(realDir)
     } else {
-      const cloned = await cloneInstall(opts.source, opts.ref, opts.path, opts.onLine)
-      if (!cloned.ok) { progress({ id: null, phase: 'failed', detail: cloned.detail }); return cloned }
+      const cloned = await cloneInstall(opts.source, opts.ref, opts.path, opts.onLine, opts.cloneRetryDelaysMs)
+      if (!cloned.ok) { progress({ id: null, phase: 'failed', detail: cloned.detail, error: cloned.error }); return cloned }
       staged = cloned.tmpDir
       manifest = cloned.manifest
       if (opts.expectedId && manifest.id !== opts.expectedId) {
@@ -339,7 +403,7 @@ export async function finishInstall(resolved: InstalledDsh, opts: DshInstallOpti
       const detail = setup.timedOut
         ? 'setup timed out'
         : `setup exited ${setup.code ?? setup.signal} · ${setup.lines.slice(-5).join(' · ')}`.slice(0, 2000)
-      progress({ id: manifest.id, phase: 'failed', detail })
+      progress({ id: manifest.id, phase: 'failed', detail, error: 'SETUP_FAILED' })
       return { ok: false, error: 'SETUP_FAILED', detail }
     }
   }
@@ -358,7 +422,7 @@ export async function finishInstall(resolved: InstalledDsh, opts: DshInstallOpti
       // install would read as hung for the minutes OpenCascade takes to arrive. The viewer's `done`
       // is not the harness's done, so it reports as the harness's setup still going.
       const dep = await installDsh({
-        source: entry.repo, expectedId: entry.id, ref: entry.ref, path: entry.path, registry: opts.registry, setupTimeoutMs: opts.setupTimeoutMs, onLine: opts.onLine,
+        source: entry.repo, expectedId: entry.id, ref: entry.ref, path: entry.path, registry: opts.registry, setupTimeoutMs: opts.setupTimeoutMs, cloneRetryDelaysMs: opts.cloneRetryDelaysMs, onLine: opts.onLine,
         onProgress: (p) => {
           if (p.phase === 'failed') return // reported below, once, with the viewer named
           const phase: DshInstallPhase = p.phase === 'done' ? 'setup' : p.phase
@@ -367,7 +431,7 @@ export async function finishInstall(resolved: InstalledDsh, opts: DshInstallOpti
       })
       if (!dep.ok) {
         const detail = `viewer ${uses} · ${dep.detail}`.slice(0, 2000)
-        progress({ id: manifest.id, phase: 'failed', detail })
+        progress({ id: manifest.id, phase: 'failed', detail, error: dep.error })
         return { ok: false, error: dep.error, detail }
       }
       progress({ id: manifest.id, phase: 'setup', detail: `viewer ${uses} · installed` })
@@ -378,7 +442,7 @@ export async function finishInstall(resolved: InstalledDsh, opts: DshInstallOpti
 
   if (!recordDoctorFailure && uses && installedDsh(uses)?.manifest.kind !== 'viewer') {
     const detail = `viewer ${uses} is not available; the previous package will be kept`
-    progress({ id: manifest.id, phase: 'failed', detail })
+    progress({ id: manifest.id, phase: 'failed', detail, error: 'VIEWER_UNAVAILABLE' })
     return { ok: false, error: 'VIEWER_UNAVAILABLE', detail }
   }
 
@@ -392,7 +456,7 @@ export async function finishInstall(resolved: InstalledDsh, opts: DshInstallOpti
   }
   if (!doctor.ok) {
     const detail = `doctor failed · ${doctor.lines.filter((line) => line.startsWith('miss')).join(' · ') || doctor.lines.slice(-3).join(' · ')}`.slice(0, 2000)
-    progress({ id: manifest.id, phase: 'failed', detail })
+    progress({ id: manifest.id, phase: 'failed', detail, error: 'DOCTOR_FAILED' })
     return { ok: false, error: 'DOCTOR_FAILED', detail }
   }
   progress({ id: manifest.id, phase: 'done' })

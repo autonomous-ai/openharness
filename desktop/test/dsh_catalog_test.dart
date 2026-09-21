@@ -140,7 +140,10 @@ void main() {
       const WsRequestTimeout('dsh_update'),
       'Test host is still updating. Try again in a few minutes.',
     ),
-    (StateError('disconnected'), 'Update failed on Test host'),
+    (
+      StateError('disconnected'),
+      'Lost the connection to Test host while updating — it may still be finishing there. Try again in a moment.',
+    ),
   ]) {
     test(
       'update failure $response preserves installed versions and allows retry',
@@ -331,6 +334,81 @@ void main() {
       app.stateOf('m')!.dsh.installs['autonomous/autonomous-circuit']!.failed,
       isTrue,
     );
+    expect(
+      app.stateOf('m')!.dsh.runs['autonomous/autonomous-circuit']!.code,
+      'UNSUPPORTED',
+    );
+  });
+
+  test('the machine\'s own failed push and the reply close ONE run, with the code and the doctor lines kept', () async {
+    final install = Completer<Map<String, dynamic>>();
+    final connection = _Connection()
+      ..answer = (type, _) => type == 'dsh_install'
+          ? install.future
+          : Future.value({'dsh': <Object>[]});
+    final app = createApp(connectionForTest: (_) => connection);
+    addTearDown(app.dispose);
+    final result = app.installDsh('m', 'autonomous/autonomous-circuit');
+    final catalog = app.stateOf('m')!.dsh;
+    for (final push in [
+      {'phase': 'doctor', 'line': 'ok git'},
+      {'phase': 'doctor', 'line': 'miss kicad-cli'},
+      {
+        'phase': 'failed',
+        'detail': 'doctor failed · miss kicad-cli',
+        'error': 'DOCTOR_FAILED',
+      },
+    ]) {
+      await app.handleEventForTest('m', {
+        'type': 'dsh_install_status',
+        'payload': {'id': 'autonomous/autonomous-circuit', ...push},
+      });
+    }
+    final run = catalog.runs['autonomous/autonomous-circuit']!;
+    expect(run.code, 'DOCTOR_FAILED');
+    install.completeError(
+      const WsRequestFailure(
+        responseType: 'dsh_install',
+        code: 'DOCTOR_FAILED',
+        detail: 'doctor failed · miss kicad-cli',
+      ),
+    );
+    expect(await result, 'doctor failed · miss kicad-cli');
+    expect(catalog.runs['autonomous/autonomous-circuit'], same(run));
+    expect(run.checks, ['ok git', 'miss kicad-cli']);
+    expect(run.phases.map((p) => p.phase), ['clone', 'doctor', 'failed']);
+    expect(
+      catalog.installs['autonomous/autonomous-circuit']!.code,
+      'DOCTOR_FAILED',
+    );
+  });
+
+  test('a socket that drops under an install says so, not "failed", and the list is asked again on reconnect', () async {
+    final connection = _Connection()
+      ..answer = (type, _) => type == 'dsh_install'
+          ? Future.error(Exception('WS disconnected'))
+          : Future.value({
+              'dsh': [
+                {..._circuit, 'installed': true},
+              ],
+            });
+    final app = createApp(connectionForTest: (_) => connection);
+    addTearDown(app.dispose);
+    expect(
+      await app.installDsh('m', 'autonomous/autonomous-circuit'),
+      'Lost the connection to Test host while installing — it may still be finishing there. Try again in a moment.',
+    );
+    final catalog = app.stateOf('m')!.dsh;
+    expect(catalog.runs['autonomous/autonomous-circuit']!.code, 'CONNECTION');
+    expect(connection.calls.map((c) => c.$1), ['dsh_install']);
+    app.onMachineConnectedForTest('m');
+    await Future<void>.delayed(Duration.zero);
+    expect(connection.calls.where((c) => c.$1 == 'dsh_list'), hasLength(1));
+    expect(catalog['autonomous/autonomous-circuit']!.installed, isTrue);
+    // Once: the next reconnect has nothing new to ask about.
+    app.onMachineConnectedForTest('m');
+    await Future<void>.delayed(Duration.zero);
+    expect(connection.calls.where((c) => c.$1 == 'dsh_list'), hasLength(1));
   });
 }
 
@@ -466,6 +544,26 @@ void _installRunTests() {
           .line,
       isNull,
     );
+    // The reason as a code: a short upper-case token or nothing.
+    expect(
+      DshInstallProgress.fromJson({
+        'id': 'a/b',
+        'phase': 'failed',
+        'error': 'CLONE_FAILED',
+      })!.code,
+      'CLONE_FAILED',
+    );
+    for (final bad in ['', 'clone failed', 'x' * 60, 7]) {
+      expect(
+        DshInstallProgress.fromJson({
+          'id': 'a/b',
+          'phase': 'failed',
+          'error': bad,
+        })!.code,
+        isNull,
+        reason: '$bad',
+      );
+    }
   });
 
   test(
