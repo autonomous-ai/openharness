@@ -177,7 +177,13 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
     const agentIds = Array.isArray(r.agentIds)
       ? r.agentIds.filter((id): id is string => typeof id === 'string' && id !== '')
       : []
-    swarms.push({ id: r.id, name: r.name.slice(0, 80), agentIds })
+    // A window that predates this field says nothing about its tiles, and the honest reading of that
+    // silence is the old one: as many tiles as agents. That keeps an older app behaving exactly as it
+    // does today rather than having its tabs vanish from the dial for the opposite reason.
+    const panes = typeof r.panes === 'number' && Number.isFinite(r.panes) && r.panes >= 0
+      ? Math.min(Math.floor(r.panes), 999)
+      : agentIds.length
+    swarms.push({ id: r.id, name: r.name.slice(0, 80), agentIds, panes })
     if (swarms.length === 24) break   // the window's own ceiling
   }
   if (swarms.length === 0) return null
