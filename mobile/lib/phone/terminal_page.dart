@@ -380,6 +380,12 @@ class _TerminalPageState extends State<TerminalPage>
   /// compares the next tick against.
   _PageFacts? _facts;
 
+  /// Set while THIS page has asked for the terminal back, so the banner can stay up through the
+  /// `opening` that answers it saying so — rather than blinking out and back as the status moves.
+  /// Taken back by [_onNotifier] once that open lands, and by [_takeControl] itself for a request
+  /// the notifier declined without ever changing a status.
+  bool _takingControl = false;
+
   _PageFacts _readFacts() {
     final notifier = widget.notifier;
     final pane = notifier.panes
@@ -425,7 +431,19 @@ class _TerminalPageState extends State<TerminalPage>
   void _onNotifier() {
     if (!mounted) return;
     final facts = _readFacts();
-    if (facts == _facts) return;
+    // ⚠️ Checked BEFORE the equality bail below, not after. A take that ends where it began —
+    // `takenOver` again, because the other app answered first — moves no fact this page reads, so
+    // the bail would keep the band saying "Taking control…" over a page that had already been
+    // told no. See [_takeControl].
+    final settled =
+        _takingControl &&
+        facts.status != TerminalSessionStatus.opening &&
+        facts.status != null;
+    if (settled) _takingControl = false;
+    if (facts == _facts) {
+      if (settled) setState(() {});
+      return;
+    }
     setState(() => _facts = facts);
   }
 
@@ -872,6 +890,12 @@ class _TerminalPageState extends State<TerminalPage>
     // Captured while the agent is still listed, for the sentence above.
     if (agent != null) _cachedAgentName = agent.name;
     final reclaim = phoneReclaimAction(session);
+    // Read-only either way — the terminal was never this pane's (a watcher) or was taken from it.
+    // `_AgentGone` owns the page when the agent itself is missing, so this stays out of its way.
+    final blocked =
+        !agentGone &&
+        session != null &&
+        (session.watching || session.status == TerminalSessionStatus.takenOver);
     // Creating needs the machine to list its folders and name its engines,
     // so one that is offline or still wants its password cannot host a new
     // agent — the same gate the Agents tab puts on its fab.
@@ -976,7 +1000,17 @@ class _TerminalPageState extends State<TerminalPage>
                                     // cancelling and restarting it. Null while the
                                     // keyboard is up or coming, so the tap is
                                     // xterm's and the keyboard stays.
-                                    onInputTap: _shouldFocus
+                                    //
+                                    // ⚠️ A tap on a pane that cannot take input
+                                    // asks for the TERMINAL, not the keyboard:
+                                    // raising one over a read-only pane offers
+                                    // a prompt that silently swallows every
+                                    // letter. The band above says why, so the
+                                    // tap takes the person to its button. See
+                                    // [_ControlBanner].
+                                    onInputTap: blocked
+                                        ? () => unawaited(_takeControl())
+                                        : _shouldFocus
                                         ? null
                                         : () => unawaited(
                                             _raiseKeyboard(session),
@@ -1118,20 +1152,22 @@ class _TerminalPageState extends State<TerminalPage>
                           // where you go having decided to do something,
                           // and this is the thing telling you that typing
                           // will go nowhere until you do.
-                          if (reclaim != null)
+                          // ⚠️ **Not while the band is up.** The band below
+                          // carries the same words and the same button, a
+                          // finger's width under this one, and two "Take
+                          // control"s stacked read as two different offers.
+                          // The band is the better of the two — it says WHY
+                          // typing stopped — so this one gives way to it.
+                          //
+                          // Kept for the states the band does not cover:
+                          // "Reconnect", for a stream that died with nobody
+                          // else involved. See [_ControlBanner].
+                          if (reclaim != null && !blocked && !_takingControl)
                             _ReclaimButton(
                               action: reclaim,
-                              // ⚠️ `takeControl` — the press IS the claim. Merely
-                              // swiping to this page does not take a terminal
-                              // another app is driving; this button is the whole
-                              // way in, which is why it sits in the header rather
-                              // than in the actions sheet. See
-                              // [AppNotifier.selectAgent].
-                              onPressed: () => widget.notifier.selectAgent(
-                                widget.machineId,
-                                widget.agentId,
-                                takeControl: true,
-                              ),
+                              // The same call the band's button makes — see
+                              // [_takeControl].
+                              onPressed: () => unawaited(_takeControl()),
                             ),
                           // Null while the agent is not loaded: there is
                           // nothing to act on yet, and a menu of actions
@@ -1154,6 +1190,15 @@ class _TerminalPageState extends State<TerminalPage>
                         ],
                       ),
                       Divider(height: 1, color: AppGlass.hair),
+                      // ⚠️ Inside the header's own slide, not under it: the two are one bar as far
+                      // as a scroll is concerned, and a band left behind while the header left
+                      // would sit on the output with nothing above it.
+                      if (blocked || _takingControl)
+                        _ControlBanner(
+                          watching: session?.watching ?? false,
+                          busy: !blocked,
+                          onTakeControl: _takeControl,
+                        ),
                     ],
                   ),
                 ),
@@ -1318,6 +1363,30 @@ class _TerminalPageState extends State<TerminalPage>
     ),
   ];
 
+  /// Asks for the terminal this pane is only watching — the band's button, and the header's.
+  ///
+  /// [_takingControl] holds the band up through the `opening` this starts, so it reads as one
+  /// action answering rather than a band that vanished and came back. `selectAgent` declines
+  /// quietly when the pane cannot be attached at all (its machine went offline meanwhile, the
+  /// agent was withdrawn), and that leaves the status where it was — so the flag is taken back
+  /// here too, rather than left armed over a page nothing is going to answer for.
+  Future<void> _takeControl() async {
+    final notifier = widget.notifier;
+    if (!_takingControl) setState(() => _takingControl = true);
+    await notifier.selectAgent(
+      widget.machineId,
+      widget.agentId,
+      takeControl: true,
+    );
+    if (!mounted) return;
+    final session = notifier
+        .paneOfAgent(widget.machineId, widget.agentId)
+        ?.session;
+    if (_takingControl && session?.status != TerminalSessionStatus.opening) {
+      setState(() => _takingControl = false);
+    }
+  }
+
   /// Restarting is a round trip that can fail, and the phone has no status rail to fail into — so
   /// the answer lands as a snackbar, which is the one surface a pushed page here always has.
   Future<void> _restart() async {
@@ -1433,6 +1502,131 @@ class _AgentGone extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// The band over the output saying this pane cannot be typed into, and offering the way in.
+///
+/// ⚠️ **Over the output, not in the header.** The header's status word is 11pt in a corner beside
+/// the agent's name, and somebody mid-sentence never looks there — the keystrokes simply stop
+/// landing and nothing on screen says why. This sits where the eyes already are. The desktop puts
+/// the same band in the same place for the same reason (`widgets/terminal_panel.dart`); this is
+/// that band at phone width.
+///
+/// Covers both ways a pane goes read-only. A WATCHER never held the terminal — the page attached
+/// to an agent the desktop was already driving, output and all (see [TerminalSession.watching]) —
+/// while `takenOver` is a terminal this phone HAD and lost. One sentence each, because "another
+/// app has it, press this" is the part that matters either way.
+class _ControlBanner extends StatelessWidget {
+  const _ControlBanner({
+    required this.watching,
+    required this.busy,
+    required this.onTakeControl,
+  });
+
+  /// True where the terminal was never this pane's; false where it was taken away.
+  final bool watching;
+
+  /// The take is in flight — its `terminal_open` is out and this pane is waiting to hear.
+  final bool busy;
+
+  final VoidCallback onTakeControl;
+
+  String get _title {
+    if (busy) return 'Taking control…';
+    return watching
+        ? 'Another app is using this terminal'
+        : 'Another app took control of this terminal';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final ink = phoneToneColor(PhoneTone.attention);
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          // Composited over the pane's own ground rather than laid on as a wash: the terminal
+          // theme behind this band may be any colour, and a bare translucent fill would read
+          // differently on each of them.
+          color: Color.alphaBlend(
+            ink.withValues(alpha: 0.12),
+            AppPalette.windowBg,
+          ),
+          border: Border(
+            bottom: BorderSide(color: ink.withValues(alpha: 0.55)),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+          child: Row(
+            children: [
+              if (busy)
+                SizedBox(
+                  width: 15,
+                  height: 15,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: ink),
+                )
+              else
+                Icon(LucideIcons.lock300, size: 15, color: ink),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: AppPalette.textPrimary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (!busy) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        'Typing is paused. Take control to type here.',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: AppPalette.textSecondary,
+                          fontSize: 11,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (!busy) ...[
+                const SizedBox(width: 10),
+                TextButton(
+                  onPressed: onTakeControl,
+                  style: TextButton.styleFrom(
+                    foregroundColor: ink,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text(
+                    'Take control',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// The terminal's body while its first keyframe is still crossing the network.
