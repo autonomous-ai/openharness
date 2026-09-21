@@ -78,7 +78,7 @@ import { tmuxSupportsSessionEnv, TMUX_SESSION_ENV_MIN } from './lib/tmuxVersion.
 import { clearDeleted, isRecentlyDeleted, markDeleted } from './lib/deletedSessions.js'
 import { terminateDeletedAgent, checkPidRuntime } from './lib/deleteAgentFallback.js'
 import { AgentRestartCoordinator, restartAgent, type RestartAgentDeps } from './lib/restartAgent.js'
-import { claudeContinuation, findLiveSession } from './lib/sessionRepair.js'
+import { claudeContinuation, findLiveSession, findResumedTranscript } from './lib/sessionRepair.js'
 import { TmuxBackend } from './lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from './lib/hostTheme.js'
 import { createAndRegisterPane } from './lib/createAgentPane.js'
@@ -87,7 +87,7 @@ import { restoreAgents } from './lib/restoreAgents.js'
 import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from './lib/launchOverrides.js'
 import { prepareCodexResume } from './engines/codex/portableHistory.js'
 import { buildHarnessSessionLabel } from './lib/harnessSessionLabel.js'
-import { listTmuxPanes } from './lib/tmuxAgentDiscovery.js'
+import { adoptLegacyHarnessSessions, listTmuxPanes } from './lib/tmuxAgentDiscovery.js'
 import { installedDsh } from './dsh/installed.js'
 import { dshVerdictPath, dshViewerName } from './dsh/manifest.js'
 import { catalogEntry } from './dsh/catalog.js'
@@ -1410,6 +1410,14 @@ async function runForeground(session: AuthSession): Promise<void> {
   }
   console.log(`[terminal] enabled backends: ${terminalConfig.backends.join(', ')}`)
   if (tmuxBackend) {
+    // Before the first inventory: sessions a pre-prefix build named `<engine>-<ts>` are renamed to
+    // `harness-<engine>-<ts>` so discovery's whitelist sees the registry's own panes again.
+    const ownedPanes = new Map(registry.list().flatMap((session) => session.runtimes
+      .filter((runtime) => runtime.backend === 'tmux')
+      .map((runtime) => [runtime.paneId, session.engine] as const)))
+    for (const adopted of await adoptLegacyHarnessSessions(ownedPanes)) {
+      console.log(`[terminal] renamed tmux session ${adopted.from} → ${adopted.to} (pane ${adopted.paneId}) · named by a build before the harness- prefix`)
+    }
     const tmuxStartup = await tmuxBackend.inventory()
     console.log(tmuxStartup.state === 'available'
       ? '[terminal] tmux: available'
@@ -2793,8 +2801,13 @@ async function runForeground(session: AuthSession): Promise<void> {
             ? await findAgyTranscript(env.AGY_HOME, sessionId) ?? undefined
             : observed.engine === 'copilot'
               ? await findCopilotTranscript(env.COPILOT_HOME, sessionId) ?? undefined
-              : undefined
-      if ((observed.engine === 'cursor' || observed.engine === 'grok') && !transcriptPath) return
+              : observed.engine === 'claude' || observed.engine === 'codex'
+                ? await findResumedTranscript(observed.engine, sessionId, { codexHome: agent.codexHome ?? undefined }) ?? undefined
+                : undefined
+      // The registry refuses a claude/codex session without its file, so a resume of a transcript this
+      // machine does not have is not a session — the hook that follows the user's next prompt will say.
+      if ((observed.engine === 'cursor' || observed.engine === 'grok' || observed.engine === 'claude' || observed.engine === 'codex')
+        && !transcriptPath) return
     } else {
       const attempts = repairAttempts.get(agent.agentId) ?? 0
       const lastAttempt = lastRepairAttempt.get(agent.agentId) ?? 0
