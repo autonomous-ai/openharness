@@ -179,3 +179,51 @@ describe('exact conversation readiness', () => {
     await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
   })
 })
+
+describe('resume refusal and readiness edge cases', () => {
+  it('reports a missing saved identity', async () => {
+    const deps = fixture(); deps.saved.mockReturnValue(null as any)
+    expect(await resumeStoppedAgent(deps)).toMatchObject({ error: 'AGENT_NOT_FOUND' })
+  })
+  it('opens a shell without a conversation id', async () => {
+    const deps = fixture(); const shell = { ...saved, engine: 'terminal' as const, sessionId: '' }; deps.saved.mockReturnValue(shell)
+    expect(await resumeStoppedAgent(deps)).toMatchObject({ ok: true }); expect(deps.launch).toHaveBeenCalledWith(shell, undefined)
+  })
+  it.each(['during check', 'row replacement', 'during retain', 'during launch check'] as const)('does not launch after %s', async when => {
+    const deps = fixture()
+    if (when === 'during launch check') deps.canLaunch.mockImplementation(async () => { deps.current.mockReturnValue(false); return true })
+    else {
+      deps.live.mockReturnValue(saved)
+      deps.checkLive.mockImplementation(async () => {
+        if (when === 'during check') deps.current.mockReturnValue(false)
+        if (when === 'row replacement') deps.live.mockReturnValue({ ...saved })
+        return { state: 'gone', reason: 'fixture' }
+      })
+      deps.retain.mockImplementation(async () => { deps.current.mockReturnValue(false) })
+    }
+    expect(await resumeStoppedAgent(deps)).toMatchObject({ error: 'AGENT_CHANGED' }); expect(deps.launch).not.toHaveBeenCalled()
+  })
+  it('does not call an unconfirmed failed process ready', async () => {
+    const deps = fixture(); deps.live.mockReturnValue({ ...saved, resumeOnly: true, launch: { state: 'failed', error: 'RESUME_UNCONFIRMED' } })
+    expect(await resumeStoppedAgent(deps)).toMatchObject({ error: 'RESUME_UNCONFIRMED' })
+  })
+  it.each(['cancelled', 'removed', 'failed', 'different engine', 'no process', 'different start', 'missing launch'] as const)('handles readiness: %s', async mode => {
+    const process = { pid: 4, startMarker: 'now', executable: 'codex' }
+    let row: RegisteredSession | undefined = { ...saved, processIdentity: process, lastHookAt: 1, launch: { state: 'ready' } }
+    if (mode === 'removed') row = undefined
+    if (mode === 'failed') row!.launch = { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'fixture' }
+    if (mode === 'different engine') row!.engine = 'claude'
+    if (mode === 'different start') row!.processIdentity = { ...process, startMarker: 'old' }
+    if (mode === 'missing launch') row!.launch = undefined
+    let time = 0
+    const result = await waitForResumedAgent(saved, {
+      current: () => mode !== 'cancelled', session: () => row,
+      process: async () => mode === 'no process' ? null : process, pane: async () => ({ dead: false }),
+      sleep: async ms => { time += ms }, now: () => time, budgetMs: 250,
+    })
+    expect(result.ok).toBe(mode === 'missing launch')
+  })
+  it('uses the production clock and timeout defaults', async () => {
+    expect(await waitForResumedAgent(saved, { current: () => false, session: () => undefined, process: async () => null, pane: async () => null, sleep: async () => {} })).toMatchObject({ error: 'AGENT_CHANGED' })
+  })
+})
