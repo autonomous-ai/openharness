@@ -1,0 +1,16 @@
+{
+  "commit": "dce1356b5f54855520767e3c4e54456d57637bee",
+  "sha256": {
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/Contents.json": "bc6ba8105ca69651aeeb77358851590de295dca04681a1d58c0f449641c242f3",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon.svg": "6c5da0aab391c324bb2bc806fada2f350f05f476e091b66541dc9cf10395dad8",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_1024.png": "56fda4f162be45abf191e422cf9a385058aad51ef1fd48b01870e4cc4fec832a",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_128.png": "7fd9d82efc340875791f394e81a4740b6d1f0e3a85450aeac74ca9ca36867be0",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_16.png": "deaa80ba2aeb2c4700a7f3fcbab5fde95d603e6688613a75a9bef867b6c71457",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_256.png": "283f9196ebe32c1ba7a41454ed9d54b0c765091b7f391e055a710448d3051730",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_32.png": "f164d53937a66f193cba78ac93f8697d97d546cf85829ba793350614b0f031d7",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png": "f157815dcc6855bd41e6c7526db72a6cdefdacc94580ec134b3f88e9bf96288a",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_64.png": "452a997513a805308696b8b897f9773f5a5794f327574c4417a652f9b698156b",
+    "desktop/assets/app_icon.png": "283f9196ebe32c1ba7a41454ed9d54b0c765091b7f391e055a710448d3051730",
+    "desktop/windows/runner/resources/app_icon.ico": "c098d3fc85cacff98b8e69811b48e9f0d852fcee278132d794411d978869cbf8"
+  }
+}

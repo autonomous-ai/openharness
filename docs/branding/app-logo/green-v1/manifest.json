@@ -1,0 +1,15 @@
+{
+  "description": "First green logo preview, before geometry refinements",
+  "sha256": {
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/Contents.json": "bc6ba8105ca69651aeeb77358851590de295dca04681a1d58c0f449641c242f3",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon.svg": "28a0a52e6aaebd3abf2310dc47cc9be0d037faf6f5e85a515878bdf6a6d970db",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_1024.png": "b36d9858520937cfbb9442c56b46d9c4ef50654237bcde8fd7a2480a71291db2",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_128.png": "dedce6fb3b960f3897e93378fd7a2c3ba1974e8abba21c577717d40acd5d649f",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_16.png": "35774523ea265080a5f268e6bb5be8d0a453f4fa0dcbddee853e841324142a57",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_256.png": "7d032eaaf2f999c9fce5b6735d0740da00aa5c8486e87ba19b4bb439491e2ddf",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_32.png": "4f6db463684337ae6b47f7158e5ad8f46f09e73d4b4aad630e7465e45ddf809c",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png": "70e4a0f1a0d834ea9614599a72c5a0ec814012817f08d823f3ee748f3083796d",
+    "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_64.png": "d6200ddaf2b7c6e4f0b506f68fdaedda9b4098a48ff909425722d57b40dbb0ad",
+    "desktop/assets/app_icon.png": "7d032eaaf2f999c9fce5b6735d0740da00aa5c8486e87ba19b4bb439491e2ddf"
+  }
+}
