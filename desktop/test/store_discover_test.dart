@@ -514,27 +514,47 @@ void main() {
       final search = find.byKey(const ValueKey('store-search'));
       final field = tester.widget<TextField>(search);
       expect(field.focusNode!.hasFocus, isTrue);
-      final initialRect = tester.getRect(search);
-      expect(initialRect.width, greaterThan(1000));
+      // The outline, not the TextField: the clear button and the ⌘F hint
+      // trade places inside it as text comes and goes.
+      final outline = find.byKey(const ValueKey('store-search-field'));
+      final initialRect = tester.getRect(outline);
+      // One Safari-shaped row: history left, a compact field centred on the
+      // pane, and the way to build your own on the right.
+      final bar = initialRect;
+      final header = tester.getRect(
+        find.byKey(const ValueKey('store-search-header')),
+      );
+      expect(bar.width, lessThanOrEqualTo(560));
+      expect(bar.center.dx, moreOrLessEquals(header.center.dx, epsilon: 0.5));
+      final back = tester.getRect(find.byKey(const ValueKey('store-back')));
+      final create = tester.getRect(
+        find.byKey(const ValueKey('store-create-harness')),
+      );
+      expect(back.right, lessThan(bar.left));
+      expect(create.left, greaterThan(bar.right));
+      expect(back.center.dy, moreOrLessEquals(bar.center.dy, epsilon: 0.5));
+      expect(create.center.dy, moreOrLessEquals(bar.center.dy, epsilon: 0.5));
+      expect(find.text('Create Harness'), findsOneWidget);
+      expect(find.text('Search harnesses'), findsOneWidget);
       await tester.drag(
         find.byKey(const PageStorageKey('store-discover-scroll')),
         const Offset(0, -700),
       );
       await tester.pumpAndSettle();
-      expect(tester.getRect(search), initialRect);
+      expect(tester.getRect(outline), initialRect);
       await _capture(tester, key, 'discover-exploration');
 
       await tester.tap(
         find.byKey(const ValueKey('store-shelf-category:Engineering')),
       );
       await tester.pumpAndSettle();
-      expect(tester.getRect(search), initialRect);
+      expect(tester.getRect(outline), initialRect);
       await tester.drag(
         find.byKey(const ValueKey('store-catalog:Engineering')),
         const Offset(0, -550),
       );
       await tester.pumpAndSettle();
-      expect(tester.getRect(search), initialRect);
+      expect(tester.getRect(outline), initialRect);
       await tester.enterText(search, 'mounting holes');
       await tester.pumpAndSettle();
       expect(
@@ -545,7 +565,7 @@ void main() {
         find.byKey(const ValueKey('store-card:autonomous/autonomous-circuit')),
         findsNothing,
       );
-      expect(tester.getRect(search), initialRect);
+      expect(tester.getRect(outline), initialRect);
       await tester.tap(find.byTooltip('Clear search'));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('store-category-hero')), findsOneWidget);
@@ -1141,7 +1161,7 @@ void main() {
       find.byKey(const ValueKey('store-category:Engineering')),
       findsNothing,
     );
-    expect(find.text('Your starting point: code.'), findsOneWidget);
+    expect(find.text('Start with code.'), findsOneWidget);
     expect(find.byKey(const ValueKey('store-card:codex')), findsOneWidget);
   });
 

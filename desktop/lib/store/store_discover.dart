@@ -76,37 +76,23 @@ class StoreDiscover extends StatelessWidget {
         final padding = box.maxWidth < 680 ? 20.0 : 36.0;
         return SingleChildScrollView(
           key: const PageStorageKey('store-discover-scroll'),
-          padding: EdgeInsets.fromLTRB(padding, 12, padding, 40),
+          padding: EdgeInsets.fromLTRB(padding, 32, padding, 40),
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 1440),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Column(
+                  Text(
+                    'Follow your curiosity.',
                     key: const ValueKey('store-curiosity-hero'),
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Follow your curiosity.',
-                        style: TextStyle(
-                          fontSize: 34,
-                          height: 1.15,
-                          letterSpacing: -1.1,
-                          fontWeight: FontWeight.w700,
-                          color: grid.AppPalette.textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Start with code. Build across disciplines.',
-                        style: TextStyle(
-                          fontSize: 15,
-                          height: 1.4,
-                          color: grid.AppPalette.textSecondary,
-                        ),
-                      ),
-                    ],
+                    style: TextStyle(
+                      fontSize: 34,
+                      height: 1.15,
+                      letterSpacing: -1.1,
+                      fontWeight: FontWeight.w700,
+                      color: grid.AppPalette.textPrimary,
+                    ),
                   ),
                   if (features.isNotEmpty) ...[
                     const SizedBox(height: 24),
@@ -150,7 +136,7 @@ class StoreDiscover extends StatelessWidget {
                   if (engines.isNotEmpty) ...[
                     const SizedBox(height: 24),
                     StoreExploreHeading(
-                      title: 'Your starting point: code.',
+                      title: 'Start with code.',
                       action: 'All coding agents',
                       onAction: onEngines,
                     ),
@@ -208,7 +194,9 @@ class StoreDiscover extends StatelessWidget {
                       onOpen: onOpen,
                     ),
                     const SizedBox(height: 32),
-                    const StoreExploreHeading(title: 'Explore disciplines'),
+                    const StoreExploreHeading(
+                      title: 'Build across disciplines.',
+                    ),
                     const SizedBox(height: 16),
                     LayoutBuilder(
                       builder: (context, constraints) {
