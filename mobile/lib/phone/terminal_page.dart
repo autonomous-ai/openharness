@@ -893,18 +893,27 @@ class _TerminalPageState extends State<TerminalPage>
         machine.agentLoadStatus == AgentLoadStatus.loaded;
     // Captured while the agent is still listed, for the sentence above.
     if (agent != null) _cachedAgentName = agent.name;
-    final reclaim = phoneReclaimAction(session);
+    // Deliberately not attaching, rather than still on its way: an older CLI cannot be asked for a
+    // terminal politely, so only a press opens one there. See [TerminalPane.heldForTakeControl].
+    final held = !agentGone && pane != null && pane.heldForTakeControl;
+    final reclaim = phoneReclaimAction(session, held: held);
     // Read-only either way — the terminal was never this pane's (a watcher) or was taken from it.
     // `_AgentGone` owns the page when the agent itself is missing, so this stays out of its way.
     final blocked =
         !agentGone &&
-        session != null &&
-        (session.watching || session.status == TerminalSessionStatus.takenOver);
+        (held ||
+            (session != null &&
+                (session.watching ||
+                    session.status == TerminalSessionStatus.takenOver)));
     final takerName = phoneTakerName(
       session,
       (id) => widget.notifier.stateOf(id)?.machine.displayName,
     );
-    final takeoverNotice = phoneTakeoverNotice(session, takerName);
+    final takeoverNotice = phoneTakeoverNotice(
+      session,
+      takerName,
+      held: held,
+    );
     // Creating needs the machine to list its folders and name its engines,
     // so one that is offline or still wants its password cannot host a new
     // agent — the same gate the Agents tab puts on its fab.
@@ -965,6 +974,12 @@ class _TerminalPageState extends State<TerminalPage>
                                     name: _cachedAgentName,
                                     onPickAnother: _pickAnotherAgent,
                                   )
+                                // Nothing is attaching and nothing will until the band above is
+                                // pressed, so the skeleton would be a promise with nobody behind
+                                // it — sweeping once and then sitting still for good. An empty
+                                // ground under the band instead. See [_ControlBanner].
+                                : held
+                                ? ColoredBox(color: AppPalette.windowBg)
                                 : pane == null || session == null
                                 ? const _Attaching()
                                 : TerminalPanel(
@@ -1154,6 +1169,7 @@ class _TerminalPageState extends State<TerminalPage>
                         status: phoneSessionSummary(
                           session,
                           takerName: takerName,
+                          held: held,
                         ),
                         trailing: [
                           // Read-only is a state to get OUT of, so its way

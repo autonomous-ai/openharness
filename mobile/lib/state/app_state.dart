@@ -5214,9 +5214,10 @@ class AppNotifier extends ChangeNotifier {
   /// control" — see `phoneReclaimAction`. It is the one gesture that means the claim, rather than
   /// merely arriving where the claim could be made.
   ///
-  /// A machine whose CLI predates the key cannot be asked politely (it takes over regardless), so
-  /// arriving at one of its agents takes the terminal the way it always did — see
-  /// [MachineState.terminalNoTakeoverAvailable].
+  /// A machine whose CLI predates the key cannot be asked politely — it takes over regardless — so
+  /// on one of those NOTHING here opens a terminal except a press: arriving at an agent leaves the
+  /// tile empty rather than taking a terminal the desktop may be working in, and the button is
+  /// what opens it. See [_attachSession] and [MachineState.terminalNoTakeoverAvailable].
   Future<void> selectAgent(
     String machineId,
     String agentId, {
@@ -5237,13 +5238,13 @@ class AppNotifier extends ChangeNotifier {
       }
       final terminal = existing.session;
       if (terminal != null) {
-        // A press STICKS, for every later open this session makes — its own reconnects included.
-        // A person who took this terminal once keeps it through a tunnel dropping; asked politely
-        // again on the way back, they would lose it to whoever picked it up meanwhile.
+        // A press arms the NEXT open, and only that one: the flag is lowered again the moment an
+        // open it armed is answered (see the `terminal_ready` branch of `TerminalSession`), so a
+        // claim cannot outlive the press that made it and come back as a reconnect hours later.
         //
-        // Otherwise the tile is merely being looked at, and asks politely from here on. Left alone
-        // while the session already holds the terminal: the flag decides what its NEXT open asks
-        // for, and lowering it mid-stream would mean losing the terminal to a reconnect.
+        // Arriving is never a claim, so anything else lowers it — but not out from under an open
+        // already in flight or a stream being held, where lowering it mid-stream would hand the
+        // terminal to a reconnect.
         if (takeControl) {
           terminal.takeover = true;
         } else if (!terminal.holdsTerminal) {
@@ -5304,11 +5305,12 @@ class AppNotifier extends ChangeNotifier {
   /// nothing retries, and landing on it changes nothing: only a person pressing
   /// "Take control" claims a terminal somebody else holds.
   ///
-  /// ⚠️ **Nothing is opened ahead of a person on an OLDER machine.** A CLI that
-  /// predates the key ignores it and takes the terminal over like any other
-  /// open — so on such a machine this guess would cost the desktop its terminal
-  /// silently, which is the one thing it must never do. Landing on a page there
-  /// still opens, because that is a person arriving, not a guess. See
+  /// ⚠️ **Nothing is opened at all on an OLDER machine.** A CLI that predates
+  /// the key ignores it and takes the terminal over like any other open — so on
+  /// such a machine this guess would cost the desktop its terminal silently,
+  /// which is the one thing it must never do. [_attachSession] refuses there
+  /// for every caller now, a press excepted; this returns first only to avoid
+  /// building a tile for a stream that would be refused a line later. See
   /// [MachineState.terminalNoTakeoverAvailable].
   Future<void> warmAgentPane(String machineId, String agentId) async {
     if (_disposed) return;
@@ -5538,6 +5540,28 @@ class AppNotifier extends ChangeNotifier {
     if (machine == null) return;
     if (machine.nodeOnline == false) return;
     if (!machine.terminalCapabilityAvailable) return;
+    // ⚠️ **On a machine that cannot be asked politely, only a press may open at all.**
+    //
+    // `takeover: false` is the whole of the phone's politeness, and a CLI that predates the key
+    // ignores it and takes the terminal over like any other open. So on such a machine EVERY open
+    // is a takeover, whatever this was called with — and the ones that are not a press (a tile
+    // restored at launch, a page swiped onto, a machine coming back online) would take the
+    // desktop's terminal silently, which is the one thing that must never happen.
+    //
+    // [warmAgentPane] already refused to guess here. This is the same refusal, moved to the one
+    // place every session is built, so no caller can reach a silent takeover by another route.
+    // A press still opens: that IS a person asking, and it is the only thing that is.
+    //
+    // Marked rather than merely refused, so the page can offer the press instead of sitting on
+    // "Attaching…" — a null session says nothing about WHY on its own. See
+    // [TerminalPane.heldForTakeControl].
+    if (!takeControl && !machine.terminalNoTakeoverAvailable) {
+      if (!pane.heldForTakeControl) {
+        pane.heldForTakeControl = true;
+        notifyListeners();
+      }
+      return;
+    }
 
     Agent? agent;
     for (final candidate in machine.agents) {
@@ -5547,6 +5571,11 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     if (agent == null || !agent.terminalAvailable) return;
+    // Cleared only once this is certain to build a session. Cleared any earlier, a press that
+    // fell out above (the agent withdrawn between the tap and here) would leave the tile with no
+    // session AND no mark — which the page reads as "attaching", forever, with the button that is
+    // its only way forward now gone.
+    pane.heldForTakeControl = false;
 
     final terminal = TerminalSession(
       machineId: pane.machineId,

@@ -188,6 +188,12 @@ class TerminalSession extends ChangeNotifier {
   /// a refusal that arrives after a press asks again, properly — see the `terminal_error` branch of
   /// [handleFrame].
   ///
+  /// ⚠️ **A press arms ONE open.** Lowered again as soon as an open it armed is answered (the
+  /// `terminal_ready` branch of [handleFrame]), because by then the claim has become a lease this
+  /// session holds and later opens rest on holding it. Left standing it would outlive the press:
+  /// a phone in a pocket reconnecting hours later would take the terminal off whoever had it by
+  /// then, which is the silent takeover a press is meant to be the only cause of.
+  ///
   /// ⚠️ Only meaningful against a daemon that advertises `noTakeover`: an older one ignores the key
   /// and takes over regardless. The caller checks — `MachineState.terminalNoTakeoverAvailable`.
   bool takeover;
@@ -565,6 +571,19 @@ class TerminalSession extends ChangeNotifier {
         // The daemon's answer to a polite open on a terminal somebody else holds: it opened, it
         // renders, and it may not type. See [watching].
         watching = payload['readOnly'] == true;
+        // ⚠️ **The press is spent here.** A takeover was asked for and ANSWERED, so the claim it
+        // was making is now a lease this session holds — and holding it is what later opens should
+        // rest on, not the press that won it.
+        //
+        // Left standing, the flag outlived the moment: an app backgrounded for hours would come
+        // back through a reconnect and take the terminal again, off whoever was working in it by
+        // then, with nobody having asked for it since the morning. That is exactly the silent
+        // takeover a press is supposed to be the only cause of. See [takeover].
+        //
+        // Nothing is lost by lowering it. A reconnect that finds the terminal still free opens
+        // normally; one that finds it taken is refused and lands on [takenOver], where the button
+        // is — a person asks again, which is the whole rule.
+        if (!watching) takeover = false;
         _resyncTimer?.cancel();
         _resyncTimer = null;
         _heartbeat = Timer.periodic(
