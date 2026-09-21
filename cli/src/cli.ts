@@ -70,7 +70,7 @@ import { gridAvailable } from './lib/gridExec.js'
 import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, engineBin, enginePathOverride } from './lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from './engines/types.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
-import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, namedAgentArgs } from './lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, commandSupportsFlagInInteractiveShell, namedAgentArgs, permissionModeFlags } from './lib/engineLaunch.js'
 import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, gridEnvVarNames, type GridLaunchMachine, type GridWebSearchStatus } from './lib/gridLaunch.js'
 import { HERMES_SYSTEM_MANAGED_DIR } from './lib/gridWebMcp.js'
 import { writeGridConfigDir } from './lib/gridConfigDir.js'
@@ -4235,6 +4235,27 @@ async function runForeground(session: AuthSession): Promise<void> {
       if (!statSync(cwd).isDirectory()) return { ok: false, error: 'CWD_NOT_FOUND' }
     } catch {
       return { ok: false, error: 'CWD_NOT_FOUND' }
+    }
+    // `--approve-for-me` was added after older Codex CLI releases. Refuse the
+    // incompatible Auto mode before opening a pane, rather than letting Codex
+    // reject the flag and leaving the person in an unexpected fallback shell.
+    // Ask mode has no flag and remains a useful workaround until Codex updates.
+    const codexAutoApprove =
+      engine === 'codex' &&
+      (permissionMode !== null
+        ? permissionModeFlags(engine, permissionMode)?.includes('--approve-for-me') === true
+        : bypassPermission)
+    if (codexAutoApprove) {
+      const support = await commandSupportsFlagInInteractiveShell(
+        engineBin('codex'),
+        '--approve-for-me',
+      )
+      if (support === 'unsupported') {
+        const detail =
+          'Your installed Codex CLI does not support --approve-for-me, which Harness uses for Auto approvals. Update Codex and try again, or choose Ask permissions for this harness.'
+        console.warn(`[agent] create codex refused · ${detail}`)
+        return { ok: false, error: 'CODEX_CLI_TOO_OLD', detail }
+      }
     }
     // A domain-specific harness: put its files into the workspace first (template, AGENTS.md, skill
     // links) and take its env/argv for the launch. Refused, never approximated, when it is not here.

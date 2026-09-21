@@ -6046,6 +6046,10 @@ class AppNotifier extends ChangeNotifier {
         'TMUX_UNAVAILABLE' =>
           'Harness needs tmux to start harnesses on $machine. '
               'Install tmux there, then try again.',
+        'CODEX_CLI_TOO_OLD' =>
+          detail ??
+              'The installed Codex CLI on $machine is too old for Auto approvals. '
+                  'Update Codex, or choose Ask permissions.',
         'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
           'Update the harness CLI on this machine to start a harness',
         'INVALID_DSH' =>
@@ -6230,6 +6234,7 @@ class AppNotifier extends ChangeNotifier {
         'INVALID_PROMPT',
         'AGENT_UNSUPPORTED',
         'TMUX_UNAVAILABLE',
+        'CODEX_CLI_TOO_OLD',
         'TMUX_TOO_OLD_FOR_GRID',
         'GRID_CONFIG_FAILED',
         'UNSUPPORTED_ON_REMOTE',

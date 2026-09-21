@@ -795,3 +795,39 @@ export async function commandAvailableInInteractiveShell(
     )
   })
 }
+
+export type CommandFlagSupport = 'supported' | 'unsupported' | 'unknown'
+
+/**
+ * Checks a CLI's own help from the same interactive shell that would launch
+ * it. `unknown` is deliberately non-blocking: a broken or unusually slow help
+ * command must not turn an otherwise usable engine into a false refusal.
+ */
+export async function commandSupportsFlagInInteractiveShell(
+  command: string,
+  flag: string,
+  shell: string | undefined = undefined,
+): Promise<CommandFlagSupport> {
+  const interactive = interactiveEngineShell(shell)
+  if (!interactive) return 'unknown'
+  const script = [
+    'help="$("$1" --help 2>&1)"',
+    'status=$?',
+    '[ "$status" -eq 0 ] || exit 2',
+    'case "$help" in *"$2"*) exit 0 ;; *) exit 1 ;; esac',
+  ].join('\n')
+  return await new Promise((resolve) => {
+    execFile(
+      interactive.path,
+      [...interactive.args, script, 'harness-engine-capability', command, flag],
+      { timeout: 5_000 },
+      (error) => {
+        if (!error) resolve('supported')
+        else {
+          const code = (error as { code?: number | string }).code
+          resolve(code === 1 || code === '1' ? 'unsupported' : 'unknown')
+        }
+      },
+    )
+  })
+}
