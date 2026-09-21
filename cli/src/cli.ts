@@ -3783,6 +3783,10 @@ async function runForeground(session: AuthSession): Promise<void> {
     backend,
     relayPool,
     autonomousEnv: readAuthSession()?.autonomousEnv ?? session.autonomousEnv,
+    // A window from before it introduced itself still gets named on the far side's "took control"
+    // banner: the relay knows it is this machine's desktop. Same source as `describeClient` above.
+    // Cut to the wire's limit here rather than let the far daemon drop the whole claim over a long name.
+    localClient: () => ({ kind: 'desktop', name: terminalHintMachineName().slice(0, 64), machineId: backend.machineId }),
   })
   // Install both CLI hooks with the port the local server actually bound.
   if (!env.DISABLE_HOOK_INSTALL) {
