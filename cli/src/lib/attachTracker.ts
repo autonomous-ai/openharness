@@ -3,11 +3,13 @@
  * normalizer (cli.ts `attachSessionNow`). Two jobs, both born of the same incident: a daemon whose
  * boot sat on ONE agent's store for good, with nothing in any log to say which.
  *
- *  - ONE attach per session at a time. Boot hydrates every agent in the background, and the first
- *    reconcile pass, a hook, or a cursor discovery can ask for the same session while that is still
- *    running. A second fold on top of the first is the duplicate-turn class of bug (a turn opened,
- *    closed after 44ms and opened again), so a plain attach JOINS the one in flight, and a `reset`
- *    waits for it and then folds afresh.
+ *  - ONE attach per session at a time. The first reconcile pass after a boot starts one for every
+ *    agent it reactivates, and a hook or a cursor discovery can ask for the same session while that
+ *    is still running. A second fold on top of the first is the duplicate-turn class of bug (a turn
+ *    opened, closed after 44ms and opened again), so a plain attach JOINS the one in flight, and a
+ *    `reset` waits for it and then folds afresh.
+ *  - A FEW sessions at a time. Each attach is a tmux probe, a `ps` over the whole machine and the
+ *    agent's entire transcript or store; a boot with twenty agents must not start twenty at once.
  *  - Saying what the daemon is busy with. `/api/status` lists the attaches in flight, and one that
  *    runs long is logged by name.
  */
@@ -27,29 +29,38 @@ export interface AttachInFlight<E> {
 }
 
 export interface AttachTrackerOptions<E> {
-  /** After this long, `onSlow` is told once about the attach. */
+  /** How many attaches may run at once; the rest wait their turn, in the order they asked. */
+  concurrency?: number
+  /** After this long RUNNING (waiting for a slot does not count), `onSlow` is told once about the attach. */
   slowMs?: number
   onSlow?: (subject: AttachSubject<E>, elapsedMs: number) => void
   now?: () => number
 }
 
 const DEFAULT_SLOW_MS = 15_000
+const DEFAULT_CONCURRENCY = 4
 
 export class AttachTracker<E> {
-  private readonly inFlight = new Map<string, { run: Promise<boolean>; subject: AttachSubject<E>; since: number }>()
+  /** Every attach that has been asked for and not finished — waiting for a slot or running. */
+  private readonly inFlight = new Map<string, { run: Promise<boolean>; subject: AttachSubject<E>; since: number | null }>()
+  private readonly waiting: Array<() => void> = []
+  private running = 0
+  private readonly concurrency: number
   private readonly slowMs: number
   private readonly onSlow?: (subject: AttachSubject<E>, elapsedMs: number) => void
   private readonly now: () => number
 
   constructor(options: AttachTrackerOptions<E> = {}) {
+    this.concurrency = Math.max(1, options.concurrency ?? DEFAULT_CONCURRENCY)
     this.slowMs = options.slowMs ?? DEFAULT_SLOW_MS
     this.onSlow = options.onSlow
     this.now = options.now ?? Date.now
   }
 
   /**
-   * Run `start` for this session — unless one is already running, in which case a plain attach
+   * Run `start` for this session — unless one is already in flight, in which case a plain attach
    * returns THAT one's result and `start` is never called; a `reset` waits for it, then runs `start`.
+   * Either way `start` runs only once a slot is free.
    */
   async attach(session: AttachSubject<E>, reset: boolean, start: () => Promise<boolean>): Promise<boolean> {
     // A loop, not an if: two resets waiting on the same attach would otherwise both start at once.
@@ -57,40 +68,50 @@ export class AttachTracker<E> {
       if (!reset) return pending.run
       await pending.run.catch(() => false)
     }
-    const since = this.now()
-    const slow = setTimeout(() => this.onSlow?.(session, this.now() - since), this.slowMs)
-    slow.unref?.()
-    // A `start` that throws before it returns a promise must still clear the timer and the slot.
-    let started: Promise<boolean>
-    try { started = start() } catch (err) { started = Promise.reject(err) }
-    const run = started.finally(() => {
-      clearTimeout(slow)
-      if (this.inFlight.get(session.sessionId)?.run === run) this.inFlight.delete(session.sessionId)
+    const entry = { run: Promise.resolve(false), subject: session, since: null as number | null }
+    entry.run = this.runWhenFree(entry, start).finally(() => {
+      if (this.inFlight.get(session.sessionId) === entry) this.inFlight.delete(session.sessionId)
     })
-    this.inFlight.set(session.sessionId, { run, subject: session, since })
-    return run
+    this.inFlight.set(session.sessionId, entry)
+    return entry.run
   }
 
-  /** What is being read right now, longest-running first. */
+  private async runWhenFree(
+    entry: { subject: AttachSubject<E>; since: number | null },
+    start: () => Promise<boolean>,
+  ): Promise<boolean> {
+    // A finishing attach hands its slot straight to the next in line (below) rather than freeing it:
+    // a newcomer arriving in that gap would otherwise slip in ahead of the queue and push it past `concurrency`.
+    if (this.running < this.concurrency) this.running++
+    else await new Promise<void>((resolve) => this.waiting.push(resolve))
+    entry.since = this.now()
+    const since = entry.since
+    const slow = setTimeout(() => this.onSlow?.(entry.subject, this.now() - since), this.slowMs)
+    slow.unref?.()
+    try {
+      // A `start` that throws before it returns a promise is a failed attach, not a lost slot.
+      return await start()
+    } finally {
+      clearTimeout(slow)
+      const next = this.waiting.shift()
+      if (next) next()
+      else this.running--
+    }
+  }
+
+  /** What is being read right now, longest-running first. Attaches still waiting for a slot are not here. */
   attaching(): Array<AttachInFlight<E>> {
     const now = this.now()
     return [...this.inFlight.values()]
+      .filter((entry): entry is typeof entry & { since: number } => entry.since !== null)
       .map(({ subject, since }) => ({
         sessionId: subject.sessionId, agentId: subject.agentId, engine: subject.engine, sinceMs: now - since,
       }))
       .sort((a, b) => b.sinceMs - a.sinceMs)
   }
-}
 
-/**
- * `fn` over every item, at most `limit` at a time, in order of the list. A rejection is the caller's
- * to catch inside `fn`; here it would stop that worker's share of the list, which is not what a boot
- * wants, so `fn` is expected to swallow its own.
- */
-export async function forEachBounded<T>(items: readonly T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
-  const queue = [...items]
-  const worker = async (): Promise<void> => {
-    for (let item = queue.shift(); item !== undefined; item = queue.shift()) await fn(item)
+  /** How many attaches are waiting for a slot. */
+  queued(): number {
+    return this.waiting.length
   }
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, queue.length)) }, worker))
 }

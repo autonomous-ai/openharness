@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { AttachTracker, forEachBounded } from './attachTracker.js'
+import { AttachTracker } from './attachTracker.js'
 
 type Engine = 'opencode' | 'claude'
 const subject = (sessionId: string, engine: Engine = 'claude') => ({ sessionId, agentId: `agent-${sessionId}`, engine })
@@ -82,9 +82,58 @@ describe('AttachTracker', () => {
       { sessionId: 'ses_fast', agentId: 'agent-ses_fast', engine: 'claude', sinceMs: 500 },
     ])
     fast.resolve(true)
-    await Promise.resolve()
-    expect(tracker.attaching().map((a) => a.sessionId)).toEqual(['ses_slow'])
+    await vi.waitFor(() => expect(tracker.attaching().map((a) => a.sessionId)).toEqual(['ses_slow']))
     slow.resolve(true)
+  })
+
+  it('runs at most `concurrency` at once, in the order asked, and a stuck one holds only its own slot', async () => {
+    const tracker = new AttachTracker<Engine>({ concurrency: 2 })
+    const gates = new Map<string, ReturnType<typeof deferred<boolean>>>()
+    const started: string[] = []
+    const results = ['a', 'b', 'c', 'd'].map((id) => tracker.attach(subject(id), false, () => {
+      started.push(id)
+      const gate = deferred<boolean>()
+      gates.set(id, gate)
+      return gate.promise
+    }))
+    await Promise.resolve()
+    expect(started).toEqual(['a', 'b'])
+    expect(tracker.queued()).toBe(2)
+    expect(tracker.attaching().map((a) => a.sessionId).sort()).toEqual(['a', 'b'])
+    // 'a' is the agent whose store hangs. Everything behind it still gets read, through b's slot.
+    gates.get('b')!.resolve(true)
+    await vi.waitFor(() => expect(started).toEqual(['a', 'b', 'c']))
+    expect(tracker.queued()).toBe(1)
+    gates.get('c')!.resolve(true)
+    await vi.waitFor(() => expect(started).toEqual(['a', 'b', 'c', 'd']))
+    expect(tracker.queued()).toBe(0)
+    gates.get('d')!.resolve(false)
+    expect(await Promise.all(results.slice(1))).toEqual([true, true, false])
+    expect(tracker.attaching().map((a) => a.sessionId)).toEqual(['a'])
+    gates.get('a')!.resolve(true)
+    expect(await results[0]).toBe(true)
+  })
+
+  it('a joiner takes no slot, and a newcomer cannot jump the queue', async () => {
+    const tracker = new AttachTracker<Engine>({ concurrency: 1 })
+    const first = deferred<boolean>()
+    const started: string[] = []
+    const run = (id: string) => tracker.attach(subject(id), false, () => {
+      started.push(id)
+      return id === 'a' ? first.promise : Promise.resolve(true)
+    })
+    const a = run('a')
+    const b = run('b')
+    const joiner = run('a')
+    await Promise.resolve()
+    expect(started).toEqual(['a'])
+    expect(tracker.queued()).toBe(1)
+    first.resolve(true)
+    // 'c' asks the instant 'a' finishes; 'b' was first in line.
+    await a
+    const c = run('c')
+    await Promise.all([b, c, joiner])
+    expect(started).toEqual(['a', 'b', 'c'])
   })
 
   it('names an attach that runs long, once, and not one that finished', async () => {
@@ -107,41 +156,5 @@ describe('AttachTracker', () => {
     } finally {
       vi.useRealTimers()
     }
-  })
-})
-
-describe('forEachBounded', () => {
-  it('runs at most `limit` at a time, in order, and one that never finishes holds only its own slot', async () => {
-    const gates = new Map<number, ReturnType<typeof deferred<void>>>()
-    const started: number[] = []
-    const all = forEachBounded([1, 2, 3, 4, 5], 2, async (n) => {
-      started.push(n)
-      const gate = deferred<void>()
-      gates.set(n, gate)
-      await gate.promise
-    })
-    await Promise.resolve()
-    expect(started).toEqual([1, 2])
-    // 1 is the agent whose store hangs: it never resolves. Everything else still gets read.
-    gates.get(2)!.resolve()
-    await vi.waitFor(() => expect(started).toEqual([1, 2, 3]))
-    gates.get(3)!.resolve()
-    await vi.waitFor(() => expect(started).toEqual([1, 2, 3, 4]))
-    gates.get(4)!.resolve()
-    await vi.waitFor(() => expect(started).toEqual([1, 2, 3, 4, 5]))
-    gates.get(5)!.resolve()
-    let settled = false
-    void all.then(() => { settled = true })
-    await new Promise((r) => setTimeout(r, 20))
-    expect(settled).toBe(false)
-    gates.get(1)!.resolve()
-    await all
-  })
-
-  it('handles an empty list and a limit larger than the list', async () => {
-    const seen: number[] = []
-    await forEachBounded([], 4, async () => { seen.push(0) })
-    await forEachBounded([1, 2], 10, async (n) => { seen.push(n) })
-    expect(seen).toEqual([1, 2])
   })
 })
