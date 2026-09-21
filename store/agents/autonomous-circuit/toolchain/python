@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# CIRCUIT_PYTHON: the board pipeline's interpreter. The project's skills start its tools with
+# `python3`, re-exec them here when that is older than 3.10 (Apple's is 3.9), and shell out to `node`
+# from PATH — which the agent's shell may not have. So: Harness's Node on PATH, then the .venv setup made.
+here="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=runtimes.sh
+. "$here/toolchain/runtimes.sh"
+harness_node 22.12 >&2 || true
+exec "$here/.venv/bin/python" "$@"

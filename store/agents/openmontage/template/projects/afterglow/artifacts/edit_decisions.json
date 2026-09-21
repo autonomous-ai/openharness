@@ -1,0 +1,14 @@
+{
+  "version": "1.0",
+  "render_runtime": "remotion",
+  "composition_mode": "atelier",
+  "bespoke": {
+    "entry": "composition/index.tsx",
+    "composition_id": "Afterglow",
+    "art_direction": "Original warm amber sun, moss-green topographic landscape, fine orbital lines, editorial serif typography, four purposeful movements. No stock components."
+  },
+  "cuts": [],
+  "metadata": {
+    "note": "Editable starter film, rendered through OpenMontage; not a new user production."
+  }
+}

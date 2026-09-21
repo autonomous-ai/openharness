@@ -1,0 +1,18 @@
+{
+  "homepage": "https://yosyshq.net",
+  "upstream": "https://github.com/YosysHQ/yosys",
+  "license": "MIT",
+  "tagline": "Framework for Verilog RTL synthesis",
+  "examples": [
+    {
+      "prompt": "Build a tiny 8-bit CPU for the iCEBreaker that runs a Fibonacci program from ROM and prints every number over the USB serial port at 115200 baud; the button runs it again. Simulate it, check the serial output in the testbench and build the bitstream.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/yosys/fibonacci-cpu.jpg",
+      "caption": "Tiny 8-bit CPU printing Fibonacci over UART · 8 checks pass · 294 LCs, 26.1 MHz · iCE40 bitstream"
+    },
+    {
+      "prompt": "Design a UART transmitter at 115200 baud from the 12 MHz clock that sends the text HELLO followed by newline each time the button is pressed (debounced), plus a breathing PWM on the green LED. Testbench must decode the serial frames and check the bytes. Run the whole flow, keep Fmax above 12 MHz, and report LUTs and Fmax.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/yosys/uart-hello.jpg",
+      "caption": "HELLO over UART + breathing LED · 25 checks pass · 226 LCs, 51.9 MHz · iCE40 bitstream"
+    }
+  ]
+}

@@ -62,6 +62,27 @@ class CurrentUserProfile {
   }
 }
 
+/// A view-only invitation. It never contains a full machine credential.
+class SharedHarness {
+  const SharedHarness({
+    required this.id,
+    required this.agentId,
+    required this.name,
+    this.engine,
+    required this.expiresAt,
+  });
+  final String id, agentId, name;
+  final String? engine;
+  final DateTime expiresAt;
+  factory SharedHarness.fromJson(Map<String, dynamic> j) => SharedHarness(
+    id: j['id'] as String,
+    agentId: j['agentId'] as String,
+    name: j['name'] as String,
+    engine: j['engine'] as String?,
+    expiresAt: DateTime.parse(j['expiresAt'] as String),
+  );
+}
+
 /// Control-plane machine (GET /api/machines).
 class Machine {
   final String machineId;
@@ -73,6 +94,9 @@ class Machine {
   final String? engine;
   final String? name;
   final String? hostname;
+  final bool isShared;
+  final String? ownerName;
+  final List<SharedHarness> sharedHarnesses;
   final String? status;
 
   const Machine({
@@ -83,6 +107,9 @@ class Machine {
     this.engine,
     this.name,
     this.hostname,
+    this.isShared = false,
+    this.ownerName,
+    this.sharedHarnesses = const [],
     this.status,
   });
 
@@ -101,6 +128,12 @@ class Machine {
     engine: j['engine'] as String?,
     name: j['name'] as String?,
     hostname: j['hostname'] as String?,
+    isShared: j['shared'] == true,
+    ownerName: j['ownerName'] as String?,
+    sharedHarnesses: [
+      for (final row in j['shares'] as List? ?? const [])
+        SharedHarness.fromJson(Map<String, dynamic>.from(row as Map)),
+    ],
     status: j['status'] as String?,
   );
 
@@ -112,19 +145,97 @@ class Machine {
     engine: engine,
     name: name ?? this.name,
     hostname: hostname,
+    isShared: isShared,
+    ownerName: ownerName,
+    sharedHarnesses: sharedHarnesses,
     status: status,
   );
 }
 
+/// Whether an agent on a Local model can search the web, as the daemon decided when it built the
+/// launch (`grid.webSearch` on the agent frame).
+///
+/// Three words, each a different fact for the person reading the picker: `on` needs no sentence;
+/// `unavailable` means the daemon could not obtain the web-tools configuration this time (an
+/// outdated CLI, no sign-in) and moving the agent again may fix it; `unsupported` means the engine
+/// cannot take the tools on this machine at all (Pi has no MCP client; Hermes under a
+/// system-managed install), and nothing about the model changes that.
+enum GridWebSearch {
+  on,
+  unavailable,
+  unsupported;
+
+  /// The one sentence shown for a degraded status, or null when there is nothing to say.
+  String? get sentence => switch (this) {
+    GridWebSearch.on => null,
+    GridWebSearch.unavailable => 'Web search unavailable',
+    GridWebSearch.unsupported => 'Web search not supported by this engine',
+  };
+
+  /// The wire word, or null for anything else — an older daemon sends no field, and a newer one
+  /// might send a fourth word this build should neither print verbatim nor guess at.
+  static GridWebSearch? fromWire(Object? raw) => switch (raw) {
+    'on' => GridWebSearch.on,
+    'unavailable' => GridWebSearch.unavailable,
+    'unsupported' => GridWebSearch.unsupported,
+    _ => null,
+  };
+}
+
 /// Data-plane agent (RPC agents_list).
+/// Where a forked agent came from — see [Agent.forkedFrom].
+class ForkedFrom {
+  final String agentId;
+  final String name;
+
+  const ForkedFrom({required this.agentId, required this.name});
+
+  static ForkedFrom? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final agentId = raw['agentId'];
+    if (agentId is! String || agentId.isEmpty) return null;
+    final name = raw['name'];
+    return ForkedFrom(
+      agentId: agentId,
+      name: name is String && name.isNotEmpty ? name : 'an agent',
+    );
+  }
+}
+
+/// Display-only fallbacks; never send these to a CLI as a user rename.
+const kUntitledPane = 'Untitled Pane';
+final _automaticHarnessName = RegExp(
+  r'^(?:(?:harness|agent)-[1-9]\d*|.+ harness \d{1,2}-\d{1,2} \d{1,2}:\d{2}(?::\d{2})?)$',
+);
+
+bool isAutomaticHarnessName(String name) =>
+    _automaticHarnessName.hasMatch(name);
+
 class Agent {
   final String id;
   final String? sessionId;
   final String name;
+
+  /// What the agent is on, in its own words — the transcript's title as the
+  /// daemon cleaned it, null when it has none or it is the name already. A
+  /// search finds an agent by this before it finds one by a recap.
+  final String? title;
   final String? engine;
   final String? engineDisplayName;
   final String? engineIconHint;
   final String? codexHome;
+
+  /// The grid model this agent is CURRENTLY running on, or null for its own vendor login.
+  ///
+  /// Read by the daemon off the live process on every discovery, never bookkept — so it is the
+  /// truth even for an agent someone re-pointed by hand. Null is a real answer, not a missing one.
+  final String? gridModel;
+
+  /// Whether the agent can search the web on that model, or null when the daemon said nothing —
+  /// an agent on its own login, an older daemon, or a grid agent it merely discovered. Decided by
+  /// the daemon when it built the launch and carried on every frame, so it is right after a
+  /// reconnect or a restart without anything being replayed.
+  final GridWebSearch? gridWebSearch;
   final String? parentAgentId;
   final AgentProject? project;
   final String status;
@@ -134,10 +245,10 @@ class Agent {
   final bool terminalAvailable;
   final String? terminalUnavailableReason;
 
-  /// The domain-specific harness this agent was created from (`autonomous/copper`), or
+  /// The domain-specific harness this agent was created from (`autonomous/autonomous-circuit`), or
   /// null for a plain engine. [engine] stays the BASE engine the process actually runs —
   /// a DSH is a decoration on the session, never a second engine (see the DSH spec in
-  /// `dsh/spec/README.md`). Everything a person sees keys off this when it is set.
+  /// `store/spec/README.md`). Everything a person sees keys off this when it is set.
   final String? dsh;
 
   /// The harness's display name as the daemon read it off the manifest. Lets a DSH this
@@ -148,17 +259,52 @@ class Agent {
   /// when there is none (yet). A change means the viewer pane must navigate.
   final String? viewerUrl;
 
+  /// Why this remote viewer could not be forwarded, including old-daemon update guidance.
+  final String? viewerError;
+
+  /// What the harness's viewer pane is called — the shared viewer's own name ("3D Viewer"), or
+  /// the harness's name and "Viewer" for one it ships ("Marp Viewer") — as the daemon worked it
+  /// out. Null from an older daemon or with no viewer; see [PaneGrid] for what stands in.
+  final String? viewerName;
+
   /// The harness's last verdict on this workspace, or null when it has not written one.
   final AgentVerdict? verdict;
+
+  /// The agent this one was forked from (`agent_fork`), or null for every
+  /// other agent. Carries the source's name as it was at the fork, because the
+  /// source may be renamed or gone by the time the badge is read.
+  final ForkedFrom? forkedFrom;
+
+  /// Whether the daemon can fork this agent (`agent_fork`), as it said on the
+  /// frame; null from a daemon that predates the field — then the engine
+  /// decides (see [canFork]).
+  final bool? forkable;
+
+  /// The permission mode this agent was launched in (`plan`, `readOnly`, …),
+  /// as the daemon recorded it; null from a daemon that predates the field, a
+  /// row from before the choice existed, or an agent Harness did not launch.
+  /// Read for Clone (⌘⇧N), so another of this one opens in the same mode.
+  final String? permissionMode;
+
+  /// Whether its permission prompts were bypassed at launch; null when
+  /// unrecorded (see [permissionMode]) — then a clone uses the default.
+  final bool? bypassPermission;
+
+  /// The engine's own named agent it was opened as (`agent_create`'s `agent`),
+  /// or null for a general session.
+  final String? namedAgent;
 
   const Agent({
     required this.id,
     this.sessionId,
     required this.name,
+    this.title,
     this.engine,
     this.engineDisplayName,
     this.engineIconHint,
     this.codexHome,
+    this.gridModel,
+    this.gridWebSearch,
     this.parentAgentId,
     this.project,
     this.status = 'active',
@@ -170,8 +316,38 @@ class Agent {
     this.dsh,
     this.dshName,
     this.viewerUrl,
+    this.viewerError,
+    this.viewerName,
     this.verdict,
+    this.forkedFrom,
+    this.forkable,
+    this.permissionMode,
+    this.bypassPermission,
+    this.namedAgent,
   });
+
+  bool get isStopped => status == 'stopped';
+
+  /// Explicit names win. An automatic CLI label gives way to its session title.
+  String get displayName => _automaticHarnessName.hasMatch(name)
+      ? (title?.trim().isNotEmpty == true ? title!.trim() : kUntitledPane)
+      : name;
+
+  /// The engines whose sessions can be forked — natively (Claude Code's
+  /// `--fork-session`, `codex fork`) or by a handoff message (OpenCode takes a
+  /// first prompt). The daemon is the authority when it says (`forkable`);
+  /// this is the answer for one that does not.
+  static const forkableEngines = {'claude', 'codex', 'opencode'};
+
+  /// Whether to offer Fork for this agent at all. Devin, Cursor and the rest
+  /// can neither fork nor open with a message, so the button is not drawn
+  /// rather than drawn and refused.
+  bool get canFork => forkable ?? forkableEngines.contains(engine);
+
+  /// Whether Clone (⌘⇧N) can open another of this agent — any engine, but not
+  /// one on a grid: the frame carries the grid's model and never its launch
+  /// key, so a clone would silently land on the engine's own login instead.
+  bool get canClone => engine != null && gridModel == null;
 
   /// What to draw this agent AS: its harness when it has one, else its engine.
   String? get identityEngine => dsh ?? engine;
@@ -203,14 +379,18 @@ class Agent {
       'failed' => 'failed',
       _ => 'ready',
     };
+    final grid = j['grid'] as Map<String, dynamic>?;
     return Agent(
       id: j['id'] as String,
       sessionId: _safeLabel(j['sessionId']),
       name: j['name'] as String? ?? 'agent',
+      title: _safeLabel(j['title']),
       engine: _safeEngine(j['engine']),
       engineDisplayName: _safeLabel(j['engineDisplayName']),
       engineIconHint: _safeLabel(j['engineIconHint']),
       codexHome: j['engine'] == 'codex' ? _safeCodexHome(j['codexHome']) : null,
+      gridModel: _safeLabel(grid?['model']),
+      gridWebSearch: GridWebSearch.fromWire(grid?['webSearch']),
       parentAgentId: _safeLabel(j['parentAgentId'] ?? j['parentId']),
       project: AgentProject.fromJson(j['project']),
       status: (j['status'] as String?) ?? 'active',
@@ -227,7 +407,16 @@ class Agent {
       dsh: _safeDsh(j['dsh']),
       dshName: _safeLabel(j['dshName']),
       viewerUrl: _safeViewerUrl(j['viewerUrl']),
+      viewerError: _safeDetail(j['viewerError']),
+      viewerName: _safeLabel(j['viewerName']),
       verdict: AgentVerdict.fromJson(j['verdict']),
+      forkedFrom: ForkedFrom.fromJson(j['forkedFrom']),
+      forkable: j['forkable'] is bool ? j['forkable'] as bool : null,
+      permissionMode: _safePermissionMode(j['permissionMode']),
+      bypassPermission: j['bypassPermission'] is bool
+          ? j['bypassPermission'] as bool
+          : null,
+      namedAgent: _safeNamedAgent(j['namedAgent']),
     );
   }
 
@@ -235,10 +424,13 @@ class Agent {
     id: id,
     sessionId: sessionId,
     name: name ?? this.name,
+    title: title,
     engine: engine,
     engineDisplayName: engineDisplayName,
     engineIconHint: engineIconHint,
     codexHome: codexHome,
+    gridModel: gridModel,
+    gridWebSearch: gridWebSearch,
     parentAgentId: parentAgentId,
     project: project,
     status: status,
@@ -250,8 +442,28 @@ class Agent {
     dsh: dsh,
     dshName: dshName,
     viewerUrl: viewerUrl,
+    viewerError: viewerError,
+    viewerName: viewerName,
     verdict: verdict,
+    forkedFrom: forkedFrom,
+    forkable: forkable,
+    permissionMode: permissionMode,
+    bypassPermission: bypassPermission,
+    namedAgent: namedAgent,
   );
+
+  /// A mode id as `PERMISSION_MODES` spells them (`acceptEdits`, `readOnly`):
+  /// one word. Not checked against this build's own list — the daemon that
+  /// launched the agent is the authority, and it is the one that will read the
+  /// id back on a clone.
+  static String? _safePermissionMode(Object? raw) =>
+      raw is String && RegExp(r'^[A-Za-z]{1,32}$').hasMatch(raw) ? raw : null;
+
+  /// The daemon's `AGENT_NAME_RE` (engineLaunch.ts): a flag value, never a path.
+  static String? _safeNamedAgent(Object? raw) =>
+      raw is String && RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(raw)
+      ? raw
+      : null;
 
   /// `owner/name`, exactly the shape the DSH manifest schema allows and nothing else — the
   /// id names an install directory on the far machine and a picker tile here.
@@ -304,7 +516,7 @@ class Agent {
 }
 
 /// A domain-specific harness's verdict on an agent's workspace, as the daemon read it off
-/// `.harness/verdict.json` (see `dsh/spec/README.md`). Counts rather than the findings
+/// `.harness/verdict.json` (see `store/spec/README.md`). Counts rather than the findings
 /// themselves: the pane header has room for "3 errors", and the findings live in the
 /// harness's own viewer.
 enum AgentPhaseState { done, active, pending, failed }
@@ -612,5 +824,121 @@ class AgentProject {
       remote: field('remote'),
       branch: field('branch', 256),
     );
+  }
+}
+
+/// One model the account's private harness grid can answer right now.
+class GridModel {
+  /// The id an engine is pointed at, verbatim from the grid.
+  final String id;
+
+  /// Which machine serves it. Display only, and empty when the grid does not say — on a private
+  /// grid this is one of the user's own computers, which is the useful part of the answer.
+  final String node;
+
+  /// The grid it is served on — the section it was listed under. Null on an older daemon that
+  /// sends only the own grid's list, which the retarget then targets as it always did.
+  final String? grid;
+
+  const GridModel({required this.id, required this.node, this.grid});
+}
+
+/// Which `grid` a machine would run, as its daemon reports beside the model list (`gridCli`).
+///
+/// `managed` is the runtime Harness itself carries and pins; `path` is one the person installed
+/// (runnable, but not the pin); `missing` is nothing to run — the one value that changes what the
+/// picker and the Local model dialog say, because an agent started on that machine would die on
+/// its first `grid`. An older daemon sends no field, read as null: nothing is claimed either way.
+enum GridCli {
+  managed,
+  path,
+  missing;
+
+  static GridCli? parse(Object? raw) => switch (raw) {
+    'managed' => GridCli.managed,
+    'path' => GridCli.path,
+    'missing' => GridCli.missing,
+    _ => null,
+  };
+}
+
+/// The picker's whole answer: which grid was asked, and what it offers.
+///
+/// One grid the machine is signed into, with what it serves. [own] marks the account's private
+/// grid — the picker calls that one "Local"; a shared grid goes by its name.
+class GridSection {
+  final String name;
+  final bool own;
+  final List<GridModel> models;
+
+  const GridSection({
+    required this.name,
+    required this.own,
+    required this.models,
+  });
+}
+
+/// `gridName` is null when the machine has no grid yet — told apart from "a grid with nothing on
+/// it", because the two need different sentences in front of a person.
+class GridModels {
+  final String? gridName;
+  final List<GridModel> models;
+
+  /// Every grid the machine is signed into, own grid first, each with its live models — the
+  /// picker's sections. Empty on an older daemon, which sends only [models] for the own grid; the
+  /// picker then draws that one section as it always did.
+  final List<GridSection> grids;
+
+  /// The engines a Local model can be offered to at all, as the daemon on that machine names them
+  /// (`localModelEngines`; the set of launch contracts in its `gridLaunch.ts`). Null when the
+  /// daemon is older and sends no such list — read as "offer everything", the behaviour before.
+  final Set<String>? localModelEngines;
+
+  /// Which `grid` the machine would run — see [GridCli]. Null when the daemon is older and does
+  /// not say, which claims nothing.
+  final GridCli? gridCli;
+
+  /// Did the machine ANSWER? False when the request failed — offline, timed out, or a daemon too
+  /// old to know the call.
+  ///
+  /// Kept apart from `gridName == null` because the two mean opposite things to a person. "This
+  /// account has no grid" is a fact worth acting on; "we could not ask" is not a fact about the
+  /// account at all, and a UI that folds them together tells a signed-in user to sign in again.
+  final bool reachable;
+
+  const GridModels({
+    required this.gridName,
+    required this.models,
+    this.grids = const [],
+    this.localModelEngines,
+    this.gridCli,
+    this.reachable = true,
+  });
+
+  /// The sections to draw: [grids] when the daemon sent them, else the own grid alone.
+  List<GridSection> get sections => grids.isNotEmpty
+      ? grids
+      : [
+          if (gridName != null)
+            GridSection(name: gridName!, own: true, models: models),
+        ];
+
+  /// The machine could not be asked. Says nothing about the account, because nothing is known —
+  /// including which engines it would have offered, or whether it has a `grid`.
+  const GridModels.unreachable()
+    : gridName = null,
+      models = const [],
+      grids = const [],
+      localModelEngines = null,
+      gridCli = null,
+      reachable = false;
+
+  /// Whether [engine] may be pointed at one of [models]: unknown engines are refused only when the
+  /// daemon gave a list — a picker that guessed would refuse the wrong ones on an older daemon.
+  bool canRunLocally(String? engine) {
+    final capable = localModelEngines;
+    if (capable == null) return true;
+    final id = engine?.trim().toLowerCase();
+    return id != null && capable.contains(id);
   }
 }

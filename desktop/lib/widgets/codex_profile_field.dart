@@ -24,6 +24,8 @@ class CodexProfileField extends StatefulWidget {
     required this.onChanged,
     this.onBusyChanged,
     this.observedPaths = const {},
+    this.textStyle,
+    this.valueChosen = false,
   });
 
   final AppNotifier notifier;
@@ -33,6 +35,8 @@ class CodexProfileField extends StatefulWidget {
   final ValueChanged<LocalCodexProfile?> onChanged;
   final ValueChanged<bool>? onBusyChanged;
   final Set<String> observedPaths;
+  final TextStyle? textStyle;
+  final bool valueChosen;
 
   @override
   State<CodexProfileField> createState() => _CodexProfileFieldState();
@@ -42,7 +46,7 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
   List<LocalCodexProfile> _profiles = const [];
   bool _loading = true;
   bool _linking = false;
-  bool _hasChosenProfile = false;
+  late bool _hasChosenProfile = widget.valueChosen;
   String? _error;
   int _loadGeneration = 0;
   int _machineRevision = 0;
@@ -61,7 +65,7 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
         oldWidget.notifier != widget.notifier) {
       _machineRevision++;
       _profiles = [];
-      _hasChosenProfile = false;
+      _hasChosenProfile = widget.valueChosen;
       _linking = false;
       _load();
     } else if (!setEquals(oldWidget.observedPaths, widget.observedPaths)) {
@@ -186,6 +190,10 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
       if (widget.value != null) widget.value!.path: widget.value!,
     };
     const refreshValue = '__refresh_profiles__';
+    final height = math.max(
+      34.0,
+      MediaQuery.textScalerOf(context).scale(13) * 1.35 + 14,
+    );
     return Wrap(
       spacing: 8,
       runSpacing: 6,
@@ -195,10 +203,12 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
           width:
               252 *
               math.min(1.4, MediaQuery.textScalerOf(context).scale(13) / 13),
-          height: 34,
+          height: height,
           child: AppSelectField<String>(
             key: const Key('new-agent-codex-profile-field'),
-            height: 34,
+            height: height,
+            textStyle: widget.textStyle,
+            radius: widget.textStyle == null ? null : 2,
             value: widget.value?.path ?? '',
             options: [
               const SelectOption(value: '', label: 'Default profile'),
@@ -228,10 +238,12 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
                     'Codex profile: ${widget.value?.label ?? (_loading ? 'Loading…' : 'Default')}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: grid.AppPalette.textPrimary,
-                    ),
+                    style:
+                        widget.textStyle ??
+                        TextStyle(
+                          fontSize: 13,
+                          color: grid.AppPalette.textPrimary,
+                        ),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -250,11 +262,13 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
             foregroundColor: grid.AppPalette.textSecondary,
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
             minimumSize: const Size(0, 32),
-            textStyle: TextStyle(
-              fontFamily: grid.AppFont.sans,
-              fontFamilyFallback: grid.AppFont.sansFallback,
-              fontSize: 13,
-            ),
+            textStyle:
+                widget.textStyle ??
+                TextStyle(
+                  fontFamily: grid.AppFont.sans,
+                  fontFamilyFallback: grid.AppFont.sansFallback,
+                  fontSize: 13,
+                ),
           ),
           child: Text(_linking ? 'Adding…' : 'Add'),
         ),

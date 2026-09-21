@@ -60,37 +60,32 @@ AppNotifier createApp({
 }
 
 void main() {
-  test(
-    'New Tab reuses the unused page from every tab, even at capacity',
-    () async {
-      final app = createApp();
-      addTearDown(app.dispose);
-      final starter = app.activeSwarm;
-      for (var i = 0; i < 10; i++) {
-        app.newSwarm();
-      }
-      expect(app.swarms, [starter]);
+  test('New Tab reuses the unused page from every tab, and past two dozen tabs still opens one', () async {
+    final app = createApp();
+    addTearDown(app.dispose);
+    final starter = app.activeSwarm;
+    for (var i = 0; i < 10; i++) {
+      app.newSwarm();
+    }
+    expect(app.swarms, [starter]);
 
-      for (var i = 1; i < AppNotifier.maxSwarms; i++) {
-        app.newSwarm(name: 'Project $i');
-      }
-      final project = app.activeSwarm;
-      expect(app.canOpenNewTab, isTrue);
-      for (var i = 0; i < 10; i++) {
-        app.selectSwarm(project.id);
-        app.newSwarm();
-        expect(app.activeSwarm, same(starter));
-        expect(app.swarms, hasLength(AppNotifier.maxSwarms));
-      }
-
-      await app.addAgentToSwarm('m', 'a0');
-      expect(app.canOpenNewTab, isFalse);
+    for (var i = 1; i < 30; i++) {
+      app.newSwarm(name: 'Project $i');
+    }
+    final project = app.activeSwarm;
+    for (var i = 0; i < 10; i++) {
+      app.selectSwarm(project.id);
       app.newSwarm();
       expect(app.activeSwarm, same(starter));
-      expect(app.panes.single.agentId, 'a0');
-      expect(app.swarms, hasLength(AppNotifier.maxSwarms));
-    },
-  );
+      expect(app.swarms, hasLength(30));
+    }
+
+    await app.addAgentToSwarm('m', 'a0');
+    app.newSwarm();
+    expect(app.activeSwarm, isNot(same(starter)));
+    expect(app.panes, isEmpty);
+    expect(app.swarms, hasLength(31));
+  });
 
   for (final activeId in ['empty-2', 'work']) {
     test(
@@ -134,11 +129,11 @@ void main() {
     'New swarm',
     'New tab',
     'New Tab',
-    'New Agent',
+    'New Harness',
     'New Tab',
   ]) {
     test(
-      '$legacy empty tabs restore as New Tab and number the first occupied tab',
+      '$legacy legacy empty tabs restore with a placeholder and follow the first agent',
       () async {
         final store = MemoryStore();
         final original = createApp(store: store);
@@ -149,13 +144,17 @@ void main() {
           store.values.values.any((value) => value.contains(legacy)),
           isTrue,
         );
+        // Old saves had no custom-name marker.
+        store.values.updateAll(
+          (_, value) => value.replaceAll(',"nameIsCustom":true', ''),
+        );
         original.dispose();
         final restored = createApp(store: store);
         addTearDown(restored.dispose);
         await restored.restorePaneLayoutForTest();
-        expect(restored.activeSwarm.name, 'New Tab');
+        expect(restored.activeSwarm.name, 'Untitled Tab');
         await restored.addAgentToSwarm('m', 'a0');
-        expect(restored.activeSwarm.name, 'harness-1');
+        expect(restored.activeSwarm.name, 'Agent 0');
       },
     );
   }
@@ -166,13 +165,13 @@ void main() {
       final app = createApp();
       addTearDown(app.dispose);
       await app.addAgentToSwarm('m', 'a0');
-      expect(app.activeSwarm.name, 'harness-1');
+      expect(app.activeSwarm.name, 'Agent 0');
       await app.addAgentToSwarm('m', 'a1');
-      expect(app.activeSwarm.name, 'harness-1');
-      expect(app.activeSwarm.toJson()['name'], 'harness-1');
+      expect(app.activeSwarm.name, 'Agent 0');
+      expect(app.activeSwarm.toJson()['name'], 'Agent 0');
       await app.closeSwarm(app.activeSwarmId);
       app.reopenClosedSwarm();
-      expect(app.activeSwarm.name, 'harness-1');
+      expect(app.activeSwarm.name, 'Agent 0');
     },
   );
 
@@ -188,32 +187,36 @@ void main() {
       final target = app.activeSwarm;
       app.newSwarm(name: 'Elsewhere');
       await app.addAgentToSwarm('m', 'a1', swarmId: target.id);
-      expect(target.name, 'harness-1');
+      expect(target.name, 'Agent 1');
       expect(app.activeSwarm.name, 'Elsewhere');
     },
   );
 
-  test('tab numbering skips saved and recently closed names', () async {
-    final store = MemoryStore();
-    final app = createApp(store: store);
-    await app.addAgentToSwarm('m', 'a0');
-    app.newSwarm();
-    await app.addAgentToSwarm('m', 'a1');
-    expect(app.activeSwarm.name, 'harness-2');
-    await app.closeSwarm(app.activeSwarmId);
-    app.newSwarm();
-    await app.addAgentToSwarm('m', 'a2');
-    expect(app.activeSwarm.name, 'harness-3');
-    app.renameSwarm(app.activeSwarmId, 'harness-10');
-    await app.flushPaneLayout();
-    app.dispose();
-    final restored = createApp(store: store);
-    addTearDown(restored.dispose);
-    await restored.restorePaneLayoutForTest();
-    restored.newSwarm();
-    await restored.addAgentToSwarm('m', 'a3');
-    expect(restored.activeSwarm.name, 'harness-11');
-  });
+  test(
+    'new tabs follow their harness and preserve custom names across restores',
+    () async {
+      final store = MemoryStore();
+      final app = createApp(store: store);
+      await app.addAgentToSwarm('m', 'a0');
+      app.newSwarm();
+      await app.addAgentToSwarm('m', 'a1');
+      expect(app.activeSwarm.name, 'Agent 1');
+      await app.closeSwarm(app.activeSwarmId);
+      app.newSwarm();
+      await app.addAgentToSwarm('m', 'a2');
+      expect(app.activeSwarm.name, 'Agent 2');
+      app.renameSwarm(app.activeSwarmId, 'harness-10');
+      await app.flushPaneLayout();
+      app.dispose();
+      final restored = createApp(store: store);
+      addTearDown(restored.dispose);
+      await restored.restorePaneLayoutForTest();
+      expect(restored.activeSwarm.name, 'harness-10');
+      restored.newSwarm();
+      await restored.addAgentToSwarm('m', 'a3');
+      expect(restored.activeSwarm.name, 'Agent 3');
+    },
+  );
 
   test(
     'shared memberships own one controller and close only the final stream',

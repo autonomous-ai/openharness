@@ -199,3 +199,57 @@ describe('foldTranscript', () => {
     expect(out).toEqual({ history: [], live: [], turnOpen: false })
   })
 })
+
+/**
+ * On a Local model the web tools are served by the `harness` MCP server, so a Claude Code transcript
+ * records `mcp__harness__web_search` where a Subscription model records `WebSearch`. The user sees an
+ * agent searching the web, not which road it took — so the cards are the native ones.
+ */
+describe('harness web tools render as the native cards', () => {
+  const assistantToolUse = (id: string, name: string, input: Record<string, unknown>): string =>
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] } })
+  const toolResult = (toolUseId: string, text: string): string =>
+    JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: text }] } })
+
+  it('maps mcp__harness__web_search to WebSearch, keeping its query', () => {
+    const state = newTurnState()
+    const events = [
+      userPrompt('what is the BTC price'),
+      assistantToolUse('t1', 'mcp__harness__web_search', { query: 'BTC price', num_results: 5 }),
+      toolResult('t1', '{"results":[]}'),
+    ].flatMap((line) => lineToEvents(line, state))
+    expect(events.find((e) => e.type === 'tool_start')).toEqual({
+      type: 'tool_start',
+      payload: { id: 't1', tool: 'WebSearch', input: { query: 'BTC price', num_results: 5 } },
+    })
+    expect(events.find((e) => e.type === 'tool_end')).toMatchObject({ payload: { id: 't1', tool: 'WebSearch', summary: 'Fetched' } })
+  })
+
+  it('maps mcp__harness__web_read to WebFetch, giving the card the `url` it reads', () => {
+    const state = newTurnState()
+    const events = [
+      userPrompt('read these'),
+      assistantToolUse('t2', 'mcp__harness__web_read', { urls: ['https://a.example/', 'https://b.example/'], max_chars: 6000 }),
+      toolResult('t2', '{"results":[]}'),
+    ].flatMap((line) => lineToEvents(line, state))
+    expect(events.find((e) => e.type === 'tool_start')).toEqual({
+      type: 'tool_start',
+      payload: {
+        id: 't2',
+        tool: 'WebFetch',
+        // The original key stays beside the one the card reads, so an expanded card shows the real input.
+        input: { urls: ['https://a.example/', 'https://b.example/'], max_chars: 6000, url: 'https://a.example/, https://b.example/' },
+      },
+    })
+    expect(events.find((e) => e.type === 'tool_end')).toMatchObject({ payload: { id: 't2', tool: 'WebFetch' } })
+  })
+
+  it('leaves every other MCP tool alone', () => {
+    const state = newTurnState()
+    const events = [
+      userPrompt('hi'),
+      assistantToolUse('t3', 'mcp__github__get_issue', { number: 1 }),
+    ].flatMap((line) => lineToEvents(line, state))
+    expect(events.find((e) => e.type === 'tool_start')).toMatchObject({ payload: { tool: 'mcp__github__get_issue', input: { number: 1 } } })
+  })
+})

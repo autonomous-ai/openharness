@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://harness.autonomous.ai/dsh/spec/1/harness.schema.json",
+  "title": "Domain-specific harness manifest (harness.json), spec 1 (with the 1.1 additions: kind, viewer.use)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "spec",
+    "id",
+    "name"
+  ],
+  "properties": {
+    "spec": {
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "agent",
+        "viewer"
+      ],
+      "description": "Spec 1.1. agent (default): a harness, one tile in the picker. viewer: a pane other packages point at with viewer.use; no engine, never a tile."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}/[a-z0-9][a-z0-9-]{0,63}$",
+      "description": "owner/name. The install directory under ~/.harness/dsh and the id on the wire."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40,
+      "description": "The picker tile."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 300
+    },
+    "category": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 24,
+      "description": "The kind of thing it makes, in a word or two — PCB, 3D design, Slides. The picker's second line under the name."
+    },
+    "author": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "Spec 1.1. Who made the agent — Autonomous for everything under autonomous/, a vendor name for a built-in engine — shown beside the category on the tile."
+    },
+    "formerly": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9-]+/[a-z0-9-]+$"
+      },
+      "description": "Ids this harness answered to before. An agent created under one keeps its harness across a rename."
+    },
+    "engine": {
+      "type": "string",
+      "description": "The base engine an agent package runs on: claude, codex, cursor, … (one of the CLI's ENGINES). Absent for a viewer package."
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "template": {
+          "type": "string",
+          "description": "Directory copied into an empty workspace."
+        },
+        "marker": {
+          "type": "string",
+          "description": "Workspace-relative file whose presence means 'already materialized'."
+        },
+        "init": {
+          "type": "string",
+          "description": "Command run after the template copy, cwd = workspace."
+        }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "instructions": {
+          "type": "string",
+          "description": "File copied to <workspace>/AGENTS.md (appended under a marker if one exists)."
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Directories whose SKILL.md-bearing subdirectories are linked into the workspace's skills folder."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Set on the engine process. Values may use ${dsh}, ${workspace}, ${home}."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Appended to the base engine's argv."
+        }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "setup": {
+          "type": "string",
+          "description": "Run once at install, cwd = install dir."
+        },
+        "doctor": {
+          "type": "string",
+          "description": "Exit 0 = ready. Each stdout line is shown to the user."
+        }
+      }
+    },
+    "viewer": {
+      "description": "Spec 1.1: either the viewer this package ships (command + url) or, for a harness, the viewer package it uses (use).",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "command",
+            "url"
+          ],
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "Long-running; env HARNESS_VIEWER_PORT, HARNESS_WORKSPACE, HARNESS_DSH, HARNESS_DSH_DIR, HARNESS_VIEWER, HARNESS_VIEWER_DIR."
+            },
+            "url": {
+              "type": "string",
+              "description": "Template: ${port} and ${artifact} (url-encoded)."
+            },
+            "artifactExtensions": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "string",
+                "pattern": "^\\.[A-Za-z0-9]+$"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "use"
+          ],
+          "properties": {
+            "use": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}/[a-z0-9][a-z0-9-]{0,63}$",
+              "description": "A viewer package's id. Installed with this harness (from the registry) and run in its own directory."
+            },
+            "url": {
+              "type": "string",
+              "description": "Optional: narrows the package's URL template."
+            },
+            "artifactExtensions": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "string",
+                "pattern": "^\\.[A-Za-z0-9]+$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "verdict": {
+      "type": "string",
+      "description": "Workspace-relative path of the verdict file. Default .harness/verdict.json."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "viewer"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "viewer"
+        ],
+        "not": {
+          "required": [
+            "engine"
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "engine"
+        ]
+      }
+    }
+  ]
+}

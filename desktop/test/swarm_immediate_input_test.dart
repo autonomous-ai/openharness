@@ -104,11 +104,13 @@ void main() {
             expect(secondInput, isEmpty, reason: 'The old agent owns no input');
             if (action == 'new tab') {
               expect(app.panes, isEmpty);
+              expect(app.swarms.first.panes, [first, second]);
+              expect(app.swarms, hasLength(2));
               expect(firstInput, isEmpty);
               expect(
                 tester
                     .widget<TextField>(
-                      find.byKey(const ValueKey('harness-start-search')),
+                      find.byKey(const ValueKey('swarm-search-input')),
                     )
                     .focusNode!
                     .hasFocus,
@@ -245,10 +247,7 @@ void main() {
         await command(tester, LogicalKeyboardKey.keyR, shift: true);
         await tester.pumpAndSettle();
         final field = tester.widget<TextField>(
-          find.descendant(
-            of: find.byType(AlertDialog),
-            matching: find.byType(TextField),
-          ),
+          find.byKey(const Key('tab-rename-input')),
         );
         expect(field.focusNode!.hasFocus, isTrue);
         if (change == 'waiting composer') {

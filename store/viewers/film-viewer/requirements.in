@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn>=0.29
+watchfiles>=0.21
+Pillow>=10.0
+pyyaml>=6.0
+jsonschema>=4.20

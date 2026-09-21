@@ -1,0 +1,11 @@
+{
+  "spec": 1,
+  "kind": "viewer",
+  "id": "autonomous/film-viewer",
+  "name": "Film Viewer",
+  "category": "Video",
+  "author": "OpenHarness contributors",
+  "description": "A screening room for OpenMontage productions: live storyboards, a film player, render versions, and notes tied to a moment in the cut.",
+  "toolchain": { "setup": "setup.sh", "doctor": "doctor.sh" },
+  "viewer": { "command": "viewer.sh", "url": "http://127.0.0.1:${port}/studio" }
+}

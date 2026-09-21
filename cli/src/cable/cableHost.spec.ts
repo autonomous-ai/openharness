@@ -1,7 +1,7 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
 import { describe, expect, it, vi } from 'vitest'
 
-import { DaemonCableHost, type CableHostWiring } from './cableHost.js'
+import { DaemonCableHost, cableEventFor, type CableHostWiring } from './cableHost.js'
 import type { FleetMachine, MachineFleet } from './machineFleet.js'
 
 const AGENTS: Array<{ agentId: string; registeredAt: number; active: boolean; terminalAvailable: boolean; engine: string }> = []
@@ -45,6 +45,12 @@ function fleetOf(machines: FleetMachine[]): MachineFleet {
 }
 
 const REMOTE: FleetMachine = { machineId: 'other', name: 'office-imac', state: 'ready', authMode: 'remote' }
+
+/** The window, open on one tab that holds these panes in this order. */
+function onTab(host: DaemonCableHost, agentIds: string[], id = 't1'): void {
+  host.setSwarms({ active: id, swarms: [{ id, name: 'Tab', agentIds, panes: agentIds.length }] })
+  host.setDesk(agentIds)
+}
 
 describe('DaemonCableHost.listMachines', () => {
   it('names the local row after the machine, and marks it local', async () => {
@@ -91,7 +97,7 @@ describe('DaemonCableHost.listMachines', () => {
   })
 })
 
-describe('DaemonCableHost.listAgents', () => {
+describe('DaemonCableHost.listAgentsFlat', () => {
   const set = (rows: Array<{ agentId: string; registeredAt: number; active?: boolean; terminalAvailable?: boolean }>): void => {
     AGENTS.length = 0
     for (const r of rows) AGENTS.push({ engine: 'claude', active: true, terminalAvailable: true, ...r })
@@ -106,13 +112,13 @@ describe('DaemonCableHost.listAgents', () => {
       { agentId: 'stale', registeredAt: 3, terminalAvailable: false },
     ])
     const host = new DaemonCableHost(wiring())
-    expect((await host.listAgents()).map((a) => a.id)).toEqual(['a', 'b'])
+    expect((await host.listAgentsFlat()).map((a) => a.id)).toEqual(['a', 'b'])
   })
 
   it('orders oldest first', async () => {
     set([{ agentId: 'new', registeredAt: 30 }, { agentId: 'old', registeredAt: 10 }, { agentId: 'mid', registeredAt: 20 }])
     const host = new DaemonCableHost(wiring())
-    expect((await host.listAgents()).map((a) => a.id)).toEqual(['old', 'mid', 'new'])
+    expect((await host.listAgentsFlat()).map((a) => a.id)).toEqual(['old', 'mid', 'new'])
   })
 
   it('breaks a tie by id, so the order never falls through to insertion order', async () => {
@@ -120,10 +126,10 @@ describe('DaemonCableHost.listAgents', () => {
     // daemon runs, so the web, the app and the dial would each show a different order for one registry.
     set([{ agentId: 'zz', registeredAt: 5 }, { agentId: 'aa', registeredAt: 5 }])
     const host = new DaemonCableHost(wiring())
-    expect((await host.listAgents()).map((a) => a.id)).toEqual(['aa', 'zz'])
+    expect((await host.listAgentsFlat()).map((a) => a.id)).toEqual(['aa', 'zz'])
 
     set([{ agentId: 'aa', registeredAt: 5 }, { agentId: 'zz', registeredAt: 5 }])
-    expect((await new DaemonCableHost(wiring()).listAgents()).map((a) => a.id)).toEqual(['aa', 'zz'])
+    expect((await new DaemonCableHost(wiring()).listAgentsFlat()).map((a) => a.id)).toEqual(['aa', 'zz'])
   })
 })
 
@@ -206,7 +212,7 @@ describe('the cloud lane follows the CABLE, not the selection', () => {
   })
 })
 
-describe('DaemonCableHost.listAgents across machines', () => {
+describe('DaemonCableHost.listAgentsFlat across machines, and the tab the dial gets', () => {
   /** A fleet whose remote agent lists are scripted per machine. */
   function crossFleet(byMachine: Record<string, Array<{ id: string; name: string }>>, machines = [REMOTE]): MachineFleet {
     const fleet = fleetOf(machines)
@@ -218,10 +224,10 @@ describe('DaemonCableHost.listAgents across machines', () => {
   }
 
   /** Two ticks: the first kicks the background refresh off, the second reads what it wrote. */
-  async function settled(host: DaemonCableHost): Promise<Awaited<ReturnType<DaemonCableHost['listAgents']>>> {
-    await host.listAgents()
+  async function settled(host: DaemonCableHost): Promise<Awaited<ReturnType<DaemonCableHost['listAgentsFlat']>>> {
+    await host.listAgentsFlat()
     await new Promise((r) => setTimeout(r, 0))
-    return host.listAgents()
+    return host.listAgentsFlat()
   }
 
   it('puts this computer first and every other machine after it, in wheel order', async () => {
@@ -238,6 +244,24 @@ describe('DaemonCableHost.listAgents across machines', () => {
     expect(agents.map((a) => a.id)).toEqual(['local-1', 'r1', 'r2'])
     expect(agents.map((a) => a.machine)).toEqual(['MacbookPro.local', 'office-imac', 'studio'])
     expect(agents.map((a) => a.machineId)).toEqual(['mine', 'other', 'third'])
+  })
+
+  it('lists a terminal beside the agents, and says it is one', async () => {
+    // It used to be left out, on the reading that the dial drives agents and a shell has no turn to
+    // drive. But the window draws a shell as a tile like any other, so leaving it out gave the dial
+    // a desk with a hole in it — a pane the carousel could not walk to and could not explain. It is
+    // listed now, and `engine` is how the tile knows to wear a prompt instead of a product mark and
+    // to offer no Voice; the same row is reported as `claude` the moment one is typed into it.
+    AGENTS.length = 0
+    AGENTS.push({ agentId: 'term-1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'terminal' })
+    AGENTS.push({ agentId: 'local-1', registeredAt: 2, active: true, terminalAvailable: true, engine: 'claude' })
+    const host = new DaemonCableHost(wiring(), crossFleet({}, []))
+    const agents = await settled(host)
+    expect(agents.map((a) => a.id)).toEqual(['term-1', 'local-1'])
+    expect(agents.map((a) => a.engine)).toEqual(['terminal', 'claude'])
+    // …and the overview's number is not the list's length. The carousel carries the shell because it
+    // is a tile; "N agents · all idle" counts work in flight, which a shell has none of.
+    expect(host.agentTotal()).toBe(1)
   })
 
   it('keeps a machine\'s agents when the backend cannot be asked', async () => {
@@ -277,58 +301,127 @@ describe('DaemonCableHost.listAgents across machines', () => {
     const machines: FleetMachine[] = [{ ...REMOTE }]
     const host = new DaemonCableHost(wiring(), crossFleet({ other: [{ id: 'r1', name: 'api' }] }, machines))
     await settled(host)
-    host.setDesk(['r1'])
+    onTab(host, ['r1'])
 
     machines[0].state = 'offline'
     const agents = await settled(host)
     expect(agents.map((a) => a.id)).toEqual(['r1'])
-    // Under the name and machine it was last seen with, not a placeholder.
+    // Under the name and machine it was last seen with, not a placeholder — and still on the dial's tab.
     expect(agents[0]).toMatchObject({ name: 'api', machineId: 'other', machine: 'office-imac' })
+    expect((await host.listAgents()).map((a) => a.id)).toEqual(['r1'])
     expect(host.knows('r1')).toBe(true)
   })
 
-  it('answers the RAIL\'s order flat, and the dial\'s ring separately, from one snapshot', async () => {
-    // Two questions, two right answers, and they must not be confused for each other. The dial walks a
-    // ring cut around the window's open tiles; ⌘K weighs "the first fifteen agents" against a list the
-    // person is reading top to bottom in their rail. Serving the ring to ⌘K makes the fifteen it picks
-    // impossible to predict from the screen — the tile someone happened to open last silently reorders
-    // what a typed task is even compared against.
+  it('answers the RAIL\'s order flat, and the dial\'s tab separately, from one snapshot', async () => {
+    // Two questions, two right answers, and they must not be confused for each other. The dial holds the
+    // window's open tab, in tile order; ⌘K weighs "the first fifteen agents" against a list the person is
+    // reading top to bottom in their rail. Serving the tab to ⌘K makes the fifteen it picks impossible to
+    // predict from the screen — the tile someone happened to open last silently reorders what a typed
+    // task is even compared against.
     AGENTS.length = 0
     AGENTS.push({ agentId: 'local-1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
     AGENTS.push({ agentId: 'local-2', registeredAt: 2, active: true, terminalAvailable: true, engine: 'claude' })
     const host = new DaemonCableHost(wiring(), crossFleet({ other: [{ id: 'r1', name: 'api' }] }))
     await settled(host)
-    // Two tiles, in an order the rail does not have: the remote agent first. ONE tile would not show the
-    // difference — a single-tile desk cuts the ring into head + tile + tail, which reassembles into the
-    // flat order exactly, so a test built on it would pass against either implementation.
-    host.setDesk(['r1', 'local-1'])
+    // Two tiles, in an order the rail does not have: the remote agent first.
+    onTab(host, ['r1', 'local-1'])
 
     // The rail: this computer's agents in their own order, then the other machine's.
     expect((await host.listAgentsFlat()).map((a) => a.id)).toEqual(['local-1', 'local-2', 'r1'])
-    // The ring: the same three, re-cut around the desk — the tiles in tile order, the rest off its edges.
-    const ring = await host.listAgents()
-    expect([...ring].map((a) => a.id).sort()).toEqual(['local-1', 'local-2', 'r1'])
-    expect(ring.map((a) => a.id)).toEqual(['r1', 'local-1', 'local-2'])
+    // The dial: the tab's two tiles in tile order, and local-2 — open nowhere — not at all.
+    expect((await host.listAgents()).map((a) => a.id)).toEqual(['r1', 'local-1'])
+    expect(host.agentTotal()).toBe(3)
   })
 
-  it('lists every agent, marking the ones the carousel does not walk', async () => {
-    // Ring first, then the rest — the session sends the count of the first
-    // group, so the ORDER is the split. Every agent is still listed, because
-    // the dial's own count and its switcher read this list.
+  it('sends the dial nothing with no window, and says so in the tab id', async () => {
+    // A shut app is not an empty tab. Both send zero rows; the dial draws "Run OpenHarness" for one and
+    // "Nothing on this tab" for the other, and `activeSwarm` is the only thing that tells them apart.
     AGENTS.length = 0
-    for (const agentId of ['a1', 'a2', 'a3', 'a4']) {
+    for (const agentId of ['a1', 'a2']) {
       AGENTS.push({ agentId, registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
     }
     const host = new DaemonCableHost(wiring())
     await settled(host)
-    // Tiles at both ends of the list: a2 and a3 are between them, so neither is
-    // reached by stepping off an edge.
-    host.setDesk(['a1', 'a4'])
 
-    const agents = await host.listAgents()
-    expect(agents.map((a) => a.id)).toEqual(['a1', 'a4', 'a2', 'a3'])
-    expect(agents.filter((a) => !a.offRing).map((a) => a.id)).toEqual(['a1', 'a4'])
-    expect(agents.filter((a) => a.offRing).map((a) => a.id)).toEqual(['a2', 'a3'])
+    expect(await host.listAgents()).toEqual([])
+    expect(host.activeSwarm()).toBe('')
+    // The count still travels: the overview prints it without holding a row per agent.
+    expect(host.agentTotal()).toBe(2)
+
+    onTab(host, [], 'fresh')
+    expect(await host.listAgents()).toEqual([])
+    expect(host.activeSwarm()).toBe('fresh')
+
+    host.setSwarms(null)
+    host.setDesk([])
+    expect(host.activeSwarm()).toBe('')
+  })
+
+  it('names the machine, and routes an open, for an agent heard from before it was listed', async () => {
+    // A remote machine's question can arrive before its agent list has ever been read. The card still has
+    // to say where it came from, and a tap on it has to open — "ignored open for unknown agent" was a
+    // question screen nobody could act on.
+    AGENTS.length = 0
+    const opened = vi.fn()
+    const host = new DaemonCableHost(wiring({ opened }), crossFleet({ other: [] }))
+    await settled(host)
+
+    expect(host.describe('r9')).toBeUndefined()
+    host.noteAgent('other', 'r9')
+    expect(host.describe('r9')).toEqual({ name: '', engine: '', machine: 'office-imac' })
+    host.openAgent('r9')
+    expect(opened).toHaveBeenCalledWith('other', 'r9', undefined)
+    // A question screen's own open says so, and the window hears it.
+    host.openAgent('r9', 'question')
+    expect(opened).toHaveBeenLastCalledWith('other', 'r9', 'question')
+  })
+
+  it('forks a local agent through the daemon and opens the fork in the window', async () => {
+    AGENTS.length = 0
+    AGENTS.push({ agentId: 'a1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
+    const opened = vi.fn()
+    const forkAgent = vi.fn(async () => ({ ok: true as const, agentId: 'a1-fork' }))
+    const host = new DaemonCableHost(wiring({ opened, forkAgent }))
+    await settled(host)
+
+    expect(await host.forkAgent('a1')).toEqual({ ok: true, agentId: 'a1-fork' })
+    expect(forkAgent).toHaveBeenCalledWith('a1')
+    // The new agent lands in the window on its machine — before any list has named it. Through
+    // `forked` when the wiring has it (beside its source), else the plain `opened`.
+    expect(opened).toHaveBeenCalledWith('mine', 'a1-fork')
+    const forked = vi.fn()
+    const host2 = new DaemonCableHost(wiring({ opened, forked, forkAgent }))
+    await settled(host2)
+    await host2.forkAgent('a1')
+    expect(forked).toHaveBeenCalledWith('mine', 'a1-fork', 'a1')
+    expect(host.describe('a1-fork')).toMatchObject({ machine: 'MacbookPro.local' })
+  })
+
+  it('forks a remote agent on its own machine, and reports the far end\'s refusal', async () => {
+    AGENTS.length = 0
+    const opened = vi.fn()
+    const fleet = crossFleet({ other: [{ id: 'r1', name: 'api' }] })
+    fleet.forkAgent = vi.fn(async (_m: string, id: string) => { if (id === 'r1') return 'r1-fork'; throw new Error('r1 is in the middle of a turn') })
+    const host = new DaemonCableHost(wiring({ opened }), fleet)
+    await settled(host)
+
+    expect(await host.forkAgent('r1')).toEqual({ ok: true, agentId: 'r1-fork' })
+    expect(fleet.forkAgent).toHaveBeenCalledWith('other', 'r1')
+    expect(opened).toHaveBeenCalledWith('other', 'r1-fork')
+    expect(await host.forkAgent('ghost')).toMatchObject({ ok: false, error: 'AGENT_NOT_FOUND' })
+  })
+
+  it('describes an agent it has listed, for a card about one the dial does not hold', async () => {
+    AGENTS.length = 0
+    AGENTS.push({ agentId: 'a1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'codex' })
+    const host = new DaemonCableHost(wiring(), crossFleet({ other: [{ id: 'r1', name: 'api' }] }))
+    await settled(host)
+    onTab(host, ['a1'])
+
+    // r1 is off the tab — the dial has no row for it — and the frame has to carry who it is.
+    expect(host.describe('r1')).toEqual({ name: 'api', engine: '', machine: 'office-imac' })
+    expect(host.describe('a1')).toMatchObject({ name: 'a1', engine: 'codex', machine: 'MacbookPro.local' })
+    expect(host.describe('ghost')).toBeUndefined()
   })
 
   it('does not resurrect an agent that has no tile', async () => {
@@ -371,6 +464,42 @@ describe('DaemonCableHost.listAgents across machines', () => {
     expect(focused).toHaveBeenCalledWith('other', 'r1')
   })
 
+  it('steps focus along the tab, wrapping at both ends, with the same forward the dial uses', async () => {
+    AGENTS.length = 0
+    for (const agentId of ['a1', 'a2', 'a3']) {
+      AGENTS.push({ agentId, registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
+    }
+    const focused = vi.fn()
+    const host = new DaemonCableHost(wiring({ focused }))
+    await settled(host)
+    // Tiles in the window's order, not registration order; a3 has no tile and is never stepped onto.
+    onTab(host, ['a2', 'a1'])
+
+    expect(await host.stepFocus('next', 'a2')).toEqual({ machineId: 'mine', agentId: 'a1' })
+    expect(await host.stepFocus('next', 'a1')).toEqual({ machineId: 'mine', agentId: 'a2' })
+    expect(await host.stepFocus('previous', 'a2')).toEqual({ machineId: 'mine', agentId: 'a1' })
+    // Off the tab, or nothing focused: the walk starts at the first (next) or last (previous) tile.
+    expect(await host.stepFocus('next', 'a3')).toMatchObject({ agentId: 'a2' })
+    expect(await host.stepFocus('previous', undefined)).toMatchObject({ agentId: 'a1' })
+    expect(focused.mock.calls.map((c) => c[1])).toEqual(['a1', 'a2', 'a1', 'a2', 'a1'])
+  })
+
+  it('steps onto a remote tile with that machine’s id, and reports an empty desk', async () => {
+    AGENTS.length = 0
+    AGENTS.push({ agentId: 'a1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
+    const focused = vi.fn()
+    const host = new DaemonCableHost(wiring({ focused }), crossFleet({ other: [{ id: 'r1', name: 'api' }] }))
+    await settled(host)
+    onTab(host, ['a1', 'r1'])
+    expect(await host.stepFocus('next', 'a1')).toEqual({ machineId: 'other', agentId: 'r1' })
+    expect(focused).toHaveBeenLastCalledWith('other', 'r1')
+
+    AGENTS.length = 0
+    const empty = new DaemonCableHost(wiring({ focused }))
+    await settled(empty)
+    expect(await empty.stepFocus('next', undefined)).toBe('no_agents')
+  })
+
   it('reports a focus with no edge, on or off the desk', async () => {
     // `edge` is gone with the arcs. It answered "which tile does this replace" for an agent the window
     // had none for, which the carousel could reach by walking past the end of the desk; it walks only
@@ -383,18 +512,18 @@ describe('DaemonCableHost.listAgents across machines', () => {
     const host = new DaemonCableHost(wiring({ focused }))
     await settled(host)
 
-    host.setDesk(['a2'])
+    onTab(host, ['a2'])
     await host.listAgents()
 
     host.focus('a2')
     expect(focused).toHaveBeenLastCalledWith(expect.any(String), 'a2')
-    // Even for one the carousel does not walk — the switcher can still name it, and the window opening
-    // it is what puts it on the desk.
+    // Even for one the dial does not hold — a notification can still name it, and the window opening it
+    // is what puts it on the tab.
     host.focus('a3')
     expect(focused).toHaveBeenLastCalledWith(expect.any(String), 'a3')
   })
 
-  it('walks the desk and nothing else', async () => {
+  it('holds the tab in tile order and nothing else', async () => {
     AGENTS.length = 0
     for (const agentId of ['a1', 'a2', 'a3', 'a4']) {
       AGENTS.push({ agentId, registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
@@ -402,31 +531,18 @@ describe('DaemonCableHost.listAgents across machines', () => {
     const host = new DaemonCableHost(wiring())
     await settled(host)
 
-    host.setDesk(['a3', 'a1'])
+    onTab(host, ['a3', 'a1'])
     const listed = await host.listAgents()
 
-    // Tile order first — that is what the dial walks — then everything else, marked so the session can
-    // count the split. The old ring wrapped the desk in two arcs of off-desk agents; a thumb can no
-    // longer step onto one at all.
-    expect(listed.map((a) => a.id)).toEqual(['a3', 'a1', 'a2', 'a4'])
-    expect(listed.filter((a) => !a.offRing).map((a) => a.id)).toEqual(['a3', 'a1'])
-  })
+    // Tile order — that is what the dial walks — and the two agents with no tile are not sent at all.
+    // They used to ride along as "off-ring" for the overview's count and the switcher; the count is a
+    // number now and the switcher is gone.
+    expect(listed.map((a) => a.id)).toEqual(['a3', 'a1'])
+    expect(host.agentTotal()).toBe(4)
 
-  it('pushes the agents in ring order, tiles first', async () => {
-    AGENTS.length = 0
-    for (const agentId of ['a1', 'a2', 'a3', 'a4']) {
-      AGENTS.push({ agentId, registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
-    }
-    const host = new DaemonCableHost(wiring({}))
-    await settled(host)
-
-    host.setDesk(['a3', 'a1'])
-    const ids = (await host.listAgents()).map((a) => a.id)
-    // Tiles in TILE order in the middle; a2 is nearer a1's end walking back,
-    // a4 nearer a3's end walking forward.
-    expect(ids.slice(ids.indexOf('a3'), ids.indexOf('a3') + 2)).toEqual(['a3', 'a1'])
-    expect(ids).toHaveLength(4)
-    expect(new Set(ids).size).toBe(4)
+    // A tile naming an id this daemon has never listed is skipped, not invented.
+    onTab(host, ['a3', 'ghost'])
+    expect((await host.listAgents()).map((a) => a.id)).toEqual(['a3'])
   })
 
   it('does not guess a machine for an unknown dial focus', async () => {
@@ -497,5 +613,48 @@ describe('DaemonCableHost.listAgents across machines', () => {
     const host = new DaemonCableHost(wiring(), fleet)
     expect(await settled(host)).toEqual([])
     expect(fleet.listAgents).not.toHaveBeenCalled()
+  })
+})
+
+describe('DaemonCableHost.listSwarms', () => {
+  // The bug this pair exists for: a tab holding only a shell drives no agent, so it named none, and
+  // the dial's switcher — which had nothing else to go on — dropped it. You could see that tab while
+  // standing on it and never reach it again once you left (openharness#160).
+  it('reports a tab that holds only a terminal as having a tile, not as empty', () => {
+    const host = new DaemonCableHost(wiring(), fleetOf([]))
+    host.setSwarms({
+      active: 'work',
+      swarms: [
+        { id: 'work', name: 'harness-1', agentIds: ['a1'], panes: 1 },
+        { id: 'shell', name: 'harness-2', agentIds: [], panes: 1 },
+        { id: 'fresh', name: 'New Harness', agentIds: [], panes: 0 },
+      ],
+    })
+    expect(host.listSwarms()).toEqual({
+      selected: 'work',
+      swarms: [
+        { id: 'work', name: 'harness-1', agents: 1, panes: 1 },
+        // No agents and still a place to go: this is the row that used to disappear.
+        { id: 'shell', name: 'harness-2', agents: 0, panes: 1 },
+        // Nothing on it at all — still nothing the dial can offer, which was always the intent.
+        { id: 'fresh', name: 'New Harness', agents: 0, panes: 0 },
+      ],
+    })
+  })
+
+  it('says nothing at all while no window is connected', () => {
+    const host = new DaemonCableHost(wiring(), fleetOf([]))
+    host.setSwarms(null)
+    expect(host.listSwarms()).toEqual({ selected: '', swarms: [] })
+  })
+})
+
+describe('cableEventFor', () => {
+  it('carries whether the card is a sub-agent\'s turn end, and nothing else about it', () => {
+    const base = { type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'body', recap: 'recap' } }
+    expect(cableEventFor(base)).toEqual({ kind: 'summary', agentId: 'a1', text: 'body', recap: 'recap', subagent: false })
+    expect(cableEventFor({ ...base, payload: { ...base.payload, subagent: true } })?.subagent).toBe(true)
+    expect(cableEventFor({ ...base, payload: { ...base.payload, subagent: 'yes' } })?.subagent).toBe(false)
+    expect(cableEventFor({ ...base, payload: { kind: 'tool', text: 'Bash' } })).toBeNull()
   })
 })

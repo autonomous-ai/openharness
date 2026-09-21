@@ -237,6 +237,16 @@ const envSchema = z.object({
   // Where domain-specific harnesses are installed (`harness dsh install`): one directory per
   // `<owner>/<name>` plus `installed.json`. Product-root state like the SSO session, not daemon data.
   DSH_DIR: z.string().default(join(adapterRootDir, 'dsh')),
+  // The ref the built-in shelf (`store/*` of the Harness monorepo) installs from, instead of the one
+  // its registry entries name (`main`). For trying a store change end to end BEFORE it merges: push
+  // the branch, run the daemon with HARNESS_STORE_REF=<branch>, and Get in the store fetches from it.
+  HARNESS_STORE_REF: z.string().regex(/^[A-Za-z0-9._\/-]{1,200}$/).optional().catch(undefined),
+  // Optional catalog mirror. Public HTTPS in production; loopback HTTP supports isolated tests.
+  HARNESS_STORE_CATALOG_URL: z.string().url().refine((value) => {
+    const url = new URL(value)
+    return !url.username && !url.password && (url.protocol === 'https:'
+      || (url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))
+  }).optional().catch(undefined),
   // This computer's stable id, minted once and never regenerated (see computerIdFile above). Pin it
   // explicitly on a box with no durable home — a container or CI job that gets a fresh ~/.harness on
   // every boot would otherwise look like a NEW computer each time and collect a machine per start.
@@ -246,6 +256,9 @@ const envSchema = z.object({
   ADAPTER_COMPUTER_ID_FILE: z.string().default(computerIdFile),
   // Set to 'true' to skip auto-installing lifecycle hooks for every supported engine.
   DISABLE_HOOK_INSTALL: z.string().default('false').transform((v) => v === 'true'),
+  // `harness start` and `harness login` install the `grid` CLI when the machine has none (see
+  // lib/gridInstall.ts). Off for tests and for a machine whose grid is managed some other way.
+  DISABLE_GRID_INSTALL: z.string().default('false').transform((v) => v === 'true'),
   // Additive terminal capability. Order controls deterministic primary-route tie breaking.
   //
   // UNSET MEANS AUTO — every backend that is actually usable here, which is what makes `herdr` then an
@@ -395,6 +408,14 @@ const envSchema = z.object({
   ADAPTER_RUNTIME_METADATA_URL: z
     .string()
     .default('https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/runtime/metadata.json'),
+  // The managed grid's manifest — its own document, as tmux's is (harness/runtime/tmux/metadata.json):
+  // install.sh slices a manifest by the FIRST platform key it finds, and Node's already has one. The
+  // same entry shape (version/url/sha256/size/archiveRoot), and its version is the PIN: the grid this
+  // build of the CLI drives, moved on purpose by a release and never by grid's own updater — see
+  // ensureManagedGrid() in lib/runtimeInstall.ts, which follows it on every daemon start.
+  ADAPTER_GRID_RUNTIME_METADATA_URL: z
+    .string()
+    .default('https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/runtime/grid/metadata.json'),
   // Where the `harness` launcher lives. Same name (and default) `scripts/install-cli.sh` uses, so a
   // sandboxed install and this process agree on which launcher they are talking about.
   HARNESS_BIN_DIR: z.string().default(adapterBinDir),

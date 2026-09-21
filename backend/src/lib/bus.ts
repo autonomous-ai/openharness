@@ -210,6 +210,14 @@ export function subscribeDown(machineId: string, cb: (msg: DownBusMsg) => void):
   return addSub(downChannel(machineId), cb as Cb)
 }
 
+/** A grant change invalidates observer sockets across backend instances. No content on this channel. */
+export function subscribeShareChanged(id: string, cb: () => void): Promise<() => void> {
+  return addSub(`harness-share:${id}`, cb)
+}
+export function publishShareChanged(id: string): Promise<number> {
+  return safePublish(`harness-share:${id}`, '{}')
+}
+
 export function publishUp(machineId: string, msg: UpBusMsg): Promise<number> {
   const type = (msg.frame as { type?: unknown } | undefined)?.type
   if (typeof type === 'string' && STATUS_TYPES.has(type)) void safePublish(statusChannel(machineId), JSON.stringify(msg.frame))
@@ -574,6 +582,20 @@ export function subscribeDeviceMachineListChanged(userId: string, cb: (msg: Devi
   return addSub(deviceMachineListChannel(userId), cb as Cb)
 }
 
+// Per-USER desk invalidation: the account's tabs changed (routes/desk.ts) on some REST worker; every
+// adapter socket of that user — one per computer, possibly on other workers — is told to re-fetch.
+export interface DeskChangedMsg { revision: number }
+
+const deskChannel = (userId: string): string => `desk:${userId}`
+
+export function publishDeskChanged(userId: string, msg: DeskChangedMsg): Promise<number> {
+  return safePublish(deskChannel(userId), JSON.stringify(msg))
+}
+
+export function subscribeDeskChanged(userId: string, cb: (msg: DeskChangedMsg) => void): Promise<() => void> {
+  return addSub(deskChannel(userId), cb as Cb)
+}
+
 export interface DeviceE2eePairMsg {
   kind: 'pending' | 'cleared'
   machineId: string
@@ -771,4 +793,18 @@ export async function getCommanderJoinGeneration(machineId: string): Promise<num
     logger.error('[bus] getCommanderJoinGeneration failed', err, { machineId })
     return undefined
   }
+}
+
+// ── validated SSO tokens (so N processes ask the profile API once, not N times) ────────────────────
+//
+// Not try/caught like the presence keys above: the cache treats a throw as a miss, and swallowing it
+// here would also swallow the difference between "absent" and "Redis is down" for anyone reading logs.
+// The key is a digest of the token — see `ssoProfileCache.ts` — and the value holds no credential.
+
+export const redisSsoProfileStore = {
+  get: (key: string): Promise<string | null> => pub.get(key),
+  async set(key: string, value: string, ttlMs: number): Promise<void> {
+    const px = Math.floor(ttlMs)
+    if (px > 0) await pub.set(key, value, 'PX', px)
+  },
 }

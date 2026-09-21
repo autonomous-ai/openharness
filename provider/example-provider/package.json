@@ -5,11 +5,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/autonomous-ai/autonomous-harness.git",
+    "url": "git+https://github.com/autonomous-ai/openharness.git",
     "directory": "example-provider"
   },
-  "homepage": "https://github.com/autonomous-ai/autonomous-harness#readme",
-  "bugs": "https://github.com/autonomous-ai/autonomous-harness/issues",
+  "homepage": "https://github.com/autonomous-ai/openharness#readme",
+  "bugs": "https://github.com/autonomous-ai/openharness/issues",
   "type": "module",
   "engines": {
     "node": ">=20.12"

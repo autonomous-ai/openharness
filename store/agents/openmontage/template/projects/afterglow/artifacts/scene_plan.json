@@ -1,0 +1,48 @@
+{
+  "version": "1.0",
+  "scenes": [
+    {
+      "id": "01",
+      "script_section_id": "s1",
+      "type": "animation",
+      "description": "Arrival",
+      "shot_intent": "An open beginning.",
+      "start_seconds": 0,
+      "end_seconds": 4.5,
+      "required_assets": []
+    },
+    {
+      "id": "02",
+      "script_section_id": "s2",
+      "type": "animation",
+      "description": "Breathing room",
+      "shot_intent": "Give an idea room to grow.",
+      "start_seconds": 4.5,
+      "end_seconds": 9,
+      "required_assets": []
+    },
+    {
+      "id": "03",
+      "script_section_id": "s3",
+      "type": "animation",
+      "description": "Orbit",
+      "shot_intent": "Move from stillness into possibility.",
+      "start_seconds": 9,
+      "end_seconds": 13.5,
+      "required_assets": []
+    },
+    {
+      "id": "04",
+      "script_section_id": "s4",
+      "type": "animation",
+      "description": "Afterglow",
+      "shot_intent": "Leave a thought that stays with you.",
+      "start_seconds": 13.5,
+      "end_seconds": 18,
+      "required_assets": []
+    }
+  ],
+  "metadata": {
+    "total_duration_seconds": 18
+  }
+}

@@ -13,11 +13,13 @@
  */
 import { spawn } from 'node:child_process'
 import { binaryOnPath } from './binaryOnPath.js'
+import { gridBinaryPath, gridChildEnv } from './gridExec.js'
 
-/** The command, and the flag on it that means "read the token off stdin" (autonomous-grid's
- *  `cli/parser.py`). Located on PATH with no environment override: tests control PATH directly, so an
- *  override would be a knob with no user. */
-export const GRID_BINARY = 'grid'
+/** The flag on `grid login` that means "read the token off stdin" (autonomous-grid's `cli/parser.py`).
+ *  WHICH `grid` is not decided here: `gridBinaryPath()` (lib/gridExec.ts) answers that for every grid
+ *  call alike — the developer override, then the managed runtime, then PATH — because this call
+ *  carries the token, and a sign-in on one binary with models on another would be two versions
+ *  writing one `~/.grid`. */
 export const GRID_HANDOFF_FLAG = '--harness'
 
 /**
@@ -52,12 +54,31 @@ function capped(sofar: string, chunk: Buffer): string {
 }
 
 const MISSING_MESSAGE =
-  'No `grid` on PATH, so there is nothing to hand this sign-in to. Install the grid CLI, then run '
-  + '`harness grid login` again.'
+  'No `grid` on PATH and no managed grid runtime, so there is nothing to hand this sign-in to. Install '
+  + 'the grid CLI, then run `harness grid login` again.'
 
 const OUTDATED_MESSAGE =
   `Your \`grid\` CLI is too old: it does not understand \`grid login ${GRID_HANDOFF_FLAG}\`. Update `
   + 'it, then run `harness grid login` again.'
+
+/**
+ * How long the child may take before it is killed and reported as a failure.
+ *
+ * ⚠️ Without this the spawn had no watchdog at all, unlike every other `grid` call
+ * (`gridExec`'s `DEFAULT_TIMEOUT_MS`): a control plane that accepts the connection and then answers
+ * nothing left this promise pending forever — a `harness login` that never returned, and, once the
+ * daemon began reconciling on its own (`lib/gridAttach.ts`), an attempt that never settled.
+ *
+ * Longer than `gridExec`'s 30s on purpose. This child makes TWO control-plane round trips (the
+ * token exchange, then the per-grid token fetch) where the others make one, and it is the call a
+ * person is most likely to be watching — cutting a slow but working sign-in off would be worse than
+ * waiting. It is a bound on a hang, not a performance budget.
+ */
+const HANDOFF_TIMEOUT_MS = 60_000
+
+function timedOutMessage(timeoutMs: number): string {
+  return `\`grid login ${GRID_HANDOFF_FLAG}\` did not answer within ${Math.round(timeoutMs / 1000)}s.`
+}
 
 function failedMessage(status: number | null, signal: NodeJS.Signals | null): string {
   const how = status === null ? `was killed by ${signal ?? 'a signal'}` : `exited ${status}`
@@ -78,19 +99,24 @@ function failedMessage(status: number | null, signal: NodeJS.Signals | null): st
  */
 export async function handOffToGrid(
   token: string,
-  opts: { json?: boolean } = {},
+  opts: { json?: boolean; timeoutMs?: number } = {},
 ): Promise<GridHandoffResult> {
-  // Asking PATH rather than spawning to find out: a missing `grid` is a sentence about installing
-  // one, not a spawn error the caller has to recognise. This process's own environment, inherited —
-  // there is nothing to override, and a parameter for one would be the knob with no user the ticket
-  // refuses.
-  if (!binaryOnPath(GRID_BINARY)) {
+  // Asking by reading rather than by spawning to find out: a missing `grid` is a sentence about
+  // installing one, not a spawn error the caller has to recognise — and a present-but-unrunnable
+  // one (EACCES, never ENOENT) is caught too. Resolved off this process's own environment, which is
+  // the one place the override and the runtime dir are read from.
+  const binary = gridBinaryPath()
+  if (!binaryOnPath(binary)) {
     return { code: 'GRID_CLI_MISSING', exitCode: 1, message: MISSING_MESSAGE, stdout: '', stderr: '' }
   }
+  const timeoutMs = opts.timeoutMs ?? HANDOFF_TIMEOUT_MS
   const args = ['login', GRID_HANDOFF_FLAG, ...(opts.json ? ['--json'] : [])]
   return await new Promise<GridHandoffResult>((resolve) => {
-    const child = spawn(GRID_BINARY, args, {
+    const child = spawn(binary, args, {
       stdio: ['pipe', opts.json ? 'pipe' : 'inherit', opts.json ? 'pipe' : 'inherit'],
+      // The human path inherits stderr, which is a terminal — exactly where grid would offer
+      // `grid update` for a binary the harness pins. See GRID_NO_UPDATE_CHECK_VAR in gridExec.ts.
+      env: gridChildEnv(),
     })
     let stdout = ''
     let stderr = ''
@@ -101,7 +127,22 @@ export async function handOffToGrid(
     })
 
     let settled = false
-    const settle = (result: GridHandoffResult): void => { if (!settled) { settled = true; resolve(result) } }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const settle = (result: GridHandoffResult): void => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      resolve(result)
+    }
+
+    // The watchdog, armed before anything can block. `SIGKILL` with no `SIGTERM` first, exactly as
+    // `gridExec` does: what is being bounded is a child that has stopped responding, and a graceful
+    // signal it may never handle is one more thing to wait for. The `close` this provokes finds
+    // `settled` already true, so the kill reports the timeout rather than a signal death.
+    timer = setTimeout(() => {
+      try { child.kill('SIGKILL') } catch { /* already gone */ }
+      settle({ code: 'GRID_LOGIN_FAILED', exitCode: 1, message: timedOutMessage(timeoutMs), stdout, stderr })
+    }, timeoutMs)
 
     // stdio[0] is a pipe, so this is never null. Refusing loudly anyway rather than optional-chaining
     // past it: with no pipe the token is never delivered, and a `grid` left waiting for one on a
@@ -109,7 +150,7 @@ export async function handOffToGrid(
     const { stdin } = child
     if (!stdin) {
       child.kill()
-      settle({ code: 'GRID_LOGIN_FAILED', exitCode: 1, message: `Could not open a pipe to \`${GRID_BINARY}\`.`, stdout, stderr })
+      settle({ code: 'GRID_LOGIN_FAILED', exitCode: 1, message: `Could not open a pipe to \`${binary}\`.`, stdout, stderr })
       return
     }
 
@@ -117,7 +158,7 @@ export async function handOffToGrid(
     // before reading breaks the pipe. Both are the child's story to tell, never a crash here.
     child.once('error', (err: NodeJS.ErrnoException) => settle(err.code === 'ENOENT'
       ? { code: 'GRID_CLI_MISSING', exitCode: 1, message: MISSING_MESSAGE, stdout, stderr }
-      : { code: 'GRID_LOGIN_FAILED', exitCode: 1, message: `Could not run \`${GRID_BINARY}\`: ${err.message}`, stdout, stderr }))
+      : { code: 'GRID_LOGIN_FAILED', exitCode: 1, message: `Could not run \`${binary}\`: ${err.message}`, stdout, stderr }))
     stdin.on('error', () => { /* EPIPE — see above */ })
 
     // A trailing newline as well as the close: `grid` reads one bounded LINE, so the hand-off does

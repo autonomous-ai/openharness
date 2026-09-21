@@ -33,7 +33,7 @@ describe('classifyGridAssignment', () => {
       // Pi and OpenCode keep their endpoint in a file rather than in the process, so they
       // round-trip through their own probes below — this one only covers what a process carries.
       if (engine === 'pi' || engine === 'opencode') continue
-      const built = buildGridEngineLaunch(engine, OVERRIDE)
+      const built = buildGridEngineLaunch(engine, OVERRIDE, { hermesSystemManaged: false })
       expect(built.ok).toBe(true)
       if (!built.ok) continue
       const assignment = classifyGridAssignment(engine, built.launch.env, built.launch.args.join(' '))
@@ -46,7 +46,7 @@ describe('classifyGridAssignment', () => {
   it('never carries the credential out of the process', () => {
     for (const engine of gridCapableEngines()) {
       if (engine === 'pi' || engine === 'opencode') continue
-      const built = buildGridEngineLaunch(engine, OVERRIDE)
+      const built = buildGridEngineLaunch(engine, OVERRIDE, { hermesSystemManaged: false })
       if (!built.ok) continue
       const assignment = classifyGridAssignment(engine, built.launch.env, built.launch.args.join(' '))
       expect(JSON.stringify(assignment), engine).not.toContain('gridkey-secret')
@@ -111,7 +111,7 @@ describe('Pi, whose endpoint lives in a file', () => {
 
   /** Writes the launch's own config files where the probe will look for them. */
   function materialize(): { dir: string; args: string } {
-    const built = buildGridEngineLaunch('pi', OVERRIDE)
+    const built = buildGridEngineLaunch('pi', OVERRIDE, { hermesSystemManaged: false })
     if (!built.ok) throw new Error(built.detail)
     const dir = mkdtempSync(join(tmpdir(), 'pi-grid-'))
     dirs.push(dir)
@@ -217,7 +217,7 @@ describe('readOpencodeGridAssignment', () => {
     // The strongest form of this test: build the real launch, write its real files where the probe
     // will look, and read them back. A spec that hand-writes the config proves only that two
     // hand-written shapes agree.
-    const built = buildGridEngineLaunch('opencode', OVERRIDE)
+    const built = buildGridEngineLaunch('opencode', OVERRIDE, { hermesSystemManaged: false })
     if (!built.ok) throw new Error(built.detail)
     const dir = mkdtempSync(join(tmpdir(), 'opencode-grid-'))
     dirs.push(dir)
@@ -318,7 +318,7 @@ describe('web tools do not disturb the probe', () => {
   })
 
   const classify = (engine: AgentEngine, override: GridLaunchOverride) => {
-    const built = buildGridEngineLaunch(engine, override)
+    const built = buildGridEngineLaunch(engine, override, { hermesSystemManaged: false })
     if (!built.ok) throw new Error(`${engine}: ${built.detail}`)
     return classifyGridAssignment(engine, built.launch.env, built.launch.args.join(' '))
   }
@@ -336,13 +336,13 @@ describe('web tools do not disturb the probe', () => {
 
   it('never reads the control plane as the place an agent is running', () => {
     // Codex is the one at risk: its endpoint comes out of argv, which now also carries
-    // `mcp_servers.grid_web.url=…`. Reading that as the endpoint would report an agent as running on
+    // `mcp_servers.harness.url=…`. Reading that as the endpoint would report an agent as running on
     // the control plane, and the app would offer to move it off a grid it is already on.
     expect(classify('codex', WITH_MCP)?.baseUrl).toBe(RELAY_V1)
   })
 
   it("reads OpenCode's config back with the server declared beside the provider", async () => {
-    const built = buildGridEngineLaunch('opencode', WITH_MCP)
+    const built = buildGridEngineLaunch('opencode', WITH_MCP, { hermesSystemManaged: false })
     if (!built.ok) throw new Error(built.detail)
     const dir = mkdtempSync(join(tmpdir(), 'opencode-grid-mcp-'))
     dirs.push(dir)

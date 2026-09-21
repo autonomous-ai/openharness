@@ -1,0 +1,5 @@
+node_modules/
+__pycache__/
+tmp/
+oss-cad-suite/
+.oss-cad-suite.*/

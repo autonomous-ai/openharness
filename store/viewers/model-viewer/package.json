@@ -1,0 +1,14 @@
+{
+  "name": "autonomous-model-viewer",
+  "private": true,
+  "description": "3D Viewer for Harness: a Blender-style glTF viewport built on three.js, served from this package",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "smoke": "node test/smoke.mjs",
+    "test": "node test/smoke.mjs && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "three": "0.186.0"
+  }
+}

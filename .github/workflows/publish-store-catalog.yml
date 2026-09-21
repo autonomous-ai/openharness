@@ -1,0 +1,46 @@
+name: Publish Store catalog
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'store/agents/**'
+      - 'store/viewers/**'
+      - 'store/registry/**'
+      - 'store/tools/catalog.mjs'
+      - 'cli/scripts/lib/dshRegistry.mjs'
+      - '.github/workflows/publish-store-catalog.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-store-catalog
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # Runs only trusted, merged source. Never executes a pull request or a fork.
+    if: github.repository == 'autonomous-ai/openharness' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      # Immutable official action commits, verified against the v7 tags.
+      # The checkout does not retain credentials in Git configuration.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22.23.2'
+      # No dependency install, package setup, release tags, or cloud access.
+      # The script writes only catalog.json on the store-catalog branch using
+      # a fast-forward ref update. It never modifies main or installed packages.
+      - name: Validate and publish catalog metadata
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node store/tools/catalog.mjs --publish

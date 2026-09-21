@@ -8,12 +8,16 @@ import 'package:xterm/xterm.dart';
 
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/core/test_run.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 
 void main() {
+  if (!kUnderTest) {
+    throw StateError('Native terminal fixtures require FLUTTER_TEST=1');
+  }
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('native terminal replaces keyframes without stale render state', (
@@ -118,10 +122,10 @@ void main() {
     await tester.pump();
     session.scroll(0, 0, 0);
     session.scroll(1, 10, 0);
-    await tester.pump(const Duration(milliseconds: 12));
+    await tester.pump(const Duration(milliseconds: 25));
     expect(
-      utf8.decode([for (final frame in inputs) ...frame.bytes]),
-      contains('\x1b[A'),
+      controls.where((frame) => frame.type == 'terminal_scroll').last.payload,
+      containsPair('direction', 'up'),
     );
     await session.handleBinary(
       TerminalBinaryFrame(

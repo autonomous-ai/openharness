@@ -1,0 +1,8 @@
+# Hardware/mechanical/PCB design files — treat as binary so autocrlf never rewrites them.
+*.step binary
+*.stp binary
+*.stl binary
+*.epro2 binary
+*.pdf binary
+*.xlsx binary
+*.zip binary

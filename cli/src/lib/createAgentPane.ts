@@ -13,7 +13,7 @@
  */
 import { homedir } from 'node:os'
 import type { AgentEngine } from '../engines/types.js'
-import type { GridLaunchOverride } from './gridLaunch.js'
+import type { GridLaunchRecord } from './gridLaunch.js'
 import type { RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import type { TerminalCreateResult, TmuxRuntimeRef } from './terminalTypes.js'
@@ -29,25 +29,42 @@ export interface CreateAgentPaneDeps {
     primaryRuntimeKey?: string
     cwd?: string | null
     grid?: { baseUrl: string; model: string | null } | null
-    gridLaunch?: GridLaunchOverride | null
+    gridLaunchRecord?: GridLaunchRecord | null
     codexHome?: string | null
     dsh?: string | null
+    agent?: string | null
     bypassPermission?: boolean
+    permissionMode?: string | null
+    defaultName?: string | null
+    label?: string | null
+    forkedFrom?: { agentId: string; name: string } | null
   }) => RegisteredSession | null }
   engine: AgentEngine
   cwd?: string | null
   bypassPermission?: boolean
+  /** The permission mode it was launched in (`PERMISSION_MODES`), kept so a relaunch reapplies it. */
+  permissionMode?: string | null
+  /** The name the creator asked for (`agent_create`'s `name`); without one the registry names the agent. */
+  defaultName?: string | null
+  /** Who the agent is when a DSH says ("Blender") — the name the registry gives is built from it. */
+  label?: string | null
   /** Base tmux session name (`-s`). Retries append `-r<attempt>` — see module doc. */
   sessionLabel: string
   argv: string[]
   env?: Record<string, string>
   grid?: { baseUrl: string; model: string | null } | null
-  /** The grid launch behind `grid`, credential included — what restore/restart relaunch the pane with. */
-  gridLaunch?: GridLaunchOverride | null
+  /** The grid launch behind `grid` (credential included — what restore/restart relaunch the pane with)
+   *  and what building it decided about web search (what the app shows for this agent). */
+  gridLaunchRecord?: GridLaunchRecord | null
   /** The CODEX_HOME folder this agent was launched against, if the caller chose one; codex only. */
   codexHome?: string | null
   /** The domain-specific harness this agent is created as, if any. */
   dsh?: string | null
+  /** The engine's named agent the pane opens as (`agent_create`'s `agent`); kept on the row so a
+   *  relaunch opens as it again. Already in `argv` — this is the record, not the launch. */
+  agent?: string | null
+  /** The agent this pane is a fork of (`agent_fork`), recorded on the row; null otherwise. */
+  forkedFrom?: { agentId: string; name: string } | null
   maxAttempts?: number
 }
 
@@ -79,10 +96,15 @@ export async function createAndRegisterPane(deps: CreateAgentPaneDeps): Promise<
       primaryRuntimeKey: terminalRouteKey(spawned.runtime),
       cwd: deps.cwd,
       grid: deps.grid,
-      gridLaunch: deps.gridLaunch,
+      gridLaunchRecord: deps.gridLaunchRecord,
       codexHome: deps.codexHome,
       dsh: deps.dsh,
+      agent: deps.agent,
       bypassPermission: deps.bypassPermission,
+      permissionMode: deps.permissionMode,
+      defaultName: deps.defaultName,
+      label: deps.label,
+      forkedFrom: deps.forkedFrom,
     })
     if (pending) return { ok: true, spawned, pending }
     console.warn(`[agent] create ${deps.engine} registration failed · pane ${spawned.runtime.paneId} · `

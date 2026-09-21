@@ -624,6 +624,7 @@ export class RuntimeProfileManager {
   onChanged: ((sessionId: string) => void) | null = null
 
   hydrate(session: RegisteredSession, rawLines: string[]): void {
+    if (this.unbound(session.sessionId)) return
     this.states.set(session.sessionId, {
       // Registries written by older builds can hold a non-string model; treat it as unknown instead of
       // letting it reach claudeAliasForModel and abort startup.
@@ -926,6 +927,7 @@ export class RuntimeProfileManager {
   }
 
   selectedModel(session: RegisteredSession): string | null {
+    if (this.unbound(session.sessionId)) return null
     const state = this.states.get(session.sessionId)
     if (!state?.model) return null
     const model = session.engine === 'claude' ? claudeAliasForModel(state.model) ?? state.model : state.model
@@ -1077,10 +1079,30 @@ export class RuntimeProfileManager {
     return null
   }
 
+  /**
+   * An agent that has not bound an engine session yet. Its `sessionId` is the EMPTY STRING, which is
+   * not an identity — every unbound agent would share one entry in a map keyed on it, across engines.
+   *
+   * That is not hypothetical. A claude agent ten seconds old was retargeted onto a grid, and the
+   * "what model was it on?" read that the retarget keeps — so a later move home can restore it —
+   * answered `opencode/big-pickle`: an OpenCode agent sitting at `''` had written its footer there
+   * first. The claude pane came home with `ANTHROPIC_MODEL=opencode/big-pickle` and Claude Code
+   * answered "There's an issue with the selected model (opencode/big-pickle). It may not exist".
+   *
+   * So `''` gets no entry. Reads answer "nothing observed", which is TRUE — an agent with no engine
+   * session has no model to report — and writes land in a throwaway rather than in a bucket the next
+   * agent will read. Everything real is re-read once the session binds, moments later.
+   */
+  private unbound(sessionId: string): boolean {
+    return !sessionId
+  }
+
   private state(sessionId: string): RuntimeState {
+    const blank = (): RuntimeState => ({ model: null, effort: null, mode: 'unknown', cliVersion: null, observedAt: null })
+    if (this.unbound(sessionId)) return blank()
     let state = this.states.get(sessionId)
     if (!state) {
-      state = { model: null, effort: null, mode: 'unknown', cliVersion: null, observedAt: null }
+      state = blank()
       this.states.set(sessionId, state)
     }
     return state

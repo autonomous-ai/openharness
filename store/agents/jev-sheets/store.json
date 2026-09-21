@@ -1,0 +1,21 @@
+{
+  "homepage": "https://typesafe.ai",
+  "upstream": "https://typesafe.ai",
+  "license": "MIT",
+  "tagline": "Drop in any spreadsheet, ask in plain words, get every row answered in seconds",
+  "examples": [
+    {
+      "prompt": "I dropped my app reviews export on the pane. Read a sample of it, then work out what people complain about most, who is thinking of leaving, and how angry they are. Write me a findings report with the counts and word-for-word quotes.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/jev-sheets/own-file.jpg",
+      "caption": "1,200 reviews, three questions, 36 seconds, 3 cents: the 119 who may leave. The reviews shown are made up"
+    },
+    {
+      "prompt": "Our survey export is in survey.csv with 3,000 free-text answers. Code every answer by theme, tell me the top five themes among the unhappy customers, and list the 20 answers I should read myself.",
+      "caption": "The agent writes the questions with you, Jev answers them for every row, and the review line shows what to read"
+    },
+    {
+      "prompt": "tickets.csv is last month of support tickets. Send each one to a team, flag the urgent ones, and tell me which three problems cost us the most tickets. Save the result so I can open it in Excel.",
+      "caption": "Every row gets an answer and a confidence. answers.csv is yours to keep"
+    }
+  ]
+}

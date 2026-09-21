@@ -84,6 +84,51 @@ describe('Codex rollout normalizer', () => {
     ])
   })
 
+  it('renders the harness web tools as the native WebSearch / WebFetch cards', () => {
+    // Codex spells an MCP tool `mcp__<server>__<tool>` (its `non_prefixed_mcp_tool_names` feature is
+    // off by default on 0.154.0), and a rollout may also split the pair into `name` + `namespace`
+    // — both shapes were read off real rollouts on this machine.
+    const normalizer = new CodexNormalizer('live')
+    const events = [
+      line('response_item', { type: 'function_call', call_id: 'ws-1', name: 'mcp__harness__web_search', arguments: '{"query":"BTC price","num_results":5}' }),
+      line('response_item', { type: 'function_call_output', call_id: 'ws-1', output: '{"results":[]}' }),
+      line('response_item', { type: 'function_call', call_id: 'wr-1', name: 'web_read', namespace: 'mcp__harness', arguments: '{"urls":["https://a.example/"]}' }),
+      line('response_item', { type: 'function_call_output', call_id: 'wr-1', output: '{"results":[]}' }),
+    ].flatMap((raw) => normalizer.ingest(raw))
+
+    expect(events).toEqual([
+      { type: 'tool_start', payload: { id: 'ws-1', tool: 'WebSearch', input: { query: 'BTC price', num_results: 5 } } },
+      { type: 'tool_end', payload: { id: 'ws-1', tool: 'WebSearch', output: '{"results":[]}', isError: false, summary: '{"results":[]}' } },
+      { type: 'tool_start', payload: { id: 'wr-1', tool: 'WebFetch', input: { urls: ['https://a.example/'], url: 'https://a.example/' } } },
+      { type: 'tool_end', payload: { id: 'wr-1', tool: 'WebFetch', output: '{"results":[]}', isError: false, summary: '{"results":[]}' } },
+    ])
+  })
+
+  it('unwraps a code-mode call to the harness web tools the same way', () => {
+    // In code mode every tool is a JS identifier on `tools`, MCP tools included:
+    // `await tools.mcp__harness__web_search({...})` (the binary's own tool-listing prose, 0.154.0).
+    const normalizer = new CodexNormalizer('live')
+    const events = [
+      line('response_item', {
+        type: 'custom_tool_call',
+        call_id: 'web-2',
+        name: 'exec',
+        input: 'const r = await tools.mcp__harness__web_search({query:"ETH price", num_results: 3}); text(r)',
+      }),
+      line('response_item', {
+        type: 'custom_tool_call',
+        call_id: 'web-3',
+        name: 'exec',
+        input: 'const r = await tools.mcp__harness__web_read({urls:["https://a.example/", \'https://b.example/\']}); text(r)',
+      }),
+    ].flatMap((raw) => normalizer.ingest(raw))
+
+    expect(events).toEqual([
+      { type: 'tool_start', payload: { id: 'web-2', tool: 'WebSearch', input: { query: 'ETH price' } } },
+      { type: 'tool_start', payload: { id: 'web-3', tool: 'WebFetch', input: { url: 'https://a.example/, https://b.example/' } } },
+    ])
+  })
+
   it('normalizes update_plan and hides internal deferred-tool discovery', () => {
     const normalizer = new CodexNormalizer('live')
     const events = [

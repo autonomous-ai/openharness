@@ -1,0 +1,20 @@
+{
+  "spec": 1,
+  "kind": "viewer",
+  "id": "autonomous/doc-viewer",
+  "name": "Doc Viewer",
+  "category": "Documents",
+  "author": "Autonomous",
+  "description": "A reader for the PDF a harness is writing: thumbnails, the outline, find, zoom and two-page spreads on pdf.js — redrawn in place on every compile, changed pages marked, compile errors shown over the last good pages.",
+  "toolchain": {
+    "setup": "./setup.sh",
+    "doctor": "./doctor.sh"
+  },
+  "viewer": {
+    "command": "./viewer.sh",
+    "url": "http://127.0.0.1:${port}/?file=${artifact}",
+    "artifactExtensions": [
+      ".pdf"
+    ]
+  }
+}

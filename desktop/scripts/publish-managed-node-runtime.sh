@@ -13,12 +13,21 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 2
 fi
 
-for command in curl gsutil shasum python3; do
+for command in curl shasum python3; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "error: $command is required" >&2
     exit 1
   }
 done
+
+# --- GCS client: `gcloud storage`, and only `gcloud storage` ---
+# gsutil was retired from this repo on 2026-09-17. It is a standalone Python tool that only
+# understands gcloud's *user* and *service-account-key* credentials: it cannot use the
+# external-account (federated) credential Workload Identity Federation issues, so every call fails
+# under WIF while the identical `gcloud storage` call works — it is the same gcloud binary that
+# performed the token exchange. Do not reintroduce it.
+command -v gcloud >/dev/null 2>&1 || { echo "error: gcloud not found — install/authenticate the gcloud SDK" >&2; exit 1; }
+gcloud storage --help >/dev/null 2>&1 || { echo "error: this gcloud is too old for 'gcloud storage' — update the gcloud SDK" >&2; exit 1; }
 
 GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
 PUBLIC_BASE="${GCS_PUBLIC_BASE_URL:-https://storage.googleapis.com/${GCS_BUCKET}}"
@@ -56,12 +65,12 @@ for pair in \
   url="${PUBLIC_BASE%/}/${object_path}"
   size="$(wc -c < "$archive_path" | tr -d ' ')"
   echo ">> uploading $archive ($size bytes)"
-  gsutil -h 'Cache-Control:public, max-age=31536000, immutable' cp \
+  gcloud storage cp --cache-control='public, max-age=31536000, immutable' \
     "$archive_path" "gs://${GCS_BUCKET}/${object_path}"
   ENTRIES+=("$manifest_arch|v$VERSION|$url|$actual|$size|node-v${VERSION}-${platform}-${upstream_arch}")
 done
 
-if ! gsutil cp "gs://${GCS_BUCKET}/${METADATA_PATH}" "$SRC" 2>/dev/null; then
+if ! gcloud storage cp "gs://${GCS_BUCKET}/${METADATA_PATH}" "$SRC" 2>/dev/null; then
   printf '{}' > "$SRC"
 fi
 
@@ -93,9 +102,9 @@ with open(dst, "w") as f:
     f.write("\n")
 PY
 
-gsutil -h 'Content-Type:application/json' \
-       -h 'Cache-Control:no-cache, no-store, must-revalidate' \
-       cp "$DST" "gs://${GCS_BUCKET}/${METADATA_PATH}"
+gcloud storage cp --content-type=application/json \
+       --cache-control='no-cache, no-store, must-revalidate' \
+       "$DST" "gs://${GCS_BUCKET}/${METADATA_PATH}"
 
 echo ">> published managed Node v${VERSION}"
 echo ">> manifest: ${PUBLIC_BASE%/}/${METADATA_PATH}"

@@ -1,0 +1,22 @@
+{
+  "homepage": "https://github.com/calesthio/OpenMontage",
+  "upstream": "https://github.com/calesthio/OpenMontage",
+  "license": "AGPL-3.0",
+  "tagline": "Open-source agentic video production",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/agents/openmontage/screenshots/studio.png",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/agents/openmontage/screenshots/review.png"
+  ],
+  "examples": [
+    {
+      "prompt": "Make a 12-second title sequence for a riverside night market called Lanterns: paper lanterns drifting up over dark water with their reflections trembling, then the title and dates glowing in. Three shots, warm and hand-made, no stock footage.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/openmontage/lanterns-title-sequence.jpg",
+      "caption": "Lanterns title sequence · 3 shots, 12 s cut with original score"
+    },
+    {
+      "prompt": "Make this a short title film called Golden Hour. Shift the palette toward blue and amber, give the second shot more breathing room, and render a new cut. Keep the original version.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/openmontage/golden-hour-edit.jpg",
+      "caption": "Golden Hour · new 18 s cut of the starter film, original kept"
+    }
+  ]
+}

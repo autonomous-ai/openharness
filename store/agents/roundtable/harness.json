@@ -1,0 +1,33 @@
+{
+  "spec": 1,
+  "id": "autonomous/roundtable",
+  "name": "Roundtable",
+  "category": "Decisions",
+  "author": "Autonomous",
+  "description": "Put a decision to a panel of coding agents — Claude, Codex, Grok, more — who research it independently, argue it out, and hand you the call with the dissent still attached.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "room.json",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "ROUNDTABLE_TOOLCHAIN": "${dsh}/toolchain"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/web-viewer",
+    "url": "http://127.0.0.1:${port}/?file=index.html",
+    "artifactExtensions": [".html"]
+  },
+  "verdict": ".harness/verdict.json"
+}

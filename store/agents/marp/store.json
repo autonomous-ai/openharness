@@ -1,0 +1,18 @@
+{
+  "homepage": "https://marp.app",
+  "upstream": "https://github.com/marp-team/marp-cli",
+  "license": "MIT",
+  "tagline": "Create beautiful slide decks using Markdown",
+  "examples": [
+    {
+      "prompt": "Make a ten-minute keynote for a science festival about the deep ocean: how deep it goes, how little of the seafloor we have mapped, and the global push to finish the map by 2030.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/marp/deep-sea-keynote.jpg",
+      "caption": "Deep-sea keynote · 9 slides, ocean art, seafloor chart, speaker notes"
+    },
+    {
+      "prompt": "Make a keynote for the internal launch of Harness, a Mac app that runs coding agents in persistent terminals you can reach from any device, with a live viewer for the work they produce. Audience: 200 engineers at an all-hands. 10 minutes. Include a chart with our growth: 12 teams in 2023, 31 in 2024, 64 in 2025, 140 today.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/marp/harness-launch-keynote.jpg",
+      "caption": "Launch keynote · 10 slides, generated art, growth chart, speaker notes"
+    }
+  ]
+}

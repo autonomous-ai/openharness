@@ -122,16 +122,32 @@ jobs:
   preflight:
     runs-on: ubuntu-latest
     steps:
-      - uses: google-github-actions/auth@v2
+      # GCP auth, WITHOUT a long-lived key — the same pattern release.yml and production-be-build.yaml
+      # already run. A service-account JSON key is a bearer credential with no expiry: it is only as
+      # safe as every place it has ever been copied to. Workload Identity Federation replaces it with
+      # a short-lived token minted from this job's own OIDC identity (hence `id-token: write` above),
+      # so there is nothing to leak and nothing to rotate.
+      #
+      # This workflow was the one left on the key when the rest of the repo federated; it is also why
+      # every GCS call below is `gcloud storage` and not `gsutil`. gsutil is a standalone Python tool
+      # that cannot use the external-account credential WIF issues, so it fails on every call while
+      # the identical `gcloud storage` call works. Do not reintroduce gsutil here.
+      #
+      # Federation is the only path: the GCP_SA_KEY fallback and the key behind it were retired on
+      # 2026-09-17. If this step fails, fix the provider or the service account's binding — do not
+      # reintroduce a key.
+      - name: Authenticate to GCP (workload identity federation)
+        uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
       - name: Verify GCS write access
         run: |
           set -euo pipefail
           probe="gs://${GCS_BUCKET}/harness/desktop/.ci-preflight/${GITHUB_RUN_ID}"
-          echo "$GITHUB_RUN_ID" | gsutil cp - "$probe"
-          gsutil rm "$probe"
+          echo "$GITHUB_RUN_ID" | gcloud storage cp - "$probe"
+          gcloud storage rm "$probe"
 
   # BOTH macOS builds, side by side: one universal app built twice, differing only in its renderer
   # (Intel on Skia, Apple Silicon on Impeller — RELEASE.md, "Two macOS builds"). A macos-15 runner is
@@ -183,9 +199,11 @@ jobs:
           apple-team-id: ${{ secrets.APPLE_TEAM_ID }}
           apple-app-password: ${{ secrets.APPLE_APP_PASSWORD }}
 
-      - uses: google-github-actions/auth@v2
+      - name: Authenticate to GCP (workload identity federation)
+        uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
 
       # SIGN_IDENTITY is read twice here: by publish-macos-variant.sh, re-signing the Intel build once
@@ -278,9 +296,11 @@ jobs:
           chmod +x "$RUNNER_TEMP/appimagetool"
           echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
 
-      - uses: google-github-actions/auth@v2
+      - name: Authenticate to GCP (workload identity federation)
+        uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
 
       - name: Build and upload linux-${{ matrix.arch }}
@@ -297,20 +317,22 @@ jobs:
       METADATA_PATH: ${{ needs.version.outputs.metadata_path }}
       SCRATCH_PREFIX: ${{ needs.version.outputs.scratch_prefix }}
     steps:
-      - uses: google-github-actions/auth@v2
+      - name: Authenticate to GCP (workload identity federation)
+        uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
 
       - name: Merge every platform's key into the manifest in one write
         run: |
           set -euo pipefail
           mkdir -p parts
-          gsutil -m cp "gs://${GCS_BUCKET}/${SCRATCH_PREFIX}/*.json" parts/
+          gcloud storage cp "gs://${GCS_BUCKET}/${SCRATCH_PREFIX}/*.json" parts/
           echo "::group::scratch manifests"; ls -la parts; echo "::endgroup::"
 
           src="$(mktemp)"; dst="$(mktemp)"
-          if ! gsutil cp "gs://${GCS_BUCKET}/${METADATA_PATH}" "$src" 2>/dev/null; then
+          if ! gcloud storage cp "gs://${GCS_BUCKET}/${METADATA_PATH}" "$src" 2>/dev/null; then
             echo "   (no existing manifest at ${METADATA_PATH} — creating a new one)"
             printf '{}' > "$src"
           fi
@@ -351,9 +373,9 @@ jobs:
               json.dump(data, f, indent=2)
               f.write("\n")
           PY
-          gsutil -h "Content-Type:application/json" \
-                 -h "Cache-Control:no-cache, no-store, must-revalidate" \
-                 cp "$dst" "gs://${GCS_BUCKET}/${METADATA_PATH}"
+          gcloud storage cp --content-type=application/json \
+                 --cache-control="no-cache, no-store, must-revalidate" \
+                 "$dst" "gs://${GCS_BUCKET}/${METADATA_PATH}"
           echo "Published to \`${METADATA_PATH}\`" >> "$GITHUB_STEP_SUMMARY"
 
   # The GitHub Release. Notes are the tag's OWN message, verbatim — the same rule
@@ -386,16 +408,29 @@ jobs:
           # annotated tag. Re-fetch the tag object to restore the annotation before reading it.
           git fetch --force origin tag "$REF_NAME"
           # A lightweight tag has no message of its own, and %(contents) would quietly fall through
-          # to the commit's — publishing "chore(release): vX.Y.Z" as the notes.
-          if [ "$(git cat-file -t "$REF_NAME")" != tag ]; then
-            echo "::error::$REF_NAME is a lightweight tag, so it carries no release notes."
-            echo "::error::Re-tag with:  git tag -a $REF_NAME --cleanup=verbatim -F notes.md"
-            exit 1
+          # to the commit's — publishing "chore(release): vX.Y.Z" as the notes. The release scripts
+          # always push an annotated tag with notes, but a hand-made `git tag` does not, and this
+          # job runs AFTER publish: failing here left a live build with no Release page (v1.1.70_desktop,
+          # 2026-09-21). So fall back to the same commit list the script would have generated —
+          # everything since the previous _desktop tag — and warn, rather than leave the release half done.
+          if [ "$(git cat-file -t "$REF_NAME")" = tag ]; then
+            git tag -l --format='%(contents)' "$REF_NAME" > RELEASE_NOTES.md
+          else
+            : > RELEASE_NOTES.md
           fi
-          git tag -l --format='%(contents)' "$REF_NAME" > RELEASE_NOTES.md
           if [ ! -s RELEASE_NOTES.md ]; then
-            echo "::error::$REF_NAME has an empty tag message — no notes to publish."
-            exit 1
+            echo "::warning::$REF_NAME carries no release notes (lightweight or empty tag) — generating them from the commit list. Next time: make release-desktop"
+            prev="$(git tag -l 'v*_desktop' \
+              | { grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)_desktop$' || true; } \
+              | grep -vx "$REF_NAME" | sort -V | tail -1)"
+            {
+              printf 'Harness Desktop %s\n\n' "$VERSION"
+              if [ -n "$prev" ]; then
+                git log --no-merges --pretty='- %s' "${prev}..${REF_NAME}"
+              else
+                git log --no-merges --pretty='- %s' -20 "$REF_NAME"
+              fi
+            } > RELEASE_NOTES.md
           fi
           base="https://cdn.autonomous.ai/harness/desktop/${VERSION}"
           cat >> RELEASE_NOTES.md <<EOF
@@ -431,11 +466,13 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: google-github-actions/auth@v2
+      - name: Authenticate to GCP (workload identity federation)
+        uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
       - name: Remove the scratch manifests
         env:
           SCRATCH_PREFIX: ${{ needs.version.outputs.scratch_prefix }}
-        run: gsutil -m rm -r "gs://${GCS_BUCKET}/${SCRATCH_PREFIX}" || true
+        run: gcloud storage rm -r "gs://${GCS_BUCKET}/${SCRATCH_PREFIX}" || true

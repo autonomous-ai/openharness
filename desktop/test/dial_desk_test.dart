@@ -299,6 +299,34 @@ void main() {
     app.dispose();
   });
 
+  test('a question on the dial brings the agent forward, and never opens a tab', () async {
+    // The same frame with reason 'question': an agent on another tab is switched
+    // to; one on no tab is left alone. A reconnect re-shows every unanswered
+    // question, and each used to open a tab.
+    final app = await _withTiles(['a1', 'a2']);
+    final first = app.activeSwarmId;
+    await app.handleEventForTest('m1', {
+      'type': 'dial_open',
+      'payload': {'machineId': 'm1', 'agentId': 'a4', 'reason': 'question'},
+    });
+    expect(app.swarms.length, 1, reason: 'not on screen: nothing opens');
+    expect(app.activeSwarmId, first);
+    expect(_desk(app), ['a1', 'a2']);
+
+    // On screen, on another tab: that tab comes forward with the agent focused.
+    app.newSwarm();
+    await app.addAgentToSwarm('m1', 'a4', swarmId: app.activeSwarmId);
+    app.selectSwarm(first);
+    await app.handleEventForTest('m1', {
+      'type': 'dial_open',
+      'payload': {'machineId': 'm1', 'agentId': 'a4', 'reason': 'question'},
+    });
+    expect(app.swarms.length, 2);
+    expect(app.activeSwarmId, isNot(first));
+    expect(app.focusedPane?.agentId, 'a4');
+    app.dispose();
+  });
+
   test(
     'a dial focus adds a missing view while preserving existing members',
     () async {

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# `"$YOSYS_TOOLCHAIN/run" <tool> …` — one tool of the flow on its own (iverilog, vvp, yosys,
+# nextpnr-ice40, icepack, iceprog), found the way flow.sh finds it: the agent's shell may have the
+# package's OSS CAD Suite, Homebrew's bin or a node on PATH, or none of them.
+# shellcheck source=path.sh
+. "$(cd "$(dirname "$0")" && pwd)/path.sh"
+[ $# -gt 0 ] || { echo "usage: \"\$YOSYS_TOOLCHAIN/run\" <tool> [arguments…]" >&2; exit 2; }
+command -v "$1" >/dev/null 2>&1 || { echo "miss $1 — run toolchain/setup.sh"; exit 127; }
+exec "$@"

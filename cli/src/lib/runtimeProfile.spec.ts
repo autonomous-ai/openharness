@@ -31,6 +31,30 @@ function session(engine: RegisteredSession['engine']): RegisteredSession {
 }
 
 describe('RuntimeProfileManager', () => {
+  it('keeps agents that have not bound a session yet out of one another state', () => {
+    // An agent awaiting its first bind carries `sessionId: ''`, which is not an identity: keyed on it,
+    // EVERY unbound agent shared one entry, across engines. Measured — a claude agent ten seconds old
+    // was retargeted onto a grid, the "what model was it on?" read answered `opencode/big-pickle`
+    // (an OpenCode agent had sat at `''` first), and the pane came home with
+    // `ANTHROPIC_MODEL=opencode/big-pickle`. Claude Code: "There's an issue with the selected model".
+    const manager = new RuntimeProfileManager()
+    const unboundOpencode = { ...session('opencode'), sessionId: '' }
+    const unboundClaude = { ...session('claude'), sessionId: '' }
+
+    manager.ingestPane(unboundOpencode, '  ┃  Build · Big Pickle OpenCode Zen', true)
+
+    // Not "the other agent's model" and not the first agent's own either: with no session there is
+    // nowhere to keep one, which is the truth about an engine that has not started talking yet.
+    expect(manager.selectedModel(unboundClaude)).toBeNull()
+    expect(manager.selectedModel(unboundOpencode)).toBeNull()
+    // A bound agent is unaffected — the fix removes a shared bucket, not the feature.
+    const bound = session('codex')
+    manager.ingestPane(bound, 'gpt-5.6-terra  high  ·', true)
+    expect(parseRuntimeProfile(manager.selectedModel(bound))).toMatchObject({
+      engine: 'codex', model: 'gpt-5.6-terra', effort: 'high',
+    })
+  })
+
   it('limits Codex Max and Ultra to GPT-5.6 models', () => {
     expect(codexEffortAllowed('gpt-5.6-sol', 'max')).toBe(true)
     expect(codexEffortAllowed('gpt-5.6-terra', 'ultra')).toBe(true)

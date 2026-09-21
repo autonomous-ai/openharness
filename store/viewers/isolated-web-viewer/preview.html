@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Isolated Web Viewer</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: light dark; font: 12px/1.4 system-ui, sans-serif; --line: light-dark(#dadbd8, #343633); --bg: light-dark(#f7f8f5, #1b1e1b); }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100dvh; display: flex; flex-direction: column; background: var(--bg); }
+  header { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+  #file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px ui-monospace, monospace; min-width: 32px; }
+  #status { display: flex; gap: 6px; align-items: center; margin-left: auto; opacity: .75; white-space: nowrap; font-size: 11px; }
+  #status::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #92978c; }
+  #status[data-live="true"]::before { background: #5e9c48; }
+  button, select { color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; cursor: pointer; }
+  button:hover, select:hover { background: #8882; }
+  :focus-visible { outline: 2px solid #699f4c; outline-offset: 2px; }
+  #stage { flex: 1; min-height: 0; display: flex; justify-content: center; overflow: auto; background-image: radial-gradient(#8883 .6px, transparent .6px); background-size: 12px 12px; }
+  iframe { width: 100%; height: 100%; flex-shrink: 0; border: 0; background: white; }
+  #stage.sized { padding: 12px; }
+  #stage.sized iframe { border: 1px solid var(--line); border-radius: 8px; }
+  @media (max-width: 480px) { header { gap: 6px; padding: 6px 8px; } #file { max-width: 90px; } #status { font-size: 0; } button, select { font-size: 11px; padding: 5px; } }
+</style>
+<header>
+  <span id="file"></span>
+  <span id="status" role="status">Connecting…</span>
+  <select id="size" aria-label="Preview width"><option value="fit">Fit</option><option value="390">Mobile · 390</option><option value="768">Tablet · 768</option><option value="1280">Desktop · 1280</option></select>
+  <button id="live" aria-pressed="true" title="Pause automatic reloads while exploring">Live</button>
+  <button id="reload" title="Reload preview">Reload</button>
+</header>
+<main id="stage"><iframe id="preview" title="Workspace preview" sandbox="allow-scripts allow-downloads allow-pointer-lock" allow="fullscreen; autoplay; gamepad" allowfullscreen></iframe></main>
+<script>
+  const prefix = '__PREVIEW_PREFIX__';
+  const requested = new URLSearchParams(location.search).get('file') || 'index.html';
+  const parts = requested.split(/[\\/]/);
+  const file = parts.some(part => !part || part.startsWith('.')) ? 'index.html' : parts.join('/');
+  const frame = document.querySelector('#preview');
+  const status = document.querySelector('#status');
+  const live = document.querySelector('#live');
+  let automatic = true, connected = false, changed = false, watchFailed = false;
+  document.querySelector('#file').textContent = file;
+  document.querySelector('#file').title = file;
+  const updateStatus = () => {
+    status.textContent = watchFailed ? 'Use Reload' : !automatic ? (changed ? 'Changes waiting' : 'Paused') : connected ? 'Live' : 'Reconnecting…';
+    status.dataset.live = String(automatic && connected && !watchFailed);
+  };
+  const reload = () => { changed = false; frame.src = prefix + file.split('/').map(encodeURIComponent).join('/') + '?v=' + Date.now(); updateStatus(); };
+  document.querySelector('#reload').addEventListener('click', reload);
+  live.addEventListener('click', () => {
+    automatic = !automatic;
+    live.setAttribute('aria-pressed', String(automatic));
+    live.textContent = automatic ? 'Live' : 'Paused';
+    if (automatic && changed) reload();
+    updateStatus();
+  });
+  document.querySelector('#size').addEventListener('change', event => {
+    const size = event.target.value;
+    frame.style.width = size === 'fit' ? '100%' : size + 'px';
+    document.querySelector('#stage').classList.toggle('sized', size !== 'fit');
+  });
+  reload();
+  const events = new EventSource('/events');
+  events.onopen = () => { connected = true; updateStatus(); };
+  events.onerror = () => { connected = false; updateStatus(); };
+  events.addEventListener('change', () => { changed = true; if (automatic) reload(); else updateStatus(); });
+  events.addEventListener('watch-error', () => { watchFailed = true; updateStatus(); });
+</script>
+</html>
+</html>

@@ -28,6 +28,8 @@ export interface AutonomousEnvironmentConfig {
   ssoClientId: string
   ssoClientSecret?: string
   ssoProfileUrl: string
+  /** Asked before `ssoProfileUrl`, which stays the fallback on a 404. Absent = turned off (''). */
+  ssoIdentityUrl?: string
   bffUrl: string
   checkoutOrigin: string
   campaignApiUrl: string
@@ -43,6 +45,7 @@ export function autonomousEnvironmentConfig(name: AutonomousEnvironment): Autono
       ssoClientId: env.STAGING_SSO_CLIENT_ID || env.SSO_CLIENT_ID,
       ssoClientSecret: env.STAGING_SSO_CLIENT_SECRET || env.SSO_CLIENT_SECRET,
       ssoProfileUrl: env.STAGING_SSO_PROFILE_URL,
+      ssoIdentityUrl: env.STAGING_SSO_IDENTITY_URL || undefined,
       bffUrl: env.STAGING_AUTONOMOUS_BFF_URL,
       checkoutOrigin: env.STAGING_AUTONOMOUS_CHECKOUT_ORIGIN,
       campaignApiUrl: env.STAGING_AUTONOMOUS_CAMPAIGN_API_URL,
@@ -55,6 +58,7 @@ export function autonomousEnvironmentConfig(name: AutonomousEnvironment): Autono
     ssoClientId: env.SSO_CLIENT_ID,
     ssoClientSecret: env.SSO_CLIENT_SECRET,
     ssoProfileUrl: env.SSO_PROFILE_URL,
+    ssoIdentityUrl: env.SSO_IDENTITY_URL || undefined,
     bffUrl: env.AUTONOMOUS_BFF_URL,
     checkoutOrigin: env.AUTONOMOUS_CHECKOUT_ORIGIN,
     campaignApiUrl: env.AUTONOMOUS_CAMPAIGN_API_URL,

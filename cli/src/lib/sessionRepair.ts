@@ -14,19 +14,16 @@
  *     unbound until its next turn, which is recoverable — mis-binding is not.
  */
 
-import { execFile } from 'child_process'
 import { open, readdir, readFile, realpath, stat } from 'fs/promises'
 import { basename, dirname, join, sep } from 'path'
-import { promisify } from 'util'
 import { env } from '../config/env.js'
 import { museEvent, museWorkspaceRoot } from '../engines/muse/normalizer.js'
 import type { AgentEngine } from '../engines/types.js'
-import { readCodexRolloutMeta } from '../engines/codex/rollout.js'
+import { readCodexRolloutMeta, resolveCodexRollout } from '../engines/codex/rollout.js'
 import { agyConversationForPid, findAgyTranscript } from '../engines/agy/session.js'
 import { copilotSessionCwd, copilotSessionForPid, findCopilotTranscript } from '../engines/copilot/session.js'
 import { sqlitePreflightMessage } from './sqliteAvailability.js'
-
-const execFileAsync = promisify(execFile)
+import { sqliteReadAll, type SqliteParam } from './sqliteRead.js'
 
 /**
  * Clock granularity only. `ps` reports start time to the second, so a file created in the same second
@@ -175,41 +172,31 @@ async function fileEngineSession(
 
 let missingSqliteReported = false
 
-/** The store-backed repair branch cannot work without the `sqlite3` CLI; warn on the first miss only. */
+/** The store-backed repair branch cannot work without a SQLite reader; warn on the first miss only. */
 function reportMissingSqliteOnce(): void {
   if (missingSqliteReported) return
   missingSqliteReported = true
-  console.warn(sqlitePreflightMessage() ?? '[preflight] sqlite3 CLI not found on PATH')
+  console.warn(sqlitePreflightMessage() ?? '[preflight] no SQLite reader available')
 }
 
-async function dbEngineSession(dbPath: string, sql: string): Promise<RepairedSession | null> {
-  let stdout: string
-  try {
-    // Same invocation the readers use: `.timeout` as a dot-command (the PRAGMA form prints a row under
-    // -json and corrupts the parse), and query_only so a repair can never write to the user's store.
-    ({ stdout } = await execFileAsync(
-      'sqlite3',
-      ['-json', '-cmd', '.timeout 3000', '-cmd', 'PRAGMA query_only=1', dbPath, sql],
-      { maxBuffer: 1024 * 1024 },
-    ))
-  } catch (err) {
-    // A missing binary is not a transient DB lock, and repair returning null forever with no signal is
+/** Read-only, through the same helper the readers use, so a repair can never write to the user's store. */
+async function dbEngineSession(dbPath: string, sql: string, params: SqliteParam[]): Promise<RepairedSession | null> {
+  const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: 1024 * 1024 })
+  if (!result.ok) {
+    // No reader at all is not a transient DB lock, and repair returning null forever with no signal is
     // how "my opencode agents never appear on Ubuntu" looks from the outside. Say it once.
-    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') reportMissingSqliteOnce()
+    if (result.reason === 'missing') reportMissingSqliteOnce()
     return null
   }
-  const trimmed = stdout.trim()
-  if (!trimmed) return null
-  let rows: Array<Record<string, unknown>>
-  try { rows = JSON.parse(trimmed) as Array<Record<string, unknown>> } catch { return null }
+  const rows = result.rows
   if (rows.length !== 1) return null // 0 = nothing to adopt, >1 = ambiguous
   const id = rows[0].id
   return typeof id === 'string' && id ? { sessionId: id } : null
 }
 
-/** SQL-escape a directory for a literal comparison (the readers build literals the same way). */
-function quote(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`
+/** One `?` per directory, for an `IN (…)` over both spellings of the cwd. */
+function placeholders(count: number): string {
+  return Array.from({ length: count }, () => '?').join(', ')
 }
 
 /**
@@ -250,10 +237,14 @@ export async function findLiveSession(
   // The DB engines match on a directory STRING, so ask for both spellings of it (see sameDir).
   const real = await realpath(cwd).catch(() => cwd)
   const dirs = real === cwd ? [cwd] : [cwd, real]
-  const dirList = dirs.map(quote).join(', ')
+  const dirList = placeholders(dirs.length)
   switch (engine) {
-    case 'claude':
-      return fileEngineSession(env.CLAUDE_PROJECTS_DIR, cwd, startedAtMs, readTranscriptMeta, opts)
+    case 'claude': {
+      // Native Claude publishes a PID-to-conversation record even before a hook binds it.
+      // Unlike a directory scan this also identifies an old process in a busy project.
+      const exact = opts?.pid ? await claudeProcessSession(opts.pid, cwd, startedAtMs) : null
+      return exact ?? fileEngineSession(env.CLAUDE_PROJECTS_DIR, cwd, startedAtMs, readTranscriptMeta, opts)
+    }
     case 'codex':
       // Codex writes no `cwd` on line one; its rollout meta carries it — and says whether the rollout
       // belongs to a subagent, which must never become an agent of its own.
@@ -313,8 +304,9 @@ export async function findLiveSession(
       return dbEngineSession(
         join(env.OPENCODE_DATA_DIR, 'opencode.db'),
         `SELECT id FROM session WHERE directory IN (${dirList}) AND parent_id IS NULL`
-          + ` AND (time_created >= ${Math.trunc(sinceMs)} OR time_updated >= ${Math.trunc(sinceMs)})`
-          + ` ORDER BY time_updated DESC LIMIT 2;`,
+          + ' AND (time_created >= ? OR time_updated >= ?)'
+          + ' ORDER BY time_updated DESC LIMIT 2;',
+        [...dirs, Math.trunc(sinceMs), Math.trunc(sinceMs)],
       )
     case 'kilo':
       // Same store shape as opencode (measured: `session` is byte-identical between the two DBs), and
@@ -322,15 +314,17 @@ export async function findLiveSession(
       return dbEngineSession(
         join(env.KILO_DATA_DIR, 'kilo.db'),
         `SELECT id FROM session WHERE directory IN (${dirList}) AND parent_id IS NULL`
-          + ` AND (time_created >= ${Math.trunc(sinceMs)} OR time_updated >= ${Math.trunc(sinceMs)})`
-          + ` ORDER BY time_updated DESC LIMIT 2;`,
+          + ' AND (time_created >= ? OR time_updated >= ?)'
+          + ' ORDER BY time_updated DESC LIMIT 2;',
+        [...dirs, Math.trunc(sinceMs), Math.trunc(sinceMs)],
       )
     case 'hermes':
       // started_at is epoch SECONDS (fractional).
       return dbEngineSession(
         join(env.HERMES_HOME, 'state.db'),
-        `SELECT id FROM sessions WHERE cwd IN (${dirList}) AND started_at >= ${Math.trunc(sinceMs / 1000)}`
-          + ` ORDER BY started_at DESC LIMIT 2;`,
+        `SELECT id FROM sessions WHERE cwd IN (${dirList}) AND started_at >= ?`
+          + ' ORDER BY started_at DESC LIMIT 2;',
+        [...dirs, Math.trunc(sinceMs / 1000)],
       )
     case 'devin':
       // created_at is epoch SECONDS (integer).
@@ -339,8 +333,9 @@ export async function findLiveSession(
         // created_at is when the session began; last_activity_at moves when devin resumes into it, which
         // is the only marker a continued session leaves behind.
         `SELECT id FROM sessions WHERE working_directory IN (${dirList})`
-          + ` AND (created_at >= ${Math.trunc(sinceMs / 1000)} OR last_activity_at >= ${Math.trunc(sinceMs / 1000)})`
-          + ` ORDER BY last_activity_at DESC LIMIT 2;`,
+          + ' AND (created_at >= ? OR last_activity_at >= ?)'
+          + ' ORDER BY last_activity_at DESC LIMIT 2;',
+        [...dirs, Math.trunc(sinceMs / 1000), Math.trunc(sinceMs / 1000)],
       )
     case 'copilot': {
       // The lock the process holds is the only thing a `/resume` leaves behind, and it is exact.
@@ -432,4 +427,48 @@ export async function claudeContinuation(transcriptPath: string): Promise<Repair
     return null
   }
   return { sessionId: nextId, transcriptPath: nextPath }
+}
+
+/**
+ * The transcript behind a session id a claude/codex process names on its own command line
+ * (`claude --resume <id>`, `codex resume <id>`) — the file `registry.register` insists on for those
+ * two engines, which argv does not carry. Claude keeps one file per session under
+ * `<projects>/<encoded cwd>/<id>.jsonl`; the cwd encoding is Claude's to define, so the project
+ * folders are listed rather than the name derived. Codex names its rollout after the thread id, and
+ * the rollout walker already knows that layout. Only a file that exists is returned: a resume of a
+ * session this machine never wrote (or one that was deleted) binds nothing.
+ */
+export async function findResumedTranscript(
+  engine: AgentEngine,
+  sessionId: string,
+  opts?: { codexHome?: string },
+): Promise<string | null> {
+  if (!/^[0-9a-f-]{16,}$/i.test(sessionId)) return null
+  if (engine === 'codex') return resolveCodexRollout(sessionId, join(opts?.codexHome || env.CODEX_HOME, 'sessions'))
+  if (engine !== 'claude') return null
+  let projects: string[]
+  try { projects = await readdir(env.CLAUDE_PROJECTS_DIR) } catch { return null }
+  for (const project of projects) {
+    const candidate = join(env.CLAUDE_PROJECTS_DIR, project, `${sessionId}.jsonl`)
+    try {
+      if ((await stat(candidate)).isFile()) return candidate
+    } catch { /* not this project */ }
+  }
+  return null
+}
+
+/** Claude's native process record is removed at exit; capture it before Stop signals the engine. */
+export async function claudeProcessSession(pid: number, cwd: string, startedAtMs: number): Promise<RepairedSession | null> {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isFinite(startedAtMs)) return null
+  try {
+    const record = JSON.parse(await readFile(join(dirname(env.CLAUDE_PROJECTS_DIR), 'sessions', `${pid}.json`), 'utf8'))
+    // procStart is UTC in current Claude, while older builds used the host's local ps format.
+    // Both represent the exact second, not the metadata file's modification time or a recycled PID.
+    if (record.pid !== pid || typeof record.procStart !== 'string'
+      || ![Date.parse(record.procStart), Date.parse(`${record.procStart} UTC`)].includes(startedAtMs)
+      || typeof record.cwd !== 'string' || !await sameDir(record.cwd, cwd)
+      || typeof record.sessionId !== 'string') return null
+    const transcriptPath = await findResumedTranscript('claude', record.sessionId)
+    return transcriptPath ? { sessionId: record.sessionId, transcriptPath } : null
+  } catch { return null }
 }

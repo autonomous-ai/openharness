@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'app_shell.dart';
 import 'auth/auth_session.dart';
 import 'core/config.dart';
 import 'core/desktop_window.dart';
-import 'main.dart' show DesktopApp;
+import 'screens/swarm_screen.dart';
 import 'state/app_state.dart';
 
 /// Normal interactive macOS app wired to a disposable local test stack.
@@ -49,7 +50,9 @@ Future<void> main() async {
   runApp(
     ProviderScope(
       overrides: [appStateProvider.overrideWithValue(notifier)],
-      child: const DesktopApp(),
+      child: HarnessApp(
+        authenticatedScreen: (app) => SwarmScreen(notifier: app),
+      ),
     ),
   );
 }

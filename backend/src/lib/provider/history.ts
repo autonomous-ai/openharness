@@ -12,7 +12,7 @@
  * machine has to be indistinguishable from a node one by the time the frame reaches the client — so
  * the provider's `nextBefore` is translated into that pager here, and never leaked upward.
  *
- * Spec: autonomous-ai/autonomous-harness → provider/spec/README.md.
+ * Spec: autonomous-ai/openharness → provider/spec/README.md.
  */
 import type { Frame } from '../tunnel.js'
 import { fetchAgentHistory, type ProviderCallOptions } from './client.js'

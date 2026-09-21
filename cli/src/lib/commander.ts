@@ -59,6 +59,20 @@ export interface CommanderMirrorOpts {
    *  `/clear` rotation); `dbSessionId` stays the engine session, which is what the device echoes back to
    *  cancel a turn and what the backend keys its voice queue on. */
   agentIdFor?: (sessionId: string) => string | undefined
+  /**
+   * True for a session whose turn end is nobody's news: an Orchestrator specialist, or its Director while
+   * specialists are still out. The terminal cards (`done`, `summary`, `error`) then carry `subagent: true`
+   * and the dial redraws the tile without the beep or a drawer row (cable_client.c). The person asked for
+   * one notification per project — the main agent's — not one per sub-agent (owner, 2026-09-21).
+   */
+  isSubagent?: (sessionId: string) => boolean
+  /**
+   * Whether a sub-agent of this session is still at work — its transcript
+   * (`<session>/subagents/agent-<id>.jsonl`) written recently. Consulted while a turn end is held, so a
+   * long sub-agent keeps the hold and only a silent one is given up on. Absent → the hold is bounded by
+   * time alone, as before.
+   */
+  subagentActive?: (sessionId: string, agentId: string) => boolean
   dataDir: string
   recapForce?: boolean
   alwaysGenerate?: boolean
@@ -80,6 +94,8 @@ interface SessionState {
   agents: Array<{ id: string; desc: string; startedAt: number; doneMs: number | null; carried?: true }>
   /** A turn_ended is being HELD because sub-agents this turn spawned are still running (see below). */
   endPending: boolean
+  /** The hold was given up on (a sub-agent went quiet), not completed: the recap goes out silent. */
+  abandoned: boolean
   /** Fires the held turn-end once the last sub-agent has finished AND the wrap-up text has stopped. */
   endSettle: NodeJS.Timeout | null
   /** Backstop: a sub-agent that never reports back must not cost the turn its recap. */
@@ -170,8 +186,17 @@ const ASYNC_LAUNCH_ACK = /Async agent launched successfully/i
  */
 const SUBAGENT_SETTLE_MS = 12_000
 const SUBAGENT_TEXT_SETTLE_MS = 2_000
-/** A sub-agent that never reports back must not cost the turn its recap forever. */
+/**
+ * A sub-agent that never reports back must not cost the turn its recap forever — but a sub-agent that IS
+ * still writing is not "never": a fixed ten minutes released the hold under long sub-agents, which rang
+ * the dial for a turn that was not over and then rang it again when it was. So the deadline is checked
+ * every minute against the sub-agents' own transcripts (`subagentActive`): held while any of them wrote
+ * in the last SUBAGENT_IDLE_MS, given up only once all of them have gone quiet for that long. Without
+ * the probe, the old ten minutes stand.
+ */
 const SUBAGENT_MAX_WAIT_MS = 10 * 60_000
+export const SUBAGENT_IDLE_MS = 2 * 60_000
+const SUBAGENT_CHECK_MS = 60_000
 
 /**
  * The device renders ONE line per sub-agent and does no formatting of its own: `› desc` while it runs,
@@ -304,7 +329,7 @@ export class CommanderMirror {
   private stateFor(sessionId: string): SessionState {
     let st = this.states.get(sessionId)
     if (!st) {
-      st = { lastAssistantText: '', lastUserMessage: '', turnOpen: false, everOpened: false, summarizing: false, lastTool: null, lastTodos: null, agents: [], endPending: false, endSettle: null, endDeadline: null, abort: null }
+      st = { lastAssistantText: '', lastUserMessage: '', turnOpen: false, everOpened: false, summarizing: false, lastTool: null, lastTodos: null, agents: [], endPending: false, abandoned: false, endSettle: null, endDeadline: null, abort: null }
       this.states.set(sessionId, st)
     }
     return st
@@ -325,7 +350,11 @@ export class CommanderMirror {
     if (!terminal && !active && !this.opts.recapForce) return
     // Agent name on the summary's outer frame → background-machine device notif line 2 (see nameFor).
     const name = terminal && this.opts.nameFor ? this.opts.nameFor(sessionId) : undefined
-    this.opts.send({ type: 'commander_event', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId, dbSessionId: sessionId, ...(name ? { name } : {}), payload })
+    // A sub-agent's turn end is not announced: the flag rides the terminal cards only, so the live stream
+    // (processing/tool/todos) is untouched and the tile still moves.
+    const ending = payload.kind === 'summary' || payload.kind === 'done' || payload.kind === 'error'
+    const subagent = ending && ((this.opts.isSubagent?.(sessionId) ?? false) || (this.states.get(sessionId)?.abandoned ?? false))
+    this.opts.send({ type: 'commander_event', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId, dbSessionId: sessionId, ...(name ? { name } : {}), payload: subagent ? { ...payload, subagent: true } : payload })
   }
 
   /** Recap diagnostics stay in the adapter log; the web only gets summary pending/done state. */
@@ -362,6 +391,7 @@ export class CommanderMirror {
           this.rememberAsk(sessionId, e.payload.userMessage || '')
           st.turnOpen = true
           st.everOpened = true
+          st.abandoned = false
           st.lastTool = null
           st.lastTodos = null
           // Drop the previous turn's finished rows, KEEP the ones still running. Two reasons, both
@@ -484,11 +514,36 @@ export class CommanderMirror {
     const running = st.agents.filter(holdsTurn).length
     console.log(`[subagents] ${sessionId.slice(0, 8)} turn-end HELD · ${running} sub-agent(s) still running`)
     this.clearEndTimers(st)
+    this.armDeadline(sessionId, st, Date.now())
+  }
+
+  /**
+   * The hold's backstop. With `subagentActive` the question is asked every minute — is any held sub-agent
+   * still writing? — and the hold outlives the old cap for as long as the answer is yes; a sub-agent quiet
+   * for SUBAGENT_IDLE_MS is abandoned and the hold released without one. Without the probe, one timer at
+   * the old cap, as before.
+   */
+  private armDeadline(sessionId: string, st: SessionState, heldAt: number): void {
+    const probe = this.opts.subagentActive
+    const wait = probe ? SUBAGENT_CHECK_MS : SUBAGENT_MAX_WAIT_MS
     st.endDeadline = setTimeout(() => {
-      const stuck = st.agents.filter(holdsTurn).map((a) => a.desc).join(', ')
+      st.endDeadline = null
+      if (!st.endPending) return
+      const held = st.agents.filter(holdsTurn)
+      const elapsed = Date.now() - heldAt
+      if (probe && elapsed < SUBAGENT_MAX_WAIT_MS) { this.armDeadline(sessionId, st, heldAt); return }
+      if (probe && held.some((a) => probe(sessionId, a.id))) {
+        console.log(`[subagents] ${sessionId.slice(0, 8)} turn-end still HELD after ${Math.round(elapsed / 60_000)}m · a sub-agent is still writing`)
+        this.armDeadline(sessionId, st, heldAt)
+        return
+      }
+      const stuck = held.map((a) => a.desc).join(', ')
       console.log(`[subagents] ${sessionId.slice(0, 8)} turn-end RELEASED by timeout · still running: ${stuck}`)
+      // Given up on, not done: the person did not get their answer, and a beep for that is the very ring
+      // this exists to remove. The tile still gets the recap.
+      st.abandoned = true
       this.releaseTurnEnd(sessionId, st)
-    }, SUBAGENT_MAX_WAIT_MS)
+    }, wait)
     st.endDeadline.unref?.()
   }
 
@@ -703,6 +758,12 @@ export class CommanderMirror {
    *  window (Summarizing…) — the device clears a busy tile only via a live terminal, and has a busy-timeout
    *  watchdog that fires if these stop arriving. Returns true while the session is busy (turnOpen ||
    *  summarizing) so the caller knows when to self-cancel the timer; false (emitting nothing) when idle. */
+  /** A turn is open on this session right now. Summarising after one does not count: the transcript is
+   *  complete, which is what a fork needs. */
+  isBusy(sessionId: string): boolean {
+    return this.states.get(sessionId)?.turnOpen === true
+  }
+
   heartbeat(sessionId: string): boolean {
     const st = this.states.get(sessionId)
     if (!st) return false

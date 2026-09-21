@@ -92,6 +92,19 @@ function fakeGridBin(root: string, state: GridOnPath): string {
   return dir
 }
 
+/** The same fake, somewhere PATH does not reach, for the case where the harness is TOLD where
+ *  `grid` is. Its shebang names this process's Node by absolute path, because that case runs with
+ *  an empty PATH — where `#!/usr/bin/env node` would fail for a reason that is not the one under
+ *  test. */
+function fakeGridOutsidePath(root: string): string {
+  const dir = join(root, 'elsewhere')
+  mkdirSync(dir, { recursive: true })
+  const script = join(dir, 'grid')
+  writeFileSync(script, FAKE_GRID.replace('#!/usr/bin/env node', `#!${process.execPath}`))
+  chmodSync(script, 0o755)
+  return script
+}
+
 function recordFile(root: string): string { return join(root, 'grid-invocation.json') }
 
 function readRecord(root: string): { args: string[]; stdin: string; env: Record<string, string> } {
@@ -115,12 +128,18 @@ function seedSession(root: string, overrides: Record<string, unknown> = {}): voi
 }
 
 function envFor(root: string, backendUrl?: string, extra: NodeJS.ProcessEnv = {}, grid: GridOnPath = 'runnable'): NodeJS.ProcessEnv {
+  // The harness resolves `grid` as HARNESS_GRID_BIN → the managed runtime → PATH (lib/gridExec.ts).
+  // The fake below is put on PATH, so the two answers that would outrank it are taken away: a
+  // developer's own override never reaches the child, and the runtime dir is one with no
+  // `current-grid` in it — not this machine's `~/.harness/runtime`.
+  const { HARNESS_GRID_BIN: _developersOwn, ...inherited } = process.env
   return {
-    ...process.env,
+    ...inherited,
     HOME: root,
     HARNESS_AUTH_DIR: join(root, 'auth'),
     ADAPTER_DATA_DIR: join(root, 'data'),
     ADAPTER_CLI_DIR: join(root, 'cli'),
+    ADAPTER_RUNTIME_DIR: join(root, 'runtime'),
     ADAPTER_COMPUTER_ID_FILE: join(root, 'computer-id'),
     ADAPTER_UPDATE_DISABLE: 'true',
     // The fake goes FIRST so it wins over any real `grid` this machine has. Unless it is meant to be
@@ -169,6 +188,9 @@ function fakeBackend(handlers: {
   exchange?: (body: any) => any
   resolveComputer?: (body: any) => any
   refresh?: (body: any) => { status: number; body: unknown }
+  /** `POST /api/grid/name` — the account's minted grid name. Absent = an older backend, which is
+   *  what every case that does not stub it is exercising (the route 404s and grid setup is skipped). */
+  gridName?: (body: any) => any
 }): Promise<{ server: Server; base: string }> {
   return new Promise((resolve) => {
     const server = createServer((req, res) => {
@@ -183,6 +205,7 @@ function fakeBackend(handlers: {
         if (req.url === '/api/auth/authorize-native' && handlers.authorizeNative) { send(handlers.authorizeNative(body)); return }
         if (req.url === '/api/auth/exchange' && handlers.exchange) { send(handlers.exchange(body)); return }
         if (req.url === '/api/machines/resolve-computer' && handlers.resolveComputer) { send(handlers.resolveComputer(body)); return }
+        if (req.url === '/api/grid/name' && handlers.gridName) { send(handlers.gridName(body)); return }
         if (req.url === '/api/auth/refresh' && handlers.refresh) {
           const answer = handlers.refresh(body)
           res.writeHead(answer.status, { 'content-type': 'application/json' })
@@ -270,6 +293,39 @@ describe('harness grid login — an already-signed-in computer', () => {
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('Signed in as a@b.test.')
     expect(readRecord(root).args).toEqual(['login', '--harness'])
+  }, 20_000)
+
+  it('also makes sure the account\'s grid exists, without changing its result line', async () => {
+    // Signing in and stopping is what this command used to do, and it left an account whose grid had
+    // never been created signed in to nothing — an empty model picker naming no cause. The second
+    // half now runs here too, and the fake records the LAST `grid` it ran: anything other than
+    // `login` is proof the ensure happened.
+    const root = tempRoot()
+    seedSession(root)
+    const { base } = await fakeBackend({
+      resolveComputer: () => ({ machine: { machineId: 'm_seeded' } }),
+      gridName: () => ({ gridName: 'someone-7f3a91c4' }),
+    })
+
+    const result = await run(root, ['grid', 'login', '--json'], base)
+
+    expect(result.status).toBe(0)
+    // The contract a client reads is untouched: the sign-in's outcome, and nothing about the ensure.
+    expect(ndjson(result.stdout)).toEqual([{ type: 'result', status: 'success', alreadySignedIn: true }])
+    expect(readRecord(root).args[0]).not.toBe('login')
+  }, 20_000)
+
+  it('leaves the grid alone when the backend mints no name — an older backend is not a failure', async () => {
+    const root = tempRoot()
+    seedSession(root)
+    const { base } = await signedInBackend() // no `/api/grid/name` route
+
+    const result = await run(root, ['grid', 'login', '--json'], base)
+
+    expect(result.status).toBe(0)
+    expect(ndjson(result.stdout)).toEqual([{ type: 'result', status: 'success', alreadySignedIn: true }])
+    // Nothing after the hand-off, so the sign-in is still the last thing that ran.
+    expect(readRecord(root).args).toEqual(['login', '--harness', '--json'])
   }, 20_000)
 
   it('carries the child\'s JSON answer out on the result line', async () => {
@@ -461,6 +517,26 @@ describe('harness grid login — when the hand-off fails', () => {
   }, 20_000)
 })
 
+describe('harness grid login — which `grid` it runs', () => {
+  /** The hand-off carries the token, so it has to run the binary every other grid call resolves to
+   *  (`gridExec.ts`: override → managed runtime → PATH), never a PATH lookup of its own. The
+   *  resolution order itself is pinned in `gridHandoff.spec.ts`; what this drives through the real
+   *  CLI is that the override is read off THIS process's environment, which is the seam a unit test
+   *  of the module cannot see. */
+  it('runs the grid HARNESS_GRID_BIN names when PATH has none', async () => {
+    const root = tempRoot()
+    seedSession(root)
+    const { base } = await signedInBackend()
+    const elsewhere = fakeGridOutsidePath(root)
+
+    const result = await run(root, ['grid', 'login', '--json'], base, { HARNESS_GRID_BIN: elsewhere }, 'absent')
+
+    expect(result.status).toBe(0)
+    expect(readRecord(root).args).toEqual(['login', '--harness', '--json'])
+    expect(readRecord(root).stdin.trim()).toBe('tok_seeded')
+  }, 20_000)
+})
+
 describe('harness grid login — when the harness session itself is broken', () => {
   it('names the harness sign-in, not the grid one, when the refresh token is invalid', async () => {
     const root = tempRoot()
@@ -573,8 +649,8 @@ function seedGridCredentials(dir: string): string {
  *  never wrote, and the SILENT case would then pass for entirely the wrong reason. Passing
  *  `undefined` drops the variable from the child's environment altogether, which is the state the
  *  `~/.grid` default is for. */
-function runLogout(root: string, gridHome?: string): Promise<Run> {
-  return run(root, ['logout'], 'http://127.0.0.1:1', { GRID_HOME: gridHome })
+function runLogout(root: string, gridHome?: string, grid: GridOnPath = 'runnable'): Promise<Run> {
+  return run(root, ['logout'], 'http://127.0.0.1:1', { GRID_HOME: gridHome }, grid)
 }
 
 describe('harness grid logout', () => {
@@ -688,32 +764,64 @@ describe('harness grid logout', () => {
   }, 20_000)
 })
 
-describe('harness logout — the grid credential it will not touch', () => {
-  it('warns, naming `harness grid logout`, when a grid sign-in is still on this machine', async () => {
+describe('harness logout — the grid sign-out it now performs', () => {
+  // ⚠️ This suite used to be named "the grid credential it will not touch" and asserted the
+  // OPPOSITE: that `harness logout` only ever printed a sentence about the grid. The one-sign-in
+  // flow reversed that decision deliberately — one sign-in creates the grid session, so one
+  // sign-out ends it — and these tests are what stop it being reverted by someone reading the old
+  // rule. The two objections the old rule was built on are each pinned below rather than dropped.
+
+  it('runs `grid logout` as part of signing out', async () => {
+    const root = tempRoot()
+    seedSession(root)
+
+    const result = await runLogout(root)
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('Signed out.')
+    expect(readRecord(root).args).toEqual(['logout'])
+  }, 20_000)
+
+  it('completes the harness sign-out even when the grid refuses', async () => {
+    const root = tempRoot()
+    seedSession(root)
+    // `grid logout` refuses over a serve child it cannot confirm stopped. That must be reported and
+    // never propagated: a grid condition cannot block a harness sign-out.
+    const result = await run(root, ['logout'], 'http://127.0.0.1:1', {
+      FAKE_GRID_EXIT: '1',
+      FAKE_GRID_STDERR: 'dt-edge: still serving on pid 4242. Stop it, or sign out with --force.\n',
+    })
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('Signed out.')
+    expect(result.stderr).toContain('still serving on pid 4242')
+  }, 20_000)
+
+  it('falls back to the old sentence when there is no `grid` to run at all', async () => {
     const root = tempRoot()
     seedSession(root)
     seedGridCredentials(join(root, '.grid'))
 
-    const result = await runLogout(root)
+    const result = await runLogout(root, undefined, 'absent')
 
-    // Local, and unable to fail: the warning is a sentence, never a condition.
+    // Nothing ran, so a credential really is being left behind — which is the one case the warning
+    // was written for, and the only one where it is still true.
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('Signed out.')
     expect(result.stderr).toContain('harness grid logout')
   }, 20_000)
 
-  it('stays silent when there are no grid credentials', async () => {
+  it('says nothing about the grid when nothing ran and there was no credential either', async () => {
     const root = tempRoot()
     seedSession(root)
 
-    const result = await runLogout(root)
+    const result = await runLogout(root, undefined, 'absent')
 
     expect(result.status).toBe(0)
-    expect(result.stdout).toContain('Signed out.')
     expect(result.stderr).not.toContain('grid logout')
   }, 20_000)
 
-  it('never removes the grid credential file', async () => {
+  it('never deletes the grid credential file itself', async () => {
     const root = tempRoot()
     seedSession(root)
     const credentials = seedGridCredentials(join(root, '.grid'))
@@ -721,8 +829,8 @@ describe('harness logout — the grid credential it will not touch', () => {
 
     await runLogout(root)
 
-    // The store may predate the harness entirely — a browser sign-in it knows nothing about — so
-    // the warning is the whole of what this command is entitled to do about it.
+    // Deleting credentials is `grid logout`'s own job, done in its own order (serve children first).
+    // The harness spawns it and reads nothing out of the store.
     expect(existsSync(credentials)).toBe(true)
     expect(readFileSync(credentials, 'utf8')).toBe(before)
   }, 20_000)
@@ -733,7 +841,9 @@ describe('harness logout — the grid credential it will not touch', () => {
     const elsewhere = join(root, 'grid-home')
     seedGridCredentials(elsewhere)
 
-    const result = await runLogout(root, elsewhere)
+    // With no `grid` on PATH the fallback sentence fires, which is what makes the path resolution
+    // observable at all — the cascade itself never reads the store.
+    const result = await runLogout(root, elsewhere, 'absent')
 
     expect(result.stderr).toContain('harness grid logout')
   }, 20_000)
@@ -741,30 +851,13 @@ describe('harness logout — the grid credential it will not touch', () => {
   it('expands a leading ~ in GRID_HOME, because `grid` does', async () => {
     const root = tempRoot()
     seedSession(root)
+    // `envFor` sets HOME to the temp root, so `~` inside the child expands to there — seeding at
+    // the TEST process's home would be a different directory entirely.
     seedGridCredentials(join(root, 'grid-state'))
 
-    // A shell expands `~` at assignment; a systemd unit, a Docker ENV or a .env file does not. There
-    // `grid`'s own `expanduser()` still resolves it, so a literal value taken verbatim here would
-    // look for a directory named `~` and go silent about a credential that is definitely present.
-    const result = await runLogout(root, '~/grid-state')
+    const result = await runLogout(root, '~/grid-state', 'absent')
 
     expect(result.stderr).toContain('harness grid logout')
-  }, 20_000)
-
-  it('does not warn about a store GRID_HOME points away from', async () => {
-    const root = tempRoot()
-    seedSession(root)
-    // Credentials at the DEFAULT location, and a GRID_HOME aimed at an empty directory. Without the
-    // override being read, the check would find the default store and warn — so this is the negative
-    // control that makes the case above mean "it read GRID_HOME" rather than "it found something".
-    seedGridCredentials(join(root, '.grid'))
-    const empty = join(root, 'grid-home-empty')
-    mkdirSync(empty, { recursive: true })
-
-    const result = await runLogout(root, empty)
-
-    expect(result.status).toBe(0)
-    expect(result.stderr).not.toContain('grid logout')
   }, 20_000)
 })
 

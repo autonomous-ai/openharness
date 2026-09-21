@@ -18,7 +18,7 @@ void main() {
       addTearDown(app.dispose);
       final command = SwarmDestination(
         id: 'command:swarm.new',
-        title: 'New Agent',
+        title: 'New Harness',
         detail: 'Navigate',
         swarmId: null,
         current: false,
@@ -32,7 +32,7 @@ void main() {
         commands: () => available ? [command] : [],
       );
       addTearDown(search.dispose);
-      search.setQuery('New Agent');
+      search.setQuery('New Harness');
       expect(search.rows.any((row) => row.isCommand), isFalse);
       search.setQuery('> new');
       expect(search.selected, same(command));
@@ -77,7 +77,7 @@ void main() {
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('swarm-search-results')),
-          matching: find.text('Open Agent'),
+          matching: find.text('Open Harness'),
         ),
         findsNothing,
       );
@@ -112,12 +112,12 @@ void main() {
   );
 
   testWidgets(
-    'New Agent commands use the shared picker and hand focus to the chosen dialog',
+    'New Harness commands use the shared picker and hand focus to the chosen dialog',
     (tester) async {
       final app = createApp();
       await mount(tester, app);
       final input = find.byKey(const ValueKey('swarm-search-input'));
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
       await tester.enterText(input, '> rename');
       await tester.pump();
       expect(

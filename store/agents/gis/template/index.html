@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Atlas — a place for discovery</title><link rel="icon" href="data:,">
+<link rel="stylesheet" href="vendor/leaflet.css"><link rel="stylesheet" href="atlas.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="index.html"><span class="mark">◈</span> Atlas <span class="edition">/ GIS STUDIO</span></a><span class="local">● Local by design</span><label class="button" for="upload">↥ Open GeoJSON</label><input id="upload" type="file" accept=".geojson,.json,application/geo+json" hidden><button id="export">↗ Export selection</button></header>
+<div id="error" role="alert" hidden></div>
+<main class="workspace">
+<aside class="sidebar">
+  <div class="eyebrow">FIELD NOTES &nbsp; / &nbsp; 001</div>
+  <h1>A place for<br><em>discovery.</em></h1>
+  <p class="intro">See the places. Find the patterns.<br>Bring your own corner of the world.</p>
+  <div class="metrics"><div><strong id="count">—</strong><span>visible features</span></div><div><strong id="geometry-count">—</strong><span>geometry types</span></div></div>
+  <div class="section-head"><h2>Explore your layer</h2><span id="source">cities.geojson</span></div>
+  <label class="search">⌕ <input id="search" type="search" placeholder="Find a place…" aria-label="Search features"></label>
+  <label class="select-row" for="type">Geometry <select id="type"><option value="all">All types</option></select></label>
+  <div class="list-head"><span>FEATURE</span><span>GEOMETRY</span></div>
+  <div id="features" class="features" aria-label="Features"></div>
+  <p id="empty" hidden>No features match. Try another search or geometry.</p>
+  <button id="fit" class="wide">⌖ Fit visible features</button>
+  <section id="details" class="details"><h2>Select a feature</h2><p>Choose a name or a shape on the map to inspect its properties.</p></section>
+  <p class="source-note">Starter coordinates identify real cities. Population values are illustrative, not demographic estimates. Offline outlines: Natural Earth 1:110m; not for navigation or surveying.</p>
+</aside>
+<section class="map-panel" aria-label="Map exploration">
+  <div id="map" role="region" aria-label="Interactive map; use arrow keys to pan and plus or minus to zoom"></div>
+  <div class="map-title"><span class="eyebrow">YOUR DATA, ON THE MAP</span><strong id="map-name">Vietnam / City atlas</strong><span id="bounds-label">Drag to explore · scroll to zoom</span></div>
+  <div class="map-tools"><button id="measure" aria-pressed="false">↔ Measure distance</button><button id="clear-measure" hidden>Clear</button></div>
+  <div class="measurement" id="measurement" role="status" hidden></div>
+  <div class="map-bottom"><div class="map-legend"><span><i></i> Your features</span><span><i class="selected"></i> Selected</span></div><span class="offline">OFFLINE VECTOR MAP</span></div>
+  <div class="coordinates" id="coordinates">WGS 84 · longitude / latitude</div>
+</section>
+</main>
+<footer><span>Every point is a starting point.</span><span>Data stays in this browser. Export to keep your selection.</span></footer>
+<script src="vendor/leaflet.js"></script><script type="module" src="atlas.mjs"></script>
+</body></html>

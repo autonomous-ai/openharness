@@ -1,0 +1,22 @@
+{
+  "homepage": "https://github.com/htdt/godogen",
+  "upstream": "https://github.com/htdt/godogen",
+  "license": "MIT",
+  "tagline": "Autonomous game development",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/agents/godogen/screenshots/explore.png",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/agents/godogen/screenshots/play.png"
+  ],
+  "examples": [
+    {
+      "prompt": "Make a synthwave hoverbike racer: ride down a neon grid canyon toward a striped setting sun, weave between glowing pylons, hop barriers and collect energy cores, with a boost and three shields.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/godogen/neon-drift.jpg",
+      "caption": "Neon Drift · 3D synthwave hoverbike racer · playable in Game Studio"
+    },
+    {
+      "prompt": "Make a low-poly sailing game: steer a little sloop around a sunny archipelago of palm islands with a lighthouse, find twelve floating treasure chests marked by beams of light before the sun sets, and watch out for reefs.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/godogen/treasure-isles.jpg",
+      "caption": "Treasure Isles · 3D low-poly sailing treasure hunt · playable in Game Studio"
+    }
+  ]
+}

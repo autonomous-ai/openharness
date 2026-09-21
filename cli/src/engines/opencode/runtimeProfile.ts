@@ -23,6 +23,18 @@ export interface OpencodeModelTarget {
   model: string
   /** What the picker filter is fed: model words, then provider words to disambiguate. */
   filter: string
+  /**
+   * The model's words ALONE, for the render where the provider is not in the row to match against.
+   *
+   * OpenCode draws the provider into the row only when it needs to: with several providers connected
+   * a row reads `Big Pickle OpenCode Zen  ·  Free`, but with one it is just `Big Pickle  ·  Free` and
+   * the provider name appears only as the section heading above. Feeding [filter] to the second one
+   * matches NOTHING — measured on a live picker: `big pickle opencode` returned an empty list where
+   * `big pickle` returned the row. So the drive falls back to this, and the "exactly one row left"
+   * rule does the disambiguating instead: if only one model answers to the name, there is no second
+   * provider to confuse it with.
+   */
+  modelFilter: string
 }
 
 export interface OpencodePickerRow {
@@ -40,21 +52,42 @@ function squash(value: string): string {
   return value.replace(/[^a-z0-9]+/gi, '').toLowerCase()
 }
 
+/**
+ * One `provider/model` id as a picker target, or null when it is not that shape.
+ *
+ * Split out from [parseOpencodeModelsOutput] because a target is also needed for a model that
+ * `opencode models` never printed: a grid's provider is declared in a config file this daemon writes
+ * for ONE agent, so the grid's models exist in that pane's picker and nowhere else. The construction
+ * is identical either way — which is the point of sharing it, since a filter built by a second rule
+ * would drift from the one the picker was measured against.
+ */
+export function opencodeModelTarget(id: string): OpencodeModelTarget | null {
+  const trimmed = id.trim()
+  if (!/^[a-z0-9][\w.-]*\/[\w./-]+$/i.test(trimmed)) return null
+  const slash = trimmed.indexOf('/')
+  const provider = trimmed.slice(0, slash)
+  const model = trimmed.slice(slash + 1)
+  // The picker shows the model's LAST segment (`minimax/minimax-m3` renders as "MiniMax M3"), so the
+  // filter is built from that plus the provider.
+  const leaf = model.slice(model.lastIndexOf('/') + 1)
+  return {
+    id: trimmed,
+    provider,
+    model,
+    filter: `${words(leaf)} ${words(provider)}`.trim(),
+    modelFilter: words(leaf),
+  }
+}
+
 /** Parse `opencode models`; anything that is not a `provider/model` line is ignored. */
 export function parseOpencodeModelsOutput(output: string): OpencodeModelTarget[] {
   const targets: OpencodeModelTarget[] = []
   const seen = new Set<string>()
   for (const rawLine of output.split('\n')) {
-    const id = rawLine.trim()
-    if (!/^[a-z0-9][\w.-]*\/[\w./-]+$/i.test(id) || seen.has(id)) continue
-    seen.add(id)
-    const slash = id.indexOf('/')
-    const provider = id.slice(0, slash)
-    const model = id.slice(slash + 1)
-    // The picker shows the model's LAST segment (`minimax/minimax-m3` renders as "MiniMax M3"), so the
-    // filter is built from that plus the provider.
-    const leaf = model.slice(model.lastIndexOf('/') + 1)
-    targets.push({ id, provider, model, filter: `${words(leaf)} ${words(provider)}`.trim() })
+    const target = opencodeModelTarget(rawLine)
+    if (!target || seen.has(target.id)) continue
+    seen.add(target.id)
+    targets.push(target)
   }
   return targets
 }
@@ -94,10 +127,15 @@ export function countOpencodePickers(capture: string): number {
   return capture.split('\n').filter((line) => /\bSelect model\b/.test(line)).length
 }
 
-/** True when a picker row is the catalog entry we are trying to select. */
-export function opencodeRowMatches(target: OpencodeModelTarget, row: OpencodePickerRow): boolean {
+/** True when a picker row NAMES the target's model, whatever provider it is listed under. */
+export function opencodeRowNamesModel(target: OpencodeModelTarget, row: OpencodePickerRow): boolean {
   const leaf = target.model.slice(target.model.lastIndexOf('/') + 1)
   return squash(row.display).startsWith(squash(leaf))
+}
+
+/** True when a picker row is the catalog entry we are trying to select. */
+export function opencodeRowMatches(target: OpencodeModelTarget, row: OpencodePickerRow): boolean {
+  return opencodeRowNamesModel(target, row)
     && squash(`${row.display} ${row.provider}`).includes(squash(target.provider))
 }
 

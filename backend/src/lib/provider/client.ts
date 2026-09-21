@@ -15,7 +15,7 @@
  * There is no discovery step: one URL, one credential header, and the methods below. Everything a
  * client needs to know it learns by calling.
  *
- * Contract: autonomous-ai/autonomous-harness → provider/spec/README.md.
+ * Contract: autonomous-ai/openharness → provider/spec/README.md.
  */
 import { providerFetch, readBodyCapped, type ProviderResponse } from '../providerUrl.js'
 

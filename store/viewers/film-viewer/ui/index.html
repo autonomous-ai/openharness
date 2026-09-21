@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Film Studio</title>
+    <link rel="stylesheet" href="/studio/studio.css" />
+  </head>
+  <body>
+    <main class="studio">
+      <header class="masthead">
+        <div>
+          <div class="eyebrow">
+            <span class="mark">◩</span> OPENMONTAGE
+            <span class="divider">/</span> FILM STUDIO
+          </div>
+          <h1 id="title">Your next film</h1>
+          <p id="subtitle">Opening the screening room…</p>
+        </div>
+        <button id="export" class="button primary" disabled>
+          <span data-icon="download"></span>Export film
+        </button>
+      </header>
+      <div id="connection" class="notice hidden" role="status"></div>
+      <section class="screening" aria-label="Film preview">
+        <div class="screen" id="screen">
+          <video
+            id="film"
+            playsinline
+            preload="metadata"
+            aria-label="Film preview"
+          ></video>
+          <div class="empty" id="empty">
+            <span class="empty-mark">◩</span>
+            <h2>A film begins with an idea.</h2>
+            <p>
+              Describe yours in the agent pane.<br />The script, shots, and
+              first cut will arrive here.
+            </p>
+          </div>
+          <button id="big-play" class="big-play hidden" aria-label="Play film">
+            <span data-icon="play"></span>
+          </button>
+          <div class="screen-label">
+            <span class="status-dot"></span
+            ><span id="screen-label">SCREENING ROOM</span>
+          </div>
+          <div class="film-meta" id="film-meta"></div>
+        </div>
+        <div class="transport">
+          <button class="icon-button" id="play" aria-label="Play film" disabled>
+            <span data-icon="play"></span>
+          </button>
+          <span class="timecode" id="clock">00:00</span>
+          <input
+            id="seek"
+            type="range"
+            aria-label="Film position"
+            min="0"
+            max="1"
+            step="0.01"
+            value="0"
+            disabled
+          />
+          <span class="timecode faint" id="duration">00:00</span>
+          <button
+            class="icon-button"
+            id="mute"
+            aria-label="Mute audio"
+            disabled
+          >
+            <span data-icon="volume"></span>
+          </button>
+          <button
+            class="icon-button"
+            id="full"
+            aria-label="Expand film"
+            disabled
+          >
+            <span data-icon="expand"></span>
+          </button>
+        </div>
+        <div class="cut-bar">
+          <label class="cut-choice"
+            ><span data-icon="layers"></span
+            ><select id="versions" aria-label="Film version" disabled>
+              <option>No cut yet</option>
+            </select></label
+          ><button id="new-cut" class="button small hidden">
+            New cut ready <span>↗</span></button
+          ><span id="cut-description">The first cut will appear here.</span>
+        </div>
+      </section>
+      <div class="production-state">
+        <span id="production-status">Preparing the studio</span
+        ><span id="spend"></span>
+      </div>
+      <div
+        id="stages"
+        class="stages hidden"
+        aria-label="Production stages"
+      ></div>
+      <section class="desk">
+        <div class="tabs" role="tablist" aria-label="Production details">
+          <button
+            class="tab active"
+            role="tab"
+            aria-selected="true"
+            aria-controls="panel"
+            id="tab-shots"
+            data-tab="shots"
+          >
+            Storyboard <span id="shot-count"></span>
+          </button>
+          <button
+            class="tab"
+            role="tab"
+            aria-selected="false"
+            aria-controls="panel"
+            id="tab-script"
+            data-tab="script"
+          >
+            Script
+          </button>
+          <button
+            class="tab"
+            role="tab"
+            aria-selected="false"
+            aria-controls="panel"
+            id="tab-notes"
+            data-tab="notes"
+          >
+            Review notes <span id="note-count"></span>
+          </button>
+          <a
+            id="production-link"
+            class="production-link"
+            href="/"
+            target="_blank"
+            rel="noopener"
+            >Production board ↗</a
+          >
+        </div>
+        <div id="panel" role="tabpanel" aria-labelledby="tab-shots"></div>
+      </section>
+      <footer>
+        <span>Made with OpenMontage. Directed by you.</span
+        ><a
+          href="https://github.com/autonomous-ai/openharness/tree/main/store/viewers/film-viewer"
+          target="_blank"
+          rel="noopener"
+          >Source · AGPL-3.0</a
+        >
+      </footer>
+    </main>
+    <div id="toast" class="toast hidden" role="status"></div>
+    <script type="module" src="/studio/studio.js"></script>
+  </body>
+</html>

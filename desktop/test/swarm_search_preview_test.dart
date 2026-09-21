@@ -99,7 +99,7 @@ void main() {
     await seedPreviews(app);
     app.adoptSessionForTest(terminal('a69', []));
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     final field = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(field, 'Workspace sync');
     await tester.pump();
@@ -107,7 +107,7 @@ void main() {
     app.machineStates['m']!.connectionStatus = ConnectionStatus.disconnected;
     app.notifyListeners();
     await tester.pump();
-    expect(find.text('Offline'), findsOneWidget);
+    expect(find.textContaining('Offline', findRichText: true), findsOneWidget);
     expect(find.text('Needs your input'), findsNothing);
     expect(
       find.textContaining('Keep shared workspaces in sync'),
@@ -173,7 +173,7 @@ void main() {
           if (inline) {
             await tester.tap(field);
           } else {
-            await chord(tester, LogicalKeyboardKey.keyO);
+            await chord(tester, LogicalKeyboardKey.keyP);
           }
           await tester.enterText(field, 'Checkout retries');
           await tester.pump();
@@ -250,10 +250,9 @@ void main() {
 
           // Switching to a group and paging before its frame uses the new
           // viewport and never retains the previous session's reading position.
-          await tester.enterText(field, 'Test host');
+          await tester.enterText(field, 'Additional agent 3');
           await page();
-          expect(search.selected!.agentId, isNull);
-          expect(previewPosition().pixels, greaterThan(0));
+          expect(search.selected!.agentId, 'paging-3');
           await page(up: true);
           expect(previewPosition().pixels, 0);
           await tester.enterText(field, 'Checkout retries');
@@ -286,7 +285,7 @@ void main() {
         if (inline) {
           await tester.tap(field);
         } else {
-          await chord(tester, LogicalKeyboardKey.keyO);
+          await chord(tester, LogicalKeyboardKey.keyP);
         }
         await tester.enterText(field, 'Checkout retries');
         await tester.pump();
@@ -341,10 +340,12 @@ void main() {
         final search = tester
             .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
             .search;
-        expect(search.selected!.agentId, isNull);
-        final waiting = tester.getTopLeft(find.text('Workspace sync').last);
-        final working = tester.getTopLeft(find.text('Search experience').last);
-        expect(waiting.dy, lessThan(working.dy));
+        expect(
+          search.rows.every((row) => row.isCreate || row.agentId != null),
+          isTrue,
+        );
+        await tester.enterText(field, 'Workspace sync');
+        await tester.pump();
         expect(
           find.text(
             'Should a workspace reopen its last layout on another machine?',
@@ -368,7 +369,7 @@ void main() {
   }
 
   testWidgets(
-    'existing earlier explanations stay visible after a commit receipt',
+    'earlier explanations remain readable by keyboard after a commit receipt',
     (tester) async {
       final app = createApp();
       await seedPreviews(app);
@@ -381,7 +382,7 @@ void main() {
       );
       app.adoptSessionForTest(terminal('a69', []));
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Checkout',
@@ -394,6 +395,11 @@ void main() {
       expect(find.text('Earlier in this session'), findsOneWidget);
       final preview = tester.getRect(
         find.byKey(const ValueKey('swarm-search-preview')),
+      );
+      await key(tester, LogicalKeyboardKey.pageDown);
+      expect(
+        tester.getRect(explanation).top,
+        greaterThanOrEqualTo(preview.top),
       );
       expect(tester.getRect(explanation).bottom, lessThan(preview.bottom));
       await tester.pumpWidget(const SizedBox());
@@ -415,7 +421,7 @@ void main() {
       await mount(tester, app);
       tester.view.physicalSize = size;
       await tester.pump();
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Checkout',
@@ -429,7 +435,7 @@ void main() {
         find.byKey(const ValueKey('swarm-search-result-list')),
       );
       if (size.width < 864) {
-        expect(preview.top, greaterThanOrEqualTo(list.bottom));
+        expect(preview.bottom, lessThanOrEqualTo(list.top));
       }
       final directory = Platform.environment['HARNESS_PREVIEW_CAPTURE_DIR'];
       if (directory != null) {

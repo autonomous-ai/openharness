@@ -1,0 +1,18 @@
+{
+  "spec": 1,
+  "kind": "viewer",
+  "id": "autonomous/mujoco-viewer",
+  "name": "MuJoCo Viewer",
+  "category": "Simulation",
+  "author": "Autonomous",
+  "description": "MuJoCo's own simulate, in the pane: live physics you can push, pull and pause, every actuator on a slider, contacts and forces drawn, sensors plotted, and the agent's recording replayed frame by frame — on MuJoCo's WebAssembly build.",
+  "toolchain": {
+    "setup": "./setup.sh",
+    "doctor": "./doctor.sh"
+  },
+  "viewer": {
+    "command": "./viewer.sh",
+    "url": "http://127.0.0.1:${port}/?file=${artifact}",
+    "artifactExtensions": [".json"]
+  }
+}

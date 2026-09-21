@@ -1,0 +1,5 @@
+{
+  "homepage": "https://threejs.org",
+  "upstream": "https://github.com/mrdoob/three.js",
+  "license": "MIT"
+}

@@ -167,6 +167,13 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   bool get _shouldCreateInputConnection => kIsWeb || !widget.readOnly;
 
+  /// Whether the platform's on-screen keyboard is the input method itself,
+  /// rather than a layer a hardware keyboard composes through. See the IME
+  /// note in [_openInputConnection].
+  static bool get _composesThroughSoftwareKeyboard =>
+      defaultTargetPlatform == TargetPlatform.iOS ||
+      defaultTargetPlatform == TargetPlatform.android;
+
   void _openInputConnection() {
     if (!_shouldCreateInputConnection) {
       return;
@@ -179,8 +186,29 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
         inputType: widget.inputType,
         inputAction: widget.inputAction,
         keyboardAppearance: widget.keyboardAppearance,
-        autocorrect: false,
-        enableSuggestions: false,
+        // ⚠️ On a phone the software keyboard IS the input method, and these two
+        // switches are what turn its pre-edit buffer off: iOS maps
+        // `autocorrect: false` onto `UITextAutocorrectionTypeNo`, Android maps
+        // `enableSuggestions: false` onto `TYPE_TEXT_FLAG_NO_SUGGESTIONS`. With
+        // either one set the keyboard has nowhere to compose, so Vietnamese
+        // Telex converted nothing and `hoom` reached the pty as four raw
+        // letters instead of `hôm`; a CJK candidate window dies the same way.
+        // A desktop IME composes through marked text, which neither flag
+        // touches, so those platforms keep the strict config — a terminal has
+        // no business autocorrecting a command.
+        //
+        // iOS has no finer knob: that one `autocorrect` gates its autocorrection
+        // AND its Telex conversion. Android's composing hangs off
+        // `enableSuggestions` alone, so its autocorrect flag
+        // (`TYPE_TEXT_FLAG_AUTO_CORRECT`) stays off there and Gboard rewrites
+        // nothing that was typed.
+        autocorrect: defaultTargetPlatform == TargetPlatform.iOS,
+        enableSuggestions: _composesThroughSoftwareKeyboard,
+        // Straight quotes and hyphens, always: `"` and `--flag` are syntax at a
+        // prompt, not typography. Both default to ENABLED, and turning
+        // autocorrect on above is what would finally let iOS act on them.
+        smartDashesType: SmartDashesType.disabled,
+        smartQuotesType: SmartQuotesType.disabled,
         enableIMEPersonalizedLearning: false,
       );
 
@@ -236,12 +264,45 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     return null;
   }
 
+  /// The native buffer's text at the moment the terminal accepted an action.
+  ///
+  /// iOS answers Return by calling [performAction] and then inserting the
+  /// newline into its own buffer anyway: `shouldChangeTextInRange:` returns YES
+  /// for the default return key (Flutter's `FlutterTextInputPlugin.mm`). So a
+  /// value the terminal has ALREADY acted on arrives right after the action —
+  /// and by then [resetEditingState] has emptied the mirror, so diffing it
+  /// retypes the whole line into the pty and follows it with a literal LF,
+  /// which a TUI reads as Ctrl+J: a soft newline, not a submit. The line the
+  /// user just sent is left sitting in the prompt underneath its own answer.
+  ///
+  /// Android performs the editor action without that second insert, and nothing
+  /// it does send matches the shape [_consumeActionEcho] checks for.
+  String? _pendingActionEcho;
+
   @override
   void updateEditingValue(TextEditingValue value) {
+    if (_consumeActionEcho(value)) return;
     _applyEditingValue(
       value,
       hasTextMutation: value.text != _currentEditingState.text,
     );
+  }
+
+  /// Drops the newline described by [_pendingActionEcho] and puts the native
+  /// buffer back on the state the action left, so the line the terminal was
+  /// already sent cannot be typed a second time.
+  ///
+  /// One shot: whatever arrives first after an action disarms this, so real
+  /// typing that follows a submit is never swallowed.
+  bool _consumeActionEcho(TextEditingValue value) {
+    final submitted = _pendingActionEcho;
+    _pendingActionEcho = null;
+    if (submitted == null) return false;
+    // The newline either lands on the buffer the action was performed on, or
+    // after this side's reset has already emptied it — whichever wins the race.
+    if (value.text != '$submitted\n' && value.text != '\n') return false;
+    _connection?.setEditingState(_currentEditingState);
+    return true;
   }
 
   void _applyEditingValue(
@@ -311,7 +372,9 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   @override
   void performAction(TextInputAction action) {
-    // print('performAction $action');
+    // Captured before the handler runs: it is what the pty has been sent, and
+    // what iOS is about to append its newline to. See [_pendingActionEcho].
+    _pendingActionEcho = _currentEditingState.text;
     widget.onAction(action);
   }
 

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10151f">
+  <meta name="description" content="Run, inspect, and benchmark your MLX-LM models on this Mac using natural language.">
+  <title>MLX-LM — Your local model space</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/mlx-icon.svg">
+  <link rel="apple-touch-icon" href="/assets/mlx-icon.png">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/?view=grid" aria-label="MLX-LM model space"><img class="brand-mark" src="/assets/mlx-icon.svg" width="40" height="40" alt=""><span>MLX-LM</span><span class="pilot">LOCAL AI</span></a>
+    <div class="top-status"><span class="local-symbol" aria-hidden="true">◈</span> On your machine <span class="separator"></span><span id="connection-status">Connecting</span></div>
+  </header>
+  <main class="workspace">
+    <section class="control-room" aria-label="MLX-LM control room">
+      <div class="page-heading"><div><p class="eyebrow">MLX-LM / ON THIS MAC</p><h1>Models. Made for this Mac.</h1></div><button id="refresh" class="icon-button" aria-label="Refresh model status" title="Refresh model status">↻</button></div>
+      <div id="runtime-notice" class="runtime-notice" role="status" hidden></div>
+      <div class="stats-row" id="stats-row">
+        <div class="stat"><span>Models on disk</span><strong id="model-count">—</strong></div>
+        <div class="stat"><span>In memory</span><strong id="running-count">—</strong></div>
+        <div class="stat"><span>Last generation</span><strong id="last-speed">— <small>tok/s</small></strong></div>
+        <div class="stat"><span>MLX allocation</span><strong id="model-memory">— <small>GiB</small></strong></div>
+      </div>
+      <section class="map-panel" aria-labelledby="map-heading">
+        <div class="panel-heading"><h2 id="map-heading">MLX on Apple Silicon</h2><span class="mono live-label" id="map-status">DISCOVERING</span></div>
+        <div id="runtime-map" class="runtime-map"><div class="map-empty">Discovering your MLX-LM models…</div></div>
+        <div class="map-footer"><span><i class="legend-dot loaded"></i> In memory <i class="legend-dot"></i> On disk</span><span id="machine-info">Apple Silicon</span></div>
+      </section>
+      <section class="models-panel" aria-labelledby="models-heading">
+        <div class="panel-heading"><h2 id="models-heading">MLX-LM models <span id="models-total" class="count-pill">0</span></h2><span class="secondary">One model in memory at a time</span></div>
+        <div id="models-list" class="models-list"></div>
+      </section>
+      <section class="performance-panel" aria-labelledby="performance-heading">
+        <div class="panel-heading"><h2 id="performance-heading">Performance</h2><a id="export-benchmarks" class="secondary" href="/api/export" download hidden>Export results ↗</a></div>
+        <div id="performance-content" class="performance-content"><div class="empty-small"><span class="empty-icon" aria-hidden="true">▥</span><p>Your first run sets the baseline.</p><span>Benchmark a model to compare speed and response time.</span></div></div>
+      </section>
+      <section class="activity-panel" aria-labelledby="activity-heading"><div class="panel-heading"><h2 id="activity-heading">Activity</h2><span class="secondary">Live from MLX-LM</span></div><div id="activity-content"></div></section>
+    </section>
+    <aside class="assistant-panel" aria-label="Natural language model controls">
+      <div class="assistant-header"><img class="assistant-avatar" src="/assets/mlx-icon.svg" width="36" height="36" alt=""><div><h2>MLX-LM operator</h2><span>Tell it what you want to run.</span></div><span class="private-badge">LOCAL</span></div>
+      <div class="conversation" id="conversation" role="log" aria-live="polite" aria-relevant="additions">
+        <div class="assistant-message"><span class="message-label">MLX-LM</span><p>Your MLX-LM models.<br>At your command.</p><p class="secondary">I can find a model, deploy it with MLX-LM, and measure how it performs here.</p></div>
+        <div class="suggestions" id="suggestions"><button data-prompt="Run a lightweight model">Run a lightweight model <span>↗</span></button><button data-prompt="Find a small model for coding">Find a model for coding <span>↗</span></button><button data-prompt="Show my models">Show my models <span>↗</span></button></div>
+      </div>
+      <div id="job-panel" class="job-panel" hidden></div>
+      <label class="model-picker" for="selected-model">Chat / follow-up model<select id="selected-model"><option value="">Auto · running model</option></select></label>
+      <form id="command-form" class="composer"><label class="sr-only" for="command-input">Ask the MLX-LM operator</label><textarea id="command-input" rows="3" placeholder="Run an MLX model, compare speeds, free up memory…" maxlength="4000"></textarea><div class="composer-footer"><span id="operator-status">MLX-LM harness</span><button id="send-button" type="submit" aria-label="Send request">↑</button></div></form>
+      <div class="assistant-footer">MLX-LM inference stays on this Mac.<span>↵ Send · ⇧↵ New line</span></div>
+    </aside>
+  </main>
+  <dialog id="model-dialog" aria-labelledby="detail-title"><div id="model-detail"></div><button class="dialog-close" aria-label="Close model details">×</button></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

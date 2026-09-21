@@ -3,6 +3,7 @@
 // once the person closes it, and taken down with the agent.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/app_state.dart';
@@ -16,38 +17,125 @@ import 'swarm_state_test.dart' show createApp;
 
 Map<String, dynamic> _frame(
   String id, {
+  bool terminalAvailable = true,
   String? viewerUrl,
+  String? viewerError,
+  String? viewerName,
   Map<String, dynamic>? verdict,
 }) => {
   'id': id,
   'name': 'Agent $id',
   'engine': 'claude',
-  'dsh': 'autonomous/copper',
-  'dshName': 'Copper',
+  'dsh': 'autonomous/autonomous-circuit',
+  'dshName': 'Autonomous Circuit',
   'viewerUrl': ?viewerUrl,
+  'viewerError': ?viewerError,
+  'viewerName': ?viewerName,
   'verdict': ?verdict,
   'terminal': {
-    'available': true,
-    'runtimes': [
-      {'backend': 'tmux', 'paneId': '%1'},
-    ],
+    'available': terminalAvailable,
+    if (terminalAvailable)
+      'runtimes': [
+        {'backend': 'tmux', 'paneId': '%1'},
+      ],
   },
 };
 
 Future<void> _synced(
   AppNotifier app,
   String id, {
+  bool terminalAvailable = true,
   String? viewerUrl,
+  String? viewerError,
+  String? viewerName,
   Map<String, dynamic>? verdict,
 }) => app.handleEventForTest('m', {
   'type': 'agent_synced',
-  'payload': {'agent': _frame(id, viewerUrl: viewerUrl, verdict: verdict)},
+  'payload': {
+    'agent': _frame(
+      id,
+      terminalAvailable: terminalAvailable,
+      viewerUrl: viewerUrl,
+      viewerError: viewerError,
+      viewerName: viewerName,
+      verdict: verdict,
+    ),
+  },
 });
 
 List<TerminalPane> _viewers(AppNotifier app) =>
     app.panes.where((pane) => pane.isWeb).toList();
 
 void main() {
+  test('a transient terminal-unavailable sync retains the terminal pane until deletion', () async {
+    final app = createApp();
+    addTearDown(app.dispose);
+    final pane = app.adoptSessionForTest(
+      terminal('a0', <TerminalBinaryFrame>[]),
+    );
+
+    await _synced(app, 'a0', terminalAvailable: false);
+
+    expect(app.panes, [pane]);
+    expect(
+      app
+          .stateOf('m')!
+          .agents
+          .firstWhere((agent) => agent.id == 'a0')
+          .terminalAvailable,
+      isFalse,
+    );
+
+    await _synced(app, 'a0');
+    expect(app.panes, [pane]);
+    expect(
+      app
+          .stateOf('m')!
+          .agents
+          .firstWhere((agent) => agent.id == 'a0')
+          .terminalAvailable,
+      isTrue,
+    );
+
+    await app.handleEventForTest('m', {
+      'type': 'agent_deleted',
+      'agentId': 'a0',
+      'payload': {'agentId': 'a0'},
+    });
+    expect(app.panes, isEmpty);
+  });
+
+  testWidgets(
+    'remote viewer update guidance can be dismissed and recovers to a forwarded URL',
+    (tester) async {
+      final app = createApp();
+      addTearDown(app.dispose);
+      app.stateOf('m')!.nodeOnline = true;
+      app.adoptSessionForTest(terminal('a0', <TerminalBinaryFrame>[]));
+      await mount(tester, app);
+      const error = 'Update Harness on the remote machine to show its viewer.';
+      await _synced(app, 'a0', viewerError: error);
+      await tester.pump();
+      expect(find.text(error), findsOneWidget);
+      expect(_viewers(app).single.url, isNull);
+      await app.closePane(_viewers(app).single.id);
+      await _synced(app, 'a0', viewerError: error);
+      expect(_viewers(app), isEmpty);
+      await app.toggleViewerPane('m', 'a0');
+      expect(_viewers(app).single.viewerError, error);
+      await _synced(
+        app,
+        'a0',
+        viewerUrl: 'http://127.0.0.1:4180/__harness_viewer/token?path=%2F',
+      );
+      await tester.pump();
+      expect(find.text(error), findsNothing);
+      expect(_viewers(app).single.viewerError, isNull);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   test('a viewer opens to the left of its agent and follows the URL', () async {
     final app = createApp();
     addTearDown(app.dispose);
@@ -240,11 +328,18 @@ void main() {
     expect(find.text('http://127.0.0.1:4179/'), findsOneWidget);
     // Its own close control, and no way to end an agent from it.
     expect(find.byTooltip('Close viewer'), findsOneWidget);
-    expect(
-      find.byTooltip('Stop Agent'),
-      findsOneWidget,
-      reason: 'the terminal keeps its own',
+    // This split is narrow: the terminal keeps its actions in the menu.
+    final actions = tester.widget<IconButton>(
+      find.widgetWithIcon(IconButton, Icons.more_horiz),
     );
+    actions.focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.text('Stop Harness'), findsOneWidget);
+    expect(find.text('Hide viewer'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
     // The verdict is the viewer's to show — chip and strip in its header,
     // nothing on the terminal's — and the terminal's header carries the
     // control that hides and shows the viewer.
@@ -281,10 +376,115 @@ void main() {
     expect(find.text('Build'), findsNothing);
     expect(find.text('1 warning'), findsNothing, reason: 'the phase wins');
     expect(find.textContaining('·  Viewer'), findsNothing);
-    expect(find.byTooltip('Hide viewer'), findsOneWidget);
     await tester.tap(find.byTooltip('Close viewer'));
     await tester.pump();
     expect(_viewers(app), isEmpty);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'the viewer is called what it is, not the harness again — the harness name moves to the tooltip',
+    (tester) async {
+      final app = createApp();
+      addTearDown(app.dispose);
+      app.stateOf('m')!.nodeOnline = true;
+      final input = <TerminalBinaryFrame>[];
+      app.adoptSessionForTest(terminal('a0', input));
+      await mount(tester, app);
+      await _synced(
+        app,
+        'a0',
+        viewerUrl: 'http://127.0.0.1:4179/',
+        viewerName: '3D Viewer',
+      );
+      await tester.pump();
+      final header = find.byType(WebPanePanel);
+      expect(
+        find.descendant(of: header, matching: find.text('3D Viewer')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: header, matching: find.text('Agent a0')),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: header,
+          matching: find.byTooltip('Agent a0\nhttp://127.0.0.1:4179/'),
+        ),
+        findsOneWidget,
+      );
+      // A daemon that predates viewerName: the harness's name and Viewer.
+      await _synced(app, 'a0', viewerUrl: 'http://127.0.0.1:4179/');
+      await tester.pump();
+      expect(
+        find.descendant(
+          of: header,
+          matching: find.text('Autonomous Circuit Viewer'),
+        ),
+        findsOneWidget,
+      );
+      // Let the terminal's batched resize run out.
+      await tester.pump(const Duration(milliseconds: 300));
+    },
+  );
+
+  testWidgets(
+    'a working agent\'s viewer says Working, keeps the last check for its tooltip, and goes back when the turn ends',
+    (tester) async {
+      final app = createApp();
+      addTearDown(app.dispose);
+      app.stateOf('m')!.nodeOnline = true;
+      final input = <TerminalBinaryFrame>[];
+      app.adoptSessionForTest(terminal('a0', input));
+      await mount(tester, app);
+      await _synced(
+        app,
+        'a0',
+        viewerUrl: 'http://127.0.0.1:4179/',
+        verdict: {'ready': true, 'summary': 'deck.pdf · 5 slides'},
+      );
+      await tester.pump();
+      final status = find.byKey(const ValueKey('pane-status'));
+      expect(
+        find.descendant(of: status, matching: find.text('Ready')),
+        findsOneWidget,
+      );
+
+      Future<void> turn(String type) => app.handleEventForTest('m', {
+        'type': type,
+        'agentId': 'a0',
+        'payload': {'agentId': 'a0'},
+      });
+      await turn('turn_started');
+      await tester.pump();
+      expect(
+        find.descendant(of: status, matching: find.text('Working')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: status, matching: find.text('Ready')),
+        findsNothing,
+      );
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Tooltip &&
+              widget.message ==
+                  'The agent is working · last check: deck.pdf · 5 slides',
+        ),
+        findsOneWidget,
+      );
+
+      await turn('turn_ended');
+      await tester.pump();
+      expect(
+        find.descendant(of: status, matching: find.text('Ready')),
+        findsOneWidget,
+      );
+      // Let the tile's working ring wind down.
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

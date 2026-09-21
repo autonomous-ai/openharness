@@ -2,10 +2,10 @@
  * Kilo live tailer.
  *
  * Kilo has no per-session transcript file — it writes `message`/`part` rows to a SQLite DB. We
- * cannot byte-offset-tail it, so this reader **polls** the DB every ~1s via the `sqlite3` CLI (shelled
- * out, like tmux/git — keeps the adapter's single pure-JS bundle intact; no native SQLite dependency)
- * and diffs against per-part state to emit incremental `LiveEvent`s into the same
- * `emitSessionEvents` funnel the file-based engines use.
+ * cannot byte-offset-tail it, so this reader **polls** the DB every ~1s (through `lib/sqliteRead`:
+ * `node:sqlite` in-process, or the `sqlite3` CLI on a Node without it) and diffs against per-part
+ * state to emit incremental `LiveEvent`s into the same `emitSessionEvents` funnel the file-based
+ * engines use.
  *
  * Measured on kilo 7.4.20: the conversation is written to the legacy `message`/`part` tables, so those
  * are the primary cursor. Unlike opencode's store, kilo's `session_message` table is NOT empty — it held
@@ -14,17 +14,14 @@
  * reach for it as an ordering key if that ever looks tempting.
  */
 
-import { execFile } from 'child_process'
-import { promisify } from 'util'
 import type { LiveEvent } from '../../lib/normalize.js'
+import { sqliteReadAll } from '../../lib/sqliteRead.js'
 import {
   MAX_OUTPUT, MAX_THINKING, clip, object, str,
   kiloToolName, toolOutputText, toolResultText, toolSummary, userMessageText,
   isTaskPart, isPermissionRejection, taskStartEvent, taskEndEvent,
   type KiloMessage, type KiloPart, type ChildStats,
 } from './normalizer.js'
-
-const execFileAsync = promisify(execFile)
 
 const ID_RE = /^[A-Za-z0-9_]+$/
 const POLL_MS = 1_000
@@ -38,10 +35,10 @@ function parseJson(text: unknown): Record<string, unknown> {
 interface Cursor { tc: number; id: string }
 
 /**
- * Read messages (+ their parts) for one session from kilo.db via the `sqlite3` CLI.
+ * Read messages (+ their parts) for one session from kilo.db.
  * `after` restricts to messages strictly after that boundary (for incremental polling).
- * Opens the DB with `query_only` + a busy timeout so it never contends with kilo's writer.
- * Throws `KiloSqliteMissing` if the `sqlite3` binary is absent.
+ * Read-only, with a short busy timeout, so it never contends with kilo's writer.
+ * Throws `KiloSqliteMissing` when this machine has no way to read SQLite at all.
  */
 export async function readKiloMessages(
   dbPath: string,
@@ -49,33 +46,25 @@ export async function readKiloMessages(
   after?: Cursor | null,
 ): Promise<KiloMessage[]> {
   if (!ID_RE.test(sessionId)) return []
-  const cond = after && ID_RE.test(after.id) && Number.isFinite(after.tc)
-    ? `AND (m.time_created > ${Math.trunc(after.tc)} OR (m.time_created = ${Math.trunc(after.tc)} AND m.id > '${after.id}'))`
+  const bounded = !!after && ID_RE.test(after.id) && Number.isFinite(after.tc)
+  const cond = bounded
+    ? 'AND (m.time_created > ? OR (m.time_created = ? AND m.id > ?)) '
     : ''
   const sql =
-    `SELECT m.id AS mid, m.time_created AS mtc, m.data AS mdata, p.id AS pid, p.data AS pdata ` +
-    `FROM message m LEFT JOIN part p ON p.message_id = m.id ` +
-    `WHERE m.session_id = '${sessionId}' ${cond} ` +
-    `ORDER BY m.time_created, m.id, p.time_created, p.id;`
+    'SELECT m.id AS mid, m.time_created AS mtc, m.data AS mdata, p.id AS pid, p.data AS pdata ' +
+    'FROM message m LEFT JOIN part p ON p.message_id = m.id ' +
+    `WHERE m.session_id = ? ${cond}` +
+    'ORDER BY m.time_created, m.id, p.time_created, p.id;'
+  const params = bounded
+    ? [sessionId, Math.trunc(after!.tc), Math.trunc(after!.tc), after!.id]
+    : [sessionId]
 
-  let stdout: string
-  try {
-    // `.timeout` is the silent dot-command form (the `PRAGMA busy_timeout=…` form prints a JSON row
-    // under -json, which would corrupt the single-array parse below). query_only guards against writes.
-    ({ stdout } = await execFileAsync(
-      'sqlite3',
-      ['-json', '-cmd', '.timeout 3000', '-cmd', 'PRAGMA query_only=1', dbPath, sql],
-      { maxBuffer: MAX_BUFFER },
-    ))
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') throw new KiloSqliteMissing()
+  const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
+  if (!result.ok) {
+    if (result.reason === 'missing') throw new KiloSqliteMissing()
     return [] // db locked / transient — retry next tick
   }
-
-  const trimmed = stdout.trim()
-  if (!trimmed) return []
-  let rows: Array<Record<string, unknown>>
-  try { rows = JSON.parse(trimmed) } catch { return [] }
+  const rows = result.rows
 
   const byId = new Map<string, KiloMessage>()
   const order: string[] = []
@@ -99,14 +88,14 @@ export async function readKiloMessages(
 }
 
 export class KiloSqliteMissing extends Error {
-  constructor() { super('sqlite3 CLI not found on PATH — Kilo sessions cannot be mirrored') }
+  constructor() { super('no SQLite reader (node:sqlite absent and no sqlite3 CLI on PATH) — Kilo sessions cannot be mirrored') }
 }
 
 export interface KiloReaderDeps {
   dbPath: string
   sessionId: string
   onEvents: (events: LiveEvent[]) => void
-  /** Reports the one-time fatal "sqlite3 missing" so the caller can warn + stop the reader. */
+  /** Reports the one-time fatal "no SQLite reader" so the caller can warn + stop the reader. */
   onFatal?: (err: Error) => void
   pollMs?: number
 }

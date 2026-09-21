@@ -14,7 +14,8 @@ import {
   executableFileIdentity,
   type AgentCommandOwnershipSnapshot,
 } from './engineBin.js'
-import { BYPASS_PERMISSION_FLAGS } from './engineLaunch.js'
+import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } from './engineLaunch.js'
+import { psEnv } from './childLocale.js'
 
 function cleanPaneTitle(title: string): string | null {
   const cleaned = title
@@ -133,7 +134,13 @@ function agentAliasCandidate(row: Pick<ProcessRow, 'executable' | 'args'>): bool
  * PID-reuse guard that startMarker exists for.
  *
  * So anchor on `lstart` instead — it is the one field with a fixed shape (`DOW MON DD HH:MM:SS YYYY`) —
- * and let comm be lazy. The day/month names stay unconstrained so a non-English `LC_TIME` still parses.
+ * and let comm be lazy.
+ *
+ * That shape is only fixed because every `ps` whose output reaches this parser is spawned under
+ * `LC_TIME=C` (`psEnv`, lib/childLocale.ts). The day and month names are left unconstrained as a
+ * courtesy to a locale that merely renames them — NOT as support for one. A locale that REORDERS the
+ * fields parses zero rows here, and most of them do: `Tue 15 Sep` (en_GB, en_AU), `Di. 15 Sep.`
+ * (de_DE), `火  9/15` (ja_JP), `вторник, 15 сентября 2026 г.` (ru_RU). That is what `psEnv` prevents.
  */
 export function parseProcessRow(line: string): ProcessRow | null {
   const match = /^\s*(\d+)\s+(\d+)\s+(.+?)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s*(.*)$/.exec(line)
@@ -172,10 +179,26 @@ function readProcField(pid: number, field: 'cmdline' | 'comm'): string | null {
   try { return readFileSync(`/proc/${pid}/${field}`, 'utf8') } catch { return null }
 }
 
+/**
+ * A `ps` that is already running answers everyone who asks while it runs. The first reconcile pass
+ * after a boot attaches a few agents at once and every attach validates its pane against the table,
+ * as does each hook that arrives in the same burst — one table serves them all. There is no cache,
+ * only the read in flight: the oldest table anyone is handed began a `ps` ago (tens of ms), never
+ * one that finished before they asked. Callers get the SAME array; none of them mutates it (every
+ * consumer maps or filters into its own), and any new one must not either.
+ */
+let processRowsInFlight: Promise<ProcessRow[] | null> | null = null
+
 /** The process table, or null when `ps` itself failed — "we could not look" is not "nothing is there". */
-export async function processRows(): Promise<ProcessRow[] | null> {
+export function processRows(): Promise<ProcessRow[] | null> {
+  if (processRowsInFlight) return processRowsInFlight
+  processRowsInFlight = readProcessRows().finally(() => { processRowsInFlight = null })
+  return processRowsInFlight
+}
+
+async function readProcessRows(): Promise<ProcessRow[] | null> {
   const rows = await new Promise<ProcessRow[] | null>((resolve) => {
-    execFile('ps', ['-axo', 'pid=,ppid=,comm=,lstart=,args='], { timeout: 3000 }, (err, stdout) => {
+    execFile('ps', ['-axo', 'pid=,ppid=,comm=,lstart=,args='], { timeout: 3000, env: psEnv() }, (err, stdout) => {
       if (err) { resolve(null); return }
       const rows: ProcessRow[] = []
       for (const line of stdout.split('\n')) {
@@ -384,6 +407,9 @@ export const ENGINE_PROCESS_SIGNATURES: Readonly<Record<RegisteredSession['engin
     basenames: [/^copilot$/],
     entrypoints: [/@github[\/\\]copilot[\/\\](?:npm-loader\.js|index\.js|bin[\/\\]copilot)$/],
   },
+  // A terminal is a shell, and a shell is what every pane starts as — so nothing matches it, ever.
+  // Discovery walks PROCESS_ENGINES and never asks; this entry exists for the Record's sake.
+  terminal: { basenames: [], entrypoints: [] },
 }
 
 function heuristicEngineProcessMatchScore(
@@ -530,15 +556,23 @@ function selectEngineProcess(
  * SessionStart hook fires for a NEW session, so a pane that reattached to an old one is invisible to the
  * daemon until the user happens to type. Read from each CLI's own `--help` on 2026-08-03.
  *
- * Two deliberate holes:
- *   - `--continue` / `-c` carries NO id on any of these CLIs. Nothing can be recovered from argv there.
- *   - claude and codex are absent: `registry.register` demands a transcript path for those two, which
- *     argv does not carry — and both DO fire SessionStart on resume, so there is nothing to repair.
+ * One deliberate hole: `--continue` / `-c` carries NO id on any of these CLIs. Nothing can be
+ * recovered from argv there.
+ *
+ * claude and codex DO fire SessionStart on resume, so their argv is normally redundant — but a hook
+ * only helps a daemon that was listening for it. An agent whose SessionStart landed while the daemon
+ * could not see its pane (a session named by an older build, before the `harness-` whitelist) sits
+ * with no session until the user types again, and cannot be forked meanwhile. Their ids are read
+ * here for that case; `registry.register` still demands the transcript, which sessionRepair's
+ * `findResumedTranscript` derives from the id. `--fork-session` (claude) writes a NEW session, so
+ * that argv names the PARENT and must not bind — `codex fork <id>` never matched `resume` to begin with.
  *
  * The id pattern is a filter, not decoration: `-r` on Command Code takes "a name (use quotes for
  * multi-word names)", so a title would otherwise be registered as a session id.
  */
-const RESUME_ARGS: Partial<Record<RegisteredSession['engine'], { flags: string[]; id: RegExp }>> = {
+const RESUME_ARGS: Partial<Record<RegisteredSession['engine'], { flags: string[]; id: RegExp; unless?: string[] }>> = {
+  claude: { flags: ['--resume', '-r'], id: /^[0-9a-f-]{16,}$/i, unless: ['--fork-session'] },
+  codex: { flags: ['resume'], id: /^[0-9a-f-]{16,}$/i },
   cursor: { flags: ['--resume'], id: /^[0-9a-f-]{16,}$/i },
   opencode: { flags: ['--session', '-s'], id: /^ses_[A-Za-z0-9]+$/ },
   // Kilo inherits opencode's resume flags and its `ses_` id prefix — measured on this machine's kilo.db:
@@ -567,23 +601,65 @@ const RESUME_ARGS: Partial<Record<RegisteredSession['engine'], { flags: string[]
 
 /**
  * Whether a live process's argv already contains every flag this engine's confirmed bypass-permission
- * mode requires — read from the running process BEFORE restart signals it, so the relaunch can reapply
- * the exact autonomy mode the agent had (there is nowhere else to read it from once the process is
- * dead). Token-exact via `argvTokens`, not a substring `.includes()` check on the raw string, so a
- * prompt or argument that merely CONTAINS the flag text cannot false-positive. Engines with no
- * confirmed bypass flag (`BYPASS_PERMISSION_FLAGS[engine] === null`) always read false — never guess.
+ * mode requires. Discovery reads it off every running agent and keeps the registry row's
+ * `bypassPermission` in step with it, which is what a relaunch reads (a row written before the field
+ * existed learns it here). Token-exact via `argvTokens`, not a substring `.includes()` check on the raw
+ * string, so a prompt or argument that merely CONTAINS the flag text cannot false-positive. Engines
+ * with no confirmed bypass flag (`BYPASS_PERMISSION_FLAGS[engine] === null`) always read false — never
+ * guess.
  */
 export function bypassPermissionActive(engine: RegisteredSession['engine'], args: string): boolean {
   const flags = BYPASS_PERMISSION_FLAGS[engine]
   if (!flags) return false
+  // A named mode says exactly how much the engine approves on its own (`full` — the old
+  // skip-everything flag — included); only an argv naming none falls back to the bare flag check.
   const tokens = argvTokens(args)
-  return flags.every((flag) => tokens.includes(flag))
+  const mode = permissionModeFromTokens(engine, tokens)
+  return mode ? permissionModeApproves(mode) : flagsInOrder(tokens, flags)
+}
+
+/**
+ * The permission mode a live process's argv names — the inverse of `permissionModeFlags`, so the row
+ * of an agent somebody typed into a terminal (or one written before modes were recorded) can carry
+ * the SAME mode a created one does, and a relaunch brings it back exactly: `--dangerously-skip-permissions`
+ * comes back as `--dangerously-skip-permissions`, not downgraded to the auto mode. Null when argv
+ * names no mode — which is not `ask` (a person picking Ask records it; an argv with no flag is just
+ * silent), so `bypassPermission` keeps deciding there as before. Token-exact like
+ * `bypassPermissionActive`; an engine with no mode table reads null.
+ */
+export function permissionModeFromArgv(engine: RegisteredSession['engine'], args: string): string | null {
+  return permissionModeFromTokens(engine, argvTokens(args))
+}
+
+function permissionModeFromTokens(engine: RegisteredSession['engine'], tokens: readonly string[]): string | null {
+  const modes = PERMISSION_MODES[engine]
+  if (!modes) return null
+  // `full` is checked ahead of the rest where the engine has it: its flag is a single token no other
+  // mode shares, and an argv carrying both it and `--permission-mode` is running without permissions
+  // whatever else it says. `ask` is empty and can never be "found".
+  const names = ['full', ...Object.keys(modes).filter((mode) => mode !== 'full')]
+  for (const mode of names) {
+    const flags = modes[mode]
+    if (flags?.length && flagsInOrder(tokens, flags)) return mode
+  }
+  return null
+}
+
+/** The flags in order, as launch writes them (`--permission-mode auto` is two tokens, and "auto"
+ *  alone elsewhere in argv is not the mode) — or `--flag=value` as one. */
+function flagsInOrder(tokens: readonly string[], want: readonly string[]): boolean {
+  return tokens.some((_, i) => want.every((flag, j) => tokens[i + j] === flag))
+    || (want.length === 2 && tokens.includes(`${want[0]}=${want[1]}`))
 }
 
 /** The session id an engine was told to resume, or null when argv does not name one. */
 export function resumeSessionId(engine: RegisteredSession['engine'], args: string): string | null {
   const spec = RESUME_ARGS[engine]
   if (!spec) return null
+  if (spec.unless) {
+    const tokens = argvTokens(args)
+    if (spec.unless.some((flag) => tokens.includes(flag))) return null
+  }
   for (const flag of spec.flags) {
     const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const value = new RegExp(`(?:^|\\s)${escaped}(?:=|\\s+)(\\S+)`, 'i').exec(args)?.[1]
@@ -689,8 +765,16 @@ export async function resolvePaneEngineProcess(
   return found.ok ? found.identity : null
 }
 
-/** A whole `lstart` stamp — `DOW MON DD HH:MM:SS YYYY` — and nothing else. */
-const LSTART_MARKER_RE = /^\S+\s+\S+\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4}$/
+/**
+ * A whole C-locale `lstart` stamp — `DOW MON DD HH:MM:SS YYYY` — and nothing else.
+ *
+ * The names are spelled out rather than left as `\S+` so this also rejects a stamp recorded while `ps`
+ * still ran under the user's own `LC_TIME` (`K szept. 15 …` parsed fine before `psEnv` landed). Such a
+ * stamp can never equal the C-locale one read back for the same process, so without this it would fail
+ * the identity comparison below and evict a live pane once per session on upgrade.
+ */
+export const LSTART_MARKER_RE =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4}$/
 
 /** Pane + engine process validation. A saved identity prevents PID reuse from reviving a stale entry. */
 export async function validateSessionRuntime(session: RegisteredSession): Promise<boolean> {
@@ -721,8 +805,9 @@ export async function checkSessionRuntime(session: RegisteredSession): Promise<R
   if (!found.ok) return { state: found.unknown ? 'unknown' : 'gone', reason: found.reason }
   const live = found.identity
   const saved = session.processIdentity
-  // A persisted identity whose startMarker is not an lstart stamp was written by the pre-fix parser (see
-  // parseProcessRow) — its fields are shifted, so it can NEVER match the corrected ones again. Adopt the
+  // A persisted identity whose startMarker is not a C-locale lstart stamp was written either by the
+  // pre-fix parser (see parseProcessRow), with its fields shifted, or by a `ps` that still inherited the
+  // user's LC_TIME (see psEnv). Either way it can NEVER match the corrected ones again. Adopt the
   // corrected identity instead of failing: the pane still has a matching engine process, and failing here
   // would drop a live session for good (Command Code, the only engine affected, does not re-register on
   // its Stop hook). One-time, per session.
@@ -805,11 +890,21 @@ export function setPaneWindowStyle(pane: string, style: string): Promise<boolean
 }
 
 /** What tmux knows about a pane right now. See `agentCreateDiagnosis.ts` for why this is read. */
+/**
+ * The pane option an engine's launch wrapper sets when the engine exits and the pane falls back to
+ * a shell (engineLaunch.ts, `harness_engine`): the engine's exit status. Empty/absent while the
+ * wrapper is still running the engine — and for the whole life of the fallback shell after that,
+ * once something reads it, so `respawn` clears it before every new launch in the same pane.
+ */
+export const ENGINE_EXIT_PANE_OPTION = '@harness_engine_exit'
+
 export interface TmuxPaneState {
   dead: boolean
   /** Exit status once the process is gone; null while it is still running. */
   exitStatus: number | null
   command: string
+  /** The engine's exit status once its launch wrapper handed the pane to a shell; null before. */
+  engineExit: number | null
 }
 
 /**
@@ -820,18 +915,20 @@ export interface TmuxPaneState {
  */
 export function tmuxPaneState(pane: string): Promise<TmuxPaneState | null> {
   return new Promise((resolve) => {
-    const format = '#{pane_dead}|#{pane_dead_status}|#{pane_current_command}'
+    const format = `#{pane_dead}|#{pane_dead_status}|#{${ENGINE_EXIT_PANE_OPTION}}|#{pane_current_command}`
     execFile('tmux', ['display-message', '-p', '-t', pane, format], { timeout: 2_000 }, (err, stdout) => {
       if (err) { resolve(null); return }
       const fields = stdout.trim().split('|')
-      if (fields.length < 3) { resolve(null); return }
+      if (fields.length < 4) { resolve(null); return }
       const status = Number(fields[1])
+      const engineExit = Number(fields[2])
       resolve({
         dead: fields[0] === '1',
         exitStatus: fields[1] !== '' && Number.isSafeInteger(status) ? status : null,
+        engineExit: fields[2] !== '' && Number.isSafeInteger(engineExit) ? engineExit : null,
         // A command name cannot contain `|`, but rejoining costs nothing and keeps a surprising
         // one from silently truncating the field.
-        command: fields.slice(2).join('|'),
+        command: fields.slice(3).join('|'),
       })
     })
   })

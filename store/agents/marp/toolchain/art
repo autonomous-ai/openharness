@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# `"$MARP_TOOLCHAIN/art" …` — art.mjs on this machine's node, or on the Node Harness itself runs on when
+# the agent's shell has none on PATH.
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=runtimes.sh
+. "$here/runtimes.sh"
+harness_node 18 || exit 1
+exec node "$here/art.mjs" "$@"

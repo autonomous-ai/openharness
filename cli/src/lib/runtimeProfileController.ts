@@ -6,7 +6,10 @@ import { parsePiFooterProfile, parsePiThinkingSelection, piThinkingSteps } from 
 import {
   countOpencodePickers,
   opencodeRowMatches,
+  opencodeRowNamesModel,
   parseOpencodePickerRows,
+  type OpencodeModelTarget,
+  type OpencodePickerRow,
 } from '../engines/opencode/runtimeProfile.js'
 import {
   codexEffortAllowed,
@@ -24,7 +27,6 @@ const PICKER_STEP_MS = 2_000
 const PI_LADDER_MAX_STEPS = 14
 /** Hermes' longest picker page is a provider's model list; twice its size still terminates. */
 const HERMES_PAGE_MAX_STEPS = 60
-
 /** "Anthropic (13 models)" names provider key `anthropic`; "GitHub Copilot (17 models)" names `copilot`. */
 function hermesProviderMatches(row: string, provider: string): boolean {
   const name = row.replace(/\s*\([^)]*\)\s*$/, '').trim().toLowerCase()
@@ -95,6 +97,79 @@ function sgrAttributes(params: readonly string[]): string[] {
 }
 
 /**
+ * The background an SGR sequence sets, as a comparable string — or null if it sets none.
+ *
+ * Needed because a composer box is identified by the colour it PAINTS, and the parameters that
+ * choose one are positional: `48;5;<n>` and `48;2;<r>;<g>;<b>` carry their arguments inline, so the
+ * arguments have to be consumed rather than read as further attributes. `38`/`58` are skipped the
+ * same way for the same reason — a truecolor FOREGROUND ends in numbers that would otherwise parse
+ * as a background code of their own.
+ *
+ * SGR 0 counts: a reset puts the default background back, which is a change like any other.
+ */
+function sgrBackground(params: readonly string[]): string | null {
+  for (let index = 0; index < params.length; index += 1) {
+    const code = params[index]
+    if (code === '48') {
+      const kind = params[index + 1]
+      return params.slice(index, index + (kind === '5' ? 3 : kind === '2' ? 5 : 2)).join(';')
+    }
+    if (code === '49' || /^(?:4[0-7]|10[0-7])$/.test(code)) return code
+    if (code === '0' || code === '') return '49'
+    if (code === '38' || code === '58') {
+      const kind = params[index + 1]
+      index += kind === '5' ? 2 : kind === '2' ? 4 : 1
+    }
+  }
+  return null
+}
+
+/**
+ * The span of a gutter line the BOX ITSELF paints — everything after the marker was wrong.
+ *
+ * A TUI draws one row of the terminal at a time, so anything floating OVER the composer lands on the
+ * composer's own lines. OpenCode's `Getting started` card is exactly that: a panel on the right-hand
+ * side, and its rows are written after the composer's on the same lines. Reading to end-of-line took
+ * the card's text as something the user had typed —
+ *
+ *   ┃ <121 spaces of composer>  <sidebar>  Connect provider        /connect
+ *
+ * so `draft` was true over an EMPTY composer, the pane never read idle, and every model switch came
+ * back AGENT_BUSY. Measured on a live pane (`harness-opencode-*`, 2026-09-15) with nothing typed in.
+ * Fourth variant of the family above: the marker is found, the strip is dropped, and then the wrong
+ * COLUMNS are read.
+ *
+ * The boundary is the box's own background. Everything a box paints is painted in it, so the
+ * interior runs from the background set right after the marker to the next background change — in
+ * the capture above, back to the pane's `48;2;10;10;10` where the box ends and the sidebar begins.
+ *
+ * Two deliberate conservatisms, both pointing the same way — a real draft must never be read as an
+ * empty prompt, because that respawns the engine under text the user typed:
+ *   * A background that appears only AFTER visible text is not the interior's. It is a highlight
+ *     drawn mid-draft, and treating it as the boundary would cut the draft off at its own styling.
+ *   * A line that sets no background at all is not clipped. Plain-text panes (and every engine that
+ *     paints no box) keep the whole line, exactly as before.
+ */
+function gutterBoxInterior(line: string, markerIndex: number): string {
+  const after = line.slice(markerIndex + 1)
+  const sgr = /\u001b\[([0-9;:]*)m/g
+  let interior: string | null = null
+  let end = after.length
+  let match: RegExpExecArray | null
+  while ((match = sgr.exec(after)) !== null) {
+    const background = sgrBackground(match[1].split(/[;:]/))
+    if (background === null) continue
+    if (interior === null) {
+      if (stripAnsi(after.slice(0, match.index)).trim().length > 0) break
+      interior = background
+      continue
+    }
+    if (background !== interior) { end = match.index; break }
+  }
+  return after.slice(0, end)
+}
+
+/**
  * Is the text after the composer marker the PLACEHOLDER, rather than something the user typed?
  *
  * Read from the STYLING, never the words: the placeholder sentence differs per engine and changes
@@ -115,6 +190,81 @@ function hasPlaceholderSgr(value: string): boolean {
       const attributes = sgrAttributes(match[1].split(/[;:]/))
       return attributes.includes('2') || attributes.includes('3')
     })
+}
+
+/**
+ * Is this SGR foreground a MUTED one — the grey a TUI writes hints and placeholders in?
+ *
+ * Returns null when the sequence sets no foreground, so a caller can keep the colour already in
+ * effect rather than treating "no change" as a change.
+ *
+ * Grey is judged by the colour itself: equal channels, and dark enough to read as secondary next to
+ * the near-white a composer draws real text in. OpenCode's placeholder is `38;2;128;128;128` and its
+ * own text `38;2;255;255;255`; the 256-colour ramp (232–255) and SGR 90 are the same intent spelled
+ * differently.
+ */
+function sgrMutedForeground(params: readonly string[]): boolean | null {
+  for (let index = 0; index < params.length; index += 1) {
+    const code = params[index]
+    if (code === '38') {
+      const kind = params[index + 1]
+      if (kind === '2') {
+        const [r, g, b] = [params[index + 2], params[index + 3], params[index + 4]].map(Number)
+        if (![r, g, b].every(Number.isFinite)) return null
+        return r === g && g === b && r >= 0x40 && r <= 0xb0
+      }
+      if (kind === '5') {
+        const n = Number(params[index + 2])
+        if (!Number.isFinite(n)) return null
+        // 8 is bright black; 232–255 is the grey ramp, whose middle is the secondary tone.
+        return n === 8 || (n >= 236 && n <= 250)
+      }
+      return null
+    }
+    if (code === '90') return true
+    if (code === '39' || code === '0' || code === '') return false
+    if (/^(?:3[0-7]|9[1-7])$/.test(code)) return false
+    if (code === '48' || code === '58') {
+      const kind = params[index + 1]
+      index += kind === '5' ? 2 : kind === '2' ? 4 : 1
+    }
+  }
+  return null
+}
+
+/**
+ * Is EVERY visible character here written in a muted colour — i.e. is this a hint rather than a draft?
+ *
+ * The third placeholder styling this module has had to learn, after dim (claude, codex, devin) and
+ * italic (hermes). OpenCode draws `Ask anything… "What is the tech stack of this project?"` as a plain
+ * TRUECOLOR GREY with no dim and no italic attribute at all, so [hasPlaceholderSgr] saw nothing and a
+ * brand-new pane read as a pane with a draft in it: never idle, and every model switch on an agent
+ * with no messages yet refused as AGENT_BUSY over an empty composer. Measured on 1.18.31.
+ *
+ * ⚠️ EVERY character, not any — which is what keeps this from swallowing a real draft. A composer
+ * writes what the user typed in its normal near-white; one such character anywhere means this is
+ * text, whatever grey hint may be sitting beside it. Spaces are not evidence of either and carry no
+ * colour worth reading, so they are skipped.
+ */
+function allVisibleTextIsMuted(value: string): boolean {
+  const sgr = /\u001b\[([0-9;:]*)m/g
+  let muted: boolean | null = null
+  let cursor = 0
+  let sawText = false
+  let match: RegExpExecArray | null
+  const segment = (text: string): boolean => {
+    if (!text.trim()) return true
+    sawText = true
+    return muted === true
+  }
+  while ((match = sgr.exec(value)) !== null) {
+    if (!segment(value.slice(cursor, match.index))) return false
+    const next = sgrMutedForeground(match[1].split(/[;:]/))
+    if (next !== null) muted = next
+    cursor = match.index + match[0].length
+  }
+  if (!segment(value.slice(cursor))) return false
+  return sawText
 }
 
 function interactionText(capture: string): string {
@@ -230,8 +380,14 @@ function inspectGutterBoxPane(capture: string, hasStatusStrip: boolean): PaneIns
     const visibleMarker = stripAnsi(line).search(marks)
     if (visibleMarker < 0) return false
     const rawMarker = line.search(marks)
-    if (rawMarker >= 0 && hasPlaceholderSgr(line.slice(rawMarker + 1))) return false
-    return stripAnsi(line).slice(visibleMarker + 1).replace(/\u00a0/g, ' ').trim().length > 0
+    // The box's interior, not the rest of the row: a panel floating over the composer writes into
+    // these same lines, and its text is not a draft. See [gutterBoxInterior]. With no marker in the
+    // RAW line there is no interior to bound — read the whole row, the direction that keeps a draft.
+    const interior = rawMarker < 0
+      ? stripAnsi(line).slice(visibleMarker + 1)
+      : gutterBoxInterior(line, rawMarker)
+    if (hasPlaceholderSgr(interior) || allVisibleTextIsMuted(interior)) return false
+    return stripAnsi(interior).replace(/\u00a0/g, ' ').trim().length > 0
   })
   return { idle: !dialog && !draft, plan: /\bplan mode on\b/i.test(currentUi), dialog, draft }
 }
@@ -752,6 +908,45 @@ export class RuntimeProfileController {
   private async setOpencode(session: RegisteredSession, target: RuntimeProfile): Promise<void> {
     const entry = (await this.deps.manager.opencodeCatalog()).find((item) => item.id === target.model)
     if (!entry) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
+    await this.driveOpencodePicker(session, entry)
+    if (!await this.waitObservedProfile(session, target)) {
+      throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
+    }
+  }
+
+  /**
+   * `/models`, filter, act only once exactly one row is left.
+   *
+   * Two attempts, because one filter does not fit both renders. With several providers connected a
+   * row carries its provider (`Big Pickle OpenCode Zen`) and the provider-qualified filter is what
+   * tells two same-named models apart; with one provider the row is bare (`Big Pickle`) and that same
+   * filter matches NOTHING. Measured on a live picker: `big pickle opencode` → empty, `big pickle` →
+   * the row.
+   *
+   * The fallback drops only the PROVIDER half, never the "exactly one row" rule — which is what makes
+   * it safe: if one model answers to the name, there is no second provider to confuse it with, and if
+   * two do, the list does not narrow and this refuses rather than guessing.
+   */
+  private async driveOpencodePicker(session: RegisteredSession, entry: OpencodeModelTarget): Promise<void> {
+    if (await this.pickOpencodeRow(session, entry, entry.filter, opencodeRowMatches)) return
+    if (entry.modelFilter === entry.filter) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
+    if (!await this.pickOpencodeRow(session, entry, entry.modelFilter, opencodeRowNamesModel)) {
+      throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
+    }
+  }
+
+  /**
+   * One attempt at the picker: open it, type `filter`, and press Enter only if exactly one row is left
+   * AND `matches` accepts it. Returns false — with the picker CLOSED — when the list did not narrow to
+   * a row this may act on, so the caller can try a different filter on a pane in its resting state.
+   * Throws only for the states no retry can help: tmux refusing input, or the picker never opening.
+   */
+  private async pickOpencodeRow(
+    session: RegisteredSession,
+    entry: OpencodeModelTarget,
+    filter: string,
+    matches: (target: OpencodeModelTarget, row: OpencodePickerRow) => boolean,
+  ): Promise<boolean> {
     // "Is a picker open?" cannot be asked of a capture that carries scrollback — an EARLIER picker is
     // still up there, so the check passes before this one opens and the filter would be typed into the
     // composer and submitted as a message. Count the openings instead and wait for one more.
@@ -766,7 +961,7 @@ export class RuntimeProfileController {
     )) {
       throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
     }
-    if (!await this.deps.sendLiteral(session.agentId, entry.filter)) {
+    if (!await this.deps.sendLiteral(session.agentId, filter)) {
       throw new RuntimeProfileControlError('TMUX_FAILED')
     }
     const narrowed = await this.waitPane(
@@ -775,15 +970,16 @@ export class RuntimeProfileController {
       PICKER_STEP_MS,
     )
     const rows = narrowed ? parseOpencodePickerRows(stripAnsi(narrowed)) ?? [] : []
-    if (rows.length !== 1 || !opencodeRowMatches(entry, rows[0])) {
-      throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
+    if (rows.length !== 1 || !matches(entry, rows[0])) {
+      // Leave the pane as it was found. A picker left open with a dead filter in it swallows whatever
+      // the user types next, and the retry below would type its filter on top of this one.
+      await this.deps.sendKey(session.agentId, 'Escape')
+      return false
     }
     if (!await this.deps.sendKey(session.agentId, 'Enter')) {
       throw new RuntimeProfileControlError('TMUX_FAILED')
     }
-    if (!await this.waitObservedProfile(session, target)) {
-      throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
-    }
+    return true
   }
 
   /**

@@ -53,6 +53,67 @@ class _ScriptedProvisioner extends EnvironmentProvisioner {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('a failed verification cannot retain an earlier ready result', () {
+    final failed = EnvironmentReadiness(
+      steps: {
+        for (final step in EnvironmentStep.values)
+          step: EnvironmentStepStatus.ready,
+      },
+      phase: EnvironmentSetupPhase.failed,
+      failure: const EnvironmentFailure(
+        title: 'Checking this computer took too long',
+        detail: 'A required tool did not respond.',
+      ),
+    );
+    expect(failed.isReady, isFalse);
+  });
+
+  testWidgets('failed automatic rechecks stop before another install', (
+    tester,
+  ) async {
+    final review = EnvironmentReadiness(
+      steps: {
+        for (final step in EnvironmentStep.values)
+          step: EnvironmentStepStatus.failed,
+      },
+      phase: EnvironmentSetupPhase.review,
+    );
+    final waiting = review.copyWith(
+      phase: EnvironmentSetupPhase.waitingForTerminal,
+      mode: EnvironmentSetupMode.automatic,
+      terminalSetup: EnvironmentTerminalSetup.linuxHost,
+    );
+    final failed = review.copyWith(
+      phase: EnvironmentSetupPhase.failed,
+      mode: EnvironmentSetupMode.automatic,
+      steps: {
+        EnvironmentStep.tmux: EnvironmentStepStatus.ready,
+        EnvironmentStep.clipboard: EnvironmentStepStatus.ready,
+        EnvironmentStep.harness: EnvironmentStepStatus.failed,
+      },
+      failure: const EnvironmentFailure(
+        title: 'Harness did not respond',
+        detail: 'Retry to check again.',
+      ),
+    );
+    final provisioner = _ScriptedProvisioner([review, waiting, failed]);
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+      cliLogin: _FakeCliLogin(),
+      environmentProvisioner: provisioner,
+    );
+    await app.bootstrap();
+    await app.startEnvironmentSetup();
+    await app.recheckEnvironmentStep(EnvironmentStep.tmux);
+    expect(provisioner.installCalls, [false, true, false]);
+    expect(app.status, AppStatus.preparingEnvironment);
+    expect(app.environmentReadiness.phase, EnvironmentSetupPhase.failed);
+    expect(app.environmentRecheckPending, isFalse);
+    app.dispose();
+  });
+
   testWidgets('automatic Terminal setup rechecks after five seconds', (
     tester,
   ) async {

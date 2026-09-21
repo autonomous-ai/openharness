@@ -1,0 +1,3 @@
+upstream/
+upstream.partial/
+__pycache__/

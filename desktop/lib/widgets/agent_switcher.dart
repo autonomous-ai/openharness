@@ -252,7 +252,7 @@ class _AgentSwitcherState extends State<_AgentSwitcher> {
                       decoration: InputDecoration(
                         border: InputBorder.none,
                         isDense: true,
-                        hintText: 'Find an agent',
+                        hintText: 'Find a harness',
                         hintStyle: TextStyle(
                           fontSize: 17,
                           color: grid.AppPalette.textFaint,

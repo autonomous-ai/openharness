@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { DshManifestSchema, dshSkillsDirFor, dshTier, dshVerdictPath, expandDshValue, parseDshManifest, readDshManifest } from './manifest.js'
+import { DshManifestSchema, dshSkillsDirFor, dshTier, dshVerdictPath, dshViewerName, expandDshValue, parseDshManifest, readDshManifest , isViewerPackage, dshEngine, viewerUse} from './manifest.js'
 
-const STARTER = fileURLToPath(new URL('../../../dsh/starter-dsh', import.meta.url))
+const STARTER = fileURLToPath(new URL('../../../store/starter', import.meta.url))
 
 describe('parseDshManifest', () => {
   it('accepts the starter fixture, which is also what the JSON Schema accepts', () => {
@@ -53,6 +53,28 @@ describe('parseDshManifest', () => {
   })
 })
 
+describe('dshViewerName: what the viewer pane beside a harness is called', () => {
+  const agent = (viewer?: Record<string, unknown>) => DshManifestSchema.parse({
+    spec: 1, id: 'autonomous/blender', name: 'Blender', engine: 'claude', ...(viewer ? { viewer } : {}),
+  })
+  const names: Record<string, string> = { 'autonomous/model-viewer': ' 3D Viewer ' }
+  const nameOf = (id: string) => names[id]
+
+  it('is the shared viewer package’s own name', () => {
+    expect(dshViewerName(agent({ use: 'autonomous/model-viewer' }), nameOf)).toBe('3D Viewer')
+  })
+
+  it('is the harness’s name and Viewer when it ships its own', () => {
+    expect(dshViewerName(agent({ command: './viewer.sh', url: 'http://127.0.0.1:${port}/' }), nameOf)).toBe('Blender Viewer')
+  })
+
+  it('is null without a viewer, or when the used package’s name is not known here', () => {
+    expect(dshViewerName(agent(), nameOf)).toBeNull()
+    expect(dshViewerName(agent({ use: 'someone/unknown-viewer' }), nameOf)).toBeNull()
+    expect(dshViewerName(agent({ use: 'autonomous/model-viewer' }), () => '   ')).toBeNull()
+  })
+})
+
 describe('expandDshValue', () => {
   it('expands the three variables and leaves anything else alone', () => {
     const vars = { dsh: '/i/dsh', workspace: '/w', home: '/h' }
@@ -74,4 +96,42 @@ describe('dshSkillsDirFor', () => {
     expect(DshManifestSchema.safeParse({ ...base, formerly: Array(9).fill('acme/x') }).success).toBe(false)
   })
 
+})
+
+describe('spec 1.1: package kinds and viewer.use', () => {
+  const base = { spec: 1, id: 'acme/thing', name: 'Thing' }
+  it('a viewer package has no engine and ships a viewer; an agent needs an engine', () => {
+    const viewer = parseDshManifest(JSON.stringify({ ...base, kind: 'viewer', viewer: { command: 'viewer.sh', url: 'http://127.0.0.1:${port}/' } }))
+    expect(viewer.ok).toBe(true)
+    if (viewer.ok) {
+      expect(isViewerPackage(viewer.manifest)).toBe(true)
+      expect(dshEngine(viewer.manifest)).toBeNull()
+      expect(dshTier(viewer.manifest)).toBe(2)
+    }
+    expect(parseDshManifest(JSON.stringify({ ...base, kind: 'viewer' })).ok).toBe(false)
+    expect(parseDshManifest(JSON.stringify({ ...base, kind: 'viewer', engine: 'claude', viewer: { command: 'v', url: 'http://127.0.0.1:${port}/' } })).ok).toBe(false)
+    expect(parseDshManifest(JSON.stringify(base)).ok).toBe(false)
+    const withAgent = parseDshManifest(JSON.stringify({ ...base, kind: 'viewer', agent: { instructions: 'AGENTS.md' }, viewer: { command: 'v', url: 'http://127.0.0.1:${port}/' } }))
+    expect(withAgent).toEqual({ ok: false, error: 'harness.json is not a spec-1 manifest: agent: a viewer package has no agent' })
+  })
+
+  it('says why a manifest could not be read: the file, the JSON, or the first issues with their paths', () => {
+    const missing = readDshManifest('/nonexistent/dir')
+    expect(!missing.ok && missing.error).toMatch(/^no harness\.json in \/nonexistent\/dir \(ENOENT: /)
+    const notJson = parseDshManifest('{"spec": 1,')
+    expect(!notJson.ok && notJson.error).toMatch(/^harness\.json is not JSON: \S/)
+    expect(parseDshManifest('[]')).toEqual({ ok: false, error: expect.stringMatching(/^harness\.json is not a spec-1 manifest: \(root\): /) })
+  })
+  it('an agent may use a viewer package instead of shipping one, and may narrow its url and extensions', () => {
+    const used = parseDshManifest(JSON.stringify({ ...base, engine: 'claude', viewer: { use: 'autonomous/cad-viewer', artifactExtensions: ['.step'] } }))
+    expect(used.ok).toBe(true)
+    if (used.ok) {
+      expect(viewerUse(used.manifest)).toBe('autonomous/cad-viewer')
+      expect(dshTier(used.manifest)).toBe(2)
+    }
+    expect(parseDshManifest(JSON.stringify({ ...base, engine: 'claude', viewer: { use: 'not an id' } })).ok).toBe(false)
+    expect(parseDshManifest(JSON.stringify({ ...base, engine: 'claude', viewer: { use: 'a/b', command: 'x' } })).ok).toBe(false)
+    const own = parseDshManifest(JSON.stringify({ ...base, engine: 'claude', viewer: { command: 'v.sh', url: 'http://127.0.0.1:${port}/' } }))
+    expect(own.ok && viewerUse(own.manifest)).toBeNull()
+  })
 })

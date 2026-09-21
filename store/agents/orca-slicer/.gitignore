@@ -1,0 +1,7 @@
+# Sliced output — never source.
+part.gcode
+*.gcode
+# Harness bookkeeping.
+.harness/
+.harness-initialized
+toolchain/slicer-cli

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../core/harness_cli_runner.dart';
+import 'peer_link_client.dart';
 
 /// Result of `harness remote-password set --stdin --json` — sets (or replaces) this machine's
 /// persistent remote password, the shared secret another machine's `harness link connect` PAKE
@@ -77,7 +78,7 @@ class CliLinkListResult {
   const CliLinkListResult({this.error, this.machines = const []});
 }
 
-class CliLink {
+class CliLink implements PeerLinkClient {
   final HarnessCliRunner _runner;
 
   CliLink({HarnessCliRunner? runner}) : _runner = runner ?? HarnessCliRunner();
@@ -129,8 +130,8 @@ class CliLink {
     );
   }
 
-  /// Clears this machine's remote password, revoking remote access for anyone who knew it. Null
-  /// on success.
+  /// Clears this machine's remote password, preventing new password-based links.
+  /// Existing trust and sessions are separate. Null on success.
   Future<String?> clearRemotePassword() async {
     final invocation = await _runJson([
       'remote-password',
@@ -149,6 +150,7 @@ class CliLink {
   /// `verifying`) as the handshake proceeds; best-effort UI feedback only, never required for
   /// correctness. [displayName], when given, is how the CLI's error messages name the machine —
   /// otherwise they show the raw [machineId], which is all a terminal user would have.
+  @override
   Future<CliLinkConnectResult> connect(
     String machineId,
     String password, {
@@ -193,6 +195,7 @@ class CliLink {
   }
 
   /// Machines this one currently trusts (CLI-to-CLI, not the browser-pairing list).
+  @override
   Future<CliLinkListResult> list() async {
     final response = await _run(['link', 'list']);
     if (response.error != null) {
@@ -218,6 +221,7 @@ class CliLink {
   }
 
   /// Removes a linked machine's trust pin. Null on success.
+  @override
   Future<String?> unlink(String machineId) async {
     final response = await _run(['link', 'unlink', machineId]);
     if (response.error != null) return response.error;

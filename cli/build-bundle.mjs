@@ -17,8 +17,8 @@ const version =
   process.env.ADAPTER_VERSION ||
   JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version
 
-// The bundled DSH registry (dsh/registry/**/*.json at the repo root) — see src/dsh/registry.ts.
-const dshRegistry = JSON.stringify(readDshRegistry(new URL('../dsh/registry', import.meta.url)))
+// The bundled registry (the store/ folders and store/registry at the repo root) — see src/dsh/registry.ts.
+const dshRegistry = JSON.stringify(readDshRegistry(new URL('../store', import.meta.url)))
 
 // Start clean so no stale per-file `dist/*.js` / sourcemaps leak into the release artifact.
 rmSync('dist', { recursive: true, force: true })
@@ -31,12 +31,15 @@ await esbuild.build({
   format: 'esm',
   target: 'node20',
   external: ['bufferutil', 'utf-8-validate'],
-  define: { __ADAPTER_VERSION__: JSON.stringify(version), __DSH_REGISTRY__: JSON.stringify(dshRegistry) },
+  define: {
+    __ADAPTER_VERSION__: JSON.stringify(version),
+    __DSH_REGISTRY__: JSON.stringify(dshRegistry),
+  },
   // The copyright line is MIT's one condition — it has to travel with the copy the user actually
   // receives, and the published bundle IS that copy (upload-cli.sh ships `cli.js` and `notify.mjs`,
   // nothing else). `legalComments: 'eof'` below appends the dependencies' own notices; this is ours.
   banner: {
-    js: `/*! harness v${version} — Copyright (c) 2026 Autonomous, Inc. — MIT (https://github.com/autonomous-ai/autonomous-harness) */\n`
+    js: `/*! harness v${version} — Copyright (c) 2026 Autonomous, Inc. — MIT (https://github.com/autonomous-ai/openharness) */\n`
       + 'import{createRequire as ___cr}from"module";const require=___cr(import.meta.url);',
   },
   sourcemap: false,
@@ -47,4 +50,5 @@ await esbuild.build({
 })
 
 copyFileSync('hook/notify.mjs', 'dist/notify.mjs')
+
 console.log(`✓ Bundled dist/cli.js (v${version}) + dist/notify.mjs`)

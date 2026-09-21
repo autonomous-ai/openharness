@@ -1,0 +1,82 @@
+name: harness_mobile
+description: "Harness viewer for iOS and Android."
+publish_to: 'none'
+
+version: 1.0.0+21
+
+environment:
+  sdk: ^3.13.0
+
+# This package is SELF-CONTAINED: it depends on no other package in this repo.
+# The app it runs — state, API, auth, WS/relay, E2EE, the viewer's stand-ins for
+# the harness CLI, and the design system — lives under `lib/`, in the same
+# folders the desktop app uses for it (`core/`, `state/`, `ws/`, `e2ee/`,
+# `viewer/`, `terminal/`, `shared/`, `widgets/`). It was vendored from
+# `../desktop` rather than imported from it: a path dependency made every
+# desktop-only concern (the managed window, the self-updater, first-run
+# provisioning) a concern of the phone build too, and pinned this package to a
+# Flutter app that targets macOS and Linux.
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  lucide_icons_flutter: ^3.1.15
+  flutter_riverpod: ^2.6.1
+
+  # Backend HTTP (`api/`, `viewer/direct_auth_api.dart`) and the update manifest.
+  dio: ^5.11.0
+  # The relay socket every machine is reached over (`ws/`).
+  web_socket_channel: ^3.0.3
+  # Sign-in hands the SSO URL to the system browser (`viewer/sign_in_browser.dart`)
+  # and the terminal opens links a program printed (`terminal/terminal_link_opener.dart`).
+  url_launcher: ^6.3.2
+  # X25519/HKDF/ChaCha20-Poly1305 for the end-to-end encryption this app
+  # terminates itself, being a viewer (`e2ee/`).
+  cryptography: ^2.9.0
+  # Unicode normalisation for the viewer's password-linking PAKE: the same
+  # password must hash identically whatever form the keyboard produced it in.
+  unorm_dart: ^0.3.2
+  # Keep the terminal core in-tree until the upstream circular-buffer ownership
+  # fix is released. See third_party/xterm/lib/src/core/buffer/buffer.dart.
+  xterm:
+    path: third_party/xterm
+  # The running build's version, shown in Settings and sent with analytics.
+  package_info_plus: ^10.2.1
+  path: ^1.9.1
+
+  # The phone's second wire to a machine: the `terminal-v1` data channel the
+  # harness CLI opens with werift on the desktop's behalf (lib/p2p/). Data
+  # channels only — no microphone, and the camera it never opens is opened by
+  # `image_picker` below instead, which is what the usage strings are for.
+  # Pinned exactly: a native plugin, and libwebrtc's SCTP/SDP behaviour is
+  # what the responder's werift has to agree with.
+  flutter_webrtc: 1.6.2+hotfix.1
+
+  # Sending a picture to an agent: the library sheet and the camera behind the
+  # key bar's image button (`phone/terminal_key_bar.dart`). The bytes it returns
+  # are re-encoded to PNG before they leave — see `terminal/image_transcode.dart`
+  # for why the whole pipe past this point accepts nothing else.
+  image_picker: ^1.2.3
+
+  # Talking to an agent: tapping the terminal opens voice input before the
+  # keyboard (`phone/voice_input_panel.dart`). This only RECORDS — 16 kHz mono
+  # PCM, wrapped as WAV here — and the words come from the Harness backend's
+  # `/api/voice/stt`, the same endpoint the dial's recordings go to. The OS
+  # recognizer was tried first and misheard Vietnamese badly.
+  record: ^7.1.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  # The p2p routing is all timers (retry, migration sweep, upgrade) — tests drive
+  # them without waiting them out.
+  fake_async: ^1.3.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/engine-icons/
+    # The real app icon, shown on the sign-in and bootstrapping screens.
+    - assets/app_icon.png

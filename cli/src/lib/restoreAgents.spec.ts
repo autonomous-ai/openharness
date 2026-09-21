@@ -50,7 +50,7 @@ interface Harness {
   launched: Array<{ agentId: string; launch: RestoreLaunch }>
   /** Per-pane scripted answers for probeProcess; shifted on each call. */
   probes: Map<string, Array<ProcessIdentity | null>>
-  states: Map<string, Array<{ dead: boolean } | null>>
+  states: Map<string, Array<{ dead: boolean; engineExit?: number | null } | null>>
   nextPane: string[]
   paneCreates: number
   respawns: number
@@ -58,7 +58,7 @@ interface Harness {
   released: string[]
 }
 
-function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; failCreate?: boolean; refuseLaunch?: boolean; budgetMs?: number; settleMs?: number } = {}): Harness {
+function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; alivePanes?: string[]; failCreate?: boolean; refuseLaunch?: boolean; budgetMs?: number; settleMs?: number } = {}): Harness {
   const h: Harness = {
     calls: [],
     rows: new Map(rows.map((r) => [r.agentId, r])),
@@ -98,7 +98,14 @@ function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; failCr
       updateProcessIdentity: (id, pi) => { note(`updateIdentity:${id}:${pi.pid}`); const r = h.rows.get(id); if (r) r.processIdentity = pi; return !!r },
       unbindSession: (sid) => { note(`unbind:${sid}`); return true },
       inheritName: (from, to) => { note(`inheritName:${from}->${to}`) },
+      releaseEngine: (id) => {
+        note(`releaseEngine:${id}`)
+        const r = h.rows.get(id); if (!r || !r.terminalHost) return null
+        r.engine = 'terminal'; r.sessionId = ''; r.processIdentity = null; r.launch = { state: 'ready' }; r.active = true
+        return r
+      },
     },
+    livePane: async (runtime) => (opts.alivePanes ?? []).includes(runtime.paneId),
     liveProcess: async (_entry, runtime) => live.has(runtime.paneId) ? identity(1000 + Number(runtime.paneId.slice(1))) : null,
     buildLaunch: async (entry, o) => {
       h.launches.push({ agentId: entry.agentId, ...(o.resumeSessionId ? { resumeSessionId: o.resumeSessionId } : {}) })
@@ -281,6 +288,25 @@ describe('restoreAgents — which agents get a pane back', () => {
 })
 
 describe('restoreAgents — waiting for the engine', () => {
+  it('keeps an explicit resume failure instead of silently starting fresh after a daemon restart', async () => {
+    const h = harness([row({ resumeOnly: true })])
+    h.probes.set('%0', [null, null])
+    h.states.set('%0', [{ dead: true }])
+    await restoreAgents(h.deps)
+    await settled(h, 1)
+    expect(h.respawns).toBe(0)
+    expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'session-a' }])
+    expect(h.rows.get('agent-a')?.launch).toMatchObject({ state: 'failed', error: 'RESUME_FAILED' })
+    expect(h.calls).not.toContain('unbind:session-a')
+  })
+
+  it('does not create a fresh conversation if a resume-only binding is missing', async () => {
+    const h = harness([row({ resumeOnly: true, sessionId: '' })])
+    await restoreAgents(h.deps)
+    expect(h.launches).toEqual([])
+    expect(h.rows.get('agent-a')?.launch).toMatchObject({ state: 'failed', error: 'RESUME_UNAVAILABLE' })
+  })
+
   it('falls back to a fresh launch once when the resumed engine dies, and unbinds the stale session', async () => {
     const h = harness([row()])
     h.probes.set('%0', [null, null, identity(9)])
@@ -375,4 +401,100 @@ describe('restoreAgents — waiting for the engine', () => {
     await settled(h, 1)
     expect(h.calls.filter((c) => c.startsWith('setLaunch:agent-a:failed'))).toEqual([])
   })
+})
+
+describe('restoreAgents — terminals', () => {
+  const terminal = (overrides: Partial<RegisteredSession> = {}) =>
+    row({ agentId: 'term-1', engine: 'terminal', terminalHost: true, sessionId: '', boundAt: null, ...overrides })
+
+  it('leaves a terminal whose pane is still there alone — a shell has no engine process to look for', async () => {
+    const h = harness([terminal()], { alivePanes: ['%3'] })
+    const summary = await restoreAgents(h.deps)
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [] })
+    expect(h.paneCreates).toBe(0)
+    expect(h.calls).toEqual([])
+  })
+
+  it('recreates a terminal whose pane is gone as a ready shell: no hold, no engine watch', async () => {
+    const h = harness([terminal()])
+    const summary = await restoreAgents(h.deps)
+    expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [] })
+    expect(h.launches).toEqual([{ agentId: 'term-1' }])
+    expect(h.calls).toEqual([
+      'clearIdentity:term-1@tx',
+      'createPane:term-1@tx',
+      'updateRuntimes:term-1:%0@tx',
+      'setLaunch:term-1:ready@tx',
+      'clearRemainOnExit:%0@tx',
+    ])
+    expect(h.rows.get('term-1')?.launch).toEqual({ state: 'ready' })
+  })
+
+  it('puts a terminal whose adopted engine exited while the daemon was down back to a shell, pane kept', async () => {
+    const h = harness([terminal({ engine: 'claude', sessionId: 'session-t', boundAt: 1, processIdentity: identity(7) })], { alivePanes: ['%3'] })
+    const summary = await restoreAgents(h.deps)
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [] })
+    expect(h.calls).toEqual(['releaseEngine:term-1'])
+    expect(h.rows.get('term-1')).toMatchObject({ engine: 'terminal', sessionId: '' })
+  })
+
+  it('keeps a terminal whose adopted engine is still running exactly as an agent', async () => {
+    const h = harness([terminal({ engine: 'claude', sessionId: 'session-t', boundAt: 1 })], { alivePanes: ['%3'], livePanes: ['%3'] })
+    const summary = await restoreAgents(h.deps)
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [] })
+    expect(h.calls).toEqual(['updateIdentity:term-1:1003'])
+    expect(h.rows.get('term-1')?.engine).toBe('claude')
+  })
+
+  it('an ordinary agent whose engine exited while the daemon was down, pane alive, becomes a terminal — no second pane', async () => {
+    const h = harness([row({ agentId: 'agent-a', terminalHost: true })], { alivePanes: ['%3'] })
+    // `terminalHost` is what releaseEngine's stub keys on; the real registry sets it for any row.
+    const summary = await restoreAgents(h.deps)
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [] })
+    expect(h.paneCreates).toBe(0)
+    expect(h.calls).toEqual(['releaseEngine:agent-a'])
+    expect(h.rows.get('agent-a')).toMatchObject({ engine: 'terminal', sessionId: '' })
+  })
+
+  it('an engine that exits during a restore (its pane fell back to a shell) is relaunched fresh, like a dead pane', async () => {
+    const h = harness([row()], { settleMs: 20 })
+    h.probes.set('%0', [identity(500), identity(501)])
+    h.states.set('%0', [{ dead: false, engineExit: 1 }, { dead: false }, { dead: false }, { dead: false }])
+    await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+    expect(h.respawns).toBe(1)
+    expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'session-a' }, { agentId: 'agent-a' }])
+  })
+
+  it('brings a terminal whose adopted engine AND pane are gone back as a shell, never as the engine', async () => {
+    const h = harness([terminal({ engine: 'claude', sessionId: 'session-t', boundAt: 1 })])
+    const summary = await restoreAgents(h.deps)
+    expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [] })
+    expect(h.calls[0]).toBe('releaseEngine:term-1')
+    expect(h.launches).toEqual([{ agentId: 'term-1' }])
+    expect(h.launched[0].launch.argv[0]).toBe('terminal')
+    expect(h.rows.get('term-1')).toMatchObject({ engine: 'terminal', launch: { state: 'ready' } })
+  })
+})
+
+
+it('retains a missing strict-resume pane for explicit Open after daemon restart', async () => {
+  const entry = row({ resumeOnly: true, launch: { state: 'starting' } })
+  const h = harness([entry])
+  h.deps.retainStopped = vi.fn((saved, _paneAlive) => { h.rows.delete(saved.agentId) })
+  const summary = await restoreAgents(h.deps)
+  expect(h.deps.retainStopped).toHaveBeenCalledWith(entry, false)
+  expect(summary.restored).toEqual([])
+  expect(h.paneCreates).toBe(0)
+  expect(h.respawns).toBe(0)
+})
+
+it('archives an engine that exited while the daemon was down without overwriting its shell', async () => {
+  const entry = row()
+  const h = harness([entry], { alivePanes: ['%3'] })
+  h.deps.retainStopped = vi.fn()
+  await restoreAgents(h.deps)
+  expect(h.deps.retainStopped).toHaveBeenCalledWith(entry, true)
+  expect(h.paneCreates).toBe(0)
+  expect(h.respawns).toBe(0)
 })

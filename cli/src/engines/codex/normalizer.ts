@@ -406,7 +406,7 @@ export class CodexNormalizer implements EngineNormalizer {
       }
       if (ORCHESTRATION_TOOLS.has(name)) return []
 
-      const descriptor = codexToolDescriptor(name, item.arguments ?? item.input)
+      const descriptor = codexToolDescriptor(name, item.arguments ?? item.input, string(item.namespace))
       this.toolNames.set(id, descriptor.tool)
       return [{ type: 'tool_start', payload: { id, tool: descriptor.tool, input: descriptor.input } }]
     }

@@ -157,8 +157,9 @@ class UpdateNotice extends StatelessWidget {
                         key: const Key('retry-update-button'),
                         label: 'Try again',
                         kind: _ActionKind.ghost,
-                        onPressed: () =>
-                            unawaited(notifier.installAvailableUpdate()),
+                        onPressed: () => unawaited(
+                          notifier.installAvailableUpdate(update: update),
+                        ),
                       ),
                     ] else ...[
                       _NoticeAction(
@@ -166,7 +167,8 @@ class UpdateNotice extends StatelessWidget {
                         label: 'Skip this version',
                         onPressed: installing
                             ? null
-                            : notifier.skipAvailableUpdate,
+                            : () =>
+                                  notifier.skipAvailableUpdate(update: update),
                       ),
                       const SizedBox(width: 6),
                       _NoticeAction(
@@ -175,8 +177,9 @@ class UpdateNotice extends StatelessWidget {
                         kind: _ActionKind.primary,
                         onPressed: installing
                             ? null
-                            : () =>
-                                  unawaited(notifier.installAvailableUpdate()),
+                            : () => unawaited(
+                                notifier.installAvailableUpdate(update: update),
+                              ),
                       ),
                     ],
                   ],
@@ -242,6 +245,8 @@ class _NoticeAction extends StatelessWidget {
               : BorderSide.none,
         ),
         textStyle: TextStyle(
+          fontFamily: grid.AppFont.sans,
+          fontFamilyFallback: grid.AppFont.sansFallback,
           fontSize: 12,
           fontWeight: primary ? grid.AppFont.semibold : grid.AppFont.regular,
         ),
@@ -251,88 +256,156 @@ class _NoticeAction extends StatelessWidget {
   }
 }
 
-/// Opens the result of a manual check from the Harness menu. It never downloads
+final _manualChecks = Expando<Future<void>>('manual desktop update checks');
+
+/// The native menu and About share one check and one result dialog per window.
+/// Invoking the other entry while a check is pending cannot stack two dialogs.
+Future<void> checkForUpdatesAndShowResult(
+  BuildContext context,
+  AppNotifier notifier,
+) {
+  final navigator = Navigator.of(context, rootNavigator: true);
+  final pending = _manualChecks[navigator];
+  if (pending != null) return pending;
+  // Schedule after assigning ownership, before notifying check-state listeners.
+  final operation = Future<void>(() async {
+    final result = await notifier.checkForUpdates();
+    if (context.mounted) {
+      await showUpdateCheckDialog(context, notifier, result);
+    }
+  }).whenComplete(() => _manualChecks[navigator] = null);
+  _manualChecks[navigator] = operation;
+  return operation;
+}
+
+/// Opens the result of a manual check. It never downloads
 /// a release until the user chooses the primary action.
 Future<void> showUpdateCheckDialog(
   BuildContext context,
   AppNotifier notifier,
   ManualUpdateCheck result,
 ) {
-  final update = result.update;
-  if (update == null) {
-    return showAppDialog<void>(
-      context: context,
-      builder: (context) => const _UpdateDialog(
-        icon: LucideIcons.circleCheck300,
-        tone: _DialogTone.ok,
-        title: 'You’re up to date',
-        body: 'This copy of Harness already has the latest version.',
-      ),
-    );
-  }
   return showAppDialog<void>(
     context: context,
-    barrierDismissible: false,
     builder: (dialogContext) {
+      var current = result;
+      var checking = false;
       var installing = false;
       return StatefulBuilder(
-        builder: (context, setState) => _UpdateDialog(
-          icon: LucideIcons.arrowDownToLine300,
-          title: installing
-              ? 'Installing Harness ${update.version}…'
-              : 'Harness ${update.version} is available',
-          body: installing
-              ? 'Don’t quit Harness. It will restart on its own.'
-              : result.isSkipped
-              ? 'You skipped this version earlier. You can still install it.'
-              : 'Download and install it now? Harness will restart when it '
-                    'finishes.',
-          busy: installing,
-          update: installing ? null : update,
-          actions: installing
-              ? const []
-              : [
-                  _DialogAction(
-                    key: const Key('close-update-dialog-button'),
-                    label: 'Close',
-                    onPressed: () async {
-                      Navigator.of(dialogContext).pop();
-                    },
-                  ),
-                  _DialogAction(
-                    label: result.isSkipped
-                        ? 'Not now'
-                        : 'Skip ${update.version}',
-                    onPressed: () async {
-                      if (!result.isSkipped) {
-                        await notifier.skipAvailableUpdate();
-                      }
-                      if (dialogContext.mounted) {
-                        Navigator.of(dialogContext).pop();
-                      }
-                    },
-                  ),
-                  _DialogAction(
-                    label: 'Update',
-                    primary: true,
-                    onPressed: () async {
-                      setState(() => installing = true);
-                      final installed = await notifier.installAvailableUpdate();
-                      // A successful install never returns — the process is
-                      // replaced. Reaching here means it failed, and the banner
-                      // behind this dialog is already showing why.
-                      if (!dialogContext.mounted || installed) return;
-                      Navigator.of(dialogContext).pop();
-                    },
-                  ),
-                ],
-        ),
+        builder: (context, setState) {
+          if (checking) {
+            return const _UpdateDialog(
+              icon: LucideIcons.refreshCw300,
+              title: 'Checking for updates…',
+              body: 'Looking for a newer version of Harness.',
+              busy: true,
+            );
+          }
+          if (current.status == DesktopUpdateCheckStatus.failed) {
+            return _UpdateDialog(
+              icon: LucideIcons.triangleAlert300,
+              tone: _DialogTone.warning,
+              title: 'Couldn’t check for updates',
+              body:
+                  'Harness couldn’t read the latest version. '
+                  'Check your connection and try again.',
+              actions: [
+                _DialogAction(
+                  label: 'Close',
+                  onPressed: () async => Navigator.of(dialogContext).pop(),
+                ),
+                _DialogAction(
+                  label: 'Retry',
+                  primary: true,
+                  onPressed: () async {
+                    setState(() => checking = true);
+                    final next = await notifier.checkForUpdates();
+                    if (!context.mounted) return;
+                    setState(() {
+                      current = next;
+                      checking = false;
+                    });
+                  },
+                ),
+              ],
+            );
+          }
+          if (current.status == DesktopUpdateCheckStatus.disabled) {
+            return const _UpdateDialog(
+              icon: LucideIcons.info300,
+              title: 'Updates are off for this build',
+              body: 'This build does not check for or install desktop updates.',
+            );
+          }
+          final update = current.update;
+          if (update == null) {
+            return const _UpdateDialog(
+              icon: LucideIcons.circleCheck300,
+              tone: _DialogTone.ok,
+              title: 'You’re up to date',
+              body: 'This copy of Harness already has the latest version.',
+            );
+          }
+          return PopScope(
+            canPop: !installing,
+            child: _UpdateDialog(
+              icon: LucideIcons.arrowDownToLine300,
+              title: installing
+                  ? 'Installing Harness ${update.version}…'
+                  : 'Harness ${update.version} is available',
+              body: installing
+                  ? 'Don’t quit Harness. It will restart on its own.'
+                  : current.isSkipped
+                  ? 'You skipped this version earlier. You can still install it.'
+                  : 'Download and install it now? Harness will restart when it '
+                        'finishes.',
+              busy: installing,
+              update: installing ? null : update,
+              actions: installing
+                  ? const []
+                  : [
+                      _DialogAction(
+                        key: const Key('close-update-dialog-button'),
+                        label: 'Close',
+                        onPressed: () async {
+                          Navigator.of(dialogContext).pop();
+                        },
+                      ),
+                      if (!current.isSkipped)
+                        _DialogAction(
+                          label: 'Skip ${update.version}',
+                          onPressed: () async {
+                            await notifier.skipAvailableUpdate(update: update);
+                            if (dialogContext.mounted) {
+                              Navigator.of(dialogContext).pop();
+                            }
+                          },
+                        ),
+                      _DialogAction(
+                        label: 'Update',
+                        primary: true,
+                        onPressed: () async {
+                          setState(() => installing = true);
+                          final installed = await notifier
+                              .installAvailableUpdate(update: update);
+                          // A successful install never returns — the process is
+                          // replaced. Reaching here means it failed, and the banner
+                          // behind this dialog is already showing why.
+                          if (!context.mounted || installed) return;
+                          setState(() => installing = false);
+                          Navigator.of(dialogContext).pop();
+                        },
+                      ),
+                    ],
+            ),
+          );
+        },
       );
     },
   );
 }
 
-enum _DialogTone { accent, ok }
+enum _DialogTone { accent, ok, warning }
 
 class _DialogAction {
   final Key? key;
@@ -370,9 +443,11 @@ class _UpdateDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final mark = tone == _DialogTone.ok
-        ? grid.AppPalette.online
-        : grid.AppPalette.accentOnSurface;
+    final mark = switch (tone) {
+      _DialogTone.ok => grid.AppPalette.online,
+      _DialogTone.warning => grid.AppPalette.warn,
+      _DialogTone.accent => grid.AppPalette.accentOnSurface,
+    };
 
     return Dialog(
       // No backgroundColor, no shape: `dialogTheme` supplies both, at
@@ -380,98 +455,108 @@ class _UpdateDialog extends StatelessWidget {
       // carry is gone with them — §1 allows exactly one border in the app and
       // it belongs to the menu panel, not to a dialog.
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 372),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: mark.withValues(alpha: 0.13),
-                  borderRadius: BorderRadius.circular(grid.AppCard.insetRadius),
+        constraints: BoxConstraints(
+          maxWidth: 372 * MediaQuery.textScalerOf(context).scale(12.5) / 12.5,
+        ),
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: mark.withValues(alpha: 0.13),
+                    borderRadius: BorderRadius.circular(
+                      grid.AppCard.insetRadius,
+                    ),
+                  ),
+                  alignment: Alignment.center,
+                  child: busy
+                      ? SizedBox(
+                          width: 17,
+                          height: 17,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: mark,
+                          ),
+                        )
+                      : Icon(icon, size: 18, color: mark),
                 ),
-                alignment: Alignment.center,
-                child: busy
-                    ? SizedBox(
-                        width: 17,
-                        height: 17,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: mark,
-                        ),
-                      )
-                    : Icon(icon, size: 18, color: mark),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                title,
-                style: TextStyle(
-                  color: grid.AppPalette.textPrimary,
-                  fontSize: 15,
-                  fontWeight: grid.AppFont.semibold,
-                ),
-              ),
-              const SizedBox(height: 5),
-              Text(
-                body,
-                style: TextStyle(
-                  color: grid.AppPalette.textSecondary,
-                  fontSize: 12.5,
-                  height: 1.5,
-                ),
-              ),
-              if (update != null) ...[
                 const SizedBox(height: 12),
-                Divider(height: 1, color: grid.AppGlass.hair),
-                const SizedBox(height: 10),
-                _Fact(label: 'Installed', value: _InstalledVersion()),
-                const SizedBox(height: 6),
-                _Fact(label: 'New version', value: Text(update!.version)),
-                if (update!.size > 0) ...[
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: grid.AppPalette.textPrimary,
+                    fontSize: 15,
+                    fontWeight: grid.AppFont.semibold,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  body,
+                  style: TextStyle(
+                    color: grid.AppPalette.textSecondary,
+                    fontSize: 12.5,
+                    height: 1.5,
+                  ),
+                ),
+                if (update != null) ...[
+                  const SizedBox(height: 12),
+                  Divider(height: 1, color: grid.AppGlass.hair),
+                  const SizedBox(height: 10),
+                  _Fact(label: 'Installed', value: _InstalledVersion()),
                   const SizedBox(height: 6),
-                  _Fact(
-                    label: 'Download',
-                    value: Text(formatDownloadSize(update!.size)),
+                  _Fact(label: 'New version', value: Text(update!.version)),
+                  if (update!.size > 0) ...[
+                    const SizedBox(height: 6),
+                    _Fact(
+                      label: 'Download',
+                      value: Text(formatDownloadSize(update!.size)),
+                    ),
+                  ],
+                ],
+                if (actions.isNotEmpty) ...[
+                  const SizedBox(height: 15),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final action in actions) ...[
+                          _NoticeAction(
+                            key: action.key,
+                            label: action.label,
+                            kind: action.primary
+                                ? _ActionKind.primary
+                                : _ActionKind.quiet,
+                            onPressed: () => unawaited(action.onPressed()),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+                if (actions.isEmpty && !busy) ...[
+                  const SizedBox(height: 15),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      _NoticeAction(
+                        label: 'Close',
+                        kind: _ActionKind.ghost,
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    ],
                   ),
                 ],
               ],
-              if (actions.isNotEmpty) ...[
-                const SizedBox(height: 15),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    for (final action in actions) ...[
-                      if (action != actions.first) const SizedBox(width: 8),
-                      _NoticeAction(
-                        key: action.key,
-                        label: action.label,
-                        kind: action.primary
-                            ? _ActionKind.primary
-                            : _ActionKind.quiet,
-                        onPressed: () => unawaited(action.onPressed()),
-                      ),
-                    ],
-                  ],
-                ),
-              ],
-              if (actions.isEmpty && !busy) ...[
-                const SizedBox(height: 15),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    _NoticeAction(
-                      label: 'Close',
-                      kind: _ActionKind.ghost,
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                  ],
-                ),
-              ],
-            ],
+            ),
           ),
         ),
       ),
@@ -493,20 +578,22 @@ class _Fact extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          width: 96,
+          width: 96 * MediaQuery.textScalerOf(context).scale(11.5) / 11.5,
           child: Text(
             label,
             style: TextStyle(color: grid.AppPalette.textFaint, fontSize: 11.5),
           ),
         ),
-        DefaultTextStyle(
-          style: TextStyle(
-            color: grid.AppPalette.textSecondary,
-            fontSize: 11.5,
-            fontFamily: grid.AppFont.mono,
-            fontFamilyFallback: grid.AppFont.monoFallback,
+        Expanded(
+          child: DefaultTextStyle(
+            style: TextStyle(
+              color: grid.AppPalette.textSecondary,
+              fontSize: 11.5,
+              fontFamily: grid.AppFont.mono,
+              fontFamilyFallback: grid.AppFont.monoFallback,
+            ),
+            child: value,
           ),
-          child: value,
         ),
       ],
     );

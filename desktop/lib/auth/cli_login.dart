@@ -3,15 +3,21 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../core/harness_cli_runner.dart';
+import 'sign_in_client.dart';
 
 class CliAuthStatus {
   final bool loggedIn;
+
+  /// Signed in, but the CLI could not refresh the token just now (no network, SSO down). Still
+  /// [loggedIn]: the session is on disk and the daemon runs on it; only the backend is out of reach.
+  final bool offline;
   final String? computerId;
   final String? machineId;
   final String? autonomousEnv;
 
   const CliAuthStatus({
     required this.loggedIn,
+    this.offline = false,
     this.computerId,
     this.machineId,
     this.autonomousEnv,
@@ -19,6 +25,7 @@ class CliAuthStatus {
 
   factory CliAuthStatus.fromJson(Map<String, dynamic> json) => CliAuthStatus(
     loggedIn: json['loggedIn'] == true,
+    offline: json['offline'] == true,
     computerId: json['computerId'] as String?,
     machineId: json['machineId'] as String?,
     autonomousEnv: json['autonomousEnv'] as String?,
@@ -39,13 +46,14 @@ class CliNotAvailableException implements Exception {
 /// signed-in session, and driving `harness login --json`'s NDJSON event stream when it does not. The
 /// CLI owns the SSO session end to end (`~/.harness/auth/session.json`) — this app never sees, stores,
 /// or refreshes an access token itself.
-class CliLogin {
+class CliLogin implements SignInClient {
   final HarnessCliRunner _runner;
   Process? _activeProcess;
   int _loginRevision = 0;
 
   CliLogin({HarnessCliRunner? runner}) : _runner = runner ?? HarnessCliRunner();
 
+  @override
   Future<CliAuthStatus> checkStatus() async {
     final result = await _run(['auth', 'status', '--json']);
     final line = _lastNonEmptyLine(result.stdout as String);
@@ -65,6 +73,7 @@ class CliLogin {
   /// flow. Calls [onAuthorizeUrl] as soon as the CLI reports the SSO page to show, then resolves once
   /// the CLI's own loopback callback server completes the flow (or throws on failure/cancellation).
   /// The process is killed if [cancel] is called while this is in flight.
+  @override
   Future<void> login({
     required void Function(String url) onAuthorizeUrl,
   }) async {
@@ -131,7 +140,9 @@ class CliLogin {
     }
   }
 
-  /// Aborts this attempt even if its process has not finished starting yet.
+  /// Aborts this attempt even if its process has not finished starting yet —
+  /// reached from the embedded sign-in webview's close button.
+  @override
   void cancel() {
     ++_loginRevision;
     final process = _activeProcess;
@@ -139,11 +150,35 @@ class CliLogin {
     process?.kill();
   }
 
+  @override
   Future<void> logout() async {
+    // Own a process handle: a timed-out logout must not remain alive and erase
+    // the credentials saved by the user's next sign-in.
+    final Process process;
     try {
-      await _run(['logout']);
-    } catch (_) {
-      // Best-effort: local app state is cleared regardless by the caller.
+      process = await _runner.start(['logout']);
+    } catch (error) {
+      throw CliNotAvailableException('Could not run the harness CLI: $error');
+    }
+    try {
+      int? exitCode;
+      await Future.wait<void>([
+        process.stdout.drain<void>(),
+        process.stderr.drain<void>(),
+        process.exitCode.then((value) => exitCode = value),
+      ]).timeout(_runner.runTimeout);
+      if (exitCode != 0) {
+        throw StateError('Could not finish signing out. Try again.');
+      }
+    } on TimeoutException {
+      process.kill();
+      try {
+        await process.exitCode.timeout(const Duration(seconds: 1));
+      } on TimeoutException {
+        process.kill(ProcessSignal.sigkill);
+        await process.exitCode;
+      }
+      throw StateError('Sign-out took too long. Try again.');
     }
   }
 

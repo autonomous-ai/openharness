@@ -1,0 +1,18 @@
+{
+  "homepage": "https://www.blender.org",
+  "upstream": "https://projects.blender.org/blender/blender",
+  "license": "MIT",
+  "tagline": "Free and open source 3D creation software",
+  "examples": [
+    {
+      "prompt": "Make a cozy isometric reading nook: a cut-away corner of a room with an armchair, a floor lamp glowing warm, a bookshelf full of colourful books, a round rug and a monstera, with evening sun through the window and a cat asleep on the rug.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/blender/cozy-reading-nook.jpg",
+      "caption": "Isometric reading nook · 122 named objects, 35 materials · glTF + Cycles render"
+    },
+    {
+      "prompt": "Model a small desk robot toy: a rounded body, a head with two round eyes, two arms that rotate at the shoulders, an antenna, and a round base. Separate named objects in collections, real sizes in millimetres, and nice materials.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/blender/desk-robot-toy.jpg",
+      "caption": "Desk robot toy · 29 named parts, 10 materials · glTF + Cycles render"
+    }
+  ]
+}

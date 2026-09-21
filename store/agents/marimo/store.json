@@ -1,0 +1,18 @@
+{
+  "homepage": "https://marimo.io",
+  "upstream": "https://github.com/marimo-team/marimo",
+  "license": "MIT",
+  "tagline": "Next-generation Python notebook",
+  "examples": [
+    {
+      "prompt": "Build a notebook that explores the Lorenz attractor: sliders for σ, ρ and β, the butterfly drawn in two projections coloured by time, and two runs started a hair apart to show how fast they diverge.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/marimo/lorenz-butterfly.jpg",
+      "caption": "Lorenz butterfly explorer · σ/ρ/β sliders, chaos stats, two projections"
+    },
+    {
+      "prompt": "Build a notebook that simulates a coffee shop queue over a day, with a slider for the arrival rate and the number of baristas, and a chart of wait times through the day.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/marimo/coffee-queue-simulator.jpg",
+      "caption": "Coffee-queue simulator · reactive sliders, KPI cards, wait-time chart"
+    }
+  ]
+}

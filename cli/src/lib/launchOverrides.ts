@@ -14,11 +14,16 @@
 
 import { join } from 'node:path'
 import type { AgentEngine } from '../engines/types.js'
+import { subscriptionModelLaunch } from './subscriptionModel.js'
+import { ownLoginProviderArgs } from '../engines/codex/ownLoginProvider.js'
+import { namedAgentArgs, supportsNamedAgent } from './engineLaunch.js'
 import {
   buildGridEngineLaunch,
   gridConflictingEnvToClear,
   type GridEngineLaunch,
+  type GridLaunchMachine,
   type GridLaunchOverride,
+  type GridLaunchRecord,
 } from './gridLaunch.js'
 import { TMUX_SESSION_ENV_MIN } from './tmuxVersion.js'
 import type { DshLaunch } from '../dsh/launch.js'
@@ -30,6 +35,13 @@ export interface LaunchOverrides {
   extraArgs: string[]
   /** Vendor credentials the launch must hide from the engine — see `gridConflictingEnvToClear`. */
   clearEnv: string[]
+  /**
+   * The grid launch this was built from and what building it decided about web search — present
+   * only when this IS a grid launch. Exactly what `registry.setGridLaunch` keeps, so the caller
+   * stores it as-is and cannot pair a status with the wrong override. A launch back onto the
+   * engine's own login has no such thing to say.
+   */
+  gridLaunchRecord?: GridLaunchRecord
 }
 
 export type LaunchOverridesResult =
@@ -37,8 +49,8 @@ export type LaunchOverridesResult =
   | { ok: false; error: string; detail: string }
 
 export interface LaunchOverridesDeps {
-  /** The config directory this MACHINE can give the launch, or none — cli.ts prunes Hermes's. */
-  configDirFor: (engine: AgentEngine, launch: GridEngineLaunch) => GridEngineLaunch['configDir']
+  /** The facts about THIS machine a contract needs and cannot read for itself — see `GridLaunchMachine`. */
+  machine: () => GridLaunchMachine
   writeGridConfigDir: (
     key: string,
     files: NonNullable<GridEngineLaunch['configDir']>['files'],
@@ -48,6 +60,15 @@ export interface LaunchOverridesDeps {
   /** Install the daemon's hooks into a non-default Codex profile. The caller decides whether hook
    *  installation is enabled at all. */
   installCodexHooks: (codexHome: string) => void
+  /**
+   * Read a Codex `config.toml`, for the provider an agent goes back to when it leaves a grid.
+   *
+   * A seam rather than a direct read: without it every relaunch built in a test would consult
+   * whatever Codex configuration the machine running the test happens to have, and a developer who
+   * had set `model_provider` would watch unrelated specs change their answer. Absent ⇒ the real
+   * file. See `engines/codex/ownLoginProvider.ts`.
+   */
+  readCodexConfig?: (path: string) => string | null
   /** What a DSH adds to the launch (its env and argv), or null when it is not installed here any
    *  more — in which case the agent relaunches as its plain base engine and says so in the log. */
   dshLaunch?: (dsh: string, workspace: string) => DshLaunch | null
@@ -57,10 +78,23 @@ export interface LaunchOverridesDeps {
 export interface LaunchSource {
   gridLaunch?: GridLaunchOverride | null
   codexHome?: string | null
+  /**
+   * The engine's OWN model to come back to, when this relaunch is a move off a grid.
+   *
+   * Ignored while `gridLaunch` is set — that launch names its own model. Absent means "let the
+   * engine decide", which is what happens for an engine with no cited mechanism.
+   */
+  subscriptionModel?: string | null
   /** The DSH the agent was created as; its env rides on every relaunch (`HARNESS_DSH` included). */
   dsh?: string | null
   /** The workspace, for the DSH's `${workspace}` — the registry row's `cwd`. */
   cwd?: string | null
+  /**
+   * The engine's named agent this pane was opened as (`agent_create`'s `agent`, opencode
+   * `--agent <name>`). Part of every relaunch, unlike a first prompt: a pane opened as `harness-compute`
+   * comes back as `harness-compute`, not as a general session with that agent's history.
+   */
+  agent?: string | null
 }
 
 /** Fresh each time: callers hand `env` to tmux and may extend it, and a shared object would carry
@@ -81,12 +115,12 @@ const noOverrides = (): LaunchOverrides => ({ env: {}, extraArgs: [], clearEnv: 
  * builds — config directory included — once it holds the pane).
  */
 export async function validateLaunchOverrides(
-  deps: Pick<LaunchOverridesDeps, 'tmuxSupportsSessionEnv'>,
+  deps: Pick<LaunchOverridesDeps, 'tmuxSupportsSessionEnv' | 'machine'>,
   engine: AgentEngine,
   source: LaunchSource,
 ): Promise<{ ok: true } | { ok: false; error: string; detail: string }> {
   if (!source.gridLaunch) return { ok: true }
-  const built = buildGridEngineLaunch(engine, source.gridLaunch)
+  const built = buildGridEngineLaunch(engine, source.gridLaunch, deps.machine())
   if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
   // Only a launch that SETS variables needs the tmux that can set them.
   if (!(await deps.tmuxSupportsSessionEnv())) {
@@ -108,19 +142,28 @@ export async function buildLaunchOverrides(
   configKey: string,
 ): Promise<LaunchOverridesResult> {
   const base = await buildBaseLaunchOverrides(deps, engine, source, configKey)
-  if (!base.ok || !source.dsh || !source.cwd) return base
-  const dsh = deps.dshLaunch?.(source.dsh, source.cwd) ?? null
-  if (!dsh) return base
-  // The DSH's variables layer over the grid's or the profile's; `HARNESS_*` are the daemon's own and
-  // a manifest cannot set them (see `dshLaunch`), so nothing here can shadow a grid credential.
-  return {
-    ok: true,
-    overrides: {
-      env: { ...base.overrides.env, ...dsh.env },
-      extraArgs: [...base.overrides.extraArgs, ...dsh.args],
-      clearEnv: base.overrides.clearEnv,
-    },
+  if (!base.ok) return base
+  let overrides = base.overrides
+  if (source.dsh && source.cwd) {
+    const dsh = deps.dshLaunch?.(source.dsh, source.cwd) ?? null
+    // The DSH's variables layer over the grid's or the profile's; `HARNESS_*` are the daemon's own
+    // and a manifest cannot set them (see `dshLaunch`), so nothing here can shadow a grid credential.
+    if (dsh) {
+      overrides = {
+        ...overrides,
+        env: { ...overrides.env, ...dsh.env },
+        extraArgs: [...overrides.extraArgs, ...dsh.args],
+      }
+    }
   }
+  // The named agent rides every relaunch, in the same argv slot `agent_create` put it in. Only an
+  // engine with a contract could have had it recorded (create refuses the rest, AGENT_UNSUPPORTED),
+  // so the guard is for a row edited by hand — it relaunches as a general session rather than
+  // handing the engine a flag it does not know.
+  if (source.agent && supportsNamedAgent(engine)) {
+    overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent)] }
+  }
+  return { ok: true, overrides }
 }
 
 async function buildBaseLaunchOverrides(
@@ -131,13 +174,39 @@ async function buildBaseLaunchOverrides(
 ): Promise<LaunchOverridesResult> {
   const valid = await validateLaunchOverrides(deps, engine, source)
   if (!valid.ok) return valid
+  // Coming back to the engine's own login undoes TWO things the grid launch set, and they are
+  // undone separately because the engine remembers them differently.
+  //
+  //   * The MODEL — re-selected so the engine does not fall back to a house default. See
+  //     `subscriptionModel.ts` for why an engine with no cited mechanism is given nothing rather
+  //     than a guess.
+  //   * The PROVIDER — named again, because Codex persists the grid's in state of its own that
+  //     outlives the argv defining it, and a resume then fails before the TUI is up. See
+  //     `engines/codex/ownLoginProvider.ts`.
+  //
+  // Accumulated rather than returned, because a Codex agent needs its profile (below) as well, and
+  // an early return here used to drop it: a row with both a remembered model and a CODEX_HOME came
+  // back on the DEFAULT profile, reading hooks from a folder that was not the one it writes to.
+  let ownLogin: LaunchOverrides | null = null
+  if (!source.gridLaunch) {
+    const restored = subscriptionModelLaunch(engine, source.subscriptionModel)
+    // Ahead of the model on the command line: `-c` configures, `-m` selects, and Codex resolves the
+    // model against the provider it has been given.
+    const provider = ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
+    if (restored || provider.length) {
+      ownLogin = {
+        env: { ...(restored?.env ?? {}) },
+        extraArgs: [...provider, ...(restored?.args ?? [])],
+        clearEnv: [],
+      }
+    }
+  }
   if (source.gridLaunch) {
-    const built = buildGridEngineLaunch(engine, source.gridLaunch)
+    const built = buildGridEngineLaunch(engine, source.gridLaunch, deps.machine())
     if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
     const env: Record<string, string> = { ...built.launch.env }
-    const configDir = deps.configDirFor(engine, built.launch)
-    if (configDir) {
-      const { envVar, files, pointAt, links } = configDir
+    if (built.launch.configDir) {
+      const { envVar, files, pointAt, links } = built.launch.configDir
       try {
         const dir = await deps.writeGridConfigDir(configKey, files, links ?? [])
         // Pi is handed the directory; OpenCode's OPENCODE_CONFIG wants the file inside it.
@@ -149,13 +218,29 @@ async function buildBaseLaunchOverrides(
     }
     // Derived from what this launch actually provides (the config-dir variable included), so an
     // inherited vendor key never outranks the grid the engine was handed.
-    return { ok: true, overrides: { env, extraArgs: [...built.launch.args], clearEnv: gridConflictingEnvToClear({ env, args: [] }) } }
+    return {
+      ok: true,
+      overrides: {
+        env,
+        extraArgs: [...built.launch.args],
+        clearEnv: gridConflictingEnvToClear({ env }),
+        gridLaunchRecord: { override: source.gridLaunch, webSearch: built.launch.webSearch },
+      },
+    }
   }
   if (source.codexHome) {
     // A Codex agent on a profile OTHER than this machine's default reads hooks.json from THAT folder,
     // not the one `harness login` installed into — without this it fires no hook at all. Idempotent.
     deps.installCodexHooks(source.codexHome)
-    return { ok: true, overrides: { env: { CODEX_HOME: source.codexHome }, extraArgs: [], clearEnv: [] } }
+    return {
+      ok: true,
+      overrides: {
+        env: { CODEX_HOME: source.codexHome, ...(ownLogin?.env ?? {}) },
+        extraArgs: [...(ownLogin?.extraArgs ?? [])],
+        clearEnv: [],
+      },
+    }
   }
+  if (ownLogin) return { ok: true, overrides: ownLogin }
   return { ok: true, overrides: noOverrides() }
 }

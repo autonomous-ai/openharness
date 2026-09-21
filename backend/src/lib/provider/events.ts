@@ -13,7 +13,7 @@
  * The frames it emits are the ones the web and the device already speak — this module is the only
  * place a provider's vocabulary becomes ours.
  *
- * Spec: autonomous-ai/autonomous-harness → provider/spec/README.md.
+ * Spec: autonomous-ai/openharness → provider/spec/README.md.
  */
 import type { Frame } from '../tunnel.js'
 

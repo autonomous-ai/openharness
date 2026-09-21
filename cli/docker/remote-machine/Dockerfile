@@ -26,6 +26,20 @@
 # from the app's New agent dialog, so a root container would quietly take a testable option away.
 FROM node:22-bookworm-slim
 
+# A UTF-8 locale, because the base image has none.
+#
+# `node:22-bookworm-slim` sets no LANG, which leaves `LC_CTYPE=POSIX` — and a program that decides
+# what it may draw from the locale rather than from the terminal takes its ASCII path there. tmux
+# negotiates UTF-8 with the client either way (`client_utf8=1` on this box), so the damage is not the
+# box-drawing a terminal shows; it is every engine, and every tool an agent runs inside one, that
+# reads the locale first and quietly degrades. A real developer machine has a UTF-8 locale, and this
+# container stands in for one.
+#
+# `C.UTF-8` rather than `en_US.UTF-8`: Debian ships it built in, so this needs no `locales` package
+# and no `locale-gen` layer, and it imposes no language on an agent's output.
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
 # tmux: the daemon discovers and drives agents through it, so there is no agent without it.
 # procps: `ps` — the CLI reads a live engine's environment to answer "which grid is this agent on?"
 #   (`lib/processEnv.ts`). On Linux it reads /proc directly, but ps is what makes the same question
@@ -85,6 +99,23 @@ RUN mkdir -p /home/node/work \
   && printf '%s\n' '{"hasCompletedOnboarding":true,"theme":"dark","projects":{"/home/node/work":{"hasTrustDialogAccepted":true}}}' \
      > /home/node/.claude.json \
   && chown -R node:node /home/node/.claude.json /home/node/work
+
+# ── A global npm prefix the `node` user can actually write to ─────────────────────────────────────
+#
+# An engine the daemon cannot find is installed on the spot, in the agent's own terminal: see
+# `lib/engineInstall.ts`, which shells out to `npm install -g <pkg>` for codex, opencode, pi, kilo,
+# copilot and the rest. npm's prefix here is /usr/local, which belongs to root — and this image runs
+# as `node` (see the header), so every one of those installs died with EACCES and left the agent
+# staring at an npm stack trace instead of an engine. Pre-baking one package would fix codex and
+# nothing else; a writable prefix fixes the mechanism, for every engine the CLI knows how to install.
+#
+# Deliberately NOT under /home/node/.harness: that volume outlives an image rebuild, so an engine
+# cached there would survive the very rebuild meant to change it — the staleness note 1 exists to
+# prevent. Re-fetching an engine when the box is recreated is the correct cost. Claude Code above
+# stays in /usr/local, baked and pinned, untouched by this.
+ENV NPM_CONFIG_PREFIX=/home/node/.npm-global
+ENV PATH=/home/node/.npm-global/bin:$PATH
+RUN mkdir -p /home/node/.npm-global/bin && chown -R node:node /home/node/.npm-global
 
 COPY --chown=node:node docker/remote-machine/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 755 /usr/local/bin/entrypoint.sh

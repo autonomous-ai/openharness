@@ -2,6 +2,7 @@ node_modules/
 .vite/
 dist/
 .tsbuildinfo
+coverage/
 .DS_Store
 # IDE state. workspace.xml records local paths, run configs and sometimes datasource
 # credentials — none of it belongs in a public repo.
@@ -19,4 +20,99 @@ provider/example-provider/sessions.json
 .env.*
 !.env.example
 
+# ---------------------------------------------------------------------------
+# Local / personal — machine- or developer-specific, never pushed
+# ---------------------------------------------------------------------------
+
+# AI coding assistants (chat history, local rules, per-dev config).
+# .claude/ contents are ignored by default; whitelist below anything the team
+# should actually share (drop the leading "#" to start tracking it).
+.claude/*
+#!.claude/settings.json
+#!.claude/commands/
+#!.claude/agents/
+#!.claude/skills/
+.claude/settings.local.json
+CLAUDE.local.md
+AGENTS.local.md
+
+.cursor/
+.cursorignore
+.windsurf/
+.codeium/
+.continue/
+.cline/
+.roo/
+.kilocode/
+.trae/
+.junie/
+.gemini/
+.opencode/
+.crush/
+.amp/
+.qodo/
+.specstory/
+.serena/
+.aider*
+.mcp.local.json
+
+# Editors / IDEs — personal workspace state
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+*.code-workspace
+.fleet/
+.zed/
+.nova/
+*.sublime-project
+*.sublime-workspace
+
+# Xcode per-user state (macOS runner)
+**/xcuserdata/
+**/*.xcuserdatad
+**/DerivedData/
+
+# OS junk
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+Desktop.ini
+
+# Secrets & signing material
+*.pem
+*.p8
+*.p12
+*.key
+*.jks
+*.keystore
+key.properties
+secrets/
 .secrets
+.omc/
+CLAUDE.local.md
+.scratch/
+service-account*.json
+
+# Agent workspace state. This repo is a project agents are run IN, and a DSH's own scripts write
+# their result to `.harness/verdict.json` in the project they ran on (cli/src/dsh/manifest.ts,
+# DEFAULT_VERDICT_PATH). It is output, never source, and it reappears whenever an agent works here —
+# which is enough to block a release, since every release script refuses a dirty tree.
+.harness/
+
+# Local scratch — notes, experiments, throwaway scripts
+scratch/
+tmp/
+mockup/
+notes/
+*.local
+*.local.*
+TODO.local.md
+mobile/docs/
+
+# pi agent task logs
+.pi/
+
+# Reproducible browser runs; reviewed Store screenshots live under store/showcase.
+work/experience-evidence/

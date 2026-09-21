@@ -1,0 +1,7 @@
+upstream/
+.venv/
+__pycache__/
+.pytest_cache/
+.ffmpeg/
+node_modules
+test-results/

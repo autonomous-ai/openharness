@@ -1,0 +1,18 @@
+{
+  "homepage": "https://github.com/earthtojake/text-to-cad",
+  "upstream": "https://github.com/earthtojake/text-to-cad",
+  "license": "MIT",
+  "tagline": "Library of agent skills for CAD, CAE and CAM",
+  "examples": [
+    {
+      "prompt": "Design a 3D-printable planetary gear set: a 12-tooth sun, three 18-tooth planets and a 48-tooth ring gear with mounting lugs, module 1.5 and 8 mm thick, plus a carrier on steel pins. Give each part its own colour.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/text-to-cad/planetary-gear-set.jpg",
+      "caption": "Planetary gear set · 9 coloured parts, involute teeth, zero interference · STEP assembly"
+    },
+    {
+      "prompt": "Design a phone stand for a phone 75 mm wide and 9 mm thick, holding it at 60 degrees, with a cable slot at the bottom, printable without supports.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/text-to-cad/phone-stand.jpg",
+      "caption": "Phone stand · 60° cradle with cable slot · STEP + STL, 100 × 70 × 95 mm"
+    }
+  ]
+}

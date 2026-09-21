@@ -1,0 +1,18 @@
+{
+  "homepage": "https://www.manim.community",
+  "upstream": "https://github.com/ManimCommunity/manim",
+  "license": "MIT",
+  "tagline": "Python library for creating mathematical animations",
+  "examples": [
+    {
+      "prompt": "Draw a chess knight using nothing but spinning circles: a Fourier series of 120 epicycles, tip to tail, tracing its silhouette in gold.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/manim/fourier-knight.jpg",
+      "caption": "Fourier knight · 120 epicycles · 17 s 1080p60 MP4, 4 chapters"
+    },
+    {
+      "prompt": "Animate the Pythagorean theorem in about 20 seconds: draw a 3-4-5 right triangle, grow squares on its three sides with their areas labelled, then show 9 + 16 = 25.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/manim/pythagorean-theorem.jpg",
+      "caption": "Pythagorean theorem · 20 s animation · 1080p MP4"
+    }
+  ]
+}

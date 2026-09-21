@@ -1,0 +1,17 @@
+{
+  "spec": 1,
+  "id": "autonomous/openmontage",
+  "name": "OpenMontage",
+  "category": "Video",
+  "author": "calesthio",
+  "description": "Direct a film from the first idea to the final cut. Watch the script, shots, and edits arrive in a live studio; play each version and leave notes right on the film.",
+  "engine": "claude",
+  "workspace": { "template": "template", "marker": "film.json", "init": "toolchain/init-workspace.sh" },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "env": { "OPENMONTAGE": "${dsh}/toolchain/montage", "OPENMONTAGE_ROOT": "${dsh}/upstream" }
+  },
+  "toolchain": { "setup": "toolchain/setup.sh", "doctor": "toolchain/doctor.sh" },
+  "viewer": { "use": "autonomous/film-viewer" },
+  "verdict": ".harness/verdict.json"
+}

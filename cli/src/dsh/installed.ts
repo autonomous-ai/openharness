@@ -6,7 +6,8 @@
  * and a row whose manifest no longer parses is reported broken rather than silently dropped, so a
  * DSH that breaks on update is visible in `harness dsh list` instead of vanishing from the picker.
  */
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { DSH_ID_RE, readDshManifest, type DshManifest } from './manifest.js'
@@ -18,10 +19,15 @@ export interface InstalledDshRecord {
   /** The git URL or local path it came from. */
   source: string
   ref: string | null
+  /** The folder of `source` that was installed, for a package that is one folder of a repo. */
+  path?: string | null
   commit: string | null
+  /** Git tree of the package folder, independent of unrelated monorepo commits. */
+  revision?: string | null
   /** True when `dir` is a symlink to a checkout — the development loop. */
   linked: boolean
   installedAt: number
+  updatedAt?: number
 }
 
 export interface InstalledDsh extends InstalledDshRecord {
@@ -77,7 +83,9 @@ export function readInstalledIndex(): InstalledDshRecord[] {
 
 export function writeInstalledIndex(records: readonly InstalledDshRecord[]): void {
   mkdirSync(dshRootDir(), { recursive: true, mode: 0o700 })
-  writeFileSync(indexPath(), JSON.stringify(records, null, 2) + '\n', { mode: 0o600 })
+  const temporary = `${indexPath()}.${randomUUID()}.tmp`
+  writeFileSync(temporary, JSON.stringify(records, null, 2) + '\n', { mode: 0o600 })
+  renameSync(temporary, indexPath())
 }
 
 export function upsertInstalledRecord(record: InstalledDshRecord): void {
@@ -97,12 +105,12 @@ export function removeInstalledRecord(id: string): boolean {
 
 /** Load one record's manifest, or say why it is broken. */
 export function resolveInstalled(record: InstalledDshRecord): InstalledDsh | BrokenDsh {
-  if (!existsSync(record.dir)) return { ...record, error: `${record.dir} is missing` }
   let realDir: string
   try {
     realDir = realpathSync(record.dir)
-  } catch (error) {
-    return { ...record, error: `${record.dir} cannot be resolved (${error instanceof Error ? error.message : String(error)})` }
+  } catch {
+    // Gone, or a link to nothing: realpath fails exactly where existsSync would say false.
+    return { ...record, error: `${record.dir} is missing` }
   }
   const manifest = readDshManifest(realDir)
   if (!manifest.ok) return { ...record, error: manifest.error }

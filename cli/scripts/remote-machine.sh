@@ -36,6 +36,15 @@ HOST_HARNESS="${HARNESS_BIN:-$HOME/.local/bin/harness}"
 # cannot be the ephemeral one `harness login` would otherwise pick — it has to be known in advance to
 # be published. Pinned here and honoured by ADAPTER_LOGIN_CALLBACK_PORT on the far side.
 LOGIN_PORT="${HARNESS_RIG_LOGIN_PORT:-46789}"
+# The box's Codex state, kept on the HOST so it survives `up` — which recreates the container, and
+# `.codex` is not on the state volume, so an engine signed in inside the box was signed out again by
+# the next rebuild. Deliberately outside this repo: auth.json holds a live refresh token.
+# Its own directory rather than a bind of the Mac's `~/.codex`: two Codex processes writing one
+# config.toml, one history.jsonl and the same sqlite files over a bind mount is how those files get
+# corrupted, and the Mac's project trust names paths that do not exist in here.
+# Seed it once with the account you want the box to use:
+#   mkdir -p ~/.harness-rig/codex && cp ~/.codex/auth.json ~/.harness-rig/codex/
+RIG_CODEX_HOME="${HARNESS_RIG_CODEX_HOME:-$HOME/.harness-rig/codex}"
 
 die() { echo "error: $*" >&2; exit 1; }
 note() { echo ">> $*"; }
@@ -99,6 +108,9 @@ cmd_up() {
   if running; then note "already up"; cmd_status; return; fi
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
   docker volume create "$VOLUME" >/dev/null
+  # Created empty if it is not there: an unseeded box still starts, and Codex in it asks to sign in
+  # exactly as it would on a fresh computer.
+  mkdir -p "$RIG_CODEX_HOME" && chmod 700 "$RIG_CODEX_HOME"
   note "starting ${CONTAINER}…"
   docker run -d \
     --name "$CONTAINER" \
@@ -107,6 +119,7 @@ cmd_up() {
     -e ADAPTER_LOGIN_CALLBACK_PORT="$LOGIN_PORT" \
     -p "127.0.0.1:${LOGIN_PORT}:${LOGIN_PORT}" \
     -v "$VOLUME:/home/node/.harness" \
+    -v "$RIG_CODEX_HOME:/home/node/.codex" \
     "$IMAGE" >/dev/null
   sleep 1
   docker logs "$CONTAINER" 2>&1 | sed 's/^/   /'

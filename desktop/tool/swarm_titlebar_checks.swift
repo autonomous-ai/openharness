@@ -32,6 +32,12 @@ private extension NSButton {
   }
 }
 
+private extension SwarmSubscriptionView {
+  // `icon` is private to the row view; a same-file extension reads it without widening the app API.
+  var iconImage: NSImage? { icon.image }
+  var iconTint: NSColor? { icon.contentTintColor }
+}
+
 private extension SwarmTabButton {
   func checkDoubleClickIsolation() throws {
     let parent = nextResponder
@@ -84,8 +90,10 @@ private extension SwarmTabButton {
   func checkCloseVisibility(_ visible: Bool) throws {
     try checkTitlebar(closeButton.showsGlyph == visible,
       "A tab reveals its close mark only for hover or keyboard focus")
-    try checkTitlebar(!closeButton.isHidden && closeButton.accessibilityLabel() == "Close \(name)",
-      "A quiet close mark remains an accessible action")
+    try checkTitlebar(closeButton.isHidden == compact,
+      "Only compact icon-only tabs hide the close control")
+    try checkTitlebar(closeButton.accessibilityLabel() == "Close \(name)",
+      "The close action retains its accessible label")
   }
 
   func clickBothActions() {
@@ -126,8 +134,8 @@ private extension SwarmTabStrip {
     let closeFrame = close.convert(close.bounds, to: nil)
     let zoomFrame = zoom.convert(zoom.bounds, to: nil)
     let newFrame = newButton.convert(newButton.bounds, to: nil)
-    try checkTitlebar(bounds.height >= 48, "Native title bar leaves room around the pill actions")
-    for button in [openButton] {
+    try checkTitlebar(bounds.height >= 40, "Native title bar leaves room around the pill actions")
+    for button in [storeButton] {
       let labelWidth = (button.title as NSString).size(withAttributes: [.font: button.font!]).width
       try checkTitlebar(button.frame.minY >= 6 && bounds.height - button.frame.maxY >= 6 && button.frame.width - labelWidth >= 32,
         "\(button.title) has vertical breathing room and readable horizontal padding")
@@ -180,7 +188,7 @@ private extension SwarmTabStrip {
     try checkTitlebar(tabs[0].showsDivider && tabs[1].showsDivider, "Separators return when the pointer leaves")
     try checkTitlebar(!tabs[10].showsDivider && !tabs[11].showsDivider, "Selected tab remains joined without neighboring separators")
     try checkTitlebar(tabs.count == 24, "All overflow tabs exist")
-    try checkTitlebar(!newButton.isEnabled, "New Agent is disabled at capacity")
+    try checkTitlebar(newButton.isEnabled, "New Tab remains available with overflow tabs")
     for (index, tab) in tabs.enumerated() {
       try tab.checkAccessibility(expectedName: "Swarm \(index)", active: index == 11)
     }
@@ -218,7 +226,7 @@ private extension SwarmTabStrip {
     update(state([["id": "swarm-0", "name": "Renamed tab"]], active: "swarm-0"))
     try checkTitlebar(tabs.count == 1 && tabs[0] === original, "Closing tabs retains the surviving control")
     try original.checkAccessibility(expectedName: "Renamed tab", active: true)
-    try checkTitlebar(newButton.isEnabled, "New Agent returns below capacity")
+    try checkTitlebar(newButton.isEnabled, "New Harness returns below capacity")
     var fullWithStarter = state(rows, active: "swarm-0")
     fullWithStarter["canOpenNewTab"] = true
     update(fullWithStarter)
@@ -226,25 +234,24 @@ private extension SwarmTabStrip {
       "New Tab can reveal an existing starter at the tab limit")
     fullWithStarter["canOpenNewTab"] = false
     update(fullWithStarter)
-    try checkTitlebar(!newButton.isEnabled,
-      "New Tab respects the workspace's availability")
+    try checkTitlebar(newButton.isEnabled,
+      "The retired canOpenNewTab capacity flag no longer disables New Tab")
     update(state([["id": "swarm-0", "name": "Renamed tab"]], active: "swarm-0"))
-    try checkTitlebar(newButton.toolTip == nil && openButton.toolTip == nil,
-      "Titlebar actions add no hover hints")
+    try checkTitlebar(newButton.toolTip == "New Tab ⌘T" && storeButton.toolTip == "Harness Store ⌘S",
+      "Titlebar actions expose their keyboard alternatives")
     try checkTitlebar(notificationButton.frame.maxX <= scroll.frame.minX,
       "The bell is before the tabs beside the traffic lights")
-    try checkTitlebar((newButton.isHidden || newButton.frame.maxX <= createButton.frame.minX) && scroll.frame.maxX <= createButton.frame.minX && createButton.frame.maxX <= openButton.frame.minX,
-      "New and Open Agent have distinct targets on the right")
-    try checkTitlebar(openButton.title == "Open Agent" && createButton.title == "New Agent",
-      "The titlebar separates New and Open Agent")
+    try checkTitlebar(scroll.frame.maxX <= newButton.frame.minX && newButton.frame.maxX <= storeButton.frame.minX,
+      "New Tab follows the tabs while the Store stays on the right")
+    try checkTitlebar(storeButton.title == "Harness Store" && storeButton.accessibilityLabel() == "Harness Store",
+      "The Store action has a visible and accessible name")
     try checkTitlebar(!subviews.contains(where: { $0 is NSTextField }), "The titlebar has no competing text editor")
     events.removeAll()
     newButton.performClick(nil)
     notificationButton.performClick(nil)
-    createButton.performClick(nil)
-    openButton.performClick(nil)
-    try checkTitlebar(events == ["new", "notifications", "newAgent", "addAgent"],
-      "The tab, notification, New and Open buttons dispatch once")
+    storeButton.performClick(nil)
+    try checkTitlebar(events == ["new", "notifications", "store"],
+      "The tab, notification and Store buttons dispatch once")
     try checkTitlebar(notificationButton.hasAttention, "The bell represents pending agent attention")
     let oldButton = newButton
     var themedState = state([["id": "swarm-0", "name": "Renamed tab"]], active: "swarm-0")
@@ -259,18 +266,17 @@ private extension SwarmTabStrip {
     original.clickBothActions()
     try checkTitlebar(events == ["select", "close"], "Native selection and close dispatch once each")
 
-    let actionPixels = [createButton.renderedPixels(), openButton.renderedPixels()]
+    let actionPixels = storeButton.renderedPixels()
     events.removeAll()
     update(state([["id": "swarm-0", "name": "Renamed tab"]], active: "swarm-0", enabled: false))
     try original.checkEnabled(false)
-    try checkTitlebar(!newButton.isEnabled && !notificationButton.isEnabled && !openButton.isEnabled && !createButton.isEnabled, "Titlebar actions disable with a modal")
-    try checkTitlebar(actionPixels == [createButton.renderedPixels(), openButton.renderedPixels()],
-      "New and Open Agent retain their colors behind a workspace modal")
+    try checkTitlebar(!newButton.isEnabled && !notificationButton.isEnabled && !storeButton.isEnabled, "Titlebar actions disable with a modal")
+    try checkTitlebar(actionPixels != storeButton.renderedPixels(),
+      "The Store visibly dims when a workspace modal disables it")
     original.clickBothActions()
     newButton.performClick(nil)
     notificationButton.performClick(nil)
-    createButton.performClick(nil)
-    openButton.performClick(nil)
+    storeButton.performClick(nil)
     try checkTitlebar(events.isEmpty, "Disabled controls emit no actions")
     try checkDragOperations()
   }
@@ -481,8 +487,13 @@ private extension SwarmTitlebar {
       "The main-menu dispatcher retains the actual Edit submenu and its targets")
     try checkTitlebar(newSwarm.keyEquivalent == "t" && newSwarm.toolTip == nil,
       "Native shortcuts display in the menu without duplicate hover hints")
-    try checkTitlebar(addHarness.keyEquivalent == "o" && addHarness.keyEquivalentModifierMask == [.command],
-      "The exported keymap keeps Open Agent on Command-O")
+    try checkTitlebar(addHarness.keyEquivalent == "p" && addHarness.keyEquivalentModifierMask == [.command],
+      "The exported keymap keeps New Pane on Command-P")
+    for (action, key) in [("splitRight", "r"), ("splitDown", "d")] {
+      let split = agent.items.first(where: { $0.representedObject as? String == action })!
+      try checkTitlebar(split.keyEquivalent == key && split.keyEquivalentModifierMask == [.command],
+        "The exported keymap preserves the native \(action) shortcut")
+    }
     setKeymap(changed)
     try checkTitlebar(NSApp.mainMenu === main && newSwarm.keyEquivalent == "o",
       "Hot reload updates the existing menu to the remapped key")
@@ -491,12 +502,12 @@ private extension SwarmTitlebar {
     // The inherited default is still first; a sequence is not falsely shown
     // as a second one-stroke accelerator in AppKit's shortcut column.
     let onlySequence = HarnessNativeKeymap(["version": 1, "contexts": Dictionary(uniqueKeysWithValues:
-      ["workspace", "terminal", "picker"].map { ($0, [["keys": ["cmd+k", "n"], "command": "swarm.new",
+      HarnessNativeKeymap.contexts.map { ($0, [["keys": ["cmd+k", "n"], "command": "swarm.new",
         "hint": "⌘K N", "repeatable": false, "menuAction": "new"]]) })])!
     setKeymap(onlySequence)
     try checkTitlebar(newSwarm.keyEquivalent.isEmpty && newSwarm.toolTip == nil,
       "Sequences add no hover hints or misleading first-key menu shortcut")
-    setKeymap(HarnessNativeKeymap(["version": 1, "contexts": ["workspace": [], "terminal": [], "picker": []]])!)
+    setKeymap(HarnessNativeKeymap(["version": 1, "contexts": ["workspace": [], "terminal": [], "picker": [], "project": []]])!)
     try checkTitlebar(newSwarm.keyEquivalent.isEmpty && newSwarm.toolTip == nil,
       "Unbinding clears the old native shortcut and hint")
     rebuildHistoryMenu()
@@ -515,16 +526,85 @@ private extension SwarmTitlebar {
       "The menu yields the remapped search shortcut to Flutter")
     try checkTitlebar(!main.performKeyEquivalent(with: open), "Menu equivalents defer before input dispatch")
     setKeymap(defaults)
-    try checkTitlebar(strip.newButton.toolTip == nil, "Keymap reload does not restore hover hints")
+    try checkTitlebar(strip.newButton.toolTip == "New Tab ⌘T", "Keymap reload restores the current New Tab hint")
     try checkTitlebar(strip.newButton.accessibilityLabel() == "New Tab", "The plus announces New Tab")
-    try checkTitlebar(main.defersToInput(event("n", 45, .command)) && main.defersToInput(event("o", 31, .command)),
-      "Command-N and Command-O reach their separate New and Open actions")
-    try checkTitlebar(!main.defersToInput(event("p", 35, .command)), "Command-P no longer opens Navigate")
+    try checkTitlebar(main.defersToInput(event("n", 45, .command)) && main.defersToInput(event("t", 17, .command)),
+      "Command-N and Command-T reach creation and New Tab")
+    try checkTitlebar(main.defersToInput(event("p", 35, .command)), "Command-P reaches New Pane")
     try checkTitlebar(main.defersToInput(event("p", 35, [.command, .shift])), "Command-Shift-P reaches command search")
     flutterKeyContext = "picker"
     syncMenuKeys()
     try checkTitlebar(!main.performKeyEquivalent(with: event("\u{f701}", 125)), "Result arrows are owned by the shared picker")
     try checkTitlebar(!main.defersToInput(event("a", 0, .command)), "Standard select-all retains native text-editing dispatch")
+  }
+
+  func checkViewerShortcutRuntime(_ defaults: HarnessNativeKeymap, messenger: TitlebarCheckMessenger) throws {
+    guard let window else { throw TitlebarCheckFailure(message: "Native viewer test window exists") }
+    let originalMenu = NSApp.mainMenu
+    let originalKeymap = keymap
+    let originalContext = flutterKeyContext
+    let originalEnabled = actionsEnabled
+    NSApp.mainMenu = NSMenu(title: "Isolated viewer shortcut test")
+    defer {
+      keymap = originalKeymap
+      flutterKeyContext = originalContext
+      actionsEnabled = originalEnabled
+      NSApp.mainMenu = originalMenu
+    }
+    actionsEnabled = true
+    // Orchestrator has no default chord now. Exercise an explicit user binding;
+    // Cmd-P belongs to New Pane and is covered by the exported default keymap.
+    let viewerMap = HarnessNativeKeymap(["version": 1, "contexts": [
+      "workspace": [["keys": ["cmd+y"], "command": "project.orchestrate", "hint": "⌘Y", "repeatable": false]],
+      "terminal": [], "picker": [], "project": [],
+    ]])!
+    setKeymap(viewerMap)
+    let main = NSApp.mainMenu as! HarnessKeymapMenu
+    func event(_ text: String, _ code: UInt16, _ flags: NSEvent.ModifierFlags = []) -> NSEvent {
+      NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+        timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: text,
+        charactersIgnoringModifiers: text, isARepeat: false, keyCode: code)!
+    }
+    // Exercise the actual native responder walk, not just the keymap lookup.
+    // No navigation, windows shown, app state, or external services are involved.
+    let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+    let webInput = TitlebarCheckInputView(frame: web.bounds)
+    web.addSubview(webInput)
+    window.contentViewController!.view.addSubview(web)
+    defer { web.removeFromSuperview(); window.makeFirstResponder(window.contentInput) }
+    try checkTitlebar(window.makeFirstResponder(webInput), "A native viewer descendant can own test focus")
+    flutterKeyContext = "workspace"
+    setKeymap(viewerMap)
+    let beforeViewer = messenger.calls.count
+    try checkTitlebar(main.performKeyEquivalent(with: event("y", 16, .command)),
+      "The custom Orchestrator shortcut is consumed by the focused native viewer bridge")
+    try checkTitlebar(messenger.calls.count == beforeViewer + 1 && messenger.calls.last?.method == "keymapCommand" &&
+      (messenger.calls.last?.arguments as? [String: String])?["command"] == "project.orchestrate",
+      "The native viewer dispatches exactly one Orchestrator command to Flutter")
+    let repeated = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+      timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "y",
+      charactersIgnoringModifiers: "y", isARepeat: true, keyCode: 16)!
+    try checkTitlebar(main.performKeyEquivalent(with: repeated) && messenger.calls.count == beforeViewer + 1,
+      "Holding the shortcut never launches repeated projects")
+    _ = main.performKeyEquivalent(with: event("b", 11, .command))
+    try checkTitlebar(messenger.calls.count == beforeViewer + 1, "The viewer bridge does not hijack Command-B")
+    actionsEnabled = false
+    _ = main.performKeyEquivalent(with: event("y", 16, .command))
+    try checkTitlebar(messenger.calls.count == beforeViewer + 1, "Modal state blocks native viewer launch dispatch")
+    actionsEnabled = true
+    let remapped = HarnessNativeKeymap(["version": 1, "contexts": [
+      "workspace": [["keys": ["cmd+x"], "command": "project.orchestrate", "hint": "⌘X", "repeatable": false]],
+      "terminal": [], "picker": [], "project": [],
+    ]])!
+    setKeymap(remapped)
+    _ = main.performKeyEquivalent(with: event("y", 16, .command))
+    try checkTitlebar(messenger.calls.count == beforeViewer + 1, "The old viewer shortcut stays unbound after remapping")
+    try checkTitlebar(main.performKeyEquivalent(with: event("x", 7, .command)) && messenger.calls.count == beforeViewer + 2,
+      "The viewer bridge follows the actual remapped two-key shortcut")
+    setKeymap(HarnessNativeKeymap(["version": 1, "contexts": ["workspace": [], "terminal": [], "picker": [], "project": []]])!)
+    _ = main.performKeyEquivalent(with: event("x", 7, .command))
+    try checkTitlebar(messenger.calls.count == beforeViewer + 2, "Unbinding disables viewer launch dispatch")
+    setKeymap(defaults)
   }
 
   func checkNativeContainer(messenger: TitlebarCheckMessenger) throws {
@@ -578,12 +658,24 @@ private extension SwarmTitlebar {
     try checkTitlebar(settings.title == "Settings…" && settings.representedObject as? String == "settings", "Settings stays in the application menu")
     let agent = main.item(withTitle: "File")!.submenu!
     let addHarness = agent.items.first(where: { $0.representedObject as? String == "addAgent" })!
-    try checkTitlebar(addHarness.title == "Open Agent…" && addHarness.keyEquivalent == "o" && addHarness.keyEquivalentModifierMask == [.command],
-      "Open Agent advertises Command-O")
-    try checkTitlebar(agent.items.contains { $0.title == "New Agent…" && $0.keyEquivalent == "n" && $0.keyEquivalentModifierMask == [.command] && $0.representedObject as? String == "newAgent" },
-      "New Agent has its own Command-N menu action")
+    try checkTitlebar(addHarness.title == "New Pane…" && addHarness.keyEquivalent == "p" && addHarness.keyEquivalentModifierMask == [.command],
+      "New Pane advertises Command-P")
+    try checkTitlebar(agent.items.contains { $0.title == "New Terminal" && $0.keyEquivalent == "t" && $0.keyEquivalentModifierMask == [.command, .shift] && $0.representedObject as? String == "newTerminal" },
+      "New Terminal has its Command-Shift-T menu action")
     let historyMenu = main.item(withTitle: "History")!.submenu!
-    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["new", "newAgent", "addAgent", "renameActive", "closeActive", "separator", "splitRight", "splitDown", "zoomPane", "closePane"], "File groups Harness and Pane actions, without Pin or Add Project clutter")
+    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["new", "addAgent", "newTerminal", "renameActive", "closeActive", "separator", "splitRight", "splitDown", "zoomPane", "closePane"], "File groups tab, terminal and pane actions")
+    for (action, title, key) in [("splitRight", "Split Right…", "r"), ("splitDown", "Split Down…", "d")] {
+      let split = agent.items.first(where: { $0.representedObject as? String == action })!
+      try checkTitlebar(split.title == title && split.keyEquivalent == key && split.keyEquivalentModifierMask == [.command],
+        "\(title) advertises its directional split shortcut")
+      actionsEnabled = true
+      canFind = false
+      try checkTitlebar(!validateMenuItem(split), "\(title) needs a focused pane")
+      canFind = true
+      try checkTitlebar(validateMenuItem(split), "\(title) is available with a focused pane")
+      menuAction(split)
+      try checkTitlebar(messenger.calls.last?.method == action, "\(title) reaches the Flutter split picker")
+    }
     try checkTitlebar(agent.items.filter { !$0.isSeparatorItem }.allSatisfy { $0.image != nil && $0.toolTip == nil },
       "Every File action has a native icon and no hover hint")
     try checkTitlebar(agent.items.contains { $0.title == "Rename Tab…" && $0.representedObject as? String == "renameActive" }, "Rename Tab preserves its command")
@@ -604,34 +696,36 @@ private extension SwarmTitlebar {
     canClosePane = true
     try checkTitlebar(validateMenuItem(closePane), "Remove Agent is enabled for a focused pane")
     let create = agent.items.first(where: { $0.representedObject as? String == "new" })!
-    canCreateSwarm = false
-    try checkTitlebar(!validateMenuItem(create), "Native New Swarm respects the tab capacity")
-    canCreateSwarm = true
-    try checkTitlebar(validateMenuItem(create), "Native New Swarm returns below capacity")
+    try checkTitlebar(validateMenuItem(create), "Native New Tab remains available without the retired tab capacity")
     let machineRows: [[String: Any]] = [
-      ["id": "office", "name": "iMac – Office", "status": "Online", "local": true, "agentCount": 2,
+      ["id": "office", "name": "iMac – Office", "status": "Online", "presence": "Online", "local": true, "agentCount": 2,
        "agents": [["id": "one", "title": "App work", "engine": "codex", "canOpen": true],
                   ["id": "two", "title": "Unavailable session", "canOpen": false]]],
-      ["id": "home", "name": "iMac – Home", "status": "Offline", "local": false, "agentCount": 0],
+      ["id": "home", "name": "iMac – Home", "status": "Offline", "presence": "Offline", "local": false, "agentCount": 0],
     ]
     _ = try messenger.receive("machinesState", arguments: ["machines": machineRows])
     let machineMenu = main.item(withTitle: "Machines")!.submenu!
-    let manager = machineMenu.items.first!
-    try checkTitlebar(manager.title == "Open Machines Manager" && manager.representedObject as? String == "manageMachines" && machineMenu.items[1].isSeparatorItem,
-      "Machines Manager leads the menu before linked computers")
-    menuAction(manager)
+    let manage = machineMenu.items[0]
+    let manager = machineMenu.items[1]
+    try checkTitlebar(manage.title == "Open Machine Monitor…" && manage.representedObject as? String == "manageMachines" &&
+      manager.title == "Open Machines Manager" && manager.representedObject as? String == "machineList" && machineMenu.items[2].isSeparatorItem,
+      "The Machines harness and existing manager lead the linked computers")
+    menuAction(manage)
     try checkTitlebar(messenger.calls.last?.method == "manageMachines",
+      "The Machines harness opens through the Flutter command bridge")
+    menuAction(manager)
+    try checkTitlebar(messenger.calls.last?.method == "machineList",
       "Machines Manager opens through the Flutter command bridge")
     let destinations = machineMenu.items.filter { $0.action == #selector(machineAction(_:)) }
     try checkTitlebar(machineMenu.minimumWidth == 0 && machineMenu.size.width < 432 &&
-      destinations.first?.attributedTitle?.string.hasSuffix("\t2 agents") == true,
+      destinations.first?.attributedTitle?.string.hasSuffix("\t2 harnesses") == true,
       "Machines gives labels twenty percent more room with aligned counts")
     try checkTitlebar(destinations.map { $0.representedObject as? String } == ["office", "home"],
       "Machines lists each linked computer as a destination")
     try checkTitlebar(destinations[0].attributedTitle?.string.contains("Online") == true &&
       destinations[1].attributedTitle?.string.contains("Offline") == true,
       "Machine availability is visible before opening its agent search")
-    try checkTitlebar(destinations[0].attributedTitle?.string.contains("2 agents") == true && destinations[1].attributedTitle?.string.contains("0 agents") == true,
+    try checkTitlebar(destinations[0].attributedTitle?.string.contains("2 harnesses") == true && destinations[1].attributedTitle?.string.contains("0 harnesses") == true,
       "Machine labels include their cached agent count")
     let agentItems = destinations[0].submenu!.items.filter { $0.action == #selector(machineAgentAction(_:)) }
     try checkTitlebar(agentItems.map(\.title) == ["App work", "Unavailable session"] && agentItems[0].image != nil,
@@ -649,8 +743,8 @@ private extension SwarmTitlebar {
     try checkTitlebar(messenger.calls.last?.method == "machineAgent" &&
       (messenger.calls.last?.arguments as? [String: String]) == ["machineId": "office", "agentId": "one"],
       "Agent selection sends both stable identities to Flutter")
-    try checkTitlebar(destinations[1].submenu?.item(withTitle: "No agents yet")?.isEnabled == false &&
-      destinations[1].submenu?.item(withTitle: "Find Agents…") != nil,
+    try checkTitlebar(destinations[1].submenu?.item(withTitle: "No harnesses yet")?.isEnabled == false &&
+      destinations[1].submenu?.item(withTitle: "Find Harnesses…") != nil,
       "Empty machines explain the empty list and keep search available")
     try checkTitlebar(machineMenu.items.compactMap { $0.representedObject as? String }.suffix(2) == ["linkMachine", "refreshMachines"],
       "Machines exposes Link and Refresh after the computer list")
@@ -673,11 +767,12 @@ private extension SwarmTitlebar {
     try checkTitlebar(!validateMenuItem(destinations[0]) && !validateMenuItem(agentItems[0]) &&
       machineMenu.item(withTitle: "No Machines Linked")?.isEnabled == false,
       "Unlinking computers clears destinations and invalidates stale actions")
-    let recentRows: [[String: Any]] = (0..<20).map { index -> [String: Any] in
+    var recentRows: [[String: Any]] = (0..<20).map { index -> [String: Any] in
       ["id": "agent:\(index)", "title": "Agent \(index) — Machine",
        "detail": "Project \(index)", "machineName": "M2", "current": index == 0,
        "engine": index == 0 ? "claude" : "codex"]
-    } + [["id": "swarm:recent", "title": "Recent Swarm", "swarm": true]]
+    }
+    recentRows.append(["id": "swarm:recent", "title": "Recent Swarm", "swarm": true])
     let closedRows: [[String: Any]] = (0..<14).map {
       ["id": "closed-\($0)", "title": "Closed Swarm \($0)", "detail": "3 agents", "swarm": true, "canReopen": true]
     }
@@ -775,15 +870,109 @@ private extension SwarmTitlebar {
     let models = main.item(withTitle: "Models")!.submenu!
     try checkTitlebar(models.items.filter { !$0.isSeparatorItem }.map(\.title) == [
       "Subscription", "Anthropic, aabbcc, 12% remaining", "OpenAI, Not signed in",
-      "API", "OpenRouter", "fal.ai", "Local", "DeepSeek V4 Flash", "Qwen3.8-27B", "Add Model"
-    ], "Models has the three requested sections and Add Model last")
-    try checkTitlebar(models.items.filter(\.isSeparatorItem).count == 3,
-      "Native separators distinguish the sections and future Add Model action")
-    for title in ["OpenRouter", "fal.ai", "DeepSeek V4 Flash", "Qwen3.8-27B", "Add Model"] {
-      let item = models.item(withTitle: title)!
-      try checkTitlebar(!item.isEnabled && item.action == nil && item.target == nil && item.submenu == nil,
-        "\(title) is greyed out and cannot dispatch or open anything")
+      "Local", "Want to manage local models?", "Open Grid"
+    ], "Models carries the two sections with something behind them, ending on the row that starts a model")
+    try checkTitlebar(models.items.filter(\.isSeparatorItem).count == 1,
+      "One native separator, between the sections — the run row is a Local row, not a section")
+    for gone in ["API", "OpenRouter", "fal.ai", "Add Model"] {
+      try checkTitlebar(models.item(withTitle: gone) == nil,
+        "\(gone) is gone — it named nothing this app can reach or do")
     }
+    // The caption and button distinguish the manager action from the Local data rows.
+    // It remains enabled with nothing served and dispatches through the same guarded
+    // handler as Link Machine… so a modal still swallows it.
+    let managerCaption = models.items[models.items.count - 2]
+    let runLocal = models.items.last!
+    try checkTitlebar(runLocal.title == "Open Grid",
+      "the last item in Models is the row that runs a local model")
+    try checkTitlebar(managerCaption.title == "Want to manage local models?" &&
+      managerCaption.view is SwarmMenuCaptionView && !managerCaption.isEnabled &&
+      runLocal.view is SwarmMenuButtonView,
+      "the manager is a button under an inert caption, not another served model")
+    try checkTitlebar(runLocal.isEnabled && runLocal.submenu == nil,
+      "Open Grid is enabled even when nothing is served, and opens no submenu")
+    try checkTitlebar(runLocal.target === self && runLocal.action == #selector(menuAction(_:))
+      && runLocal.representedObject as? String == "runLocalModel",
+      "Open Grid dispatches runLocalModel through the guarded channel handler")
+    try checkTitlebar(runLocal.identifier?.rawValue == HarnessKeymapMenu.actionPrefix + "runLocalModel",
+      "Open Grid is identified for the keymap like every other Harness command")
+    try checkTitlebar(validateMenuItem(runLocal), "Open Grid validates with the workspace live")
+    actionsEnabled = false
+    try checkTitlebar(!validateMenuItem(runLocal), "Open Grid cannot run behind a modal")
+    actionsEnabled = true
+    try checkTitlebar(!runLocal.title.contains("Mac"),
+      "The model manager action does not assume one vendor's computer")
+
+    // With more than one machine linked, the row has to say WHICH computer the manager opens on:
+    // it becomes a submenu of the machines, each child dispatching the same command with that
+    // machine's id, this computer marked. With one machine (or none) it is the plain row above.
+    _ = try messenger.receive("machinesState", arguments: ["machines": machineRows])
+    let picked = main.item(withTitle: "Models")!.submenu!.items.last!
+    // AppKit gives a submenu's parent its own `submenuAction:`; what matters is that it is no longer
+    // the guarded channel handler — nothing is dispatched until a machine is chosen.
+    try checkTitlebar(picked.title == "Open Grid" && picked.submenu != nil
+      && picked.action != #selector(menuAction(_:)) && picked.representedObject == nil,
+      "with two machines the manager row opens a submenu instead of dispatching itself")
+    try checkTitlebar(picked.identifier?.rawValue == HarnessKeymapMenu.actionPrefix + "runLocalModel",
+      "the submenu's parent keeps the keymap identifier")
+    let choices = picked.submenu!.items
+    try checkTitlebar(choices.map(\.title) == ["iMac – Office (this computer)", "iMac – Home"],
+      "one child per linked machine, in the Machines menu's order, this computer marked")
+    try checkTitlebar(choices.allSatisfy { $0.target === self && $0.action == #selector(runLocalModelAction(_:)) }
+      && choices.map { $0.representedObject as? String } == ["office", "home"],
+      "each child dispatches runLocalModel for its own machine")
+    let modelCalls = messenger.calls.count
+    runLocalModelAction(choices[1])
+    try checkTitlebar(messenger.calls.last?.method == "runLocalModel"
+      && (messenger.calls.last?.arguments as? [String: String]) == ["machineId": "home"]
+      && messenger.calls.count == modelCalls + 1,
+      "choosing a machine sends runLocalModel with that machine's id")
+    actionsEnabled = false
+    try checkTitlebar(!validateMenuItem(choices[0]), "a machine choice cannot run behind a modal")
+    actionsEnabled = true
+    try checkTitlebar(validateMenuItem(choices[0]), "and returns when the modal closes")
+    _ = try messenger.receive("machinesState", arguments: ["machines": [machineRows[0]]])
+    let single = main.item(withTitle: "Models")!.submenu!.items.last!
+    try checkTitlebar(single.submenu == nil && single.representedObject as? String == "runLocalModel",
+      "one machine linked: back to the plain row, and the app picks the machine")
+    _ = try messenger.receive("machinesState", arguments: ["machines": []])
+
+    // The Local section is DATA, not two hardcoded names. A menu naming a model nobody serves is
+    // worse than one admitting it has none, which is what the empty case above asserts.
+    updateModels(modelRows, local: [
+      ["id": "Qwen3.6-35B-A3B-UD-Q5_K_XL", "node": "macbook-m1max"],
+      ["id": "DeepSeek-V4-Flash", "node": ""],
+    ])
+    let served = main.item(withTitle: "Models")!.submenu!
+    try checkTitlebar(served.item(withTitle: "Qwen3.6-35B-A3B-UD-Q5_K_XL, macbook-m1max") != nil,
+      "a served model names the machine answering it")
+    try checkTitlebar(served.item(withTitle: "DeepSeek-V4-Flash") != nil,
+      "a model with no node named is listed on its own")
+    try checkTitlebar(served.items.last?.title == "Open Grid"
+      && !served.items[served.items.count - 2].isSeparatorItem
+      && served.items.filter(\.isSeparatorItem).count == 1,
+      "the manager keeps its caption after the Local data rows once models are served")
+
+    // A local row is built by the same view as a subscription row, which is what makes the two
+    // sections read as one menu. A plain disabled NSMenuItem greys its whole title, so a served
+    // model looked unavailable beside the accounts above it.
+    let localRows = served.items.compactMap { $0.view as? SwarmSubscriptionView }.suffix(2)
+    try checkTitlebar(localRows.count == 2, "Local models render as rows, not as greyed labels")
+    try checkTitlebar(localRows.first?.identity.stringValue == "Qwen3.6-35B-A3B-UD-Q5_K_XL"
+      && localRows.first?.balance.stringValue == "macbook-m1max",
+      "the model id takes the left column and its node the trailing one, as usage does above")
+    try checkTitlebar(localRows.last?.balance.stringValue.isEmpty == true,
+      "a model with no node leaves the trailing column empty rather than inventing one")
+    try checkTitlebar(localRows.allSatisfy { $0.iconImage != nil && $0.iconTint == .labelColor },
+      "a local model carries a tinted mark, so its row is not a gap where the brand icons sit")
+    let subscriptionWidth = served.items.compactMap { $0.view as? SwarmSubscriptionView }.first!.bounds.width
+    try checkTitlebar(localRows.allSatisfy { $0.bounds.width == subscriptionWidth },
+      "both sections share one width, so the trailing column does not step at the section break")
+    try checkTitlebar(localRows.allSatisfy { $0.identity.frame.minX == served.items.compactMap({ $0.view as? SwarmSubscriptionView }).first!.identity.frame.minX },
+      "local and subscription titles start in the same column")
+    updateModels(modelRows)
+    try checkTitlebar(models.item(withTitle: "No models being served") == nil,
+      "an empty Local says nothing — the run row is the answer, not a sentence")
     let subscription = models.items.first(where: { $0.view is SwarmSubscriptionView })!
     let row = subscription.view as! SwarmSubscriptionView
     try checkTitlebar(subscription.submenu == nil && subscription.action == nil && !subscription.isEnabled,
@@ -973,6 +1162,12 @@ do {
     window.contentViewController = content
     let messenger = TitlebarCheckMessenger()
     let titlebar = SwarmTitlebar(window: window, messenger: messenger)
+    if let path = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_KEYMAP_FIXTURE"] {
+      let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as! [String: [String: Any]]
+      let before = titlebarCheckCount
+      try titlebar.checkViewerShortcutRuntime(HarnessNativeKeymap(fixture["defaults"]!)!, messenger: messenger)
+      print("Native Orchestrator viewer dispatch: \(titlebarCheckCount - before) checks passed with a focused WKWebView descendant; no window displayed.")
+    }
     try titlebar.checkNativeContainer(messenger: messenger)
     if let path = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_KEYMAP_FIXTURE"] {
       let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as! [String: [String: Any]]

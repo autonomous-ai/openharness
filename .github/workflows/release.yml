@@ -27,7 +27,8 @@ name: Release
 #
 # cli/scripts/upload-cli.sh is used EXACTLY as it is, with no flag this file invented: GCS_BUCKET,
 # METADATA_PATH and OTA_KEY are env overrides it already supports. The script is the production
-# release path — `make upload-cli` runs the same bytes from a laptop — and CI adapts to it.
+# release path, and this workflow is its only caller: there is no `make` target that runs it from a
+# laptop, so every published CLI version has the tag that names it.
 #
 # The TAG is the version. CI never auto-bumps: left to itself the script reads the current version
 # out of the remote manifest and adds one, so what publishes would depend on when the job ran.
@@ -109,10 +110,6 @@ jobs:
   # Runs beside `version`, so it is free in wall clock.
   preflight:
     runs-on: ubuntu-latest
-    env:
-      # The `secrets` context cannot be read from a step-level `if:`, so reduce it to a boolean here
-      # — job-level `env:` can see it. Holds "true"/"false", never the value itself.
-      HAS_WIF: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' }}
     steps:
       # GCP auth, WITHOUT a long-lived key wherever possible.
       #
@@ -122,22 +119,14 @@ jobs:
       # from this job's own OIDC identity, so there is nothing to leak and nothing to rotate. The GCP
       # side is one script, in autonomous-ai/github-templates: scripts/setup-gcp-wif.sh.
       #
-      # Two steps, not one, only for the duration of the cutover: WIF the moment the
-      # GCP_WORKLOAD_IDENTITY_PROVIDER secret exists, the key until then, so provisioning GCP and
-      # switching CI are not the same deploy.
-      # DELETE the second step (and the GCP_SA_KEY secret, and the key itself) once a release has
-      # gone green on the first — see docs/cicd.md.
+      # Federation is the only path: the GCP_SA_KEY fallback and the key behind it were retired on
+      # 2026-09-17. If this step fails, fix the provider or the service account's binding — do not
+      # reintroduce a key.
       - name: Authenticate to GCP (workload identity federation)
-        if: env.HAS_WIF == 'true'
         uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-      - name: Authenticate to GCP (service-account key — legacy fallback)
-        if: env.HAS_WIF != 'true'
-        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
       - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
       - name: Verify GCS write access
         run: |
@@ -166,8 +155,6 @@ jobs:
       # dry run it is the scratch manifest nothing polls.
       METADATA_PATH: ${{ needs.version.outputs.metadata_path }}
       VERSION: ${{ needs.version.outputs.version }}
-      # See `preflight` above: `secrets` is unreadable from a step `if:`, so it becomes a boolean.
-      HAS_WIF: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -190,16 +177,10 @@ jobs:
       # Same two-step auth as `preflight` above, and the same cutover note applies: delete the key
       # fallback once a release has gone green on federation.
       - name: Authenticate to GCP (workload identity federation)
-        if: env.HAS_WIF == 'true'
         uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-      - name: Authenticate to GCP (service-account key — legacy fallback)
-        if: env.HAS_WIF != 'true'
-        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
       - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
 
       # From the repo root, the way `make upload-cli` calls it. The script bundles with
@@ -312,16 +293,29 @@ jobs:
           # annotated tag. Re-fetch the tag object to restore the annotation before reading it.
           git fetch --force origin tag "$REF_NAME"
           # A lightweight tag has no message of its own, and %(contents) would quietly fall through
-          # to the commit's — publishing "chore(release): vX.Y.Z" as the notes.
-          if [ "$(git cat-file -t "$REF_NAME")" != tag ]; then
-            echo "::error::$REF_NAME is a lightweight tag, so it carries no release notes."
-            echo "::error::Re-tag with:  git tag -a $REF_NAME --cleanup=verbatim -F notes.md"
-            exit 1
+          # to the commit's — publishing "chore(release): vX.Y.Z" as the notes. The release scripts
+          # always push an annotated tag with notes, but a hand-made `git tag` does not, and this
+          # job runs AFTER publish: failing here left a live build with no Release page (v0.2.82_cli,
+          # 2026-09-21). So fall back to the same commit list the script would have generated —
+          # everything since the previous _cli tag — and warn, rather than leave the release half done.
+          if [ "$(git cat-file -t "$REF_NAME")" = tag ]; then
+            git tag -l --format='%(contents)' "$REF_NAME" > RELEASE_NOTES.md
+          else
+            : > RELEASE_NOTES.md
           fi
-          git tag -l --format='%(contents)' "$REF_NAME" > RELEASE_NOTES.md
           if [ ! -s RELEASE_NOTES.md ]; then
-            echo "::error::$REF_NAME has an empty tag message — no notes to publish."
-            exit 1
+            echo "::warning::$REF_NAME carries no release notes (lightweight or empty tag) — generating them from the commit list. Next time: make release-cli"
+            prev="$(git tag -l 'v*_cli' \
+              | { grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)_cli$' || true; } \
+              | grep -vx "$REF_NAME" | sort -V | tail -1)"
+            {
+              printf 'Harness CLI %s\n\n' "$VERSION"
+              if [ -n "$prev" ]; then
+                git log --no-merges --pretty='- %s' "${prev}..${REF_NAME}"
+              else
+                git log --no-merges --pretty='- %s' -20 "$REF_NAME"
+              fi
+            } > RELEASE_NOTES.md
           fi
           base="https://cdn.autonomous.ai/harness/cli/${VERSION}"
           cat >> RELEASE_NOTES.md <<EOF

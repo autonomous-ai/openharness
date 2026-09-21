@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 
 import '../../core/harness_file_store.dart';
@@ -5,6 +7,7 @@ import '../../core/local_key_value_store.dart';
 import 'app_theme.dart';
 import 'color_palette.dart';
 import 'harness_background.dart';
+import 'prompt_style.dart';
 
 /// The app's coordinated palette and UI typography on this computer.
 ///
@@ -21,8 +24,10 @@ class AppearancePrefs {
     this.uiSize = uiSizeDefault,
     this.palette = HarnessPalette.graphite,
     this.background = HarnessBackground.plain,
+    this.prompt = const PromptPrefs(),
   });
 
+  final PromptPrefs prompt;
   final HarnessPalette palette;
   final HarnessBackground background;
 
@@ -56,12 +61,14 @@ class AppearancePrefs {
     double? uiSize,
     HarnessPalette? palette,
     HarnessBackground? background,
+    PromptPrefs? prompt,
     bool clearUiFamily = false,
   }) => AppearancePrefs(
     uiFamily: clearUiFamily ? null : (uiFamily ?? this.uiFamily),
     uiSize: uiSize ?? this.uiSize,
     palette: palette ?? this.palette,
     background: background ?? this.background,
+    prompt: prompt ?? this.prompt,
   );
 
   @override
@@ -70,10 +77,12 @@ class AppearancePrefs {
       other.uiFamily == uiFamily &&
       other.uiSize == uiSize &&
       other.palette == palette &&
-      other.background == background;
+      other.background == background &&
+      other.prompt == prompt;
 
   @override
-  int get hashCode => Object.hash(uiFamily, uiSize, palette, background);
+  int get hashCode =>
+      Object.hash(uiFamily, uiSize, palette, background, prompt);
 }
 
 /// The user's appearance choices, remembered across launches.
@@ -92,6 +101,8 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
   static const _sizeKey = 'app_ui_font_size';
   static const _paletteKey = 'app_color_palette';
   static const _backgroundKey = 'harness_start_background';
+  static const _promptKey = 'workspace_prompt_v1';
+  Future<void>? _promptSave;
   Future<void>? _paletteSave;
   Future<void>? _backgroundSave;
 
@@ -109,12 +120,14 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
         _sizeKey,
         _paletteKey,
         _backgroundKey,
+        _promptKey,
       ]);
       value = AppearancePrefs(
         uiFamily: _familyFrom(saved[_familyKey]),
         uiSize: _sizeFrom(saved[_sizeKey]),
         palette: HarnessPalette.fromId(saved[_paletteKey]),
         background: HarnessBackground.fromId(saved[_backgroundKey]),
+        prompt: _promptFrom(saved[_promptKey]),
       );
     } catch (_) {
       value = const AppearancePrefs();
@@ -165,6 +178,34 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
     }
   }
 
+  static PromptPrefs _promptFrom(String? raw) {
+    try {
+      return PromptPrefs.fromJson(raw == null ? null : jsonDecode(raw));
+    } catch (_) {
+      return const PromptPrefs();
+    }
+  }
+
+  Future<void> setPrompt(PromptPrefs prompt) {
+    if (value.prompt == prompt) return _promptSave ?? Future.value();
+    value = value.copyWith(prompt: prompt);
+    return _promptSave ??= _savePrompt();
+  }
+
+  Future<void> _savePrompt() async {
+    try {
+      while (true) {
+        final prefs = value.prompt;
+        await _storage.write(_promptKey, jsonEncode(prefs.toJson()));
+        if (value.prompt == prefs) break;
+      }
+    } catch (_) {
+      // Keep the preview usable for this run if storage is unavailable.
+    } finally {
+      _promptSave = null;
+    }
+  }
+
   /// Choose a face, or pass `null` for the system font.
   Future<void> setUiFamily(String? family) async {
     final next = _familyFrom(family);
@@ -202,11 +243,13 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
     value = const AppearancePrefs();
     await _paletteSave;
     await _backgroundSave;
+    await _promptSave;
     try {
       await _storage.delete(_familyKey);
       await _storage.delete(_sizeKey);
       await _storage.delete(_paletteKey);
       await _storage.delete(_backgroundKey);
+      await _storage.delete(_promptKey);
     } catch (_) {
       // See above.
     }

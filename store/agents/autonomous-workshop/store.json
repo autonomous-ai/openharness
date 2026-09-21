@@ -1,0 +1,17 @@
+{
+  "upstream": "https://github.com/autonomous-ai/autonomous-workshop",
+  "license": "MIT",
+  "tagline": "AI inventors that make new toys and games",
+  "examples": [
+    {
+      "prompt": "Design a cable clip that holds three 6 mm cables to the edge of a 20 mm thick desk, printable without supports.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/autonomous-workshop/desk-cable-clip.jpg",
+      "caption": "Three-cable desk clip · one support-free PETG part · verified STEP, 38 × 33 × 14 mm"
+    },
+    {
+      "prompt": "Design a honeycomb desk organizer: seven hexagonal cups for pens, brushes and scissors, stepping up in height around a tall centre cup, printable in one piece without supports.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/autonomous-workshop/honeycomb-desk-organizer.jpg",
+      "caption": "Honeycomb desk organizer · 7 hex cups, one support-free print · verified STEP, 89 × 92 × 104 mm"
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shortcuts/keymap.dart';
+import 'package:harness/shortcuts/keymap_commands.dart';
 
 const commands = {'swarm.new', 'pane.focus_left', 'picker.next'};
 KeyBinding bind(
@@ -18,6 +19,79 @@ KeymapMatch match(
 ]) => map.match(context, keys.split(' ').map(KeyStroke.parse));
 
 void main() {
+  test('Launch and Project actions have no default text shortcuts', () {
+    final commands = {
+      'creation.agent',
+      'creation.project',
+      'creation.task',
+      'creation.project_machine',
+      'creation.options',
+      'creation.project_new',
+      'creation.project_existing',
+      'creation.project_repository',
+      for (var i = 1; i <= 9; i++) 'creation.project_recent_$i',
+    };
+    expect(
+      harnessDefaultKeymap
+          .bindingsFor(KeymapContext.project)
+          .where((binding) => commands.contains(binding.command)),
+      isEmpty,
+    );
+    expect(
+      match(harnessDefaultKeymap, 'up', KeymapContext.project).command,
+      'picker.previous',
+    );
+    expect(
+      match(harnessDefaultKeymap, 'down', KeymapContext.project).command,
+      'picker.next',
+    );
+    expect(
+      match(harnessDefaultKeymap, 'enter', KeymapContext.project).command,
+      'picker.accept',
+    );
+  });
+
+  test(
+    'project bindings override picker defaults and inherit custom navigation',
+    () {
+      final defaults = [
+        bind('o', 'creation.options', KeymapContext.picker),
+        bind('o', 'creation.project_existing', KeymapContext.project),
+        bind('ctrl+n', 'picker.next', KeymapContext.picker),
+      ];
+      final original = ResolvedKeymap(defaults, const KeymapConfig.empty());
+      expect(
+        match(original, 'o', KeymapContext.picker).command,
+        'creation.options',
+      );
+      expect(
+        match(original, 'o', KeymapContext.project).command,
+        'creation.project_existing',
+      );
+      final custom = ResolvedKeymap(
+        defaults,
+        KeymapConfig([
+          bind('o', null, KeymapContext.project),
+          bind('f', 'creation.project_existing', KeymapContext.project),
+          bind('ctrl+n', null, KeymapContext.picker),
+          bind('j', 'picker.next', KeymapContext.picker),
+        ]),
+      );
+      expect(
+        match(custom, 'o', KeymapContext.picker).command,
+        'creation.options',
+      );
+      expect(match(custom, 'o', KeymapContext.project).matched, isFalse);
+      expect(match(custom, 'f', KeymapContext.picker).matched, isFalse);
+      expect(
+        match(custom, 'f', KeymapContext.project).command,
+        'creation.project_existing',
+      );
+      expect(match(custom, 'ctrl+n', KeymapContext.project).matched, isFalse);
+      expect(match(custom, 'j', KeymapContext.project).command, 'picker.next');
+    },
+  );
+
   test('retired Navigate and preview bindings preserve other shortcuts', () {
     final config = KeymapConfig.parse('''{"bindings":[
       {"keys":"cmd+i","command":"picker.preview","when":"picker"},

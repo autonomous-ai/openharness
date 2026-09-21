@@ -12,8 +12,10 @@ void main() {
   late List<({String type, Map<String, dynamic> payload})> sent;
   late List<TerminalBinaryFrame> binarySent;
   late TerminalSession session;
+  DateTime? controlledNow;
 
   setUp(() {
+    controlledNow = null;
     sent = [];
     binarySent = [];
     session = TerminalSession(
@@ -21,6 +23,7 @@ void main() {
       agentId: 'agent-1',
       agentName: 'backend-api',
       engineId: 'codex',
+      now: () => controlledNow ?? DateTime.now(),
       send: (type, payload) async {
         sent.add((type: type, payload: Map<String, dynamic>.from(payload)));
         return true;
@@ -281,6 +284,9 @@ void main() {
   test(
     'terminal input batches, preserves Enter boundary and is never retried',
     () async {
+      // Keep all typed characters inside the 4 ms logical batching window,
+      // even when a loaded CI host takes longer to schedule the test itself.
+      controlledNow = DateTime(2026, 9, 18);
       await ready();
       await session.handleBinary(
         output(0, utf8.encode(r'prompt> '), keyframe: true, cols: 80, rows: 24),
@@ -935,6 +941,100 @@ void main() {
     },
   );
 
+  // Who took the terminal rides on the close (`takenBy`), so the banner can
+  // name them; the name goes away with the next open, so a retaken pane never
+  // shows a stale one.
+  test('a takeover names its taker when the daemon says who', () async {
+    await ready();
+    await session.handleFrame('terminal_closed', {
+      'streamId': streamId,
+      'code': 'TERMINAL_TAKEN_OVER',
+      'reason': 'another client connected',
+      'takenBy': {
+        'kind': 'desktop',
+        'name': 'Mac mini',
+        'machineId': 'ab12ab12ab12ab12',
+      },
+    });
+    expect(session.status, TerminalSessionStatus.takenOver);
+    expect(session.takenOverBy?.name, 'Mac mini');
+    expect(session.takenOverBy?.kind, 'desktop');
+    expect(session.takenOverBy?.machineId, 'ab12ab12ab12ab12');
+    expect(session.errorMessage, contains('Mac mini'));
+    // The fleet's current name for that machine wins over the declared one.
+    expect(
+      session.takenOverBy!.label(
+        (id) => id == 'ab12ab12ab12ab12' ? 'Studio' : null,
+      ),
+      'Studio',
+    );
+    expect(session.takenOverBy!.label((_) => null), 'Mac mini');
+
+    await session.reopen();
+    expect(session.takenOverBy, isNull);
+  });
+
+  test(
+    'a takeover with no or a malformed taker reads as another app',
+    () async {
+      await ready();
+      await session.handleFrame('terminal_closed', {
+        'streamId': streamId,
+        'code': 'TERMINAL_TAKEN_OVER',
+        'takenBy': {'kind': 'not a kind', 'name': 'x'},
+      });
+      expect(session.status, TerminalSessionStatus.takenOver);
+      expect(session.takenOverBy, isNull);
+      expect(session.errorMessage, contains('Another client'));
+      expect(
+        TerminalClientDescriptor.fromJson({'kind': 'phone', 'name': ' iPhone '})
+            ?.name,
+        'iPhone',
+      );
+      expect(
+        TerminalClientDescriptor.fromJson({
+          'kind': 'desktop',
+          'name': 'a',
+          'machineId': '../x',
+        }),
+        isNull,
+      );
+      expect(TerminalClientDescriptor.fromJson('Mac'), isNull);
+    },
+  );
+
+  test(
+    'terminal_open carries this client\'s introduction when it has one',
+    () async {
+      final introduced = TerminalSession(
+        machineId: 'machine-1',
+        agentId: 'agent-1',
+        agentName: 'backend-api',
+        engineId: 'codex',
+        client: const TerminalClientDescriptor(
+          kind: 'desktop',
+          name: 'This Mac',
+          machineId: 'ab12ab12ab12ab12',
+        ),
+        send: (type, payload) async {
+          sent.add((type: type, payload: Map<String, dynamic>.from(payload)));
+          return true;
+        },
+        sendBinary: (_) async => true,
+      );
+      addTearDown(introduced.dispose);
+      await introduced.open(initialCols: 100, initialRows: 30);
+      expect(sent.single.payload['client'], {
+        'kind': 'desktop',
+        'name': 'This Mac',
+        'machineId': 'ab12ab12ab12ab12',
+      });
+      sent.clear();
+      await session.open(initialCols: 100, initialRows: 30);
+      expect(sent.single.payload.containsKey('client'), isFalse);
+    },
+  );
+
   test(
     'terminal_link_mode updates linkMode, ignoring a stale stream id',
     () async {
@@ -1015,7 +1115,9 @@ void main() {
     },
   );
 
-  test('resync retries three times, reopens once, then fails closed', () async {
+  testWidgets('resync retries three times, reopens once, then fails closed', (
+    tester,
+  ) async {
     session.dispose();
     session = TerminalSession(
       machineId: 'machine-1',
@@ -1038,7 +1140,9 @@ void main() {
     );
     await session.handleBinary(output(2, utf8.encode('gap')));
 
-    await Future<void>.delayed(const Duration(milliseconds: 45));
+    // Advance the retry clock deterministically; an overloaded test runner
+    // can wake a 45 ms wall-clock wait before the last 5 ms retry is armed.
+    await tester.pump(const Duration(milliseconds: 45));
 
     expect(
       sent.where((frame) => frame.type == 'terminal_resync'),

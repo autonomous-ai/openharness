@@ -17,7 +17,7 @@
  */
 import { spawn } from 'node:child_process'
 import { binaryOnPath } from './binaryOnPath.js'
-import { GRID_BINARY } from './gridHandoff.js'
+import { GRID_BINARY, gridBinaryPath, gridChildEnv } from './gridExec.js'
 
 /** The verb, on the same binary the hand-off spawns. Deliberately NOT a cross-repo pin: rename it in
  *  autonomous-grid and argparse refuses it loudly, in the child's own words, on the child's own
@@ -25,8 +25,8 @@ import { GRID_BINARY } from './gridHandoff.js'
 const GRID_LOGOUT_VERB = 'logout'
 
 const MISSING_MESSAGE =
-  `No \`${GRID_BINARY}\` on PATH, so there is no grid sign-in here for this to end. If your grid CLI `
-  + 'is installed somewhere else, run `grid logout` there.'
+  `No \`${GRID_BINARY}\` on PATH and no managed grid runtime, so there is no grid sign-in here for this `
+  + 'to end. If your grid CLI is installed somewhere else, run `grid logout` there.'
 
 /**
  * A child ran and its exit code is the answer, or none did and this carries the sentence.
@@ -48,21 +48,25 @@ const missing = (): GridLogoutOutcome => ({ ran: false, exitCode: 1, message: MI
  * place that has to know what the sign-out accepts.
  */
 export async function passThroughToGridLogout(args: string[]): Promise<GridLogoutOutcome> {
-  // Asking PATH rather than spawning to find out, exactly as the hand-off does: an absent `grid` is
+  // The same binary the hand-off signed in on — `gridBinaryPath()`: override, managed runtime, PATH —
+  // and asked by reading rather than by spawning, exactly as the hand-off does: an absent `grid` is
   // a sentence, not a spawn error every caller would have to recognise. It also catches the case a
   // spawn cannot — a `grid` that is present but not executable answers EACCES, never ENOENT.
-  if (!binaryOnPath(GRID_BINARY)) return missing()
+  const binary = gridBinaryPath()
+  if (!binaryOnPath(binary)) return missing()
   return await new Promise<GridLogoutOutcome>((resolve) => {
     // All three streams inherited: the child talks to the terminal directly, which is what makes
     // this a passthrough rather than a re-narration of one.
-    const child = spawn(GRID_BINARY, [GRID_LOGOUT_VERB, ...args], { stdio: 'inherit' })
+    // Inherited stderr is a terminal, where grid would offer `grid update` for a binary the harness
+    // pins — off, as for every child of this daemon (GRID_NO_UPDATE_CHECK_VAR in gridExec.ts).
+    const child = spawn(binary, [GRID_LOGOUT_VERB, ...args], { stdio: 'inherit', env: gridChildEnv() })
     let settled = false
     const settle = (outcome: GridLogoutOutcome): void => { if (!settled) { settled = true; resolve(outcome) } }
 
     // Between the PATH check and the spawn the binary can still be gone.
     child.once('error', (err: NodeJS.ErrnoException) => settle(err.code === 'ENOENT'
       ? missing()
-      : { ran: false, exitCode: 1, message: `Could not run \`${GRID_BINARY}\`: ${err.message}` }))
+      : { ran: false, exitCode: 1, message: `Could not run \`${binary}\`: ${err.message}` }))
 
     // A child killed by a signal has no status. It reports as an ordinary non-zero exit, because
     // that is what a shell would see and because the signal reached this process too — the person

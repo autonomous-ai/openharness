@@ -13,6 +13,17 @@ fix and the regression in `test/terminal_session_test.dart` passes against it.
 
 ## Local patches
 
+- **Linux clipboard and Meta keys leave shell editing intact**
+  (`lib/src/ui/shortcut/shortcuts.dart`, `lib/src/terminal_view.dart`,
+  `lib/src/core/input/handler.dart`). Linux uses Ctrl-Shift-C/V/A for clipboard
+  copy/paste/select-all, preserving Ctrl-A and Ctrl-V for the program in the
+  terminal. Left-Alt printable keys send an escape prefix with the actual
+  keyboard-layout character, preserving case and punctuation; AltGr and macOS
+  Option remain native text composition. The fallback letter handler respects
+  Shift and emits lowercase otherwise. Desktop creates Linux-target terminals
+  on Linux. Regressions: `test/terminal_clipboard_test.dart`, with existing IME
+  coverage in `test/terminal_view_interaction_test.dart`.
+
 - **Remote grids survive viewport resizing** (`lib/src/terminal_view.dart`,
   `lib/src/ui/render.dart`). `TerminalView.resizeBuffer` defaults to true;
   Harness sets it to false so a smaller local pane reports its desired size
@@ -142,3 +153,54 @@ it if one is dropped.
    vertical scrolling and app-owned Meta shortcuts keep their bindings.
    Regression: the macOS/Linux pair in `test/terminal_panel_focus_test.dart`
    exercises physical key events through `TerminalPanel` to binary PTY input.
+
+9. **A software keyboard is allowed to compose**
+   (`lib/src/ui/custom_text_edit.dart`). The strict
+   `autocorrect: false` / `enableSuggestions: false` this connection attached
+   with is right for a hardware keyboard — a desktop IME composes through
+   marked text, which neither flag touches — but on a phone those two flags ARE
+   the IME: iOS maps `autocorrect` onto `UITextAutocorrectionTypeNo` and
+   Android maps `enableSuggestions` onto `TYPE_TEXT_FLAG_NO_SUGGESTIONS`, and
+   with no pre-edit buffer to work in a Vietnamese Telex keyboard converted
+   nothing — `hoom` reached the pty as four raw letters instead of `hôm`, and a
+   CJK candidate window never opened. iOS and Android now attach with
+   composition left on (iOS needs `autocorrect`, the only knob it has; Android
+   needs `enableSuggestions` and keeps autocorrection itself off), and smart
+   dashes and quotes — which default to ENABLED, and which iOS only acts on
+   once autocorrect is on — are switched off on every platform so `"` and
+   `--flag` stay syntax rather than typography. Regression:
+   `mobile/test/terminal_ime_input_test.dart`, the only build that reaches the
+   mobile branch.
+
+10. **Return does not leave the line it just sent sitting in the prompt**
+    (`lib/src/ui/custom_text_edit.dart`). iOS answers the Return key by calling
+    `performAction` and then inserting the `\n` into its own buffer anyway:
+    `shouldChangeTextInRange:` returns YES for the default return key
+    (`FlutterTextInputPlugin.mm`). So an editing value the terminal has ALREADY
+    acted on arrives right after the action — by which point
+    `resetEditingState` has emptied the mirror, so the diff retyped the whole
+    line into the pty and followed it with a literal LF. A TUI reads that as
+    Ctrl+J, a soft newline rather than a submit, so the message the user just
+    sent reappeared in the prompt underneath its own answer. That one value is
+    now recognised by its shape, dropped, and the native buffer put back on the
+    state the action left. It is one shot, so real typing after a submit is
+    never swallowed, and Android performs its editor action without the second
+    insert so nothing there matches. Regression:
+    `mobile/test/terminal_ime_input_test.dart`.
+11. **Block Elements (U+2580–U+259F) are painted as rectangles, not font
+    glyphs** (`lib/src/ui/block_glyphs.dart`, `lib/src/ui/painter.dart`,
+    `lib/src/ui/render.dart`, `lib/src/terminal_view.dart`). A cell is
+    `TerminalStyle.height` (1.2) times the font size, rounded to whole pixels
+    by SkParagraph (13 pt → 16 px), but a font's block glyphs only cover the
+    face's own ascent and descent — and SF Mono's don't reach the cell's edges
+    horizontally either — so anything drawn with blocks (Claude Code's mascot,
+    progress bars, TUI borders) showed a dark band under every row and seams
+    between columns. `paintCellForeground` now hands those code points to
+    `paintBlockGlyph`, which fills the cell's own rectangle(s) with every edge
+    snapped to a device pixel (the view feeds the painter
+    `MediaQuery.devicePixelRatioOf`) and anti-aliasing off; the snapping is
+    what makes neighbours tile on Impeller, which ignores the flag. The three
+    shade characters are a full cell at 25/50/75 % coverage, and inverse/faint
+    follow the text path. Box drawing (U+2500–U+257F) still comes from the
+    font. Regression: `test/terminal_block_glyph_test.dart`, which also
+    rasterises through the real painter.

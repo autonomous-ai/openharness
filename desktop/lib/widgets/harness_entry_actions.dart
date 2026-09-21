@@ -77,7 +77,7 @@ class HarnessEntryActions extends StatelessWidget {
               shape: const StadiumBorder(),
             ),
             icon: const Icon(AgentActionIcons.open, size: 18),
-            label: const Text('Open Agent'),
+            label: const Text('Open Harness'),
           ),
         ),
         _keyboardAction(
@@ -87,7 +87,7 @@ class HarnessEntryActions extends StatelessWidget {
             key: newKey,
             onPressed: onNew,
             icon: const Icon(AgentActionIcons.create, size: 18),
-            label: const Text('New Agent'),
+            label: const Text('New Harness'),
             style: FilledButton.styleFrom(
               enabledMouseCursor: SystemMouseCursors.click,
               minimumSize: size,

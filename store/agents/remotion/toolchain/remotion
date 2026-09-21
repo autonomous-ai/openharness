@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# `$REMOTION`: Remotion's CLI, with render progress written to .harness/render.json for the pane.
+# The agent's shell may have no node on PATH: Harness's own serves, and the CLI it spawns inherits it.
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=runtimes.sh
+. "$here/runtimes.sh"
+harness_node 18 || exit 1
+exec node "$here/remotion.mjs" "$@"

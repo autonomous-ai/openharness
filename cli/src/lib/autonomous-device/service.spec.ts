@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
-import { AutonomousDeviceService, type AutonomousDeviceFrame } from './service.js'
+import { AUTONOMOUS_DEVICE_CAPABILITIES, AutonomousDeviceService, type AutonomousDeviceFrame } from './service.js'
 
 function fixture(now?: () => number, fullAnswer?: string) {
   const submit = vi.fn(), stop = vi.fn(async () => true), answer = vi.fn(async () => true)
@@ -58,6 +58,155 @@ describe('Autonomous device local-agent service', () => {
       expect(requestAppFocus).toHaveBeenCalledTimes(1)
       expect(service.focusSnapshot().focus).toBeNull()
     } finally { vi.useRealTimers() }
+  })
+
+  describe('scroll', () => {
+    function scrollFixture(hasApp = true) {
+      const scroll = vi.fn((_phase: 'down' | 'move' | 'up', _dy: number, _velocity: number) => hasApp)
+      const service = new AutonomousDeviceService({ machineId: 'machine', scroll,
+        agents: () => [], submit: vi.fn(), stop: async () => true, answer: async () => true, cancelDelivery: () => true, recent: () => [] })
+      const send = (over: Record<string, unknown>) => service.request('device', { type: 'scroll', requestId: randomUUID(), ...over })
+      return { service, scroll, send }
+    }
+
+    it('advertises the capability', () => {
+      expect(AUTONOMOUS_DEVICE_CAPABILITIES).toContain('scroll')
+    })
+
+    it('forwards each phase of a stroke to the window, dy and velocity defaulting to 0', async () => {
+      const f = scrollFixture()
+      expect(await f.send({ phase: 'down' })).toMatchObject({ type: 'scroll_result' })
+      expect(await f.send({ phase: 'move', dy: -24 })).not.toHaveProperty('error')
+      expect(await f.send({ phase: 'up', dy: -3, velocity: -900 })).not.toHaveProperty('error')
+      expect(f.scroll.mock.calls).toEqual([['down', 0, 0], ['move', -24, 0], ['up', -3, -900]])
+    })
+
+    it('rejects a bad phase, a non-integer or oversized travel, and unknown fields', async () => {
+      const f = scrollFixture()
+      for (const over of [{ phase: 'flick' }, { phase: 'move', dy: 1.5 }, { phase: 'move', dy: 5000 }, { phase: 'up', velocity: 1e6 }, { phase: 'move', dy: 1, agentId: 'a' }]) {
+        expect(await f.send(over)).toMatchObject({ error: { code: 'INVALID_REQUEST' } })
+      }
+      expect(f.scroll).not.toHaveBeenCalled()
+    })
+
+    it('is FOCUS_UNAVAILABLE without a Desktop window, and when the machine has no scroll wiring', async () => {
+      expect(await scrollFixture(false).send({ phase: 'down' })).toMatchObject({ error: { code: 'FOCUS_UNAVAILABLE' } })
+      const bare = new AutonomousDeviceService({ machineId: 'm', agents: () => [], submit: vi.fn(), stop: async () => true, answer: async () => true, cancelDelivery: () => true, recent: () => [] })
+      expect(await bare.request('device', { type: 'scroll', requestId: randomUUID(), phase: 'down' })).toMatchObject({ error: { code: 'FOCUS_UNAVAILABLE' } })
+    })
+  })
+
+  describe('focus.step', () => {
+    const DESK = ['a', 'b', 'c']
+    function stepFixture(desk = DESK, acknowledge = true) {
+      const stepFocus = vi.fn(async (direction: 'next' | 'previous', current: string | undefined) => {
+        if (!desk.length) return 'no_agents' as const
+        const at = current ? desk.indexOf(current) : -1
+        const agentId = at < 0 ? desk[direction === 'next' ? 0 : desk.length - 1] : desk[(at + (direction === 'next' ? 1 : desk.length - 1)) % desk.length]
+        // The app acknowledges on its own tick, the way `dial_focus` → `app_focus` does.
+        if (acknowledge) setTimeout(() => service.appFocus('machine', agentId, 'window'), 0)
+        return { machineId: 'machine', agentId }
+      })
+      const events: AutonomousDeviceFrame[] = []
+      const service = new AutonomousDeviceService({ machineId: 'machine', stepFocus,
+        agents: () => desk.map(agentId => ({ agentId, name: agentId.toUpperCase(), engine: 'claude', state: 'idle' })),
+        submit: vi.fn(), stop: async () => true, answer: async () => true, cancelDelivery: () => true, recent: () => [], emit: f => events.push(f) })
+      const step = (direction: 'next' | 'previous', over: Record<string, unknown> = {}) => service.request('device',
+        { type: 'focus.step', requestId: randomUUID(), idempotencyKey: randomUUID(), direction, focusRevision: service.focusSnapshot().focusRevision, ...over })
+      return { service, stepFocus, events, step }
+    }
+
+    it('advertises the capability', () => {
+      expect(new AutonomousDeviceService({ machineId: 'm', agents: () => [], submit: vi.fn(), stop: async () => true, answer: async () => true, cancelDelivery: () => true, recent: () => [] }))
+        .toBeDefined()
+      expect(AUTONOMOUS_DEVICE_CAPABILITIES).toContain('focus.step')
+    })
+
+    it('walks next and previous through the desk and wraps at both ends', async () => {
+      const f = stepFixture()
+      f.service.appFocus('machine', 'b', 'window')
+      expect((await f.step('next')).focus).toEqual({ machineId: 'machine', agentId: 'c', name: 'C' })
+      expect((await f.step('next')).focus).toMatchObject({ agentId: 'a' })
+      expect((await f.step('previous')).focus).toMatchObject({ agentId: 'c' })
+      expect((await f.step('previous')).focus).toMatchObject({ agentId: 'b' })
+      expect(f.stepFocus.mock.calls.map(c => c[1])).toEqual(['b', 'c', 'a', 'c'])
+      expect(f.events.filter(e => e.kind === 'focus.changed')).toHaveLength(5)
+    })
+
+    it('starts from the first or last tile when nothing is focused', async () => {
+      const f = stepFixture()
+      expect((await f.step('previous')).focus).toMatchObject({ agentId: 'c' })
+      const g = stepFixture()
+      expect((await g.step('next')).focus).toMatchObject({ agentId: 'a' })
+    })
+
+    it('answers a single-agent desk with the same focus and no wait', async () => {
+      const f = stepFixture(['only'])
+      f.service.appFocus('machine', 'only', 'window')
+      const before = f.service.focusSnapshot()
+      const result = await f.step('next')
+      expect(result.focus).toMatchObject({ agentId: 'only' })
+      expect(result.focusRevision).toBe(before.focusRevision)
+      expect(f.events.filter(e => e.kind === 'focus.changed')).toHaveLength(1)
+    })
+
+    it('refuses a stale revision without moving', async () => {
+      const f = stepFixture()
+      f.service.appFocus('machine', 'a', 'window')
+      const stale = f.service.focusSnapshot().focusRevision
+      f.service.appFocus('machine', 'b', 'window')
+      expect((await f.step('next', { focusRevision: stale })).error).toMatchObject({ code: 'FOCUS_CHANGED' })
+      expect(f.stepFocus).not.toHaveBeenCalled()
+      expect(f.service.focusSnapshot().focus).toMatchObject({ agentId: 'b' })
+    })
+
+    it('replays a retried gesture instead of stepping twice, even once the revision is stale', async () => {
+      const f = stepFixture()
+      f.service.appFocus('machine', 'a', 'window')
+      const req = { type: 'focus.step', requestId: randomUUID(), idempotencyKey: 'gesture1', direction: 'next', focusRevision: f.service.focusSnapshot().focusRevision }
+      const first = await f.service.request('device', req)
+      expect(first.focus).toMatchObject({ agentId: 'b' })
+      // The first tick already moved focus, so the key's revision is stale now — the retry still gets its result.
+      const retry = await f.service.request('device', { ...req, requestId: randomUUID() })
+      expect(retry).toEqual({ ...first, requestId: retry.requestId })
+      expect(f.stepFocus).toHaveBeenCalledTimes(1)
+      expect((await f.service.request('device', { ...req, requestId: randomUUID(), direction: 'previous' })).error).toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' })
+      // Revoke forgets the gesture with the device: the same key from a re-paired device is a new tick.
+      f.service.revoke('device')
+      expect((await f.service.request('device', { ...req, requestId: randomUUID(), focusRevision: f.service.focusSnapshot().focusRevision })).focus).toMatchObject({ agentId: 'c' })
+      // Another device's identical key is its own gesture.
+      expect((await f.service.request('other', { ...req, requestId: randomUUID(), focusRevision: f.service.focusSnapshot().focusRevision })).focus).toMatchObject({ agentId: 'a' })
+      expect(f.stepFocus).toHaveBeenCalledTimes(3)
+    })
+
+    it('fails clearly when the app never acknowledges, and the retry repeats that answer', async () => {
+      vi.useFakeTimers()
+      try {
+        const f = stepFixture(DESK, false)
+        f.service.appFocus('machine', 'a', 'window')
+        const req = { type: 'focus.step', requestId: randomUUID(), idempotencyKey: 'gesture1', direction: 'next', focusRevision: f.service.focusSnapshot().focusRevision }
+        const pending = f.service.request('device', req)
+        await vi.advanceTimersByTimeAsync(2001)
+        expect((await pending).error).toMatchObject({ code: 'FOCUS_UNAVAILABLE' })
+        expect((await f.service.request('device', { ...req, requestId: randomUUID() })).error).toMatchObject({ code: 'FOCUS_UNAVAILABLE' })
+        expect(f.stepFocus).toHaveBeenCalledTimes(1)
+        expect(f.service.focusSnapshot().focus).toMatchObject({ agentId: 'a' })
+      } finally { vi.useRealTimers() }
+    })
+
+    it('reports no agents, no app, and bad requests without pretending to move', async () => {
+      expect((await stepFixture([]).step('next')).error).toMatchObject({ code: 'NO_AGENTS' })
+      const noApp = new AutonomousDeviceService({ machineId: 'machine', stepFocus: async () => 'no_app',
+        agents: () => [{ agentId: 'a', name: 'A', engine: 'claude', state: 'idle' }],
+        submit: vi.fn(), stop: async () => true, answer: async () => true, cancelDelivery: () => true, recent: () => [] })
+      const base = { type: 'focus.step', idempotencyKey: 'k', direction: 'next', focusRevision: noApp.focusSnapshot().focusRevision }
+      expect((await noApp.request('device', { ...base, requestId: randomUUID() })).error).toMatchObject({ code: 'FOCUS_UNAVAILABLE' })
+      const f = stepFixture()
+      expect((await f.step('next', { direction: 'sideways' })).error).toMatchObject({ code: 'INVALID_REQUEST' })
+      expect((await f.step('next', { focusRevision: undefined })).error).toMatchObject({ code: 'INVALID_REQUEST' })
+      expect((await f.step('next', { machineId: 'machine' })).error).toMatchObject({ code: 'INVALID_REQUEST' })
+      expect(f.stepFocus).not.toHaveBeenCalled()
+    })
   })
 
   it('reserves before dispatch and deduplicates concurrent sends without selecting another agent', async () => {

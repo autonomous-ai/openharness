@@ -9,7 +9,7 @@
  */
 import { existsSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { readDshManifest, type DshManifest } from './manifest.js'
+import { isViewerPackage, readDshManifest, type DshManifest } from './manifest.js'
 import { skillDirsIn } from './materialize.js'
 
 export interface CheckLine {
@@ -47,16 +47,25 @@ export function checkDsh(path: string): CheckResult {
     return { ok: false, lines, manifest: null }
   }
   const manifest = read.manifest
-  add('ok', `harness.json parses · ${manifest.id} "${manifest.name}" runs on ${manifest.engine}`)
-  if (!manifest.description) add('warn', 'no description — the picker tile will have none')
+  const viewerPkg = isViewerPackage(manifest)
+  add('ok', viewerPkg
+    ? `harness.json parses · ${manifest.id} "${manifest.name}" is a viewer package`
+    : `harness.json parses · ${manifest.id} "${manifest.name}" runs on ${manifest.engine}`)
+  if (!manifest.description) add('warn', viewerPkg ? 'no description' : 'no description — the picker tile will have none')
+  if (!manifest.author && !viewerPkg) add('warn', 'no author — the tile will not say who made it')
+  if (viewerPkg) {
+    if (manifest.workspace) add('warn', 'a viewer package has no workspace of its own; workspace.* is ignored')
+    if (manifest.verdict) add('warn', 'a viewer package writes no verdict; the harness that uses it does')
+  }
 
   const ws = manifest.workspace
   if (ws?.template) {
     if (isDir(join(dir, ws.template))) add('ok', `workspace.template ${ws.template}/`)
+    else if (manifest.toolchain?.setup) add('warn', `workspace.template ${ws.template} is not in the checkout; toolchain.setup must create it`)
     else add('fail', `workspace.template ${ws.template} is not a directory`)
     if (!ws.marker) add('warn', 'workspace.template without workspace.marker: the template is copied on EVERY create')
   }
-  if (ws?.marker && ws.template && !existsSync(join(dir, ws.template, ws.marker))) {
+  if (ws?.marker && ws.template && isDir(join(dir, ws.template)) && !existsSync(join(dir, ws.template, ws.marker))) {
     add('warn', `workspace.marker ${ws.marker} is not in the template, so a fresh workspace stays "fresh" until something else writes it`)
   }
   if (ws?.init) {
@@ -69,24 +78,35 @@ export function checkDsh(path: string): CheckResult {
   const agent = manifest.agent
   if (agent?.instructions) {
     if (isFile(join(dir, agent.instructions))) add('ok', `agent.instructions ${agent.instructions}`)
+    // A wrapper that fetches its upstream at setup (the project's own AGENTS.md, template and skills
+    // arrive with it) has none of them on a plain checkout — by design, the same as fetched skills.
+    else if (manifest.toolchain?.setup) add('warn', `agent.instructions ${agent.instructions} is not in the checkout; toolchain.setup must create it`)
     else add('fail', `agent.instructions ${agent.instructions} does not exist`)
-  } else {
+  } else if (!viewerPkg) {
+    // A viewer package may not have an agent section at all, so it is never told it lacks one.
     add('warn', 'no agent.instructions — the agent gets no AGENTS.md from this harness')
   }
   for (const root of agent?.skills ?? []) {
     const full = join(dir, root)
-    if (!isDir(full)) { add('fail', `agent.skills ${root} is not a directory`); continue }
+    if (!isDir(full)) {
+      // A skills root that setup populates (upstream skills fetched at install, not vendored — the
+      // shape a project without a licence to copy forces) is absent on a plain checkout by design.
+      if (manifest.toolchain?.setup) add('warn', `agent.skills ${root} is not in the checkout; toolchain.setup must create it, or the agent gets no skills`)
+      else add('fail', `agent.skills ${root} is not a directory`)
+      continue
+    }
     const dirs = skillDirsIn(full)
     if (!dirs.length) add('fail', `agent.skills ${root} has no SKILL.md-bearing directory`)
     else add('ok', `agent.skills ${root}/ · ${dirs.map((d) => d.slice(full.length + 1) || '.').join(', ')}`)
   }
-  if (!agent?.skills?.length) add('warn', 'no agent.skills — a tier-0 harness usually ships at least one')
+  if (!agent?.skills?.length && !viewerPkg) add('warn', 'no agent.skills — a tier-0 harness usually ships at least one')
   for (const [key, value] of Object.entries(agent?.env ?? {})) {
     if (key.startsWith('HARNESS_')) add('fail', `agent.env.${key} is reserved (HARNESS_* is set by Harness)`)
     else if (/\$\{(?!dsh\}|workspace\}|home\})/.test(value)) add('warn', `agent.env.${key} uses a variable Harness does not expand: ${value}`)
   }
 
-  for (const [name, command] of Object.entries(manifest.toolchain ?? {})) {
+  for (const name of ['setup', 'doctor'] as const) {
+    const command = manifest.toolchain?.[name]
     if (!command) continue
     const p = commandPath(dir, command)
     if (p === null) add('ok', `toolchain.${name} is a shell line`)
@@ -96,7 +116,10 @@ export function checkDsh(path: string): CheckResult {
   if (!manifest.toolchain?.doctor) add('warn', 'no toolchain.doctor — Harness cannot tell the user what is missing before a create')
 
   const viewer = manifest.viewer
-  if (viewer) {
+  if (viewer && 'use' in viewer) {
+    add('ok', `viewer.use ${viewer.use} — installed with this harness; its command and URL come from that package`)
+    if (viewer.url !== undefined && !viewer.url.includes('${port}')) add('fail', 'viewer.url has no ${port}: Harness picks the port, the URL must use it')
+  } else if (viewer) {
     const p = commandPath(dir, viewer.command)
     if (p === null) add('ok', 'viewer.command is a shell line')
     else if (isFile(p)) add('ok', `viewer.command ${viewer.command}`)

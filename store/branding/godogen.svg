@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Godogen Harness package — an idea becomes a game</title>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="#303854"/>
+  <path d="M22 25h20c7 0 9 6 11 14l2 8c1 5-5 8-8 4l-7-7H24l-7 7c-3 4-9 1-8-4l2-8c2-8 4-14 11-14Z" fill="#b5d9ae"/>
+  <path d="M22 32v10M17 37h10" stroke="#303854" stroke-width="3.5" stroke-linecap="round"/>
+  <circle cx="42" cy="33" r="2.5" fill="#303854"/>
+  <circle cx="47" cy="39" r="2.5" fill="#303854"/>
+  <path d="m36 7 2.5 6.5L45 16l-6.5 2.5L36 25l-2.5-6.5L27 16l6.5-2.5Z" fill="#e5c182"/>
+</svg>

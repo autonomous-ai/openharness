@@ -19,7 +19,8 @@
 # `--build-name`/`--build-number` flags, and this script asserts the artifact really carries it
 # before publishing, so the running release always equals the published manifest version.
 #
-# Prereqs: `gsutil` authenticated with WRITE access; the bucket/objects must be public-read;
+# Prereqs: `gcloud storage` authenticated with WRITE access on the bucket; the
+# bucket/objects must be public-read;
 # `flutter` on PATH; the Xcode project signs Release with a "Developer ID Application" identity
 # (see macos/Runner.xcodeproj — CODE_SIGN_IDENTITY/DEVELOPMENT_TEAM) whose certificate + private key
 # must be in this machine's LOGIN keychain (NOT the System keychain — that one prompts for an admin
@@ -116,7 +117,43 @@ fi
 
 NOTARY_PROFILE="${NOTARY_PROFILE:-harness-notarize}"
 
-command -v gsutil  >/dev/null 2>&1 || { echo "error: gsutil not found — install/authenticate the gcloud SDK" >&2; exit 1; }
+# --- GCS client: `gcloud storage`, and only `gcloud storage` ---
+# gsutil was retired from this repo on 2026-09-17. It is a standalone Python tool that only
+# understands gcloud's *user* and *service-account-key* credentials: it cannot use the
+# external-account (federated) credential Workload Identity Federation issues, so every call fails
+# under WIF while the identical `gcloud storage` call works — it is the same gcloud binary that
+# performed the token exchange. Every release path here runs on WIF now. Do not reintroduce it.
+command -v gcloud >/dev/null 2>&1 || {
+  echo "error: gcloud not found — install/authenticate the gcloud SDK" >&2
+  exit 1
+}
+gcloud storage --help >/dev/null 2>&1 || {
+  echo "error: this gcloud is too old for 'gcloud storage' — update the gcloud SDK" >&2
+  exit 1
+}
+
+# gcs_cp <src> <dst> [cache-control] [content-type] — either side may be gs:// or a local path or `-`.
+gcs_cp() {
+  local src="$1" dst="$2" cc="${3:-}" ct="${4:-}" args=(storage cp)
+  if [ -n "$cc" ]; then args+=("--cache-control=$cc"); fi
+  if [ -n "$ct" ]; then args+=("--content-type=$ct"); fi
+  gcloud "${args[@]}" "$src" "$dst"
+}
+
+# gcs_refuse_republish <gs://…> — a versioned artifact is IMMUTABLE once published: the CDN in front of
+# it caches for a year and serves the FIRST bytes it saw for that path. Re-uploading the same version
+# (a re-run of a failed release workflow, a second tag on the same version) leaves the manifest naming
+# bytes the CDN will never serve — every updater then fails its size/sha check with "Could not
+# download and verify". Measured on 1.1.56 (2026-09-18): three workflow runs, one path, two different
+# zips, self-update broken for every Mac. The fix is always a new version, never an overwrite.
+gcs_refuse_republish() {
+  local dst="$1"
+  if gcloud storage ls "$dst" >/dev/null 2>&1; then
+    echo "error: $dst already exists — versioned artifacts are immutable (the CDN keeps the first bytes)." >&2
+    echo "       Publish a NEW version instead of re-uploading this one (see RELEASE.md)." >&2
+    exit 1
+  fi
+}
 command -v python3 >/dev/null 2>&1 || { echo "error: python3 not found" >&2; exit 1; }
 command -v flutter >/dev/null 2>&1 || { echo "error: flutter not found" >&2; exit 1; }
 if [ "$DO_NOTARIZE" -eq 1 ]; then
@@ -280,13 +317,15 @@ echo ">> uploading release $VER"
 # Immutable per-version path — see the CDN_ASSET_BASE_URL note near the top of this script. Long
 # max-age here is what actually lets the CDN cache these instead of hitting GCS on every install/update.
 echo "   zip: gs://${GCS_BUCKET}/${GCS_PATH}  ($SIZE bytes, sha256=$SHA)"
-gsutil -h "Cache-Control:public, max-age=31536000, immutable" cp "$ZIP" "gs://${GCS_BUCKET}/${GCS_PATH}"
+gcs_refuse_republish "gs://${GCS_BUCKET}/${GCS_PATH}"
+gcs_cp "$ZIP" "gs://${GCS_BUCKET}/${GCS_PATH}" "public, max-age=31536000, immutable"
 echo "   dmg: gs://${GCS_BUCKET}/${DMG_GCS_PATH}  ($DMG_SIZE bytes, sha256=$DMG_SHA)"
-gsutil -h "Cache-Control:public, max-age=31536000, immutable" cp "$DMG" "gs://${GCS_BUCKET}/${DMG_GCS_PATH}"
+gcs_refuse_republish "gs://${GCS_BUCKET}/${DMG_GCS_PATH}"
+gcs_cp "$DMG" "gs://${GCS_BUCKET}/${DMG_GCS_PATH}" "public, max-age=31536000, immutable"
 
 echo ">> merging manifest: gs://${GCS_BUCKET}/${METADATA_PATH}  (${OTA_KEY}, ${DMG_KEY})"
 SRC="$(mktemp)"; DST="$(mktemp)"   # removed by cleanup() on EXIT
-if ! gsutil cp "gs://${GCS_BUCKET}/${METADATA_PATH}" "$SRC" 2>/dev/null; then
+if ! gcs_cp "gs://${GCS_BUCKET}/${METADATA_PATH}" "$SRC" 2>/dev/null; then
   echo "   (no existing metadata.json — creating a new one)"
   printf '{}' > "$SRC"
 fi
@@ -316,9 +355,8 @@ with open(dst, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 PY
-gsutil -h "Content-Type:application/json" \
-       -h "Cache-Control:no-cache, no-store, must-revalidate" \
-       cp "$DST" "gs://${GCS_BUCKET}/${METADATA_PATH}"
+gcs_cp "$DST" "gs://${GCS_BUCKET}/${METADATA_PATH}" \
+       "no-cache, no-store, must-revalidate" "application/json"
 
 echo
 echo ">> published desktop app $VER"

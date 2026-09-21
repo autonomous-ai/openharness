@@ -1,0 +1,9 @@
+{
+  "version": "1.0",
+  "output_path": "renders/afterglow.mp4",
+  "duration_seconds": 18.048,
+  "width": 1280,
+  "height": 720,
+  "has_audio": true,
+  "verification": "ffprobe and complete FFmpeg decode"
+}

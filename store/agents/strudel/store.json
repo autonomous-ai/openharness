@@ -1,0 +1,18 @@
+{
+  "homepage": "https://strudel.cc",
+  "upstream": "https://github.com/tidalcycles/strudel",
+  "license": "MIT",
+  "tagline": "Music live coding environment for the browser",
+  "examples": [
+    {
+      "prompt": "Make an 80s synthwave track at 100 bpm: gated drums, a driving octave bassline, a pulsing 16th-note arpeggio, a wide supersaw pad, and a soaring lead that takes over after 8 bars.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/strudel/synthwave-night-drive.jpg",
+      "caption": "Synthwave \"Night drive\" · 100 bpm, 8 voices, 16 bars · playing live in the pane"
+    },
+    {
+      "prompt": "Write a 90 bpm lo-fi house groove: a kick and hats from bar 1, a bassline, warm chords, a hook that enters at bar 9, and a break at bar 17.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/strudel/lofi-house-groove.jpg",
+      "caption": "Lo-fi house groove · 90 bpm, 9 voices, 32 bars · playing live in the pane"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+# Generated map data — never source.
+out/
+*.geojson
+!template/*.geojson
+# Harness bookkeeping.
+.harness/
+.harness-initialized

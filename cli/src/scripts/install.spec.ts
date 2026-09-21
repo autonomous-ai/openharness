@@ -1,6 +1,6 @@
 import { spawnSync } from "child_process";
 import { join } from "path";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { describe, expect, it } from "vitest";
 
@@ -30,6 +30,83 @@ const downloadToolsOf = (source: string) =>
     source.indexOf("  # Fetching, unpacking and verifying the runtime"),
     source.indexOf('  echo "▸ Installing the Harness Node runtime'),
   );
+
+// Steps 5 and 6 — the verification, the wordmark and the guide, and the PATH reminder — as one
+// runnable unit, from the constants down so BIN_DIR and LAUNCHER resolve the way they do in the script.
+const finaleOf = (source: string) =>
+  source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# Shared by every download")) +
+  source.slice(source.indexOf("# 5. Final verification"));
+
+// A ~/.local/bin with a launcher that answers `version`, plus the node and tmux the verification runs.
+const installedFixture = (scratch: string) => {
+  const home = join(scratch, "home");
+  const bin = join(home, ".local", "bin");
+  mkdirSync(bin, { recursive: true });
+  writeCommand(bin, "harness", ['[ "$1" = version ] && echo 0.2.60', "exit 0"]);
+  writeCommand(scratch, "node", ["exit 0"]);
+  writeCommand(scratch, "tmux", ['echo "tmux 3.7"']);
+  return { home, node: join(scratch, "node") };
+};
+
+const runFinale = (mode: "standalone" | "desktop", pathHasBin: boolean) => {
+  const source = readFileSync(installer, "utf8");
+  const scratch = mkdtempSync(join(tmpdir(), "harness-finale-"));
+  try {
+    const { home, node } = installedFixture(scratch);
+    const bin = join(home, ".local", "bin");
+    return spawnSync("/bin/sh", ["-c", finaleOf(source)], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: home,
+        INSTALL_MODE: mode,
+        NODE_BIN: node,
+        PATH: pathHasBin ? `${bin}:${scratch}:/usr/bin:/bin` : `${scratch}:/usr/bin:/bin`,
+      },
+    });
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+};
+
+const LOGO = [
+  "    _",
+  "   | |__   __ _ _ __ _ __   ___  ___ ___",
+  "   | '_ \\ / _` | '__| '_ \\ / _ \\/ __/ __|",
+  "   | | | | (_| | |  | | | |  __/\\__ \\__ \\",
+  "   |_| |_|\\__,_|_|  |_| |_|\\___||___/___/",
+];
+
+describe("scripts/install.sh: what it says once it is done", () => {
+  it("ends with the wordmark and the guide — login, start, remote password, then harness remote — in that order", () => {
+    const result = runFinale("standalone", true);
+    expect(result.status).toBe(0);
+    const out = result.stdout;
+    for (const line of LOGO) expect(out).toContain(line);
+    expect(out).toContain("✓ harness 0.2.60 installed.");
+    const order = ["harness login", "harness start", "harness remote-password set", "harness remote  ", "harness machines", "harness status", "harness --help"];
+    const at = order.map((command) => out.indexOf(command));
+    expect(at.every((index) => index >= 0)).toBe(true);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+    expect(out.indexOf(LOGO[1])).toBeLessThan(out.indexOf("harness login"));
+    // Every command is explained, and nothing is run: the fixture launcher only answered `version`.
+    expect(out).toContain("# 1. sign in");
+    expect(out).toContain("# 3. let your OTHER machines reach this one");
+    expect(out).not.toContain("'harness' is installed in ~/.local/bin");
+  }, 20_000);
+
+  it("the PATH reminder still comes after the guide when ~/.local/bin is not on PATH", () => {
+    const out = runFinale("standalone", false).stdout;
+    expect(out.indexOf("harness --help")).toBeLessThan(out.indexOf("'harness' is installed in ~/.local/bin"));
+  }, 20_000);
+
+  it("desktop mode gets the one line and no guide: the app takes the person through sign-in", () => {
+    const out = runFinale("desktop", true).stdout;
+    expect(out).toContain("harness 0.2.60 installed.");
+    expect(out).not.toContain("Get started");
+    expect(out).not.toContain(LOGO[1]);
+  }, 20_000);
+});
 
 describe("scripts/install.sh command contract", () => {
   it("rejects a legacy machine-token argument before installing", () => {
@@ -203,7 +280,7 @@ describe("scripts/install.sh command contract", () => {
       });
 
       expect(result.status).toBe(0);
-      expect(readFileSync(invocations, "utf8")).toContain("install tmux\n");
+      expect(readFileSync(invocations, "utf8")).toContain("install --force-bottle tmux\n");
       expect(result.stdout).not.toContain("managed");
       expect(() => readFileSync(fetched, "utf8")).toThrow();
     } finally {
@@ -330,7 +407,7 @@ describe("scripts/install.sh command contract", () => {
       });
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain("Homebrew could not install tmux");
+      expect(result.stdout).toContain("No Homebrew tmux bottle for this Mac; using the managed build instead.");
       expect(readlinkSync(join(home, ".local", "bin", "tmux"))).toContain(root);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
@@ -651,6 +728,145 @@ describe("scripts/install.sh command contract", () => {
       rmSync(scratch, { recursive: true, force: true });
     }
   });
+
+  // ── the managed grid ──────────────────────────────────────────────────────────────────────────
+  //
+  // The grid CLI the release PINS, laid down beside Node and tmux — but unlike them, optional: the
+  // harness works without it, the daemon follows the pin on every start, so this step may fail and
+  // the install still succeeds. And never linked into ~/.local/bin: that path is grid's own
+  // installer's (uv's, on a Mac); the daemon puts the managed grid on an agent pane's PATH itself.
+
+  // The helpers plus the grid step alone, as one runnable unit.
+  const gridStepOf = (source: string) =>
+    source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# 1. Host requirements")) +
+    source.slice(source.indexOf("# 3b. The managed grid"), source.indexOf("# 4. Ensure ~/.local/bin"));
+
+  it("installs the managed grid after the CLI and before PATH, as a step the install can survive", () => {
+    const source = readFileSync(installer, "utf8");
+    const cliStep = source.indexOf("# 3. Fetch manifest");
+    const gridStep = source.indexOf("# 3b. The managed grid");
+    const pathStep = source.indexOf("# 4. Ensure ~/.local/bin");
+    expect(cliStep).toBeGreaterThan(0);
+    expect(gridStep).toBeGreaterThan(cliStep);
+    expect(pathStep).toBeGreaterThan(gridStep);
+    expect(source).toContain('GRID_METADATA_URL="${HARNESS_GRID_METADATA_URL:-');
+    expect(source).toContain('CURRENT_GRID_FILE="$RUNTIME_DIR/current-grid"');
+    // Optional, by construction: the call is guarded, and the function returns instead of exiting.
+    expect(source.slice(gridStep, pathStep)).toMatch(/install_managed_grid \|\|/);
+    const fn = source.slice(source.indexOf("install_managed_grid() {"), source.indexOf("# 1. Host requirements"));
+    expect(fn).not.toContain("exit ");
+    expect(fn).not.toContain("ln -s");
+  });
+
+  const gridFixture = (scratch: string, tamperSha = false) => {
+    const home = join(scratch, "home");
+    const root = "grid-9.9-darwin-arm64";
+    const stage = join(scratch, "stage", root, "bin");
+    mkdirSync(stage, { recursive: true });
+    writeCommand(stage, "grid", ["printf 'grid 9.9\\n'"]);
+    const archive = join(scratch, `${root}.tar.gz`);
+    spawnSync("tar", ["-czf", archive, "-C", join(scratch, "stage"), root]);
+    const sha = spawnSync("shasum", ["-a", "256", archive], { encoding: "utf8" }).stdout.split(" ")[0];
+    writeFileSync(join(scratch, "manifest.json"), JSON.stringify({
+      grid: {
+        "darwin-arm64": {
+          version: "9.9",
+          url: "https://cdn.example/grid.tar.gz",
+          sha256: tamperSha ? "0".repeat(64) : sha,
+          size: 1,
+          archiveRoot: root,
+        },
+      },
+    }, null, 2));
+    writeCommand(scratch, "curl", [
+      `printf '%s\\n' "$*" >> '${join(scratch, "curl-invocations")}'`,
+      `case "$*" in *"-o "*) cp '${archive}' "$4" ;; *) cat '${join(scratch, "manifest.json")}' ;; esac`,
+    ]);
+    writeCommand(scratch, "uname", [`if [ "$1" = "-m" ]; then printf 'arm64\\n'; else printf 'Darwin\\n'; fi`]);
+    mkdirSync(home, { recursive: true });
+    return { home, root };
+  };
+
+  const runGridStep = (scratch: string, home: string, mode: string) =>
+    spawnSync("/bin/sh", ["-c", gridStepOf(readFileSync(installer, "utf8"))], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: home,
+        INSTALL_MODE: mode,
+        PATH: `${scratch}:/usr/bin:/bin`,
+        HARNESS_GRID_METADATA_URL: "https://cdn.example/manifest.json",
+      },
+    });
+
+  it("downloads, verifies and records the managed grid read-only, and links nothing", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-grid-managed-"));
+    try {
+      const { home, root } = gridFixture(scratch);
+      const result = runGridStep(scratch, home, "standalone");
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("downloading grid 9.9 (darwin-arm64)");
+      expect(result.stdout).toContain(`installed grid 9.9 → ${join(home, ".harness", "runtime", root)}`);
+      const binary = join(home, ".harness", "runtime", root, "bin", "grid");
+      expect(readFileSync(join(home, ".harness", "runtime", "current-grid"), "utf8").trim()).toBe(binary);
+      // `grid update` is a rename INTO bin/; a bin/ it cannot write to is what makes that fail loudly.
+      expect(statSync(binary).mode & 0o777).toBe(0o555);
+      expect(statSync(join(home, ".harness", "runtime", root, "bin")).mode & 0o777).toBe(0o555);
+      expect(existsSync(join(home, ".local", "bin", "grid"))).toBe(false);
+      expect(readFileSync(join(scratch, "curl-invocations"), "utf8")).toContain("https://cdn.example/manifest.json");
+    } finally {
+      // The read-only bin/ the step lays down cannot be emptied as it is; give it back before the sweep.
+      try { chmodSync(join(scratch, "home", ".harness", "runtime", "grid-9.9-darwin-arm64", "bin"), 0o755); } catch { /* never laid down */ }
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("survives a grid whose checksum does not match: says so, records nothing, and the install goes on", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-grid-tampered-"));
+    try {
+      const { home } = gridFixture(scratch, true);
+      const result = runGridStep(scratch, home, "standalone");
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("checksum verification");
+      expect(result.stdout).toContain("fetched by the daemon");
+      expect(existsSync(join(home, ".harness", "runtime", "current-grid"))).toBe(false);
+      expect(readdirSync(join(home, ".harness", "runtime")).filter((n) => n.startsWith(".grid-staging-"))).toEqual([]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("says which platform has no managed grid, fetches nothing, and the install goes on", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-grid-platform-"));
+    try {
+      const { home } = gridFixture(scratch);
+      writeCommand(scratch, "uname", [`if [ "$1" = "-m" ]; then printf 'riscv64\\n'; else printf 'Linux\\n'; fi`]);
+      const result = runGridStep(scratch, home, "standalone");
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("No managed grid is published for Linux/riscv64");
+      expect(existsSync(join(scratch, "curl-invocations"))).toBe(false);
+      expect(existsSync(join(home, ".harness", "runtime", "current-grid"))).toBe(false);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("fetches no grid in host mode, which installs no CLI either", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-grid-host-"));
+    try {
+      const { home } = gridFixture(scratch);
+      const result = runGridStep(scratch, home, "host");
+
+      expect(result.status).toBe(0);
+      expect(existsSync(join(scratch, "curl-invocations"))).toBe(false);
+      expect(existsSync(join(home, ".harness", "runtime", "current-grid"))).toBe(false);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 20_000);
 
   it("desktop mode skips all host package and tmux work", () => {
     const source = readFileSync(installer, "utf8");

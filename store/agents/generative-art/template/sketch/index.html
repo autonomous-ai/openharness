@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fieldwork · Your visual studio</title><link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%2096%2096%22%3E%0A%20%20%3Ctitle%3EGenerative%20Art%20%E2%80%94%20contour%20edition%3C%2Ftitle%3E%0A%20%20%3Crect%20x%3D%224%22%20y%3D%224%22%20width%3D%2288%22%20height%3D%2288%22%20rx%3D%2223%22%20fill%3D%22%23eee7d5%22%2F%3E%0A%20%20%3Cg%20fill%3D%22none%22%20stroke%3D%22%232d5449%22%20stroke-width%3D%225%22%20stroke-linecap%3D%22round%22%3E%0A%20%20%20%20%3Cpath%20d%3D%22M21%2027c31-20%2023%2045%2054%2025%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M21%2039c31-20%2023%2045%2054%2025%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M21%2051c31-20%2023%2045%2054%2025%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M21%2063c21-14%2024%2014%2037%2014%22%2F%3E%0A%20%20%3C%2Fg%3E%0A%20%20%3Ccircle%20cx%3D%2271%22%20cy%3D%2224%22%20r%3D%227%22%20fill%3D%22%23ce7645%22%2F%3E%0A%3C%2Fsvg%3E%0A"><style>:root{color-scheme:dark;--bg:#111513;--panel:#171c19;--line:#ffffff17;--ink:#f0f2e9;--muted:#99a59b;--accent:#d6fa8b;font:13px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink)}button,input,select,textarea{font:inherit;color:inherit;border:1px solid var(--line);border-radius:6px;background:var(--panel);padding:9px 11px;min-width:0}button{cursor:pointer;touch-action:manipulation}button:hover{border-color:#879280;background:#253022}button:disabled{opacity:.4;cursor:default}button.primary{background:var(--accent);color:#182319;border-color:transparent;font-weight:650}button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}button[aria-pressed=true]{color:var(--accent);border-color:#d6fa8b55;background:#253022}button.quiet{color:var(--muted);width:100%}input[type=range]{padding:0;accent-color:var(--accent);width:100%}input[type=color]{height:38px;width:100%;padding:3px}input[type=checkbox]{accent-color:var(--accent)}textarea{resize:vertical;min-height:64px;width:100%}header{min-height:73px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:16px 25px;gap:16px}.wordmark{display:flex;align-items:center;gap:10px;font-size:12px;letter-spacing:.08em;font-weight:700}.wordmark span{font-size:9px;border-left:1px solid var(--line);padding-left:13px;color:var(--muted);font-weight:400}.file-actions{display:flex;gap:8px}main{display:grid;grid-template-columns:270px minmax(300px,1fr) 205px;min-height:calc(100vh - 73px)}aside{padding:28px 22px}.project-panel{border-right:1px solid var(--line)}.production-panel{border-left:1px solid var(--line)}h1,h2,p{margin:0}h1{font-size:29px;line-height:1.1;letter-spacing:-.04em;margin:12px 0 16px;font-weight:560}h2{font-size:14px;font-weight:550}.eyebrow{font-size:9px;letter-spacing:.17em;color:var(--muted);font-family:ui-monospace,monospace}.brief{color:#b9c2b9;font-size:12px;line-height:1.6}.help{margin-top:16px;padding:12px;background:#d6fa8b08;border:1px solid #d6fa8b20;border-radius:7px;font-size:11px}.help summary{color:var(--accent);cursor:pointer}.help p{margin-top:10px;color:var(--muted)}.section-heading{display:flex;justify-content:space-between;align-items:center;margin:27px 0 10px;padding-top:22px;border-top:1px solid var(--line)}.section-heading button{padding:3px 8px;font-size:18px}.field,label{display:flex;flex-direction:column;gap:7px;margin:16px 0;color:#cbd2ca;font-size:11px}.field-top{display:flex;justify-content:space-between;align-items:center;gap:8px}.field output{color:var(--muted);font-variant-numeric:tabular-nums}.asset-preview{max-height:60px;max-width:100%;object-fit:contain}.asset-row{display:flex;gap:7px}.asset-row button{font-size:11px}.hint{font-size:10px;color:var(--muted);line-height:1.65}.brief-details{margin-top:24px;font-size:11px;color:var(--muted)}.brief-details summary{cursor:pointer}.brief-details p{margin-top:10px}.stage-column{min-width:0;background:#0c100e;display:flex;flex-direction:column}.stage-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 22px;min-height:65px;border-bottom:1px solid var(--line)}#formats{display:flex;gap:5px;flex-wrap:wrap}#formats button{font-size:10px;padding:6px 10px;background:transparent}#dimensions{font-size:10px;white-space:nowrap;color:var(--muted);font-family:ui-monospace,monospace}.art-stage{position:relative;min-height:520px;flex:1;display:flex;justify-content:center;align-items:center;padding:34px 44px;background:radial-gradient(ellipse at 50% 35%,#27312955,transparent 65%)}#art{max-width:100%;width:auto;height:auto;max-height:calc(100vh - 320px);min-height:180px;object-fit:contain;box-shadow:0 15px 50px #0008}.canvas-footer{display:flex;justify-content:space-between;padding:10px 23px;border-top:1px solid var(--line);gap:15px;font-size:9px;letter-spacing:.02em;color:var(--muted)}.status-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--accent);margin-right:7px}.output-panel{padding:23px;display:flex;align-items:center;justify-content:space-between;gap:20px;border-top:1px solid var(--line)}.output-panel h2{font-size:18px;letter-spacing:-.025em;margin:6px 0}.output-panel p:not(.eyebrow){font-size:10px;color:var(--muted)}.output-actions{display:flex;flex-direction:column;gap:6px;min-width:137px}.output-actions button{font-size:10px}.rule{height:1px;background:var(--line);margin:25px 0}.seed-row{display:flex;gap:5px}.seed-row input{width:100%}#next-seed,#export-edition{font-size:11px;width:100%;margin:5px 0 10px}#toast{position:fixed;bottom:24px;left:50%;transform:translate(-50%,15px);max-width:min(600px,90vw);padding:11px 18px;background:#e8f0df;color:#172115;border-radius:7px;opacity:0;pointer-events:none;z-index:10;box-shadow:0 10px 40px #0007;transition:.15s}#toast.visible{opacity:1;transform:translate(-50%,0)}.render-error{position:absolute;inset:auto 25px 25px;background:#47251f;color:#ffddd0;padding:18px;border:1px solid #a45e4a;border-radius:7px;white-space:pre-wrap}.notice{padding:12px 25px;display:flex;gap:12px;align-items:center;background:#39341d;font-size:11px}.notice button{font-size:11px}.notice[hidden], [hidden]{display:none!important}@media(min-width:1600px){main{grid-template-columns:300px minmax(300px,1fr) 230px}.art-stage{min-height:650px}.project-panel{padding:34px 28px}}@media(max-width:1100px){main{grid-template-columns:245px minmax(240px,1fr)}.production-panel{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,1fr);gap:0 22px;border-top:1px solid var(--line)}.production-panel>.rule{display:none}.production-panel>.eyebrow{grid-column:1/-1;margin-top:12px}.output-panel{align-items:flex-start;flex-direction:column}.output-actions{flex-direction:row;flex-wrap:wrap}.art-stage{padding:25px;min-height:460px}.wordmark span{display:none}}@media(max-width:650px){header{padding:14px;align-items:flex-start;flex-wrap:wrap}.file-actions{width:100%}.file-actions button{flex:1;font-size:11px}main{display:flex;flex-direction:column}.stage-column{order:0}.project-panel{order:1;border-top:1px solid var(--line);border-right:none}.production-panel{order:2;display:block;border-left:none}.art-stage{min-height:360px;padding:25px 20px}#art{max-height:60vh}.stage-toolbar{padding:12px;flex-wrap:wrap}.output-panel{padding:18px}.canvas-footer{padding:10px 14px;font-size:8px}.notice{flex-wrap:wrap}aside{padding:24px}h1{font-size:30px}}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+.wordmark .brand-icon{display:block;width:27px;height:27px;padding:0;border:0}.brand-icon svg{display:block;width:100%;height:100%}
+</style></head>
+<body>
+<header><div class="wordmark"><span class="brand-icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 96 96">
+  <title>Generative Art — contour edition</title>
+  <rect x="4" y="4" width="88" height="88" rx="23" fill="#eee7d5"/>
+  <g fill="none" stroke="#2d5449" stroke-width="5" stroke-linecap="round">
+    <path d="M21 27c31-20 23 45 54 25"/>
+    <path d="M21 39c31-20 23 45 54 25"/>
+    <path d="M21 51c31-20 23 45 54 25"/>
+    <path d="M21 63c21-14 24 14 37 14"/>
+  </g>
+  <circle cx="71" cy="24" r="7" fill="#ce7645"/>
+</svg>
+</span>FIELDWORK<span>VISUAL STUDIO</span></div><div class="file-actions"><button id="open-project">Open project</button><button id="save-project">Save project</button><button class="primary" id="export-kit">Export kit ↗</button></div></header>
+<div id="revision-notice" class="notice" hidden><span>The agent has made a new version. Your previous draft is saved on this device.</span><button id="use-revision">Use new version</button><button id="keep-draft">Keep my draft</button></div>
+<main>
+<aside class="project-panel">
+<p class="eyebrow">YOUR PROJECT</p><h1 id="project-title"></h1><p id="brief" class="brief"></p>
+<details class="help"><summary>Make something entirely different</summary><p>Describe it in the Harness chat beside this studio. Ask for a new composition, illustration, pattern or visual identity. The agent creates the artwork and the controls for your idea. You never need to write code.</p><p>Try: “Use my café’s name and logo. Create an illustrated coffee bag, a square announcement and a landscape banner. Use woodcut botanical forms.”</p></details>
+<div class="section-heading"><h2>Make it yours</h2><div><button id="undo" title="Undo" aria-label="Undo">↶</button><button id="redo" title="Redo" aria-label="Redo">↷</button></div></div>
+<div id="controls"></div><div id="assets"></div>
+<details class="brief-details"><summary>Project notes</summary><p id="notes"></p><p>Save project includes the drawing program, your adjustments and embedded images. Keep this file to reopen or attach to a new Harness conversation.</p></details>
+</aside>
+<section class="stage-column">
+<div class="stage-toolbar"><div id="formats" role="group" aria-label="Output format"></div><span id="dimensions"></span></div>
+<div class="art-stage" id="art-stage"><img id="art" alt="Your original artwork"><div class="render-error" id="render-error" role="alert" hidden></div></div>
+<div class="canvas-footer"><span><i class="status-dot"></i><span id="render-status">Preparing your artwork</span></span><span id="draft-status">Saved in this browser</span></div>
+<section class="output-panel"><div><p class="eyebrow">DELIVER SOMETHING REAL</p><h2>From your idea. Into the world.</h2><p>Editable SVG for design tools. PNG for publishing. A complete project to keep creating.</p></div><div class="output-actions"><button id="export-svg">Editable SVG ↗</button><button id="export-png">PNG image ↗</button><button id="export-html">Portable studio ↗</button></div></section>
+</section>
+<aside class="production-panel"><p class="eyebrow">ARTBOARD</p><label>Width<input type="number" min="64" max="8192" id="width"></label><label>Height<input type="number" min="64" max="8192" id="height"></label><p class="hint">Pixels. The SVG stays sharp at any size. Ask the agent to adapt the layout to a new proportion.</p>
+<div id="variation-panel"><div class="rule"></div><p class="eyebrow">VARIATION</p><form id="seed-form"><label for="seed">Composition seed</label><div class="seed-row"><input id="seed" maxlength="128"><button type="submit">Apply</button></div><button id="next-seed" type="button">Explore another ↗</button></form><p class="hint">The same project and seed recreate the same vector geometry.</p></div>
+<div class="rule"></div><p class="eyebrow">EXPORT</p><label>PNG scale<select id="png-scale"><option value="1">1× · artboard size</option><option value="2">2× · double size</option><option value="4">4× · print detail</option></select></label><div id="edition-panel"><label>Edition count<input id="edition-count" type="number" min="1" max="24" value="1"></label><button id="export-edition">Export SVG edition ↗</button><p class="hint">Edition ZIP includes the exact seeds and your editable source. Export kit includes every named format as SVG and PNG.</p></div>
+<div class="rule"></div><button id="reset-project" class="quiet">Restore agent version</button></aside>
+</main><div id="toast" role="status"></div><input type="file" id="project-file" accept=".json,application/json" hidden>
+<script id="fieldwork-data" type="application/json">{"spec":"fieldwork/1","id":"night-garden","title":"Night Garden","brief":"A nocturnal botanical identity for an independent music festival. Build a poster, square announcement and wide banner with oversized typography and original cut-paper flowers.","notes":"Example project. Ask the agent for your own visual system; none of these shapes or controls are requirements. The three formats are composed separately from the same design language.","seed":"42","formats":[{"name":"Poster","width":1200,"height":1600},{"name":"Social","width":1080,"height":1080},{"name":"Banner","width":1920,"height":800}],"controls":[{"key":"headline","type":"text","label":"Festival name","value":"NIGHT GARDEN"},{"key":"details","type":"text","label":"Date and place","value":"SEPTEMBER 26—28 · BOTANICAL GROUNDS"},{"key":"lineup","type":"text","label":"Lineup","value":"MIRA / SOFT SIGNAL / LUNAR ASSEMBLY"},{"key":"paper","type":"color","label":"Paper","value":"#f4ead9"},{"key":"ink","type":"color","label":"Ink","value":"#142a24"},{"key":"flower","type":"color","label":"Petals","value":"#f26842"},{"key":"accent","type":"color","label":"Center","value":"#dcf476"},{"key":"petals","type":"range","label":"Flower geometry","min":5,"max":14,"step":1,"value":8},{"key":"wildness","type":"range","label":"Organic variation","min":0,"max":100,"step":1,"value":55}],"assets":[{"key":"logo","label":"Your logo (optional)"}],"code":"// This program belongs to this brief. Replace it entirely for a different idea.\n// Return SVG children. width/height are the current artboard; values are user edits.\nconst { el, text } = svg, r = rng('flowers'), w = width, h = height;\nconst wide = w / h > 1.7, square = !wide && w / h > .85;\nconst pad = w * .065, base = Math.min(w, h);\nconst parts = [el('rect', { width: w, height: h, fill: values.paper })];\nconst flower = (x, y, radius, petals, rotation, color) => {\n  let path = '';\n  const steps = petals * 24, jitter = values.wildness / 100;\n  const phase = r() * 6.283;\n  for (let i = 0; i \u003c= steps; i++) {\n    const angle = i / steps * Math.PI * 2;\n    const lobes = .57 + .43 * (.5 + .5 * Math.cos(angle * petals));\n    const rad = radius * lobes * (1 + Math.sin(angle * 3 + phase) * .13 * jitter);\n    path += `${i ? 'L' : 'M'}${(Math.cos(angle) * rad).toFixed(2)},${(Math.sin(angle) * rad).toFixed(2)} `;\n  }\n  return el('g', { transform: `translate(${x} ${y}) rotate(${rotation})` }, [\n    el('path', { d: path + 'Z', fill: color }),\n    el('circle', { r: radius * .24, fill: values.accent }),\n    ...Array.from({ length: 32 }, () => { const a = r() * Math.PI * 2, d = Math.sqrt(r()) * radius * .18; return el('circle', { cx: Math.cos(a) * d, cy: Math.sin(a) * d, r: radius * .012, fill: values.ink }); }),\n  ]);\n};\nconst type = { fill: values.ink, 'font-family': 'Arial, Helvetica, sans-serif' };\nparts.push(text('INDEPENDENT SOUND / AFTER DARK', { ...type, x: pad, y: h * .066, 'font-size': base * .015, 'letter-spacing': base * .002 }));\nif (wide) {\n  parts.push(flower(w * .77, h * .45, h * .35, values.petals, -20, values.flower));\n  parts.push(flower(w * .94, h * .20, h * .15, 6, 0, values.ink));\n} else {\n  parts.push(el('path', { d: `M ${w * .50} ${h * (square ? .55 : .59)} Q ${w * .25} ${h * .45} ${w * .65} ${h * .27}`, fill: 'none', stroke: values.ink, 'stroke-width': w * .026 }));\n  parts.push(flower(w * .66, h * (square ? .27 : .28), w * (square ? .215 : .30), values.petals, -18, values.flower));\n  parts.push(flower(w * .25, h * (square ? .37 : .40), w * (square ? .15 : .17), Math.max(5, values.petals - 2), 20, values.ink));\n  const leafY = h * (square ? .44 : .50);\n  parts.push(el('ellipse', { cx: w * .53, cy: leafY, rx: w * (square ? .07 : .085), ry: w * (square ? .135 : .19), fill: values.ink, transform: `rotate(57 ${w * .53} ${leafY})` }));\n}\nconst words = values.headline.trim().split(/\\s+/), midpoint = Math.ceil(words.length / 2);\nconst lines = words.length > 1 ? [words.slice(0, midpoint).join(' '), words.slice(midpoint).join(' ')] : [words[0] || 'UNTITLED'];\nconst maxWidth = w * (wide ? .52 : .88), font = Math.min(base * (wide ? .195 : square ? .17 : .18), maxWidth / Math.max(...lines.map(s => s.length)) * 1.48);\nconst baseline = h * (wide ? .39 : square ? .70 : .72);\nlines.forEach((line, i) => parts.push(text(line, { ...type, x: pad, y: baseline + i * font * .90, 'font-size': font, 'font-weight': '900', 'letter-spacing': -font * .05 })));\nparts.push(el('line', { x1: pad, x2: w - pad, y1: h * .89, y2: h * .89, stroke: values.ink, 'stroke-width': Math.max(1, base * .0014) }));\nparts.push(text(values.details, { ...type, x: pad, y: h * .925, 'font-size': Math.min(base * .017, (w - pad * 2) / Math.max(values.details.length, 1) * 1.6), 'font-weight': 700, 'letter-spacing': base * .001 }));\nparts.push(text(values.lineup, { ...type, x: pad, y: h * .96, 'font-size': Math.min(base * .013, (w - pad * 2) / Math.max(values.lineup.length, 1) * 1.6) }));\nif (assets.logo) parts.push(el('image', { href: assets.logo, x: w - pad - base * .08, y: h * .036, width: base * .08, height: base * .055, preserveAspectRatio: 'xMidYMid meet' }));\nreturn parts.join('');\n","revision":"34377e73e93d35f3709b29bea94b74df60560a809351500020f388f3067bfe25"}</script><script id="fieldwork-model">// Shared by the authoring tools, preview worker and exported projects.
+const ART_SPEC = 'fieldwork/1';
+const kinds = new Set(['text', 'color', 'range', 'select', 'toggle']);
+const keyPattern = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
+function validateProject(input) {
+  const p = structuredClone(input);
+  if (!p || p.spec !== ART_SPEC) throw new Error('This is not a Fieldwork project.');
+  if (typeof p.id !== 'string' || !/^[a-z0-9-]{1,80}$/.test(p.id)) throw new Error('Project needs a stable id.');
+  for (const name of ['title', 'brief']) if (typeof p[name] !== 'string' || !p[name].trim() || p[name].length > 6000) throw new Error(`Invalid ${name}.`);
+  if (typeof p.code !== 'string' || !p.code.trim() || p.code.length > 500000) throw new Error('The project needs an artwork.js renderer.');
+  // Compile only. Actual rendering happens in a terminable browser worker.
+  new Function('width', 'height', 'seed', 'values', 'assets', 'rng', 'svg', '"use strict";\n' + p.code);
+  if (!Array.isArray(p.formats) || !p.formats.length || p.formats.length > 12) throw new Error('Provide 1–12 output formats.');
+  for (const f of p.formats) {
+    if (typeof f.name !== 'string' || !f.name.trim() || f.name.length > 80) throw new Error('Name each format.');
+    for (const k of ['width', 'height']) if (!Number.isInteger(f[k]) || f[k] < 64 || f[k] > 8192) throw new Error('Artboards must be 64–8192 pixels per side.');
+  }
+  if (!Array.isArray(p.controls) || p.controls.length > 40) throw new Error('Provide at most 40 editable controls.');
+  const ids = new Set();
+  for (const c of p.controls) {
+    if (!keyPattern.test(c.key) || ids.has(c.key) || !kinds.has(c.type) || typeof c.label !== 'string') throw new Error('Invalid or duplicate project control.');
+    ids.add(c.key);
+    if (c.type === 'range' && (![c.min, c.max, c.step ?? 1].every(Number.isFinite) || c.max <= c.min || (c.step ?? 1) <= 0)) throw new Error(`Invalid range: ${c.key}.`);
+    if (c.type === 'select' && (!Array.isArray(c.options) || !c.options.length || c.options.length > 50 || c.options.some(x => typeof x !== 'string'))) throw new Error(`Invalid choices: ${c.key}.`);
+    checkedValue(c, c.value);
+  }
+  p.assets ??= [];
+  if (!Array.isArray(p.assets) || p.assets.length > 12) throw new Error('Provide at most 12 image assets.');
+  ids.clear();
+  for (const a of p.assets) {
+    if (!keyPattern.test(a.key) || ids.has(a.key) || typeof a.label !== 'string') throw new Error('Invalid asset slot.');
+    ids.add(a.key);
+    if (a.data && (typeof a.data !== 'string' || !/^data:image\/(png|jpeg|webp|svg\+xml);base64,[a-zA-Z0-9+/=]+$/.test(a.data) || a.data.length > 16000000)) throw new Error(`Embed ${a.label} as a PNG, JPEG, WebP or SVG image.`);
+  }
+  p.seed = String(p.seed ?? '1').slice(0, 128);
+  if (p.variations !== undefined && typeof p.variations !== 'boolean') throw new Error('variations must be a boolean.');
+  if (JSON.stringify(p).length > 28000000) throw new Error('Keep the editable project under 28 MB. Use smaller embedded images.');
+  return p;
+}
+function checkedValue(c, value) {
+  if (c.type === 'range' && (!Number.isFinite(value) || value < c.min || value > c.max)) throw new Error(`${c.label} is out of range.`);
+  if (c.type === 'color' && (typeof value !== 'string' || !/^#[0-9a-f]{6}$/i.test(value))) throw new Error(`Invalid ${c.label} color.`);
+  if (c.type === 'text' && (typeof value !== 'string' || value.length > 4000)) throw new Error(`${c.label} must be text under 4000 characters.`);
+  if (c.type === 'select' && !c.options.includes(value)) throw new Error(`Invalid ${c.label} choice.`);
+  if (c.type === 'toggle' && typeof value !== 'boolean') throw new Error(`Invalid ${c.label} toggle.`);
+  return value;
+}
+function artRandom(seed, namespace = '') {
+  let n = 2166136261;
+  for (const c of String(seed) + ':' + namespace) n = Math.imul(n ^ c.charCodeAt(0), 16777619);
+  return () => { n += 0x6D2B79F5; let t = Math.imul(n ^ n >>> 15, n | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+function xml(value) { return String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]); }
+const svg = {
+  escape: xml,
+  el(tag, attrs = {}, children = '') {
+    if (!/^[a-zA-Z][a-zA-Z0-9:-]*$/.test(tag)) throw new Error('Invalid SVG element.');
+    return `<${tag}${Object.entries(attrs).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => ` ${k}="${xml(v)}"`).join('')}>${Array.isArray(children) ? children.join('') : children}</${tag}>`;
+  },
+  text(value, attrs = {}) { return svg.el('text', attrs, xml(value)); },
+};
+function renderProject(project, { format = 0, width, height, seed = project.seed, values = {} } = {}) {
+  const f = project.formats[format];
+  if (!f) throw new Error('Choose a valid format.');
+  width ??= f.width; height ??= f.height;
+  if (![width, height].every(n => Number.isInteger(n) && n >= 64 && n <= 8192)) throw new Error('Invalid artboard size.');
+  const resolved = Object.fromEntries(project.controls.map(c => [c.key, checkedValue(c, values[c.key] ?? c.value)]));
+  const assets = Object.fromEntries(project.assets.map(a => [a.key, a.data || '']));
+  const body = new Function('width', 'height', 'seed', 'values', 'assets', 'rng', 'svg', '"use strict";\n' + project.code)(width, height, String(seed), resolved, assets, name => artRandom(seed, name), svg);
+  if (typeof body !== 'string' || !body.trim() || body.length > 24000000) throw new Error('The renderer must return SVG artwork under 24 MB.');
+  return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><title>${xml(project.title)}</title>${body}</svg>`;
+}
+function filename(name) { return String(name).normalize('NFKD').replace(/[^a-zA-Z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 100) || 'artwork'; }
+// ZIP STORE: portable editable delivery without a runtime dependency or a cloud service.
+function zipFiles(files) {
+  const enc = new TextEncoder(), chunks = [], central = []; let offset = 0;
+  for (const [name, body] of files) {
+    const path = enc.encode(name), bytes = typeof body === 'string' ? enc.encode(body) : new Uint8Array(body);
+    let crc = 0xffffffff;
+    for (const b of bytes) { crc ^= b; for (let i = 0; i < 8; i++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1)); }
+    crc = (crc ^ 0xffffffff) >>> 0;
+    const header = new Uint8Array(30 + path.length), v = new DataView(header.buffer);
+    v.setUint32(0, 0x04034b50, true); v.setUint16(4, 20, true); v.setUint16(6, 0x800, true); v.setUint16(12, 33, true);
+    v.setUint32(14, crc, true); v.setUint32(18, bytes.length, true); v.setUint32(22, bytes.length, true); v.setUint16(26, path.length, true); header.set(path, 30);
+    const row = new Uint8Array(46 + path.length), c = new DataView(row.buffer);
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x800, true); c.setUint16(14, 33, true);
+    c.setUint32(16, crc, true); c.setUint32(20, bytes.length, true); c.setUint32(24, bytes.length, true); c.setUint16(28, path.length, true); c.setUint32(42, offset, true); row.set(path, 46);
+    chunks.push(header, bytes); central.push(row); offset += header.length + bytes.length;
+  }
+  const length = central.reduce((n, row) => n + row.length, 0), end = new Uint8Array(22), e = new DataView(end.buffer);
+  e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, length, true); e.setUint32(16, offset, true);
+  return new Blob([...chunks, ...central, end], { type: 'application/zip' });
+}
+</script><script>const $ = selector => document.querySelector(selector);
+const original = validateProject(JSON.parse($('#fieldwork-data').textContent));
+const modelSource = $('#fieldwork-model').textContent;
+const storageKey = `fieldwork:${original.id}`;
+let project = structuredClone(original), format = 0, svgText = '', artURL, worker, renderSequence = 0;
+let undoStack = [], redoStack = [], pendingDraft, preserveDraft = false, toastTimer, renderTimer;
+const exportButtons = ['export-svg', 'export-png', 'export-kit', 'export-edition'];
+const snapshot = () => ({ project: structuredClone(project), format });
+function toast(message) { $('#toast').textContent = message; $('#toast').classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').classList.remove('visible'), 4500); }
+function signal(type, extra = {}) { if (parent !== window) parent.postMessage({ type, seed: project.seed, ...extra }, '*'); }
+function persist() {
+  if (preserveDraft) return;
+  try { localStorage.setItem(storageKey, JSON.stringify({ baseRevision: original.revision, ...snapshot() })); $('#draft-status').textContent = 'Draft saved on this device'; }
+  catch { $('#draft-status').textContent = 'Save project to keep your changes'; }
+}
+function changed(mutate, { rebuild = false } = {}) {
+  undoStack.push(snapshot()); if (undoStack.length > 24) undoStack.shift(); redoStack = [];
+  mutate(); if (rebuild) buildUI(); else syncFields();
+  persist(); scheduleRender();
+}
+function restore(state) { project = validateProject(state.project); format = Math.max(0, Math.min(project.formats.length - 1, state.format || 0)); buildUI(); persist(); scheduleRender(); }
+function saveFile(name, content, type) {
+  const blob = content instanceof Blob ? content : new Blob([content], { type: type || 'application/octet-stream' });
+  const url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+function baseName(suffix = '') { return `${filename(project.title)}-${filename(project.formats[format].name)}-${filename(project.seed)}${suffix}`; }
+function portableProject() { return { ...structuredClone(project), view: { format } }; }
+function syncFields() {
+  $('#width').value = project.formats[format].width; $('#height').value = project.formats[format].height;
+  $('#dimensions').textContent = `${$('#width').value} × ${$('#height').value}`;
+  $('#seed').value = project.seed;
+  $('#undo').disabled = !undoStack.length; $('#redo').disabled = !redoStack.length;
+  for (const b of $('#formats').children) b.setAttribute('aria-pressed', Number(b.dataset.format) === format);
+  const url = new URL(location.href); url.searchParams.set('seed', project.seed); history.replaceState(null, '', url);
+  signal('harness:state');
+}
+function buildUI() {
+  document.title = `${project.title} · Fieldwork`;
+  $('#project-title').textContent = project.title; $('#brief').textContent = project.brief;
+  $('#notes').textContent = project.notes || 'Your drawing program is original to this project. Ask the agent to change its visual language, composition or outputs.';
+  $('#variation-panel').hidden = project.variations === false;
+  $('#edition-panel').hidden = project.variations === false;
+  $('#formats').replaceChildren();
+  project.formats.forEach((f, i) => { const b = document.createElement('button'); b.textContent = f.name; b.dataset.format = i; b.onclick = () => changed(() => { format = i; }); $('#formats').append(b); });
+  $('#controls').replaceChildren();
+  for (const c of project.controls) {
+    const label = document.createElement('label'), top = document.createElement('span'), title = document.createElement('span'), out = document.createElement('output');
+    label.className = 'field'; top.className = 'field-top'; title.textContent = c.label; top.append(title);
+    let input;
+    if (c.type === 'select') { input = document.createElement('select'); for (const option of c.options) { const el = document.createElement('option'); el.textContent = option; input.append(el); } }
+    else if (c.type === 'text' && c.multiline) input = document.createElement('textarea');
+    else { input = document.createElement('input'); input.type = c.type === 'toggle' ? 'checkbox' : c.type === 'text' ? 'text' : c.type; }
+    input.id = 'control-' + c.key;
+    if (c.type === 'range') { input.min = c.min; input.max = c.max; input.step = c.step ?? 1; out.value = c.value; top.append(out); }
+    if (c.type === 'toggle') input.checked = c.value; else input.value = c.value;
+    if (c.type === 'text') input.maxLength = 4000;
+    input.addEventListener(c.type === 'color' || c.type === 'range' || c.type === 'text' ? 'input' : 'change', () => changed(() => {
+      c.value = c.type === 'toggle' ? input.checked : c.type === 'range' ? Number(input.value) : input.value; out.value = c.value;
+    }));
+    label.append(top, input); $('#controls').append(label);
+  }
+  $('#assets').replaceChildren();
+  for (const asset of project.assets) {
+    const block = document.createElement('div'), name = document.createElement('p'), row = document.createElement('div'), choose = document.createElement('button'), remove = document.createElement('button'), input = document.createElement('input');
+    block.className = 'field'; name.textContent = asset.label; row.className = 'asset-row'; choose.textContent = asset.data ? 'Replace image' : 'Use your image'; remove.textContent = 'Remove'; remove.disabled = !asset.data;
+    input.type = 'file'; input.accept = 'image/png,image/jpeg,image/webp,image/svg+xml'; input.hidden = true; input.setAttribute('aria-label', asset.label);
+    choose.onclick = () => input.click();
+    input.onchange = async () => {
+      try {
+        const file = input.files[0]; if (!file) return;
+        if (file.size > 12000000) throw new Error('Choose an image under 12 MB.');
+        const data = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file); });
+        const candidate = structuredClone(project); candidate.assets.find(a => a.key === asset.key).data = data; validateProject(candidate);
+        changed(() => { asset.data = data; }, { rebuild: true });
+      } catch (error) { toast(error.message || 'Could not read that image.'); }
+    };
+    remove.onclick = () => changed(() => { delete asset.data; }, { rebuild: true });
+    row.append(choose, remove); block.append(name, row, input); $('#assets').append(block);
+  }
+  syncFields();
+}
+function checkSVG(text) {
+  const externalURL = value => [...value.matchAll(/url\(\s*([^)]*)\)/gi)].some(([, url]) => !/^(#|data:)/i.test(url.trim().replace(/^['"]|['"]$/g, '')));
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+  if (doc.querySelector('parsererror')) throw new Error('Artwork returned invalid SVG. Ask the agent to fix the drawing program.');
+  for (const node of doc.querySelectorAll('*')) {
+    if (['script', 'foreignobject', 'iframe', 'object', 'embed', 'audio', 'video', 'animate', 'animatetransform', 'set'].includes(node.localName.toLowerCase())) throw new Error('This studio exports static vector artwork. Remove active SVG elements.');
+    for (const attr of node.attributes) {
+      if (/^on/i.test(attr.name) || (/(^|:)href$/.test(attr.name) && !/^(#|data:image\/)/.test(attr.value))) throw new Error('Embed artwork assets so exports work offline.');
+      if (externalURL(attr.value)) throw new Error('External resources are not portable. Embed them in the project.');
+    }
+    if (node.localName === 'style' && (/@import/i.test(node.textContent) || externalURL(node.textContent))) throw new Error('Embed fonts and images; external stylesheets cannot be exported.');
+  }
+  return text;
+}
+function renderInWorker(candidate, options = {}) {
+  return new Promise((resolve, reject) => {
+    const script = modelSource + '\nonmessage = e => { try { postMessage({ svg: renderProject(e.data.project, e.data.options) }); } catch (error) { postMessage({ error: error.message }); } };';
+    const url = URL.createObjectURL(new Blob([script], { type: 'text/javascript' }));
+    const task = new Worker(url); URL.revokeObjectURL(url);
+    const timer = setTimeout(() => { task.terminate(); reject(new Error('This drawing took longer than 5 seconds. Ask the agent to simplify it.')); }, 5000);
+    const done = fn => value => { clearTimeout(timer); task.terminate(); fn(value); };
+    task.onmessage = event => done(event.data.error ? reject : resolve)(event.data.error ? new Error(event.data.error) : event.data.svg);
+    task.onerror = event => done(reject)(new Error(event.message));
+    task.postMessage({ project: candidate, options });
+  });
+}
+function scheduleRender() { ++renderSequence; for (const id of exportButtons) $('#' + id).disabled = true; clearTimeout(renderTimer); renderTimer = setTimeout(render, 80); }
+async function render() {
+  const sequence = ++renderSequence;
+  for (const id of exportButtons) $('#' + id).disabled = true;
+  $('#render-status').textContent = 'Drawing your project…';
+  try {
+    const text = checkSVG(await renderInWorker(project, { format }));
+    if (sequence !== renderSequence) return;
+    const image = $('#art'), nextURL = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' }));
+    await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = () => reject(new Error('The vector image could not be displayed.')); image.src = nextURL; });
+    if (artURL) URL.revokeObjectURL(artURL); artURL = nextURL;
+    if (sequence !== renderSequence) return;
+    svgText = text; $('#render-error').hidden = true;
+    $('#render-status').textContent = 'Original vector artwork · ready to export';
+    for (const id of exportButtons) $('#' + id).disabled = false;
+    document.body.dataset.ready = 'true'; signal('harness:ready');
+  } catch (error) {
+    if (sequence !== renderSequence) return;
+    $('#render-error').textContent = error.message; $('#render-error').hidden = false;
+    $('#render-status').textContent = 'Drawing needs a fix · exports paused'; signal('harness:error', { message: error.message });
+  }
+}
+async function raster(text, width, height, scale = Number($('#png-scale').value)) {
+  const w = Math.round(width * scale), h = Math.round(height * scale);
+  if (w > 8192 || h > 8192 || w * h > 32000000) throw new Error('PNG is too large. Choose a smaller scale or artboard (maximum 32 megapixels).');
+  const url = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' }));
+  try {
+    const img = new Image(); img.src = url; await img.decode();
+    const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h;
+    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('PNG export failed.');
+    return blob;
+  } finally { URL.revokeObjectURL(url); }
+}
+function guard(task) { return async () => { try { await task(); } catch (error) { toast(error.message); } }; }
+$('#export-svg').onclick = () => saveFile(baseName('.svg'), svgText, 'image/svg+xml');
+$('#export-png').onclick = guard(async () => { const f = project.formats[format]; saveFile(baseName('.png'), await raster(svgText, f.width, f.height)); toast('PNG exported at your chosen size.'); });
+$('#save-project').onclick = () => { saveFile(`${filename(project.title)}.fieldwork.json`, JSON.stringify(portableProject(), null, 2), 'application/json'); toast('Editable project saved, including your images and drawing program.'); };
+$('#open-project').onclick = () => $('#project-file').click();
+$('#project-file').onchange = guard(async () => {
+  const file = $('#project-file').files[0]; if (!file) return;
+  if (file.size > 64000000) throw new Error('Project is too large (maximum 64 MB).');
+  const next = validateProject(JSON.parse(await file.text()));
+  changed(() => { project = next; format = Math.min(next.view?.format || 0, next.formats.length - 1); }, { rebuild: true });
+  $('#project-file').value = ''; toast('Project opened.');
+});
+$('#export-html').onclick = () => {
+  const doc = document.documentElement.cloneNode(true);
+  doc.querySelector('#fieldwork-data').textContent = JSON.stringify(portableProject()).replace(/</g, '\\u003c');
+  doc.querySelector('#revision-notice').hidden = true; doc.querySelector('#art').removeAttribute('src');
+  doc.querySelector('#toast').className = ''; doc.querySelector('body').removeAttribute('data-ready');
+  saveFile(`${filename(project.title)}-studio.html`, '<!doctype html>\n' + doc.outerHTML, 'text/html');
+  toast('Portable studio saved. Open it directly in a browser.');
+};
+function sourceFiles() {
+  const p = portableProject(), manifest = structuredClone(p); delete manifest.code; delete manifest.revision; delete manifest.view;
+  return [['project.fieldwork.json', JSON.stringify(p, null, 2)], ['source/project.json', JSON.stringify(manifest, null, 2)], ['source/artwork.js', p.code], ['README.txt', `${p.title}\n\n${p.brief}\n\nOpen SVG in a vector editor. PNGs are ready for publishing. Open project.fieldwork.json in Fieldwork to revise the project; it contains your renderer and embedded images. The source folder contains editable project settings and drawing code. System fonts can vary between machines.\n`]];
+}
+$('#export-kit').onclick = guard(async () => {
+  const candidate = structuredClone(project), files = sourceFiles(), scale = Number($('#png-scale').value);
+  $('#export-kit').disabled = true;
+  try {
+    for (let i = 0; i < candidate.formats.length; i++) {
+      const f = candidate.formats[i], name = `${String(i + 1).padStart(2, '0')}-${filename(f.name)}`, text = checkSVG(await renderInWorker(candidate, { format: i }));
+      files.push([`${name}.svg`, text], [`${name}.png`, await (await raster(text, f.width, f.height, scale)).arrayBuffer()]);
+    }
+    saveFile(`${filename(candidate.title)}-delivery.zip`, zipFiles(files)); toast(`${candidate.formats.length} formats exported as SVG and PNG, with editable source.`);
+  } finally { $('#export-kit').disabled = false; }
+});
+$('#export-edition').onclick = guard(async () => {
+  const count = Number($('#edition-count').value);
+  if (!Number.isInteger(count) || count < 1 || count > 24) throw new Error('Choose an edition of 1–24.');
+  const candidate = structuredClone(project), chosenFormat = format, files = sourceFiles(), seeds = [];
+  for (let i = 0; i < count; i++) {
+    const seed = i === 0 ? candidate.seed : /^\d{1,9}$/.test(candidate.seed) ? String(Number(candidate.seed) + i) : `${candidate.seed}.${i}`;
+    seeds.push(seed); files.push([`edition/${String(i + 1).padStart(2, '0')}-${filename(seed)}.svg`, checkSVG(await renderInWorker(candidate, { format: chosenFormat, seed }))]);
+  }
+  files.push(['edition.json', JSON.stringify({ seeds, format: candidate.formats[chosenFormat], project: candidate.id }, null, 2)]);
+  saveFile(`${filename(candidate.title)}-edition.zip`, zipFiles(files)); toast(`${count} reproducible vectors exported.`);
+});
+$('#seed-form').onsubmit = event => { event.preventDefault(); changed(() => { project.seed = $('#seed').value.trim().slice(0, 128) || '1'; }); };
+$('#next-seed').onclick = () => changed(() => { project.seed = /^\d{1,9}$/.test(project.seed) ? String(Number(project.seed) + 1) : `${project.seed.slice(0, 115)}.${Math.floor(artRandom(project.seed, 'next')() * 1000000)}`; });
+for (const dimension of ['width', 'height']) $('#' + dimension).onchange = () => {
+  const value = Number($('#' + dimension).value);
+  if (!Number.isInteger(value) || value < 64 || value > 8192) { toast('Use a size from 64 to 8192 pixels.'); syncFields(); return; }
+  changed(() => { project.formats[format][dimension] = value; });
+};
+$('#undo').onclick = () => { if (!undoStack.length) return; redoStack.push(snapshot()); restore(undoStack.pop()); };
+$('#redo').onclick = () => { if (!redoStack.length) return; undoStack.push(snapshot()); restore(redoStack.pop()); };
+$('#reset-project').onclick = () => changed(() => { project = structuredClone(original); format = 0; }, { rebuild: true });
+$('#use-revision').onclick = () => { preserveDraft = false; $('#revision-notice').hidden = true; persist(); };
+$('#keep-draft').onclick = () => { preserveDraft = false; $('#revision-notice').hidden = true; restore(pendingDraft); };
+try {
+  const saved = JSON.parse(localStorage.getItem(storageKey));
+  if (saved) {
+    saved.project = validateProject(saved.project);
+    if (saved.baseRevision === original.revision) { project = saved.project; format = Math.min(saved.format || 0, project.formats.length - 1); }
+    else { pendingDraft = saved; preserveDraft = true; $('#revision-notice').hidden = false; }
+  }
+} catch { /* A blocked store or an old draft never prevents opening the project. */ }
+const querySeed = new URLSearchParams(location.search).get('seed'); if (querySeed) project.seed = querySeed.slice(0, 128);
+addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.target.closest('input,textarea,select')) { e.preventDefault(); $('#' + (e.shiftKey ? 'redo' : 'undo')).click(); } });
+window.fieldwork = {
+  getProject: () => portableProject(), getSVG: () => svgText, validateProject,
+  render: async (options = {}) => checkSVG(await renderInWorker(project, { format, ...options })),
+  async deliver(options, scale = 1) {
+    const f = project.formats[options.format || 0], text = checkSVG(await renderInWorker(project, options));
+    const blob = await raster(text, f.width, f.height, scale);
+    const png = await new Promise(resolve => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsDataURL(blob); });
+    return { svg: text, png, width: f.width * scale, height: f.height * scale };
+  },
+};
+buildUI(); render();
+</script></body></html>

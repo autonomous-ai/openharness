@@ -1,0 +1,23 @@
+{
+  "spec": 1,
+  "kind": "viewer",
+  "id": "autonomous/video-viewer",
+  "name": "Video Viewer",
+  "category": "Video",
+  "author": "Autonomous",
+  "description": "An editor-grade player for what a harness renders: every render listed, chapters on the timeline, frame-accurate scrubbing with a filmstrip, loops and stills — and the render in progress playable as it is made.",
+  "toolchain": {
+    "doctor": "./doctor.sh"
+  },
+  "viewer": {
+    "command": "./viewer.sh",
+    "url": "http://127.0.0.1:${port}/?file=${artifact}",
+    "artifactExtensions": [
+      ".mp4",
+      ".webm",
+      ".mov",
+      ".gif",
+      ".png"
+    ]
+  }
+}

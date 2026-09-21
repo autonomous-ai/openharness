@@ -14,14 +14,14 @@ import {
 
 // The id inside a `runtime-v1:` string is the AGENT id ('h1' here) — a client only ever echoes back an id
 // the catalog minted, and the catalog is agent-scoped. `setProfile` is still addressed with either id.
-function session(engine: 'claude' | 'codex' | 'cursor'): RegisteredSession {
+function session(engine: 'claude' | 'codex' | 'cursor' | 'opencode'): RegisteredSession {
   return {
     schemaVersion: 2,
     active: true,
     sessionId: 's1', engine, launcherId: 'h1', agentId: 'h1', boundAt: 0, transcriptPath: '/tmp/s1.jsonl', projectDir: 'tmp', cwd: '/tmp',
     tmuxPane: '%1', source: null, title: null, model: null,
     runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux\u0000%1',
-    cliVersion: engine === 'codex' ? '0.144.5' : engine === 'cursor' ? '2026.07.20-8cc9c0b' : '2.1.212', processIdentity: null,
+    cliVersion: engine === 'codex' ? '0.144.5' : engine === 'cursor' ? '2026.07.20-8cc9c0b' : engine === 'opencode' ? '1.18.31' : '2.1.212', processIdentity: null,
     registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
   }
 }
@@ -59,7 +59,7 @@ describe('runtime pane parsing', () => {
       ...composer.map((line) => `  ┃${line}`),
       '  ┃  Build · DeepSeek-V4-Flash-0731 autonomous.ai',
       '  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀',
-      '   /Users/macbook/Downloads/20260907',
+      '   /Users/example/Downloads/20260907',
     ].join('\n')
 
     expect(inspectRuntimePane('opencode', box(['', '', '']))).toMatchObject({ idle: true, draft: false })
@@ -76,6 +76,62 @@ describe('runtime pane parsing', () => {
       'opencode',
       [box(['', '  LSP là gì thế', '']), 'answer text', box(['', '', ''])].join('\n'),
     )).toMatchObject({ idle: true, draft: false })
+  })
+
+  it('reads opencode past a card floating over its composer', () => {
+    // Copied off a live pane (2026-09-15). OpenCode's `Getting started` card is drawn on the RIGHT,
+    // which puts its text on the composer's own rows — a TUI paints one terminal row at a time, so
+    // anything floating over the box lands inside the box's lines. Reading to end-of-line took
+    // `Connect provider /connect` as something the user had typed, so an EMPTY composer read as a
+    // draft, the pane was never idle, and every model switch came back AGENT_BUSY.
+    const PANE = '\u001b[48;2;10;10;10m'
+    const BOX = '\u001b[48;2;30;30;30m'
+    const SIDEBAR = '\u001b[48;2;20;20;20m'
+    const BLUE = '\u001b[38;2;92;156;245m'
+    const WHITE = '\u001b[38;2;255;255;255m'
+    const row = (composer: string, card: string) =>
+      `${PANE}  ${BLUE}┃${WHITE}${BOX}${composer.padEnd(40)}`
+      + `${PANE}  ${SIDEBAR}  ${BOX}    \u001b[38;2;238;238;238m${card}`
+    const pane = (composer: readonly string[]) => [
+      ...composer.map((line) => row(line, 'Connect provider        /connect')),
+      row('  Build · Big Pickle OpenCode Zen', ''),
+      `  ${BLUE}╹\u001b[38;2;30;30;30m▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀`,
+    ].join('\n')
+
+    expect(inspectRuntimePane('opencode', pane(['', '', '']))).toMatchObject({ idle: true, draft: false })
+    // The card must not be able to hide a draft either: text INSIDE the box still counts, on the
+    // very row the card writes into. Reading a real draft as an empty prompt respawns the engine
+    // under text the user typed — the one direction this must never be wrong in.
+    expect(inspectRuntimePane('opencode', pane(['', '  what changed in this repo', ''])))
+      .toMatchObject({ idle: false, draft: true })
+  })
+
+  it('reads OpenCode\'s grey placeholder as a placeholder, not a draft', () => {
+    // Copied off a live pane (1.18.31). The third placeholder styling this module has had to learn:
+    // claude/codex/devin draw dim, hermes draws italic, and OpenCode draws a plain TRUECOLOR GREY
+    // with neither attribute — so nothing recognised it and a BRAND-NEW pane read as one holding a
+    // draft. It was never idle, and every model switch on an agent with no messages yet refused as
+    // AGENT_BUSY over an empty composer.
+    const BOX = '\u001b[48;2;30;30;30m'
+    const PANE = '\u001b[48;2;10;10;10m'
+    const WHITE = '\u001b[38;2;255;255;255m'
+    const GREY = '\u001b[38;2;128;128;128m'
+    const pane = (composer: string) => [
+      `  \u001b[38;2;92;156;245m┃${WHITE}${BOX}  ${composer}${WHITE}     ${PANE}`,
+      `  \u001b[38;2;92;156;245m┃${WHITE}${BOX}  \u001b[38;2;92;156;245mBuild${WHITE} ${GREY}·${WHITE} Big Pickle${PANE}`,
+      '  \u001b[38;2;92;156;245m╹\u001b[38;2;30;30;30m▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀',
+    ].join('\n')
+
+    expect(inspectRuntimePane('opencode', pane(`${GREY}Ask anything… "What is the tech stack of this project?"`)))
+      .toMatchObject({ idle: true, draft: false })
+    // ⚠️ The direction that must never be wrong: text the user typed is drawn in the composer's own
+    // near-white, and reading it as a placeholder would respawn the engine under a real draft.
+    expect(inspectRuntimePane('opencode', pane(`${WHITE}switch me please`)))
+      .toMatchObject({ idle: false, draft: true })
+    // A grey hint sitting BESIDE typed text does not make the line a placeholder — every visible
+    // character has to be muted, not merely some of them.
+    expect(inspectRuntimePane('opencode', pane(`${WHITE}fix the parser${GREY}  ⏎ send`)))
+      .toMatchObject({ idle: false, draft: true })
   })
 
   it('reads copilot, whose composer carries no marker while its sent messages do', () => {

@@ -26,13 +26,14 @@ export interface ArtifactHit {
   mtimeMs: number
 }
 
-export function newestArtifact(workspace: string, extensions: readonly string[]): ArtifactHit | null {
+/** `maxFiles` bounds how many directory entries are looked at; a test seam, the default in production. */
+export function newestArtifact(workspace: string, extensions: readonly string[], maxFiles = MAX_FILES): ArtifactHit | null {
   if (!extensions.length) return null
   const wanted = new Set(extensions.map((ext) => ext.toLowerCase()))
   let best: ArtifactHit | null = null
   let seen = 0
   const walk = (dir: string, depth: number): void => {
-    if (depth > MAX_DEPTH || seen > MAX_FILES) return
+    if (depth > MAX_DEPTH || seen > maxFiles) return
     let names: string[]
     try {
       names = readdirSync(dir)
@@ -40,7 +41,7 @@ export function newestArtifact(workspace: string, extensions: readonly string[])
       return
     }
     for (const name of names) {
-      if (seen++ > MAX_FILES) return
+      if (seen++ > maxFiles) return
       const path = join(dir, name)
       let st: ReturnType<typeof statSync>
       try {

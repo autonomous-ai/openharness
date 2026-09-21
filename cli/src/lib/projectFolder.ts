@@ -1,9 +1,12 @@
 import { spawn } from 'node:child_process'
-import { lstat, mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { projectFolderName, projectFolderSlug } from './agentNames.js'
 
-export type ProjectFolder = { source: 'new' } | { source: 'remote'; repositoryUrl: string; name: string }
+/** `name` on a new project is what the person called it; without one the folder is named after the
+ *  harness and the time. */
+export type ProjectFolder = { source: 'new'; name?: string } | { source: 'remote'; repositoryUrl: string; name: string }
 
 export class ProjectFolderError extends Error {
   constructor(readonly code: string, message: string) { super(message) }
@@ -13,7 +16,11 @@ export class ProjectFolderError extends Error {
 // credentials nor arbitrary local paths/remote helpers are repository URLs.
 export function parseProjectFolder(payload: Record<string, unknown>): ProjectFolder | null {
   if (payload.projectSource === undefined) return null
-  if (payload.projectSource === 'new' && payload.repositoryUrl === undefined) return { source: 'new' }
+  if (payload.projectSource === 'new' && payload.repositoryUrl === undefined) {
+    // Slugged again here: the name becomes a path segment, so it is never taken on trust.
+    const name = typeof payload.projectName === 'string' ? projectFolderSlug(payload.projectName) : null
+    return name ? { source: 'new', name } : { source: 'new' }
+  }
   if (payload.projectSource !== 'remote' || typeof payload.repositoryUrl !== 'string') {
     throw new ProjectFolderError('INVALID_PROJECT_SOURCE', 'Choose a project.')
   }
@@ -46,21 +53,40 @@ async function exists(path: string): Promise<boolean> {
 
 export async function prepareProjectFolder(
   project: ProjectFolder,
-  options: { root?: string; clone?: (url: string, destination: string) => Promise<void> } = {},
+  options: {
+    root?: string
+    clone?: (url: string, destination: string) => Promise<void>
+    /** Who the harness is ("Codex", "Blender"): a new project folder is named after it and the time. */
+    label?: string | null
+    now?: () => Date
+  } = {},
 ): Promise<string> {
   const root = options.root ?? join(homedir(), 'harnesses')
   let staging: string | undefined
   try {
     await mkdir(root, { recursive: true })
+    if (project.source === 'new' && project.name) {
+      // A name somebody chose is never quietly changed: an existing folder is theirs to pick as an
+      // existing project, as a clone's is.
+      const folder = join(root, project.name)
+      try { await mkdir(folder); return folder }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+        throw new ProjectFolderError('PROJECT_EXISTS', `“${project.name}” already exists. Select that folder from your projects.`)
+      }
+    }
     if (project.source === 'new') {
-      const numbers = (await readdir(root)).map(name => /^agent-([1-9]\d*)$/.exec(name)?.[1])
-      let next = numbers.reduce((max, value) => value && BigInt(value) > max ? BigInt(value) : max, 0n) + 1n
-      for (;;) {
-        const folder = join(root, `agent-${next++}`)
+      // `codex-2026-09-17-15-26` (agentNames.ts): nothing to count. Two in the same minute take the
+      // seconds; the same second, a suffix. mkdir reserves the name atomically, so simultaneous
+      // desktop and remote creates never share a folder; files and symlinks count as taken.
+      const at = (options.now ?? (() => new Date()))()
+      const label = options.label?.trim() || 'harness'
+      const precise = projectFolderName(label, at, true)
+      for (let attempt = 0; ; attempt++) {
+        const name = attempt === 0 ? projectFolderName(label, at) : attempt === 1 ? precise : `${precise}-${attempt}`
+        const folder = join(root, name)
         try { await mkdir(folder); return folder }
         catch (error) {
-          // mkdir reserves the name atomically, including simultaneous desktop
-          // and remote creates. Files and symlinks also count as occupied.
           if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
         }
       }

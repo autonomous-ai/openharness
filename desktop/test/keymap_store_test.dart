@@ -44,6 +44,29 @@ class _ControlledFile extends Fake implements File {
   }
 }
 
+class _PausedResolutionFile extends Fake implements File {
+  _PausedResolutionFile(this.delegate);
+  final File delegate;
+  Completer<void>? resolutionGate;
+  final resolutionPaused = Completer<void>();
+
+  @override
+  File get absolute => delegate.absolute;
+  @override
+  Stream<List<int>> openRead([int? start, int? end]) =>
+      delegate.openRead(start, end);
+  @override
+  Future<String> resolveSymbolicLinks() async {
+    final gate = resolutionGate;
+    if (gate != null) {
+      if (!resolutionPaused.isCompleted) resolutionPaused.complete();
+      await gate.future;
+      resolutionGate = null;
+    }
+    return delegate.resolveSymbolicLinks();
+  }
+}
+
 void main() {
   late Directory directory;
   setUp(() async {
@@ -206,4 +229,66 @@ void main() {
       '/users/dev/.config/harness/keybindings.jsonc',
     );
   });
+
+  test(
+    'an immediate save to a newly selected symlink target is not lost',
+    () async {
+      final first = File('${directory.path}/repo1/keys.jsonc');
+      final second = File('${directory.path}/repo2/keys.jsonc');
+      await first.parent.create();
+      await second.parent.create();
+      await first.writeAsString(config('swarm.new'));
+      await second.writeAsString(config('pane.focus_left'));
+      final replacement = File('${second.path}.save');
+      await replacement.writeAsString(config('swarm.new'));
+      final link = Link('${directory.path}/app/keybindings.jsonc');
+      await Directory('${directory.path}/app').create();
+      await link.create(first.path);
+      final watchedFile = _PausedResolutionFile(File(link.path));
+      final store = storeFor(watchedFile, watch: true);
+      addTearDown(store.dispose);
+      await store.start();
+      var replaced = false;
+      final replacementDelivered = Completer<void>();
+      final replacementPaths = {
+        second.path,
+        await second.resolveSymbolicLinks(),
+      };
+      final witness = second.parent.watch().listen((event) {
+        if (replaced &&
+            (replacementPaths.contains(event.path) ||
+                event is FileSystemMoveEvent &&
+                    replacementPaths.contains(event.destination)) &&
+            !replacementDelivered.isCompleted) {
+          replacementDelivered.complete();
+        }
+      });
+      addTearDown(witness.cancel);
+      final gate = Completer<void>();
+      store.addListener(() {
+        if (!replaced && selected(store) == 'pane.focus_left') {
+          // The editor saves again as soon as the new target's map is visible.
+          // Hold the next watch refresh until the filesystem delivered this
+          // replacement. A slow target discovery must not lose an editor save.
+          watchedFile.resolutionGate = gate;
+          replacement.renameSync(second.path);
+          replaced = true;
+        }
+      });
+      await link.update(second.path);
+      try {
+        await Future.wait([
+          watchedFile.resolutionPaused.future,
+          replacementDelivered.future,
+        ]).timeout(const Duration(seconds: 5));
+      } finally {
+        gate.complete();
+      }
+      await eventually(() => replaced && selected(store) == 'swarm.new');
+      expect(store.error, isNull);
+    },
+    skip: Platform.isWindows
+        ? 'Creating Windows symlinks requires host permission'
+        : false,
+  );
 }

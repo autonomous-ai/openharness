@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ENGINES } from '../engines/types.js'
 import type { RegisteredSession } from './registry.js'
-import { TerminalStreamManager, terminalEngineCapabilities, UPLOAD_CHUNK_BYTES } from './terminalStreamManager.js'
+import { TerminalStreamManager, clientDescriptorFrom, terminalEngineCapabilities, UPLOAD_CHUNK_BYTES } from './terminalStreamManager.js'
 import {
   TERMINAL_ACTION_SUCCEEDED,
   terminalActionPossiblyExecuted,
@@ -74,7 +74,7 @@ describe('TerminalStreamManager', () => {
   let outputBeforeOpen: Uint8Array | null
   let terminals: TerminalBackendCoordinator
 
-  const newManager = (extra: { isLoopback?: (connId: string) => boolean } = {}): TerminalStreamManager =>
+  const newManager = (extra: Partial<ConstructorParameters<typeof TerminalStreamManager>[0]> = {}): TerminalStreamManager =>
     new TerminalStreamManager({
       terminals,
       resolveAgent: (id) => agents.get(id),
@@ -589,6 +589,57 @@ describe('TerminalStreamManager', () => {
     expect(sent.some((frame) => frame.connId === 'web-2'
       && frame.type === 'terminal_closed'
       && frame.payload.reason === 'heartbeat timeout')).toBe(true)
+  })
+
+  // The incumbent's banner says WHO took over, so the close it gets carries what the winner
+  // declared on open — verbatim through a relay, since the daemon never learns a peer's name.
+  it('names the taker on the close when the winner introduced itself', async () => {
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+    })
+    await manager.handleFrame('web-2', 'terminal_open', {
+      requestId: 'open-2', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+      client: { kind: 'desktop', name: '  Mac mini ', machineId: 'ab12ab12ab12ab12' },
+    })
+    const closed = sent.find((frame) => frame.connId === 'web-1' && frame.type === 'terminal_closed')
+    expect(closed?.payload).toMatchObject({
+      code: 'TERMINAL_TAKEN_OVER',
+      takenBy: { kind: 'desktop', name: 'Mac mini', machineId: 'ab12ab12ab12ab12' },
+    })
+  })
+
+  it('falls back to what the daemon can say about a silent winner, and says nothing over a bad claim', async () => {
+    manager = newManager({
+      describeClient: (connId) => connId === 'local-2' ? { kind: 'desktop', name: 'This Mac' } : null,
+    })
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+    })
+    await manager.handleFrame('local-2', 'terminal_open', {
+      requestId: 'open-2', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+    })
+    expect(sent.find((frame) => frame.connId === 'web-1' && frame.type === 'terminal_closed')?.payload.takenBy)
+      .toEqual({ kind: 'desktop', name: 'This Mac' })
+    // A claim the daemon will not repeat: a kind with spaces, or a name that is not a name.
+    await manager.handleFrame('web-3', 'terminal_open', {
+      requestId: 'open-3', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+      client: { kind: 'not a kind', name: 'x'.repeat(500) },
+    })
+    const closed = sent.find((frame) => frame.connId === 'local-2' && frame.type === 'terminal_closed')
+    expect(closed?.payload.code).toBe('TERMINAL_TAKEN_OVER')
+    expect(closed?.payload).not.toHaveProperty('takenBy')
+    expect(sent.findLast((frame) => frame.type === 'terminal_ready')?.connId).toBe('web-3')
+  })
+
+  it('reads a client descriptor strictly', () => {
+    expect(clientDescriptorFrom({ kind: 'phone', name: 'Hieu\u2019s iPhone' })).toEqual({ kind: 'phone', name: 'Hieu\u2019s iPhone' })
+    expect(clientDescriptorFrom({ kind: 'desktop', name: 'a\u0000b', machineId: 'ab12ab12ab12ab12' }))
+      .toEqual({ kind: 'desktop', name: 'a b', machineId: 'ab12ab12ab12ab12' })
+    expect(clientDescriptorFrom({ kind: 'desktop', name: 'Mac', machineId: '../etc' })).toBeUndefined()
+    expect(clientDescriptorFrom({ kind: 'Desktop', name: 'Mac' })).toBeUndefined()
+    expect(clientDescriptorFrom({ kind: 'desktop', name: '   ' })).toBeUndefined()
+    expect(clientDescriptorFrom('Mac')).toBeUndefined()
+    expect(clientDescriptorFrom(undefined)).toBeUndefined()
   })
 
   it('takes over a second agent alias that resolves to the same tmux pane', async () => {

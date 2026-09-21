@@ -1,18 +1,31 @@
 name: Docker production backend build
 
 # Builds backend/Dockerfile.k8s and pushes it to gcr.io/autonomous-ecm/autonomous-code-be, on a
-# pushed `v*_backend` tag. The `_backend` suffix is what keeps this trigger and release.yml's `v*_cli` one
-# from firing on each other now that the CLI and the backend share a repo.
+# pushed `v*_backend` tag. The `_backend` suffix is what keeps this trigger and release.yml's `v*_cli`
+# one from firing on each other now that the CLI and the backend share a repo.
 #
-# The build itself lives in autonomous-ai/github-templates. This repo is the only caller of the `-v2`
-# template: a clone of docker-build-and-push.yaml with workload identity federation, SHA-pinned
-# actions, no caller value spliced into a shell, and deploy secrets as BuildKit mounts rather than
-# build args. The original is untouched and still serves autonomous-code, ecm-web and the standalone
-# harness backend, so nothing here can break their builds — they migrate when they choose.
+# WHY THIS IS INLINE AND NOT A CALL TO autonomous-ai/github-templates.
 #
-# `@main` is a MOVING reference: whoever can push to that repo decides what runs here with GCP push
-# credentials attached. Pin it to a commit SHA and bump it deliberately — that matters more from a
-# public repo than a private one.
+# It used to be `uses: autonomous-ai/github-templates/.github/workflows/docker-build-and-push-v2.yaml`.
+# That CANNOT WORK FROM THIS REPO and never did: autonomous-harness is PUBLIC, github-templates is
+# PRIVATE, and GitHub lets a public caller reach reusable workflows only in public repositories. The
+# run died at startup in 0s with no jobs and no logs — "this run likely failed because of a workflow
+# file issue" — which reads like a syntax error and is not one. Every other caller of that template
+# (autonomous-code, ecm-web, autonomous-harness-backend, ecm-sds, ai-radio-agent) is private, so this
+# was the only one affected, and it broke the moment the backend moved into this public repo.
+# The template repo's Actions access setting is already `organization`; that governs private-to-private
+# sharing and cannot grant a public repo access. `internal` visibility would sidestep it, but that
+# needs an Enterprise plan and this org is on free.
+#
+# So DO NOT "tidy" this back into a `uses:` of a private repo — it will fail at startup again. If the
+# templates repo is ever made public, this can go back to calling it.
+#
+# This is a copy of docker-build-and-push-v2.yaml with that caller's inputs folded in as constants.
+# Keep it in sync by hand when the template gains a fix worth having. What was dropped deliberately:
+#   * the branch/DOCKER_BUILD_ENV tag-resolution arms — this workflow only ever triggers on a tag,
+#     so BUILD_ENV is always `production` and there is no GHA cache to write.
+#   * the SECRET_DEPLOY_GITHUB_TOKEN / SECRET_DEPLOY_GITHUB_USER / GITLAB_TOKEN BuildKit mounts —
+#     Dockerfile.k8s consumes none of them.
 #
 # Nothing here is reachable from a pull request: the only trigger is a tag push, which only a
 # maintainer with write access can make. A fork's PR cannot run this job and cannot see its secrets.
@@ -22,37 +35,94 @@ on:
     tags:
       - 'v*_backend'
 
+# `contents: read` because actions/checkout is the only token use; `id-token: write` to mint the OIDC
+# token the federated auth step exchanges for a short-lived GCP credential.
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: docker_build_web_production
+  cancel-in-progress: false
+
+env:
+  REGISTRY_HOST: gcr.io
+  IMAGE_PATH: autonomous-ecm
+  IMAGE_NAME: autonomous-code-be
+  # Resolved from the WORKSPACE ROOT, not from the build context — docker/build-push-action passes
+  # this straight to `buildx --file`. The context stays `backend` because the Dockerfile's
+  # COPY package.json / COPY prisma / COPY src are all relative to it.
+  DOCKERFILE: backend/Dockerfile.k8s
+  BUILD_CONTEXT: backend
+
 jobs:
   build-autonomous-code-be-production:
-    uses: autonomous-ai/github-templates/.github/workflows/docker-build-and-push-v2.yaml@main
-    # Permissions belong to the CALLER: a called workflow can never hold more than it was granted, so
-    # the template deliberately declares none of its own. `contents: read` because the template's
-    # actions/checkout is the only token use; `id-token: write` to mint the OIDC token the federated
-    # auth step exchanges for a short-lived GCP credential.
-    permissions:
-      contents: read
-      id-token: write
-    with:
-      DOCKER_IMAGE_NAME: autonomous-code-be
-      DOCKER_CONTEXT: backend
-      DOCKERFILE_NAME: Dockerfile.k8s
-      CONCURRENCY_GROUP: docker_build_web_production
-      RUNNER_TAG: ubuntu-latest
-    secrets:
-      # NOTE THE `_GCR` SUFFIX. The registry and the CLI release bucket live in DIFFERENT GCP
-      # projects, so they need different service accounts — this one in the registry's project,
-      # release.yml's plain GCP_SERVICE_ACCOUNT in the bucket's.
-      #
-      # The PROVIDER is shared, though. A pool in one project can be granted impersonation on a
-      # service account in another (the project number inside the pool's resource name is the pool's,
-      # never the service account's), so one pool and one provider serve both.
-      #
-      # Set all of them with scripts/setup-gcp-wif.sh in autonomous-ai/github-templates — run it
-      # once per service account.
-      # While they are unset these pass through as empty strings and the template falls back to the
-      # key below, so this file is correct before and after the migration.
-      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-      GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT_GCR }}
-      # The legacy path. Delete this line once a tag build has gone green on federation, then delete
-      # the key itself in GCP — an unused key that still authenticates is still a liability.
-      GCLOUD_DEV_SERVICE_ACCOUNT_JSON: ${{ secrets.GCLOUD_DEV_SERVICE_ACCOUNT_JSON }}
+    runs-on: ubuntu-latest
+    env:
+      # The `secrets` context is not readable from a step-level `if:`, so reduce it to a boolean here
+      # — job-level `env:` can see it. This holds "true"/"false", never any key material.
+      HAS_WIF: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Tag-only trigger, so GITHUB_REF_NAME is already the bare tag (e.g. v1.2.21_backend) and that
+      # is the image tag ArgoCD deploys by.
+      - name: Work out the image tag
+        run: |
+          set -euo pipefail
+          {
+            echo "BUILD_ENV=production"
+            echo "IMAGE_TAG=${GITHUB_REF_NAME}"
+          } >> "$GITHUB_ENV"
+
+      - name: Fail early if no GCP credential was supplied
+        if: env.HAS_WIF != 'true'
+        run: |
+          echo "::error::Set GCP_WORKLOAD_IDENTITY_PROVIDER + GCP_SERVICE_ACCOUNT_GCR."
+          echo "::error::This workflow has no key fallback — federation is the only path."
+          exit 1
+
+      # NOTE THE `_GCR` SUFFIX on the service account. The registry and the CLI release bucket live in
+      # DIFFERENT GCP projects, so they need different service accounts — this one in the registry's
+      # project, release.yml's plain GCP_SERVICE_ACCOUNT in the bucket's. The PROVIDER is shared: a
+      # pool in one project can be granted impersonation on a service account in another (the project
+      # number inside the pool's resource name is the pool's, never the service account's).
+      - name: Setup google auth (workload identity federation)
+        if: env.HAS_WIF == 'true'
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_GCR }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+        with:
+          version: '>= 363.0.0'
+
+      - name: Setup docker
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Authenticate docker
+        run: gcloud auth configure-docker --quiet "$REGISTRY_HOST"
+
+      - name: Docker meta
+        id: dockerMeta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ${{ env.IMAGE_PATH }}/${{ env.IMAGE_NAME }}
+
+      - name: Build and push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ env.BUILD_CONTEXT }}
+          file: ${{ env.DOCKERFILE }}
+          push: true
+          labels: ${{ steps.dockerMeta.outputs.labels }}
+          tags: |
+            ${{ env.REGISTRY_HOST }}/${{ env.IMAGE_PATH }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY_HOST }}/${{ env.IMAGE_PATH }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          cache-from: type=gha
+          # Build args are PUBLIC to anyone who can pull the image. Only non-sensitive values here.
+          build-args: |
+            BUILD_ENV=${{ env.BUILD_ENV }}
+            BUILD_TAG=${{ env.IMAGE_TAG }}

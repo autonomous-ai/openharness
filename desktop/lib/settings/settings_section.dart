@@ -3,7 +3,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../logging/debug_surface.dart';
 
-/// One screen in Settings — a row in its rail, and the pane that row opens.
+/// A Settings navigation entry. Customize returns to the workspace and opens
+/// its side panel; the other entries select a Settings page.
 ///
 /// Declared once, like [ShortcutAction] in `shortcuts/app_shortcuts.dart`: the
 /// rail, the search filter and the pane all read this list, so a section cannot
@@ -11,7 +12,8 @@ import '../logging/debug_surface.dart';
 enum SettingsSection {
   account(LucideIcons.user300, 'Account'),
   usage(LucideIcons.chartNoAxesColumn300, 'Usage'),
-  devices(LucideIcons.zap300, 'Autonomous devices'),
+  customize(LucideIcons.palette300, 'Customize'),
+  devices(LucideIcons.zap300, 'Autonomous robots'),
   shortcuts(LucideIcons.keyboard300, 'Keyboard shortcuts'),
   debug(LucideIcons.bug300, 'Debug'),
   tracking(LucideIcons.activity300, 'Tracking'),
@@ -82,6 +84,7 @@ const _kSettingsGroups = [
   // which logs are read at all — the pane is off until somebody sets it.
   SettingsGroup('Preferences', [
     SettingsSection.usage,
+    SettingsSection.customize,
     SettingsSection.devices,
     SettingsSection.account,
   ]),

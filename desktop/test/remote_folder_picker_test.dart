@@ -7,11 +7,14 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_placement.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/widgets/new_agent_dialog.dart';
 import 'package:harness/widgets/remote_folder_picker.dart';
+
+import 'support/agent_picker.dart';
 
 class _Folders extends AppNotifier {
   _Folders()
@@ -43,16 +46,21 @@ class _Folders extends AppNotifier {
   Future<String?> createAgent(
     String machineId, {
     required String engine,
-    required String folder,
+    required String? folder,
     ProjectFolderRequest? projectFolder,
     bool bypassPermission = false,
+    String? permissionMode,
     String? codexHome,
     String? dsh,
+    String? prompt,
+    String? name,
+    String? agent,
     String? swarmId,
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
+    HarnessPlacement? placement,
   }) async {
-    launches.add((machine: machineId, engine: engine, folder: folder));
+    launches.add((machine: machineId, engine: engine, folder: folder!));
     return null;
   }
 
@@ -362,7 +370,7 @@ void main() {
   );
 
   testWidgets(
-    'remote selection returns to New Agent without launching or losing choices',
+    'remote selection returns to New Harness without launching or losing choices',
     (tester) async {
       final app = _Folders();
       addTearDown(app.dispose);
@@ -389,10 +397,7 @@ void main() {
       );
       await tester.tap(find.text('Open'));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(
-        find.byKey(const ValueKey('new-agent-quick-codex')),
-      );
-      await tester.tap(find.byKey(const ValueKey('new-agent-quick-codex')));
+      await chooseAgent(tester, 'codex');
       await tester.ensureVisible(
         find.byKey(const Key('new-agent-project-browse')),
       );
@@ -427,7 +432,7 @@ void main() {
       expect(find.text('target'), findsOneWidget);
       expect(find.text('/home/dev/target'), findsNothing);
       expect(app.launches, isEmpty);
-      await tester.tap(find.widgetWithText(FilledButton, 'Create'));
+      await tester.tap(find.byKey(const ValueKey('create-agent-submit')));
       await tester.pumpAndSettle();
       expect(app.launches, [
         (machine: 'remote', engine: 'codex', folder: '/home/dev/target'),

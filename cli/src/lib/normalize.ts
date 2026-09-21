@@ -13,6 +13,8 @@
  *    renders identically to one sent from the web (mirror-all).
  */
 
+import { harnessWebTool } from './harnessWebTools.js'
+
 // ── Event shapes (match the server’s SessionEvent contract SessionEvent + live turn frames) ──────
 
 export interface SubagentSummary {
@@ -244,7 +246,14 @@ function mapContentItem(item: unknown): RawContentBlock {
   }
 
   let toolInput = c.input as Record<string, unknown> | undefined
-  const toolName = c.name as string | undefined
+  let toolName = c.name as string | undefined
+  // On a Local model the web tools come from the `harness` MCP server; the transcript should not
+  // look different for it, so they take the native cards here, at the one raw→normalized point.
+  const webTool = type === 'tool_use' ? harnessWebTool(toolName, toolInput) : null
+  if (webTool) {
+    toolName = webTool.tool
+    toolInput = webTool.input
+  }
   if (type === 'tool_use' && toolInput) {
     if ((toolName === 'Write' || toolName === 'WriteFile') && typeof toolInput.content === 'string' && toolInput.content.length > 500) {
       toolInput = smartWriteInput(toolInput)

@@ -1,0 +1,1 @@
+{ "spec": 1, "runtime": "mlx-lm", "scope": "local-language-models", "notes": "MLX-LM runs one loaded model per workspace. Weights stay in the Hugging Face cache; measurements belong to this workspace." }

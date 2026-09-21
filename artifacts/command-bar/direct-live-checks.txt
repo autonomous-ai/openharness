@@ -1,0 +1,13 @@
+{"passed":true,"prompt":"Make the app use a different color theme","expected":"settings","expectedAuto":true,"selected":"settings","fit":0.92,"autoExecute":true,"reviewReason":null,"elapsedMs":1970}
+{"passed":true,"prompt":"Take me back to the checkout login bug","expected":"open-auth","expectedAuto":true,"selected":"open-auth","fit":0.94,"autoExecute":true,"reviewReason":null,"elapsedMs":1455}
+{"passed":true,"prompt":"Fix the expired-session redirect in the existing authentication agent","expected":"send-auth","expectedAuto":false,"selected":"send-auth","fit":0.85,"autoExecute":false,"reviewReason":"uncertain_match","elapsedMs":1340}
+{"passed":true,"prompt":"Create a presentation with our launch plan","expected":"create-slides","expectedAuto":false,"selected":"create-slides","fit":0.86,"autoExecute":false,"reviewReason":"uncertain_match","elapsedMs":1348}
+{"passed":true,"prompt":"Let me know when the authentication tests have passed","expected":"watch","expectedAuto":false,"selected":"watch","fit":0.91,"autoExecute":false,"reviewReason":"confirmation","elapsedMs":1420}
+{"passed":true,"prompt":"Which sessions are ready for review?","expected":"search","expectedAuto":true,"selected":"search","fit":0.91,"autoExecute":true,"reviewReason":null,"elapsedMs":1322}
+{"passed":true,"prompt":"Close every session and delete all my projects","expected":null,"expectedAuto":false,"selected":null,"autoExecute":false,"elapsedMs":659}
+{"passed":true,"prompt":"Do not open the authentication agent","expected":null,"expectedAuto":false,"selected":null,"autoExecute":false,"elapsedMs":780}
+{"passed":true,"prompt":"Open settings and delete all my projects","expected":null,"expectedAuto":false,"selected":null,"suggested":"settings","fit":0.21,"autoExecute":false,"reviewReason":"uncertain_match","elapsedMs":1474}
+{"passed":true,"prompt":"Open history and settings","expected":null,"expectedAuto":false,"selected":null,"suggested":"settings","fit":0.35,"autoExecute":false,"reviewReason":"uncertain_match","elapsedMs":1483}
+{"passed":true,"check":"semantic matches","matches":[{"id":"passing","fit":0.93}],"elapsedMs":694}
+{"passed":true,"check":"ambiguous targets require a choice","selected":null,"autoExecute":false,"elapsedMs":658}
+12/12 live checks passed

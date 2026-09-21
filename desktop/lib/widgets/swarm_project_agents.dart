@@ -73,7 +73,7 @@ class _ProjectAgentsState extends State<_ProjectAgents> {
             const SizedBox(height: 16),
             SwarmSearchField(
               autofocus: true,
-              hintText: 'Find an agent or machine',
+              hintText: 'Find a harness or machine',
               onChanged: (value) => setState(() => _query = value),
             ),
             const SizedBox(height: 12),
@@ -83,7 +83,7 @@ class _ProjectAgentsState extends State<_ProjectAgents> {
                 builder: (context, _) {
                   final rows = swarmAgents(widget.app, _query);
                   if (rows.isEmpty) {
-                    return const Center(child: Text('No matching agents'));
+                    return const Center(child: Text('No matching harnesses'));
                   }
                   return ListView.builder(
                     itemCount: rows.length,

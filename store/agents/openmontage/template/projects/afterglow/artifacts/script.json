@@ -1,0 +1,38 @@
+{
+  "version": "1.0",
+  "title": "Afterglow",
+  "sections": [
+    {
+      "id": "s1",
+      "label": "Arrival",
+      "text": "A sun rises over a quiet landscape.",
+      "start_seconds": 0,
+      "end_seconds": 4.5
+    },
+    {
+      "id": "s2",
+      "label": "Breathing room",
+      "text": "Layered terrain drifts beneath the light.",
+      "start_seconds": 4.5,
+      "end_seconds": 9
+    },
+    {
+      "id": "s3",
+      "label": "Orbit",
+      "text": "Fine rings trace the path of a new idea.",
+      "start_seconds": 9,
+      "end_seconds": 13.5
+    },
+    {
+      "id": "s4",
+      "label": "Afterglow",
+      "text": "The title returns as the landscape settles.",
+      "start_seconds": 13.5,
+      "end_seconds": 18
+    }
+  ],
+  "metadata": {
+    "total_duration_seconds": 18,
+    "notes": "A pre-rendered, editable motion study. Original synthesized score; no narration and no paid generation."
+  }
+}

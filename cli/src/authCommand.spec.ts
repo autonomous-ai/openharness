@@ -28,14 +28,14 @@ function tempRoot(): string {
   return root
 }
 
-function seedSession(root: string): void {
+function seedSession(root: string, opts: { expiresInMs?: number } = {}): void {
   const authDir = join(root, 'auth')
   mkdirSync(authDir, { recursive: true })
   writeFileSync(join(authDir, 'session.json'), JSON.stringify({
     version: 1,
     accessToken: 'tok_seeded',
     refreshToken: 'refresh_seeded',
-    expiresAt: Date.now() + 60 * 60_000, // an hour out — accessToken() must not attempt a refresh
+    expiresAt: Date.now() + (opts.expiresInMs ?? 60 * 60_000), // an hour out — accessToken() must not attempt a refresh
     autonomousEnv: 'prod',
     computerId: 'a'.repeat(32),
     machineId: 'm_seeded',
@@ -49,9 +49,13 @@ function envFor(root: string, backendUrl?: string): NodeJS.ProcessEnv {
     HOME: root,
     HARNESS_AUTH_DIR: join(root, 'auth'),
     ADAPTER_DATA_DIR: join(root, 'data'),
+    ADAPTER_RUNTIME_DIR: join(root, 'runtime'),
     ADAPTER_CLI_DIR: join(root, 'cli'),
     ADAPTER_COMPUTER_ID_FILE: join(root, 'computer-id'),
     ADAPTER_UPDATE_DISABLE: 'true',
+    // Sign-in should exercise the fake backend, never a developer's Grid binary or its installer.
+    HARNESS_GRID_BIN: join(root, 'grid-unavailable'),
+    DISABLE_GRID_INSTALL: 'true',
     ...(backendUrl ? { BACKEND_WS_URL: backendUrl } : {}),
   }
 }
@@ -139,6 +143,17 @@ describe('harness auth status --json', () => {
       expiresAt: expect.any(Number),
     })
   })
+
+  it('reports loggedIn:true and offline:true when the token needs a refresh the service cannot serve', () => {
+    // Near expiry forces a refresh; port 1 refuses it. That is a signed-in computer with no network —
+    // not a signed-out one. It used to read as loggedIn:false and send the desktop app to a login
+    // screen that could not have succeeded without the network either.
+    const root = tempRoot()
+    seedSession(root, { expiresInMs: 30_000 })
+    const result = runSync(root, ['auth', 'status', '--json'], 'http://127.0.0.1:1')
+    expect(result.status).toBe(0)
+    expect(JSON.parse(result.stdout.trim())).toMatchObject({ loggedIn: true, offline: true, machineId: 'm_seeded' })
+  })
 })
 
 describe('harness login --json', () => {
@@ -151,7 +166,16 @@ describe('harness login --json', () => {
     const result = await runAsync(root, ['login', '--json'], base)
     expect(result.status).toBe(0)
     const lines = result.stdout.trim().split('\n').map((l) => JSON.parse(l))
-    expect(lines).toEqual([{ type: 'result', status: 'success', alreadySignedIn: true }])
+    // The sign-in now also hands its token to `grid` and makes sure the account's private grid
+    // exists — best-effort, reported on this line rather than allowed to change its status. There is
+    // no `grid` on PATH in this test, so it reports the attempt and the harness sign-in still
+    // succeeds, which is the property worth pinning.
+    expect(lines).toEqual([{
+      type: 'result',
+      status: 'success',
+      alreadySignedIn: true,
+      grid: { signedIn: false, code: expect.any(String) },
+    }])
   })
 
   it('emits a BACKEND_ERROR result line (not a stack trace) when authorize-native is unreachable', async () => {
@@ -200,6 +224,12 @@ describe('harness login --json', () => {
     expect(exitCode).toBe(0)
     // Drain any trailing buffered line after exit.
     if (stdout.trim()) lines.push(JSON.parse(stdout.trim()))
-    expect(lines[1]).toEqual({ type: 'result', status: 'success' })
+    // Same contract as the already-signed-in line: the grid hand-off is reported here, and its
+    // failure (no `grid` on PATH in this test) never changes `status`.
+    expect(lines[1]).toEqual({
+      type: 'result',
+      status: 'success',
+      grid: { signedIn: false, code: expect.any(String) },
+    })
   }, 15_000)
 })

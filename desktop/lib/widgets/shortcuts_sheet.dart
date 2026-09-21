@@ -5,6 +5,7 @@ import '../shared/widgets/app_dialog.dart';
 import '../shortcuts/shortcuts_list.dart';
 import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_settings.dart';
+import '../shortcuts/keyboard_practice.dart';
 
 /// The ⌘/ sheet — [ShortcutsList] in a dialog.
 ///
@@ -62,6 +63,10 @@ class _ShortcutsSheetState extends State<_ShortcutsSheet> {
                       contextKind: _contextKind,
                       onContextChanged: (value) =>
                           setState(() => _contextKind = value),
+                    ),
+                    TextButton(
+                      onPressed: () => showKeyboardPractice(context),
+                      child: const Text('Practice these shortcuts'),
                     ),
                     ShortcutsList(contextKind: _contextKind),
                   ],

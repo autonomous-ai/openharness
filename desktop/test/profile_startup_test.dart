@@ -262,8 +262,55 @@ void main() {
       expect(app.lastError, isNull);
       expect(app.machineStates['fixture']!.agents, hasLength(1));
       expect(app.daemonChecks, 2);
-      await tester.pump(const Duration(seconds: 35));
+      await tester.pump(
+        AppNotifier.machineListSafetyNetInterval * 2 +
+            const Duration(seconds: 5),
+      );
+      // The safety-net re-read continues after recovery without probing the daemon again.
+      // Its pending read is coalesced across subsequent ticks.
+      expect(api.lists, hasLength(3));
+      api.lists.last.complete([_machine]);
+      await tester.pump();
+      expect(app.daemonChecks, 2);
+      disposeApp();
+    },
+  );
+
+  testWidgets(
+    'invitation discovery recovers from network failures without losing machines',
+    (tester) async {
+      final start = app.bootstrap();
+      await tester.pump();
+      api.profiles.single.complete(_profile('current'));
+      api.lists.single.complete([_machine]);
+      await tester.pump();
+      await start;
+
+      await tester.pump(AppNotifier.machineListSafetyNetInterval);
       expect(api.lists, hasLength(2));
+      api.lists.last.completeError(
+        ApiException('Backend unreachable', status: 502),
+      );
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      expect(app.machines.map((m) => m.machineId), ['fixture']);
+      expect(app.lastError, isNull);
+
+      await tester.pump(const Duration(seconds: 2));
+      expect(api.lists, hasLength(3));
+      // The safety net must not duplicate a recovery request that is still pending.
+      await tester.pump(AppNotifier.machineListSafetyNetInterval);
+      expect(api.lists, hasLength(3));
+      api.lists.last.complete([_machine]);
+      await tester.pump();
+      expect(app.machinesRefreshing, isFalse);
+      await tester.pump(AppNotifier.machineListSafetyNetInterval);
+      expect(api.lists, hasLength(4));
+      api.lists.last.complete([_machine]);
+      await tester.pump();
+      // …nor remember the tick it skipped: one read per tick, not a second one owed from before.
+      await tester.pump();
+      expect(api.lists, hasLength(4));
       disposeApp();
     },
   );
@@ -347,6 +394,75 @@ void main() {
     );
   }
 
+  test(
+    'newer machine inventory cannot be replaced by an older reply',
+    () async {
+      app.status = AppStatus.authenticated;
+      final old = app.refreshMachines();
+      await _tick();
+      final current = app.refreshMachines();
+      await _tick();
+      expect(api.lists, hasLength(2));
+      api.lists.last.complete([_machine.copyWith(name: 'Current computer')]);
+      expect(await current, isTrue);
+      api.lists.first.complete([_machine.copyWith(name: 'Old computer')]);
+      expect(await old, isFalse);
+      expect(app.machines.single.displayName, 'Current computer');
+      expect(
+        app.machineStates['fixture']!.machine.displayName,
+        'Current computer',
+      );
+    },
+  );
+
+  for (final failure in [false, true]) {
+    test(
+      'superseded inventory ${failure ? 'failure' : 'success'} leaves the current loading state alone',
+      () async {
+        app.status = AppStatus.authenticated;
+        final old = app.refreshMachines();
+        await _tick();
+        final current = app.refreshMachines();
+        await _tick();
+        if (failure) {
+          api.lists.first.completeError(
+            ApiException('Old failure', status: 403),
+          );
+        } else {
+          api.lists.first.complete([_machine]);
+        }
+        expect(await old, isFalse);
+        expect(app.machinesLoading, isTrue);
+        expect(app.machines, isEmpty);
+        api.lists.last.complete([_machine]);
+        expect(await current, isTrue);
+        expect(app.machinesLoading, isFalse);
+        expect(app.machines, [_machine]);
+      },
+    );
+  }
+
+  test(
+    'older inventory success cannot dismiss the latest retry error',
+    () async {
+      app.status = AppStatus.authenticated;
+      final old = app.refreshMachines();
+      await _tick();
+      final current = app.retryMachines();
+      await _tick();
+      api.profiles.single.complete(null);
+      api.lists.last.completeError(
+        ApiException('Current inventory failure', status: 403),
+      );
+      await current;
+      api.lists.first.complete([_machine]);
+      await old;
+      expect(app.lastError, contains('Current inventory failure'));
+      expect(app.machines, isEmpty);
+      expect(app.machinesLoading, isFalse);
+    },
+  );
+
   test('a late profile response cannot restore a signed-out account', () async {
     final start = app.login();
     await Future<void>.delayed(Duration.zero);
@@ -363,6 +479,23 @@ void main() {
     expect(app.machines, isEmpty);
     expect(connection.requests, isEmpty);
   });
+
+  test(
+    'a late machine response cannot restore signed-out cache status',
+    () async {
+      app.status = AppStatus.authenticated;
+      final pending = app.refreshMachines();
+      await _tick();
+      expect(api.lists, hasLength(1));
+      await app.logout();
+      api.lastMachinesStale = true;
+      api.lists.single.complete([_machine]);
+      await pending;
+      expect(app.machinesAreStale, isFalse);
+      expect(app.machines, isEmpty);
+      expect(app.machineStates, isEmpty);
+    },
+  );
 
   test(
     'a late profile publishes account details without reloading agents',

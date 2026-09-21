@@ -53,8 +53,20 @@ import {
   P2pSignalRateGuard,
   terminalP2pPolicy,
 } from './p2pSignaling.js'
-import { touchUserOnlineDay, recordRemoteUsage } from './dailyTracking.js'
-import { utcDayKey } from '../types/analytics.js'
+import { recordRemoteUsage } from './dailyTracking.js'
+
+/**
+ * Down-frames the backend mints for an adapter, which a web client must never be able to forge.
+ *
+ * The `__` prefix already marks most of these; these two predate that convention and are not
+ * prefixed, so they fell through this handler's namespace checks into the verbatim forward at the
+ * bottom. See the block in `handleFrame` for what each one does when forged.
+ *
+ * Senders, all backend-side: `lib/adapterWs.ts` (on connect), `services/MachineService.ts`
+ * (rename, revoke) and `lib/adapterAccountPushes.ts` (desk_changed, machines_changed — forged, each
+ * one makes every window on that computer re-read from this backend).
+ */
+export const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'machines_changed'])
 
 const wss = createWss(WS_LIMITS.web, { echoFirstProtocol: true })
 
@@ -122,20 +134,10 @@ function attachUserClient(ws: WebSocket, user: AuthUser): void {
   logger.info('web user connected', { userId: user.sub })
   send({ type: 'connected', payload: { userId: user.sub } })
 
-  // Daily presence: mark today online now, and re-check on the existing 30s re-seed tick / on
-  // disconnect so a connection spanning UTC midnight gets counted for the new day too. The guard
-  // only advances on a SUCCESSFUL write, so a transient DB failure gets retried on the next tick
-  // instead of being silently skipped for the rest of the day.
-  let lastPresenceDayKey: string | null = null
-  const touchPresence = (isNewConnection: boolean): void => {
-    const now = new Date()
-    const dayKey = utcDayKey(now)
-    if (!isNewConnection && dayKey === lastPresenceDayKey) return
-    touchUserOnlineDay(user.sub, now, { isNewConnection })
-      .then(() => { lastPresenceDayKey = dayKey })
-      .catch((err) => logger.warn('presence tracking failed', { userId: user.sub, error: String(err) }))
-  }
-  touchPresence(true)
+  // No daily-presence write here. This socket is not the person: the desktop app never dials it (the
+  // local daemon does, one per FOREIGN machine it relays), so counting upgrades measured relay
+  // reconnects and missed every single-machine user. `user_daily_presence` is fed by the app's own
+  // `app_presence` ping through the daemon's adapter-ws instead (lib/adapterWs.ts).
 
   // An unattached socket (user parked on the Machines page, no agent selected) holds no hub client, so a
   // registry-driven sweep can't see it — it would be killed by LB idle timeouts, or never reaped when
@@ -235,7 +237,6 @@ function attachUserClient(ws: WebSocket, user: AuthUser): void {
     if (!deviceSeedTimer) {
       deviceSeedTimer = setInterval(() => {
         void seedDeviceStatuses().catch(() => { /* ignore */ })
-        touchPresence(false)
       }, DEVICE_RESEED_MS)
     }
     await seedDeviceStatuses()
@@ -353,6 +354,19 @@ function attachUserClient(ws: WebSocket, user: AuthUser): void {
     // Double-underscore frames are backend-to-Harness control messages. A web
     // client must never be able to forge its own lifecycle notification.
     if (typeof type === 'string' && type.startsWith('__')) return
+    // ⚠️ Same rule, for the two control frames that are NOT `__`-prefixed and so escaped it. Anything
+    // reaching this handler holds a valid access token for the account and nothing more, while the
+    // frames below are instructions the adapter obeys as the backend's own — everything else here
+    // falls through to `client.sendDown(frame)`, which forwards verbatim:
+    //   - `machine_meta` names the account's private grid, i.e. the inference endpoint every agent on
+    //     that computer is then pointed at. Forged, it redirects the account's work.
+    //   - `machine_revoked` makes the adapter clear its stored session and exit.
+    // Both are minted here (`adapterWs.ts`, `services/MachineService.ts`); no client in this
+    // repository sends either, so refusing them costs nothing. The adapter refuses them from
+    // non-backend transports too (`cli/src/backendSocket.ts`, BACKEND_ONLY_DOWN_TYPES) — but it
+    // cannot tell a frame the backend decided on from one the backend relayed for a web client, so
+    // that check alone does not cover this path. This is where that distinction still exists.
+    if (typeof type === 'string' && BACKEND_ONLY_DOWN_TYPES.has(type)) return
     const isTerminal = typeof type === 'string' && TERMINAL_DOWN_TYPES.has(type)
     const terminalNamespace = typeof type === 'string' && type.startsWith('terminal_')
     if (terminalNamespace && !isTerminal) {
@@ -510,7 +524,6 @@ function attachUserClient(ws: WebSocket, user: AuthUser): void {
     if (deviceStatusUnsub) { deviceStatusUnsub(); deviceStatusUnsub = null }
     if (machineListUnsub) { machineListUnsub(); machineListUnsub = null }
     if (deviceE2eePairUnsub) { deviceE2eePairUnsub(); deviceE2eePairUnsub = null }
-    touchPresence(false)
     logger.info('web user disconnected', { userId: user.sub, machineId: currentAgentId ?? undefined })
   }
   ws.on('close', cleanup)

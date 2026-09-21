@@ -42,6 +42,10 @@ on:
 
 permissions:
   contents: read
+  # Mints the OIDC token the auth step below exchanges for a short-lived GCP credential. It is a
+  # capability, not a secret: what it can reach is decided by the pool's attribute-condition and the
+  # service account's IAM bindings, not by this line.
+  id-token: write
 
 concurrency:
   # A newer push to the same internal branch supersedes the build still notarizing — nobody is
@@ -148,10 +152,20 @@ jobs:
           apple-team-id: ${{ secrets.APPLE_TEAM_ID }}
           apple-app-password: ${{ secrets.APPLE_APP_PASSWORD }}
 
-      - uses: google-github-actions/auth@v2
+      # GCP auth, WITHOUT a long-lived key wherever possible. The credential is used for exactly one
+      # thing in this workflow: writing this build's .zip/.dmg to the release bucket under its
+      # unlisted prefix, and resetting their cache headers afterwards.
+      #
+      # Same pool and provider as release.yml, and the SAME service account — this writes to
+      # s3-autonomous-upgrade-3, the bucket that one already publishes to, so there was no new GCP
+      # setup to do. Federation is the only path: the GCP_SA_KEY fallback and the key behind it were
+      # retired on 2026-09-17. Do not reintroduce a key.
+      - name: Authenticate to GCP (workload identity federation)
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-      - uses: google-github-actions/setup-gcloud@v2
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
 
       - name: Build ${{ matrix.variant }} and pin its renderer
         env:
@@ -181,8 +195,11 @@ jobs:
           bash scripts/upload-desktop.sh --no-build "$VERSION"
           # upload-desktop.sh uploads with a year-long immutable cache: right for a release path
           # nobody ever changes, wrong for a build that may have to be taken back.
-          gsutil -m setmeta -h "Cache-Control:private, max-age=0, no-store" \
-            "gs://${GCS_BUCKET}/${GCS_PATH}" "gs://${GCS_BUCKET}/${DMG_GCS_PATH}"
+          # `gcloud storage`, not gsutil: gsutil cannot use the external-account credential
+          # federation issues, and parallelises by default so `-m` has no equivalent.
+          gcloud storage objects update \
+            "gs://${GCS_BUCKET}/${GCS_PATH}" "gs://${GCS_BUCKET}/${DMG_GCS_PATH}" \
+            --cache-control="private, max-age=0, no-store"
 
       - name: Hand out the link
         env:
@@ -203,7 +220,7 @@ jobs:
             echo "dmg sha256 \`${sha}\`"
             echo
             echo "Unlisted, not private: this repository is public, so anyone who opens this page can"
-            echo "download the build. Take it back with \`gsutil -m rm -r gs://${GCS_BUCKET}/${PREFIX}\`"
+            echo "download the build. Take it back with \`gcloud storage rm -r gs://${GCS_BUCKET}/${PREFIX}\`"
             echo "(both builds of this run)."
           } >> "$GITHUB_STEP_SUMMARY"
 

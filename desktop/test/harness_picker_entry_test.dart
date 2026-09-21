@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/screens/swarm_screen.dart';
+import 'package:harness/state/swarm_search.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/terminal/terminal_binary.dart';
@@ -41,7 +42,7 @@ void main() {
     (const Size(600, 680), 2.0),
   ]) {
     testWidgets(
-      'Open Agent shows results separately from New Agent at $size, $scale',
+      'Open Harness shows results separately from New Harness at $size, $scale',
       (tester) async {
         tester.view.devicePixelRatio = 1;
         tester.view.physicalSize = size;
@@ -70,19 +71,19 @@ void main() {
         );
         await tester.pump(const Duration(milliseconds: 100));
         final field = find.byKey(const ValueKey('swarm-search-input'));
-        await chord(tester, LogicalKeyboardKey.keyO);
+        await chord(tester, LogicalKeyboardKey.keyP);
         expect(field, findsOneWidget);
         expect(find.byType(SwarmSearchResults), findsOneWidget);
         expect(
           find.byKey(const ValueKey('swarm-search-preview')),
-          findsOneWidget,
+          findsNothing,
         );
         expect(find.byKey(const ValueKey('harness-picker-open')), findsNothing);
         expect(
           tester.widget<TextField>(field).decoration!.hintText,
-          'Find an agent',
+          kHarnessPickerHint,
         );
-        expect(find.text('Find an agent'), findsOneWidget);
+        expect(find.text(kHarnessPickerHint), findsOneWidget);
         expect(find.byKey(const ValueKey('create-agent-submit')), findsNothing);
         final before = tester.getRect(field);
         final controller = tester.widget<TextField>(field).controller;

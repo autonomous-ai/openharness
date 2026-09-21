@@ -1,3 +1,6 @@
+import { mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { agentFrame } from './agentFrame.js'
 import type { RegisteredSession } from './registry.js'
@@ -54,6 +57,39 @@ describe('agentFrame', () => {
       .toMatchObject({ selectedModel: 'opus', terminal: { available: false, primary: 'tmux/%1' } })
   })
 
+  it('carries the viewer pane’s name with the harness, and null for a plain engine', async () => {
+    const withViewer = await agentFrame(session(null), {
+      selectedModel: null, terminalAvailable: true,
+      dsh: { id: 'autonomous/blender', name: 'Blender', viewerUrl: 'http://127.0.0.1:4100/', viewerName: '3D Viewer', verdict: null },
+    })
+    expect(withViewer).toMatchObject({ dsh: 'autonomous/blender', dshName: 'Blender', viewerName: '3D Viewer' })
+    const older = await agentFrame(session(null), {
+      selectedModel: null, terminalAvailable: true,
+      dsh: { id: 'autonomous/blender', name: 'Blender', viewerUrl: null, verdict: null },
+    })
+    expect(older).toHaveProperty('viewerName', null)
+    expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).toHaveProperty('viewerName', null)
+  })
+
+  // What the desktop's Clone (⌘⇧N) sends back through `agent_create`: the choices only the registry
+  // row holds. Without them a clone of a Plan-mode reviewer would come up as an auto-mode general.
+  it('carries the launch choices a clone needs', async () => {
+    const row = session(null)
+    row.permissionMode = 'plan'
+    row.bypassPermission = false
+    row.agent = 'reviewer'
+    expect(await agentFrame(row, { selectedModel: null, terminalAvailable: true }))
+      .toMatchObject({ permissionMode: 'plan', bypassPermission: false, namedAgent: 'reviewer' })
+  })
+
+  it('reports unrecorded launch choices as null rather than omitting them', async () => {
+    const frame = await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })
+    expect(frame).toHaveProperty('permissionMode', null)
+    expect(frame).toHaveProperty('bypassPermission', null)
+    expect(frame).toHaveProperty('namedAgent', null)
+    expect(frame).not.toHaveProperty('agent')
+  })
+
   it('reports launch state and defaults legacy agents to ready', async () => {
     const legacy = session(null)
     expect(await agentFrame(legacy, { selectedModel: null, terminalAvailable: true }))
@@ -61,5 +97,36 @@ describe('agentFrame', () => {
     legacy.launch = { state: 'failed', error: 'ENGINE_DID_NOT_START', detail: 'See terminal.' }
     expect(await agentFrame(legacy, { selectedModel: null, terminalAvailable: true }))
       .toMatchObject({ launch: { state: 'failed', error: 'ENGINE_DID_NOT_START', detail: 'See terminal.' } })
+  })
+})
+
+describe('agentFrame updatedAt', () => {
+  const context = { selectedModel: null, terminalAvailable: true }
+  const lastHook = Date.UTC(2026, 8, 17, 7)
+
+  // The regression: discovery rewrites the registry's `updatedAt` on every pass, so an agent with no
+  // readable transcript was stamped "now" forever and a phone sorting by recency put it on top.
+  it('follows the last hook without a transcript, never the bookkeeping clock', async () => {
+    const row = { ...session(null), updatedAt: Date.now(), lastHookAt: lastHook }
+    expect((await agentFrame(row, context)).updatedAt).toBe('2026-09-17T07:00:00.000Z')
+  })
+
+  it('an unreadable transcript falls back to the last hook too', async () => {
+    const row = { ...session(null), transcriptPath: '/nonexistent/agent-frame.jsonl', updatedAt: Date.now(), lastHookAt: lastHook }
+    expect((await agentFrame(row, context)).updatedAt).toBe('2026-09-17T07:00:00.000Z')
+  })
+
+  it("prefers the transcript's mtime", async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'agent-frame-'))
+    try {
+      const transcriptPath = join(dir, 'session.jsonl')
+      await writeFile(transcriptPath, '{}\n')
+      const written = new Date('2026-09-18T01:02:03.000Z')
+      await utimes(transcriptPath, written, written)
+      const row = { ...session(null), transcriptPath, updatedAt: Date.now(), lastHookAt: lastHook }
+      expect((await agentFrame(row, context)).updatedAt).toBe(written.toISOString())
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

@@ -15,10 +15,9 @@ import 'ledger_types.dart';
 
 /// One file or database a scan read, and what came out of it.
 ///
-/// [mtimeMs] and [size] together are the fingerprint. Cheap to take, and between
-/// them they catch every edit an agent CLI actually makes — these are
-/// append-only logs, so a write moves both. A hash would be exact and would cost
-/// a full read of the very file the fingerprint exists to avoid reading.
+/// [mtimeMs] and [size] together fingerprint the append-mostly JSONL logs.
+/// SQLite sources keep these as metadata only: committed changes can live in a
+/// separate, reused WAL file, so their scanner queries SQLite on each scan.
 class ScannedSource {
   const ScannedSource({
     required this.path,
@@ -101,37 +100,9 @@ abstract class LedgerScanner {
 
   /// Read what changed since [previous], keyed by source path.
   ///
-  /// An implementation is expected to reuse a [ScannedSource] whose fingerprint
-  /// still matches rather than re-parsing it.
+  /// JSONL implementations reuse a [ScannedSource] whose fingerprint still
+  /// matches. SQLite always queries a new committed snapshot.
   Future<LedgerScanResult> scan(Map<String, ScannedSource> previous);
-}
-
-/// Every `.jsonl` under [roots], deepest first, with unreadable roots skipped.
-///
-/// Skipped rather than reported: a missing `~/.codex` means that CLI was never
-/// run here, which is the ordinary case for two of the three providers on any
-/// given machine and not worth a sentence on screen.
-Future<List<File>> listJsonlFiles(Iterable<String> roots) async {
-  final seen = <String>{};
-  final files = <File>[];
-  for (final root in roots) {
-    final directory = Directory(root);
-    if (!await directory.exists()) continue;
-    try {
-      await for (final entity in directory.list(
-        recursive: true,
-        followLinks: false,
-      )) {
-        if (entity is! File || !entity.path.endsWith('.jsonl')) continue;
-        if (seen.add(entity.path)) files.add(entity);
-      }
-    } on FileSystemException {
-      // A single unreadable subtree must not hide the roots beside it.
-      continue;
-    }
-  }
-  files.sort((a, b) => a.path.compareTo(b.path));
-  return files;
 }
 
 /// The current user's home, or null when the environment names none.

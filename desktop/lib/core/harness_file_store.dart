@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'host_platform.dart';
+import 'viewer_mode.dart';
 import 'local_key_value_store.dart';
 
 /// Versioned Harness desktop state stored under the user's Harness home.
@@ -12,7 +14,15 @@ import 'local_key_value_store.dart';
 class HarnessFileStore implements BatchLocalKeyValueStore {
   static const schemaVersion = 1;
   // Separate from production; the CLI still owns shared authentication and links.
-  static const directoryName = 'desktop-app-v2';
+  //
+  // A viewer build is a different product holding a different session — its own
+  // SSO tokens and its own E2EE identity — so it lives BESIDE the desktop one
+  // rather than in it. On a Mac, where the viewer path is developed with
+  // `--dart-define=HARNESS_VIEWER_MODE=true`, the two would otherwise overwrite
+  // each other's state.
+  static final String directoryName = kViewerMode
+      ? 'viewer-app-v2'
+      : 'desktop-app-v2';
   static const fileName = 'state.json';
   static const lockFileName = 'state.lock';
 
@@ -39,6 +49,7 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
         if (drive != null && path != null) home = '$drive$path';
       }
     }
+    if (home == null || home.isEmpty) home = containerHome;
     if (home == null || home.isEmpty) {
       throw StateError('Could not resolve the current user home directory');
     }
@@ -188,8 +199,17 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
 
   Future<void> _makePrivateFile(File file) => _chmod(file.path, '600');
 
+  /// Windows has no POSIX modes, and a phone neither needs one — the app's
+  /// sandbox is already private to it — nor can spawn `/bin/chmod` at all.
   Future<void> _chmod(String path, String mode) async {
-    if (Platform.isWindows) return;
+    if (Platform.isWindows || isMobileHost) return;
+    // Reads must still repair permissions changed outside this instance, but
+    // launching chmod for every already-private directory and lock dominates
+    // startup. Check the live mode each time; do not cache it across operations.
+    // Include special bits as well as rwx when deciding that no repair is needed.
+    final expected = int.parse(mode, radix: 8);
+    final actual = (await FileStat.stat(path)).mode;
+    if ((actual & 0xfff) == expected) return;
     final result = await Process.run('/bin/chmod', [mode, path]);
     if (result.exitCode != 0) {
       throw FileSystemException('Could not set mode $mode', path);

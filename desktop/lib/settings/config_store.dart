@@ -9,6 +9,10 @@ class ConfigStore {
   static const _environmentKey = 'app_autonomous_environment';
   static const _skippedDesktopUpdateVersionKey =
       'skipped_desktop_update_version';
+  // Written by builds that had a "Don't show this again" on the Local model
+  // manager dialog. The dialog is where a machine is chosen now, so there is
+  // nothing to skip; kept only so Reset cleans state those builds wrote.
+  static const _legacyRunLocalModelSkipDialogKey = 'runLocalModel.skipDialog';
   // No longer read or written: live pre-flight runs on every launch. Kept only
   // so Reset can clean state written by older desktop builds.
   static const _legacyEnvironmentSetupVersionKey = 'environment_setup_version';
@@ -72,6 +76,7 @@ class ConfigStore {
       _storage.delete(_baseUrlKey),
       _storage.delete(_environmentKey),
       _storage.delete(_skippedDesktopUpdateVersionKey),
+      _storage.delete(_legacyRunLocalModelSkipDialogKey),
       _storage.delete(_legacyEnvironmentSetupVersionKey),
     ]);
   }

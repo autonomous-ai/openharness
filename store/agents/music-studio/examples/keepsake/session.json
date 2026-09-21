@@ -1,0 +1,666 @@
+{
+  "spec": "afterhours/1",
+  "id": "keepsake",
+  "title": "Keepsake",
+  "brief": "Arrange the supplied waltz melody for a 33-second family film interlude. Preserve every melody note and both tempos. Add an understated three-beat accompaniment, a low foundation and a small final answer; leave room for narration.",
+  "seed": "keepsake-original",
+  "tempo": 72.00002880001152,
+  "tempos": [
+    {
+      "beat": 0,
+      "bpm": 72.00002880001152
+    },
+    {
+      "beat": 18,
+      "bpm": 60
+    }
+  ],
+  "meter": [
+    3,
+    4
+  ],
+  "beats": 36,
+  "tracks": [
+    {
+      "id": "midi-0",
+      "name": "Approved melody",
+      "instrument": "felt",
+      "midiProgram": 0,
+      "gain": 0.8,
+      "pan": -0.08,
+      "notes": [
+        {
+          "beat": 0,
+          "duration": 1.5,
+          "midi": 67,
+          "velocity": 0.6141732283464567
+        },
+        {
+          "beat": 1.5,
+          "duration": 0.5,
+          "midi": 69,
+          "velocity": 0.47244094488188976
+        },
+        {
+          "beat": 2,
+          "duration": 0.75,
+          "midi": 71,
+          "velocity": 0.47244094488188976
+        },
+        {
+          "beat": 3,
+          "duration": 2.4,
+          "midi": 74,
+          "velocity": 0.6141732283464567
+        },
+        {
+          "beat": 6,
+          "duration": 1,
+          "midi": 72,
+          "velocity": 0.6141732283464567
+        },
+        {
+          "beat": 7,
+          "duration": 1,
+          "midi": 71,
+          "velocity": 0.47244094488188976
+        },
+        {
+          "beat": 8,
+          "duration": 0.8,
+          "midi": 69,
+          "velocity": 0.47244094488188976
+        },
+        {
+          "beat": 9,
+          "duration": 2.4,
+          "midi": 67,
+          "velocity": 0.6141732283464567
+        },
+        {
+          "beat": 12,
+          "duration": 1.4,
+          "midi": 64,
+          "velocity": 0.6141732283464567
+        },
+        {
+          "beat": 13.5,
+          "duration": 0.8,
+          "midi": 67,
+          "velocity": 0.47244094488188976
+        },
+        {
+          "beat": 15,
+          "duration": 2.6,
+          "midi": 66,
+          "velocity": 0.6141732283464567
+        },
+        {
+          "beat": 18,
+          "duration": 1.5,
+          "midi": 67,
+          "velocity": 0.5590551181102362
+        },
+        {
+          "beat": 19.5,
+          "duration": 0.5,
+          "midi": 69,
+          "velocity": 0.4251968503937008
+        },
+        {
+          "beat": 20,
+          "duration": 0.75,
+          "midi": 71,
+          "velocity": 0.4251968503937008
+        },
+        {
+          "beat": 21,
+          "duration": 2.4,
+          "midi": 74,
+          "velocity": 0.5590551181102362
+        },
+        {
+          "beat": 24,
+          "duration": 1,
+          "midi": 72,
+          "velocity": 0.5590551181102362
+        },
+        {
+          "beat": 25,
+          "duration": 1,
+          "midi": 71,
+          "velocity": 0.4251968503937008
+        },
+        {
+          "beat": 26,
+          "duration": 0.8,
+          "midi": 69,
+          "velocity": 0.4251968503937008
+        },
+        {
+          "beat": 27,
+          "duration": 2.4,
+          "midi": 67,
+          "velocity": 0.5590551181102362
+        },
+        {
+          "beat": 30,
+          "duration": 1.4,
+          "midi": 64,
+          "velocity": 0.5590551181102362
+        },
+        {
+          "beat": 31.5,
+          "duration": 0.8,
+          "midi": 67,
+          "velocity": 0.4251968503937008
+        },
+        {
+          "beat": 33,
+          "duration": 2.6,
+          "midi": 67,
+          "velocity": 0.5590551181102362
+        }
+      ],
+      "muted": false,
+      "solo": false,
+      "attack": 0.008,
+      "release": 0.4,
+      "tone": 6500,
+      "space": 0.22,
+      "delay": 0,
+      "sampleRoot": 60,
+      "clips": []
+    },
+    {
+      "id": "left-hand",
+      "name": "Waltz accompaniment",
+      "instrument": "felt",
+      "gain": 0.4,
+      "pan": -0.23,
+      "space": 0.12,
+      "release": 0.3,
+      "notes": [
+        {
+          "beat": 0,
+          "midi": 55,
+          "duration": 0.8,
+          "velocity": 0.43
+        },
+        {
+          "beat": 1,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 1,
+          "midi": 62,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 2,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 2,
+          "midi": 62,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 3,
+          "midi": 59,
+          "duration": 0.8,
+          "velocity": 0.43
+        },
+        {
+          "beat": 4,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 4,
+          "midi": 62,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 5,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 5,
+          "midi": 62,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 6,
+          "midi": 60,
+          "duration": 0.8,
+          "velocity": 0.43
+        },
+        {
+          "beat": 7,
+          "midi": 60,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 7,
+          "midi": 64,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 8,
+          "midi": 60,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 8,
+          "midi": 64,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 9,
+          "midi": 55,
+          "duration": 0.8,
+          "velocity": 0.43
+        },
+        {
+          "beat": 10,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 10,
+          "midi": 62,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 11,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 11,
+          "midi": 62,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 12,
+          "midi": 52,
+          "duration": 0.8,
+          "velocity": 0.43
+        },
+        {
+          "beat": 13,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 13,
+          "midi": 64,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 14,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 14,
+          "midi": 64,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 15,
+          "midi": 50,
+          "duration": 0.8,
+          "velocity": 0.43
+        },
+        {
+          "beat": 16,
+          "midi": 57,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 16,
+          "midi": 60,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 17,
+          "midi": 57,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 17,
+          "midi": 60,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 18,
+          "midi": 55,
+          "duration": 0.8,
+          "velocity": 0.43
+        },
+        {
+          "beat": 19,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 19,
+          "midi": 62,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 20,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 20,
+          "midi": 62,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 21,
+          "midi": 59,
+          "duration": 0.8,
+          "velocity": 0.43
+        },
+        {
+          "beat": 22,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 22,
+          "midi": 62,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 23,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 23,
+          "midi": 62,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 24,
+          "midi": 60,
+          "duration": 0.8,
+          "velocity": 0.43
+        },
+        {
+          "beat": 25,
+          "midi": 60,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 25,
+          "midi": 64,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 26,
+          "midi": 60,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 26,
+          "midi": 64,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 27,
+          "midi": 55,
+          "duration": 0.8,
+          "velocity": 0.43
+        },
+        {
+          "beat": 28,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 28,
+          "midi": 62,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 29,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 29,
+          "midi": 62,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 30,
+          "midi": 52,
+          "duration": 0.8,
+          "velocity": 0.43
+        },
+        {
+          "beat": 31,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 31,
+          "midi": 64,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 32,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 32,
+          "midi": 64,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 33,
+          "midi": 55,
+          "duration": 0.8,
+          "velocity": 0.43
+        },
+        {
+          "beat": 34,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 34,
+          "midi": 62,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 35,
+          "midi": 59,
+          "duration": 0.6,
+          "velocity": 0.32
+        },
+        {
+          "beat": 35,
+          "midi": 62,
+          "duration": 0.6,
+          "velocity": 0.32
+        }
+      ],
+      "muted": false,
+      "solo": false,
+      "attack": 0.008,
+      "tone": 8000,
+      "delay": 0,
+      "sampleRoot": 60,
+      "clips": []
+    },
+    {
+      "id": "cello-role",
+      "name": "Low foundation",
+      "instrument": "bass",
+      "gain": 0.24,
+      "tone": 800,
+      "release": 0.25,
+      "space": 0.06,
+      "notes": [
+        {
+          "beat": 0,
+          "midi": 43,
+          "duration": 2.5,
+          "velocity": 0.5
+        },
+        {
+          "beat": 6,
+          "midi": 48,
+          "duration": 2.5,
+          "velocity": 0.5
+        },
+        {
+          "beat": 12,
+          "midi": 40,
+          "duration": 2.5,
+          "velocity": 0.5
+        },
+        {
+          "beat": 18,
+          "midi": 43,
+          "duration": 2.5,
+          "velocity": 0.5
+        },
+        {
+          "beat": 24,
+          "midi": 48,
+          "duration": 2.5,
+          "velocity": 0.5
+        },
+        {
+          "beat": 30,
+          "midi": 40,
+          "duration": 2.5,
+          "velocity": 0.5
+        },
+        {
+          "beat": 33,
+          "midi": 43,
+          "duration": 2.5,
+          "velocity": 0.5
+        }
+      ],
+      "pan": 0,
+      "muted": false,
+      "solo": false,
+      "attack": 0.008,
+      "delay": 0,
+      "sampleRoot": 60,
+      "clips": []
+    },
+    {
+      "id": "answer",
+      "name": "Final answer",
+      "instrument": "bell",
+      "gain": 0.24,
+      "pan": 0.27,
+      "release": 0.45,
+      "space": 0.2,
+      "notes": [
+        {
+          "beat": 30,
+          "midi": 74,
+          "duration": 0.9,
+          "velocity": 0.4
+        },
+        {
+          "beat": 31.5,
+          "midi": 71,
+          "duration": 0.9,
+          "velocity": 0.4
+        },
+        {
+          "beat": 33,
+          "midi": 67,
+          "duration": 0.9,
+          "velocity": 0.4
+        }
+      ],
+      "muted": false,
+      "solo": false,
+      "attack": 0.008,
+      "tone": 8000,
+      "delay": 0,
+      "sampleRoot": 60,
+      "clips": []
+    }
+  ],
+  "importWarnings": [],
+  "master": 0.9,
+  "tail": 0,
+  "assets": [],
+  "sections": [
+    {
+      "name": "A memory",
+      "beat": 0,
+      "length": 18
+    },
+    {
+      "name": "Coming home",
+      "beat": 18,
+      "length": 18
+    }
+  ]
+}

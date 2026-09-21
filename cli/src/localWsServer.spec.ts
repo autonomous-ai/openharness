@@ -105,6 +105,44 @@ describe('local CLI WebSocket', () => {
     ws.close()
   })
 
+  // A window from before it introduced itself on `terminal_open` still gets named on the far
+  // machine's "took control" banner: this daemon knows the window is its own desktop.
+  it('introduces a silent window on a relayed terminal_open, and believes one that speaks', async () => {
+    const backend = new FakeBackend()
+    const relayed: Frame[] = []
+    const relayPool = {
+      acquire: async (_machineId: string, _env: string, _select: Frame, sink: LocalClientSink) => {
+        sink.sendFrame({ type: 'connected', payload: { machineId: 'other-machine', e2ee: false } })
+        return { send: async (frame: Frame) => { relayed.push(frame) }, sendBinary: async () => {}, detach: () => {} }
+      },
+      acquireIsolated: async () => { throw new Error('unused') },
+      invalidate: () => {},
+    }
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, {
+      machineId, backend, autonomousEnv: 'test',
+      relayPool: relayPool as unknown as NonNullable<Parameters<typeof attachLocalWsServer>[1]['relayPool']>,
+      localClient: () => ({ kind: 'desktop', name: 'This Mac', machineId }),
+    })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: 'other-machine', localProtocolVersion: 1 } }))
+    await expect(connected).resolves.toMatchObject({ type: 'connected' })
+
+    ws.send(JSON.stringify({ type: 'terminal_open', payload: { requestId: 'o1', agentId: 'a', cols: 80, rows: 24, protocolVersion: 3 } }))
+    ws.send(JSON.stringify({ type: 'terminal_open', payload: { requestId: 'o2', agentId: 'a', cols: 80, rows: 24, protocolVersion: 3, client: { kind: 'desktop', name: 'Named by the window' } } }))
+    ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'r1' } }))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(relayed).toEqual([
+      { type: 'terminal_open', payload: { requestId: 'o1', agentId: 'a', cols: 80, rows: 24, protocolVersion: 3, client: { kind: 'desktop', name: 'This Mac', machineId } } },
+      { type: 'terminal_open', payload: { requestId: 'o2', agentId: 'a', cols: 80, rows: 24, protocolVersion: 3, client: { kind: 'desktop', name: 'Named by the window' } } },
+      { type: 'agents_list', payload: { requestId: 'r1' } },
+    ])
+    ws.close()
+  })
+
   it('takes the window\'s tile roster, keeps it off the wire, and forgets it on close', async () => {
     const backend = new FakeBackend()
     const rosters: string[][] = []
@@ -157,7 +195,7 @@ describe('local CLI WebSocket', () => {
     ws.send(JSON.stringify({ type: 'app_swarms', payload: {
       active: 's2',
       swarms: [
-        { id: 's1', name: 'Workshop', agentIds: ['a1', '', 7, 'a2'] },
+        { id: 's1', name: 'Workshop', agentIds: ['a1', '', 7, 'a2'], panes: 3 },
         { id: '', name: 'no id' },
         'junk',
         { id: 's2', name: 'Launch' },
@@ -165,8 +203,12 @@ describe('local CLI WebSocket', () => {
     } }))
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(seen).toEqual([{ active: 's2', swarms: [
-      { id: 's1', name: 'Workshop', agentIds: ['a1', 'a2'] },
-      { id: 's2', name: 'Launch', agentIds: [] },
+      // Three tiles, two of them agents: the third is a shell or a viewer, and saying so is the
+      // point — see the terminal-only tab below.
+      { id: 's1', name: 'Workshop', agentIds: ['a1', 'a2'], panes: 3 },
+      // No count at all, from a window too old to send one: as many tiles as agents, which is what
+      // this row meant before the field existed.
+      { id: 's2', name: 'Launch', agentIds: [], panes: 0 },
     ] }])
     // Like app_panes: a fact about this desk, so the machine never sees it.
     expect(backend.frames.map((frame) => frame.type)).toEqual([])

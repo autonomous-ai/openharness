@@ -1,0 +1,12 @@
+{
+  "name": "autonomous-strudel",
+  "private": true,
+  "description": "Strudel as a Harness agent: the pane is Strudel's own REPL, self-hosted from @strudel/repl",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test pane/voices.test.mjs test/viewer.test.mjs && python3 -m unittest toolchain/test_verdict.py toolchain/test_scripts.py"
+  },
+  "dependencies": {
+    "@strudel/repl": "1.3.0"
+  }
+}

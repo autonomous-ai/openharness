@@ -27,6 +27,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write   # only used by the Workload Identity Federation variant of the auth steps below
 
 env:
   GCS_BUCKET: s3-autonomous-upgrade-3
@@ -37,16 +38,32 @@ jobs:
     if: ${{ inputs.publish }}
     runs-on: ubuntu-latest
     steps:
-      - uses: google-github-actions/auth@v2
+      # GCP auth, WITHOUT a long-lived key — the same pattern release.yml, release-desktop.yml and
+      # production-be-build.yaml already run. A service-account JSON key is a bearer credential with
+      # no expiry: it is only as safe as every place it has ever been copied to. Workload Identity
+      # Federation replaces it with a short-lived token minted from this job's own OIDC identity
+      # (hence `id-token: write` above), so there is nothing to leak and nothing to rotate.
+      #
+      # Note that every GCS call below — and in publish-managed-tmux-runtime.sh — is `gcloud storage`
+      # and not `gsutil`. gsutil is a standalone Python tool that cannot use the external-account
+      # credential WIF issues, so it fails on every call while the identical `gcloud storage` call
+      # works. Do not reintroduce gsutil here.
+      #
+      # Federation is the only path: the GCP_SA_KEY fallback and the key behind it were retired on
+      # 2026-09-17. If this step fails, fix the provider or the service account's binding — do not
+      # reintroduce a key.
+      - name: Authenticate to GCP (workload identity federation)
+        uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
       - name: Verify GCS write access
         run: |
           set -euo pipefail
           probe="gs://${GCS_BUCKET}/harness/runtime/tmux/.ci-preflight/${GITHUB_RUN_ID}"
-          echo "$GITHUB_RUN_ID" | gsutil cp - "$probe"
-          gsutil rm "$probe"
+          echo "$GITHUB_RUN_ID" | gcloud storage cp - "$probe"
+          gcloud storage rm "$probe"
 
   build:
     runs-on: macos-15
@@ -89,9 +106,11 @@ jobs:
           pattern: tmux-${{ inputs.tmux_version }}-*
           path: dist
           merge-multiple: true
-      - uses: google-github-actions/auth@v2
+      - name: Authenticate to GCP (workload identity federation)
+        uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
       - name: Publish archives and manifest
         run: |

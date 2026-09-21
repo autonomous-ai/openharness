@@ -1,12 +1,13 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../logging/debug_surface.dart';
 
 /// Harness uses Command as a direct prefix for frequent workspace actions.
-/// T opens a tab, N adds an existing or new agent, S changes layout,
-/// H/J/K/L and arrows focus panes, B routes a task, D splits down and R splits
-/// right. The same definitions feed live keys, help and search.
+/// T opens a tab, P adds a pane, N creates a harness, S opens the Store,
+/// Shift-L chooses a layout. H/J/K/L and arrows focus panes; B routes a task.
+/// The same definitions feed live keys, help and search.
 ///
 /// Unclaimed input stays with the focused agent or text field. Composition,
 /// copy/paste and the coding agent's own prompt editing must keep working.
@@ -53,7 +54,17 @@ enum ShortcutAction {
 
   closePane,
   newAgent,
+
+  /// A plain shell in a pane, like a native terminal's new tab — the daemon
+  /// treats whatever engine is later typed into it as the pane's agent.
+  newTerminal,
+
+  /// Another agent of the focused pane's kind — same machine, folder, harness,
+  /// profile and permission mode — with a fresh conversation: fork minus the
+  /// context. No dialog, like [newTerminal].
+  cloneAgent,
   routeTask,
+  orchestrate,
   reload,
   showLayout,
   pinPane,
@@ -230,7 +241,11 @@ const List<AppShortcut> kAppShortcuts = [
   ),
   AppShortcut(
     action: ShortcutAction.showLayout,
-    activator: SingleActivator(LogicalKeyboardKey.keyS, meta: true),
+    activator: SingleActivator(
+      LogicalKeyboardKey.keyL,
+      meta: true,
+      shift: true,
+    ),
     label: 'Choose the grid layout',
     group: ShortcutGroup.panes,
   ),
@@ -280,7 +295,7 @@ const List<AppShortcut> kAppShortcuts = [
   AppShortcut(
     action: ShortcutAction.newAgent,
     activator: SingleActivator(LogicalKeyboardKey.keyN, meta: true),
-    label: 'New Agent',
+    label: 'New Harness',
     group: ShortcutGroup.actions,
   ),
   AppShortcut(
@@ -307,8 +322,7 @@ const List<AppShortcut> kAppShortcuts = [
 ///
 /// Kept out of [kAppShortcuts] because it is not always there: a release build
 /// has no Debug screen (see [kDebugSurfaceEnabled]), and a key that opens
-/// nothing is worse than a key that was never taken. Shift keeps it separate
-/// from the everyday Command-D split action.
+/// nothing is worse than a key that was never taken.
 const AppShortcut kDebugShortcut = AppShortcut(
   action: ShortcutAction.showDebug,
   activator: SingleActivator(LogicalKeyboardKey.keyD, meta: true, shift: true),
@@ -341,8 +355,8 @@ List<AppShortcut> appShortcuts({bool swarmMode = true}) => [
 const kSwarmShortcuts = [
   AppShortcut(
     action: ShortcutAction.addAgent,
-    activator: SingleActivator(LogicalKeyboardKey.keyO, meta: true),
-    label: 'Open Agent',
+    activator: SingleActivator(LogicalKeyboardKey.keyP, meta: true),
+    label: 'New Pane',
     group: ShortcutGroup.actions,
   ),
   AppShortcut(
@@ -357,15 +371,30 @@ const kSwarmShortcuts = [
     label: 'New Tab',
     group: ShortcutGroup.navigate,
   ),
+  // ⌘⇧T is New Terminal, as it is in a terminal app. "Reopen last closed
+  // harness" used to sit on it; it lives on in the History menu, the ⌘⇧P
+  // command palette and `keybindings.jsonc`, without a default chord.
   AppShortcut(
-    action: ShortcutAction.reopenClosedSwarm,
+    action: ShortcutAction.newTerminal,
     activator: SingleActivator(
       LogicalKeyboardKey.keyT,
       meta: true,
       shift: true,
     ),
-    label: 'Reopen last closed agent',
-    group: ShortcutGroup.navigate,
+    label: 'New Terminal',
+    group: ShortcutGroup.actions,
+  ),
+  // ⌘⇧N was Create Agent until ⌘N became New Harness (01989f5a); reclaimed
+  // for its shifted sibling: ⌘N starts a new one, ⌘⇧N another of this one.
+  AppShortcut(
+    action: ShortcutAction.cloneAgent,
+    activator: SingleActivator(
+      LogicalKeyboardKey.keyN,
+      meta: true,
+      shift: true,
+    ),
+    label: 'Clone Agent',
+    group: ShortcutGroup.actions,
   ),
   AppShortcut(
     action: ShortcutAction.closeSwarm,
@@ -390,7 +419,7 @@ const kSwarmShortcuts = [
       meta: true,
       shift: true,
     ),
-    label: 'Next Harness',
+    label: 'Next Tab',
     group: ShortcutGroup.navigate,
   ),
   AppShortcut(
@@ -400,13 +429,13 @@ const kSwarmShortcuts = [
       meta: true,
       shift: true,
     ),
-    label: 'Previous Harness',
+    label: 'Previous Tab',
     group: ShortcutGroup.navigate,
   ),
   AppShortcut(
     action: ShortcutAction.nextSwarm,
     activator: SingleActivator(LogicalKeyboardKey.tab, control: true),
-    label: 'Next Harness',
+    label: 'Next Tab',
     group: ShortcutGroup.navigate,
   ),
   AppShortcut(
@@ -416,7 +445,7 @@ const kSwarmShortcuts = [
       control: true,
       shift: true,
     ),
-    label: 'Previous Harness',
+    label: 'Previous Tab',
     group: ShortcutGroup.navigate,
   ),
   AppShortcut(
@@ -517,7 +546,7 @@ List<ShortcutRow> shortcutRows() {
   // The digits are not in [kAppShortcuts] — nine near-identical rows would bury
   // everything around them — so they join here, at the end of their group.
   final digits = ShortcutRow(
-    label: 'Select harnesses 1–9',
+    label: 'Select tabs 1–9',
     chords: const [
       ['⌘', '1 – $kTabDigitCount'],
     ],
@@ -544,17 +573,25 @@ class TerminalKey {
 /// The shortcuts screen prints these beside the ones the app takes, because
 /// "why is there no shortcut for X" is answered by seeing that X already
 /// belongs to something.
-const List<TerminalKey> kTerminalOwnedKeys = [
-  TerminalKey(['⌘', 'C'], 'Copy'),
-  TerminalKey(['⌘', 'V'], 'Paste'),
-  TerminalKey(['⌘', 'A'], 'Select all'),
-  TerminalKey(['esc'], 'Interrupt the engine'),
-  TerminalKey(['⌥', '⏎'], "Newline in the engine's prompt"),
+List<TerminalKey> get kTerminalOwnedKeys => [
+  if (defaultTargetPlatform == TargetPlatform.linux) ...const [
+    TerminalKey(['⌃', '⇧', 'C'], 'Copy'),
+    TerminalKey(['⌃', '⇧', 'V'], 'Paste'),
+    TerminalKey(['⌃', '⇧', 'A'], 'Select all'),
+  ] else ...const [
+    TerminalKey(['⌘', 'C'], 'Copy'),
+    TerminalKey(['⌘', 'V'], 'Paste'),
+    TerminalKey(['⌘', 'A'], 'Select all'),
+  ],
+  const TerminalKey(['esc'], 'Interrupt the engine'),
+  const TerminalKey(['⌥', '⏎'], "Newline in the engine's prompt"),
   // Kept as short as the rows around them: the deck's narrowest card is 280px, where a label much
   // past thirty characters takes a second line to itself.
-  TerminalKey(['⌥', '⌫'], 'Delete the previous word'),
-  TerminalKey(['⌘', '⌫'], "Delete to the line's start"),
-  TerminalKey(['⌃', 'C'], 'Cancel / interrupt in the agent'),
+  const TerminalKey(['⌥', '⌫'], 'Delete the previous word'),
+  // ⌘⌫ is taken in the pane on Apple only — elsewhere ⌘ is Super and stays the app's.
+  if (defaultTargetPlatform != TargetPlatform.linux)
+    const TerminalKey(['⌘', '⌫'], "Delete to the line's start"),
+  const TerminalKey(['⌃', 'C'], 'Cancel / interrupt in the agent'),
 ];
 
 /// Turns the declared shortcuts into the map [CallbackShortcuts] wants.

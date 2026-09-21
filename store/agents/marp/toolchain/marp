@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# `"$MARP_TOOLCHAIN/marp" deck.md … -o dist/deck.pdf` — the pinned marp-cli, whose own launcher is a
+# node script: node on PATH first (this machine's, or the Node Harness itself runs on).
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=runtimes.sh
+. "$here/runtimes.sh"
+harness_node 18 || exit 1
+[ -x "$here/node_modules/.bin/marp" ] || { echo "miss marp-cli — run toolchain/setup.sh"; exit 1; }
+# A machine with no browser of its own renders PDF and PPTX through the headless shell setup.sh fetched.
+# shellcheck source=browser.sh
+. "$here/browser.sh"
+if [ -z "${CHROME_PATH:-}" ] && browser="$(marp_browser)"; then
+  case "$browser" in */chrome-headless-shell) export CHROME_PATH="$browser" ;; esac
+fi
+exec "$here/node_modules/.bin/marp" "$@"

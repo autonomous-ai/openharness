@@ -1,0 +1,17 @@
+{
+  "upstream": "https://github.com/autonomous-ai/autonomous-circuit",
+  "license": "MIT",
+  "tagline": "Get a verified PCB and a fab packet you can order",
+  "examples": [
+    {
+      "prompt": "Design a six-key USB macropad. Start with the schematic.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/autonomous-circuit/six-key-macropad.jpg",
+      "caption": "Six-key USB-C macropad · RP2040, 43 parts, 84×47 mm · fab-ready for JLCPCB"
+    },
+    {
+      "prompt": "Design a USB-C desk weather badge: an RP2040 reads a BME280 temperature, humidity and pressure sensor and shows comfort on a bar of five RGB LEDs, with one button to cycle modes.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/autonomous-circuit/weather-badge.jpg",
+      "caption": "USB-C weather badge · RP2040 + BME280 + 5 RGB LEDs, 55 parts, 80×64 mm · fab-ready for JLCPCB"
+    }
+  ]
+}

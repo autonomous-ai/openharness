@@ -1,0 +1,18 @@
+{
+  "homepage": "https://www.remotion.dev",
+  "upstream": "https://github.com/remotion-dev/remotion",
+  "license": "MIT",
+  "tagline": "Make videos programmatically",
+  "examples": [
+    {
+      "prompt": "Make a 12-second \"my year in running\" recap video: total kilometres counting up, a glowing route line drawing itself across a city map, and monthly distance bars rising one by one with the best month lit up. Bold type, sunset colours.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/remotion/year-in-running.jpg",
+      "caption": "Year in running recap · 12 s 1080p MP4 · count-up, route, 12 bars"
+    },
+    {
+      "prompt": "Make a 12 second launch video for the Harness Store with three beats: the store opens, a card flips to Get, and a spinning 3D cube lands in a pane. Bold type, smooth motion. Render it to MP4.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/remotion/harness-store-launch.jpg",
+      "caption": "Harness Store launch · 12 s 1080p MP4 · 3 beats"
+    }
+  ]
+}

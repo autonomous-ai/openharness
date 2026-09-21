@@ -35,6 +35,7 @@ class TerminalView extends StatefulWidget {
     this.autoResize = true,
     this.resizeBuffer = true,
     this.renderingEnabled = true,
+    this.outputRepaintInterval,
     this.backgroundOpacity = 1,
     this.focusNode,
     this.autofocus = false,
@@ -89,6 +90,10 @@ class TerminalView extends StatefulWidget {
   /// Re-enabling reconciles geometry and scroll position on the next layout.
   /// An enclosing disabled [TickerMode] also suspends rendering updates.
   final bool renderingEnabled;
+
+  /// Coalesces terminal-output repaints to at most one per interval. Input and
+  /// scrolling remain immediate. Null keeps every output update responsive.
+  final Duration? outputRepaintInterval;
 
   /// Opacity of the terminal background. Set to 0 to make the terminal
   /// background transparent.
@@ -275,6 +280,7 @@ class TerminalViewState extends State<TerminalView> {
           autoResize: widget.autoResize,
           resizeBuffer: widget.resizeBuffer,
           renderingEnabled: widget.renderingEnabled,
+          outputRepaintInterval: widget.outputRepaintInterval,
           textStyle: widget.textStyle,
           textScaler: widget.textScaler ?? MediaQuery.textScalerOf(context),
           theme: widget.theme,
@@ -565,6 +571,20 @@ class TerminalViewState extends State<TerminalView> {
     // committed text (`に`) arrives. Let TextInputClient own all text without
     // Control/Command; it will call _onInsert exactly once on commit.
     final isTextInput = _isPrintableText(event.character);
+    // Linux's left Alt is Meta for readline/Vim: preserve the actual case
+    // and punctuation produced by the keyboard layout. Right Alt (AltGr)
+    // and macOS Option stay with the native text input client.
+    final keyboard = HardwareKeyboard.instance;
+    final linuxMeta = defaultTargetPlatform == TargetPlatform.linux &&
+        keyboard.logicalKeysPressed.contains(LogicalKeyboardKey.altLeft) &&
+        !keyboard.logicalKeysPressed.contains(LogicalKeyboardKey.altRight) &&
+        !keyboard.isControlPressed &&
+        !keyboard.isMetaPressed;
+    if (isTextInput && linuxMeta) {
+      widget.terminal.textInput('\x1b${event.character}');
+      _scrollToBottom();
+      return KeyEventResult.handled;
+    }
     if (isTextInput && !reservesTerminalKey) {
       // Do not let another Flutter shortcut consume this before macOS gets a
       // chance to update the native text-input client.
@@ -671,6 +691,7 @@ class _TerminalView extends LeafRenderObjectWidget {
     required this.autoResize,
     required this.resizeBuffer,
     required this.renderingEnabled,
+    this.outputRepaintInterval,
     required this.textStyle,
     required this.textScaler,
     required this.theme,
@@ -695,6 +716,8 @@ class _TerminalView extends LeafRenderObjectWidget {
   final bool resizeBuffer;
 
   final bool renderingEnabled;
+
+  final Duration? outputRepaintInterval;
 
   final TerminalStyle textStyle;
 
@@ -725,6 +748,7 @@ class _TerminalView extends LeafRenderObjectWidget {
       resizeBuffer: resizeBuffer,
       renderingEnabled:
           renderingEnabled && TickerMode.valuesOf(context).enabled,
+      outputRepaintInterval: outputRepaintInterval,
       textStyle: textStyle,
       textScaler: textScaler,
       theme: theme,
@@ -734,7 +758,7 @@ class _TerminalView extends LeafRenderObjectWidget {
       onEditableRect: onEditableRect,
       composingText: composingText,
       composingBacktrackCells: composingBacktrackCells,
-    );
+    )..devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
   }
 
   @override
@@ -742,6 +766,7 @@ class _TerminalView extends LeafRenderObjectWidget {
     renderObject
       ..renderingEnabled =
           renderingEnabled && TickerMode.valuesOf(context).enabled
+      ..outputRepaintInterval = outputRepaintInterval
       ..terminal = terminal
       ..controller = controller
       ..offset = offset
@@ -756,6 +781,7 @@ class _TerminalView extends LeafRenderObjectWidget {
       ..alwaysShowCursor = alwaysShowCursor
       ..onEditableRect = onEditableRect
       ..composingText = composingText
-      ..composingBacktrackCells = composingBacktrackCells;
+      ..composingBacktrackCells = composingBacktrackCells
+      ..devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
   }
 }

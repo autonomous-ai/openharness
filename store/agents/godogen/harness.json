@@ -1,0 +1,28 @@
+{
+  "spec": 1,
+  "id": "autonomous/godogen",
+  "name": "Godogen",
+  "category": "Games",
+  "author": "Alex Ermolov",
+  "description": "Build a world you can play. Watch your game take shape in a live studio, explore each version, and play while the agent keeps creating.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "studio.json",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": ["skills", "runtime/.claude/skills"],
+    "env": {
+      "GODOGEN_TOOLS": "${dsh}/toolchain",
+      "GODOGEN_RUNTIME": "${dsh}/runtime"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": { "use": "autonomous/game-viewer" },
+  "verdict": ".harness/verdict.json"
+}

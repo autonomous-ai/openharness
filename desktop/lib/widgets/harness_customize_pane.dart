@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -7,11 +5,32 @@ import '../settings/sections/appearance_section.dart';
 import '../settings/sections/terminal_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
-import '../shared/theme/harness_background.dart';
-import 'swarm_wallpaper.dart';
+import '../shared/widgets/app_dialog.dart';
+import 'box_chrome.dart';
+import 'prompt_customize.dart';
 
-/// Page-local customization. Appearance and Terminal use their existing stores
-/// and controls, so moving them here keeps the user's saved choices intact.
+/// Opens customization over the workspace so appearance changes remain visible
+/// on the terminals. All global entry points use this same right-side panel.
+Future<void> showHarnessCustomizePane(BuildContext context) =>
+    showAppDialog<void>(
+      context: context,
+      veilTint: Colors.transparent,
+      veilBlur: 0,
+      transitionDuration: Duration.zero,
+      builder: (context) => Align(
+        alignment: Alignment.centerRight,
+        child: SizedBox(
+          width: (440 * MediaQuery.textScalerOf(context).scale(13) / 13).clamp(
+            0,
+            MediaQuery.sizeOf(context).width,
+          ),
+          height: double.infinity,
+          child: HarnessCustomizePane(onClose: () => Navigator.pop(context)),
+        ),
+      ),
+    );
+
+/// Appearance and Terminal share the app's existing preference stores.
 class HarnessCustomizePane extends StatelessWidget {
   const HarnessCustomizePane({super.key, required this.onClose, this.store});
   final VoidCallback onClose;
@@ -39,8 +58,11 @@ class HarnessCustomizePane extends StatelessWidget {
                       Expanded(
                         child: Text(
                           'Customize Harness',
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w600),
+                          style: boxMonoStyle(
+                            size: 14,
+                            color: grid.AppPalette.textPrimary,
+                            weight: FontWeight.w600,
+                          ),
                         ),
                       ),
                       IconButton(
@@ -60,11 +82,9 @@ class HarnessCustomizePane extends StatelessWidget {
                   unselectedLabelColor: grid.AppPalette.textSecondary,
                   indicatorColor: grid.AppPalette.swarmAccent,
                   dividerColor: grid.AppPalette.divider,
+                  labelStyle: boxMonoStyle(size: 12),
                   tabs: const [
-                    Tab(
-                      key: ValueKey('customize-background'),
-                      text: 'Wallpaper',
-                    ),
+                    Tab(key: ValueKey('customize-prompt'), text: 'Pane'),
                     Tab(
                       key: ValueKey('customize-appearance'),
                       text: 'Appearance',
@@ -75,7 +95,7 @@ class HarnessCustomizePane extends StatelessWidget {
                 Expanded(
                   child: TabBarView(
                     children: [
-                      _Backgrounds(store: store ?? appearancePrefsStore),
+                      PromptCustomize(store: store ?? appearancePrefsStore),
                       const AppearanceSection(),
                       const TerminalSection(),
                     ],
@@ -88,98 +108,4 @@ class HarnessCustomizePane extends StatelessWidget {
       ),
     );
   }
-}
-
-class _Backgrounds extends StatelessWidget {
-  const _Backgrounds({required this.store});
-  final AppearancePrefsStore store;
-
-  @override
-  Widget build(BuildContext context) => SingleChildScrollView(
-    padding: const EdgeInsets.all(20),
-    child: ValueListenableBuilder<AppearancePrefs>(
-      valueListenable: store,
-      builder: (context, prefs, _) => LayoutBuilder(
-        builder: (context, constraints) => Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: [
-            for (final choice in HarnessBackground.values)
-              SizedBox(
-                width: (constraints.maxWidth - 12) / 2,
-                child: _BackgroundChoice(
-                  choice: choice,
-                  selected: prefs.background == choice,
-                  onChoose: () => unawaited(store.setBackground(choice)),
-                ),
-              ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-class _BackgroundChoice extends StatelessWidget {
-  const _BackgroundChoice({
-    required this.choice,
-    required this.selected,
-    required this.onChoose,
-  });
-  final HarnessBackground choice;
-  final bool selected;
-  final VoidCallback onChoose;
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-    selected: selected,
-    button: true,
-    label: '${choice.label} wallpaper',
-    onTap: onChoose,
-    child: ExcludeSemantics(
-      child: TextButton(
-        key: ValueKey('background-${choice.name}'),
-        onPressed: onChoose,
-        style: TextButton.styleFrom(
-          padding: const EdgeInsets.all(6),
-          foregroundColor: grid.AppPalette.textPrimary,
-          backgroundColor: grid.AppPalette.cardBg,
-          side: BorderSide(
-            color: selected
-                ? grid.AppPalette.swarmAccent
-                : grid.AppPalette.divider,
-            width: 1.5,
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(7),
-              child: AspectRatio(
-                aspectRatio: 1.6,
-                child: SwarmWallpaper(background: choice, thumbnail: true),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
-              child: Row(
-                children: [
-                  Expanded(child: Text(choice.label)),
-                  const SizedBox(width: 4),
-                  SizedBox(
-                    width: 16,
-                    child: selected ? const Icon(Icons.check, size: 16) : null,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
 }

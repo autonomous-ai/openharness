@@ -81,11 +81,18 @@ extension AnalyticsEvents on Analytics {
   ///
   /// The working folder is deliberately absent: it is an absolute path, which
   /// this stream never carries.
-  void agentCreated({required String engine, required bool bypassPermission}) =>
-      track(
-        'agent_created',
-        params: {'engine': engine, 'bypass_permission': bypassPermission},
-      );
+  void agentCreated({
+    required String engine,
+    required bool bypassPermission,
+    String? permissionMode,
+  }) => track(
+    'agent_created',
+    params: {
+      'engine': engine,
+      'bypass_permission': bypassPermission,
+      'permission_mode': ?permissionMode,
+    },
+  );
 
   /// The first message of a signed-in session — how long it took this person to
   /// get from being logged in to actually talking to an agent, whichever agent

@@ -1,0 +1,17 @@
+{
+  "listed": false,
+  "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/quantum-studio",
+  "upstream": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/quantum-studio",
+  "license": "MIT",
+  "tagline": "Edit circuits and see superposition, phase and entanglement",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/quantum-studio/starter.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Build a Bell pair and show me its amplitudes, measurement probabilities and local Bloch states.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/quantum-studio/starter.jpg",
+      "caption": "Bell state · step, edit, sample and export"
+    }
+  ]
+}

@@ -5,7 +5,8 @@
  * same shell selection) `engineLaunch.ts` uses to exec an engine in a pane.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { interactiveEngineShell } from '../lib/engineLaunch.js'
+import { harnessNodePrelude, interactiveEngineShell } from '../lib/engineLaunch.js'
+import { managedNodePath } from '../lib/nodeRuntime.js'
 
 export interface DshCommandOptions {
   cwd: string
@@ -32,11 +33,37 @@ export function isShellNoise(line: string): boolean {
   return /can't change option: zle$/.test(line) || /^\(eval\):\d+: can't change option: zle$/.test(line)
 }
 
-/** `[path, ...args]` that runs `script` through the user's shell, or `/bin/sh -c` when none is known. */
+/**
+ * `[path, ...args]` that runs `script` through the user's shell, or `/bin/sh -c` when none is known.
+ *
+ * AS A LOGIN SHELL, whatever the shell. interactiveEngineShell gives bash `-ic` on purpose for a pane
+ * (see tmuxOnPath.ts on why), but a bash user's PATH conventionally lives in `.bash_profile`, which
+ * only `-l` reads — and Terminal.app opens a login shell, so that file is what "on my terminal it
+ * works" means. Measured 2026-09-16: Solid's doctor answered `miss codex on PATH` from the daemon
+ * while `harness dsh doctor` in Terminal found it, because codex was an npm global under nvm and nvm
+ * is sourced from `.bash_profile`. A setup or a doctor is one process, so the reason bash panes avoid
+ * `-l` (a PATH built in .bashrc compounding across subshells) does not apply here.
+ */
 export function dshShellArgv(script: string): { path: string; args: string[] } {
   const shell = interactiveEngineShell()
-  if (shell) return { path: shell.path, args: [...shell.args, script] }
-  return { path: '/bin/sh', args: ['-c', script] }
+  const body = `${dshNodeFallback()}\n${script}`
+  if (shell) {
+    const args = shell.args.map((a) => (a === '-ic' ? '-lic' : a))
+    return { path: shell.path, args: [...args, body] }
+  }
+  return { path: '/bin/sh', args: ['-c', body] }
+}
+
+/**
+ * The line run before a DSH's command: when the login shell's PATH has no `node`, the Node this
+ * daemon runs on joins the END of it. Since the product moved to a private runtime, a machine with no
+ * node on PATH is the normal case (see nodeRuntime.ts), and a package whose setup says `npm ci` or
+ * whose viewer is `node viewer.mjs` would otherwise fail on exactly the machines Harness set up
+ * itself. Appended, not prepended, so a node the person installed always wins; and run after the rc
+ * files, so a profile that assigns PATH outright cannot drop it.
+ */
+export function dshNodeFallback(): string {
+  return harnessNodePrelude(managedNodePath()).trimEnd()
 }
 
 export function spawnDshCommand(script: string, opts: { cwd: string; env?: Record<string, string> }): ChildProcess {
@@ -60,7 +87,8 @@ export function runDshCommand(script: string, opts: DshCommandOptions): Promise<
     try {
       child = spawnDshCommand(script, { cwd: opts.cwd, env: opts.env })
     } catch (error) {
-      const line = `could not start: ${error instanceof Error ? error.message : String(error)}`
+      // spawn throws only Errors (an invalid argument: a NUL in the cwd, say).
+      const line = `could not start: ${(error as Error).message}`
       opts.onLine?.(line)
       resolve({ code: 127, signal: null, lines: [line], timedOut: false })
       return

@@ -8,8 +8,12 @@ export const P2P_SIGNAL_MAX_BYTES = 128 * 1024
 export const P2P_SIGNAL_MAX_FRAMES_PER_MINUTE = 240
 export const P2P_SIGNAL_MAX_BYTES_PER_MINUTE = 4 * 1024 * 1024
 
-export const P2P_DOWN_TYPES = new Set(['p2p_offer', 'p2p_ice_candidate', 'p2p_abort'])
-export const P2P_UP_TYPES = new Set(['p2p_answer', 'p2p_ice_candidate', 'p2p_abort'])
+// p2p_promote / p2p_promote_ack: the client's TURN-to-direct upgrade cutting a live session over to a
+// shadow one it negotiated beside it (the CLI's remoteRelay.ts promoteToDirect(), and the phone's port of
+// it). They ride the same sealed signaling channel as the offer/answer they follow; without them here
+// the cutover's promote was rejected as P2P_TYPE_REJECTED and every upgrade timed out on its ack.
+export const P2P_DOWN_TYPES = new Set(['p2p_offer', 'p2p_ice_candidate', 'p2p_abort', 'p2p_promote'])
+export const P2P_UP_TYPES = new Set(['p2p_answer', 'p2p_ice_candidate', 'p2p_abort', 'p2p_promote_ack'])
 
 export function p2pFrameBytes(frame: Frame): number {
   return Buffer.byteLength(JSON.stringify(frame), 'utf8')

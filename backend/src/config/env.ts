@@ -93,13 +93,22 @@ const envSchema = z.object({
   SSO_CLIENT_SECRET: z.string().optional(), // public client (PKCE, auth method 'none') → leave unset
   SSO_SCOPE: z.string().default('openid profile email roles'),
   SSO_PROFILE_URL: z.string().default('https://apiv2.autonomous.ai/api/v1/me/profile'),
+  // The cheap way to prove a token: the same answer shape as SSO_PROFILE_URL with no customer or cart
+  // read behind it. Asked first; SSO_PROFILE_URL is the fallback on a 404 (a BFF that predates the
+  // route). '' turns it off — set that, or your own URL, WHENEVER you move SSO_PROFILE_URL, or tokens
+  // for your host get proved against this one.
+  SSO_IDENTITY_URL: z.string().default('https://apiv2.autonomous.ai/api/v1/me/identity'),
   // Per-user staging override. Production remains the default; these are consulted only after the
   // login transaction/user record explicitly selects `stag`.
   STAGING_SSO_ISSUER: z.string().default('https://auth.staging.autonomousdev.xyz'),
   STAGING_SSO_CLIENT_ID: z.string().optional(),
   STAGING_SSO_CLIENT_SECRET: z.string().optional(),
   STAGING_SSO_PROFILE_URL: z.string().default('https://apiv2.staging.autonomousdev.xyz/api/v1/me/profile'),
+  STAGING_SSO_IDENTITY_URL: z.string().default('https://apiv2.staging.autonomousdev.xyz/api/v1/me/identity'),
   SSO_PROFILE_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  // How long a token the profile API just accepted is trusted without asking again (0 = ask every
+  // time). This is also the longest a token revoked at the SSO keeps working here.
+  SSO_PROFILE_CACHE_TTL_MS: z.coerce.number().int().min(0).default(60_000),
   // Forces the SSO account picker so users can switch accounts (not silently auto-login the last one).
   // Set to '' to disable, or 'login' to force re-entering credentials.
   SSO_PROMPT: z.string().default('select_account'),
@@ -144,7 +153,7 @@ const envSchema = z.object({
   HARNESS_DEVICE_TIMEZONE_DEFAULT: z.string().default('Asia/Saigon'),
   // DEV ONLY. A `provider` machine dials a URL its owner typed, so plain http:// and loopback are
   // refused (see lib/providerUrl.ts). This flag lifts the scheme check so a developer can point a
-  // machine at a local example-provider (autonomous-ai/autonomous-harness). Setting it in production
+  // machine at a local example-provider (autonomous-ai/openharness). Setting it in production
   // disables an SSRF control — boot
   // logs a FATAL-level warning if it is on there.
   PROVIDER_ALLOW_INSECURE_URLS: z.coerce.boolean().default(false),

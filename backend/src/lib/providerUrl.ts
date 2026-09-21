@@ -114,7 +114,7 @@ function allowInsecure(): boolean {
  *
  * `isBlockedAddress` is the pure policy and stays that way so it can be asserted directly. This is
  * the enforcement point, and it has to honour the dev flag for the same reason the flag exists: a
- * local `example-provider` (autonomous-ai/autonomous-harness) lives at `http://127.0.0.1:4502`, which
+ * local `example-provider` (autonomous-ai/openharness) lives at `http://127.0.0.1:4502`, which
  * is refused on BOTH counts —
  * plain http AND loopback. Lifting only the scheme left the flag unable to do the one job it was
  * added for, which is exactly what happened until someone tried to test locally.

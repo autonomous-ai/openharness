@@ -6,6 +6,16 @@ import 'package:flutter/services.dart';
 import '../shared/theme/color_palette.dart';
 import 'build_identity.dart';
 
+/// Whether this build runs inside a window the app is allowed to manage.
+///
+/// `window_manager` ships implementations for macOS, Windows and Linux only.
+/// Its Dart surface still compiles everywhere, so on any other platform the
+/// calls below are not a compile error — they are a `MissingPluginException` at
+/// runtime, thrown from `main` before the first frame. The guard therefore has
+/// to live here rather than being left to each call site to remember.
+bool get hasManagedWindow =>
+    Platform.isMacOS || Platform.isWindows || Platform.isLinux;
+
 /// Configures the native window before the first Flutter frame.
 ///
 /// On macOS, AppKit places Swarm tabs beside the system traffic lights in a
@@ -14,6 +24,7 @@ import 'build_identity.dart';
 Future<void> configureDesktopWindow({
   HarnessPalette palette = HarnessPalette.graphite,
 }) async {
+  if (!hasManagedWindow) return;
   await windowManager.ensureInitialized();
   final options = WindowOptions(
     size: const Size(1280, 800),
@@ -49,6 +60,7 @@ Future<void> configureDesktopWindow({
 /// both run, in that order. Failures are swallowed on purpose: the plugin throws on a platform without a
 /// window server (a headless test host), and losing the palette is worse than losing the raise.
 Future<void> revealWindow() async {
+  if (!hasManagedWindow) return;
   try {
     if (await windowManager.isMinimized()) await windowManager.restore();
     await windowManager.show();

@@ -1,3 +1,4 @@
+import { SharingEndedError, type HarnessShareRelay } from './sharing/relay.js'
 import { randomUUID } from 'node:crypto'
 import type { AppSwarms } from './cable/cableSession.js'
 import type http from 'node:http'
@@ -39,7 +40,15 @@ export interface LocalWsServerOptions {
   /** Serves a `machine_select` for any OTHER machine this signed-in user owns, by relaying to
    *  backend's `/api/web-ws` — see lib/remoteRelay.ts. Omit to keep today's own-machine-only behavior. */
   relayPool?: RemoteRelayPool
+  shareRelay?: HarnessShareRelay
   autonomousEnv?: string
+  /**
+   * Who a window on this computer is, for a `terminal_open` it relays to another machine without
+   * introducing itself (a desktop build from before `client`). This daemon knows what the window
+   * cannot be made to say: the client is a desktop on THIS machine, by id and name. Filled in only
+   * when the frame carries no `client` of its own — a window that does introduce itself is believed.
+   */
+  localClient?: () => { kind: string; name: string; machineId?: string } | null
   /** The desktop app opened an agent's terminal — which agent, and on which machine. Lets the dial follow
    *  the window, so the two screens stay one desk. */
   /** Explicit app focus, including clear/disconnect, for voice routing independent of the dial. */
@@ -175,7 +184,13 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
     const agentIds = Array.isArray(r.agentIds)
       ? r.agentIds.filter((id): id is string => typeof id === 'string' && id !== '')
       : []
-    swarms.push({ id: r.id, name: r.name.slice(0, 80), agentIds })
+    // A window that predates this field says nothing about its tiles, and the honest reading of that
+    // silence is the old one: as many tiles as agents. That keeps an older app behaving exactly as it
+    // does today rather than having its tabs vanish from the dial for the opposite reason.
+    const panes = typeof r.panes === 'number' && Number.isFinite(r.panes) && r.panes >= 0
+      ? Math.min(Math.floor(r.panes), 999)
+      : agentIds.length
+    swarms.push({ id: r.id, name: r.name.slice(0, 80), agentIds, panes })
     if (swarms.length === 24) break   // the window's own ceiling
   }
   if (swarms.length === 0) return null
@@ -188,6 +203,15 @@ function binaryBytes(raw: RawData): Uint8Array {
   if (raw instanceof ArrayBuffer) return new Uint8Array(raw)
   if (Array.isArray(raw)) return new Uint8Array(Buffer.concat(raw))
   return new Uint8Array()
+}
+
+/** `terminal_open` with this computer's own introduction, when the window gave none — see `localClient`. */
+function withLocalClient(frame: Frame, localClient: LocalWsServerOptions['localClient']): Frame {
+  if (frame.type !== 'terminal_open' || !localClient) return frame
+  const payload = frame.payload && typeof frame.payload === 'object' ? frame.payload as Record<string, unknown> : {}
+  if (payload.client !== undefined) return frame
+  const client = localClient()
+  return client ? { ...frame, payload: { ...payload, client } } : frame
 }
 
 /**
@@ -260,6 +284,18 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             close(4403, 'machine mismatch')
             return
           }
+          if (typeof payload.shareId === 'string') {
+            if (!options.shareRelay) { close(4403, 'Sharing is unavailable'); return }
+            try {
+              relay = await options.shareRelay.acquire(requestedMachineId, payload.shareId, sink, close)
+              if (ws.readyState !== WebSocket.OPEN) { relay.detach(); return }
+              selected = true
+            } catch (error) {
+              close(error instanceof SharingEndedError ? 4403 : 1013,
+                error instanceof Error ? error.message.slice(0, 120) : 'Sharing unavailable')
+            }
+            return
+          }
           if (requestedMachineId === options.machineId) {
             if (!options.backend.registerLocalClient(connId, sink)) {
               close(1011, 'local registration failed')
@@ -291,9 +327,12 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           // its pooled entry is suspect (most commonly the relayed machine's own Harness process
           // restarted, dropping its E2EE session without the transport itself ever closing). Drop it
           // so this select dials fresh instead of handing back the same dead session again.
-          if (payload?.forceReconnect === true) options.relayPool.invalidate(requestedMachineId)
+          if (payload?.forceReconnect === true && payload?.relayIsolation !== true) options.relayPool.invalidate(requestedMachineId)
           try {
-            relay = await options.relayPool.acquire(requestedMachineId, options.autonomousEnv, frame, sink, close)
+            relay = payload?.relayIsolation === true
+              ? await options.relayPool.acquireIsolated(requestedMachineId, options.autonomousEnv, frame, sink, close)
+              : await options.relayPool.acquire(requestedMachineId, options.autonomousEnv, frame, sink, close)
+            if (ws.readyState !== WebSocket.OPEN) { relay.detach(); return }
             selected = true
           } catch (err) {
             const noPeerLink = err instanceof RelayConnectError && err.message === 'NO_PEER_LINK'
@@ -430,7 +469,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             return
           }
           if (!parsed) { close(4400, 'invalid json frame'); return }
-          await relay.send(parsed)
+          await relay.send(withLocalClient(parsed, options.localClient))
           return
         }
 

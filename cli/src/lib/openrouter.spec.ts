@@ -2,11 +2,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { env } from '../config/env.js'
 import { openRouterComplete, redactKeys, resolveOpenRouterKey } from './openrouter.js'
 
 const KEY = 'sk-or-v1-file-key'
-const originalPath = env.ORI_CREDENTIALS_PATH
+const originalPath = process.env.ORI_CREDENTIALS_PATH
 const originalEnvKey = process.env.OPENROUTER_API_KEY
 const dirs: string[] = []
 
@@ -21,11 +20,12 @@ function credentialsFile(contents: string): string {
 beforeEach(() => {
   delete process.env.OPENROUTER_API_KEY
   // A path that does not exist is the normal state on a machine without ori.
-  env.ORI_CREDENTIALS_PATH = join(tmpdir(), 'ori-cred-absent', 'credentials.json')
+  process.env.ORI_CREDENTIALS_PATH = join(tmpdir(), 'ori-cred-absent', 'credentials.json')
 })
 
 afterEach(() => {
-  env.ORI_CREDENTIALS_PATH = originalPath
+  if (originalPath === undefined) delete process.env.ORI_CREDENTIALS_PATH
+  else process.env.ORI_CREDENTIALS_PATH = originalPath
   if (originalEnvKey === undefined) delete process.env.OPENROUTER_API_KEY
   else process.env.OPENROUTER_API_KEY = originalEnvKey
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
@@ -34,7 +34,7 @@ afterEach(() => {
 
 describe('resolveOpenRouterKey', () => {
   it('prefers the daemon env, then the agent process, then the credentials file', async () => {
-    env.ORI_CREDENTIALS_PATH = credentialsFile(JSON.stringify({ key: KEY }))
+    process.env.ORI_CREDENTIALS_PATH = credentialsFile(JSON.stringify({ key: KEY }))
     process.env.OPENROUTER_API_KEY = 'sk-or-v1-daemon'
     expect(await resolveOpenRouterKey({ kind: 'ori', apiKey: 'sk-or-v1-process' })).toBe('sk-or-v1-daemon')
 
@@ -47,15 +47,15 @@ describe('resolveOpenRouterKey', () => {
 
   it('returns null — never throws — when the file is absent, corrupt or keyless', async () => {
     expect(await resolveOpenRouterKey()).toBeNull()
-    env.ORI_CREDENTIALS_PATH = credentialsFile('{not json')
+    process.env.ORI_CREDENTIALS_PATH = credentialsFile('{not json')
     expect(await resolveOpenRouterKey()).toBeNull()
-    env.ORI_CREDENTIALS_PATH = credentialsFile(JSON.stringify({ userId: 'or_user_1' }))
+    process.env.ORI_CREDENTIALS_PATH = credentialsFile(JSON.stringify({ userId: 'or_user_1' }))
     expect(await resolveOpenRouterKey()).toBeNull()
   })
 
   it('re-reads after the file changes, so `ori login` needs no daemon restart', async () => {
     const file = credentialsFile(JSON.stringify({ key: 'sk-or-v1-old' }))
-    env.ORI_CREDENTIALS_PATH = file
+    process.env.ORI_CREDENTIALS_PATH = file
     expect(await resolveOpenRouterKey()).toBe('sk-or-v1-old')
     writeFileSync(file, JSON.stringify({ key: 'sk-or-v1-new' }))
     expect(await resolveOpenRouterKey()).toBe('sk-or-v1-new')

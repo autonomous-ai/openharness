@@ -1,0 +1,37 @@
+{
+  "spec": 1,
+  "title": "Desk sensor enclosure",
+  "brief": "A desktop enclosure for a 65 × 40 × 1.6 mm PCB with a 12 mm component envelope. Support the board on rails, leave at least 2 mm above the components, provide a cable opening and an easily removable lift-off lid. These are example measurements, not a discovered board.",
+  "units": "mm",
+  "sourceFiles": ["part.FCMacro", "dimensions.json", "design.json"],
+  "parts": [
+    {"id": "base", "object": "Base", "label": "Enclosure base", "material": "Prototype plastic; select material before fabrication", "quantity": 1, "notes": "The rails support the PCB but do not positively fasten it. Review the board's underside and the chosen print process."},
+    {"id": "lid", "object": "Lid", "label": "Lift-off lid", "material": "Prototype plastic; select material before fabrication", "quantity": 1, "notes": "A locating lid, not a latch or a seal. Review print orientation and fit compensation in the slicer."}
+  ],
+  "references": ["Board", "Components", "Cable"],
+  "assumptions": [
+    "All measurements are millimetres. Example dimensions must be replaced with the user's measured part or board data.",
+    "The model is a dry, indoor prototype. No ingress, thermal, electrical or structural performance has been tested.",
+    "Nominal 0.3 mm locating-lip gap and 0.4 mm cable clearance are design inputs, not guaranteed as-printed fit.",
+    "The board has an unobstructed underside where it rests on the two rails. Check the actual component layout.",
+    "The reference drawing shows projected geometry and overall dimensions, not complete production tolerances."
+  ],
+  "assembly": [
+    "Inspect the base and lid; remove process residue and review the mating surfaces before fitting anything.",
+    "Place the PCB on the two rails, align the cable with its opening, then lower the locating lid.",
+    "Do not force the board or lid. Measure a fit coupon or revise the saved clearances if the fabrication process requires it."
+  ],
+  "hardware": ["No fasteners or locking hardware are included; this is a lift-off desktop enclosure."],
+  "checks": [
+    {"id": "base-envelope", "type": "bounds", "part": "Base", "size": [72.8, 47.8, 23.4], "origin": [-36.4, -23.9, 0], "tolerance": 0.02, "reason": "Meet the specified outer envelope and assembly origin."},
+    {"id": "lid-envelope", "type": "bounds", "part": "Lid", "size": [72.8, 47.8, 4.2], "origin": [-36.4, -23.9, 21.4], "tolerance": 0.03, "reason": "Keep the lid in its assembled position, including its locating lip."},
+    {"id": "measured-board", "type": "bounds", "part": "Board", "size": [65, 40, 1.6], "origin": [-32.5, -20, 5.8], "reason": "Use the supplied board dimensions and its rail-supported location."},
+    {"id": "component-envelope", "type": "bounds", "part": "Components", "size": [65, 40, 12], "origin": [-32.5, -20, 7.4], "reason": "Retain the required component keep-out, rather than shrinking it to make a fit check pass."},
+    {"id": "board-does-not-intersect-base", "type": "no-overlap", "parts": ["Base", "Board"], "reason": "The board may rest on the rails but must not penetrate the enclosure."},
+    {"id": "components-clear-base", "type": "clearance", "parts": ["Base", "Components"], "minimum": 1, "reason": "Keep at least 1 mm around the nominal component envelope."},
+    {"id": "components-clear-lid", "type": "clearance", "parts": ["Lid", "Components"], "minimum": 2, "reason": "Leave at least 2 mm above the component envelope, including near the lid lip."},
+    {"id": "assembled-parts-do-not-intersect", "type": "no-overlap", "parts": ["Base", "Lid"], "reason": "The lid must seat without intersecting the base in the nominal model."},
+    {"id": "cable-location", "type": "bounds", "part": "Cable", "size": [10, 10.4, 5], "origin": [6, -27.9, 7.5], "reason": "Keep the requested cable envelope at the measured connector position."},
+    {"id": "cable-clearance", "type": "clearance", "parts": ["Base", "Cable"], "minimum": 0.4, "reason": "The actual opening must clear the specified cable envelope on every side."}
+  ]
+}

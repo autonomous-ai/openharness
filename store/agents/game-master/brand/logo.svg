@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="112" viewBox="0 0 480 112">
+  <title>Game Master logo</title>
+  <rect width="480" height="112" rx="24" fill="#f5f2e9"/>
+  <g transform="translate(8 8)"><rect x="4" y="4" width="88" height="88" rx="23" fill="#1d2d37"/>
+  <path d="m19 31 13-13 24 24-13 13Z" fill="#ed9075"/>
+  <path d="m40 54 13-13 24 24-13 13Z" fill="#81c8c4"/>
+  <path d="m48 36 12 12-12 12-12-12Z" fill="#1d2d37" stroke="#eed5a0" stroke-width="4"/>
+  <circle cx="24" cy="70" r="5" fill="#ed9075"/>
+  <circle cx="72" cy="26" r="5" fill="#81c8c4"/></g>
+  <text x="120" y="53" fill="#243732" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="600" letter-spacing="-.8">Game Master</text>
+  <text x="121" y="76" fill="#63746b" font-family="Arial, Helvetica, sans-serif" font-size="10" font-weight="600" letter-spacing="2.1">RELAY · AUTONOMOUS</text>
+</svg>

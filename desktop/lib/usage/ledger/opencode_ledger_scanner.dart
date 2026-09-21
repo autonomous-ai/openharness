@@ -16,11 +16,16 @@ library;
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:sqlite3/sqlite3.dart';
 
 import 'ledger_scanner.dart';
 import 'ledger_types.dart';
+
+class _UnsupportedUsageFormat implements Exception {
+  const _UnsupportedUsageFormat();
+}
 
 class OpenCodeLedgerScanner implements LedgerScanner {
   OpenCodeLedgerScanner({
@@ -43,14 +48,25 @@ class OpenCodeLedgerScanner implements LedgerScanner {
   }
 
   @override
-  Future<LedgerScanResult> scan(Map<String, ScannedSource> previous) async {
-    final directory = _dataDirectory;
+  Future<LedgerScanResult> scan(Map<String, ScannedSource> previous) =>
+      Isolate.run(() => _scanDirectory(_dataDirectory));
+
+  static Future<LedgerScanResult> _scanDirectory(String? directory) async {
     if (directory == null) {
       return const LedgerScanResult.unavailable(
         'No home directory to read the OpenCode database from',
       );
     }
-    final databases = await _listDatabases(directory);
+    final List<File> databases;
+    try {
+      databases = await _listDatabases(directory);
+    } on FileSystemException catch (error) {
+      return LedgerScanResult(
+        status: LedgerStatus.failed,
+        message:
+            'Could not read OpenCode usage: ${error.osError?.message ?? error.message}',
+      );
+    }
     if (databases.isEmpty) {
       return const LedgerScanResult.unavailable(
         'No OpenCode database on this computer',
@@ -58,42 +74,50 @@ class OpenCodeLedgerScanner implements LedgerScanner {
     }
 
     final sources = <ScannedSource>[];
+    final failures = <String>[];
     for (final file in databases) {
-      final FileStat stat;
       try {
-        stat = await file.stat();
-      } on FileSystemException {
-        continue;
-      }
-      final cached = previous[file.path];
-      if (cached != null && cached.matches(stat)) {
-        sources.add(cached);
-        continue;
-      }
-      final List<LedgerEntry> entries;
-      try {
-        entries = _read(file.path);
-      } on SqliteException catch (error) {
-        // One unreadable database must not hide the others, but a machine whose
-        // only database is locked or corrupt has to say so rather than report an
-        // empty ledger as though nothing had been spent.
-        if (databases.length == 1) {
-          return LedgerScanResult.unavailable(
-            'Could not read the OpenCode database: ${error.message}',
-          );
+        final stat = await file.stat();
+        if (stat.type != FileSystemEntityType.file) {
+          failures.add('A database is no longer available.');
+          continue;
         }
-        continue;
+        // The main database can keep its size and mtime while commits change
+        // only its WAL. WAL files can also be reused. Query SQLite's committed
+        // snapshot on every requested scan instead of trusting file metadata.
+        // This aggregate query runs off the UI isolate; the store still avoids
+        // rescanning on every visit through its five-minute snapshot lifetime.
+        final entries = _read(file.path);
+        sources.add(
+          ScannedSource(
+            path: file.path,
+            mtimeMs: stat.modified.millisecondsSinceEpoch,
+            size: stat.size,
+            entries: entries,
+          ),
+        );
+      } on SqliteException catch (error) {
+        failures.add(error.message);
+      } on FileSystemException catch (error) {
+        failures.add(error.osError?.message ?? error.message);
+      } on _UnsupportedUsageFormat {
+        failures.add('This OpenCode usage format is not supported yet.');
       }
-      sources.add(
-        ScannedSource(
-          path: file.path,
-          mtimeMs: stat.modified.millisecondsSinceEpoch,
-          size: stat.size,
-          entries: entries,
-        ),
-      );
     }
-    return LedgerScanResult(sources: sources);
+    return LedgerScanResult(
+      sources: sources,
+      status: failures.isEmpty
+          ? LedgerStatus.ok
+          : sources.isEmpty
+          ? LedgerStatus.failed
+          : LedgerStatus.partial,
+      message: failures.isEmpty
+          ? null
+          : sources.isEmpty
+          ? 'Could not read OpenCode usage: ${failures.first}'
+          : 'Could not read ${failures.length} of ${databases.length} OpenCode databases. '
+                'Figures are incomplete. ${failures.first}',
+    );
   }
 
   /// `opencode.db` and its siblings, canonical one first.
@@ -101,9 +125,8 @@ class OpenCodeLedgerScanner implements LedgerScanner {
   /// The canonical database is the live one and must claim a duplicated session
   /// ahead of a stale copy beside it; remaining ties go in path order so
   /// ownership is the same on every rescan.
-  Future<List<File>> _listDatabases(String directory) async {
+  static Future<List<File>> _listDatabases(String directory) async {
     final dir = Directory(directory);
-    if (!await dir.exists()) return const [];
     final pattern = RegExp(r'^opencode(?:-[A-Za-z0-9_.-]+)?\.db$');
     final files = <File>[];
     try {
@@ -111,8 +134,9 @@ class OpenCodeLedgerScanner implements LedgerScanner {
         if (entity is! File) continue;
         if (pattern.hasMatch(entity.uri.pathSegments.last)) files.add(entity);
       }
-    } on FileSystemException {
-      return const [];
+    } on FileSystemException catch (error) {
+      if (error.osError?.errorCode == 2) return const [];
+      rethrow;
     }
     files.sort((a, b) {
       final aRank = a.uri.pathSegments.last == 'opencode.db' ? 0 : 1;
@@ -123,24 +147,29 @@ class OpenCodeLedgerScanner implements LedgerScanner {
     return files;
   }
 
-  List<LedgerEntry> _read(String path) {
+  static List<LedgerEntry> _read(String path) {
     // Read-only, so a scan can never write to a database the CLI owns — and
     // opening a live WAL database this way is fine, which is the case that
     // matters since OpenCode may be running while this scan happens.
     final db = sqlite3.open(path, mode: OpenMode.readOnly);
     try {
-      if (!_hasTable(db, 'session')) return const [];
+      if (!_hasTable(db, 'session')) throw const _UnsupportedUsageFormat();
       final columns = _columns(db, 'session');
       // Newer OpenCode keeps per-session totals. One aggregate row per session
       // is both cheaper and more accurate than re-adding every message blob.
       const required = [
+        'id',
+        'directory',
+        'time_created',
         'cost',
         'tokens_input',
         'tokens_output',
         'tokens_reasoning',
         'tokens_cache_read',
       ];
-      if (!required.every(columns.contains)) return const [];
+      if (!required.every(columns.contains)) {
+        throw const _UnsupportedUsageFormat();
+      }
       final hasCacheWrite = columns.contains('tokens_cache_write');
       final hasModel = columns.contains('model');
 
@@ -150,7 +179,8 @@ class OpenCodeLedgerScanner implements LedgerScanner {
         '${hasCacheWrite ? ', tokens_cache_write' : ''}'
         '${hasModel ? ', model' : ''} '
         'FROM session '
-        'WHERE tokens_input + tokens_output + tokens_reasoning + tokens_cache_read > 0 '
+        'WHERE tokens_input > 0 OR tokens_output > 0 OR tokens_reasoning > 0 OR tokens_cache_read > 0 '
+        '${hasCacheWrite ? 'OR tokens_cache_write > 0 ' : ''}'
         'ORDER BY time_created, id',
       );
 
@@ -163,7 +193,7 @@ class OpenCodeLedgerScanner implements LedgerScanner {
     }
   }
 
-  LedgerEntry? _entry(
+  static LedgerEntry? _entry(
     Row row, {
     required bool hasCacheWrite,
     required bool hasModel,

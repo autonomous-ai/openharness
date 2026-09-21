@@ -9,6 +9,7 @@ import {
   gridEnvVarNames,
   parseGridLaunchOverride,
   relayBaseUrl,
+  type GridLaunchMachine,
   type GridLaunchOverride,
 } from './gridLaunch.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
@@ -29,9 +30,11 @@ const WITH_MODEL: GridLaunchOverride = { ...WIRE, model: 'GLM-4.7-Flash' }
 /** The control plane's web-tools mount, trailing slash and all — see `GridLaunchOverride.mcpUrl`. */
 const MCP_URL = 'https://api-grid.autonomous.ai/v1/grid/web-mcp/'
 const WITH_MCP: GridLaunchOverride = { ...WITH_MODEL, mcpUrl: MCP_URL }
+/** The ordinary machine: nobody has pinned Hermes settings in /etc/hermes. */
+const PLAIN_MACHINE: GridLaunchMachine = { hermesSystemManaged: false }
 
-function launchOf(engine: AgentEngine, override = WITH_MODEL) {
-  const built = buildGridEngineLaunch(engine, override)
+function launchOf(engine: AgentEngine, override = WITH_MODEL, machine = PLAIN_MACHINE) {
+  const built = buildGridEngineLaunch(engine, override, machine)
   if (!built.ok) throw new Error(`${engine} was refused: ${built.detail}`)
   return built.launch
 }
@@ -100,8 +103,16 @@ describe('the launch each engine gets', () => {
         ANTHROPIC_AUTH_TOKEN: WIRE.apiKey,
         ANTHROPIC_MODEL: 'GLM-4.7-Flash',
       },
-      // The built-in search no grid can run — see "takes Claude Code's built-in WebSearch away".
-      args: ['--disallowedTools=WebSearch'],
+      args: [
+        // The built-in web tools no grid can run — see "takes Claude Code's built-in web tools away".
+        '--disallowedTools=WebSearch,WebFetch',
+        // …and the words that tell the model so, delivered to a resumed conversation too — see "tells
+        // Claude Code in its system prompt".
+        '--system-prompt-snapshot', 'off',
+        '--append-system-prompt', expect.stringContaining('WebSearch'),
+      ],
+      // No MCP url in this override, so no web tools — and the app is told so.
+      webSearch: 'unavailable',
     })
     // Setting it too makes Claude Code warn that auth may not work, and it decides nothing.
     expect(launchOf('claude').env).not.toHaveProperty('ANTHROPIC_API_KEY')
@@ -242,7 +253,7 @@ describe('the launch each engine gets', () => {
   })
 
   it('refuses Copilot without a model rather than letting it fail inside the app', () => {
-    const built = buildGridEngineLaunch('copilot', OVERRIDE)
+    const built = buildGridEngineLaunch('copilot', OVERRIDE, PLAIN_MACHINE)
     expect(built).toMatchObject({ ok: false, error: 'GRID_MODEL_REQUIRED' })
   })
 
@@ -266,7 +277,7 @@ describe('the engines that cannot', () => {
     const refused = ENGINES.filter((engine) => !capable.has(engine))
     expect(refused.length).toBeGreaterThan(0)
     for (const engine of refused) {
-      const built = buildGridEngineLaunch(engine, OVERRIDE)
+      const built = buildGridEngineLaunch(engine, OVERRIDE, PLAIN_MACHINE)
       expect(built.ok).toBe(false)
       if (built.ok) continue
       expect(built.error).toBe('GRID_ENGINE_UNSUPPORTED')
@@ -285,11 +296,26 @@ describe('the engines that cannot', () => {
 
 describe('describeGridLaunch', () => {
   it('names the grid and the model, and never the key', () => {
-    const line = describeGridLaunch('claude', WITH_MODEL)
+    const line = describeGridLaunch('claude', WITH_MODEL, 'on')
     expect(line).toContain('autonomous.ai')
     expect(line).toContain('GLM-4.7-Flash')
     expect(line).not.toContain(WIRE.apiKey)
-    expect(describeGridLaunch('claude', OVERRIDE)).not.toContain(WIRE.apiKey)
+    expect(describeGridLaunch('claude', OVERRIDE, 'on')).not.toContain(WIRE.apiKey)
+  })
+
+  it('names the web-search status — the daemon log is where a degraded launch says why', () => {
+    expect(describeGridLaunch('claude', WITH_MCP, 'on')).toContain('web search on')
+    expect(describeGridLaunch('claude', WITH_MODEL, 'unavailable')).toContain('web search unavailable')
+    expect(describeGridLaunch('pi', WITH_MCP, 'unsupported')).toContain('web search unsupported')
+    // The url is the control plane's address, not a secret — but it is also not the log's business.
+    expect(describeGridLaunch('claude', WITH_MCP, 'on')).not.toContain(MCP_URL)
+  })
+
+  it('says why, for the two answers this module decides itself', () => {
+    expect(describeGridLaunch('hermes', WITH_MCP, 'unsupported')).toContain('/etc/hermes pins')
+    expect(describeGridLaunch('pi', WITH_MCP, 'unsupported')).toContain('no MCP client')
+    // `unavailable` was decided — and its reason logged — by the url resolver, not here.
+    expect(describeGridLaunch('claude', WITH_MODEL, 'unavailable')).toMatch(/web search unavailable$/)
   })
 })
 
@@ -319,6 +345,17 @@ describe('gridEnvVarNames', () => {
     expect(gridEnvVarNames('pi')).toContain('PI_CODING_AGENT_DIR')
   })
 
+  it('covers every variable a launch WITH web tools sets, so returning to the own login clears them all', () => {
+    // This is what `cli.ts` hands `tmux clearEnv` on a clearGrid retarget. A variable a web-tools
+    // launch set but this list missed would leave the pane holding an MCP credential after the agent
+    // was told it is back on its subscription model.
+    for (const engine of gridCapableEngines()) {
+      const launch = launchOf(engine, WITH_MCP)
+      const set = [...Object.keys(launch.env), ...(launch.configDir ? [launch.configDir.envVar] : [])]
+      for (const name of set) expect(gridEnvVarNames(engine), `${engine} sets ${name}`).toContain(name)
+    }
+  })
+
   it('is empty for an engine that cannot be pointed at a grid', () => {
     expect(gridEnvVarNames('amp')).toEqual([])
   })
@@ -332,14 +369,14 @@ describe('gridConflictingEnvToClear', () => {
     apiKey: 'RELAY-KEY',
   }
   const clearedFor = (engine: AgentEngine, model?: string): string[] => {
-    const built = buildGridEngineLaunch(engine, model ? { ...override, model } : override)
+    const built = buildGridEngineLaunch(engine, model ? { ...override, model } : override, PLAIN_MACHINE)
     if (!built.ok) throw new Error(`${engine} refused: ${JSON.stringify(built)}`)
     return gridConflictingEnvToClear(built.launch)
   }
 
   it('never clears a variable the same launch sets', () => {
     for (const engine of ['claude', 'codex', 'opencode', 'hermes', 'grok', 'copilot', 'pi'] as const) {
-      const built = buildGridEngineLaunch(engine, { ...override, model: 'a-model' })
+      const built = buildGridEngineLaunch(engine, { ...override, model: 'a-model' }, PLAIN_MACHINE)
       if (!built.ok) throw new Error(`${engine} refused`)
       const set = new Set(Object.keys(built.launch.env))
       if (built.launch.configDir) set.add(built.launch.configDir.envVar)
@@ -389,7 +426,7 @@ describe('opencode declares the grid as a provider', () => {
     apiKey: 'RELAY-KEY',
   }
   const launch = (model?: string) => {
-    const built = buildGridEngineLaunch('opencode', model ? { ...base, model } : base)
+    const built = buildGridEngineLaunch('opencode', model ? { ...base, model } : base, PLAIN_MACHINE)
     if (!built.ok) throw new Error('opencode refused')
     return built.launch
   }
@@ -490,7 +527,7 @@ describe('web tools (grid ADR 0041)', () => {
   })
 
   it('hands Claude Code the server as a --mcp-config JSON string', () => {
-    expect(claudeMcpJson().mcpServers['grid-web'])
+    expect(claudeMcpJson().mcpServers['harness'])
       .toEqual({ type: 'http', url: MCP_URL, headers: { Authorization: 'Bearer ${GRID_API_KEY}' } })
   })
 
@@ -505,7 +542,7 @@ describe('web tools (grid ADR 0041)', () => {
     // expands `${VAR}` in a header exactly as Claude Code does, and sends `${env:VAR}` and
     // `{env:VAR}` through verbatim — so the opencode spelling would have put the literal string on
     // the wire and failed authentication with nothing naming why.
-    expect(copilotMcpJson().mcpServers['grid-web'])
+    expect(copilotMcpJson().mcpServers['harness'])
       .toEqual({ type: 'http', url: MCP_URL, headers: { Authorization: 'Bearer ${GRID_API_KEY}' } })
     // One document, not two that merely look alike — this is what makes the shared builder honest.
     const at = launchOf('copilot', WITH_MCP).args.indexOf('--additional-mcp-config')
@@ -522,16 +559,16 @@ describe('web tools (grid ADR 0041)', () => {
   })
 
   it("points Codex at it through env_http_headers, which carries the WHOLE header value", () => {
-    expect(codexArg('mcp_servers.grid-web.url')).toBe(`mcp_servers.grid-web.url="${MCP_URL}"`)
-    expect(codexArg('mcp_servers.grid-web.env_http_headers.Authorization'))
-      .toBe('mcp_servers.grid-web.env_http_headers.Authorization="GRID_MCP_AUTHORIZATION"')
+    expect(codexArg('mcp_servers.harness.url')).toBe(`mcp_servers.harness.url="${MCP_URL}"`)
+    expect(codexArg('mcp_servers.harness.env_http_headers.Authorization'))
+      .toBe('mcp_servers.harness.env_http_headers.Authorization="GRID_MCP_AUTHORIZATION"')
     // Bearer included — `bearer_token_env_var` takes a bare token, this one does not, and ADR 0041
     // D-d calls confusing the two a silent 401.
     expect(launchOf('codex', WITH_MCP).env.GRID_MCP_AUTHORIZATION).toBe(`Bearer ${WIRE.apiKey}`)
   })
 
   it('declares it in the config file opencode already gets', () => {
-    expect(opencodeConfig().mcp['grid-web'])
+    expect(opencodeConfig().mcp['harness'])
       .toEqual({
         type: 'remote',
         url: MCP_URL,
@@ -550,7 +587,7 @@ describe('web tools (grid ADR 0041)', () => {
     // Emitted as JSON on purpose: it is a subset of YAML, and Hermes parses this with a YAML loader.
     expect(JSON.parse(file!.content)).toEqual({
       mcp_servers: {
-        'grid-web': {
+        'harness': {
           url: MCP_URL,
           headers: { Authorization: 'Bearer ${GRID_API_KEY}' },
         },
@@ -566,20 +603,24 @@ describe('web tools (grid ADR 0041)', () => {
     expect(Object.keys(JSON.parse(file.content))).toEqual(['mcp_servers'])
   })
 
-  it('calls the server the same thing in every harness', () => {
-    // The tools are named after it — an agent sees `mcp__grid-web__web_search` — so a harness that
+  it('calls the server `harness` in every harness — the user never reads "grid"', () => {
+    // The tools are named after it — an agent sees `mcp__harness__web_search` — so a harness that
     // spells it differently gets differently-named tools, and a prompt or skill naming one silently
-    // misses on the other. Codex is where this is easy to get wrong: its config keys are dotted TOML
-    // paths, which look like they could not carry a `-`. They can.
-    expect(Object.keys(claudeMcpJson().mcpServers)).toEqual(['grid-web'])
-    expect(Object.keys(copilotMcpJson().mcpServers)).toEqual(['grid-web'])
-    expect(Object.keys(opencodeConfig().mcp)).toEqual(['grid-web'])
+    // misses on the other. The name is also what `/mcp` and a permission prompt show, which is why
+    // it is the product's name and not the grid's.
+    expect(Object.keys(claudeMcpJson().mcpServers)).toEqual(['harness'])
+    expect(Object.keys(copilotMcpJson().mcpServers)).toEqual(['harness'])
+    expect(Object.keys(opencodeConfig().mcp)).toEqual(['harness'])
     expect(Object.keys(JSON.parse(launchOf('hermes', WITH_MCP).configDir!.files[0]!.content).mcp_servers))
-      .toEqual(['grid-web'])
-    for (const arg of launchOf('codex', WITH_MCP).args) {
-      expect(arg, 'codex renamed the server, and with it every tool').not.toContain('grid_web')
+      .toEqual(['harness'])
+    expect(codexArg('mcp_servers.harness.url')).toBeDefined()
+    const grok = launchOf('grok', WITH_MCP).configDir!.files[0]!.content
+    expect(grok).toContain('[mcp_servers.harness]')
+    for (const engine of ['claude', 'codex', 'copilot', 'opencode', 'hermes', 'grok'] as const) {
+      const launch = launchOf(engine, WITH_MCP)
+      const written = [...launch.args, ...(launch.configDir?.files ?? []).map((f) => f.content)].join('\n')
+      expect(written, engine).not.toContain('grid-web')
     }
-    expect(codexArg('mcp_servers.grid-web.url')).toBeDefined()
   })
 
   it('never writes the key to disk or to an argv', () => {
@@ -608,29 +649,183 @@ describe('web tools (grid ADR 0041)', () => {
     }
   })
 
-  it("takes Claude Code's built-in WebSearch away on every grid launch, web tools or not", () => {
-    // `WebSearch` is an Anthropic SERVER tool (`web_search_20250305`) that no grid runs: the grid
-    // answers it with a 400, and a model offered it reaches for it before `mcp__grid-web__web_search`.
+  it("takes Claude Code's built-in web tools away on every grid launch, web tools or not", () => {
+    // `WebSearch` is an Anthropic SERVER tool (`web_search_20250305`) that no grid runs, and
+    // `WebFetch` summarises through a haiku call on the same base URL, which the relay answers
+    // `503 no_providers_available`. Both are dead on a grid, with or without a replacement, and a
+    // model offered a dead tool reaches for it first.
     for (const override of [OVERRIDE, WITH_MODEL, WITH_MCP]) {
-      expect(launchOf('claude', override).args).toContain('--disallowedTools=WebSearch')
+      expect(launchOf('claude', override).args).toContain('--disallowedTools=WebSearch,WebFetch')
     }
     // ONE token. The flag is variadic, so the two-token form would swallow any positional after it as
     // another tool name — measured on Claude Code 2.1.268, it then sent no request at all.
     expect(launchOf('claude', WITH_MCP).args).not.toContain('--disallowedTools')
+    expect(launchOf('claude', WITH_MCP).args).not.toContain('--disallowedTools=WebSearch')
+  })
+
+  it('tells Claude Code in its system prompt that the built-in web tools are gone — on every grid launch', () => {
+    // `--disallowedTools` empties the tool LIST of them, and the list is not the only place a model
+    // reads tool names from. A conversation moved onto a grid mid-way still carries the `WebSearch`
+    // turns it had on the Subscription model, and a model imitates those ahead of reading the list —
+    // seen on a real pane (2026-09-16, Claude Code 2.1.273, a DeepSeek model resumed after three
+    // `WebSearch` turns on Sonnet 5): one response carrying three `WebSearch` calls, each refused "No
+    // such tool available", before the next turn found `mcp__harness__web_search`. The list of that
+    // request had no `WebSearch` in it; the history did. So the prompt says so in words.
+    for (const override of [OVERRIDE, WITH_MODEL, WITH_MCP]) {
+      const args = launchOf('claude', override).args
+      const at = args.indexOf('--append-system-prompt')
+      expect(at, 'claude was not given --append-system-prompt').toBeGreaterThanOrEqual(0)
+      const prompt = args[at + 1] as string
+      expect(prompt).toContain('WebSearch')
+      expect(prompt).toContain('WebFetch')
+      // Earlier turns are the whole problem, so the text names them rather than leaving the model to
+      // weigh a tool list against a history that contradicts it.
+      expect(prompt).toMatch(/earlier turns/)
+      // Principle 4 of the plan: a model narrates its system prompt back to the user ("WebSearch got
+      // disabled mid-session. I'll use the harness web search tool instead."), so "grid" is not in it.
+      expect(prompt.toLowerCase()).not.toContain('grid')
+    }
+  })
+
+  it('makes that prompt reach a conversation the agent was already in the middle of', () => {
+    // Claude Code records the system prompt on a conversation's first request and replays the record
+    // on every later request and resume, "even when a later launch passes different text"
+    // (`--system-prompt-snapshot`, default `on`, 2.1.273). Measured 2026-09-16 on a resumed session:
+    // with `--append-system-prompt` alone the model never saw the text and no new record was written;
+    // with `--system-prompt-snapshot off` on the same launch it did — and a later launch WITHOUT the
+    // flag (the move back to the Subscription model) replayed the original record, so nothing said
+    // on the grid follows the agent off it. A move onto a grid is nearly always such a resume.
+    for (const override of [OVERRIDE, WITH_MODEL, WITH_MCP]) {
+      const args = launchOf('claude', override).args
+      const at = args.indexOf('--system-prompt-snapshot')
+      expect(at, 'claude was not given --system-prompt-snapshot').toBeGreaterThanOrEqual(0)
+      expect(args[at + 1]).toBe('off')
+    }
+  })
+
+  it('points the prompt at the harness tools only when they were wired', () => {
+    const promptOf = (override: GridLaunchOverride): string => {
+      const args = launchOf('claude', override).args
+      return args[args.indexOf('--append-system-prompt') + 1] as string
+    }
+    // With a server: name the replacements, so the model has somewhere to go.
+    expect(promptOf(WITH_MCP)).toContain('mcp__harness__web_search')
+    expect(promptOf(WITH_MCP)).toContain('mcp__harness__web_read')
+    // Without one — a degraded launch, or an older desktop — naming a tool the model was not given
+    // would send it down the same road as the dead one, so the prompt says there are no web tools.
+    expect(promptOf(WITH_MODEL)).not.toContain('mcp__harness__')
+    expect(promptOf(WITH_MODEL)).toMatch(/no web tools/)
+
+  })
+
+  it("pre-approves the harness web tools for Claude Code, so a permission mode cannot take them away", () => {
+    // The tools are the daemon's own gift to the agent, and Claude Code's permission system does not
+    // know that: in `default` mode every call prompts, and in `auto` mode the classifier DENIED
+    // `mcp__harness__web_search` outright on a real pane (2026-09-15) — the model then fell back to
+    // curl. An allow rule is honoured before either, so the two tools are listed by name.
+    expect(launchOf('claude', WITH_MCP).args).toContain('--allowedTools=mcp__harness__web_search,mcp__harness__web_read')
+    // ONE token, for the same reason as `--disallowedTools=`: the flag is variadic.
+    expect(launchOf('claude', WITH_MCP).args).not.toContain('--allowedTools')
+    // Nothing to approve when nothing was wired.
+    expect(launchOf('claude', WITH_MODEL).args.some((a) => a.startsWith('--allowedTools'))).toBe(false)
+  })
+
+  it("turns Codex's native web search off on every grid launch, web tools or not", () => {
+    // The native tool is an API-side feature of OpenAI's Responses endpoint. Verified on codex-cli
+    // 0.154.0 with `--strict-config`: the key is `web_search`, the variants `disabled`, `cached`,
+    // `indexed`, `live`, and `web_search_mode` is refused as unknown.
+    for (const override of [OVERRIDE, WITH_MODEL, WITH_MCP]) {
+      const args = launchOf('codex', override).args
+      const at = args.indexOf('web_search="disabled"')
+      expect(at, 'codex was not told to disable web_search').toBeGreaterThan(0)
+      expect(args[at - 1]).toBe('-c')
+    }
   })
 
   it('adds no web tools when the desktop sends no mcpUrl', () => {
-    // An older desktop, and the no-regression promise: no server it did not ask for. Claude's one flag
-    // is not a web tool but the removal of one no grid can run — see the test above.
-    expect(launchOf('claude', WITH_MODEL).args).toEqual(['--disallowedTools=WebSearch'])
+    // An older desktop, and the no-regression promise: no server it did not ask for. Claude's flags
+    // are not web tools but the removal of two no grid can run, and the words that say so — with no
+    // replacement named, since none was wired. See the tests above.
+    expect(launchOf('claude', WITH_MODEL).args).toEqual([
+      '--disallowedTools=WebSearch,WebFetch',
+      '--system-prompt-snapshot', 'off',
+      '--append-system-prompt', expect.not.stringContaining('mcp__harness__'),
+    ])
     expect(launchOf('claude', WITH_MODEL).env.GRID_API_KEY).toBeUndefined()
+    expect(launchOf('grok', WITH_MODEL).configDir!.files[0]!.content).not.toContain('mcp_servers')
     expect(launchOf('copilot', WITH_MODEL).args).toEqual([])
     expect(launchOf('copilot', WITH_MODEL).env.GRID_API_KEY).toBeUndefined()
-    expect(codexArg('mcp_servers.grid-web.url', WITH_MODEL)).toBeUndefined()
+    expect(codexArg('mcp_servers.harness.url', WITH_MODEL)).toBeUndefined()
     expect(launchOf('codex', WITH_MODEL).env.GRID_MCP_AUTHORIZATION).toBeUndefined()
     expect(opencodeConfig(WITH_MODEL).mcp).toBeUndefined()
     // Hermes had no config directory at all before web tools, so it goes back to having none.
     expect(launchOf('hermes', WITH_MODEL).configDir).toBeUndefined()
     expect(launchOf('hermes', WITH_MODEL).env.GRID_API_KEY).toBeUndefined()
+  })
+})
+
+describe('web search status — what the app is told about the launch it got', () => {
+  // Every engine with MCP wiring, which is every grid-capable one but Pi.
+  const WIRED: AgentEngine[] = ['claude', 'codex', 'opencode', 'hermes', 'grok', 'copilot']
+
+  it('is on when the MCP url is present and the engine wired it', () => {
+    for (const engine of WIRED) expect(launchOf(engine, WITH_MCP).webSearch, engine).toBe('on')
+  })
+
+  it('is unavailable when the url is absent — the grid could not be asked for it', () => {
+    for (const engine of WIRED) expect(launchOf(engine, WITH_MODEL).webSearch, engine).toBe('unavailable')
+  })
+
+  it('is unsupported for Pi, which has no MCP client, url or no url', () => {
+    expect(launchOf('pi', WITH_MCP).webSearch).toBe('unsupported')
+    expect(launchOf('pi', WITH_MODEL).webSearch).toBe('unsupported')
+  })
+
+  it('is unsupported for Hermes on a machine whose settings are pinned in /etc/hermes, and writes no overlay there', () => {
+    // The overlay REPLACES the system scope rather than adding to it, so on such a machine it is
+    // dropped — a decision the builder makes, so every caller (create, retarget, restore) agrees.
+    const launch = launchOf('hermes', WITH_MCP, { hermesSystemManaged: true })
+    expect(launch.webSearch).toBe('unsupported')
+    expect(launch.configDir).toBeUndefined()
+    // The variable exists only to be referenced by the overlay, so it goes with it.
+    expect(launch.env.GRID_API_KEY).toBeUndefined()
+    expect(launch.env.HERMES_MANAGED_DIR).toBeUndefined()
+  })
+
+  it('takes nothing else from Hermes on such a machine — inference is still pointed at the grid', () => {
+    const pinned = launchOf('hermes', WITH_MCP, { hermesSystemManaged: true })
+    const plain = launchOf('hermes', WITH_MCP)
+    expect(pinned.env).toMatchObject({ OPENAI_BASE_URL: plain.env.OPENAI_BASE_URL, OPENAI_API_KEY: plain.env.OPENAI_API_KEY })
+    expect(pinned.args).toEqual(plain.args)
+  })
+
+  it('is unsupported for Hermes on such a machine even with no url — the pin is the fact that lasts', () => {
+    expect(launchOf('hermes', WITH_MODEL, { hermesSystemManaged: true }).webSearch).toBe('unsupported')
+  })
+
+  it('leaves every other engine alone on such a machine', () => {
+    for (const engine of WIRED.filter((e) => e !== 'hermes')) {
+      expect(launchOf(engine, WITH_MCP, { hermesSystemManaged: true }).webSearch, engine).toBe('on')
+    }
+  })
+
+  it('says on exactly when the launch it describes names the server — for every engine, both machines', () => {
+    // "The engine wired it" is not taken on trust from the contract that reports it: the launch
+    // either carries the `harness` server (in argv or in a file it writes) or it does not, and the
+    // status must agree with that. A future contract that took a url and forgot to wire it, or
+    // wired it and reported otherwise, fails here.
+    const names = (launch: ReturnType<typeof launchOf>): string =>
+      [...launch.args, ...(launch.configDir?.files.map((f) => f.content) ?? [])].join('\n')
+    for (const machine of [PLAIN_MACHINE, { hermesSystemManaged: true }]) {
+      for (const engine of gridCapableEngines()) {
+        for (const override of [WITH_MCP, WITH_MODEL]) {
+          const built = buildGridEngineLaunch(engine, override, machine)
+          if (!built.ok) continue // copilot without a model — refused, nothing to describe
+          const wired = names(built.launch).includes('harness')
+          expect(built.launch.webSearch === 'on', `${engine} · mcpUrl ${!!override.mcpUrl} · pinned ${machine.hermesSystemManaged}`)
+            .toBe(wired)
+        }
+      }
+    }
   })
 })

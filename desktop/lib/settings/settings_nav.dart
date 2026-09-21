@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/layouts/widgets/rail_section_header.dart';
 import '../shared/layouts/widgets/sidebar_item.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../widgets/window_chrome.dart';
+import '../shared/widgets/section_scaffold.dart';
 import 'settings_section.dart';
 
 /// The settings list: the way back, a field that narrows the list to what you
@@ -25,9 +26,56 @@ class SettingsNav extends StatefulWidget {
 
 class _SettingsNavState extends State<SettingsNav> {
   String _query = '';
+  final _search = TextEditingController();
+  final _searchFocus = FocusNode(debugLabel: 'Search settings');
+
+  @override
+  void dispose() {
+    _search.dispose();
+    _searchFocus.dispose();
+    super.dispose();
+  }
+
+  bool get _composing =>
+      _search.value.composing.isValid && !_search.value.composing.isCollapsed;
+
+  void _chooseMatch() {
+    if (_composing || _query.trim().isEmpty) return;
+    final match = _visible.expand((group) => group.sections).firstOrNull;
+    if (match != null) widget.onSelect(match);
+  }
+
+  KeyEventResult _searchKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final keys = HardwareKeyboard.instance;
+    if (keys.isControlPressed ||
+        keys.isMetaPressed ||
+        keys.isAltPressed ||
+        keys.isShiftPressed) {
+      return KeyEventResult.ignored;
+    }
+    final key = event.logicalKey;
+    final enter =
+        key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter;
+    final down = key == LogicalKeyboardKey.arrowDown;
+    final up = key == LogicalKeyboardKey.arrowUp;
+    if (!enter && !down && !up) return KeyEventResult.ignored;
+    if (_composing) return KeyEventResult.skipRemainingHandlers;
+    if (enter) {
+      if (event is KeyDownEvent) _chooseMatch();
+    } else if (down) {
+      if (_visible.isNotEmpty) _searchFocus.nextFocus();
+    } else {
+      _searchFocus.previousFocus();
+    }
+    return KeyEventResult.handled;
+  }
 
   /// The groups, narrowed to the query. Matching is a plain case-insensitive
-  /// substring of the label — this list is four rows, so anything cleverer
+  /// substring of the label — this list is short, so anything cleverer
   /// would be machinery no one can feel. A group's own title matches too, so
   /// typing "help" surfaces the whole run rather than nothing.
   List<SettingsGroup> get _visible {
@@ -53,33 +101,47 @@ class _SettingsNavState extends State<SettingsNav> {
 
   @override
   Widget build(BuildContext context) {
-    // The rail owns its fill and spans the window's full height, so the fill
-    // runs under the traffic lights too — head and column read as one surface
-    // rather than two shades.
+    // The rail and the section begin below the native title bar.
     grid.AppTheme.watch(context);
     return Container(
       width: SettingsNav.width,
       color: grid.AppSurface.recess,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10),
+        // Rows add their own icon gutter: their glyphs and group captions sit
+        // on the same 24px content inset as the section on the right.
+        padding: const EdgeInsets.symmetric(
+          horizontal: SectionScaffold.contentPadding - SidebarItem.iconGutter,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Clearance for the traffic lights, and the rail's share of the
-            // window drag handle.
-            const WindowDragStrip(),
-            const SizedBox(height: 6),
+            const SizedBox(height: SectionScaffold.contentPadding),
             // A SidebarItem like the rows below, so the way out hovers,
             // highlights and aligns exactly like them instead of being a
             // shrink-wrapped button in its own grey.
-            SidebarItem(
-              icon: LucideIcons.arrowLeft300,
-              label: 'Back to app',
-              onTap: () => Navigator.of(context).maybePop(),
+            SizedBox(
+              height: SectionScaffold.headingHeight(context),
+              child: Center(
+                child: SidebarItem(
+                  key: const Key('settings-back-button'),
+                  icon: LucideIcons.arrowLeft300,
+                  label: 'Back to app',
+                  onTap: () => Navigator.of(context).maybePop(),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Focus(
+              onKeyEvent: _searchKey,
+              skipTraversal: true,
+              child: _SearchField(
+                controller: _search,
+                focusNode: _searchFocus,
+                onChanged: (value) => setState(() => _query = value),
+                onSubmitted: (_) => _chooseMatch(),
+              ),
             ),
             const SizedBox(height: 8),
-            _SearchField(onChanged: (value) => setState(() => _query = value)),
-            const SizedBox(height: 2),
             Expanded(child: _navList()),
           ],
         ),
@@ -111,9 +173,17 @@ class _SettingsNavState extends State<SettingsNav> {
 /// The rail's filter, styled like the machine rail's own — the app has one
 /// shape for "narrow this list".
 class _SearchField extends StatelessWidget {
-  const _SearchField({required this.onChanged});
+  const _SearchField({
+    required this.controller,
+    required this.focusNode,
+    required this.onChanged,
+    required this.onSubmitted,
+  });
 
+  final TextEditingController controller;
+  final FocusNode focusNode;
   final ValueChanged<String> onChanged;
+  final ValueChanged<String> onSubmitted;
 
   @override
   Widget build(BuildContext context) {
@@ -124,10 +194,16 @@ class _SearchField extends StatelessWidget {
       // Keyed because the Appearance pane now carries fields of its own, so a
       // test reaching for "the" TextField would find three.
       key: const Key('settings-search-field'),
+      controller: controller,
+      focusNode: focusNode,
+      autofocus: true,
       onChanged: onChanged,
+      onSubmitted: onSubmitted,
+      onEditingComplete: () {},
+      textInputAction: TextInputAction.search,
       style: grid.kFieldTextStyle,
       decoration: InputDecoration(
-        hintText: 'search settings',
+        hintText: 'Search settings',
         prefixIcon: Icon(
           LucideIcons.search300,
           size: grid.kFieldIconSize,

@@ -1,0 +1,25 @@
+/* The pane is the game and nothing else: no scrollbars, no page chrome, no rubber-banding. */
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #0b0d12;
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: none;
+}
+
+/* Phaser's autoCenter (CENTER_BOTH in src/main.js) centres the canvas with margins. Do not also
+   centre it with flexbox here: the two add up and push the game off-centre in a tall pane. */
+#game-container {
+    width: 100vw;
+    height: 100vh;
+}
+
+#game-container canvas {
+    display: block;
+    /* The canvas takes the click that gives this webview keyboard focus. */
+    outline: none;
+}

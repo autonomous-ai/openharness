@@ -1,0 +1,13 @@
+# Exported geometry — never source.
+part.step
+part.stl
+*.step
+*.stp
+*.stl
+*.brep
+# Harness bookkeeping.
+.harness/
+.harness-initialized
+toolchain/freecad-cli
+*.FCStd
+*.FCStd1

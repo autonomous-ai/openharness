@@ -6,7 +6,8 @@ import 'dart:ui' show AppExitResponse;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/main.dart';
+import 'package:harness/app_shell.dart';
+import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/ws/ws_conn.dart';
@@ -26,6 +27,7 @@ class _PendingConnection extends WsConn {
       );
   final reply = Completer<Map<String, dynamic>>();
   final calls = <String>[];
+  final payloads = <Map<String, dynamic>>[];
   @override
   Future<Map<String, dynamic>> request(
     String type, {
@@ -33,6 +35,7 @@ class _PendingConnection extends WsConn {
     Duration timeout = const Duration(seconds: 20),
   }) {
     calls.add(type);
+    payloads.add(payload);
     return reply.future;
   }
 
@@ -92,17 +95,39 @@ void main() {
     (
       'TMUX_UNAVAILABLE',
       null,
-      'Harness needs tmux to start agents on Test host. Install tmux there, then try again.',
+      'Harness needs tmux to start harnesses on Test host. Install tmux there, then try again.',
+    ),
+    (
+      'CODEX_CLI_TOO_OLD',
+      'Your installed Codex CLI does not support --approve-for-me. Update Codex and try again.',
+      'Your installed Codex CLI does not support --approve-for-me. Update Codex and try again.',
     ),
     (
       'UNSUPPORTED',
       null,
-      'Update the harness CLI on this machine to create an agent',
+      'Update the harness CLI on this machine to start a harness',
+    ),
+    // Refused at the wire before any pane exists: a definite no, never
+    // "check status".
+    (
+      'PROMPT_TOO_LONG',
+      'prompt is longer than 2000 characters',
+      'This first task is too long for Test host. Shorten it and try again.',
+    ),
+    (
+      'INVALID_PROMPT',
+      'prompt must be a string',
+      'Could not start harness: prompt must be a string',
+    ),
+    (
+      'PROMPT_UNSUPPORTED',
+      null,
+      'This engine cannot be opened with a first message on Test host.',
     ),
     (
       'SPAWN_FAILED',
       'The machine could not allocate an agent process.',
-      'Test host has not confirmed the new agent yet. Check status before creating another.',
+      'Test host has not confirmed the new harness yet. Check status before starting another.',
     ),
   ]) {
     test(
@@ -130,6 +155,44 @@ void main() {
     );
   }
 
+  test('a first task travels on agent_create as given, and no task sends no '
+      'field', () async {
+    final connection = _PendingConnection();
+    final app = createApp(connectionForTest: (_) => connection);
+    addTearDown(app.dispose);
+    final withTask = app.createAgent(
+      'm',
+      engine: 'claude',
+      folder: '/work',
+      prompt: 'Fix the failing tests.\nThen push.',
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(connection.calls, ['agent_create']);
+    expect(
+      connection.payloads.single['prompt'],
+      'Fix the failing tests.\nThen push.',
+    );
+    connection.complete();
+    await withTask;
+
+    final bare = _PendingConnection();
+    final plain = createApp(connectionForTest: (_) => bare);
+    addTearDown(plain.dispose);
+    final withoutTask = plain.createAgent(
+      'm',
+      engine: 'codex',
+      folder: '/work',
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(
+      bare.payloads.single.containsKey('prompt'),
+      isFalse,
+      reason: 'a machine that knows the field refuses it for some engines',
+    );
+    bare.complete();
+    await withoutTask;
+  });
+
   test(
     'an unconfirmed creation is not presented as a definite failure',
     () async {
@@ -140,7 +203,7 @@ void main() {
       connection.reply.completeError(const WsRequestTimeout('agent_create'));
       expect(
         await creation,
-        'Test host has not confirmed the new agent yet. Check status before creating another.',
+        'Test host has not confirmed the new harness yet. Check status before starting another.',
       );
       expect(connection.calls, ['agent_create']);
       expect(app.panes, isEmpty);
@@ -186,7 +249,7 @@ void main() {
         await tester.pumpWidget(
           ProviderScope(
             overrides: [appStateProvider.overrideWithValue(app)],
-            child: const DesktopApp(),
+            child: HarnessApp(authenticatedScreen: _swarm),
           ),
         );
         await tester.pump();
@@ -311,3 +374,7 @@ void main() {
     },
   );
 }
+
+/// The screen the desktop app mounts once signed in — the argument `HarnessApp`
+/// now takes, so the shell itself does not have to know about either app.
+Widget _swarm(AppNotifier app) => SwarmScreen(notifier: app);

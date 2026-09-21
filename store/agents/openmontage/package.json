@@ -1,0 +1,12 @@
+{
+  "name": "openharness-openmontage",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "test:browser": "node test/studio.e2e.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

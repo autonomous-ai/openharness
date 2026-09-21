@@ -1,0 +1,18 @@
+{
+  "homepage": "https://phaser.io",
+  "upstream": "https://github.com/phaserjs/phaser",
+  "license": "MIT",
+  "tagline": "Open source HTML5 game framework",
+  "examples": [
+    {
+      "prompt": "Make a side-scrolling platformer at sunset: a little fox runs and double-jumps across floating islands, collects glowing berries, stomps hedgehogs and races to a lantern at the end. Parallax mountains, procedural art only.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/phaser/sunset-fox-platformer.jpg",
+      "caption": "Sunset Fox · parallax platformer, 48 berries, double jump · playable in the pane"
+    },
+    {
+      "prompt": "Make a small brick breaker game with a title screen, three levels, power-ups that widen the paddle, and a score.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/phaser/brick-breaker.jpg",
+      "caption": "Brick by Brick · 3 levels, wide-paddle power-ups · playable in the pane"
+    }
+  ]
+}

@@ -197,7 +197,7 @@ void main() {
           }
         }
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-        await chord(tester, LogicalKeyboardKey.keyO);
+        await chord(tester, LogicalKeyboardKey.keyP);
         await tester.pumpAndSettle();
         await capture('open');
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
@@ -206,11 +206,17 @@ void main() {
         await capture('new');
         debugDisableShadows = previousShadows;
         expect(tester.takeException(), isNull);
-        for (final label in ['Codex', 'Claude Code', 'Cursor']) {
-          if (tester
-              .renderObject<RenderParagraph>(find.text(label))
-              .didExceedMaxLines) {
-            issues.add('$label is truncated when choosing an agent');
+        // The agent bar's pill names the chosen agent: never cut short.
+        for (final paragraph in tester.renderObjectList<RenderParagraph>(
+          find.descendant(
+            of: find.byKey(const Key('new-agent-agent-choice')),
+            matching: find.byType(RichText),
+          ),
+        )) {
+          if (paragraph.didExceedMaxLines) {
+            issues.add(
+              '${paragraph.text.toPlainText()} is truncated in the agent bar',
+            );
           }
         }
         expect(issues, isEmpty);

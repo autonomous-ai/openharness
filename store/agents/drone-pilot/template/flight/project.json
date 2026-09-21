@@ -1,0 +1,94 @@
+{
+  "schema": "vector/2",
+  "id": "alder-orchard",
+  "title": "Alder Orchard",
+  "brief": "Example geometry, not a surveyed or authorized site. Document the orchard blocks, avoid the irrigation pond and keep a return allowance in each sortie. Replace the boundary and camera with measured values before doing your own planning.",
+  "origin": [
+    -122.802,
+    38.466
+  ],
+  "home": [
+    20,
+    20
+  ],
+  "areas": [
+    {
+      "id": "orchard",
+      "name": "Orchard blocks",
+      "kind": "boundary",
+      "locked": false,
+      "ring": [
+        [
+          0,
+          0
+        ],
+        [
+          420,
+          0
+        ],
+        [
+          420,
+          260
+        ],
+        [
+          280,
+          300
+        ],
+        [
+          0,
+          300
+        ]
+      ]
+    },
+    {
+      "id": "pond",
+      "name": "Irrigation pond",
+      "kind": "exclusion",
+      "locked": true,
+      "ring": [
+        [
+          200,
+          100
+        ],
+        [
+          265,
+          95
+        ],
+        [
+          285,
+          150
+        ],
+        [
+          240,
+          175
+        ],
+        [
+          200,
+          150
+        ]
+      ]
+    }
+  ],
+  "camera": {
+    "name": "Example camera — enter your measured specs",
+    "sensorWidth": 13.2,
+    "sensorHeight": 8.8,
+    "focalLength": 8.8,
+    "imageWidth": 5472,
+    "imageHeight": 3648,
+    "minInterval": 1
+  },
+  "settings": {
+    "height": 55,
+    "speed": 6,
+    "angle": 0,
+    "frontOverlap": 0.75,
+    "sideOverlap": 0.7,
+    "margin": 6,
+    "usableMinutes": 14,
+    "reservePercent": 20,
+    "climbSpeed": 3,
+    "descentSpeed": 2,
+    "turnSeconds": 3
+  }
+}

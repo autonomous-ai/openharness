@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+. "$here/env.sh"
+case "${1:-help}" in
+  python) shift; exec "$OPENMONTAGE_PACKAGE/.venv/bin/python" "$@" ;;
+  preflight) exec "$OPENMONTAGE_PACKAGE/.venv/bin/python" -c 'from tools.tool_registry import registry; import json; registry.discover(); print(json.dumps(registry.support_envelope(), indent=2))' ;;
+  render) shift; exec "$OPENMONTAGE_PACKAGE/.venv/bin/python" "$here/render.py" "$@" ;;
+  *) echo 'OpenMontage: montage preflight | montage python SCRIPT [ARGS] | montage render [--project ID] [--scale 0.5]'; exit 0 ;;
+esac

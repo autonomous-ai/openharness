@@ -12,6 +12,7 @@ import 'package:xterm/xterm.dart';
 
 import 'swarm_interactions_test.dart' show chord;
 import 'keymap_runtime_test.dart' show native;
+import 'keymap_host_test.dart' show key;
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 
@@ -59,6 +60,94 @@ Future<void> output(
 );
 
 void main() {
+  testWidgets('Find edits Unicode with readline keys without sending input', (
+    tester,
+  ) async {
+    final app = createApp();
+    final input = <TerminalBinaryFrame>[];
+    final session = terminal('a0', input);
+    await output(session, 0, 'run 🐙\r\nrun report\r\n', keyframe: true);
+    app.adoptSessionForTest(session);
+    addTearDown(app.dispose);
+    await mount(tester, app);
+    await chord(tester, LogicalKeyboardKey.keyF);
+    await tester.enterText(findField, 'run 🐙');
+    await finishFind(tester);
+    final controller = tester.widget<TextField>(findField).controller!;
+    final search = tester
+        .widget<TerminalFindBar>(find.byType(TerminalFindBar))
+        .search!;
+    expect(search.count, 1);
+    await key(tester, LogicalKeyboardKey.keyH, ctrl: true);
+    await finishFind(tester);
+    expect(controller.text, 'run ');
+    expect(search.count, 2);
+    await key(tester, LogicalKeyboardKey.keyU, ctrl: true);
+    await finishFind(tester);
+    expect(controller.text, isEmpty);
+    await key(tester, LogicalKeyboardKey.keyY, ctrl: true);
+    await finishFind(tester);
+    expect(controller.text, 'run ');
+    expect(search.count, 2);
+    expect(input, isEmpty);
+    await key(tester, LogicalKeyboardKey.escape);
+    await key(tester, LogicalKeyboardKey.arrowLeft);
+    await tester.pump(const Duration(milliseconds: 10));
+    expect(input.single.bytes, [27, 91, 68]);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('compact Find options own keys and return to the query', (
+    tester,
+  ) async {
+    final app = createApp();
+    final input = <TerminalBinaryFrame>[];
+    final session = terminal('a0', input);
+    await output(session, 0, 'Marker\r\nmarker\r\n', keyframe: true);
+    app.adoptSessionForTest(session);
+    addTearDown(app.dispose);
+    await mount(tester, app);
+    tester.view.physicalSize = const Size(600, 800);
+    tester.platformDispatcher.textScaleFactorTestValue = 1.7;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await tester.pump();
+    await chord(tester, LogicalKeyboardKey.keyF);
+    await tester.enterText(findField, 'marker');
+    await finishFind(tester);
+    final search = tester
+        .widget<TerminalFindBar>(find.byType(TerminalFindBar))
+        .search!;
+    expect(search.count, 2);
+    // Tab reaches the compact actions. Enter opens them and chooses their
+    // first item, rather than stepping a match or sending input underneath.
+    await key(tester, LogicalKeyboardKey.tab);
+    await key(tester, LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(find.text('Match case'), findsOneWidget);
+    await key(tester, LogicalKeyboardKey.enter);
+    await finishFind(tester);
+    expect(search.caseSensitive, isTrue);
+    expect(search.count, 1);
+    expect(tester.widget<TextField>(findField).focusNode!.hasFocus, isTrue);
+    await tester.tap(find.byTooltip('Find options'));
+    await tester.pump();
+    await key(tester, LogicalKeyboardKey.escape);
+    expect(find.text('Match case'), findsNothing);
+    expect(findField, findsOneWidget);
+    await key(tester, LogicalKeyboardKey.escape);
+    expect(findField, findsNothing);
+    expect(input, isEmpty);
+    expect(tester.takeException(), isNull);
+    await chord(tester, LogicalKeyboardKey.keyF);
+    await tester.tap(find.byTooltip('Find options'));
+    await tester.pump();
+    expect(find.text('Match case'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    expect(find.text('Match case'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final nativeEntry in [false, true]) {
     testWidgets(
       'opening Find owns input before its first frame (native=$nativeEntry)',
@@ -489,7 +578,9 @@ void main() {
         ),
         findsOneWidget,
       );
-      await tester.tap(find.byTooltip('Match case'));
+      await tester.tap(find.byTooltip('Find options'));
+      await tester.pump();
+      await tester.tap(find.text('Match case'));
       await tester.pump();
       expect(tester.widget<TextField>(findField).focusNode!.hasFocus, isTrue);
       await tester.pumpWidget(const SizedBox());
@@ -717,7 +808,9 @@ void main() {
     await tester.pump();
     expect(session.status, TerminalSessionStatus.takenOver);
     expect(find.text('TERMINAL FROZEN'), findsNothing);
-    expect(find.text('Take control'), findsOneWidget);
+    // Header chip and the in-pane banner both offer it; neither typed anything.
+    expect(find.widgetWithText(TextButton, 'Take control'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Take control'), findsOneWidget);
     expect(input, isEmpty);
     await tester.pumpWidget(const SizedBox());
     app.dispose();

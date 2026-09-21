@@ -69,10 +69,8 @@ class TerminalThemeStore extends ValueNotifier<TerminalThemeChoice> {
   /// Read the saved choice, if there is one. Failure — or a scheme name from a
   /// build that had one this one does not — is silent and lands on the default.
   /// An unreadable state file is not a reason to refuse to start.
-  /// `readMany`, not a plain `read`, for a single key: it is the batch path
-  /// [TerminalFontStore] and [AppearancePrefsStore] take, so on a shared file
-  /// store this preference arrives in the same snapshot as theirs rather than
-  /// as a second pass over a file that may have been rewritten in between.
+  /// Uses the same batch-read API as [TerminalFontStore] and
+  /// [AppearancePrefsStore]. Each load observes its own current snapshot.
   Future<void> load() async {
     try {
       final saved = await _storage.readMany([_key]);

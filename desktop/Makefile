@@ -1,4 +1,4 @@
-.PHONY: release upload-desktop upload-desktop-linux upload-node-runtime upload-tmux-runtime terminal-local-manual terminal-local-e2e terminal-prod-e2e
+.PHONY: release upload-desktop upload-desktop-linux upload-node-runtime upload-tmux-runtime upload-grid-runtime terminal-local-manual terminal-local-e2e terminal-prod-e2e
 
 ## release: tag this commit vX.Y.Z_desktop and push the tag — CI builds macOS + Linux, publishes to
 ## GCS, and cuts the GitHub Release. The version is bumped from max(last git tag, live metadata.json),
@@ -34,6 +34,12 @@ upload-node-runtime:
 ## (ARGS="3.5a <dir>"). CI does this from release-tmux-runtime.yml; by hand only for a rebuild.
 upload-tmux-runtime:
 	bash scripts/publish-managed-tmux-runtime.sh $(ARGS)
+
+## upload-grid-runtime: publish the grid archives built by cli/scripts/build-managed-grid.sh
+## (ARGS="0.3.47 <dir>"). The manifest's version is the pin every daemon follows; CI does this from
+## release-grid-runtime.yml, by hand only for a rebuild.
+upload-grid-runtime:
+	bash scripts/publish-managed-grid-runtime.sh $(ARGS)
 
 ## terminal-local-manual: start the local backend/CLI stack and open the desktop fixture.
 terminal-local-manual:

@@ -30,12 +30,12 @@ void main() {
           'a0': AgentProject(
             name: 'harness-app-v2',
             cwd: '/work/harness-app-v2',
-            remote: 'https://github.com/autonomous-ai/autonomous-harness.git',
+            remote: 'https://github.com/autonomous-ai/openharness.git',
           ),
           'a1': AgentProject(
             name: 'autonomous-harness',
             cwd: '/work/autonomous-harness',
-            remote: 'https://github.com/autonomous-ai/autonomous-harness.git',
+            remote: 'https://github.com/autonomous-ai/openharness.git',
           ),
         },
       );

@@ -12,56 +12,44 @@ import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 
 void main() {
-  testWidgets(
-    'Open Agent in the header reuses the chosen session in this workspace',
-    (tester) async {
-      final app = createApp();
-      final input = <TerminalBinaryFrame>[];
-      final shared = app.adoptSessionForTest(terminal('a0', input));
-      final source = app.activeSwarm;
-      app.newSwarm(name: 'Review');
-      final existing = app.adoptSessionForTest(terminal('a1', input));
-      final target = app.activeSwarm;
-      await mount(tester, app);
-      tester.view.physicalSize = const Size(880, 560);
-      await tester.pump();
-      final add = find.byKey(const ValueKey('swarm-open-agent-button'));
-      expect(tester.getRect(add).top, lessThan(44));
-      expect(find.byType(FloatingActionButton), findsNothing);
-      expect(
-        tester
-            .getRect(find.byKey(existing.cellKey))
-            .overlaps(tester.getRect(add)),
-        isFalse,
-      );
-      await tester.tap(add);
-      await tester.pump();
-      await tester.enterText(
-        find.byKey(const ValueKey('swarm-search-input')),
-        'Agent 0',
-      );
-      await tester.pump();
-      expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('swarm-row-action')),
-          matching: find.text('Open Agent'),
-        ),
-        findsOneWidget,
-      );
-      expect(find.byKey(const ValueKey('swarm-row-action')), findsOneWidget);
+  testWidgets('New Pane shortcut reuses the chosen session in this workspace', (
+    tester,
+  ) async {
+    final app = createApp();
+    final input = <TerminalBinaryFrame>[];
+    final shared = app.adoptSessionForTest(terminal('a0', input));
+    final source = app.activeSwarm;
+    app.newSwarm(name: 'Review');
+    final existing = app.adoptSessionForTest(terminal('a1', input));
+    final target = app.activeSwarm;
+    await mount(tester, app);
+    tester.view.physicalSize = const Size(880, 560);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('swarm-new-pane-button')), findsNothing);
+    expect(find.byType(FloatingActionButton), findsNothing);
+    await chord(tester, LogicalKeyboardKey.keyP);
+    await tester.enterText(
+      find.byKey(const ValueKey('swarm-search-input')),
+      'Agent 0',
+    );
+    await tester.pump();
+    expect(
+      find.textContaining('enter  open', findRichText: true),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('swarm-row-action')), findsOneWidget);
 
-      expect(find.byType(AlertDialog), findsNothing);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pump();
-      expect(app.activeSwarm, same(target));
-      expect(target.panes, [existing, shared]);
-      expect(source.panes, [shared]);
-      expect(input, isEmpty);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox());
-      app.dispose();
-    },
-  );
+    expect(find.byType(AlertDialog), findsNothing);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(app.activeSwarm, same(target));
+    expect(target.panes, [existing, shared]);
+    expect(source.panes, [shared]);
+    expect(input, isEmpty);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
 
   for (final axis in PaneResizeAxis.values) {
     testWidgets(

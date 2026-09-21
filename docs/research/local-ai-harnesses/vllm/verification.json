@@ -1,0 +1,152 @@
+{
+  "at": "2026-09-20T05:46:19.731Z",
+  "checks": [
+    "serve",
+    "private API auth, host and origin",
+    "viewer and official icon HTTP assets",
+    "chat",
+    "benchmark",
+    "load_test",
+    "load_test",
+    "serve",
+    "chat",
+    "serving settings apply and chat preserves them",
+    "active cancellation frees owned server",
+    "serve",
+    "chat",
+    "recovery after cancellation",
+    "unload_all"
+  ],
+  "runtime": {
+    "id": "vllm",
+    "name": "vLLM",
+    "online": true,
+    "version": "0.29.0+cpu",
+    "backend": "Metal",
+    "backendVersion": "0.29.0",
+    "mlxVersion": "0.32.1",
+    "models": [
+      {
+        "id": "HuggingFaceTB/SmolLM2-135M-Instruct",
+        "name": "SmolLM2-135M-Instruct",
+        "path": "<home>/.cache/huggingface/hub/models--HuggingFaceTB--SmolLM2-135M-Instruct/snapshots/12fd25f77366fa6b3b4b768ec3050bf629380bac",
+        "digest": "12fd25f77366fa6b3b4b768ec3050bf629380bac",
+        "size": 272437573,
+        "family": "llama",
+        "parameters": null,
+        "quantization": "bfloat16",
+        "supportsThinking": false,
+        "running": false,
+        "resident": null
+      },
+      {
+        "id": "Qwen/Qwen2.5-1.5B-Instruct",
+        "name": "Qwen2.5-1.5B-Instruct",
+        "path": "<home>/.cache/huggingface/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+        "digest": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+        "size": 3098955668,
+        "family": "qwen2",
+        "parameters": null,
+        "quantization": "bfloat16",
+        "supportsThinking": false,
+        "running": false,
+        "resident": null
+      },
+      {
+        "id": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+        "name": "Qwen2.5-0.5B-Instruct-4bit",
+        "path": "<home>/.cache/huggingface/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/a5339a4131f135d0fdc6a5c8b5bbed2753bbe0f3",
+        "digest": "a5339a4131f135d0fdc6a5c8b5bbed2753bbe0f3",
+        "size": 289598797,
+        "family": "qwen2",
+        "parameters": null,
+        "quantization": "4-bit",
+        "supportsThinking": false,
+        "running": false,
+        "resident": null
+      },
+      {
+        "id": "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
+        "name": "Qwen2.5-1.5B-Instruct-4bit",
+        "path": "<home>/.cache/huggingface/hub/models--mlx-community--Qwen2.5-1.5B-Instruct-4bit/snapshots/8b403126fc14f14cfc99bb4cfa72ecbc129ea677",
+        "digest": "8b403126fc14f14cfc99bb4cfa72ecbc129ea677",
+        "size": 880169797,
+        "family": "qwen2",
+        "parameters": null,
+        "quantization": "4-bit",
+        "supportsThinking": false,
+        "running": false,
+        "resident": null
+      },
+      {
+        "id": "mlx-community/Qwen2.5-7B-Instruct-4bit",
+        "name": "Qwen2.5-7B-Instruct-4bit",
+        "path": "<home>/.cache/huggingface/hub/models--mlx-community--Qwen2.5-7B-Instruct-4bit/snapshots/c26a38f6a37d0a51b4e9a1eb3026530fa35d9fed",
+        "digest": "c26a38f6a37d0a51b4e9a1eb3026530fa35d9fed",
+        "size": 4295887610,
+        "family": "qwen2",
+        "parameters": null,
+        "quantization": "4-bit",
+        "supportsThinking": false,
+        "running": false,
+        "resident": null
+      },
+      {
+        "id": "mlx-community/Qwen3-0.6B-4bit",
+        "name": "Qwen3-0.6B-4bit",
+        "path": "<home>/.cache/huggingface/hub/models--mlx-community--Qwen3-0.6B-4bit/snapshots/73e3e38d981303bc594367cd910ea6eb48349da8",
+        "digest": "73e3e38d981303bc594367cd910ea6eb48349da8",
+        "size": 351383618,
+        "family": "qwen3",
+        "parameters": null,
+        "quantization": "4-bit",
+        "supportsThinking": true,
+        "running": false,
+        "resident": null
+      },
+      {
+        "id": "mlx-community/SmolLM2-135M-Instruct",
+        "name": "SmolLM2-135M-Instruct",
+        "path": "<home>/.cache/huggingface/hub/models--mlx-community--SmolLM2-135M-Instruct/snapshots/422de227b90002f443a21a58b1087f6ee7632731",
+        "digest": "422de227b90002f443a21a58b1087f6ee7632731",
+        "size": 273874876,
+        "family": "llama",
+        "parameters": null,
+        "quantization": "bfloat16",
+        "supportsThinking": false,
+        "running": false,
+        "resident": null
+      }
+    ],
+    "serving": {
+      "context": 2048,
+      "maxSequences": 4,
+      "memoryFraction": 0.1,
+      "prefixCaching": true,
+      "status": "idle",
+      "model": null,
+      "processRssBytes": null
+    }
+  },
+  "chat": {
+    "output": "A bicycle needs brakes to stop the bicycle while moving in a traffic at a speed that is higher than the maximum speed of the bicycle.",
+    "metrics": {
+      "model": "mlx-community/Qwen3-0.6B-4bit",
+      "tokens": 28,
+      "promptTokens": 23,
+      "tokensPerSecond": 96.30713721875337,
+      "firstTokenMs": 60.79104099999677,
+      "firstOutputMs": 60.86099899999681,
+      "totalMs": 290.73649999999907,
+      "thinking": false,
+      "doneReason": "stop",
+      "metric": "client_end_to_end",
+      "serving": {
+        "context": 2048,
+        "maxSequences": 4,
+        "memoryFraction": 0.1,
+        "prefixCaching": true
+      }
+    }
+  }
+}

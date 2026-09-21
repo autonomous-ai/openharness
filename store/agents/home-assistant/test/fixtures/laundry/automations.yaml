@@ -1,0 +1,47 @@
+# Example-only power sensor. No power switching or physical appliance control.
+- id: habitat_wash_started
+  alias: Recognize an active wash cycle
+  initial_state: false
+  mode: single
+  trace:
+    stored_traces: 40
+  triggers:
+    - trigger: numeric_state
+      entity_id: sensor.example_washer_power
+      above: 12
+      for:
+        seconds: 120
+  conditions:
+    - condition: state
+      entity_id: input_boolean.example_wash_active
+      state: "off"
+  actions:
+    - action: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.example_wash_active
+
+- id: habitat_wash_finished
+  alias: Confirm sustained low power before notifying
+  initial_state: false
+  mode: single
+  trace:
+    stored_traces: 40
+  triggers:
+    - trigger: numeric_state
+      entity_id: sensor.example_washer_power
+      below: 3
+      for:
+        seconds: 300
+  conditions:
+    - condition: state
+      entity_id: input_boolean.example_wash_active
+      state: "on"
+  actions:
+    - action: persistent_notification.create
+      data:
+        title: Laundry is ready
+        message: The example washer has stayed below 3 W for five minutes.
+        notification_id: habitat_laundry
+    - action: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.example_wash_active

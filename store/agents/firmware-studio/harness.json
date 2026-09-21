@@ -1,0 +1,35 @@
+{
+  "spec": 1,
+  "id": "autonomous/firmware-studio",
+  "name": "Firmware Studio",
+  "category": "Embedded",
+  "author": "OpenHarness contributors",
+  "description": "Build PlatformIO firmware and inspect real compiler results, memory usage, downloadable artifacts and a project pin plan. Hardware deployment is a separate approved step.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "platformio.ini",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "FIRMWARE_TOOLCHAIN": "${dsh}/toolchain",
+      "FIRMWARE_SKILLS": "${dsh}/skills"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/isolated-web-viewer",
+    "artifactExtensions": [
+      ".html"
+    ]
+  },
+  "verdict": ".harness/verdict.json"
+}

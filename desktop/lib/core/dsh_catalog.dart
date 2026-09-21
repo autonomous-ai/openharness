@@ -9,6 +9,42 @@
 /// on a machine that has never heard of it and say "Harness will install".
 library;
 
+/// One example on a product page: the prompt, a picture of what the harness made from it, and a line
+/// naming the result. Read defensively — it arrives from any machine's catalog.
+class StoreExample {
+  const StoreExample({required this.prompt, this.image, this.caption});
+
+  final String prompt;
+
+  /// An https picture of the output, or null when the package has none for this prompt.
+  final String? image;
+  final String? caption;
+
+  static StoreExample? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final prompt = raw['prompt'];
+    if (prompt is! String || prompt.trim().isEmpty || prompt.length > 600) {
+      return null;
+    }
+    final image = raw['image'];
+    final uri = image is String ? Uri.tryParse(image.trim()) : null;
+    final caption = raw['caption'];
+    return StoreExample(
+      prompt: prompt.trim(),
+      image:
+          uri != null &&
+              uri.scheme == 'https' &&
+              uri.hasAuthority &&
+              (image as String).length <= 2048
+          ? image.trim()
+          : null,
+      caption: caption is String && caption.trim().isNotEmpty
+          ? caption.trim().substring(0, caption.trim().length.clamp(0, 120))
+          : null,
+    );
+  }
+}
+
 class DshEntry {
   const DshEntry({
     required this.id,
@@ -18,7 +54,21 @@ class DshEntry {
     this.category,
     this.installed = false,
     this.viewer = false,
+    this.viewerUse,
     this.tier = 0,
+    this.kind = 'agent',
+    this.author,
+    this.repo,
+    this.homepage,
+    this.upstream,
+    this.license,
+    this.tagline,
+    this.screenshots = const [],
+    this.examples = const [],
+    this.linked = false,
+    this.installedCommit,
+    this.availableCommit,
+    this.updateAvailable = false,
   });
 
   /// `owner/name` — the install directory on the machine and the wire id.
@@ -37,24 +87,93 @@ class DshEntry {
 
   /// Whether it ships a viewer, i.e. whether a web pane will open beside it.
   final bool viewer;
+
+  /// Shared viewer package used by this agent, if the daemon reports one.
+  final String? viewerUse;
   final int tier;
+
+  /// `agent` — a harness, one tile; `viewer` — a pane other packages point at
+  /// with `viewer.use`, installed alongside them and never a tile (spec 1.1).
+  final String kind;
+  bool get isViewerPackage => kind == 'viewer';
+
+  /// A built-in engine (Claude Code, Codex…) as the store lists it: never on
+  /// the wire — the store builds these rows from [allEngines] and the machines'
+  /// engine probes, so the Code shelf and the harness shelves are one list.
+  bool get isEngine => kind == 'engine';
+
+  /// Who made it — "Autonomous" for everything under autonomous/ — beside the category on the tile.
+  final String? author;
+
+  /// The store's product page, from the registry: the package's repo, the
+  /// project's homepage, the upstream it wraps, the wrapper's licence, pictures.
+  final String? repo;
+  final String? homepage;
+  final String? upstream;
+  final String? license;
+
+  /// One line in the project's own words, from its website or repository —
+  /// "Advanced physics simulation" — under the name wherever it is chosen.
+  final String? tagline;
+  final List<String> screenshots;
+
+  /// What a person types and what comes out — the product page is built around these.
+  final List<StoreExample> examples;
+
+  /// Installed as a link to a checkout (`--link`) rather than a clone: a
+  /// developer's own working copy, which Remove would only unlink.
+  final bool linked;
+  final String? installedCommit;
+  final String? availableCommit;
+  final bool updateAvailable;
+  bool get hasUpdate => installed && !linked && updateAvailable;
 
   static DshEntry? fromJson(Object? raw) {
     if (raw is! Map) return null;
     final id = raw['id'];
-    final engine = raw['engine'];
+    final kind = raw['kind'] == 'viewer' ? 'viewer' : 'agent';
+    final engine = kind == 'viewer' ? '' : raw['engine'];
     if (id is! String || !_validId(id)) return null;
-    if (engine is! String || engine.isEmpty || engine.length > 64) return null;
+    if (kind != 'viewer' &&
+        (engine is! String || engine.isEmpty || engine.length > 64)) {
+      return null;
+    }
     final name = raw['name'];
     final description = raw['description'];
     final category = raw['category'];
+    final author = raw['author'];
     final tier = raw['tier'];
+    final screenshots = raw['screenshots'];
     return DshEntry(
       id: id,
+      repo: _httpUrl(raw['repo']),
+      homepage: _httpUrl(raw['homepage']),
+      upstream: _httpUrl(raw['upstream']),
+      license: _short(raw['license'], 40),
+      tagline: _short(raw['tagline'], 80),
+      screenshots: screenshots is List
+          ? screenshots
+                .map(_httpUrl)
+                .whereType<String>()
+                .take(8)
+                .toList(growable: false)
+          : const [],
+      examples: raw['examples'] is List
+          ? (raw['examples'] as List)
+                .map(StoreExample.fromJson)
+                .whereType<StoreExample>()
+                .take(8)
+                .toList(growable: false)
+          : const [],
+      linked: raw['linked'] == true,
+      installedCommit: _commit(raw['installedCommit']),
+      availableCommit: _commit(raw['availableCommit']),
+      updateAvailable: raw['updateAvailable'] == true,
       name: name is String && name.trim().isNotEmpty
           ? name.trim().substring(0, name.trim().length.clamp(0, 40))
           : id.substring(id.indexOf('/') + 1),
-      engine: engine,
+      engine: engine is String ? engine : '',
+      kind: kind,
       description: description is String && description.trim().isNotEmpty
           ? description.trim().substring(
               0,
@@ -64,11 +183,39 @@ class DshEntry {
       category: category is String && category.trim().isNotEmpty
           ? category.trim().substring(0, category.trim().length.clamp(0, 24))
           : null,
+      author: author is String && author.trim().isNotEmpty
+          ? author.trim().substring(0, author.trim().length.clamp(0, 80))
+          : null,
       installed: raw['installed'] == true,
       viewer: raw['viewer'] == true,
+      viewerUse:
+          raw['viewerUse'] is String && _validId(raw['viewerUse'] as String)
+          ? raw['viewerUse'] as String
+          : null,
       tier: tier is num && tier >= 0 && tier <= 9 ? tier.toInt() : 0,
     );
   }
+
+  /// An https URL, or nothing: the page opens what the registry says, so it
+  /// must never be a `file:` or `javascript:` link.
+  static String? _httpUrl(Object? raw) {
+    if (raw is! String) return null;
+    final uri = Uri.tryParse(raw.trim());
+    if (uri == null ||
+        !uri.hasAuthority ||
+        (uri.scheme != 'https' && uri.scheme != 'http')) {
+      return null;
+    }
+    return raw.trim().length > 2048 ? null : raw.trim();
+  }
+
+  static String? _short(Object? raw, int max) =>
+      raw is String && raw.trim().isNotEmpty
+      ? raw.trim().substring(0, raw.trim().length.clamp(0, max))
+      : null;
+
+  static String? _commit(Object? raw) =>
+      raw is String && RegExp(r'^[a-fA-F0-9]{40}$').hasMatch(raw) ? raw : null;
 
   static bool _validId(String id) =>
       id.length <= 129 &&
@@ -82,11 +229,25 @@ class DshInstallProgress {
     required this.id,
     required this.phase,
     this.detail,
+    this.line,
+    this.code,
   });
 
   final String id;
   final String phase;
   final String? detail;
+
+  /// On `failed`: the machine's reason as a code (`CLONE_FAILED`,
+  /// `SETUP_FAILED`, `DOCTOR_FAILED`…), or one of this app's own
+  /// (`CONNECTION`, `TIMEOUT`) when the request never came back. What lets
+  /// the Store say "the network" rather than "the package" without guessing
+  /// from the wording. Null from a daemon that predates it.
+  final String? code;
+
+  /// The line the phase's command is on right now, as the machine narrates it
+  /// (throttled there). What turns "Setting up…" for three minutes into
+  /// "Installed 61 packages".
+  final String? line;
 
   bool get done => phase == 'done';
   bool get failed => phase == 'failed';
@@ -110,16 +271,87 @@ class DshInstallProgress {
       return null;
     }
     final detail = raw['detail'];
+    final line = raw['line'];
+    final error = raw['error'];
     return DshInstallProgress(
       id: id,
       phase: phase,
       detail: detail is String && detail.trim().isNotEmpty
-          ? detail
-                .replaceAll(RegExp(r'[\x00-\x1f\x7f]'), ' ')
-                .trim()
-                .substring(0, detail.trim().length.clamp(0, 500))
+          ? _clean(detail, 500)
           : null,
+      line: line is String && line.trim().isNotEmpty ? _clean(line, 200) : null,
+      code: error is String && _codeRe.hasMatch(error) ? error : null,
     );
+  }
+
+  static final _codeRe = RegExp(r'^[A-Z][A-Z0-9_]{1,40}$');
+
+  static String _clean(String raw, int max) {
+    final text = raw.replaceAll(RegExp(r'[\x00-\x1f\x7f]'), ' ').trim();
+    return text.length > max ? text.substring(0, max) : text;
+  }
+}
+
+/// One install as the dialog watches it: every phase the machine reported,
+/// when each began, and the lines it printed on the way — the material for a
+/// panel that says what is happening rather than that something is.
+///
+/// Kept beside [MachineDsh.installs] (the latest phase, which older callers
+/// read) rather than replacing it.
+class DshInstallRun {
+  DshInstallRun(this.id, {DateTime? startedAt})
+    : startedAt = startedAt ?? DateTime.now();
+
+  final String id;
+  final DateTime startedAt;
+
+  /// Phases in the order they began, with when. `done`/`failed` close the run.
+  final List<({String phase, DateTime at})> phases = [];
+
+  /// What the phases printed, oldest first, bounded.
+  final List<String> log = [];
+  static const int maxLog = 40;
+
+  String? line;
+  String? detail;
+  String? code;
+
+  String get phase => phases.isEmpty ? 'clone' : phases.last.phase;
+  bool get done => phase == 'done';
+  bool get failed => phase == 'failed';
+  bool get inProgress => !done && !failed;
+
+  /// The doctor's verdict lines (`ok …`, `miss …`, `warn …`) seen so far.
+  List<String> get checks => log
+      .where((l) => RegExp(r'^(ok|miss|warn)\s').hasMatch(l))
+      .toList(growable: false);
+
+  /// How long [phase] took, once the next one began.
+  Duration? took(String phase) {
+    for (var i = 0; i < phases.length; i++) {
+      if (phases[i].phase != phase) continue;
+      if (i + 1 < phases.length) {
+        return phases[i + 1].at.difference(phases[i].at);
+      }
+      return null;
+    }
+    return null;
+  }
+
+  bool reached(String phase) => phases.any((p) => p.phase == phase);
+
+  void apply(DshInstallProgress progress, {DateTime? now}) {
+    final at = now ?? DateTime.now();
+    if (phases.isEmpty || phases.last.phase != progress.phase) {
+      phases.add((phase: progress.phase, at: at));
+    }
+    if (progress.detail != null) detail = progress.detail;
+    if (progress.code != null) code = progress.code;
+    if (progress.line != null && progress.line != line) {
+      line = progress.line;
+      log.add(progress.line!);
+      if (log.length > maxLog) log.removeAt(0);
+    }
   }
 }
 
@@ -145,6 +377,46 @@ class MachineDsh {
 
   /// Installs the user asked for, by harness id, at their latest reported phase.
   final Map<String, DshInstallProgress> installs = {};
+
+  /// The same installs with their history — see [DshInstallRun].
+  final Map<String, DshInstallRun> runs = {};
+
+  /// Record a progress push against both views. A push for a run nobody here
+  /// started (another window asked) opens one, so it can still be watched.
+  void applyInstall(DshInstallProgress progress, {DateTime? now}) {
+    installs[progress.id] = progress;
+    var run = runs[progress.id];
+    // A fresh push after a closed run is a new attempt.
+    if (run == null || run.done || run.failed) {
+      run = DshInstallRun(progress.id, startedAt: now);
+      runs[progress.id] = run;
+    }
+    run.apply(progress, now: now);
+  }
+
+  /// Close [id]'s run as failed with the reply's reason. The machine usually
+  /// pushed its own `failed` a moment earlier; that run is kept — its phases
+  /// and doctor lines are what explains the failure — and only the reason is
+  /// set, rather than a second push opening a fresh run holding nothing but
+  /// the sentence. A run that is not already closed is closed by this push.
+  void failInstall(String id, String detail, {String? code, DateTime? now}) {
+    final run = runs[id];
+    if (run != null && run.failed) {
+      run.detail = detail;
+      if (code != null) run.code = code;
+      installs[id] = DshInstallProgress(
+        id: id,
+        phase: 'failed',
+        detail: detail,
+        code: code ?? run.code,
+      );
+      return;
+    }
+    applyInstall(
+      DshInstallProgress(id: id, phase: 'failed', detail: detail, code: code),
+      now: now,
+    );
+  }
 
   DshEntry? operator [](String id) => byId[id];
 

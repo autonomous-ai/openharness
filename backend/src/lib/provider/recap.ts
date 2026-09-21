@@ -16,7 +16,7 @@
  * `machine-node/brain/src/prefrontal/recap.ts`, because a truncated line that ADVERTISES its
  * truncation reads worse on a round 466px display than one that simply ends.
  *
- * Spec: autonomous-ai/autonomous-harness → provider/spec/README.md.
+ * Spec: autonomous-ai/openharness → provider/spec/README.md.
  */
 import { fetchRecap, type ProviderCallOptions, type ProviderRecap } from './client.js'
 

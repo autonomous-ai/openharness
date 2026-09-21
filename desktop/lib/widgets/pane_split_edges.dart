@@ -16,13 +16,11 @@ class PaneSplitEdges extends StatefulWidget {
     required this.canSplitRight,
     required this.canSplitDown,
     required this.onSplit,
-    this.onNewSplit,
   });
 
   final Widget child;
   final bool enabled, canSplitRight, canSplitDown;
   final ValueChanged<PaneResizeAxis>? onSplit;
-  final ValueChanged<PaneResizeAxis>? onNewSplit;
 
   @override
   State<PaneSplitEdges> createState() => _PaneSplitEdgesState();
@@ -30,7 +28,6 @@ class PaneSplitEdges extends StatefulWidget {
 
 class _PaneSplitEdgesState extends State<PaneSplitEdges> {
   static const _buttonSize = 32.0;
-  static const _actionsSize = _buttonSize * 2 + 4;
   static const _inset = 8.0;
   static const _edgeWidth = 44.0;
   PaneResizeAxis? _edge;
@@ -72,14 +69,14 @@ class _PaneSplitEdgesState extends State<PaneSplitEdges> {
   Rect _actionsRect(PaneResizeAxis axis) => axis == PaneResizeAxis.x
       ? Rect.fromLTWH(
           _size.width - _inset - _buttonSize,
-          (_size.height - _actionsSize) / 2,
+          (_size.height - _buttonSize) / 2,
           _buttonSize,
-          _actionsSize,
+          _buttonSize,
         )
       : Rect.fromLTWH(
-          (_size.width - _actionsSize) / 2,
+          (_size.width - _buttonSize) / 2,
           _size.height - _inset - _buttonSize,
-          _actionsSize,
+          _buttonSize,
           _buttonSize,
         );
 
@@ -113,14 +110,7 @@ class _PaneSplitEdgesState extends State<PaneSplitEdges> {
                   border: Border.all(color: AppColors.borderStrong),
                   borderRadius: BorderRadius.circular(_buttonSize / 2),
                 ),
-                child: Flex(
-                  direction: right ? Axis.vertical : Axis.horizontal,
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _button(axis, create: true, available: available),
-                    _button(axis, create: false, available: available),
-                  ],
-                ),
+                child: _button(axis, available: available),
               ),
             ),
           ),
@@ -129,19 +119,15 @@ class _PaneSplitEdgesState extends State<PaneSplitEdges> {
     );
   }
 
-  Widget _button(
-    PaneResizeAxis axis, {
-    required bool create,
-    required bool available,
-  }) {
+  Widget _button(PaneResizeAxis axis, {required bool available}) {
     final right = axis == PaneResizeAxis.x;
-    final action = create ? 'New Agent' : 'Open Agent';
+    final action = right ? 'New Pane to the Right' : 'New Pane Below';
     final direction = right ? 'right' : 'down';
-    final callback = create ? widget.onNewSplit : widget.onSplit;
+    final callback = widget.onSplit;
     return IconButton(
-      key: ValueKey('pane-${create ? 'new' : 'open'}-$direction'),
+      key: ValueKey('pane-split-$direction'),
       tooltip: available
-          ? '$action · Split $direction'
+          ? action
           : '$action: make this pane ${right ? 'wider' : 'taller'} to split $direction',
       onPressed: available && callback != null
           ? () {
@@ -149,10 +135,7 @@ class _PaneSplitEdgesState extends State<PaneSplitEdges> {
               callback(axis);
             }
           : null,
-      icon: Icon(
-        create ? AgentActionIcons.create : AgentActionIcons.open,
-        size: 18,
-      ),
+      icon: const Icon(AgentActionIcons.create, size: 18),
       style: IconButton.styleFrom(
         fixedSize: const Size.square(_buttonSize),
         minimumSize: const Size.square(_buttonSize),

@@ -17,8 +17,11 @@ import { sid } from './lib/log.js'
 import { VERSION } from './version.js'
 import { env } from './config/env.js'
 import { hookCredentialMatches, loadOrCreateHookCredential } from './lib/hookAuth.js'
+import { routeStoreRequest, type StoreHandler } from './lib/storeProxy.js'
 import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
+import type { CommandBarService } from './lib/commandBar.js'
+import { handleCommandBarHttp } from './lib/commandBarHttp.js'
 
 /**
  * Which agent does a hook belong to, given the two grades of evidence?
@@ -28,17 +31,19 @@ import { ENGINES, type AgentEngine } from './engines/types.js'
  * on tmux and on Herdr alike, so requiring ancestry rejected every hook that engine ever sent and no
  * session bound at all.
  *
- * The weaker grade is the runtime itself: the hook named a pane, and that pane carries exactly one agent
- * of this engine. Accepted only when it is unambiguous, and only after the caller has already proven it
- * can read the 0600 hook credential. Two candidates is not a tie to break — it is a question we cannot
- * answer, so we answer nothing.
+ * Only Cursor may use the weaker runtime evidence: the hook named a pane carrying exactly one Cursor
+ * agent, and the caller already proved it can read the 0600 hook credential. Other engines must match
+ * ancestry. A delayed hook from an exited Codex process can name a pane now running a NEW Codex
+ * session; trusting that pane alone binds the old transcript to the replacement agent.
+ * Two candidates is not a tie to break, so we answer nothing.
  */
-export function chooseHookAgent<T>(byAncestry: readonly T[], byRuntimeOnly: readonly T[]): {
+export function chooseHookAgent<T>(byAncestry: readonly T[], byRuntimeOnly: readonly T[], engine: AgentEngine): {
   agent: T | null
   reason: 'ancestry' | 'runtime' | 'ambiguous' | 'none'
 } {
   if (byAncestry.length === 1) return { agent: byAncestry[0], reason: 'ancestry' }
   if (byAncestry.length > 1) return { agent: null, reason: 'ambiguous' }
+  if (engine !== 'cursor') return { agent: null, reason: 'none' }
   if (byRuntimeOnly.length === 1) return { agent: byRuntimeOnly[0], reason: 'runtime' }
   return { agent: null, reason: byRuntimeOnly.length ? 'ambiguous' : 'none' }
 }
@@ -49,6 +54,7 @@ export interface PairOutcome {
 }
 
 export interface HookServerHandlers {
+  onCommandBar?: Pick<CommandBarService, 'status' | 'decide'>
   onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
 
   onRegistered: (
@@ -118,7 +124,18 @@ export interface HookServerHandlers {
   onMachineDelete?: (machineId: string) => Promise<PairOutcome>
   /** GET /api/auth/me — proxy the signed-in user's profile from backend. */
   onAuthMe?: () => Promise<PairOutcome>
+  onSharedHarnesses?: () => Promise<PairOutcome>
+  /** GET /api/desk — the account's tabs, the same on every computer; proxied like the machine list. */
+  onDeskRead?: () => Promise<PairOutcome>
+  /** POST /api/desk/ops — the window's tab edits, applied on the backend (its routes/desk.ts); a
+   *  local write, so CSRF-guarded like a rename. */
+  onDeskOps?: (body: unknown) => Promise<PairOutcome>
+  /** /api/store/* — proxy the Harness Store's ratings and reviews to backend the same way: reads
+   *  ungated like the machine list, writes (PUT/DELETE) CSRF-guarded like a rename. See storeProxy.ts. */
+  onStore?: StoreHandler
 }
+
+export { STORE_PATH_RE } from './lib/storeProxy.js'
 
 const MAX_HOOK_BODY_BYTES = 256 * 1024
 const HOOK_BODY_FIELDS = new Set([
@@ -368,6 +385,8 @@ export function startHookServer(
         json(200, { ok: true, version: VERSION }); return
       }
 
+      if (await handleCommandBarHttp(req, res, handlers.onCommandBar)) return
+
       // Local dashboard (self-contained page) + its read-only status/logs.
       if (req.method === 'GET' && (url === '/' || url === '/index.html')) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(LOCAL_WEB_HTML); return
@@ -600,6 +619,21 @@ export function startHookServer(
         if (!list) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(list); return
       }
+      if (req.method === 'GET' && url === '/api/harness-shares') {
+        if (!handlers.onSharedHarnesses) { json(503, { error: 'UNAVAILABLE' }); return }
+        await proxied(handlers.onSharedHarnesses); return
+      }
+      if (req.method === 'GET' && url === '/api/desk') {
+        if (!handlers.onDeskRead) { json(503, { error: 'UNAVAILABLE' }); return }
+        await proxied(handlers.onDeskRead); return
+      }
+      if (req.method === 'POST' && url === '/api/desk/ops') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onDeskOps) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: unknown
+        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
+        await proxied(() => handlers.onDeskOps!(body)); return
+      }
       if (req.method === 'GET' && url === '/api/auth/me') {
         const me = handlers.onAuthMe
         if (!me) { json(503, { error: 'UNAVAILABLE' }); return }
@@ -624,6 +658,16 @@ export function startHookServer(
         const machineId = decodeURIComponent(url.slice('/api/machines/'.length))
         if (!machineId) { json(400, { error: 'MISSING_MACHINE_ID' }); return }
         await proxied(() => remove(machineId)); return
+      }
+
+      // The Harness Store: ratings and reviews in the backend, through this daemon's own session. The
+      // rules (reads ungated, writes behind the local header, the paths it forwards) are storeProxy.ts's.
+      if (url.startsWith('/api/store/')) {
+        // A request an http.Server hands over always has its url; `url` above is it without the query.
+        const route = await routeStoreRequest({ method: req.method, url: req.url as string, localOk, readBody: () => readBody(req) }, handlers.onStore)
+        if ('forward' in route) await proxied(route.forward)
+        else json(route.status, route.body)
+        return
       }
 
       // `harness pairings` — list paired browsers.

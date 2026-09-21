@@ -3,146 +3,32 @@ import 'dart:async';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
-import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
+import '../shortcuts/app_keymap.dart';
 import '../state/swarm_catalog.dart';
-import 'link_machine_dialog.dart';
-import 'link_machine_screen.dart';
+import 'link_another_machine_dialog.dart';
 import 'remote_folder_picker.dart';
 import 'clone_repository_dialog.dart';
+import 'terminal_name_prompt.dart';
+import 'terminal_prompt.dart';
 
-Future<String?> showSwarmRenameDialog(BuildContext context, String name) =>
-    showAppDialog<String>(
-      context: context,
-      transitionDuration: Duration.zero,
-      veilBlur: 0,
-      veilTint: const Color(0x99000000),
-      builder: (_) => _RenameSwarmDialog(name: name),
-    );
-
-class _RenameSwarmDialog extends StatefulWidget {
-  const _RenameSwarmDialog({required this.name});
-  final String name;
-  @override
-  State<_RenameSwarmDialog> createState() => _RenameSwarmDialogState();
-}
-
-class _RenameSwarmDialogState extends State<_RenameSwarmDialog> {
-  late final _text = TextEditingController(
-    text: widget.name,
-  )..selection = TextSelection(baseOffset: 0, extentOffset: widget.name.length);
-  final _focus = FocusNode(debugLabel: 'Rename Tab name');
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && ModalRoute.isCurrentOf(context) != false) {
-        _focus.requestFocus();
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _focus.dispose();
-    _text.dispose();
-    super.dispose();
-  }
-
-  void _save() {
-    final name = _text.text.trim();
-    if (name.isNotEmpty) Navigator.pop(context, name);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    final accent = grid.AppPalette.accentOnSurface;
-    final border = OutlineInputBorder(
-      borderRadius: BorderRadius.circular(10),
-      borderSide: BorderSide.none,
-    );
-    return ListenableBuilder(
-      listenable: _text,
-      builder: (context, _) => AlertDialog(
-        title: const Text('Rename Tab'),
-        titleTextStyle: Theme.of(context).textTheme.titleMedium,
-        content: SizedBox(
-          width: 360,
-          child: Semantics(
-            label: 'Harness name',
-            child: TextSelectionTheme(
-              data: TextSelectionTheme.of(context)
-                  .copyWith(selectionColor: accent.withValues(alpha: .3)),
-              child: TextField(
-                controller: _text,
-                focusNode: _focus,
-                autofocus: true,
-                maxLength: 80,
-                cursorColor: accent,
-                textInputAction: TextInputAction.done,
-                style: TextStyle(
-                  fontSize: 15,
-                  color: grid.AppPalette.textPrimary,
-                ),
-                decoration: InputDecoration(
-                  filled: true,
-                  fillColor: grid.AppSurface.recess,
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 14,
-                  ),
-                  border: border,
-                  enabledBorder: border,
-                  focusedBorder: border.copyWith(
-                    borderSide: BorderSide(color: accent),
-                  ),
-                  counterText: '',
-                  suffixText: _text.text.characters.length >= 70
-                      ? '${_text.text.characters.length}/80'
-                      : null,
-                  suffixStyle: TextStyle(
-                    fontSize: 11,
-                    color: grid.AppPalette.textSecondary,
-                  ),
-                ),
-                onSubmitted: (_) => _save(),
-              ),
-            ),
-          ),
-        ),
-        actions: [
-          OutlinedButton(
-            onPressed: () => Navigator.pop(context),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: grid.AppPalette.textSecondary,
-              minimumSize: const Size(88, 38),
-              padding: const EdgeInsets.symmetric(horizontal: 18),
-              side: const BorderSide(color: Colors.white24),
-              shape: const StadiumBorder(),
-            ),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: _text.text.trim().isEmpty ? null : _save,
-            style: FilledButton.styleFrom(
-              backgroundColor: grid.AppPalette.swarmAccent,
-              foregroundColor: grid.AppPalette.swarmTabBar,
-              minimumSize: const Size(88, 38),
-              padding: const EdgeInsets.symmetric(horizontal: 18),
-              shape: const StadiumBorder(),
-            ),
-            child: const Text('Rename'),
-          ),
-        ],
-      ),
-    );
-  }
-}
+Future<String?> showSwarmRenameDialog(
+  BuildContext context,
+  String name, {
+  AppKeymap? keymap,
+}) => showTerminalPrompt<String>(
+  context,
+  keymap: keymap,
+  builder: (_) => TerminalNamePrompt(
+    title: 'Rename Tab',
+    name: name,
+    fieldKey: const Key('tab-rename-input'),
+    fieldLabel: 'Tab name',
+    maxLength: 80,
+  ),
+);
 
 Future<SavedSwarmProject?> showSwarmProjectDialog(
   BuildContext context,
@@ -313,83 +199,11 @@ class _ProjectDialogState extends State<_ProjectDialog> {
   );
 }
 
+/// Link another machine. The dialog itself lives in
+/// `link_another_machine_dialog.dart`; this name is what every caller — the
+/// Machines menu, ⌘ commands, the machines manager — has always used.
 Future<void> showSwarmLinkDialog(
   BuildContext context,
-  AppNotifier notifier,
-) async {
-  final selected = await showAppDialog<String>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Link machine'),
-      content: SizedBox(
-        width: 480,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'On the other machine, sign in to Harness and start the daemon:',
-              ),
-              const SizedBox(height: 14),
-              const SelectableText(
-                'harness login\nharness start',
-                style: TextStyle(fontFamily: 'monospace', fontSize: 13),
-              ),
-              const SizedBox(height: 18),
-              const Text(
-                'Use the same account. Set a remote password on that machine, then choose it here to connect.',
-                style: TextStyle(fontSize: 12, color: Colors.white60),
-              ),
-              const SizedBox(height: 12),
-              ListenableBuilder(
-                listenable: notifier,
-                builder: (_, _) => Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    for (final machine in notifier.machineStates.values.where(
-                      (m) => !m.isLocalMachine,
-                    ))
-                      ListTile(
-                        leading: const Icon(Icons.computer, size: 18),
-                        title: Text(machine.machine.displayName),
-                        subtitle: Text(
-                          machine.needsLink
-                              ? 'Link required'
-                              : machine.nodeOnline == false
-                              ? 'Offline'
-                              : 'Linked',
-                        ),
-                        onTap: () =>
-                            Navigator.pop(context, machine.machine.machineId),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: notifier.refreshMachines,
-          child: const Text('Refresh'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.pop(context, 'local-access'),
-          child: const Text('This machine’s remote password'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Done'),
-        ),
-      ],
-    ),
-  );
-  if (!context.mounted || selected == null) return;
-  if (selected == 'local-access') {
-    await showLinkMachineDialog(context, notifier);
-  } else {
-    await showLinkMachineScreenDialog(context, notifier, selected);
-  }
-}
+  AppNotifier notifier, {
+  AppKeymap? keymap,
+}) => showLinkAnotherMachineDialog(context, notifier, keymap: keymap);

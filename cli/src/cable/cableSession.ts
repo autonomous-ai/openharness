@@ -1,9 +1,8 @@
 // The message layer: what the daemon and the dial SAY to each other, on top of the bytes serial.ts moves.
 //
-// Written twice — here and in apps/esp32-circle/main/cable_client.c of the autonomous-code repository —
-// with no shared code, because the two halves ship from different repositories. The framing underneath
-// agrees by shared vectors; this layer agrees by docs/cable-protocol.md and by being small enough to read
-// in one sitting.
+// Written twice — here and in devices/harness-device/firmware/main/cable_client.c — with no shared code, because one half
+// is TypeScript on a laptop and the other is C on an MCU. The framing underneath agrees by shared vectors;
+// this layer agrees by docs/cable-protocol.md and by being small enough to read in one sitting.
 //
 // THE VOCABULARY IS THE PRODUCT'S: machine → agent → session. The machine is this computer, the agents
 // are what the registry holds, and a session is one conversation underneath an agent.
@@ -130,23 +129,11 @@ export interface CableAgent {
   model?: string
   effort?: string
   /**
-   * An agent the dial KNOWS but does not walk to.
-   *
-   * The carousel is built around the window's tiles, and an agent sitting
-   * between them in list order is off neither edge — see `deskRing`. It is
-   * still sent: the dial counts its agents on the overview and lists them in
-   * the pull-down switcher, and a dial that says "5 agents" to someone who has
-   * eleven is simply wrong. What it is left out of is the walk.
-   */
-  offRing?: boolean
-  /**
    * The machine this agent lives on, and that machine's name.
    *
-   * THE CAROUSEL IS NO LONGER ONE MACHINE'S. Every agent on every machine is on it at once, so an agent
-   * that does not say where it lives cannot be driven: the daemon routes each turn, stop and answer by
-   * this id, and the dial prints the name on the switcher's second line where the engine used to be.
-   *
-   * Optional because the WIRE is: a firmware that predates the field simply does not draw it.
+   * A tab can hold panes from several machines at once, so an agent that does not say where it lives
+   * cannot be driven: the daemon routes each turn, stop and answer by this id, and the dial prints the
+   * name under the agent's.
    */
   machineId?: string
   machine?: string
@@ -178,16 +165,28 @@ export interface CableSwarm {
   name: string
   /** How many agents it holds — the dial draws the count, never the members. */
   agents: number
+  /**
+   * How many TILES it holds, of any kind — agents, shells, viewers.
+   *
+   * Separate from `agents` because the two answer different questions, and the dial needs the second
+   * one: a tab holding only a terminal drives no agent, so `agents` is 0 for it exactly as it is for
+   * an untouched New Harness tab. Filtering the switcher on `agents` therefore hid a tab that had
+   * real content in it, with no way back to it from the dial. Nothing here ever becomes a roster
+   * entry — a shell is still never named to the dial.
+   */
+  panes: number
 }
 
 /** The window's swarms as it last described them, or null while no window is connected. */
 export interface AppSwarms {
   active: string
-  swarms: Array<{ id: string; name: string; agentIds: string[] }>
+  swarms: Array<{ id: string; name: string; agentIds: string[]; panes: number }>
 }
 
 /** Why the list is as short as it is. The dial renders this, instead of drawing an empty wheel. */
 export type CableMachineSource = 'backend' | 'local' | 'signed-out'
+/** Why the dial sent an `agent.open`: a tap (absent) or a question screen that came up on its own. */
+export type OpenReason = 'question'
 
 export type { WindowRoute } from './windowRoute.js'
 import type { WindowRoute } from './windowRoute.js'
@@ -222,7 +221,14 @@ export interface CableHost {
   selectSwarm(swarmId: string): void
   appName(): string
   voiceLang(): string
+  /** The active tab's agents, in tile order — and nothing else. Empty with no window or an empty tab. */
   listAgents(): Promise<CableAgent[]>
+  /** Every agent across the account — the overview's number. The dial gets the count, never the rows. */
+  agentTotal(): number
+  /** The active tab's id, or '' with no window: what lets the dial tell an empty tab from a shut app. */
+  activeSwarm(): string
+  /** Who an agent is, for a card about one the dial does not hold. Undefined for an id never listed. */
+  describe(agentId: string): { name: string; engine: string; machine: string } | undefined
   sendTurn(agentId: string, text: string): void
   stopTurn(agentId: string): void
   /**
@@ -239,8 +245,14 @@ export interface CableHost {
    * says where the eye is and the window moves a tile to match, while this asks
    * for a tile of its own. A turn that just finished is a new thing to look at,
    * not a replacement for whatever the person was already watching.
+   *
+   * `reason` is why the dial sent it: absent for a person's tap; `'question'` when a question screen
+   * came up on its own — the window then only brings the agent forward if it is already on screen,
+   * because a reconnect re-shows every unanswered question and each used to open a tab.
    */
-  openAgent(agentId: string): void
+  openAgent(agentId: string, reason?: OpenReason): void
+  /** The dial asked for a fork of this agent — a second one with its history, opened in the window. */
+  forkAgent(agentId: string): Promise<{ ok: true; agentId: string } | { ok: false; error: string; detail?: string }>
   /**
    * Does this daemon's own agent list hold that id?
    *
@@ -809,8 +821,19 @@ export class CableSession {
         }
         return
       case 'agent.open':
-        if (str('agentId')) this.host.openAgent(str('agentId')!)
+        // Only the one reason the window knows; anything else reads as a tap, the older frame's meaning.
+        if (str('agentId')) this.host.openAgent(str('agentId')!, str('reason') === 'question' ? 'question' : undefined)
         return
+      case 'agent.fork': {
+        // The dial's Fork action. The host opens the new agent in the window itself; the dial only needs
+        // to hear a refusal, as a toast, so a press that did nothing is not a press that was lost.
+        const id = str('agentId')
+        if (!id) return
+        void this.host.forkAgent(id).then((result) => {
+          if (!result.ok) return this.toast(result.detail ?? result.error)
+        }).catch((err) => this.toast((err as Error).message))
+        return
+      }
       case 'scroll': {
         // Forwarded verbatim, including the reports carrying no travel: the two ends of a stroke are the
         // whole point of the message. A `down` with nothing in it stops a fling still running, and an `up`
@@ -1100,12 +1123,16 @@ export class CableSession {
 
   private async syncAgentsNow(force: boolean): Promise<void> {
     const agents = await this.host.listAgents()
-    const key = CableSession.agentsKey(agents)
+    // WHETHER there is a window is in the key, not WHICH tab: an empty tab after the window shut sends the
+    // same zero rows and draws a different screen, so that flip has to push. The tab's id does not — the
+    // dial names the tab from the `swarms` frame — and keying on it made every tab switch push twice,
+    // once when `app_swarms` named the new tab over the old panes and again when `app_panes` arrived.
+    const key = `${this.host.activeSwarm() ? 'window' : ''}|${CableSession.agentsKey(agents)}`
     if (!force && key === this.lastAgentsKey) return
     this.lastAgentsKey = key
     // Every push, and only pushes. The dial showing a different number from the daemon is a question this
     // line answers in one look: either the daemon never said it, or it said it and the dial disagreed.
-    this.log(`cable: agents → ${agents.length}${force ? ' (attach)' : ''}`)
+    this.log(`cable: agents → ${agents.length} of ${this.host.agentTotal()}${force ? ' (attach)' : ''}`)
 
     await this.send({ t: 'agents.begin' })
     for (const a of agents) {
@@ -1117,16 +1144,16 @@ export class CableSession {
         model: a.model ?? '',
         effort: a.effort ?? '',
         // Where it lives. The id is what the dial sends back for every action, the name is what it draws
-        // on the switcher's second line, and the id is also how a machine row finds its first agent.
+        // under the agent's, and the id is also how a machine row finds its first agent.
         machineId: a.machineId ?? '',
         machine: a.machine ?? '',
       })
 
     }
-    // How many of the agents just sent are on the CAROUSEL. They come first, so
-    // a count is enough, and a firmware that predates the field walks all of
-    // them exactly as it did before.
-    await this.send({ t: 'agents.end', ring: agents.filter((a) => !a.offRing).length })
+    // Every agent sent is walked. What travels beside them: `total`, the account-wide count the overview
+    // prints (the rows behind it stay here), and `tab`, the active tab's id — '' with no window, which is
+    // how the dial tells "the app is shut" from "this tab is empty" when both send zero agents.
+    await this.send({ t: 'agents.end', total: this.host.agentTotal(), tab: this.host.activeSwarm() })
 
     // The list just changed shape under the dial, so say again which agent both screens are on.
     //
@@ -1134,11 +1161,20 @@ export class CableSession {
     // memory of it — see desiredFocus. A re-anchor after a push is silent by design (the dial reports
     // nothing it did not do itself), so without this a dial that landed on the wrong tile would sit there
     // with nobody to notice.
-    if (this.desiredFocus) {
+    //
+    // Only for an agent the list just sent. The record can name one on another tab — the window focused
+    // it there, then switched — and a focus the dial cannot land is a frame it holds for five seconds and
+    // a warning per push; the tab switch is what un-focused it, and the next click sets a new record.
+    if (this.desiredFocus && agents.some((a) => a.id === this.desiredFocus)) {
       this.expectedAppFocusEcho = this.desiredFocus
       this.expectedAppFocusEchoUntil = Date.now() + APP_FOCUS_SETTLE_MS
       await this.focusAgent(this.desiredFocus)
     }
+
+    // A tile that has just appeared has no history on the dial. The usual case is a remote machine: its
+    // agents reach the cache seconds after the greeting, long after the attach pushed everyone else's.
+    // Cheap to say on every change — [restored] makes it a no-op for every tile already carrying one.
+    this.restoreInBackground()
   }
 
   /**
@@ -1154,26 +1190,76 @@ export class CableSession {
    * Sent on attach only. The list is re-sent whenever it changes; the history behind it does not, or every
    * rename would replay a week of recaps.
    */
+  /**
+   * Agents whose history the dial has already been given.
+   *
+   * THE DIAL KEEPS WHAT IT IS TOLD. Re-sending a tile's recaps buys nothing and costs 55 frames down a
+   * cable that the `focus` somebody just clicked has to share — measured: a switch every second kept the
+   * link saturated, and the focus, written in 20 ms, reached the glass 1.7 s later.
+   *
+   * Cleared on attach, which is the one moment the dial genuinely has nothing: a replug, a reboot, an OTA.
+   */
+  private readonly restored = new Set<string>()
+
+  /** A background restore already walking the list, so a second trigger joins it rather than racing it. */
+  private restoring = false
+
   async pushRestores(): Promise<void> {
-    return this.queued(() => this.pushRestoresNow())
+    // READ FIRST, QUEUE SECOND, and the split is the whole point. A remote agent's history is a cloud
+    // round trip and there is one per agent; asking for them from INSIDE the push chain holds every frame
+    // behind them — including the `focus` the person who just clicked is waiting for. Measured on the
+    // desk: a click from a local agent to a remote one took 1.5 s, of which 0.7 s was this loop waiting
+    // on the first `agent_recent` while the dial sat on the old tile.
+    const rows: Array<{ id: string; past: Array<{ recap: string; text: string }> }> = []
+    for (const a of await this.host.listAgents()) {
+      // Marked as it is ASKED FOR, not as it is sent: the answer is a cloud round trip, and a tick
+      // arriving mid-loop would otherwise start a second walk over the same agents.
+      if (this.restored.has(a.id)) continue
+      this.restored.add(a.id)
+      rows.push({ id: a.id, past: await this.host.recentSummaries(a.id) })
+    }
+    if (!rows.length) return
+    return this.queued(async () => {
+      for (const row of rows) {
+        // Oldest first, so the newest ends up on top of the tile's stack.
+        for (const s of [...row.past].reverse()) {
+          if (!s.recap && !s.text) continue
+          await this.send({ t: 'summary', agentId: row.id, recap: s.recap, text: s.text, restore: true })
+        }
+      }
+    })
   }
 
-  private async pushRestoresNow(): Promise<void> {
-    for (const a of await this.host.listAgents()) {
-      const past = await this.host.recentSummaries(a.id)
-      // Oldest first, so the newest ends up on top of the tile's stack.
-      for (const s of [...past].reverse()) {
-        if (!s.recap && !s.text) continue
-        await this.send({ t: 'summary', agentId: a.id, recap: s.recap, text: s.text, restore: true })
-      }
-    }
+  /**
+   * The same history, off the critical path.
+   *
+   * A machine switch owes the person two things and they are not equally urgent: the tile they clicked,
+   * NOW, and what every tile was last doing, eventually. `restore: true` says the second one is history —
+   * no beep, no notification — so nothing about it is worth a second of staring at the old tile.
+   */
+  private restoreInBackground(): void {
+    if (this.restoring) return
+    this.restoring = true
+    void this.pushRestores()
+      .catch((err) => this.log(`cable: restores failed (${(err as Error).message})`))
+      .finally(() => { this.restoring = false })
   }
 
   /** Attach: tell the dial everything, whether or not any of it looks unchanged from here. */
   async pushAgents(): Promise<void> {
-    await this.syncMachines(true)
-    await this.syncSwarms(true)
-    await this.syncAgents(true)
+    // A dial that has just greeted us has no history at all — it rebooted, or the cable was out. This is
+    // the one place that says so; everywhere else, [restored] is what keeps the link quiet.
+    this.restored.clear()
+    // Attach owns this walk. Held across the list push so the trigger inside it does not start the same
+    // one from the other end and leave the caller awaiting a restore that has nothing left to send.
+    this.restoring = true
+    try {
+      await this.syncMachines(true)
+      await this.syncSwarms(true)
+      await this.syncAgents(true)
+    } finally {
+      this.restoring = false
+    }
     await this.pushRestores()
   }
 
@@ -1189,13 +1275,16 @@ export class CableSession {
 
   private async syncSwarmsNow(force: boolean): Promise<void> {
     const { selected, swarms } = this.host.listSwarms()
-    const key = `${selected}|${swarms.map((s) => `${s.id}:${s.name}:${s.agents}`).join('|')}`
+    // `panes` belongs in the key as much as `agents` does. Opening a terminal on a tab that holds no
+    // agent moves only the tile count, and a key blind to it would swallow that push and leave the
+    // dial showing a tab it still believes is empty — the very row this field exists to keep.
+    const key = `${selected}|${swarms.map((s) => `${s.id}:${s.name}:${s.agents}:${s.panes}`).join('|')}`
     if (!force && key === this.lastSwarmsKey) return
     this.lastSwarmsKey = key
     this.log(`cable: swarms → ${swarms.length}${selected ? ` (on ${selected})` : ''}${force ? ' [push]' : ''}`)
     // ONE frame, not a begin/row/end stream: two dozen rows of an id, a name and a count fit in a
     // kilobyte, and the dial replaces the whole list on arrival either way.
-    await this.send({ t: 'swarms', selected, items: swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agents })) })
+    await this.send({ t: 'swarms', selected, items: swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agents, panes: s.panes })) })
   }
 
   // ── machines ──────────────────────────────────────────────────────────────────────────────────────
@@ -1246,8 +1335,8 @@ export class CableSession {
     if (!machineId) return
     if (machineId === this.host.selectedMachine()) {
       await this.send({ t: 'machine.selected', machineId })
-      await this.syncAgents(true)
-      await this.pushRestores()
+      await this.syncAgents()
+      this.restoreInBackground()
       return
     }
     const result = await this.host.selectMachine(machineId)
@@ -1257,13 +1346,20 @@ export class CableSession {
       return
     }
     this.log(`cable: machine.select → ${machineId}`)
-    // REQUIRED, not hygiene: two machines whose agents happen to share names and engines produce an equal
-    // agentsKey, and the new machine's list would then never be sent at all.
-    this.lastAgentsKey = ''
     await this.send({ t: 'machine.selected', machineId })
-    await this.syncAgents(true)
-    await this.pushRestores()
-    await this.syncMachines(true)   // the ✓ moved, and the agent counts with it
+    // NOT FORCED, and that is the fix for a switch that felt slow at random.
+    //
+    // Forcing both was right when the carousel showed ONE machine at a time: selecting another machine
+    // replaced every tile, so the list and its history had to be re-streamed. The carousel now spans every
+    // machine — `listAgentsFlat` reads the same 22 agents whichever row wears the ✓ — so a forced push
+    // re-sends a list and a history the dial already has, 55 frames of it, and the `focus` the person is
+    // waiting on queues behind them on the wire. Measured: 20 ms to write the focus, 1.7 s to land it.
+    //
+    // The diff still sends anything that GENUINELY changed, including a machine whose agents have only
+    // just arrived in the cache — and [restored] means those, and only those, bring their history along.
+    await this.syncAgents()
+    await this.syncMachines()   // the ✓ moved: `machinesKey` carries the selection, so this pushes
+    this.restoreInBackground()
   }
 
   /** One row changed — liveness, a rename, a count. Cheaper than re-streaming the wheel. */
@@ -1289,18 +1385,33 @@ export class CableSession {
    * A finished turn's recap.
    *
    * `quiet` means the window already has this agent on screen: draw the tile,
-   * skip the beep and the notification drawer. An extra field rather than a
-   * different frame, so firmware that predates it simply notifies as it always
-   * did instead of losing the recap.
+   * skip the notification drawer (the beep still sounds). `silent` means the
+   * turn was a sub-agent's: draw the tile, skip the beep AND the drawer — the
+   * main agent's own end is the one the person is waiting for. Extra fields
+   * rather than different frames, so firmware that predates them simply
+   * notifies as it always did instead of losing the recap.
    */
-  async summary(agentId: string, recap: string, text: string, quiet = false): Promise<void> {
-    await this.send(quiet ? { t: 'summary', agentId, recap, text, quiet: true } : { t: 'summary', agentId, recap, text })
+  async summary(agentId: string, recap: string, text: string, quiet = false, silent = false): Promise<void> {
+    const who = this.whoIs(agentId)
+    await this.send({ t: 'summary', agentId, ...who, recap, text, ...(quiet ? { quiet: true } : {}), ...(silent ? { silent: true } : {}) })
+  }
+
+  /**
+   * The name, engine and machine that ride on every `summary` and `question`.
+   *
+   * The dial holds ONE TAB's agents, and a turn can finish on any of them — the drawer row and the
+   * question card for an agent off this tab have nobody to ask but the frame. Sent on every card rather
+   * than only the off-tab ones: the dial then has one path, and a tab switch mid-flight cannot strand a
+   * card with an id and no name.
+   */
+  private whoIs(agentId: string): { name: string; engine: string; machine: string } {
+    return this.host.describe(agentId) ?? { name: '', engine: '', machine: '' }
   }
   async turnError(agentId: string, message: string): Promise<void> {
     await this.send({ t: 'turn.error', agentId, message })
   }
   async question(agentId: string, id: string, questions: unknown): Promise<void> {
-    await this.send({ t: 'question', agentId, id, questions })
+    await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
   }
 
   /**

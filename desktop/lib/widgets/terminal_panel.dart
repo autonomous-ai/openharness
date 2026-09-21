@@ -1,3 +1,7 @@
+import '../shared/theme/prompt_style.dart';
+import 'prompt_context.dart';
+import '../sharing/share_harness_dialog.dart';
+
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -31,6 +35,8 @@ import '../terminal/terminal_viewport.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
+import 'box_chrome.dart';
+import 'grid_model_picker.dart';
 import 'pane_header_actions.dart';
 
 /// The pane header's own horizontal inset.
@@ -46,6 +52,9 @@ class TerminalPanel extends StatefulWidget {
   /// where there is nothing to close it back to.
   final VoidCallback? onClose;
   final VoidCallback? onRestart;
+
+  /// Forks this harness — a second agent with its history (fork_agent_dialog.dart).
+  final VoidCallback? onFork;
   final VoidCallback? onDelete;
 
   final VoidCallback? onToggleZoom;
@@ -57,12 +66,24 @@ class TerminalPanel extends StatefulWidget {
   /// Only the focused grid tile may claim keyboard focus on mount/rebuild.
   final bool focused;
   final bool visible;
+
+  /// Coalesces streaming output for an unfocused tile without delaying input.
+  final Duration? outputRepaintInterval;
   final Size? viewportSize;
 
   /// A shared terminal can move to another tab without being remounted.
   final (String, int)? paneLocation;
   final (int, int, int?)? layoutRequest;
   final bool compactHeader;
+
+  /// The tile's own header strip — engine, title, status, pin, close — and
+  /// whether it is built at all. False on the phone, where [PhoneHeader] already
+  /// names the agent above this panel, there is no tile to pin, close or drag,
+  /// and the pane takes the full remaining height (`phone/terminal_page.dart`
+  /// in the mobile package). Find has no way in there — every
+  /// [TerminalFindAction] caller lives in the desktop screens — so the row's
+  /// Find overlay goes with it.
+  final bool showHeader;
   final int focusRequest;
 
   /// Whether this tile's composer textbox is showing. Only consulted for a remote machine.
@@ -87,10 +108,12 @@ class TerminalPanel extends StatefulWidget {
     required this.session,
     required this.focused,
     this.visible = true,
+    this.outputRepaintInterval,
     this.viewportSize,
     this.paneLocation,
     this.layoutRequest,
     this.compactHeader = false,
+    this.showHeader = true,
     this.focusRequest = 0,
     this.composerVisible = false,
     this.readOnly = false,
@@ -98,6 +121,7 @@ class TerminalPanel extends StatefulWidget {
     this.onToggleComposer,
     this.onClose,
     this.onRestart,
+    this.onFork,
     this.onDelete,
     this.onToggleZoom,
     this.zoomed = false,
@@ -161,6 +185,22 @@ class _TerminalPanelState extends State<TerminalPanel>
   RemoteMediaProgress? _previewProgress;
   Object? _headerPresentation;
   Widget? _header;
+
+  /// Set while the in-pane control banner is answering a keystroke that went
+  /// nowhere (see [_nudgeControlBanner]); cleared by [_controlNudgeTimer].
+  bool _controlNudged = false;
+  int _controlNudge = 0;
+  Timer? _controlNudgeTimer;
+
+  /// Set when THIS pane asked for the stream back, so the banner can stay up
+  /// through `opening` saying so. A first open, or a resync, is not that and
+  /// shows nothing.
+  bool _retakingControl = false;
+
+  /// The status the last frame was built for. The grid normally rebuilds this
+  /// panel on every session change, but the banner must not depend on that.
+  TerminalSessionStatus? _builtStatus;
+  bool _wasBlocked = false;
 
   @override
   void initState() {
@@ -293,6 +333,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     terminalThemeStore.removeListener(_onFontChanged);
     _cancelDialInertia();
     _cursorBlinkTimer?.cancel();
+    _controlNudgeTimer?.cancel();
     _focusNode.removeListener(_handleFocusChange);
     _composerFocus.removeListener(_handleComposerFocusChange);
     _controller.dispose();
@@ -325,6 +366,54 @@ class _TerminalPanelState extends State<TerminalPanel>
   void _onSessionChanged() {
     if (!mounted) return;
     _syncCursorBlink();
+    if (_controlNudged && !_inputBlocked) {
+      _controlNudgeTimer?.cancel();
+      _controlNudgeTimer = null;
+      setState(() => _controlNudged = false);
+    }
+    if (_retakingControl &&
+        widget.session.status != TerminalSessionStatus.opening) {
+      setState(() => _retakingControl = false);
+    } else if (_builtStatus != widget.session.status) {
+      setState(() {});
+    }
+    // The band promises ⏎, so the focused tile puts the keyboard in its
+    // terminal the moment the stream is lost: a composer being disabled drops
+    // it on the floor, and a pane reached by mouse may never have held it —
+    // either way the focused tile would be the one place ⏎ did nothing.
+    // Only when the keyboard is this pane's or nobody's, though: a person
+    // mid-word in the command dock or a rename field keeps it, and the band's
+    // text is there to click when they come back.
+    if (_inputBlocked &&
+        !_wasBlocked &&
+        widget.focused &&
+        widget.visible &&
+        _keyboardIsOursOrIdle) {
+      _claimFocusAfterFrame();
+    }
+    _wasBlocked = _inputBlocked;
+    // A pane can open BEFORE its screen exists: over the relay it mounts empty
+    // and the retained scrollback is replayed a moment later, so the jump in
+    // `_afterTerminalMounted` lands on nothing and the screen then fills in
+    // above the reader. xterm does not close this — its own `_scrollToBottom`
+    // answers typing and the keyboard opening, never new output.
+    //
+    // Gated on [_followTail], which is kept as "the view is showing its end",
+    // so a pane the reader has scrolled up in — or one restored to a saved
+    // position — is not at the end, and is never followed.
+    // Visible only. A parked pane holds the offset it was left at while output
+    // arrives behind it — `swarm_screen_test` pins that — and comes back to the
+    // end through `_afterTerminalMounted`, which is where returning is handled.
+    if (_followTail && widget.visible) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !widget.visible) return;
+        if (!_followTail || !_scrollController.hasClients) return;
+        final position = _scrollController.position;
+        if (position.pixels != position.maxScrollExtent) {
+          position.jumpTo(position.maxScrollExtent);
+        }
+      });
+    }
     if (!_composerFocusPending) return;
     if (!widget.focused || !_showsComposer) {
       _composerFocusPending = false;
@@ -393,7 +482,14 @@ class _TerminalPanelState extends State<TerminalPanel>
     CellOffset location(CellOffset old) =>
         CellOffset(old.x.clamp(0, terminal.viewWidth - 1), row(old.y));
     final wasFinding = _find != null;
-    _closeFind(restore: false, focus: false, rebuild: false);
+    // A screen refresh replaces the search model in place. Keep its editor's
+    // input connection (and any active composition) if it owns the keyboard.
+    _closeFind(
+      restore: false,
+      focus: false,
+      rebuild: false,
+      releaseFocus: false,
+    );
     _clearLastFind();
     // Selection anchors belong to a specific circular buffer. Detach them
     // before the TerminalView starts laying out the replacement terminal.
@@ -450,7 +546,10 @@ class _TerminalPanelState extends State<TerminalPanel>
       _find!.setQuery(_lastFindQuery, caseSensitive: _lastFindCaseSensitive);
     }
     _followTail = atEnd;
-    _afterTerminalMounted(scrollToEnd: atEnd);
+    // Resizes and resyncs are output updates, not requests to enter this pane.
+    // Its retained renderer/editor keeps its current focus; a command bar or
+    // other control must keep any keyboard ownership it already has.
+    _afterTerminalMounted(scrollToEnd: atEnd, claimFocus: false);
   }
 
   /// Typing in the composer focuses the tile, exactly like clicking into the terminal does.
@@ -484,10 +583,14 @@ class _TerminalPanelState extends State<TerminalPanel>
       bar.focusSearch(selectAll: false);
       return true;
     }
-    if (_composerFocus.hasFocus) return true;
     // On a remote pane the box gets the caret, not the terminal. Landing in the terminal would
     // hand the user the per-keystroke path by default — the exact cost the box exists to avoid.
-    if (_showsComposer && !widget.readOnly) {
+    // Except while the pane has lost control: the box is being disabled (it
+    // may still hold focus this frame, and drops it on the next) and the
+    // terminal is where ⏎ takes control back (see [_onTerminalKey]), so the
+    // keyboard is moved there rather than left to fall to the route.
+    if (_composerFocus.hasFocus && !_inputBlocked) return true;
+    if (_showsComposer && !widget.readOnly && !_inputBlocked) {
       if (widget.session.acceptsInput && _composerFocus.canRequestFocus) {
         _composerFocus.requestFocus();
         return true;
@@ -497,6 +600,65 @@ class _TerminalPanelState extends State<TerminalPanel>
     }
     view.requestKeyboard();
     return true;
+  }
+
+  /// Whether pulling focus into the terminal would take it from nobody: the
+  /// keyboard is already in this pane (terminal or composer) or has fallen
+  /// back to a scope with no field under it.
+  bool get _keyboardIsOursOrIdle {
+    final primary = FocusManager.instance.primaryFocus;
+    return primary == null ||
+        primary is FocusScopeNode ||
+        identical(primary, _focusNode) ||
+        identical(primary, _composerFocus);
+  }
+
+  /// Another client took the stream ([TerminalSessionStatus.takenOver]) and
+  /// only a person can take it back. That state alone: `closed`/`error` are
+  /// usually a beat long — the app reattaches them itself
+  /// (`_paneNeedsAttach`) — and a band that flashes up for those frames is
+  /// noise, where a taken-over pane stays taken over until somebody acts.
+  /// Never a pane-level [TerminalPanel.notice] (offline, unlinked — nothing
+  /// here would help) and never a shared read-only view.
+  bool get _inputBlocked =>
+      !widget.readOnly &&
+      widget.notice == null &&
+      widget.session.status == TerminalSessionStatus.takenOver;
+
+  /// Retakes the stream, the same path as the header chip: `selectAgent` on a
+  /// dead pane is `reopen()`, and a repeat while it is already `opening` only
+  /// re-focuses the tile, so a held ⏎ sends one `terminal_open`.
+  Future<void> _takeControl() async {
+    final session = widget.session;
+    if (_inputBlocked && !_retakingControl) {
+      setState(() => _retakingControl = true);
+    }
+    await widget.notifier.selectAgent(session.machineId, session.agentId);
+    // `selectAgent` declines quietly when the pane cannot be attached (machine
+    // gone offline meanwhile, agent withdrawn). No status change means no
+    // listener call, so the flag is taken back here rather than left armed
+    // for an `opening` this pane never asked for.
+    if (mounted &&
+        _retakingControl &&
+        identical(widget.session, session) &&
+        session.status != TerminalSessionStatus.opening) {
+      setState(() => _retakingControl = false);
+    }
+  }
+
+  /// A keystroke was typed into a pane that cannot take it. Flash the banner
+  /// and say so for a moment, rather than letting the key vanish in silence.
+  void _nudgeControlBanner() {
+    if (!mounted) return;
+    _controlNudgeTimer?.cancel();
+    _controlNudgeTimer = Timer(const Duration(seconds: 2), () {
+      _controlNudgeTimer = null;
+      if (mounted) setState(() => _controlNudged = false);
+    });
+    setState(() {
+      _controlNudged = true;
+      _controlNudge++;
+    });
   }
 
   bool get _canClaimInput =>
@@ -761,6 +923,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     bool restore = true,
     bool focus = true,
     bool rebuild = true,
+    bool releaseFocus = true,
   }) {
     final search = _find;
     if (search == null) return;
@@ -773,7 +936,7 @@ class _TerminalPanelState extends State<TerminalPanel>
       _lastFindBuffer = _viewTerminal.buffer;
     }
     _find = null;
-    _findBarKey.currentState?.releaseSearchFocus();
+    if (releaseFocus) _findBarKey.currentState?.releaseSearchFocus();
     search.removeListener(_onFindChanged);
     search.dispose();
     _clearFindHighlight();
@@ -905,33 +1068,60 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// reserved for a genuinely REMOTE pane, whose engine reads a DIFFERENT
   /// clipboard than this one — see `MachineState.isLocalMachine`.
   Future<void> _paste() async {
-    if (widget.readOnly || !widget.session.acceptsInput) return;
-    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-    if (text != null && text.isNotEmpty) {
-      // A binary TerminalBinaryKind.paste frame rides the same AEAD channel as every other terminal
-      // byte, so this works identically for a local or a relayed machine — see pasteText's doc. Only
-      // the CLI's own version gates it: an older daemon never advertises the capability.
-      final machine = widget.notifier.stateOf(widget.session.machineId);
-      if (machine != null && machine.terminalPasteRawAvailable) {
-        await widget.session.pasteText(text);
-      } else {
-        widget.session.terminal.paste(text);
+    final target = widget.session;
+    final streamId = target.streamId;
+    bool stillOwnsPaste() =>
+        mounted &&
+        identical(widget.session, target) &&
+        !widget.readOnly &&
+        target.acceptsInput &&
+        target.streamId == streamId;
+    if (!stillOwnsPaste()) return;
+
+    ClipboardData? data;
+    try {
+      data = await Clipboard.getData(Clipboard.kTextPlain);
+    } on PlatformException {
+      if (mounted && stillOwnsPaste()) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(
+            content: Text('Could not read the clipboard. Try Paste again.'),
+          ),
+        );
       }
       return;
     }
-    final machine = widget.notifier.stateOf(widget.session.machineId);
+    // Reading the clipboard crosses a platform boundary. The pane may have
+    // changed agents, become read only, closed, or reconnected in that time.
+    if (!stillOwnsPaste()) return;
+    final text = data?.text;
+    if (text != null && text.isNotEmpty) {
+      final machine = widget.notifier.stateOf(target.machineId);
+      _controller.clearSelection();
+      if (machine != null && machine.terminalPasteRawAvailable) {
+        await target.pasteText(text);
+      } else {
+        target.terminal.paste(text);
+      }
+      return;
+    }
+    // An empty clipboard has no input for a shell. Ctrl-V there means
+    // quoted-insert, so the agent image-paste fallback would change its mode.
+    if (isTerminalEngine(target.engineId)) return;
+    final machine = widget.notifier.stateOf(target.machineId);
     if (machine != null &&
         !machine.isLocalMachine &&
         machine.terminalImagePasteAvailable) {
       final imageBytes = await NativeClipboard.readImagePng();
+      if (!stillOwnsPaste()) return;
       if (imageBytes != null &&
           imageBytes.isNotEmpty &&
           imageBytes.length <= terminalLocalImagePasteMaxPayloadBytes) {
-        await widget.session.pasteImage(imageBytes);
+        await target.pasteImage(imageBytes);
         return;
       }
     }
-    widget.session.terminal.keyInput(TerminalKey.keyV, ctrl: true);
+    target.terminal.keyInput(TerminalKey.keyV, ctrl: true);
   }
 
   /// ⌘⌫ — kill back to the start of the line, the way a macOS text field does it.
@@ -973,31 +1163,77 @@ class _TerminalPanelState extends State<TerminalPanel>
   ///
   /// xterm binds paste itself, but only ever to its text-only action. `onKeyEvent`
   /// is the one hook that runs BEFORE its shortcut map (terminal_view.dart), so
-  /// this is where the binding has to be replaced rather than added.
+  /// this is where the binding has to be replaced rather than added. The chord taken is the
+  /// platform's exact one: Linux reserves Ctrl-V for the terminal program and pastes with
+  /// Ctrl-Shift-V.
   KeyEventResult _onTerminalKey(FocusNode node, KeyEvent event) {
+    final keyboard = HardwareKeyboard.instance;
+    // A pane that lost control still gets the keys (xterm's read-only mode
+    // keeps the focus node, it only stops opening an input connection), and
+    // dropping them silently is how people sit typing into a frozen pane. ⏎
+    // takes control back; any other plain key nudges the banner that says so.
+    // ⌘/⌃ chords are left alone: they are the app's and the pane's shortcuts.
+    if (event is KeyDownEvent &&
+        _inputBlocked &&
+        !keyboard.isMetaPressed &&
+        !keyboard.isControlPressed) {
+      if (event.logicalKey == LogicalKeyboardKey.enter ||
+          event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+        unawaited(_takeControl());
+        return KeyEventResult.handled;
+      }
+      if (_isTypingKey(event)) {
+        _nudgeControlBanner();
+        return KeyEventResult.ignored;
+      }
+    }
     // A held ⌘⌫ repeats, the way a held Backspace does — unlike ⌘V, where a second paste is never
     // what the finger that stayed down meant.
     if ((event is KeyDownEvent || event is KeyRepeatEvent) &&
         event.logicalKey == LogicalKeyboardKey.backspace) {
       return _onDeleteToLineStart();
     }
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
-    if (event.logicalKey != LogicalKeyboardKey.keyV) {
+    if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.keyV) {
       return KeyEventResult.ignored;
     }
-    final keyboard = HardwareKeyboard.instance;
-    if (keyboard.isShiftPressed) {
-      return KeyEventResult.ignored; // ⇧⌘V is a different verb
-    }
-
+    if (keyboard.isAltPressed) return KeyEventResult.ignored;
     final apple =
         defaultTargetPlatform == TargetPlatform.macOS ||
         defaultTargetPlatform == TargetPlatform.iOS;
-    final pasting = apple ? keyboard.isMetaPressed : keyboard.isControlPressed;
+    final pasting = apple
+        ? keyboard.isMetaPressed &&
+              !keyboard.isControlPressed &&
+              !keyboard.isShiftPressed
+        : keyboard.isControlPressed &&
+              !keyboard.isMetaPressed &&
+              keyboard.isShiftPressed ==
+                  (defaultTargetPlatform == TargetPlatform.linux);
     if (!pasting) return KeyEventResult.ignored;
     unawaited(_paste());
     return KeyEventResult.handled;
   }
+
+  /// A key that would have put something into the terminal: a character, or
+  /// one of the editing/navigation keys a prompt answers. Not a bare modifier
+  /// or a function key, which nobody expects to echo.
+  static bool _isTypingKey(KeyEvent event) {
+    final character = event.character;
+    if (character != null && character.isNotEmpty) return true;
+    return _editingKeys.contains(event.logicalKey);
+  }
+
+  // Not const: LogicalKeyboardKey overrides `==`, which a const set refuses.
+  static final Set<LogicalKeyboardKey> _editingKeys = {
+    LogicalKeyboardKey.backspace,
+    LogicalKeyboardKey.delete,
+    LogicalKeyboardKey.tab,
+    LogicalKeyboardKey.escape,
+    LogicalKeyboardKey.space,
+    LogicalKeyboardKey.arrowUp,
+    LogicalKeyboardKey.arrowDown,
+    LogicalKeyboardKey.arrowLeft,
+    LogicalKeyboardKey.arrowRight,
+  };
 
   bool get _linkModifierPressed {
     final keyboard = HardwareKeyboard.instance;
@@ -1160,6 +1396,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     grid.AppTheme.watch(context);
     final session = widget.session;
     _syncTerminal(session.terminal);
+    _builtStatus = session.status;
     final machineState = widget.notifier.stateOf(session.machineId);
     final remote = machineState != null && !machineState.isLocalMachine;
     final showComposer = _showsComposer;
@@ -1172,73 +1409,79 @@ class _TerminalPanelState extends State<TerminalPanel>
         color: grid.AppPalette.windowBg,
         child: Column(
           children: [
-            Stack(
-              children: [
-                Visibility(
-                  visible: _find == null,
-                  maintainSize: true,
-                  maintainAnimation: true,
-                  maintainState: true,
-                  child: _buildHeader(context),
-                ),
-                // Attach the focused pane's input before Find is requested.
-                // Hidden/unfocused panes need no dormant editor or index.
-                if (_find != null || (widget.visible && widget.focused))
-                  Positioned.fill(
-                    child: Offstage(
-                      offstage: _find == null,
-                      child: LayoutBuilder(
-                        builder: (context, constraints) => Row(
-                          children: [
-                            if (constraints.maxWidth > 520)
-                              Expanded(
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: _stripPadding,
-                                  ),
-                                  child: Text(
-                                    session.agentName,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      color: Colors.white70,
+            if (widget.showHeader)
+              Stack(
+                children: [
+                  Visibility(
+                    visible: _find == null,
+                    maintainSize: true,
+                    maintainAnimation: true,
+                    maintainState: true,
+                    child: _buildHeader(context),
+                  ),
+                  // Attach the focused pane's input before Find is requested.
+                  // Hidden/unfocused panes need no dormant editor or index.
+                  if (_find != null || (widget.visible && widget.focused))
+                    Positioned.fill(
+                      child: Offstage(
+                        offstage: _find == null,
+                        child: LayoutBuilder(
+                          builder: (context, constraints) => Row(
+                            children: [
+                              if (constraints.maxWidth > 520)
+                                Expanded(
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: _stripPadding,
+                                    ),
+                                    child: Text(
+                                      session.agentName,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: boxMonoStyle(
+                                        color: Colors.white70,
+                                      ),
                                     ),
                                   ),
-                                ),
-                              )
-                            else
-                              const Spacer(),
-                            SizedBox(
-                              width: math.min(constraints.maxWidth, 380),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 4,
-                                ),
-                                child: TerminalFindBar(
-                                  key: _findBarKey,
-                                  search: _find,
-                                  initialQuery: _lastFindQuery,
-                                  initialCaseSensitive: _lastFindCaseSensitive,
-                                  readOnly:
-                                      widget.readOnly || !session.acceptsInput,
-                                  onQuery: _queryFind,
-                                  onStep: _stepFind,
-                                  onClose: _closeFind,
-                                  onFocus: () => widget.onRendererFocus?.call(),
+                                )
+                              else
+                                const Spacer(),
+                              SizedBox(
+                                width: math.min(constraints.maxWidth, 380),
+
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 4,
+                                  ),
+                                  child: TerminalFindBar(
+                                    key: _findBarKey,
+                                    search: _find,
+                                    initialQuery: _lastFindQuery,
+                                    initialCaseSensitive:
+                                        _lastFindCaseSensitive,
+                                    readOnly:
+                                        widget.readOnly ||
+                                        !session.acceptsInput,
+                                    onQuery: _queryFind,
+                                    onStep: _stepFind,
+                                    onClose: _closeFind,
+                                    onFocus: () =>
+                                        widget.onRendererFocus?.call(),
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
-              ],
-            ),
+                ],
+              ),
 
-            Divider(height: 1, color: AppColors.border),
+            // Goes with the row above it: the phone draws its own rule under
+            // [PhoneHeader], and keeping this one would stack two.
+            if (widget.showHeader) Divider(height: 1, color: AppColors.border),
             Expanded(
               child: Stack(
                 children: [
@@ -1255,9 +1498,10 @@ class _TerminalPanelState extends State<TerminalPanel>
                           session.terminal,
                           key: _terminalViewKey,
                           controller: _controller,
-                          autoResize: widget.visible,
+                          autoResize: widget.visible && !session.readOnly,
                           resizeBuffer: false,
                           renderingEnabled: widget.visible,
+                          outputRepaintInterval: widget.outputRepaintInterval,
                           scrollController: _scrollController,
                           focusNode: _focusNode,
                           autofocus: widget.focused && !showComposer,
@@ -1291,6 +1535,9 @@ class _TerminalPanelState extends State<TerminalPanel>
                           mouseCursor:
                               _hoveredLink != null && _linkModifierPressed
                               ? SystemMouseCursors.click
+                              // An I-beam invites typing; a blocked pane does not.
+                              : _inputBlocked
+                              ? SystemMouseCursors.basic
                               : SystemMouseCursors.text,
                           onSecondaryTapDown: (_, _) => _copyOrPaste(),
 
@@ -1301,6 +1548,33 @@ class _TerminalPanelState extends State<TerminalPanel>
                       ),
                     ),
                   ),
+                  // The header's status chip is 11pt in a corner; a person
+                  // mid-sentence never sees it. This band sits over the
+                  // frozen output itself, where the eyes already are, and
+                  // stays through `opening` so the pane does not jump when
+                  // it is answered.
+                  if (_inputBlocked ||
+                      (_retakingControl &&
+                          session.status == TerminalSessionStatus.opening))
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: _ControlBanner(
+                        busy: !_inputBlocked,
+                        nudged: _controlNudged,
+                        nudge: _controlNudge,
+                        takerName: session.takenOverBy?.label(
+                          (id) =>
+                              widget.notifier.stateOf(id)?.machine.displayName,
+                        ),
+                        onTakeControl: _inputBlocked
+                            ? () => unawaited(_takeControl())
+                            : null,
+                        onFocusTerminal: () =>
+                            _laidOutTerminalView()?.requestKeyboard(),
+                      ),
+                    ),
                   if (session.uploadProgress != null ||
                       _previewProgress != null)
                     Positioned(
@@ -1367,6 +1641,7 @@ class _TerminalPanelState extends State<TerminalPanel>
       theme: Theme.of(context),
       brightness: grid.AppTheme.brightness.value,
       fontFamily: AppFonts.sans,
+      terminalFont: terminalFontStore.value,
       notifier: widget.notifier,
       session: session,
       name: session.agentName,
@@ -1386,6 +1661,7 @@ class _TerminalPanelState extends State<TerminalPanel>
       compact: widget.compactHeader,
       close: widget.onClose != null,
       restart: widget.onRestart != null,
+      fork: widget.onFork != null,
       delete: widget.onDelete != null,
       composer: widget.composerVisible,
       toggleComposer: widget.onToggleComposer != null,
@@ -1410,9 +1686,11 @@ class _TerminalPanelState extends State<TerminalPanel>
         onRestart: widget.onRestart == null
             ? null
             : () => widget.onRestart?.call(),
+        onFork: widget.onFork == null ? null : () => widget.onFork?.call(),
         onDelete: widget.onDelete == null
             ? null
             : () => widget.onDelete?.call(),
+        onReconnect: () => unawaited(_takeControl()),
         composerVisible: widget.composerVisible,
         onToggleComposer: widget.onToggleComposer == null
             ? null
@@ -1431,10 +1709,15 @@ class _TerminalHeader extends StatelessWidget {
   final bool readOnly;
   final VoidCallback? onClose;
   final VoidCallback? onRestart;
+  final VoidCallback? onFork;
 
   /// Ends the agent (with a confirmation), as the rail's row menu does. Null
   /// where the pane cannot name a live agent to end.
   final VoidCallback? onDelete;
+
+  /// Retakes a dead or taken-over stream — the panel's `_takeControl`, so the
+  /// chip and the in-pane band drive one path.
+  final VoidCallback onReconnect;
   final bool compact;
   final VoidCallback? onToggleZoom;
   final bool zoomed;
@@ -1458,7 +1741,9 @@ class _TerminalHeader extends StatelessWidget {
     this.readOnly = false,
     this.onClose,
     this.onRestart,
+    this.onFork,
     this.onDelete,
+    required this.onReconnect,
     this.compact = false,
     this.onToggleZoom,
     this.zoomed = false,
@@ -1483,6 +1768,9 @@ class _TerminalHeader extends StatelessWidget {
         .where((agent) => agent.id == session.agentId)
         .firstOrNull
         ?.codexHome;
+    final taker = session.takenOverBy?.label(
+      (id) => notifier.stateOf(id)?.machine.displayName,
+    );
     final status =
         notice ??
         switch (session.status) {
@@ -1501,7 +1789,8 @@ class _TerminalHeader extends StatelessWidget {
           TerminalSessionStatus.takenOver => (
             label: 'Take control',
             icon: Icons.lock_outline,
-            detail: 'Read only: another app controls this terminal. Take control moves input ownership to this app.',
+            detail:
+                'Read only: ${taker ?? 'another app'} controls this terminal. Take control moves input ownership to this app.',
           ),
           TerminalSessionStatus.error || TerminalSessionStatus.closed => (
             label: 'Reconnect',
@@ -1532,229 +1821,283 @@ class _TerminalHeader extends StatelessWidget {
       if (profile != null) 'Codex profile: $profile',
       'Double-click to rename',
     ].join('\n');
-    final remoteComposer = machine != null && !machine.isLocalMachine
+    // A terminal has no prompt to compose a message for — a shell reads keys,
+    // and the composer's Enter-to-send would be a line nobody asked for.
+    final remoteComposer =
+        machine != null &&
+            !machine.isLocalMachine &&
+            !isTerminalEngine(session.engineId)
         ? onToggleComposer
         : null;
-    final actionsWidth = remoteComposer == null ? 118.0 : 148.0;
+    // The icon cluster, plus the model picker that now sits at its left — without the extra the
+    // constraint clips the picker rather than the details it was measured for. Zero on an engine
+    // that gets no picker, so those headers keep the width they always had.
+    final showModelPicker =
+        status == null && !readOnly && modelPickerSupports(session.engineId);
+    final pickerWidth = showModelPicker ? 72.0 : 0.0;
+    final actionsWidth =
+        (remoteComposer == null ? 148.0 : 178.0) +
+        pickerWidth +
+        (onFork == null ? 0 : 30) +
+        (agent?.viewerUrl == null && agent?.viewerError == null ? 0 : 30);
     final folder =
         project?.cwd
             .split(RegExp(r'[/\\]'))
             .where((part) => part.isNotEmpty)
             .lastOrNull ??
         project?.name;
-    final details = [
-      if (folder?.isNotEmpty == true) folder!,
-      if (project?.branch?.trim().isNotEmpty == true) project!.branch!,
-      machineName,
-    ];
-    final branchIndex = project?.branch?.trim().isNotEmpty == true
-        ? (folder?.isNotEmpty == true ? 1 : 0)
-        : null;
+    // A fork says so first: "forked from X" is the one fact about this pane
+    // that the folder and the branch — shared with its source — cannot tell.
+    final forkedFrom = agent?.forkedFrom;
     final strip = PaneHeaderHover(
       child: SizedBox(
         height: compact ? 38 : 46,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: _stripPadding),
           child: LayoutBuilder(
-            builder: (context, constraints) => Row(
-              children: [
-                if (agent != null)
-                  EngineMark.forAgent(agent, size: 17)
-                else
-                  EngineMark(engine: session.engineId, size: 17),
-                // Icon and name, the same as every other pane (owner,
-                // 2026-09-15): a harness agent is its harness here, and the
-                // engine it runs on is the dialog's and the tooltip's to say.
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Row(
-                    children: [
-                      Flexible(
-                        child: Tooltip(
-                          message: identityDetail,
-                          waitDuration: const Duration(milliseconds: 700),
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onDoubleTap: () => unawaited(
-                              showAgentRenameDialog(
-                                context,
-                                notifier,
-                                session.machineId,
-                                session.agentId,
+            builder: (context, constraints) {
+              final scale = MediaQuery.textScalerOf(context).scale(13) / 13;
+              final narrow = constraints.maxWidth < 560 * math.max(1, scale);
+              final rightWidth = narrow
+                  ? math.max(
+                      showModelPicker ? 60.0 : 28.0,
+                      constraints.maxWidth * .36,
+                    )
+                  : math.max(actionsWidth, constraints.maxWidth * .55);
+              return Row(
+                children: [
+                  if (agent != null)
+                    EngineMark.forAgent(agent, size: 17)
+                  else
+                    EngineMark(engine: session.engineId, size: 17),
+                  // Icon and name, the same as every other pane (owner,
+                  // 2026-09-15): a harness agent is its harness here, and the
+                  // engine it runs on is the dialog's and the tooltip's to say.
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Flexible(
+                          child: Tooltip(
+                            message: identityDetail,
+                            waitDuration: const Duration(milliseconds: 700),
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onDoubleTap: () => unawaited(
+                                showAgentRenameDialog(
+                                  context,
+                                  notifier,
+                                  session.machineId,
+                                  session.agentId,
+                                  session.agentName,
+                                ),
+                              ),
+                              child: Text(
                                 session.agentName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: boxMonoStyle(
+                                  color: AppColors.text,
+                                  size: 12,
+                                  weight: FontWeight.w600,
+                                ),
                               ),
                             ),
-                            child: Text(
+                          ),
+                        ),
+                        if (status != null || !compact)
+                          const SizedBox(width: 8),
+                        if (status != null && narrow)
+                          Tooltip(
+                            message: '${status.label}: ${status.detail}',
+                            child: IconButton(
+                              tooltip: status.label,
+                              onPressed: canReconnect ? onReconnect : null,
+                              icon: Icon(status.icon, size: 14),
+                              style: IconButton.styleFrom(
+                                foregroundColor: color,
+                                disabledForegroundColor: color,
+                                fixedSize: const Size(28, 28),
+                                minimumSize: const Size(28, 28),
+                                padding: EdgeInsets.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                            ),
+                          )
+                        else if (status != null)
+                          ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth: math.max(
+                                0,
+                                math.min(
+                                  constraints.maxWidth * .22,
+                                  constraints.maxWidth - actionsWidth - 110,
+                                ),
+                              ),
+                            ),
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: Tooltip(
+                                message: status.detail,
+                                child: TextButton(
+                                  onPressed: canReconnect ? onReconnect : null,
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: color,
+                                    disabledForegroundColor: AppColors.textSoft,
+                                    minimumSize: Size.zero,
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 4,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(status.icon, size: 14),
+                                      const SizedBox(width: 6),
+                                      Flexible(
+                                        child: Text(
+                                          status.label,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(fontSize: 11),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          )
+                        else if (!compact)
+                          Padding(
+                            padding: const EdgeInsets.all(4),
+                            child: Icon(Icons.circle, size: 8, color: color),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // Which of the three paths carries this pane's bytes. Absent for a local machine's own
+                  // terminal, which has no such distinction and so gets no badge.
+                  //
+                  // The wire word and the word a person reads differ for the middle state, deliberately:
+                  // the CLI sends 'turn' (it is a TURN allocation) but both middle and last are relays to
+                  // a reader, so they read as "relay" and "ws". 'relay' on the wire kept its original
+                  // meaning — the backend WebSocket — so an older CLI is never mislabelled.
+                  if (!compact && !narrow && session.linkMode != null)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      child: _LinkModeMark(mode: session.linkMode!),
+                    ),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: rightWidth),
+                    child: PaneHeaderActions(
+                      compact: narrow,
+                      // Where this agent runs, with the controls rather than beside the name — the
+                      // header has room for one of the two, and this is the half you only read while
+                      // reaching for it. Absent while a notice is showing: a header asking to
+                      // reconnect is not the moment to offer a menu.
+                      modelPicker: showModelPicker
+                          ? GridModelPicker(
+                              compact: narrow,
+                              notifier: notifier,
+                              machineId: session.machineId,
+                              currentModel: agent?.gridModel,
+                              webSearch: agent?.gridWebSearch,
+                              engineLabel: session.engineId,
+                              onSelected: (model) => unawaited(
+                                notifier.retargetAgentToGridModel(
+                                  session.machineId,
+                                  session.agentId,
+                                  model.id,
+                                  gridName: model.grid,
+                                ),
+                              ),
+                              onUseOwnLogin: () => unawaited(
+                                notifier.clearAgentGrid(
+                                  session.machineId,
+                                  session.agentId,
+                                ),
+                              ),
+                              // The pane's own context, because the door opens New Agent — and
+                              // the pane's own MACHINE, because a picker on a remote agent's pane
+                              // is asking about the models that computer can serve, not this one's.
+                              onRunLocalModel: () => unawaited(
+                                notifier.runLocalModel(
+                                  context,
+                                  machineId: session.machineId,
+                                ),
+                              ),
+                            )
+                          : null,
+                      onShare:
+                          readOnly ||
+                              notifier
+                                      .stateOf(session.machineId)
+                                      ?.machine
+                                      .isShared ==
+                                  true
+                          ? null
+                          : () => showShareHarnessDialog(
+                              context,
+                              notifier,
+                              session.machineId,
+                              session.agentId,
                               session.agentName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: AppColors.text,
-                                fontFamily: AppFonts.sans,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                              ),
                             ),
+                      zoomed: zoomed,
+                      onZoom: onToggleZoom,
+                      onRestart: onRestart,
+                      onFork: onFork,
+                      onDelete: onDelete,
+                      onClose: onClose,
+                      terminal: isTerminalEngine(session.engineId),
+                      onToggleComposer: remoteComposer,
+                      composerVisible: composerVisible,
+                      // A harness agent's viewer, shown or hidden from the
+                      // pane it belongs to.
+                      onToggleViewer:
+                          agent?.viewerUrl == null && agent?.viewerError == null
+                          ? null
+                          : () => notifier.toggleViewerPane(
+                              session.machineId,
+                              agent!.id,
+                            ),
+                      viewerVisible:
+                          agent != null &&
+                          notifier.viewerPaneShown(session.machineId, agent.id),
+                      viewerColor: agent == null
+                          ? null
+                          : agentIdentity(agent).color,
+                      details: Tooltip(
+                        message: [
+                          if (forkedFrom != null)
+                            'Forked from ${forkedFrom.name}',
+                          if (project != null) project.cwd,
+                          if (project?.branch?.isNotEmpty == true)
+                            'Branch: ${project!.branch}',
+                          machineName,
+                        ].join('\n'),
+                        child: PromptContextView(
+                          size: narrow ? 11 : 12,
+                          contextData: PromptContext(
+                            machine: machineName,
+                            project: narrow ? null : folder,
+                            branch: narrow ? null : project?.branch,
+                            leading: !narrow && forkedFrom != null
+                                ? 'forked from ${forkedFrom.name}'
+                                : null,
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      if (status != null)
-                        ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxWidth: math.max(
-                              0,
-                              math.min(
-                                constraints.maxWidth * .22,
-                                constraints.maxWidth - actionsWidth - 110,
-                              ),
-                            ),
-                          ),
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Tooltip(
-                              message: status.detail,
-                              child: TextButton(
-                                onPressed: canReconnect
-                                    ? () => notifier.selectAgent(
-                                        session.machineId,
-                                        session.agentId,
-                                      )
-                                    : null,
-                                style: TextButton.styleFrom(
-                                  foregroundColor: color,
-                                  disabledForegroundColor: AppColors.textSoft,
-                                  minimumSize: Size.zero,
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                    vertical: 4,
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(status.icon, size: 14),
-                                    const SizedBox(width: 6),
-                                    Flexible(
-                                      child: Text(
-                                        status.label,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(fontSize: 11),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        )
-                      else if (!compact)
-                        Padding(
-                          padding: const EdgeInsets.all(4),
-                          child: Icon(Icons.circle, size: 8, color: color),
-                        ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // Which of the three paths carries this pane's bytes. Absent for a local machine's own
-                // terminal, which has no such distinction and so gets no badge.
-                //
-                // The wire word and the word a person reads differ for the middle state, deliberately:
-                // the CLI sends 'turn' (it is a TURN allocation) but both middle and last are relays to
-                // a reader, so they read as "relay" and "ws". 'relay' on the wire kept its original
-                // meaning — the backend WebSocket — so an older CLI is never mislabelled.
-                if (!compact && session.linkMode != null)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    child: _LinkModeMark(mode: session.linkMode!),
-                  ),
-                ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxWidth: math.max(
-                      actionsWidth,
-                      constraints.maxWidth * .55,
                     ),
                   ),
-                  child: PaneHeaderActions(
-                    zoomed: zoomed,
-                    onZoom: onToggleZoom,
-                    onRestart: onRestart,
-                    onDelete: onDelete,
-                    onClose: onClose,
-                    onToggleComposer: remoteComposer,
-                    composerVisible: composerVisible,
-                    // A harness agent's viewer, shown or hidden from the
-                    // pane it belongs to.
-                    onToggleViewer: agent?.viewerUrl == null
-                        ? null
-                        : () => notifier.toggleViewerPane(
-                            session.machineId,
-                            agent!.id,
-                          ),
-                    viewerVisible:
-                        agent != null &&
-                        notifier.viewerPaneShown(session.machineId, agent.id),
-                    viewerColor: agent == null
-                        ? null
-                        : agentIdentity(agent).color,
-                    details: Tooltip(
-                      message: [
-                        if (project != null) project.cwd,
-                        if (project?.branch?.isNotEmpty == true)
-                          'Branch: ${project!.branch}',
-                        machineName,
-                      ].join('\n'),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          for (var i = 0; i < details.length; i++) ...[
-                            if (i > 0)
-                              Text(
-                                '  •  ',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  color: AppColors.mutedStrong,
-                                ),
-                              ),
-                            Flexible(
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  if (i == branchIndex) ...[
-                                    Icon(
-                                      LucideIcons.gitBranch300,
-                                      size: 12,
-                                      color: AppColors.mutedStrong,
-                                    ),
-                                    const SizedBox(width: 4),
-                                  ],
-                                  Flexible(
-                                    child: Text(
-                                      details[i],
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontFamily: AppFonts.sans,
-                                        fontSize: 12,
-                                        color: AppColors.mutedStrong,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+                ],
+              );
+            },
           ),
         ),
       ),
@@ -1818,6 +2161,246 @@ class _LinkModeMark extends StatelessWidget {
     return Tooltip(
       message: label,
       child: Icon(icon, size: 14, color: color, semanticLabel: label),
+    );
+  }
+}
+
+/// The band over a pane another client took the stream of. It says what
+/// happened, that keys go nowhere, and how to get it back — the header's chip
+/// carries the same fact, but at 11pt in a corner it was being read by nobody,
+/// and people sat typing. Taken-over only, not closed/error: see
+/// [_TerminalPanelState._inputBlocked] for why those keep the chip alone.
+///
+/// ⏎ is named on the button itself and in the line under the title, always:
+/// the first cut showed it only once the terminal held focus and hid the line
+/// on a compact header, which is every pane in swarm mode — so the one thing
+/// a person needed to know was the one thing the band left out.
+///
+/// While the pane is retaking the stream [busy] is set and the band keeps its
+/// place with the button swapped for a spinner, so answering it does not jump
+/// the layout.
+class _ControlBanner extends StatelessWidget {
+  final bool busy;
+
+  /// A key was just typed into the pane; see [_TerminalPanelState._nudgeControlBanner].
+  final bool nudged;
+  final int nudge;
+  final VoidCallback? onTakeControl;
+
+  /// A click on the band's text puts the keyboard in the terminal, so ⏎ works
+  /// even when the person reached the pane with the mouse.
+  final VoidCallback? onFocusTerminal;
+
+  /// Who has the terminal now, when the daemon said (`terminal_closed.takenBy`
+  /// — the fleet's current name for that machine when this app knows it);
+  /// null from an older daemon or a taker that did not introduce itself.
+  final String? takerName;
+
+  const _ControlBanner({
+    required this.busy,
+    required this.nudged,
+    required this.nudge,
+    required this.onTakeControl,
+    required this.onFocusTerminal,
+    this.takerName,
+  });
+
+  String get title => busy
+      ? 'Taking control…'
+      : takerName == null
+      ? 'Another app took control of this terminal'
+      : '$takerName took control of this terminal';
+
+  String? get detail {
+    if (busy) return null;
+    if (nudged) return 'Keys are ignored — press ⏎ to take control.';
+    return 'Typing is paused. Press ⏎ or click Take control to type here again.';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final ink = AppColors.warning;
+    final detail = this.detail;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    // Composited over the pane's own ground, as [UpdateNotice] is over the
+    // window's: the terminal theme behind this band may be any colour, and a
+    // bare 12% wash would read differently on each of them.
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      child: Stack(
+        children: [
+          // The flash is the ground only. Re-keyed per nudge so each ignored
+          // key restarts it from full, and kept OUT of the content's ancestry
+          // so the button is not remounted (and does not lose focus or hover)
+          // on every keystroke.
+          Positioned.fill(
+            child: TweenAnimationBuilder<double>(
+              key: ValueKey(nudge),
+              tween: Tween(begin: 1, end: 0),
+              duration: reduceMotion
+                  ? Duration.zero
+                  : const Duration(milliseconds: 450),
+              curve: Curves.easeOut,
+              builder: (context, flash, _) {
+                final wash = ink.withValues(alpha: 0.12 + 0.18 * flash);
+                return DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Color.alphaBlend(wash, grid.AppPalette.panelBg),
+                    border: Border(
+                      bottom: BorderSide(color: ink.withValues(alpha: 0.55)),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 12, 10),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // A quarter-width tile at large text cannot seat the sentence
+                // and the button on one line; there the button takes a line of
+                // its own under the title rather than running off the edge.
+                final narrow = constraints.maxWidth < 340;
+                final lead = !busy
+                    ? Icon(Icons.lock_outline, size: 16, color: ink)
+                    : SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: ink,
+                        ),
+                      );
+                final text = Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: AppColors.text,
+                        fontFamily: AppFonts.sans,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (detail != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        detail,
+                        maxLines: narrow ? 1 : 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: nudged ? ink : AppColors.textSoft,
+                          fontFamily: AppFonts.sans,
+                          fontSize: 11,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ],
+                );
+                // The text is a click target too: it hands the terminal the
+                // keyboard, which is what makes the ⏎ it promises true.
+                final prose = MouseRegion(
+                  cursor: SystemMouseCursors.basic,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: onFocusTerminal,
+                    child: Row(
+                      children: [
+                        lead,
+                        const SizedBox(width: 10),
+                        Expanded(child: text),
+                      ],
+                    ),
+                  ),
+                );
+                final button = busy
+                    ? null
+                    : _ControlBannerButton(onPressed: onTakeControl);
+                if (narrow) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      prose,
+                      if (button != null) ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: button,
+                          ),
+                        ),
+                      ],
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    Expanded(child: prose),
+                    if (button != null) ...[const SizedBox(width: 12), button],
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// `Take control ⏎` — the action with its key drawn on it, in the button's own
+/// ink rather than [KeyCap]'s well fill, which would sit as a grey square on
+/// the accent.
+class _ControlBannerButton extends StatelessWidget {
+  final VoidCallback? onPressed;
+  const _ControlBannerButton({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    final onAccent = Theme.of(context).colorScheme.onPrimary;
+    return FilledButton(
+      onPressed: onPressed,
+      style: FilledButton.styleFrom(
+        minimumSize: const Size(0, 28),
+        padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'Take control',
+            style: TextStyle(
+              fontFamily: AppFonts.sans,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+            decoration: BoxDecoration(
+              border: Border.all(color: onAccent.withValues(alpha: 0.6)),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Semantics(
+              label: 'Return',
+              child: Icon(Icons.keyboard_return, size: 12, color: onAccent),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

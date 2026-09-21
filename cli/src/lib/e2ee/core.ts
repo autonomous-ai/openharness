@@ -349,7 +349,9 @@ export const ENCRYPTED_RPC_RESULT_TYPES = new Set<string>([
   'e2ee_pairings_unpair_all_result', 'e2ee_browser_link_create_result',
   // Device RPC replies that carry adapter content (recap headline/body, new agent name). Must be
   // ciphertext so the backend relay can't read them — device↔adapter E2EE parity with web.
-  'agent_recent_result', 'agent_create_result', 'agent_create_status_result', 'agent_restart_result',
+  'agent_recent_result', 'agent_create_result', 'agent_create_status_result', 'agent_restart_result', 'agent_resume_result',
+  // A fork's reply names the new agent, exactly like agent_create's.
+  'agent_fork_result',
   // A remote-machine directory listing (New Agent folder browser) — leaks filesystem layout if plaintext.
   'fs_list_dir_result', 'project_preview_result',
   // Same reasoning as fs_list_dir_result: reveals Codex profile folder names/paths on this machine.
@@ -371,7 +373,9 @@ export const ENCRYPTED_DOWN_TYPES = new Set<string>([
   // as "no session/answers", the pane dialog was never keyed, and the CLI waited on question 1 forever.
   'question_response',
   'agents_list', 'sessions_list', 'session_get', 'models_list',
-  'agent_create', 'agent_create_status', 'agent_delete', 'agent_restart', 'agent_recent', 'agent_update', 'agent_files', 'agent_read_file',
+  'agent_create', 'agent_create_status', 'agent_delete', 'agent_restart', 'agent_resume', 'agent_recent', 'agent_update', 'agent_files', 'agent_read_file',
+  // Carries the fork's name and first task — what the person typed — like agent_create's prompt.
+  'agent_fork',
   'fs_list_dir', 'project_preview', 'codex_profiles_list', 'codex_profile_link',
   // Asks this machine to read its own agent accounts' usage (lib/accountUsage.ts). ⚠️ Missing here it
   // would not fail loudly — the same trap `question_response` once fell into: the payload would stay
@@ -394,8 +398,10 @@ export const ENCRYPTED_DOWN_TYPES = new Set<string>([
   // it outright as TERMINAL_FRAME_REJECTED — indistinguishable from a real protocol violation.
   'terminal_chunked_upload_begin', 'terminal_chunked_upload_cancel',
   // WebRTC signaling reveals both peers' network candidates. Keep it inside the already-authenticated
-  // pairwise session; the backend needs only the outer type + connId to route it.
-  'p2p_offer', 'p2p_answer', 'p2p_ice_candidate', 'p2p_abort',
+  // pairwise session; the backend needs only the outer type + connId to route it. p2p_promote is the
+  // TURN-to-direct cutover (remoteRelay.ts promoteToDirect()) — missing here it went out in the clear
+  // and the backend's isEncryptedP2pFrame() rejected it, so no upgrade ever got its ack.
+  'p2p_offer', 'p2p_answer', 'p2p_ice_candidate', 'p2p_abort', 'p2p_promote',
 ])
 export function isEncryptedUpType(t: string): boolean { return ENCRYPTED_UP_TYPES.has(t) }
 export function isEncryptedRpcResultType(t: string): boolean { return ENCRYPTED_RPC_RESULT_TYPES.has(t) }

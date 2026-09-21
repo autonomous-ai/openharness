@@ -73,12 +73,18 @@ class AppSelectField<T> extends StatefulWidget {
     required this.onChanged,
     this.width,
     this.menuWidth,
+    this.menuAlignedToEnd = false,
     this.height = AppControl.height,
+    this.padding = const EdgeInsets.only(left: 10, right: 8),
     this.trigger,
     this.focusNode,
     this.fillColor,
     this.selected,
     this.emptyLabel,
+    this.filterable = false,
+    this.filterThreshold = 8,
+    this.textStyle,
+    this.radius,
   });
 
   final T value;
@@ -93,7 +99,13 @@ class AppSelectField<T> extends StatefulWidget {
   /// does — a name, a second line and a mark want room to be read at a
   /// glance. Never narrower than the field itself.
   final double? menuWidth;
+
+  /// A menu wider than its field lines up with the field's END edge and
+  /// grows toward the start — for a field at the right of a row, whose menu
+  /// would otherwise run past the dialog it sits in.
+  final bool menuAlignedToEnd;
   final double height;
+  final EdgeInsetsGeometry padding;
 
   /// An alternate compact trigger, such as the agent picker's More button.
   /// Selection, keyboard navigation and menu rows remain shared.
@@ -103,7 +115,27 @@ class AppSelectField<T> extends StatefulWidget {
 
   /// A choice-tile selection. Null retains the ordinary field focus border.
   final bool? selected;
+  final TextStyle? textStyle;
+  final double? radius;
   final String? emptyLabel;
+
+  /// Whether a long list may put a search field at the head of its menu.
+  ///
+  /// Only past [filterThreshold], because the field is furniture: a list short
+  /// enough to READ is faster read than typed at, and a box over eight rows
+  /// says "there is more here" when there is not. Past it — the agent picker's
+  /// twenty-odd harnesses and engines — the list stops being something you
+  /// scan and becomes something you hunt through, and typing-to-jump only
+  /// helps someone who already knows the first letter of the name.
+  ///
+  /// The query is matched against the [SelectOption.detail] and
+  /// [SelectOption.note] as well as the label, so "slides" finds Marp and
+  /// "anthropic" finds Claude Code: on a list like this one the second line is
+  /// half of what people know a row by.
+  final bool filterable;
+
+  /// How many options the menu must hold before [filterable] draws the field.
+  final int filterThreshold;
 
   @override
   State<AppSelectField<T>> createState() => _AppSelectFieldState<T>();
@@ -114,8 +146,11 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
   final _ownedFocus = FocusNode(debugLabel: 'Select field');
   FocusNode get _fieldFocus => widget.focusNode ?? _ownedFocus;
   final _optionFocus = <T, FocusNode>{};
+  final _filterFocus = FocusNode(debugLabel: 'Select filter');
+  final _filterController = TextEditingController();
   ({T value})? _pendingFocus;
   String _prefix = '';
+  String _filter = '';
   Duration? _lastTyped;
   bool _focusScheduled = false;
   bool _hovered = false;
@@ -131,6 +166,30 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
           .where((option) => option.value == widget.value)
           .firstOrNull ??
       widget.options.firstOrNull;
+
+  /// Whether this menu carries a search field — see [AppSelectField.filterable].
+  bool get _filtering =>
+      widget.filterable && widget.options.length > widget.filterThreshold;
+
+  /// The rows the open menu is showing: every option, or the ones the typed
+  /// query names. Case-insensitive and anywhere in the string, not a prefix:
+  /// somebody hunting "cad" should find `text-to-cad` and Autonomous Workshop both.
+  List<SelectOption<T>> get _shownOptions {
+    if (!_filtering || _filter.isEmpty) return widget.options;
+    final needle = _filter.toLowerCase();
+    return [
+      for (final option in widget.options)
+        if (option.label.toLowerCase().contains(needle) ||
+            (option.detail?.toLowerCase().contains(needle) ?? false) ||
+            (option.note?.toLowerCase().contains(needle) ?? false))
+          option,
+    ];
+  }
+
+  /// A query that matches nothing still gets a row, so a typo reads as "no
+  /// matches" rather than as a menu that mysteriously emptied.
+  bool get _noMatches =>
+      _filtering && _filter.isNotEmpty && _shownOptions.isEmpty;
 
   @override
   void didUpdateWidget(AppSelectField<T> oldWidget) {
@@ -157,6 +216,8 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
   @override
   void dispose() {
     _ownedFocus.dispose();
+    _filterFocus.dispose();
+    _filterController.dispose();
     for (final node in _optionFocus.values) {
       node.dispose();
     }
@@ -170,13 +231,29 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
     }
     _prefix = '';
     _lastTyped = null;
+    _filter = '';
+    _filterController.clear();
     _controller.open();
     // Unopened controls need no per-option focus nodes. Mount them with the
     // menu, including any match typed before its first frame.
     setState(() {});
+    // A searchable menu opens ON the search field: it is autofocused, so the
+    // first keystroke narrows the list instead of jumping to a letter.
+    if (_filtering) {
+      _focusFilter();
+      return;
+    }
     if (_currentOption != null) {
       _focusOption(_currentOption!, afterLayout: true);
     }
+  }
+
+  void _focusFilter() {
+    _pendingFocus = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_controller.isOpen) return;
+      _filterFocus.requestFocus();
+    });
   }
 
   void _focusOption(SelectOption<T> option, {bool afterLayout = false}) {
@@ -207,14 +284,15 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
   }
 
   int get _highlightedIndex {
-    final focused = widget.options.indexWhere(
+    final rows = _shownOptions;
+    final focused = rows.indexWhere(
       (option) => _optionFocus[option.value]?.hasPrimaryFocus == true,
     );
     if (focused >= 0) return focused;
     final pending = _pendingFocus;
     return pending == null
         ? -1
-        : widget.options.indexWhere((option) => option.value == pending.value);
+        : rows.indexWhere((option) => option.value == pending.value);
   }
 
   void _choose(SelectOption<T> option) {
@@ -242,7 +320,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
       if (event.logicalKey == LogicalKeyboardKey.enter ||
           event.logicalKey == LogicalKeyboardKey.numpadEnter) {
         final index = _highlightedIndex;
-        if (index >= 0) _choose(widget.options[index]);
+        if (index >= 0) _choose(_shownOptions[index]);
         return KeyEventResult.handled;
       }
     }
@@ -262,10 +340,12 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
     _lastTyped = event.timeStamp;
     final continuing = _prefix.isNotEmpty && _prefix != text;
     _prefix = continuing ? _prefix + text : text;
+    final rows = _shownOptions;
+    if (rows.isEmpty) return KeyEventResult.handled;
     final current = _highlightedIndex;
     final start = current < 0 ? 0 : current + (continuing ? 0 : 1);
-    for (var offset = 0; offset < widget.options.length; offset++) {
-      final option = widget.options[(start + offset) % widget.options.length];
+    for (var offset = 0; offset < rows.length; offset++) {
+      final option = rows[(start + offset) % rows.length];
       if (option.label.trimLeft().toLowerCase().startsWith(_prefix)) {
         _focusOption(option);
         break;
@@ -281,6 +361,47 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
     onKeyEvent: _typeAhead,
     child: child,
   );
+
+  /// Escape, Enter and the arrows while the search field holds the caret.
+  ///
+  /// Every other key is left alone — it is text, and typing IS the navigation
+  /// here, which is where the typing-to-jump of a short menu goes on a long
+  /// one.
+  KeyEventResult _filterKeys(FocusNode _, KeyEvent event) {
+    if (event is KeyUpEvent || !_controller.isOpen) {
+      return KeyEventResult.ignored;
+    }
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.escape) {
+      _controller.close();
+      _fieldFocus.requestFocus();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      final rows = _shownOptions;
+      // Typed: the one match, or the first of several — the row a person is
+      // looking at the top of. Untouched: the choice already made, so an
+      // Enter that opened the menu and an Enter that closes it agree.
+      final target = _filter.isEmpty
+          ? (rows.where((o) => o.value == widget.value).firstOrNull ??
+                rows.firstOrNull)
+          : rows.firstOrNull;
+      if (target != null) _choose(target);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowDown ||
+        key == LogicalKeyboardKey.arrowUp) {
+      final rows = _shownOptions;
+      if (rows.isNotEmpty) {
+        _focusOption(
+          key == LogicalKeyboardKey.arrowDown ? rows.first : rows.last,
+        );
+      }
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
 
   /// How tall this panel may draw.
   ///
@@ -299,7 +420,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
     // options carry a sentence would otherwise be measured wrong in whichever
     // direction the guess went, and a panel that disagrees with its layout by a
     // few pixels wears a scrollbar it does not need.
-    widget.options.fold<double>(
+    _shownOptions.fold<double>(
           0,
           (total, option) =>
               total +
@@ -308,13 +429,19 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                   : AppMenuRowMetrics.roomy.detailExtent),
         ) +
         AppMenu.panelPadding.vertical +
-        (widget.options.isEmpty && widget.emptyLabel != null
+        ((widget.options.isEmpty && widget.emptyLabel != null) || _noMatches
             ? AppMenuRowMetrics.roomy.extent
-            : 0),
+            : 0) +
+        (_filtering ? _filterExtent : 0),
     _maxPanelHeight,
   );
 
   static const double _maxPanelHeight = 380;
+
+  /// The search field's own band: a field at the app's own height, plus the
+  /// gap that separates it from the first row. Read from the scaled token, so
+  /// a larger UI size grows the panel with the field inside it.
+  double get _filterExtent => AppControl.heightFieldScaled + 10;
 
   /// A floor under the panel's width, on top of the field's own.
   ///
@@ -323,6 +450,43 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
   /// allowed to be wider than the box it drops out of; the reverse, a panel
   /// narrower than its control, is what reads as an unrelated box.
   static const double _minPanelWidth = 240;
+
+  double _rowWidth(double? panelWidth) => math.max(
+    math.max(panelWidth ?? 0, widget.menuWidth ?? 0),
+    _minPanelWidth,
+  );
+
+  /// The search box at the head of a long menu.
+  ///
+  /// Inside the panel rather than over the closed control: the control is the
+  /// answer, this is the question, and a field that replaced the chosen row
+  /// would leave the menu saying nothing while it was open.
+  Widget _filterField(double width) => Focus(
+    canRequestFocus: false,
+    skipTraversal: true,
+    onKeyEvent: _filterKeys,
+    child: SizedBox(
+      width: width,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(11, 3, 11, 7),
+        child: TextField(
+          key: const Key('app-select-filter'),
+          controller: _filterController,
+          focusNode: _filterFocus,
+          style: widget.textStyle ?? kFieldTextStyle,
+          decoration: InputDecoration(
+            hintText: 'Search',
+            prefixIcon: Icon(
+              Icons.search,
+              size: kFieldIconSize,
+              color: AppPalette.textFaint,
+            ),
+          ),
+          onChanged: (value) => setState(() => _filter = value.trim()),
+        ),
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -352,10 +516,17 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
         _prefix = '';
         _lastTyped = null;
         _pendingFocus = null;
+        _filter = '';
+        _filterController.clear();
       },
       // Below the control, by the app's one menu gap — and the panel takes its
       // fill, rim and radius from [AppMenu], the app's single panel recipe.
-      alignmentOffset: const Offset(0, AppControl.menuGap),
+      alignmentOffset: Offset(
+        widget.menuAlignedToEnd
+            ? math.min(0, (panelWidth ?? 0) - _rowWidth(panelWidth))
+            : 0,
+        AppControl.menuGap,
+      ),
       // ⚠️ The width is set on the ROWS, not with `MenuStyle.minimumSize`.
       //
       // `minimumSize` does widen the panel, but `MenuAnchor` lays its children
@@ -366,12 +537,10 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
       // at.
       style: AppMenu.style(maxHeight: _panelHeight),
       menuChildren: [
+        if (_filtering) _filterField(_rowWidth(panelWidth)),
         if (widget.options.isEmpty && widget.emptyLabel != null)
           SizedBox(
-            width: math.max(
-              math.max(panelWidth ?? 0, widget.menuWidth ?? 0),
-              _minPanelWidth,
-            ),
+            width: _rowWidth(panelWidth),
             height: AppMenuRowMetrics.roomy.extent,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -384,14 +553,27 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
               ),
             ),
           ),
-        for (final option in widget.options)
+        if (_noMatches)
+          SizedBox(
+            width: _rowWidth(panelWidth),
+            height: AppMenuRowMetrics.roomy.extent,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'No matches',
+                  style: TextStyle(color: AppPalette.textSecondary),
+                ),
+              ),
+            ),
+          ),
+        for (final option in _shownOptions)
           _typingRegion(
             SizedBox(
-              width: math.max(
-                math.max(panelWidth ?? 0, widget.menuWidth ?? 0),
-                _minPanelWidth,
-              ),
+              width: _rowWidth(panelWidth),
               child: AppMenuItem(
+                textStyle: widget.textStyle,
                 // No glyph of its own: the leading slot belongs to the tick,
                 // and stays empty (not a blank checkbox) on rows without it.
                 // `selected` also carries the wash and the heavier label, so the
@@ -430,14 +612,16 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
               splashFactory: NoSplash.splashFactory,
               hoverColor: Colors.transparent,
               focusColor: Colors.transparent,
-              borderRadius: BorderRadius.circular(AppControl.radius),
+              borderRadius: BorderRadius.circular(
+                widget.radius ?? AppControl.radius,
+              ),
               child: SizedBox(
                 width: widget.width,
                 height: widget.height,
                 child: AnimatedContainer(
                   duration: AppMotion.hover,
                   curve: AppMotion.curve,
-                  padding: const EdgeInsets.only(left: 10, right: 8),
+                  padding: widget.padding,
                   decoration: BoxDecoration(
                     color: _hovered || _focused || controller.isOpen
                         ? widget.fillColor == null
@@ -447,7 +631,9 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                                   widget.fillColor!,
                                 )
                         : widget.fillColor ?? AppSurface.recess,
-                    borderRadius: BorderRadius.circular(AppControl.radius),
+                    borderRadius: BorderRadius.circular(
+                      widget.radius ?? AppControl.radius,
+                    ),
                     border: Border.all(
                       color:
                           widget.selected == true ||
@@ -472,16 +658,19 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                                     current?.label ?? '—',
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontFamily: AppFont.sans,
-                                      fontFamilyFallback: AppFont.sansFallback,
-                                      fontSize: AppControl.fontSize,
-                                      fontWeight: AppControl.fontWeight,
-                                      letterSpacing: AppFont.trackingFor(
-                                        AppControl.fontSize,
-                                      ),
-                                      color: AppPalette.textPrimary,
-                                    ),
+                                    style:
+                                        widget.textStyle ??
+                                        TextStyle(
+                                          fontFamily: AppFont.sans,
+                                          fontFamilyFallback:
+                                              AppFont.sansFallback,
+                                          fontSize: AppControl.fontSize,
+                                          fontWeight: AppControl.fontWeight,
+                                          letterSpacing: AppFont.trackingFor(
+                                            AppControl.fontSize,
+                                          ),
+                                          color: AppPalette.textPrimary,
+                                        ),
                                   ),
                                 ),
                                 if (current?.note != null) ...[

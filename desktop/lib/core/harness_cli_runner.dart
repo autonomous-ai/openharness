@@ -1,3 +1,5 @@
+import 'host_platform.dart';
+
 import 'dart:io';
 
 import '../logging/cli_transcript.dart';
@@ -18,6 +20,13 @@ import '../logging/cli_transcript.dart';
 class HarnessCliRunner {
   final Directory harnessHome;
   final Map<String, String> environment;
+
+  /// How long one CLI command may take before the app stops waiting on it. Every command this app
+  /// runs answers in well under a second (`auth status`, `link list`) or a few seconds (`start`
+  /// spawning the daemon and waiting for its port). A `start` that had to reach a black-holed
+  /// backend used to sit here for good — and the app sat on "Starting local service…" with it.
+  final Duration runTimeout;
+  static const defaultRunTimeout = Duration(seconds: 30);
   final Future<ProcessResult> Function(
     String executable,
     List<String> arguments, {
@@ -34,6 +43,7 @@ class HarnessCliRunner {
   HarnessCliRunner({
     Directory? harnessHome,
     Map<String, String>? environment,
+    this.runTimeout = defaultRunTimeout,
     Future<ProcessResult> Function(
       String executable,
       List<String> arguments, {
@@ -56,7 +66,9 @@ class HarnessCliRunner {
     // before any UI existed to report it.
     final home = Platform.environment['HOME'];
     final profile = Platform.environment['USERPROFILE'];
-    final resolved = home != null && home.isNotEmpty ? home : profile;
+    final resolved = home != null && home.isNotEmpty
+        ? home
+        : (profile != null && profile.isNotEmpty ? profile : containerHome);
     if (resolved == null || resolved.isEmpty) {
       throw StateError('Could not resolve the current user home directory');
     }
@@ -113,11 +125,21 @@ class HarnessCliRunner {
     final invocation = await resolve(arguments);
     return logProcessRun(
       _displayLine(arguments),
-      () => _runProcess(
-        invocation.executable,
-        invocation.arguments,
-        environment: invocation.environment,
-      ),
+      () =>
+          _runProcess(
+            invocation.executable,
+            invocation.arguments,
+            environment: invocation.environment,
+          ).timeout(
+            runTimeout,
+            // The child is not killed — `Process.run` gives no handle to it, and a stuck `start` is the
+            // CLI's own lock's business. What ends here is the app's wait, as an error it can show.
+            onTimeout: () => throw ProcessException(
+              'harness',
+              arguments,
+              'did not finish within ${runTimeout.inSeconds}s',
+            ),
+          ),
     );
   }
 

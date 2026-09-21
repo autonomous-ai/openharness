@@ -3,15 +3,105 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
+import 'package:harness/core/dsh_catalog.dart';
+import 'package:harness/widgets/agent_picker.dart';
+import 'package:harness/shared/widgets/app_choice_picker.dart';
+import 'package:harness/store/store_screen.dart';
+import 'package:harness/core/config.dart';
+import 'package:harness/auth/auth_session.dart';
 import 'package:harness/screens/swarm_screen.dart';
+import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_placement.dart';
+import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/usage/models_menu_controller.dart';
 import 'package:harness/usage/usage_accounts.dart';
 import 'package:harness/usage/usage_controller.dart';
 import 'package:harness/usage/usage_source.dart';
 import 'package:harness/usage/usage_window.dart';
+import 'package:harness/widgets/new_harness_box.dart';
 
+import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
+import 'keymap_host_test.dart' show key;
+
+/// Stands in for the machine behind the Open Grid door: the probes New Agent
+/// makes answer at once, and the harness list says whether Grid is installed
+/// there. Nothing is created — the door's job ends when New Agent is open on
+/// the right machine with Grid chosen, or the Store is open on Grid's page.
+class _GridApp extends AppNotifier {
+  _GridApp({required this.grid, this.harness = AppNotifier.gridHarness})
+    : super(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      ) {
+    hasNavigationRail = false;
+  }
+
+  /// Per machine: true = Grid installed, false = listed but not installed,
+  /// absent = the machine never heard of it.
+  final Map<String, bool> grid;
+  final String harness;
+
+  @override
+  Future<void> probeEngines(String machineId, {bool force = false}) async {}
+
+  @override
+  Future<void> probeDsh(String machineId, {bool force = false}) async {
+    final installed = grid[machineId];
+    machineStates[machineId]!.dsh.replace([
+      if (installed != null)
+        DshEntry(
+          id: harness,
+          name: harness == AppNotifier.machinesHarness
+              ? 'Machine Monitor'
+              : 'Grid',
+          engine: 'codex',
+          description: 'Talk to your fleet.',
+          installed: installed,
+        ),
+    ]);
+    notifyListeners();
+  }
+
+  @override
+  Future<Map<String, dynamic>> listCodexProfiles(
+    String machineId, {
+    Set<String> observedPaths = const {},
+  }) async => {'profiles': <dynamic>[]};
+}
+
+_GridApp _gridApp({
+  required Map<String, bool> grid,
+  bool secondMachine = false,
+  String harness = AppNotifier.gridHarness,
+}) {
+  final app = _GridApp(grid: grid, harness: harness);
+  const machine = Machine(
+    machineId: 'm',
+    authMode: MachineAuthMode.remote,
+    name: 'Test host',
+  );
+  app.machines = [machine];
+  app.machineStates['m'] = MachineState(machine)
+    ..localOnly = true
+    ..nodeOnline = true
+    ..agentLoadStatus = AgentLoadStatus.loaded;
+  if (secondMachine) {
+    const other = Machine(
+      machineId: 'other',
+      authMode: MachineAuthMode.remote,
+      name: 'Studio',
+    );
+    app.machines = [machine, other];
+    app.machineStates['other'] = MachineState(other)
+      ..nodeOnline = true
+      ..agentLoadStatus = AgentLoadStatus.loaded;
+  }
+  return app;
+}
 
 class _Source implements UsageSource {
   _Source(this.provider, this.answer);
@@ -255,4 +345,159 @@ void main() {
       projects.dispose();
     },
   );
+
+  /// Mount the swarm screen on [app] and send the native Models menu's
+  /// `runLocalModel` command, with or without a machine.
+  Future<void> openGridDoor(
+    WidgetTester tester,
+    _GridApp app, {
+    String? machineId,
+    String command = 'runLocalModel',
+  }) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    const channel = MethodChannel('harness/swarm_tabs');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async => true);
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    final projects = SwarmProjectStore();
+    addTearDown(projects.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SwarmScreen(
+          notifier: app,
+          nativeTabs: true,
+          projectStore: projects,
+        ),
+      ),
+    );
+    final reply = Completer<void>();
+    messenger.handlePlatformMessage(
+      channel.name,
+      const StandardMethodCodec().encodeMethodCall(
+        MethodCall(
+          command,
+          machineId == null ? null : {'machineId': machineId},
+        ),
+      ),
+      (_) => reply.complete(),
+    );
+    await tester.pumpAndSettle();
+  }
+
+  for (final (command, harness, stem, machineId) in [
+    ('runLocalModel', AppNotifier.gridHarness, 'grid', null),
+    ('runLocalModel', AppNotifier.gridHarness, 'grid', 'other'),
+    ('manageMachines', AppNotifier.machinesHarness, 'machine-monitor', null),
+  ]) {
+    testWidgets('native $command opens the product dock on $machineId', (
+      tester,
+    ) async {
+      newHarnessOpensInBox = true;
+      addTearDown(() => newHarnessOpensInBox = false);
+      final app = _gridApp(
+        grid: {'m': true, 'other': true},
+        secondMachine: true,
+        harness: harness,
+      );
+      addTearDown(app.dispose);
+      app.adoptSessionForTest(terminal('source', []));
+      final source = app.activeSwarm;
+      await openGridDoor(tester, app, machineId: machineId, command: command);
+      final box = tester
+          .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+          .controller;
+      expect(box.engine, harness);
+      expect(box.machineId, machineId ?? 'm');
+      expect(box.projectLabel, startsWith('~/harnesses/$stem-'));
+      expect(box.placement, HarnessPlacement.newTab);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(app.swarms, [source]);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(find.byType(NewHarnessBox), findsNothing);
+      expect(app.swarms, [source]);
+      if (command == 'manageMachines') {
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+        await tester.enterText(
+          find.byKey(const ValueKey('swarm-search-input')),
+          '> machine monitor',
+        );
+        await tester.pump();
+        await key(tester, LogicalKeyboardKey.enter);
+        expect(
+          tester
+              .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+              .controller
+              .engine,
+          harness,
+        );
+        expect(app.swarms, [source]);
+        await key(tester, LogicalKeyboardKey.escape);
+      }
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(milliseconds: 60));
+    });
+  }
+
+  testWidgets('native runLocalModel opens New Agent with Grid chosen', (
+    tester,
+  ) async {
+    // The Models menu's command arrives as a bare method call, the way Link
+    // Machine… does. Grid is installed here, so the door is the Store's Open
+    // button in another place: a draft tab, New Agent, Grid already chosen.
+    final app = _gridApp(grid: {'m': true});
+    await openGridDoor(tester, app);
+
+    // The dialog is open (its title also names the tab and the start card).
+    expect(find.byType(AgentPicker), findsOneWidget);
+    final picker = tester.widget<AgentPicker>(find.byType(AgentPicker));
+    expect(picker.value, AppNotifier.gridHarness);
+    expect(app.activeSwarm.isStore, isFalse);
+    expect(app.panes, isEmpty);
+
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
+
+  testWidgets('native runLocalModel with a machineId opens on THAT machine', (
+    tester,
+  ) async {
+    // With two machines linked the native menu lists them and names the chosen
+    // one: New Harness opens with that machine selected, so Grid manages the
+    // models of the computer it runs on.
+    final app = _gridApp(grid: {'m': true, 'other': true}, secondMachine: true);
+    await openGridDoor(tester, app, machineId: 'other');
+
+    expect(find.byType(AgentPicker), findsOneWidget);
+    expect(
+      tester.widget<AgentPicker>(find.byType(AgentPicker)).value,
+      AppNotifier.gridHarness,
+    );
+    final machines = tester.widget<AppChoicePicker<String>>(
+      find.byKey(const Key('new-agent-machine-field')),
+    );
+    expect(machines.value, 'other');
+
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
+
+  testWidgets("without Grid installed, the door is the Store on Grid's page", (
+    tester,
+  ) async {
+    // No harness to open yet: the Store's page for Grid has Install, and that
+    // is the way in. No New Harness, no pane.
+    final app = _gridApp(grid: {'m': false});
+    await openGridDoor(tester, app);
+
+    expect(find.byType(AgentPicker), findsNothing);
+    expect(app.activeSwarm.isStore, isTrue);
+    expect(find.byType(StoreTab), findsOneWidget);
+    expect(app.panes, isEmpty);
+
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
 }

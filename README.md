@@ -1,605 +1,336 @@
-https://github.com/user-attachments/assets/97848065-61c6-40df-be66-a8247f69aa4c
+> “World-class entrepreneurs are polymaths.”
+>
+> — [Peter Thiel](https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s)
 
-# Harness
+# Follow your curiosity. Build across disciplines.
 
-Harness is a desktop app for agents that build things. Code, with Claude Code, Codex, Cursor and
-eleven more. PCBs, with Copper. 3D parts, with Solid. Keynotes, with Marp. One window, every machine
-you own. Each agent is a persistent terminal on the machine it runs on, and for the domains beyond
-code, a viewer beside it shows the work as it is made.
+OpenHarness is open-source software and hardware for building with coding agents. Use Claude Code,
+Codex, and others to make software, design parts and circuit boards, explore data, and create videos,
+with your agents, domain tools, and live viewers in one place and sessions that persist across every
+machine you own.
 
-| Harness | You say | You get | You watch |
-|---|---|---|---|
-| **Claude Code, Codex, Cursor, …** · Code | "add OAuth to the API" | the change, in your repo | the agent's terminal |
-| **Copper** · PCB | "a USB-C powered ESP32 sensor board" | a fab-ready board, ordered in a click | the board, its checks, the fab |
-| **Solid** · 3D design | "an iPhone case with a lanyard loop" | a printable STEP part | the model: Build, Fit, Print, Review |
-| **Marp** · Slides | "a launch keynote for 200 engineers" | a keynote with art and speaker notes | the slides filling in, then Present |
-| **Yours** | | anything an agent can build in a folder | [add a domain harness](#add-a-domain-harness) |
+The old rule said ten thousand hours to a craft. That was the tax on curiosity, and most of us could
+only afford to pay it once, so we specialized and called the rest hobbies.
 
-Every harness is the same thing to the app: a tile in New Agent, and a tab with the agent's terminal
-on the right, the domain's viewer on the left, and the pane header saying where the work is. The
-domain lives in its own git repository, installed on first use, never in Harness itself.
+Coding agents become the specialists, given the tools of a craft and a way to see what they made:
+the geometry that becomes a part, the netlist that becomes a circuit board, the script that becomes
+a film. You bring the idea, the taste, and the judgment about what is worth making.
 
-Each terminal is a tmux pane on the machine it runs on, kept there by a small daemon (`harness`).
-The window attaches to those panes, from this computer or from any other, with everything between
-machines encrypted end to end. Close the laptop, open it on the train: same pane, same scrollback.
-An optional USB device puts the same agents on your desk.
+Use the desktop app on its own, or add the optional **Harness device** to follow your agents, answer
+their questions, and speak new tasks from your desk. The app, firmware, schematics, PCB layouts, and
+enclosure CAD files are all open source.
 
-It drives the agents you already run:
+[Who it's for](#for-polymaths-in-the-making) · [What you can make](#domain-specific-harnesses-dsh) · [Run it](#run-it) ·
+[Harness device](#harness-device) · [Architecture](docs/architecture.md) · [Contribute](#contributing)
 
 <p align="center">
-  <img src=".github/assets/engines/claude.png"      height="72" alt="Claude Code"  title="Claude Code">
-  &nbsp;&nbsp;
-  <img src=".github/assets/engines/codex.png"       height="72" alt="Codex"        title="Codex">
-  &nbsp;&nbsp;
-  <img src=".github/assets/engines/cursor.png"      height="72" alt="Cursor"       title="Cursor">
-  &nbsp;&nbsp;
-  <img src=".github/assets/engines/opencode.png"    height="72" alt="OpenCode"     title="OpenCode">
-  &nbsp;&nbsp;
-  <img src=".github/assets/engines/pi.png"          height="72" alt="Pi"           title="Pi">
-  &nbsp;&nbsp;
-  <img src=".github/assets/engines/hermes.png"      height="72" alt="Hermes"       title="Hermes">
-  &nbsp;&nbsp;
-  <img src=".github/assets/engines/commandcode.png" height="72" alt="Command Code" title="Command Code">
-  &nbsp;&nbsp;
-  <img src=".github/assets/engines/devin.png"       height="72" alt="Devin"        title="Devin">
-  &nbsp;&nbsp;
-  <img src=".github/assets/engines/muse.png"        height="72" alt="Muse Code"    title="Muse Code">
-  &nbsp;&nbsp;
-  <img src=".github/assets/engines/amp.png"         height="72" alt="Amp"          title="Amp">
-  &nbsp;&nbsp;
-  <img src=".github/assets/engines/kilo.png"        height="72" alt="Kilo"         title="Kilo">
-  &nbsp;&nbsp;
-  <img src=".github/assets/engines/grok.png"        height="72" alt="Grok"         title="Grok">
-  &nbsp;&nbsp;
-  <img src=".github/assets/engines/agy.png"         height="72" alt="Antigravity"  title="Antigravity">
-  &nbsp;&nbsp;
-  <img src=".github/assets/engines/copilot.png"     height="72" alt="GitHub Copilot" title="GitHub Copilot">
+  <a href=".github/assets/store/workshop-overview.svg"><img src=".github/assets/store/workshop-overview.svg" width="1280" alt="Start with Coding: 14 agents including Claude Code, Codex, and Cursor. Then explore Design, Engineering, Media, Music, Productivity, Science and Data, Simulation, Games, Research, and Local AI."></a>
 </p>
 
-And the harnesses for the domains beyond code, each on one of those agents:
+## For polymaths in the making.
+
+Built for the curious engineer who wants to build beyond software. Get your hands on more of what
+you are making, from the physical product to the analysis and the launch video. Makers and creators
+with the same curiosity are welcome. You get there by directing a specialist in each craft and
+judging what comes back, not by mastering them all first.
+
+Monday, a feature. Tuesday, the customer data. Wednesday, an enclosure for the prototype. Thursday,
+the launch video. You already know how to build with code, and Harness brings that way of working to
+CAD, circuit boards, games, videos, and documents, with agents and tools for each craft.
+
+Your ideas can take you into unfamiliar crafts: an app, a physical product, a game, a film. This is
+a place to follow them. Give each job an agent with the right tools, inspect what it makes, and steer
+the next iteration. The code and project files are there to read, change, version, and build on.
+
+**From handoff to hands-on.** You bring intent and judgment; your agents write and run code. Each
+harness supplies the tools and feedback for a different craft. You can get your hands on more of
+the product and the work of bringing it to customers.
+
+Start with what you know and learn the next craft through the things you build. The
+[ideal-user guide](docs/ideal-users.md) records who we're building for and how the app, community,
+and device serve them.
+
+## Domain-specific harnesses (DSH)
+
+**Coding agents can build far more than software.** Code is the common medium: geometry scripts make
+parts, animation code makes videos, and analysis code turns data into charts and findings. That is
+what connects the dots between crafts, and a harness gives the agent the tools and feedback to work
+in each one.
+
+<img width="1000" height="563" alt="harness" src="https://github.com/user-attachments/assets/25c63335-279a-4f9a-b702-2ffaec2b096f" />
+
+
+A **domain-specific harness** turns a coding agent into a specialist. It brings the domain's
+instructions and skills, a pinned toolchain, a project template, a verdict the app can read, and a
+**live viewer** for what the agent makes. You chat on one side; the board, the part, the robot or the
+game takes shape on the other, and stays interactive after the agent is done.
+
+A DSH is a folder with a `harness.json`. The agent does the reasoning; the harness brings the tools
+and the view. Adding a domain never needs a change to the app or the daemon.
+
+<!-- store-catalog:start -->
+### Coding and beyond
+
+Start with a coding agent you already use. Explore 48 domain-specific harnesses when your
+next idea takes you further.
+
+| Category | Agents and harnesses |
+|---|---|
+| **Coding** | [Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build, Kilo Code](docs/engines.md), [Machine Monitor](store/agents/machine-monitor/) |
+| Design | [Autonomous Workshop](store/agents/autonomous-workshop/), [Blender](store/agents/blender/), [Bonsai MCP](store/agents/bonsai-mcp/), [Creative Direction](store/agents/creative-direction/), [Excalidraw](store/agents/excalidraw/), [FreeCAD](store/agents/freecad/), [Generative Art](store/agents/generative-art/), [OpenSCAD](store/agents/openscad/), [text-to-cad](store/agents/text-to-cad/) |
+| Engineering | [Autonomous Circuit](store/agents/autonomous-circuit/), [CircuitJS](store/agents/circuitjs/), [Home Assistant](store/agents/home-assistant/), [KiCad](store/agents/kicad/), [Orca Slicer](store/agents/orca-slicer/), [Yosys](store/agents/yosys/) |
+| Media | [Comfy MCP](store/agents/comfy-mcp/), [Manim](store/agents/manim/), [OpenMontage](store/agents/openmontage/), [Remotion](store/agents/remotion/) |
+| Music | [Ableton AI](store/agents/ableton-ai/), [JUCE Agent Toolkit](store/agents/juce-agent-toolkit/), [Music Studio](store/agents/music-studio/), [Score](store/agents/score/), [Strudel](store/agents/strudel/) |
+| Productivity | [Jev Sheets](store/agents/jev-sheets/), [Marp](store/agents/marp/), [Typst](store/agents/typst/) |
+| Science & Data | [autoresearch-mlx](store/agents/autoresearch-mlx/), [Data Studio](store/agents/data-studio/), [Lab Bench](store/agents/lab-bench/), [marimo](store/agents/marimo/), [RDKit](store/agents/rdkit/) |
+| Simulation | [DimOS](store/agents/dimos/), [Drone Pilot](store/agents/drone-pilot/), [Foam-Agent](store/agents/foam-agent/), [MuJoCo](store/agents/mujoco/), [SimSkill](store/agents/simskill/) |
+| Games | [Game Master](store/agents/game-master/), [Godogen](store/agents/godogen/), [Phaser](store/agents/phaser/), [Voxel Worlds](store/agents/voxel-worlds/) |
+| Research | [Jev Browser](store/agents/jev-browser/), [Roundtable](store/agents/roundtable/) |
+| Local AI | [Grid](store/agents/autonomous-grid/), [MLX-LM](store/agents/mlx-lm/), [Ollama](store/agents/ollama/), [vLLM](store/agents/vllm/) |
+
+These are the 48 harnesses currently listed in the Store catalog. They combine upstream
+open-source tools and original workflows, with instructions, setup, checks, and live views for each craft.
+
+The 10 [shared viewers](store/viewers/) cover CAD, 3D models, documents, games, film, video,
+MuJoCo, web pages, isolated web previews, and studios. Viewer packages install alongside the
+harnesses that need them. Experimental packages marked unlisted are not included above.
+<!-- store-catalog:end -->
+
+**The harness we'd love to see next is the one for your craft.** Bring an open-source tool you use,
+a workflow you know well, or your own company's toolchain. A harness can live in this repository or
+in yours.
+
+<!-- store-showcase:start -->
+<p align="center">
+  <a href=".github/assets/store/showcase.gif"><img src=".github/assets/store/showcase.gif" width="1280" alt="Six real harness outputs, shown one at a time with their harness name and complete prompt: Autonomous Circuit, text-to-cad, MuJoCo, Blender, Godogen, and Manim."></a>
+</p>
+
+Six real outputs, one at a time. Each slide includes the harness and the original prompt.
+[Still preview](.github/assets/store/showcase-poster.png) · Individual images and prompts below.
+
+<details>
+<summary>Read the prompts and open individual images</summary>
+
+**[Autonomous Circuit](store/showcase/autonomous-circuit/six-key-macropad.jpg)** · [Open harness](store/agents/autonomous-circuit/)
+
+> Design a six-key USB macropad. Start with the schematic.
+
+**[text-to-cad](store/showcase/text-to-cad/planetary-gear-set.jpg)** · [Open harness](store/agents/text-to-cad/)
+
+> Design a 3D-printable planetary gear set: a 12-tooth sun, three 18-tooth planets and a 48-tooth ring gear with mounting lugs, module 1.5 and 8 mm thick, plus a carrier on steel pins. Give each part its own colour.
+
+**[MuJoCo](store/showcase/mujoco/g1-humanoid-hello.jpg)** · [Open harness](store/agents/mujoco/)
+
+> Make the Unitree G1 humanoid say hello: stand, raise its right hand and wave three times, then lower it and take a small bow. Record it.
+
+**[Blender](store/showcase/blender/cozy-reading-nook.jpg)** · [Open harness](store/agents/blender/)
+
+> Make a cozy isometric reading nook: a cut-away corner of a room with an armchair, a floor lamp glowing warm, a bookshelf full of colourful books, a round rug and a monstera, with evening sun through the window and a cat asleep on the rug.
+
+**[Godogen](store/showcase/godogen/neon-drift.jpg)** · [Open harness](store/agents/godogen/)
+
+> Make a synthwave hoverbike racer: ride down a neon grid canyon toward a striped setting sun, weave between glowing pylons, hop barriers and collect energy cores, with a boost and three shields.
+
+**[Manim](store/showcase/manim/fourier-knight.jpg)** · [Open harness](store/agents/manim/)
+
+> Draw a chess knight using nothing but spinning circles: a Fourier series of 120 epicycles, tip to tail, tracing its silhouette in gold.
+
+</details>
+<!-- store-showcase:end -->
+
+Every picture is real output from the harness's own toolchain, and the prompt is the one that made it.
+
+## Coding agents, on every machine
+
+Keep the agents doing that work together, wherever they run.
+
+- **Real terminals that outlive the window.** Every agent runs in a persistent tmux session. Close the
+  app and the agents keep working; if tmux goes down with a reboot, the daemon brings the panes back and
+  resumes the sessions.
+- **Every engine, no wrappers.** Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin,
+  Muse Code, Amp, Kilo, Grok Build, Antigravity and GitHub Copilot. OpenHarness reads the transcript each
+  agent already writes and installs the vendor's own hooks. Your credentials stay in `~/.claude`, `~/.codex` and
+  so on. See the [engine list](docs/engines.md).
+- **All your machines in one window.** The laptop, the Mac mini at home, the server in the rack. Each
+  runs a daemon with outbound connections only. Terminal traffic is end-to-end encrypted, the relay only
+  forwards ciphertext, and it goes peer to peer over WebRTC when it can. No SSH server, VPN, or open
+  port.
+- **Built for many agents at once.** Split panes, a keyboard-driven layout, fuzzy search across
+  sessions and machines (**⌘O**), and one shortcut to the agents waiting on you (**⇧⌘I**). The
+  [workspace guide](docs/app.md) and [keybindings](docs/keyboard.md) cover the rest.
 
 <p align="center">
-  <img src=".github/assets/engines/copper.png" height="72" alt="Copper · PCB"       title="Copper · PCB, on Claude Code">
-  &nbsp;&nbsp;
-  <img src=".github/assets/engines/solid.png"  height="72" alt="Solid · 3D design"  title="Solid · 3D design, on Codex">
-  &nbsp;&nbsp;
-  <img src=".github/assets/engines/marp.png"   height="72" alt="Marp · Slides"      title="Marp · Slides, on Claude Code">
+
+<img width="1280" height="716" alt="ezgif-3355e1eae4366c76" src="https://github.com/user-attachments/assets/e3401aae-9402-4710-a46d-1da150ff96bf" />
+
+
 </p>
 
-## What you get
 
-- **Harnesses for more than code.** Copper (PCB), Solid (3D design) and Marp (Slides) sit beside the
-  coding agents in New Agent. Pick one and the tab opens with the domain's viewer next to the
-  terminal, the domain's skills in the agent, and its toolchain installed on the machine. Build your
-  own from the starter in an afternoon: [Add a domain harness](#add-a-domain-harness).
-- **One window, N machines.** Panes from your laptop, the Mac mini at home and the box in the rack,
-  side by side. Create sessions, make splits, move panes, change focus, zoom, pin, pick a layout.
-- **Remote persistent sessions.** Agents run in tmux on the machine. Disconnect, reconnect, same
-  session. After a reboot the daemon recreates each pane with the engine's own `--resume` and the same
-  agent id, so the window comes back exactly as it was.
-- **No SSH, no VPN, no open ports.** Every machine dials out to the relay over a WebSocket. A terminal
-  is promoted to a direct WebRTC data channel between the two ends when ICE succeeds, and stays on the
-  relay when it doesn't. The relay holds no key material and forwards ciphertext.
-- **Remote directory lists and clone.** Start a session on another machine by browsing its filesystem
-  from the New Agent dialog, or clone a repository into a folder there first.
-- **Keyboard first.** A full default keymap, one-to-four-stroke sequences, a JSONC keymap file that
-  live-reloads, and a command palette over every action. Native macOS menus follow the same keymap.
-- **Agent-aware terminals.** Turn boundaries, the agent's own questions (`AskUserQuestion` and the
-  engines' equivalents) surfaced and answerable from the window or the device, per-turn recaps,
-  model and effort, subscription usage windows.
-- **Boss mode (⌘B).** Type or say what you want. A router picks the agent already on it from the
-  agents' names and their last recaps, and the text lands in that pane.
-- **Fourteen engines, one rule.** Harness never wraps an agent. It reads the transcript the agent
-  already writes and installs the vendor's own hooks or plugin to learn when a turn starts and ends.
-  Your credentials stay in your `~/.claude`, `~/.codex`, and so on.
+### Run it
 
-## Install
+1. [Download the desktop app](https://harness.autonomous.ai/desktop) for macOS or Linux.
+2. Sign in to a coding agent you already use, with your own subscription, API key, or local model.
+3. Press **⌘N**, pick an agent or a harness, a machine and a project, and start.
 
-**macOS 12+ (Apple Silicon and Intel), Linux (Ubuntu 22.04+).** Download the app from
-[harness.autonomous.ai/desktop](https://harness.autonomous.ai/desktop). On first launch it checks for
-tmux, installs a managed Node 20 and the `harness` daemon under `~/.harness`, signs you in with SSO,
-and starts the daemon. This computer is your first machine.
-
-**Add another machine** — a server, a Mac mini, a container — with the daemon alone. Node ≥ 20 and
-tmux are the prerequisites; `sqlite3` is needed only for the engines that keep their conversations in
-SQLite (OpenCode, Kilo, Hermes, Devin).
+On another machine:
 
 ```bash
 curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
-harness login      # browser SSO, saves this computer's session
-harness start      # connects; reconnects to the same machine on every later start
+harness login
+harness start
 ```
 
-It appears in the app's machine list within a minute. There is no token to copy: a durable computer
-id under `~/.harness` keeps later starts attached to the same machine record.
+Then **Machines → Link Machine** in the app.
 
-One thing to know from the start: **the daemon only knows about panes it created.** Sessions you start
-from the app or the web are tmux sessions named `harness-*`, owned by the daemon. A `claude` you launch
-by hand in your own tmux is not picked up.
+macOS is the primary tested platform. Linux builds exist and feature parity is in progress; Windows is
+work in progress. Embedded live viewers require macOS; remote viewers also need a current Harness
+CLI on both machines. The app and daemon still need a Harness account to start;
+[account-free local use is tracked](docs/development.md#account-free-local-use).
 
-## The app
+<details>
+<summary><b>Build from source</b></summary>
 
-### Sessions
+For macOS, install Node.js 20+, tmux, Xcode, and Flutter 3.47+ / Dart 3.13+:
 
-An agent is one engine process in one tmux pane on one machine. The app calls it a harness. A tab
-holds any number of panes, from any mix of machines; the app remembers tabs, pane placement, sizes,
-pinned slots, focus and zoom across restarts, in `~/.harness/desktop-app-v2/state.json`.
+```bash
+git clone https://github.com/autonomous-ai/openharness.git
+cd openharness
+(cd cli && npm ci)
+make install-cli
+cd desktop
+flutter config --enable-swift-package-manager
+flutter pub get
+flutter run -d macos
+```
 
-**New Harness (⌘N)** asks for four things: the machine, the working folder, the engine, and,
-under Advanced, two settings most people never touch. The folder picker is the native panel on this
-computer and a remote directory list on any other machine, served over the daemon's `fs_list_dir`.
-**Clone repository** clones a GitHub URL into a parent folder first. The engine row shows every engine
-the machine has, probes availability live, and marks the ones the daemon would install on first
-launch. Advanced holds the engine's permission-bypass flag (`--dangerously-skip-permissions`,
-`--dangerously-bypass-approvals-and-sandbox`, `--force`, `--auto`, whichever the engine has) and,
-for Codex, a profile: a `CODEX_HOME` folder to launch under instead of `~/.codex`, each with its own
-hooks.
+`make install-cli` installs this checkout's CLI and restarts the local daemon. The
+[development guide](docs/development.md) covers tests and isolated environments.
 
-Creation carries a receipt. If the reply is lost, the button turns into **Check status** rather than
-creating a second session.
+</details>
 
-Closing a pane is a view operation; the agent keeps running. **Stop Harness** ends the engine process
-and asks first. **Restart Harness** relaunches it in the same pane with the same id, resuming the
-conversation where the engine supports it.
+### How it fits together
 
-**Open Harness (⌘O)** is the search: agents, tabs, projects, machines, history and commands, fuzzy
-matched, with a session preview on the right built from cached recent turns. Type `>` for commands
-only (also ⇧⌘P).
+```mermaid
+flowchart LR
+  device["Harness device"] -- USB --> daemon
+  app["Harness app<br/>(Flutter)"] -- loopback --> daemon["harness daemon<br/>(TypeScript)"]
+  daemon --> tmux["tmux"] --> agents["Claude Code · Codex · OpenCode · …"]
+  daemon --> dsh["DSH toolchain<br/>+ live viewer"]
+  daemon <-- "E2EE · WebRTC" --> relay["Harness relay"]
+  relay <--> remote["daemons on your<br/>other machines"]
+```
 
-### Panes and layouts
+The [architecture guide](docs/architecture.md) covers the daemon, the session model, transport and
+encryption.
 
-Hover the right or bottom edge of a pane for a split control, or ⌘R and ⌘D to split right and down;
-both open the same picker at that position. Drag a pane's header onto another pane to swap them.
-Resize grips live in the gaps and appear on hover or keyboard focus; sizes are remembered per pane
-count.
+## Your first DSH in ten minutes
 
-**Layout (⌘S)** opens a palette of drawn shapes rather than names: Split, Columns, Rows, Main
-left/right/top/bottom, Grid, 2 to 5 columns, Middle + sides, Two over three, Auto. Press ⌘S again to
-cycle, a digit to pick directly, Enter to apply. A pinned pane keeps its slot when other panes close
-around it.
+The [Hello World example](store/examples/hello-world/) is a Codex session that edits an HTML page
+shown in the shared Web Viewer:
 
-### Keyboard
+```text
+hello-world/
+  harness.json
+  AGENTS.md             # instructions for the agent
+  template/index.html   # copied into a new project
+```
 
-The defaults, in the workspace:
+Its manifest connects the pieces:
 
-| Keys | Action |
+```json
+{
+  "spec": 1,
+  "id": "examples/hello-world",
+  "name": "Hello World",
+  "engine": "codex",
+  "workspace": {
+    "template": "template",
+    "marker": "index.html"
+  },
+  "agent": { "instructions": "AGENTS.md" },
+  "viewer": { "use": "autonomous/web-viewer" }
+}
+```
+
+The CLI and the package protocol call a harness a DSH, so the commands are `harness dsh …`. From this
+checkout, with the `harness` CLI installed:
+
+```bash
+harness dsh install "$PWD/store/viewers/web-viewer" --link
+cp -R store/examples/hello-world ../my-first-harness
+harness dsh check ../my-first-harness
+harness dsh install ../my-first-harness --link
+```
+
+Press **⌘N → Hello World**, choose a new project, and ask it to “Say hello to Ada.” The agent edits
+`index.html`; the viewer reloads. Change `AGENTS.md` to try another workflow, then start a new session.
+`--link` keeps the package connected to your source directory; Store installs resolve viewer
+dependencies on their own.
+
+The [authoring guide](store/README.md) covers the full manifest, toolchains, live progress, verdicts,
+store pages, and publishing; the [package specification](store/spec/README.md) is the contract.
+
+| Piece | Responsibility |
 |---|---|
-| ⌘N | New Harness |
-| ⌘O | Open Harness — search sessions, tabs, machines, history; `>` for commands |
-| ⇧⌘P | Command palette |
-| ⌘B | Boss mode: describe a task, it picks the agent |
-| ⌘T · ⌘W · ⇧⌘T · ⇧⌘R | New tab · close tab · reopen last closed · rename tab |
-| ⌘1 … ⌘9 | Select tab by position |
-| ⇧⌘] · ⇧⌘[ · ⌃Tab · ⌃⇧Tab | Next · previous tab |
-| ⌘] · ⌘[ · ⌘Y | Forward · back through visited harnesses · full history |
-| ⌘H ⌘J ⌘K ⌘L · ⌘arrows | Focus the pane left · below · above · right |
-| ⇧⌘arrows | Move the focused pane |
-| ⌘R · ⌘D | Split right · split down |
-| ⌘⏎ · ⌘; · ⇧⌘W | Zoom or restore · last pane · close pane |
-| ⌘S | Layout palette |
-| ⌘F · ⌘G · ⇧⌘G | Find in terminal · next · previous match |
-| ⇧⌘I | Harnesses needing input |
-| ⌘, · ⌘/ | Settings · keyboard shortcuts |
+| Engine | Runs the coding agent: Claude Code, Codex, OpenCode, and the rest |
+| Harness (DSH) | Packages a domain: engine, instructions, toolchain, workspace, and viewer |
+| Viewer | Shows and interacts with what the agent makes; shared across harnesses |
+| Session | One running agent, in one project, on one machine |
 
-In a picker: ↓ ⌃N ⌃J and ↑ ⌃P ⌃K move, ⏎ opens, ⌘⏎ adds the result as a pane here, Esc or ⌃G closes.
-The terminal keeps ⌘C, ⌘V, ⌘A, Esc, ⌥⏎ and ⌃C for itself. `pane.pin`, `pane.focus_1…9`,
-`pane.resize`, `pane.reset_sizes`, `machine.link` and a few others ship unbound and are in the palette.
+## Harness device
 
-Remap anything in `~/.config/harness/keybindings.jsonc` (`$XDG_CONFIG_HOME` respected). The file is
-JSONC: `{ "version": 1, "bindings": [{ "keys": "cmd+k cmd+l", "command": "pane.focus_right",
-"when": "workspace" }] }`. Sequences are one to four strokes; `"command": null` unbinds a key or a
-whole prefix; `when` is `workspace`, `terminal` or `picker`. The file is watched and reloaded on save;
-a bad edit keeps the last good keymap and says what was wrong. **Keyboard shortcuts (⌘/)** lists the
-effective bindings and **Open keyboard config** writes a commented template with every command id.
+<p align="center">
+  <img src=".github/assets/hardware/answer.jpg" width="960" alt="A finger taps the round Harness device to answer an agent that redesigned the billing controls">
+</p>
 
-### Terminal
+The optional **Harness device** is a round, always-on display that sits beside
+your keyboard and shows your agents at a glance: what each one is doing, which one has finished, and
+which one is waiting on you. Read a question and answer it on the screen, or tap and speak a new task,
+without switching windows.
 
-The renderer is a vendored, patched [xterm](desktop/third_party/xterm). Each pane has its own find bar
-(⌘F). ⌘-click opens links; an image or video path in the output opens in a preview, downloaded from
-the remote machine over the existing encrypted connection with progress and cancel (up to 512 MiB).
-Paste or drop an image onto a pane to send it to the agent. On a remote machine a composer box under
-the pane batches a message instead of paying a round trip per keystroke. Scrollback is restored from
-the daemon's snapshots on attach, resize, zoom and reconnect. Font, size (⌘0, ⌘+, ⌘-), terminal
-colours and six app palettes are in Settings.
+It is open hardware, all the way down. This repository has everything it takes to build one:
 
-### Attention, models, usage
-
-When an agent asks a question the pane gets an amber ring, the titlebar bell lights, and ⇧⌘I lists
-every harness waiting on you. Answers go back into the engine's own dialog; there is no side channel.
-
-The **Models** menu shows each engine's subscription usage window, refreshed once a minute, for local
-and remote machines alike. Settings ▸ Usage is a separate token ledger read from Claude's and Codex's
-transcripts and OpenCode's database, off per provider until you switch it on.
-
-### Machines
-
-The app talks to the daemon on this computer over a loopback socket and never dials the relay itself.
-Other machines are reached through that daemon: it links to them with a per-machine remote password,
-terminates the encryption locally, and hands the app plaintext. Machines ▸ Link Machine… runs the
-link flow; the CLI equivalent is under [The daemon and CLI](#the-daemon-and-cli).
-
-## How it works
-
-```
-                                ( ◉ )   Harness device (USB)
-                                  │
-   ┌─────────── this computer ───────────┐
-   │  Harness app ── loopback ──▶ harness daemon ──▶ tmux ──▶ claude · codex · …   │
-   └──────────────────────────────┬──────┘
-                                  │ WebSocket (E2EE)
-                        ╔═════════╧═════════╗
-                        ║   Harness Relay   ║   store and forward, no keys
-                        ╚═════════╤═════════╝
-          ┌───────────────────────┼───────────────────────┐
-     your server             your platform            harness.autonomous.ai
-   harness daemon            your HTTP API             the web client
-   tmux · hermes · muse      (provider)                (paired browser)
-          ▲
-          └── terminal traffic goes direct over WebRTC when ICE succeeds
-```
-
-**The daemon** runs detached under your account. Every five seconds it reconciles the `harness-*`
-tmux sessions with its registry; a pane has to be missing on two scans before its agent is marked
-gone. It tails each agent's transcript with a byte offset (JSONL for most engines, SQLite for
-OpenCode, Kilo, Hermes and Devin) and turns lines into a normalized event stream: turn started,
-tool call, sub-agent, question, turn ended. Hooks it installs into the vendor CLI tell it about
-session start, prompt submit and stop. Every five minutes it re-reads engine configs and pane
-footers to keep model and effort right. On start it restores panes that died with the tmux server,
-and it self-updates from a signed manifest, swapping the bundle atomically.
-
-**The session model.** The registry (`~/.harness/cli/data/registry.json`, mode 0600) is the source of
-truth for agents: engine, working directory, tmux pane, bound transcript, process identity. Layouts
-belong to the app. The relay stores machine records, agent names and daily counters, never a
-transcript, a recap or a keystroke.
-
-**Transport.** Each daemon holds one WebSocket to the relay, authenticated with its SSO token.
-Terminal bytes ride a binary channel on that socket until a WebRTC data channel negotiates, then move
-to it. Encryption is on for every path and has no switch:
-
-- **Ed25519** identity keys, pinned at first pairing and signing every ephemeral after it.
-- A **CPace-style PAKE** over ristretto255 — the six-character pairing code bootstraps a shared secret
-  across the untrusted relay, and an attacker gets one online guess.
-- **X25519** ephemeral Diffie–Hellman per connection, through HKDF to pairwise session keys.
-- A **per-process group key** so one event encrypts once for many readers.
-- **ChaCha20-Poly1305** on every frame, with the associated data binding frame type and session.
-
-The crypto core lives in [`cli/src/lib/e2ee/`](cli/src/lib/e2ee/) and is a byte-identical twin of the
-browser's copy, with a drift-guard test and committed self-vectors.
-
-## The daemon and CLI
-
-`harness` is one pure-JS bundle run by the managed Node under `~/.harness/cli`. Everything below
-works the same on a headless Linux server; the app is not required on a machine, only the daemon.
-
-| Command | What it does |
+| Layer | What's here |
 |---|---|
-| `harness login [--force] [--json]` | Browser SSO; save this computer's session. `--force` signs in as a different account. `--json` emits NDJSON for GUI clients. |
-| `harness start [-f] [--repair]` | Start the daemon from the saved session. `-f` runs in the foreground for a supervisor. `--repair` re-verifies the managed Node runtime. |
-| `harness stop` · `harness logout` · `harness reset` | Stop the daemon · stop and clear the SSO session · stop and clear all local state. |
-| `harness status` · `harness version` · `harness update [--force]` | Running, pid, machine id, session count · version · update now. |
-| `harness machines [list] [--json]` · `harness machines delete <id>` | This account's machines · remove another machine (never this one). |
-| `harness pair <code>` · `harness pairings` · `harness unpair <#\|fp\|--all>` | Pair a browser with the code the web client shows; list; unpair. |
-| `harness browser-link` | Print a reusable seven-day setup link for browsers. |
-| `harness remote-password set\|status\|clear` | This machine's persistent password for machine-to-machine links. |
-| `harness link connect <id> [--name=<label>]` · `harness link list` · `harness link unlink <id>` | Let this machine reach another of yours, terminating E2EE here; list; unlink. |
-| `harness grid login [--force] [--json]` · `harness grid logout` | Sign the `grid` CLI in with this computer's account, no second browser. |
-| `harness flash [flags]` | Re-flash a plugged-in Harness device over USB. Flags pass straight to the flasher. |
-| `harness autonomous-device discover\|status\|list\|pair\|revoke` | Pair Autonomous OS devices found on the LAN, directly, with no relay. |
+| [Firmware](devices/harness-device/firmware/) | ESP32-S3, ESP-IDF, a 466 × 466 round AMOLED with touch, microphones and audio. Connects to the host's daemon over USB — no Wi-Fi setup, no account on the device. |
+| [PCB](devices/harness-device/hardware/pcb/) | The EasyEDA Pro project, the schematic, Gerbers, the bill of materials, and pick-and-place data for assembly. |
+| [Enclosure](devices/harness-device/hardware/3d/) | STEP for editing and STL for printing: the housing, an iron counterweight base, the USB clamp, and the button. |
 
-Interactive prompts read one line from stdin with `--stdin`; `--json` switches any of them to NDJSON.
+[**Get a Harness device**](https://www.autonomous.ai/harness), or build your own from these files. The
+[firmware guide](devices/harness-device/firmware/README.md) lists the supported boards and build
+commands, and the [hardware guide](devices/harness-device/hardware/README.md) covers the design files.
 
-The daemon also serves a loopback dashboard at `http://127.0.0.1:18473`: health, this machine's
-fingerprint, paired clients, stop. It never renders a transcript. Configuration is environment
-variables (`BACKEND_WS_URL`, `WEB_URL`, `ADAPTER_DATA_DIR`, `ADAPTER_COMPUTER_ID`, `PORT`, and the
-per-engine home directories); [`cli/README.md`](cli/README.md) has the full table and the
-`.env.example`.
+https://github.com/user-attachments/assets/97848065-61c6-40df-be66-a8247f69aa4c
 
-## Automation
+## Contributing
 
-The app is one client of the daemon. Anything on the same computer can be another: the loopback
-WebSocket at `ws://127.0.0.1:18473/api/local-ws` takes a `machine_select` frame first
-(`{ machineId, localProtocolVersion: 1 }`, no `Origin` header), then request frames with a `requestId`
-and answers them with `<type>_result`. Selecting one of your other machines proxies the request
-through this daemon's link to it.
+There are three ways in, one for each layer of the stack.
 
-What it answers: `agents_list`, `agent_create`, `agent_restart`, `agent_retarget`, `agent_delete`,
-`agent_update`, `agent_recent`, `agent_files`, `agent_read_file` (text, or media in 128 KiB chunks),
-`fs_list_dir`, `engines_probe`, `codex_profiles_list`, `codex_profile_link`, `models_list`,
-`usage_read`, `question_response`, `voice_route`, `message`, `cancel`, and `terminal_open` for a
-binary terminal channel with scroll, resync and paste. The same frames travel from the web client
-over the relay.
+- **Make a DSH for a tool you use.** Start from Hello World, make one workflow work end to end, pin the
+  toolchain, credit the upstream project, and show something worth looking at in the viewer.
+- **Improve the coding workspace.** Terminal behavior, engine support, the daemon, the relay, Linux and
+  Windows.
+- **Hack the hardware.** Port the firmware to another board, remix the enclosure, add a feature to the
+  device.
 
-Engines report in over HTTP on the same port: `POST /api/hook/session-start`, `session-end`,
-`turn-start`, `turn-stop`, `tool-start`, authenticated by a per-install token the daemon writes into
-the hook it installs.
+Small fixes and notes about something that didn't work are welcome too. The
+[contribution guide](CONTRIBUTING.md) walks through each path.
 
-There is no `harness new` or `harness split` today. Sessions are created and arranged through the app,
-the web client, or this socket.
+## Repository map
 
-## Engines
-
-| Engine | Binary | How Harness follows it | Resume | Permission bypass | Grid |
-|---|---|---|---|---|---|
-| Claude Code | `claude` | hooks in `~/.claude/settings.json` + JSONL transcript | `--resume` | `--dangerously-skip-permissions` | yes |
-| Codex | `codex` | `hooks.json` per `CODEX_HOME` + JSONL rollouts | `resume` | `--dangerously-bypass-approvals-and-sandbox` | yes |
-| Cursor | `cursor-agent` | `~/.cursor/hooks.json` + transcript | `--resume` | `--force` | — |
-| OpenCode | `opencode` | plugin + SQLite | `--session` | `--auto` | yes |
-| Pi | `pi` | extension + transcript | `--session` | — | yes |
-| Hermes | `hermes` | hooks + SQLite | `--resume` | — | yes |
-| Command Code | `cmd` | hooks + transcript | `--resume` | — | — |
-| Devin | `devin` | hooks + SQLite | — | — | — |
-| Muse Code | `muse` | transcript | `resume` | — | — |
-| Amp | `amp` | plugin writes the transcript Harness tails | `threads continue` | — | — |
-| Kilo | `kilo` | plugin + SQLite | `--session` | — | — |
-| Grok Build | `grok` | hooks + `updates.jsonl` | `--resume` | — | yes |
-| Antigravity | `agy` | hooks + transcript | `--conversation` | — | — |
-| GitHub Copilot | `copilot` | hooks + transcript | `--resume` | — | yes |
-
-A launcher that hands the pane to one of these is that engine: `ori claude` is a Claude Code agent,
-and the daemon reads the gateway off the live process so recaps and routing go through it too.
-
-**Grids.** An agent can be pointed at an [Autonomous Grid](https://www.autonomous.ai/grid) relay
-instead of the engine's own login, at creation or later with **Retarget**, which respawns the same
-pane with the grid's environment and `--resume`. The engines marked above support it; the key travels
-in the tmux session environment, never in argv or a file. Needs tmux ≥ 3.2.
-
-## The Harness device
-
-A round 466×466 AMOLED with touch and a far-field microphone, USB-C on the bottom edge. It has no
-WiFi and holds no credential. It is served entirely over the cable by the daemon on the computer it is
-plugged into; plugging it in is the authorization. The wire is one USB serial device (`303a:1001`),
-framed as `A5 5A | ver | type | len | payload | crc16` with a JSON vocabulary, a five-second ping,
-and a hard 8 KiB frame ceiling, specified in [`docs/specs/cable-protocol.md`](docs/specs/cable-protocol.md).
-
-What it shows: your agents as tiles in the order of the window's panes, with what each is doing and
-for how long; a wheel of your machines; the agent's own question when it asks one, answerable with a
-tap; the recap when a turn finishes, with one quiet tone. Scroll the face to scroll the terminal.
-Double-tap and speak to send a task: the audio goes to the daemon as PCM, comes back as a transcript,
-and Boss mode routes it. A voice turn can carry a mode — `/goal` runs an instruction to done,
-`/loop` on a schedule — adapted per engine; `/loop` is Claude Code only today.
-
-Firmware updates travel over the same cable in 16 KB credit windows, offered from the published
-metadata and never for a dev build. `harness flash` re-flashes a device from a USB port. The firmware
-is ESP-IDF ≥ 5.5 under [`device/esp32-circle/`](device/esp32-circle/) (`idf.py set-target esp32s3 &&
-idf.py build`); `make device-test` runs the host-side tests with no board attached.
-
-## Extend Harness
-
-### Add your agent
-
-Two paths. Both are first-class and both are in this repo.
-
-|  | **CLI engine** | **API provider** |
-|---|---|---|
-| Your agent is | a command you run, anywhere `harness login` runs | a service on your own infrastructure |
-| You write | a normalizer in TypeScript, here | an HTTP endpoint, in any language |
-| You ship it | as a pull request to this repo | by deploying it yourself |
-| Start at | [`cli/src/engines/README.md`](cli/src/engines/README.md) | [`provider/`](provider/README.md) |
-
-A CLI engine touches about twenty shared files, and the engines README is that list in dependency
-order. The one rule: every field name, event kind and tool name comes from a real recorded session of
-the real binary, never inferred from another engine. If your agent writes nothing to disk, look at Amp:
-its plugin writes the transcript, and from there it is an ordinary engine.
-
-```bash
-cd cli && npm install && npm run typecheck && npm test        # replay the recorded-session fixtures
+```text
+desktop/    Flutter app and terminal workspace
+cli/        TypeScript CLI, daemon, engine adapters, and package runtime
+backend/    Relay and control plane
+store/      Domain-specific harnesses, shared viewers, registry, examples, and package spec
+provider/   Provider API contract, implementations, and conformance tests
+devices/    Harness device firmware, PCB, and enclosure
 ```
 
-An API provider implements eight JSON-RPC 2.0 methods over HTTPS with SSE for the one that streams:
-`agent.list`, `agent.send`, `agent.history`, `turn.cancel`, `agent.create`, `agent.rename`,
-`agent.delete`, `agent.recap`. No SDK, no discovery, no capability negotiation. The reference
-implementation ships the conformance runner; zero failures is the bar.
+- [Development and testing](docs/development.md) · [Extension points](docs/extending.md) · [CLI and automation](docs/cli.md)
+- [Desktop](desktop/README.md) · [Daemon](cli/README.md) · [Relay](backend/README.md) · [Provider API](provider/README.md)
+- [Security policy](SECURITY.md) · [License](LICENSE)
 
-```bash
-cd provider/reference-provider && npm install && npm run dev            # http://127.0.0.1:4319
-npm run conformance -- --url https://your-endpoint --key <credential>
-```
-
-### Add a terminal multiplexer
-
-Harness watches tmux with nothing to configure. A second multiplexer is added beside tmux, not in
-place of it. Before writing code, confirm two things: a process inside a pane can identify that pane
-with a stable, multiplexer-namespaced id, and your tool's presence is detectable without running it,
-so a machine that lacks it pays nothing. Then implement: list panes with PID and working directory,
-send literal text and keys, capture a pane, display a message, create and kill sessions. Carry the new
-pane identity through process discovery, registry persistence and hooks, and scrub it from recap
-workers so they cannot register as phantom agents. The retired Herdr backend is still in the tree
-(`cli/src/lib/herdrBackend.ts`) as the worked example of the contract; see
-[Adding a multiplexer](CONTRIBUTING.md#adding-a-multiplexer).
-
-```bash
-cd cli && npm run test:tmux-real       # the real multiplexer discovery suite
-```
-
-### Add a domain harness
-
-A domain harness turns Harness into a product for one domain. Copper makes PCBs, Solid makes 3D
-parts, Marp makes keynotes; yours can make anything an agent can build in a folder. To the user it
-is one more tile in New Agent, with a category under the name. Pick it and you get a tab of its own:
-the domain's viewer on the left, the engine's terminal on the right, the engine started with the
-domain's skills in a workspace the harness laid out, and the pane header reporting where the work is.
-
-Nothing about the domain lives in this repo. A harness is a git repository that Harness installs on
-a machine on first use. Harness reads one manifest, copies files into the workspace, runs the commands
-the manifest names, and watches one JSON file. That is the whole coupling.
-
-| In the repo | What it is |
-|---|---|
-| `harness.json` | the manifest: id, name, category, base engine, workspace, skills, toolchain, viewer, verdict path |
-| `AGENTS.md` | what the engine is told in every workspace; a `claude` base gets a `CLAUDE.md` that imports it |
-| `skills/` | the domain's craft as `SKILL.md` bundles, symlinked into the workspace so edits are live |
-| `template/` | a fresh workspace, copied once into an empty folder, plus an optional `init` script |
-| `toolchain/setup`, `doctor` | install the domain's tools at install time; say what is missing, one line per check |
-| `viewer` | a loopback web server Harness runs beside the terminal; the pane is a webview on it |
-| `.harness/verdict.json` | the one file the domain writes and Harness reads: ready or not, findings, phases |
-
-#### Build one
-
-1. **Copy the starter.** [`dsh/starter-dsh/`](dsh/starter-dsh/) is a complete tier-0 harness: a
-   manifest, an `AGENTS.md`, one skill, a template, a toolchain that installs nothing.
-
-   ```bash
-   cp -r dsh/starter-dsh ~/code/my-harness && cd ~/code/my-harness && git init
-   ```
-
-   In `harness.json` set `id` (`owner/name`, the install directory and the wire id), `name` (the
-   tile), `category` (the tile's second line), `engine` (`claude` or `codex`), and
-   `workspace.marker` (a file whose presence means the workspace is already laid out).
-
-2. **Tell the agent its job.** `AGENTS.md` says what the workspace is, where things go, what to do
-   first, and how to work so the pane moves: first save within a minute, then build up, check after
-   every pass. The craft itself goes in `skills/<name>/SKILL.md`: the dialect, the patterns, the
-   commands. Skills are symlinked, so a change in your checkout is live in every workspace.
-
-3. **Lay out the workspace.** `template/` is copied into an empty folder once; then
-   `workspace.init` runs with the workspace as its working directory and `HARNESS_DSH_DIR` pointing
-   at the install. Seed the first verdict here so the header has a state before the first prompt.
-
-4. **Ship the toolchain with the harness.** `toolchain/setup.sh` runs once at install, in the
-   install directory: pin versions and vendor them there (a `node_modules`, a `.venv`), never into
-   the user's machine. `toolchain/doctor.sh` exits 0 when the machine can run the harness and prints
-   one line per check; Harness shows those lines. Point the agent at the tools through `agent.env`
-   (`"MARP_TOOLCHAIN": "${dsh}/toolchain"`); `${dsh}`, `${workspace}` and `${home}` expand.
-
-5. **Write the verdict as a feed.** `.harness/verdict.json` is written at every check and every
-   phase change, not at the end. `ready` is the one machine truth; `summary` is the header's line;
-   `phases` is how the header says "you are here".
-
-   ```json
-   { "spec": 1, "ready": false, "summary": "10 slides so far · 1 warning",
-     "findings": [{ "severity": "warning", "kind": "dense", "message": "slide 4 has 61 words" }],
-     "artifact": "deck.md",
-     "phases": [{ "id": "outline", "name": "Outline", "state": "done" },
-                { "id": "draft", "name": "Draft", "state": "active" },
-                { "id": "polish", "name": "Polish", "state": "pending" }],
-     "updatedAt": "2026-09-15T23:33:00Z" }
-   ```
-
-6. **Add the viewer.** `viewer.command` is a long-running process. Harness starts it with
-   `HARNESS_VIEWER_PORT`, `HARNESS_WORKSPACE`, `HARNESS_DSH_DIR` and `HARNESS_DSH` in its
-   environment, waits for the port to open on `127.0.0.1`, then loads `viewer.url` in the pane
-   (`${port}` and `${artifact}` expand; the artifact is what the verdict names, or the newest file
-   matching `artifactExtensions`). Serve files from the workspace and nothing outside it, watch the
-   workspace, push a reload on every change, and re-run your check on every change so the header
-   moves while the agent writes without the agent running anything. Marp's viewer does all of this
-   in about 110 lines of Node with no dependencies beyond its renderer.
-
-7. **Check it, install it, run it.**
-
-   ```bash
-   harness dsh check .                    # conformance: the manifest, the scripts, the schemas
-   harness dsh install . --link           # this checkout as the installed harness (a symlink)
-   harness dsh doctor owner/name          # what the machine is missing, if anything
-   harness dsh list                       # installed here, and what the registry offers
-   ```
-
-   Then New Agent, your tile, a folder, a prompt. For a check without the app,
-   [`dsh/tools/dsh-e2e.mjs`](dsh/tools/) creates an agent over the daemon's loopback socket and
-   reports the materialized workspace, the viewer URL, the pane's environment and the first verdict.
-   The viewer process reads its own files when it starts; after you edit it, kill it and the daemon
-   respawns it on the new code.
-
-8. **Publish.** Add `dsh/registry/<owner>/<name>.json` in a pull request:
-
-   ```json
-   { "id": "owner/name", "name": "Name", "category": "Thing", "description": "One line.",
-     "repo": "https://github.com/owner/name", "ref": "main", "engine": "claude",
-     "tier": 2, "verified": false }
-   ```
-
-   CI clones the repo at that ref and runs the conformance check. Once merged, the app offers the
-   tile before the harness is installed and installs it on Create; `verified: true` is for
-   first-party entries, everything else shows its git URL on install.
-
-#### Tiers
-
-| Tier | Ships | Harness shows |
-|---|---|---|
-| 0 | manifest, `AGENTS.md`, skills, template | the tile, a terminal with the skills loaded |
-| 1 | + a check that writes `.harness/verdict.json` | + ready or not, findings and phases in the pane header |
-| 2 | + a viewer server | + the viewer pane beside the terminal, following the artifact |
-
-#### Worked examples
-
-| Harness | Base | What it shows |
-|---|---|---|
-| [Marp](https://github.com/autonomous-ai/autonomous-marp) (Slides) | Claude Code | the smallest complete tier 2: a 110-line viewer with live reload and a present mode, two themes, an offline art generator, a check that writes the verdict, node tests. Start here. |
-| [Copper](https://github.com/autonomous-ai/autonomous-circuit) (PCB) | Claude Code | a Python toolchain vendored by `setup.sh`, a board viewer, phases Build / Checks / Fab written by the generation pipeline |
-| [Solid](https://github.com/autonomous-ai/autonomous-workshop) (3D design) | Codex | a Codex base, CAD scripts as skills, a STEP viewer found through `artifactExtensions`, phases Build / Fit / Print / Motion / Review |
-
-Two rules hold across all of them. The pane is progressive: a harness that only produces a final
-file is not one. And the domain stays in the harness: if adding yours needs a change in this repo,
-that is a spec change, and [`dsh/spec/README.md`](dsh/spec/README.md) with its schemas is where the
-contract lives. Changes to it are appended to `dsh/spec/CHANGES.md`.
-
-## Providers, relay, web
-
-- **`provider/`** — the spec ([`spec/README.md`](provider/spec/README.md)), the deterministic
-  [`reference-provider`](provider/reference-provider/) with the conformance runner on port 4319, and
-  [`example-provider`](provider/example-provider/), a real one backed by the local `claude` CLI on
-  port 4502 (read its README before running it; it skips permissions). `provider/e2e` runs both.
-- **`backend/`** — the relay: Node, MongoDB via Prisma, Redis. It terminates four WebSocket paths
-  (`/api/adapter-ws` for daemons, `/api/web-ws`, `/api/device-ws`, `/api/manager-ws`), signals WebRTC
-  and hands out STUN/TURN, and persists machines, agent names and counters. `npm install && npm run
-  dev` on `:8085`; [`backend/README.md`](backend/README.md) and `.env.example` for the rest.
-  `harness-api.autonomous.ai` is the hosted instance.
-- **The web client** at [harness.autonomous.ai](https://harness.autonomous.ai) reaches the same
-  machines from a browser after `harness pair <code>` or a `harness browser-link`. It is not in this
-  repository; it also hosts the CLI installer and the desktop downloads.
-
-## Repository layout
-
-```
-desktop/    the app (Flutter; macOS and Linux). third_party/xterm is the patched terminal core
-cli/        the harness daemon and CLI (TypeScript, one bundle). src/engines/ is one folder per engine
-backend/    the relay (Node, Prisma/MongoDB, Redis)
-provider/   the API-provider spec, reference and example providers, conformance runner
-device/     firmware for the Harness device (ESP-IDF, esp32-circle)
-dsh/        domain harnesses: the contract and schemas, the registry, the starter, daemon-level tools
-```
-
-## Development
-
-```bash
-# cli
-cd cli && npm install && npm run typecheck && npm test
-make install-cli          # bundle this tree into ~/.harness/cli and restart the daemon on it
-
-# desktop (Flutter ≥ 3.47 / Dart ≥ 3.13; SPM on for macOS)
-cd desktop && flutter pub get && flutter analyze && flutter test
-flutter run -d macos      # or -d linux
-
-# backend
-cd backend && npm install && npm run typecheck && npm test
-
-# provider
-cd provider/e2e && npm install && npm test
-
-# device
-make device-test
-```
-
-Each product releases on its own tag and the suffix routes the workflow: `vX.Y.Z_cli` bundles and
-publishes the daemon (running daemons pick it up within a minute), `vX.Y.Z_backend` builds the image,
-`vX.Y.Z_desktop` builds, signs and publishes both macOS bundles and both Linux architectures.
-`make release-cli|release-backend|release-desktop` cut them; `make upload-circle` publishes device
-firmware over the air. `ci.yml` runs the CLI suite on demand (Actions -> CI -> Run workflow) and holds
-no secrets, which is what lets it run on a fork's branch; see [`docs/cicd.md`](docs/cicd.md).
-`make remote-machine`
-brings up a second machine in Docker so the remote path can be exercised from one laptop.
-
-## Docs
-
-- [`docs/specs/cable-protocol.md`](docs/specs/cable-protocol.md) — the device wire, the only thing the firmware and the daemon share.
-- [`docs/cicd.md`](docs/cicd.md) — workflows, tags, credentials, dry runs.
-- [`docs/harness-v2-handoff.md`](docs/harness-v2-handoff.md) — the current state of the app, superseding the other `harness-v2-*` notes; [`docs/harness-v2-keyboard-system.md`](docs/harness-v2-keyboard-system.md) for the keymap design.
-- [`docs/harness-agent-creation.md`](docs/harness-agent-creation.md), [`docs/harness-agent-lifecycle.md`](docs/harness-agent-lifecycle.md), [`docs/harness-agent-first-tabs.md`](docs/harness-agent-first-tabs.md) — how sessions are created, kept and shown.
-- [`docs/autonomous-device-integration.md`](docs/autonomous-device-integration.md) — direct LAN pairing with Autonomous OS devices.
-- [`cli/README.md`](cli/README.md), [`desktop/README.md`](desktop/README.md), [`backend/README.md`](backend/README.md), [`provider/README.md`](provider/README.md) — per-package detail.
-
-## Contributing, security, licence
-
-Open an issue before writing an engine or a multiplexer so the integration shape and the real software
-a maintainer needs to reproduce it are agreed first; the review and pull-request workflow is in
-[CONTRIBUTING.md](CONTRIBUTING.md). Security reports go to [SECURITY.md](SECURITY.md), not the issue
-tracker. [MIT](LICENSE).
+The repository is MIT licensed unless a folder says otherwise. Upstream tools, models, and assets keep
+their own licenses.

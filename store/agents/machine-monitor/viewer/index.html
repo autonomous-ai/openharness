@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Machine Monitor · Your computers</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main id="app">
+    <section class="workspace">
+      <div class="main-column">
+        <div class="view-toolbar">
+          <div class="segmented" role="group" aria-label="View">
+            <button id="view-fleet" type="button" aria-pressed="true">Fleet</button>
+            <button id="view-projects" type="button" aria-pressed="false">Projects</button>
+            <button id="view-activity" type="button" aria-pressed="false">Activity</button>
+          </div>
+          <div class="toolbar-selects">
+            <div class="menu" id="window-menu" hidden>
+              <button type="button" class="menu-button" id="window-button" aria-haspopup="listbox" aria-expanded="false">
+                <span class="menu-kicker">Since</span><span class="menu-value" id="window-value">7 days</span><span class="menu-chevron" aria-hidden="true">▾</span>
+              </button>
+              <div class="menu-list" id="window-list" role="listbox" aria-label="Time window" hidden></div>
+            </div>
+            <button type="button" class="ghost" id="motion" aria-pressed="false">Pause motion</button>
+          </div>
+        </div>
+
+        <div class="stage" id="stage">
+          <canvas id="links" aria-hidden="true"></canvas>
+          <div class="stage-heading">
+            <span class="eyebrow">YOUR MACHINES</span>
+            <span class="stage-subtitle" id="stage-subtitle">Looking for your computers.</span>
+          </div>
+          <div class="node-layer" id="nodes" aria-label="Machines"></div>
+          <div class="stage-empty" id="stage-empty" hidden>
+            <span class="empty-mark" aria-hidden="true">◍</span>
+            <h1 id="empty-title">One computer so far.</h1>
+            <p id="empty-message">Ask for another one and I will walk you through bringing it in.</p>
+          </div>
+          <div class="stage-foot">
+            <span id="stage-legend">Lines are the links from this computer</span>
+          </div>
+        </div>
+
+        <section class="board scrolls" id="projects" hidden aria-label="Projects across your machines"></section>
+        <section class="board scrolls" id="activity" hidden aria-label="What your machines have been doing"></section>
+
+        <div class="totals" id="totals"></div>
+        <section class="log">
+          <div class="section-heading"><h2>Recent</h2><span id="observed">Waiting for Harness</span></div>
+          <div id="log-list" aria-live="polite"><div class="quiet">Nothing has changed here yet.</div></div>
+        </section>
+      </div>
+      <aside class="inspector scrolls" id="inspector" aria-label="Details"></aside>
+    </section>
+    <div class="toast" id="toast" role="status" hidden></div>
+  </main>
+</body>
+</html>

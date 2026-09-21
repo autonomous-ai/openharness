@@ -96,6 +96,42 @@ resolves a tmux — the terminal's tmux always wins, so daemon and terminal shar
 never opens a Terminal window. Publish a new runtime **before** the `install.sh` that pins a newer
 tmux level, and keep it level with what Homebrew ships.
 
+## Managed grid runtime
+
+The grid CLI, as a runtime beside Node and tmux: the daemon shells out to `grid` for every Local
+model (`gridExec.ts`), and the Local model manager has an agent run it by name in its pane, so a
+machine that installs the harness must have one without a second installer. Same shape as the other
+two — `harness/runtime/grid/metadata.json`, its own manifest for the reason tmux has one, entries
+`{version,url,sha256,size,archiveRoot}`, archives `grid-<ver>-<platform>/bin/grid` — with one
+difference: **the manifest's version is a pin**. `install.sh` lays that grid down (step 3b, optional:
+a failed download does not fail the install), and the daemon moves every installed machine to it
+on its next start (`ensureManagedGrid`), keeping one version back for the panes still running the
+old one. Laid down read-only, `bin/` included, so `grid update` — an `os.replace` into that
+directory — fails loudly instead of overwriting the pin; the daemon also sets
+`GRID_NO_UPDATE_CHECK=1` on every spawn and pane. Never linked into `~/.local/bin`: that path is
+grid's own installer's (uv's, on a Mac), and the daemon puts the managed grid on an agent pane's
+PATH itself.
+
+Linux archives **wrap** autonomous-grid's own release binaries (`grid-linux-{x86_64,arm64}`, verified
+against the release's `SHA256SUMS` at build time, then re-hosted under our manifest so nothing is
+fetched from GitHub at install time). macOS archives are **built** by `cli/scripts/build-managed-grid.sh`
+from a checkout of the release tag with grid's own `packaging/build_binary.sh` — Nuitka onefile,
+ad-hoc signed, not notarized: the SIGKILL grid's README attributes to ad-hoc signing is Gatekeeper on a
+*quarantined* download, which a `curl`-fetched runtime never is (the managed tmux runs the same way).
+Nuitka does not cross-compile, so `darwin-x64` builds on an Intel runner; drop it from `platforms`
+when none is available.
+
+```bash
+gh workflow run release-grid-runtime.yml -f grid_version=0.3.47                                   # build all four, publish
+gh workflow run release-grid-runtime.yml -f grid_version=0.3.47 -f publish=false                  # build only, inspect
+gh workflow run release-grid-runtime.yml -f grid_version=0.3.47 -f platforms=darwin-arm64,linux-x64,linux-arm64
+make upload-grid-runtime ARGS="0.3.47 /path/to/archives"                                          # the publisher CI calls
+```
+
+The pin may only move to a version at or above `GRID_VERSION_FLOOR` (`cli/src/lib/gridExec.ts`); the
+publisher refuses anything lower, because the daemon would too. Move the floor and the pin in the
+same change when a harness release starts to need a newer `grid`.
+
 ## Two macOS builds — Intel on Skia, Apple Silicon on Impeller
 
 Every release ships the macOS app **twice**: the same universal (arm64 + x86_64) build of the same
@@ -359,7 +395,7 @@ page, and in its summary — named `Harness-macos[-arm64]-<next version>-<commit
   cannot be found by guessing. The run page that prints its link is public, though, so anyone who
   opens it can download the build. The team chose that on 2026-09-10 over a key-derived link that only
   key holders could work out; if it stops being acceptable, that is the design to go back to.
-- Take a build back with `gsutil -m rm -r gs://s3-autonomous-upgrade-3/harness/desktop-internal/<token>`
+- Take a build back with `gcloud storage rm -r gs://s3-autonomous-upgrade-3/harness/desktop-internal/<token>`
   (the summary prints it); the workflow strips the release's year-long cache headers from these files
   so a deletion sticks.
 - **It never updates itself.** `DESKTOP_UPDATE_METADATA_URL` points at a manifest nothing writes,

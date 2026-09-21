@@ -1,0 +1,6 @@
+.openmontage
+.harness/
+exports/
+**/.render.lock
+**/render-progress.json
+**/__pycache__/

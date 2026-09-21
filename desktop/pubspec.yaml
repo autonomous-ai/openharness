@@ -30,6 +30,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Natural ordering for numbered agents, projects, and completion candidates.
+  collection: ^1.19.1
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -41,6 +43,11 @@ dependencies:
   go_router: ^17.5.0
   url_launcher: ^6.3.2
   cryptography: ^2.9.0
+  # Unicode normalisation for the viewer's password-linking PAKE: the same
+  # password must hash identically whatever form the keyboard produced it in.
+  # Pure Dart, so it registers no native plugin and leaves the macOS SPM
+  # package list untouched — see CLAUDE.md on what a plugin costs here.
+  unorm_dart: ^0.3.2
   # Keep the terminal core in-tree until the upstream circular-buffer ownership
   # fix is released. See third_party/xterm/lib/src/core/buffer/buffer.dart.
   xterm:
@@ -69,6 +76,9 @@ dependencies:
   # now; the pane shows the URL as text where no implementation is registered
   # (Linux, and every `flutter test`). See CLAUDE.md on what a plugin costs.
   webview_flutter: ^4.14.1
+  # Named directly for the WebKit creation params (muted autoplay in viewer panes).
+  webview_flutter_platform_interface: ^2.15.1
+  webview_flutter_wkwebview: ^3.26.1
 
 dev_dependencies:
   flutter_test:
@@ -98,6 +108,9 @@ flutter:
   uses-material-design: true
   assets:
     - assets/engine-icons/
+    - assets/store/
+    - assets/store/projects/
+    - assets/store/covers/
     # The real app icon, shown in Settings ▸ About. Copied from the macOS
     # icon set (`macos/Runner/Assets.xcassets/AppIcon.appiconset`) rather than
     # loaded from the bundle: Flutter can't read an .icns, and About should show
@@ -105,6 +118,7 @@ flutter:
     - assets/app_icon.png
     - assets/harness_device.png
     - assets/harness_device_studio.png
+    - assets/harness_store_card.png
     - assets/swarm-wallpapers/
 
   # To add assets to your application, add an assets section, like this:

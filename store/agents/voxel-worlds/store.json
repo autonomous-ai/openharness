@@ -1,0 +1,28 @@
+{
+  "listed": true,
+  "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/voxel-worlds",
+  "license": "MIT",
+  "tagline": "Build original worlds. Keep every piece.",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/voxel-worlds/starter.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/voxel-worlds/civic-court.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/voxel-worlds/amber-vault.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Build a cozy harbor village with a broad walking quay, a lighthouse and colorful workshops. Keep the buildings and boats separate so I can reuse them in my game; give me a GLB asset kit and an offline walkthrough.",
+      "caption": "Author an editable environment, walk it and keep named 3D assets",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/voxel-worlds/starter.jpg"
+    },
+    {
+      "prompt": "Block out a civic arts courtyard with a sheltered gallery, water garden, reading canopy and sculpture. Let me move each structure and export the masses in meters for a 3D design tool.",
+      "caption": "Revise real geometry and physical scale; export independent building masses",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/voxel-worlds/civic-court.jpg"
+    },
+    {
+      "prompt": "Create a modular dungeon kit with a branching hall, an amber altar and an east treasury. Widen the west entrance while keeping my approved east wing unchanged, and export the modules.",
+      "caption": "Preserve approved work while revising a reusable voxel kit",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/voxel-worlds/amber-vault.jpg"
+    }
+  ]
+}

@@ -77,20 +77,16 @@ void main() {
         await tester.enterText(field, '   ');
         await tester.testTextInput.receiveAction(TextInputAction.done);
         await tester.pump();
-        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(find.byType(Dialog), findsOneWidget);
         expect(completions, 0);
-        expect(
-          tester
-              .widget<FilledButton>(find.widgetWithText(FilledButton, 'Rename'))
-              .onPressed,
-          isNull,
-        );
+        expect(find.text('Name cannot be empty'), findsOneWidget);
+        expect(editor.focusNode!.hasPrimaryFocus, isTrue);
         await tester.enterText(field, '  Search polish  ');
         await tester.testTextInput.receiveAction(TextInputAction.done);
         await tester.pumpAndSettle();
         expect(result, 'Search polish');
         expect(completions, 1);
-        expect(find.byType(AlertDialog), findsNothing);
+        expect(find.byType(Dialog), findsNothing);
 
         await tester.tap(find.text('Open'));
         await tester.pumpAndSettle();
@@ -99,7 +95,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(result, isNull);
         expect(completions, 2);
-        expect(find.byType(AlertDialog), findsNothing);
+        expect(find.byType(Dialog), findsNothing);
         expect(tester.takeException(), isNull);
       },
     );

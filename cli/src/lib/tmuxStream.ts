@@ -435,6 +435,7 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
     paneId: string,
     child: ChildProcessWithoutNullStreams,
     private readonly sink: TerminalStreamSink,
+    private readonly readOnly = false,
   ) {
     this.runtime = { backend: 'tmux', paneId }
     this.child = child
@@ -452,11 +453,17 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
       },
     })
     child.stdout.on('data', (chunk: Buffer) => this.onStdout(chunk))
+    // Pipe failures are emitted asynchronously by stdin, not by ChildProcess.
+    // A control client that exits during a write must only end this stream.
+    child.stdin.on('error', (error) => {
+      this.notifyClose(this.closed ? 'closed' : `tmux control input failed: ${error.message}`)
+      void this.close()
+    })
     child.once('error', (error) => this.notifyClose(`tmux control client error: ${error.message}`))
     child.once('close', (code) => this.notifyClose(this.closed ? 'closed' : `tmux control client exited (${code ?? 'signal'})`))
   }
 
-  static async open(paneId: string, size: TerminalStreamSize, sink: TerminalStreamSink): Promise<TerminalReadResult<TmuxControlStream>> {
+  static async open(paneId: string, size: TerminalStreamSize, sink: TerminalStreamSink, readOnly = false): Promise<TerminalReadResult<TmuxControlStream>> {
     const original = await paneMeta(paneId)
     if (!original) return { state: 'failed', reason: 'tmux pane metadata is unavailable' }
     if (original.windowPanes !== 1) return { state: 'failed', reason: 'TERMINAL_MULTI_PANE_UNSUPPORTED' }
@@ -469,8 +476,8 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
       child.once('error', () => { if (!settled) { settled = true; resolve(false) } })
     })
     if (!spawned) return { state: 'failed', reason: 'tmux control client could not start' }
-    const stream = new TmuxControlStream(paneId, child, sink)
-    const resized = await stream.resize(size)
+    const stream = new TmuxControlStream(paneId, child, sink, readOnly)
+    const resized = readOnly ? TERMINAL_ACTION_SUCCEEDED : await stream.resize(size)
     if (resized.state !== 'succeeded') {
       await stream.close()
       return { state: 'failed', reason: resized.reason }
@@ -657,6 +664,7 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
    * `await` slipped in ahead of them would let a later keystroke overtake an earlier one.
    */
   async writeRaw(bytes: Uint8Array): Promise<TerminalActionResult> {
+    if (this.readOnly) return terminalActionNotStarted('VIEW_ONLY')
     if (this.closed) return terminalActionNotStarted('terminal stream is closed')
     if (bytes.length === 0) return TERMINAL_ACTION_SUCCEEDED
     // scroll() below leaves the pane in copy-mode, which captures all keyboard input for its own
@@ -691,6 +699,7 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
    * program's own paste-detector once split across multiple `send-keys` commands).
    */
   async pasteRaw(text: string): Promise<TerminalActionResult> {
+    if (this.readOnly) return terminalActionNotStarted('VIEW_ONLY')
     if (this.closed) return terminalActionNotStarted('terminal stream is closed')
     if (text.length === 0) return TERMINAL_ACTION_SUCCEEDED
     const pasted = await pasteRawIntoTmux(this.runtime.paneId, text)
@@ -705,6 +714,7 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
    *  own prompt as literal characters instead of scrolling) — copy-mode works regardless, since it
    *  never depends on the program in the pane understanding anything about the bytes at all. */
   async scroll(direction: 'up' | 'down', lines: number): Promise<TerminalActionResult> {
+    if (this.readOnly) return terminalActionNotStarted('VIEW_ONLY')
     if (this.closed) return terminalActionNotStarted('terminal stream is closed')
     if (lines <= 0) return TERMINAL_ACTION_SUCCEEDED
     // Idempotent — safe even if already in copy-mode from a previous scroll.
@@ -720,6 +730,7 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
   }
 
   async resize(requested: TerminalStreamSize): Promise<TerminalActionResult> {
+    if (this.readOnly) return terminalActionNotStarted('VIEW_ONLY')
     return this.serializeOperation(async () => {
       if (this.closed) return terminalActionNotStarted('terminal stream is closed')
       const metadata = await this.runControlCommand(
@@ -764,7 +775,9 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
     // makes agent switching shrink and immediately re-expand the pane; TUIs
     // such as Grok preserve those intermediate repaint fragments in the live
     // screen. The next controller will resize only if its grid truly differs.
-    try { this.child.stdin.write('detach-client\n') } catch { /* ignore */ }
+    if (this.child.stdin.writable) {
+      try { this.child.stdin.write('detach-client\n') } catch { /* ignore */ }
+    }
     const exited = await new Promise<boolean>((resolve) => {
       if (this.child.exitCode != null || this.child.signalCode != null) { resolve(true); return }
       const timer = setTimeout(() => resolve(false), 500)

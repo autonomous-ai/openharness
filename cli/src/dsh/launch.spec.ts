@@ -30,11 +30,20 @@ describe('dshLaunch', () => {
     // What discovery reads back is exactly what was set.
     expect(dshFromEnv(launch.env)).toBe('autonomous/circuit')
   })
+
+  it('a manifest with no agent section adds only the three HARNESS_ variables and no argv', () => {
+    const bare: InstalledDsh = { ...installed, manifest: { spec: 1, id: 'autonomous/circuit', name: 'Circuit', engine: 'claude' } }
+    expect(dshLaunch(bare, '/ws')).toEqual({
+      env: { HARNESS_DSH: 'autonomous/circuit', HARNESS_DSH_DIR: '/src/circuit', HARNESS_WORKSPACE: '/ws' },
+      args: [],
+    })
+  })
 })
 
 describe('buildLaunchOverrides with a DSH', () => {
   const deps: LaunchOverridesDeps = {
-    configDirFor: () => undefined,
+    // The branch replaced `configDirFor` with the machine facts the grid launch builder reads itself.
+    machine: () => ({ hermesSystemManaged: false }),
     writeGridConfigDir: async () => '/cfg',
     tmuxSupportsSessionEnv: async () => true,
     installCodexHooks: () => undefined,

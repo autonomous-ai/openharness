@@ -21,18 +21,41 @@ describe('project folder preparation', () => {
     expect(() => parseProjectFolder({ projectSource: 'new', repositoryUrl: 'owner/repo' })).toThrow(ProjectFolderError)
   })
 
-  it('creates different folders for two deliberate new projects', async () => {
-    const folders = await Promise.all([prepareProjectFolder({ source: 'new' }, { root }), prepareProjectFolder({ source: 'new' }, { root })])
-    expect(new Set(folders).size).toBe(2)
-    expect(new Set(folders)).toEqual(new Set([join(root, 'agent-1'), join(root, 'agent-2')]))
-    expect(await readdir(root)).toHaveLength(2)
+  const now = () => new Date(2026, 8, 3, 9, 5, 7)
+
+  it('names a new project after its agent and the time, every part two digits so folders sort', async () => {
+    expect(await prepareProjectFolder({ source: 'new' }, { root, label: 'Codex', now })).toBe(join(root, 'codex-2026-09-03-09-05'))
+    expect(await prepareProjectFolder({ source: 'new' }, { root, label: 'Autonomous Circuit', now })).toBe(join(root, 'autonomous-circuit-2026-09-03-09-05'))
+    expect(await prepareProjectFolder({ source: 'new' }, { root, label: '  ', now })).toBe(join(root, 'harness-2026-09-03-09-05'))
+    expect(await prepareProjectFolder({ source: 'new' }, { root, label: '!!', now })).toBe(join(root, 'harness-2026-09-03-09-05-07'))
   })
 
-  it('continues numbering past existing folders and files without changing them', async () => {
-    await mkdir(join(root, 'agent-2'))
-    await writeFile(join(root, 'agent-4'), 'keep')
-    expect(await prepareProjectFolder({ source: 'new' }, { root })).toBe(join(root, 'agent-5'))
-    expect(await readFile(join(root, 'agent-4'), 'utf8')).toBe('keep')
+  it('gives a named new project that folder, slugged again here, and never a changed name', async () => {
+    expect(parseProjectFolder({ projectSource: 'new', projectName: 'My Game! v2' })).toEqual({ source: 'new', name: 'My-Game-v2' })
+    // A name is a path segment: nothing that climbs or hides survives, and nothing usable is no name.
+    expect(parseProjectFolder({ projectSource: 'new', projectName: '../../etc' })).toEqual({ source: 'new', name: 'etc' })
+    expect(parseProjectFolder({ projectSource: 'new', projectName: ' .. ' })).toEqual({ source: 'new' })
+    expect(parseProjectFolder({ projectSource: 'new', projectName: 7 })).toEqual({ source: 'new' })
+    expect(await prepareProjectFolder({ source: 'new', name: 'My-Game-v2' }, { root, label: 'Codex', now })).toBe(join(root, 'My-Game-v2'))
+    // Asking again is refused rather than answered with "My-Game-v2-2": the folder is theirs to pick.
+    await expect(prepareProjectFolder({ source: 'new', name: 'My-Game-v2' }, { root, label: 'Codex', now }))
+      .rejects.toMatchObject({ code: 'PROJECT_EXISTS' })
+    expect(await readdir(root)).toEqual(['My-Game-v2'])
+  })
+
+  it('gives two projects in the same minute the seconds, then a suffix, and never takes a file’s name', async () => {
+    await writeFile(join(root, 'codex-2026-09-03-09-05'), 'keep')
+    const folders = await Promise.all([1, 2, 3].map(() => prepareProjectFolder({ source: 'new' }, { root, label: 'Codex', now })))
+    expect(new Set(folders)).toEqual(new Set([
+      join(root, 'codex-2026-09-03-09-05-07'), join(root, 'codex-2026-09-03-09-05-07-2'), join(root, 'codex-2026-09-03-09-05-07-3'),
+    ]))
+    expect(await readFile(join(root, 'codex-2026-09-03-09-05'), 'utf8')).toBe('keep')
+    expect(await readdir(root)).toHaveLength(4)
+  })
+
+  it('uses the clock when no time is given', async () => {
+    const folder = await prepareProjectFolder({ source: 'new' }, { root, label: 'Pi' })
+    expect(folder).toMatch(/\/pi-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/)
   })
 
   it('publishes a complete clone and never replaces existing files or starts a second clone', async () => {

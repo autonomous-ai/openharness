@@ -22,8 +22,24 @@ export interface LineEvent {
   ts: number
 }
 
+/**
+ * Lines that were ALREADY ON DISK when this tail started reading them — a `fromStart` attach of a file
+ * with content, or a re-read after the file shrank under us. They are emitted as one batch, on
+ * `'history'` rather than `'line'`, because the consumer has to know where the batch ENDS: everything in
+ * it is the past except a turn still open at its last line, and only the whole batch can say which.
+ * Measured on prod (2026-09-17): one agent's 42 turns landed in the same second, all of them re-reads of
+ * prompts already answered — counted as 42 turns started that day.
+ */
+export interface HistoryEvent {
+  sessionId: string
+  engine: AgentEngine
+  lines: LineEvent[]
+}
+
 interface FileState extends WatchedSession {
   offset: number
+  /** Bytes below this were on disk before the current read cursor was placed — history, not live. */
+  historicalUntil: number
   partial: string
   seq: number
   debounce: NodeJS.Timeout | null
@@ -60,8 +76,10 @@ export class Watcher extends EventEmitter {
 
     let offset = 0
     let cursorLines: string[] = []
+    let size = 0
+    try { size = (await stat(session.transcriptPath)).size } catch { size = 0 }
     if (!opts.fromStart) {
-      try { offset = (await stat(session.transcriptPath)).size } catch { offset = 0 }
+      offset = size
       if (session.engine === 'cursor') {
         try { cursorLines = completeLines(await readFile(session.transcriptPath, 'utf8')) } catch { cursorLines = [] }
       }
@@ -79,6 +97,8 @@ export class Watcher extends EventEmitter {
     this.files.set(session.transcriptPath, {
       ...session,
       offset,
+      // A `fromStart` tail of a file that already has content reads that content as history.
+      historicalUntil: opts.fromStart ? size : 0,
       partial: '',
       seq: 0,
       debounce: null,
@@ -89,6 +109,23 @@ export class Watcher extends EventEmitter {
     this.bySession.set(session.sessionId, session.transcriptPath)
     this.watcher?.add(session.transcriptPath)
     if (opts.fromStart) this.schedule(session.transcriptPath)
+  }
+
+  /** Move a byte-tailed session's read cursor to a known length after the file was rewritten in place
+   *  by a trusted producer (e.g. the Codex resume reasoning-id repair). The repair shrinks the rollout
+   *  mid-history; left alone, the next read would see `size < offset`, treat it as a truncation, reset
+   *  to 0 and re-emit the whole conversation into the live normalizer. Pinning the offset to the new
+   *  length keeps the invariant that every line is emitted exactly once. No-op when the session is not
+   *  registered (the post-reboot restore path repairs before it re-attaches, so there is nothing to
+   *  move). Call synchronously in the same tick as the rewrite, before the producer appends again. */
+  setTail(sessionId: string, offset: number): void {
+    const filePath = this.bySession.get(sessionId)
+    if (!filePath) return
+    const state = this.files.get(filePath)
+    if (!state) return
+    if (state.debounce) { clearTimeout(state.debounce); state.debounce = null }
+    state.offset = offset
+    state.partial = ''
   }
 
   async removeSession(sessionId: string): Promise<void> {
@@ -170,8 +207,11 @@ export class Watcher extends EventEmitter {
     let size: number
     try { size = (await stat(filePath)).size } catch { return }
     if (size < state.offset) {
+      // The file shrank: rewritten in place (or recreated). Whatever it holds now is read from byte 0,
+      // and none of it is new to the world — it is history until the write that grows it past this.
       state.offset = 0
       state.partial = ''
+      state.historicalUntil = size
     }
     if (size <= state.offset) return
 
@@ -192,21 +232,36 @@ export class Watcher extends EventEmitter {
       return
     }
 
+    // Byte position of each line, to tell the historical prefix of this chunk from the live rest: a
+    // file appended to between the cursor being placed and this read has both in the same chunk. The
+    // carried partial line began that many bytes before `start`.
+    let pos = start - Buffer.byteLength(state.partial, 'utf8')
     const combined = state.partial + chunk
     const lines = combined.split('\n')
     state.partial = combined.endsWith('\n') ? '' : (lines.pop() ?? '')
+    const history: LineEvent[] = []
     for (const raw of lines) {
+      const linePos = pos
+      pos += Buffer.byteLength(raw, 'utf8') + 1
       const text = raw.replace(/\r$/, '')
       if (!text.trim()) continue
-      this.emit('line', {
+      const evt: LineEvent = {
         sessionId: state.sessionId,
         engine: state.engine,
         projectDir: basename(dirname(filePath)),
         text,
         seq: state.seq++,
         ts: Date.now(),
-      } satisfies LineEvent)
+      }
+      if (linePos < state.historicalUntil) { history.push(evt); continue }
+      if (history.length) this.flushHistory(state, history)
+      this.emit('line', evt)
     }
+    if (history.length) this.flushHistory(state, history)
+  }
+
+  private flushHistory(state: FileState, lines: LineEvent[]): void {
+    this.emit('history', { sessionId: state.sessionId, engine: state.engine, lines: lines.splice(0) } satisfies HistoryEvent)
   }
 
   private async readCursor(filePath: string, state: FileState): Promise<void> {
@@ -217,6 +272,7 @@ export class Watcher extends EventEmitter {
     state.cursorLines = next
     state.offset = 0
     state.partial = ''
+    state.historicalUntil = 0
     for (const text of next.slice(common)) {
       if (!text.trim()) continue
       this.emit('line', {

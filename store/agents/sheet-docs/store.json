@@ -1,0 +1,17 @@
+{
+  "listed": false,
+  "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/sheet-docs",
+  "upstream": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/sheet-docs",
+  "license": "MIT",
+  "tagline": "Editable documents and spreadsheets from structured source",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/sheet-docs/starter.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Build the synthetic regional report with matching Word prose, spreadsheet formulas and a fresh PDF.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/sheet-docs/starter.jpg",
+      "caption": "One source · editable DOCX, recalculated XLSX and PDF"
+    }
+  ]
+}

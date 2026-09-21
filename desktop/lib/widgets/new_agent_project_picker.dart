@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/models.dart';
+import '../core/project_folder.dart';
 import '../core/repository_clone.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_choice_picker.dart';
@@ -22,16 +23,26 @@ class NewAgentProjectPicker extends StatefulWidget {
     required this.tileSize,
     required this.onSelected,
     required this.onBrowse,
+    this.terminal = false,
     this.initialFolder,
+    this.initialProject,
     this.locked = false,
+    this.terminalStyle = false,
   });
   final AppNotifier notifier;
   final String machineId;
   final String? initialFolder;
+  final ProjectFolderRequest? initialProject;
   final FocusNode focusNode;
   final Size tileSize;
   final bool locked;
-  final void Function(String? folder, GitHubRepository? repository) onSelected;
+  final bool terminalStyle;
+
+  /// The choice is for a terminal, not an agent: the first tile is the home
+  /// folder (a shell opens there, nothing is prepared), and there is no Git
+  /// tile — a terminal does not clone.
+  final bool terminal;
+  final void Function(String? folder, ProjectFolderRequest? project) onSelected;
   final Future<String?> Function() onBrowse;
 
   @override
@@ -44,15 +55,26 @@ typedef _ProjectChoice = ({
   _ProjectSource source,
   String? folder,
   GitHubRepository? repository,
+  String? name,
 });
 
 class _NewAgentProjectPickerState extends State<NewAgentProjectPicker> {
-  late _ProjectSource _source = widget.initialFolder == null
+  late _ProjectSource _source = widget.initialProject?.repository != null
+      ? _ProjectSource.git
+      : widget.initialFolder == null
       ? _ProjectSource.newProject
       : _ProjectSource.local;
   late String? _folder = widget.initialFolder;
-  GitHubRepository? _repository;
+  late GitHubRepository? _repository = widget.initialProject?.repository;
+  late String? _name = widget.initialProject?.name;
   bool _chosen = false, _browsing = false;
+  final _localFocus = FocusNode();
+
+  @override
+  void dispose() {
+    _localFocus.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -77,7 +99,13 @@ class _NewAgentProjectPickerState extends State<NewAgentProjectPicker> {
   Future<void> _restore() async {
     final history = widget.notifier.projectHistory;
     await history.load();
-    if (!mounted || widget.locked || _chosen || widget.initialFolder != null) {
+    if (!mounted || widget.locked || _chosen) {
+      return;
+    }
+    if (widget.initialFolder != null || widget.initialProject != null) {
+      // A handed-off choice is just as explicit as one made in these tiles.
+      // Keep it in this dialog's per-machine history before switching away.
+      _rememberChoice();
       return;
     }
     // The dialog owns this bucket. Choices survive machine switches, never a
@@ -88,9 +116,10 @@ class _NewAgentProjectPickerState extends State<NewAgentProjectPicker> {
       setState(() {
         _folder = choice.folder;
         _repository = choice.repository;
+        _name = choice.name;
         _source = choice.source;
       });
-      widget.onSelected(choice.folder, choice.repository);
+      widget.onSelected(choice.folder, _preparation);
     } else {
       setState(() {});
     }
@@ -98,9 +127,17 @@ class _NewAgentProjectPickerState extends State<NewAgentProjectPicker> {
 
   void _rememberChoice() => PageStorage.maybeOf(context)?.writeState(
     context,
-    (source: _source, folder: _folder, repository: _repository),
+    (source: _source, folder: _folder, repository: _repository, name: _name),
     identifier: ('project-choice', widget.machineId),
   );
+
+  ProjectFolderRequest? get _preparation => switch (_source) {
+    _ProjectSource.newProject =>
+      widget.terminal ? null : ProjectFolderRequest.newProject(name: _name),
+    _ProjectSource.git =>
+      _repository == null ? null : ProjectFolderRequest.remote(_repository!),
+    _ => null,
+  };
 
   List<SelectOption<String>> get _recent {
     final machine = widget.notifier.stateOf(widget.machineId);
@@ -143,7 +180,7 @@ class _NewAgentProjectPickerState extends State<NewAgentProjectPicker> {
       _repository = repository;
     });
     _rememberChoice();
-    widget.onSelected(folder, repository);
+    widget.onSelected(folder, _preparation);
     if (repository == null) {
       unawaited(
         widget.notifier.projectHistory.select(widget.machineId, folder),
@@ -153,6 +190,7 @@ class _NewAgentProjectPickerState extends State<NewAgentProjectPicker> {
 
   Future<void> _browse() async {
     if (_browsing || widget.locked) return;
+    final restoreFocus = _localFocus.hasFocus;
     _chosen = true;
     setState(() => _browsing = true);
     try {
@@ -161,7 +199,14 @@ class _NewAgentProjectPickerState extends State<NewAgentProjectPicker> {
         _select(_ProjectSource.local, folder: path);
       }
     } finally {
-      if (mounted) setState(() => _browsing = false);
+      if (mounted) {
+        setState(() => _browsing = false);
+        if (restoreFocus) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && !widget.locked) _localFocus.requestFocus();
+          });
+        }
+      }
     }
   }
 
@@ -187,62 +232,91 @@ class _NewAgentProjectPickerState extends State<NewAgentProjectPicker> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Wrap(
-          spacing: 10,
-          runSpacing: 10,
+          spacing: AppChoiceTile.gap,
+          runSpacing: widget.terminalStyle ? 2 : AppChoiceTile.gap,
           children: [
             AppChoiceTile(
+              terminalStyle: widget.terminalStyle,
               key: const Key('new-agent-folder-newProject'),
               size: widget.tileSize,
               focusNode: widget.focusNode,
-              label: 'New project',
-              leading: const Icon(LucideIcons.folderPlus, size: 18),
+              label: widget.terminal ? 'Home' : 'New project',
+              detail: widget.terminal || _name == null
+                  ? null
+                  : projectFolderSlug(_name!),
+              leading: Icon(
+                widget.terminal ? LucideIcons.house : LucideIcons.folderPlus,
+                size: 22,
+              ),
               selected: _source == _ProjectSource.newProject,
               onPressed: widget.locked
                   ? null
                   : () => _select(_ProjectSource.newProject),
             ),
             AppChoiceTile(
+              terminalStyle: widget.terminalStyle,
               key: const Key('new-agent-project-browse'),
               size: widget.tileSize,
-              label: 'Local',
+              focusNode: _localFocus,
+              label: 'Existing folder',
               detail: _source == _ProjectSource.local && _folder != null
                   ? p.basename(_folder!)
                   : null,
-              leading: const Icon(LucideIcons.folderOpen, size: 18),
+              leading: const Icon(LucideIcons.folderOpen, size: 22),
               selected: _source == _ProjectSource.local,
               onPressed: widget.locked || _browsing ? null : _browse,
             ),
-            AppChoiceTile(
-              key: const Key('new-agent-project-git'),
-              size: widget.tileSize,
-              label: 'Git',
-              detail: _repository?.name,
-              leading: const Icon(LucideIcons.gitBranch, size: 18),
-              selected: _source == _ProjectSource.git,
-              onPressed: widget.locked ? null : _git,
-            ),
+            if (!widget.terminal)
+              AppChoiceTile(
+                terminalStyle: widget.terminalStyle,
+                key: const Key('new-agent-project-git'),
+                size: widget.tileSize,
+                label: 'Git',
+                detail: _repository?.name,
+                leading: const Icon(LucideIcons.gitBranch, size: 22),
+                selected: _source == _ProjectSource.git,
+                onPressed: widget.locked ? null : _git,
+              ),
             Semantics(
               selected: selectedRecent,
               inMutuallyExclusiveGroup: true,
               child: AppSelectField<String>(
                 key: const Key('new-agent-project-recent'),
+                textStyle: widget.terminalStyle
+                    ? DefaultTextStyle.of(context).style
+                    : null,
+                radius: widget.terminalStyle ? 2 : null,
                 value: selectedRecent ? _folder ?? '' : '',
                 options: recent,
                 width: widget.tileSize.width,
+                // Twice the tile: recent projects share a parent folder, and
+                // the path under each name is what tells them apart (owner,
+                // 2026-09-17: "all folders look the same"). Opens leftward
+                // from the row's last tile.
+                menuWidth: widget.tileSize.width * 2,
+                menuAlignedToEnd: true,
                 height: widget.tileSize.height,
+                padding: widget.terminalStyle
+                    ? AppChoiceTile.terminalPadding
+                    : AppChoiceTile.padding,
                 selected: selectedRecent,
                 fillColor: selectedRecent
                     ? grid.AppPalette.swarmAccent.withValues(alpha: .16)
+                    : widget.terminalStyle
+                    ? Colors.transparent
                     : grid.AppSurface.recess,
                 emptyLabel: 'No recent projects',
                 onChanged: (path) =>
                     _select(_ProjectSource.recent, folder: path),
                 trigger: AppChoiceTileContent(
+                  terminalStyle: widget.terminalStyle,
                   label: 'Recent',
                   detail: selectedRecent && _folder != null
                       ? p.basename(_folder!)
                       : null,
-                  leading: const Icon(LucideIcons.history, size: 18),
+                  leading: widget.terminalStyle
+                      ? Text(selectedRecent ? '>' : ' ')
+                      : const Icon(LucideIcons.history, size: 22),
                   trailing: const Icon(Icons.keyboard_arrow_down, size: 18),
                 ),
               ),

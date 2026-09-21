@@ -45,6 +45,16 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# iOS/Android are not targets of this app (macOS, Linux and Windows are), but
+# .metadata still lists them under migration.platforms, so `flutter pub get`
+# keeps regenerating an ios/ skeleton: Generated.xcconfig and
+# flutter_export_environment.sh with this machine's absolute paths baked in,
+# Flutter/ephemeral/, GeneratedPluginRegistrant, and empty Runner.xcodeproj /
+# Runner.xcworkspace shells with no project.pbxproj. All generated, all
+# machine-specific, none of it openable in Xcode.
+/ios/
+/android/
+
 # Widget Preview related
 .widget_preview/
 

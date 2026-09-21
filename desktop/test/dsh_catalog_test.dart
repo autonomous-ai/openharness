@@ -36,8 +36,8 @@ class _Connection extends WsConn {
 }
 
 const _circuit = {
-  'id': 'autonomous/copper',
-  'name': 'Copper',
+  'id': 'autonomous/autonomous-circuit',
+  'name': 'Autonomous Circuit',
   'description': 'Chat with AI → a board you can order',
   'engine': 'claude',
   'installed': false,
@@ -46,10 +46,170 @@ const _circuit = {
 };
 
 void main() {
+  test('update versions are optional, validated, and offered only for installed clones', () {
+    final old = DshEntry.fromJson(_circuit)!;
+    expect(old.installedCommit, isNull);
+    expect(old.hasUpdate, isFalse);
+    final version = {
+      ..._circuit,
+      'installed': true,
+      'installedCommit': 'a' * 40,
+      'availableCommit': 'b' * 40,
+      'updateAvailable': true,
+    };
+    final entry = DshEntry.fromJson(version)!;
+    expect(entry.installedCommit, 'a' * 40);
+    expect(entry.availableCommit, 'b' * 40);
+    expect(entry.hasUpdate, isTrue);
+    expect(DshEntry.fromJson({...version, 'linked': true})!.hasUpdate, isFalse);
+    expect(
+      DshEntry.fromJson({...version, 'installed': false})!.hasUpdate,
+      isFalse,
+    );
+    expect(
+      DshEntry.fromJson({...version, 'updateAvailable': 'yes'})!.hasUpdate,
+      isFalse,
+    );
+    expect(
+      DshEntry.fromJson({...version, 'installedCommit': 'main'})!
+          .installedCommit,
+      isNull,
+    );
+    expect(
+      DshEntry.fromJson({...version, 'availableCommit': 123})!.availableCommit,
+      isNull,
+    );
+  });
+
+  test(
+    'updates use their own request and refresh the installed version',
+    () async {
+      final connection = _Connection();
+      final app = createApp(connectionForTest: (_) => connection);
+      addTearDown(app.dispose);
+      connection.answer = (type, payload) async => type == 'dsh_update'
+          ? {'ok': true}
+          : {
+              'dsh': [
+                {
+                  ..._circuit,
+                  'installed': true,
+                  'installedCommit': 'b' * 40,
+                  'updateAvailable': false,
+                },
+              ],
+            };
+      expect(await app.updateDsh('m', _circuit['id']! as String), isNull);
+      expect(connection.calls.map((call) => call.$1), [
+        'dsh_update',
+        'dsh_list',
+      ]);
+      expect(
+        app.stateOf('m')!.dsh[_circuit['id']! as String]!.installedCommit,
+        'b' * 40,
+      );
+    },
+  );
+  for (final (response, message) in <(Object, String)>[
+    ({'ok': false, 'detail': 'miss compiler'}, 'miss compiler'),
+    ({'ok': false}, 'Update failed on Test host'),
+    (
+      const WsRequestFailure(responseType: 'dsh_update', code: 'UNSUPPORTED'),
+      'Update the harness CLI on Test host to update harnesses',
+    ),
+    (
+      const WsRequestFailure(
+        responseType: 'dsh_update',
+        code: 'UNSUPPORTED_ON_REMOTE',
+      ),
+      'Update the harness CLI on Test host to update harnesses',
+    ),
+    (
+      const WsRequestFailure(
+        responseType: 'dsh_update',
+        code: 'DSH_BUSY',
+        detail: 'Another update is running',
+      ),
+      'Another update is running',
+    ),
+    (
+      const WsRequestFailure(responseType: 'dsh_update', code: 'INTERNAL'),
+      'Update failed on Test host (INTERNAL)',
+    ),
+    (
+      const WsRequestTimeout('dsh_update'),
+      'Test host is still updating. Try again in a few minutes.',
+    ),
+    (
+      StateError('disconnected'),
+      'Lost the connection to Test host while updating — it may still be finishing there. Try again in a moment.',
+    ),
+  ]) {
+    test(
+      'update failure $response preserves installed versions and allows retry',
+      () async {
+        final connection = _Connection()
+          ..answer = (_, _) async {
+            if (response is Map<String, dynamic>) return response;
+            throw response;
+          };
+        final app = createApp(connectionForTest: (_) => connection);
+        addTearDown(app.dispose);
+        final entry = DshEntry.fromJson({
+          ..._circuit,
+          'installed': true,
+          'installedCommit': 'a' * 40,
+          'availableCommit': 'b' * 40,
+          'updateAvailable': true,
+        })!;
+        final catalog = app.stateOf('m')!.dsh..replace([entry]);
+        expect(await app.updateDsh('m', entry.id), message);
+        expect(catalog[entry.id], same(entry));
+        expect(catalog[entry.id]!.hasUpdate, isTrue);
+        expect(catalog.runs[entry.id]!.failed, isTrue);
+        expect(connection.calls.map((call) => call.$1), ['dsh_update']);
+
+        final failedRun = catalog.runs[entry.id];
+        connection.answer = (type, _) async => type == 'dsh_update'
+            ? {'ok': true}
+            : {
+                'dsh': [
+                  {..._circuit, 'installed': true, 'installedCommit': 'b' * 40},
+                ],
+              };
+        expect(await app.updateDsh('m', entry.id), isNull);
+        expect(catalog.runs[entry.id], isNot(same(failedRun)));
+        expect(catalog[entry.id]!.installedCommit, 'b' * 40);
+        expect(catalog[entry.id]!.hasUpdate, isFalse);
+      },
+    );
+  }
+  test('updating a removed machine sends no request', () async {
+    final connection = _Connection();
+    final app = createApp(connectionForTest: (_) => connection);
+    addTearDown(app.dispose);
+    expect(await app.updateDsh('removed', 'acme/thing'), 'Machine not found');
+    expect(connection.calls, isEmpty);
+  });
+  _authorAndKindTests();
+  _productPageTests();
+  _installRunTests();
+  test('shared viewer dependencies are optional and validated', () {
+    expect(
+      DshEntry.fromJson({..._circuit, 'viewerUse': 'autonomous/cad-viewer'})!
+          .viewerUse,
+      'autonomous/cad-viewer',
+    );
+    expect(DshEntry.fromJson(_circuit)!.viewerUse, isNull);
+    expect(
+      DshEntry.fromJson({..._circuit, 'viewerUse': '../viewer'})!.viewerUse,
+      isNull,
+    );
+  });
   test('an entry is read off the wire and refuses ids outside owner/name', () {
     final entry = DshEntry.fromJson(_circuit)!;
-    expect(entry.id, 'autonomous/copper');
-    expect(entry.name, 'Copper');
+    expect(entry.id, 'autonomous/autonomous-circuit');
+    expect(entry.name, 'Autonomous Circuit');
     expect(entry.engine, 'claude');
     expect(entry.installed, isFalse);
     expect(entry.viewer, isTrue);
@@ -61,7 +221,7 @@ void main() {
     );
     expect(DshEntry.fromJson({'id': 'circuit', 'engine': 'claude'}), isNull);
     expect(DshEntry.fromJson({'id': 'a/b', 'engine': ''}), isNull);
-    expect(DshEntry.fromJson('autonomous/copper'), isNull);
+    expect(DshEntry.fromJson('autonomous/autonomous-circuit'), isNull);
   });
 
   test(
@@ -100,7 +260,9 @@ void main() {
       final catalog = app.stateOf('m')!.dsh;
       expect(catalog.loaded, isTrue);
       expect(catalog.error, isNull);
-      expect(catalog.entries.map((e) => e.id), ['autonomous/copper']);
+      expect(catalog.entries.map((e) => e.id), [
+        'autonomous/autonomous-circuit',
+      ]);
       expect(connection.calls.map((c) => c.$1), ['dsh_list']);
       // A second ask is answered from memory unless forced.
       await app.probeDsh('m');
@@ -134,23 +296,25 @@ void main() {
                 {..._circuit, 'installed': true},
               ],
             });
-      final result = app.installDsh('m', 'autonomous/copper');
+      final result = app.installDsh('m', 'autonomous/autonomous-circuit');
       final catalog = app.stateOf('m')!.dsh;
-      expect(catalog.installs['autonomous/copper']!.phase, 'clone');
+      expect(catalog.installs['autonomous/autonomous-circuit']!.phase, 'clone');
       await app.handleEventForTest('m', {
         'type': 'dsh_install_status',
-        'payload': {'id': 'autonomous/copper', 'phase': 'setup'},
+        'payload': {'id': 'autonomous/autonomous-circuit', 'phase': 'setup'},
       });
       expect(
-        catalog.installs['autonomous/copper']!.label,
+        catalog.installs['autonomous/autonomous-circuit']!.label,
         'Setting up the toolchain…',
       );
       install.complete({'ok': true});
       expect(await result, isNull);
-      expect(catalog.installs['autonomous/copper']!.done, isTrue);
-      expect(catalog['autonomous/copper']!.installed, isTrue);
+      expect(catalog.installs['autonomous/autonomous-circuit']!.done, isTrue);
+      expect(catalog['autonomous/autonomous-circuit']!.installed, isTrue);
       expect(connection.calls.map((c) => c.$1), ['dsh_install', 'dsh_list']);
-      expect(connection.calls.first.$2, {'id': 'autonomous/copper'});
+      expect(connection.calls.first.$2, {
+        'id': 'autonomous/autonomous-circuit',
+      });
     },
   );
 
@@ -164,11 +328,342 @@ void main() {
       );
     final app = createApp(connectionForTest: (_) => connection);
     addTearDown(app.dispose);
-    final error = await app.installDsh('m', 'autonomous/copper');
+    final error = await app.installDsh('m', 'autonomous/autonomous-circuit');
     expect(error, 'Update the harness CLI on Test host to install harnesses');
     expect(
-      app.stateOf('m')!.dsh.installs['autonomous/copper']!.failed,
+      app.stateOf('m')!.dsh.installs['autonomous/autonomous-circuit']!.failed,
       isTrue,
     );
+    expect(
+      app.stateOf('m')!.dsh.runs['autonomous/autonomous-circuit']!.code,
+      'UNSUPPORTED',
+    );
+  });
+
+  test('the machine\'s own failed push and the reply close ONE run, with the code and the doctor lines kept', () async {
+    final install = Completer<Map<String, dynamic>>();
+    final connection = _Connection()
+      ..answer = (type, _) => type == 'dsh_install'
+          ? install.future
+          : Future.value({'dsh': <Object>[]});
+    final app = createApp(connectionForTest: (_) => connection);
+    addTearDown(app.dispose);
+    final result = app.installDsh('m', 'autonomous/autonomous-circuit');
+    final catalog = app.stateOf('m')!.dsh;
+    for (final push in [
+      {'phase': 'doctor', 'line': 'ok git'},
+      {'phase': 'doctor', 'line': 'miss kicad-cli'},
+      {
+        'phase': 'failed',
+        'detail': 'doctor failed · miss kicad-cli',
+        'error': 'DOCTOR_FAILED',
+      },
+    ]) {
+      await app.handleEventForTest('m', {
+        'type': 'dsh_install_status',
+        'payload': {'id': 'autonomous/autonomous-circuit', ...push},
+      });
+    }
+    final run = catalog.runs['autonomous/autonomous-circuit']!;
+    expect(run.code, 'DOCTOR_FAILED');
+    install.completeError(
+      const WsRequestFailure(
+        responseType: 'dsh_install',
+        code: 'DOCTOR_FAILED',
+        detail: 'doctor failed · miss kicad-cli',
+      ),
+    );
+    expect(await result, 'doctor failed · miss kicad-cli');
+    expect(catalog.runs['autonomous/autonomous-circuit'], same(run));
+    expect(run.checks, ['ok git', 'miss kicad-cli']);
+    expect(run.phases.map((p) => p.phase), ['clone', 'doctor', 'failed']);
+    expect(
+      catalog.installs['autonomous/autonomous-circuit']!.code,
+      'DOCTOR_FAILED',
+    );
+  });
+
+  test('a socket that drops under an install says so, not "failed", and the list is asked again on reconnect', () async {
+    final connection = _Connection()
+      ..answer = (type, _) => type == 'dsh_install'
+          ? Future.error(Exception('WS disconnected'))
+          : Future.value({
+              'dsh': [
+                {..._circuit, 'installed': true},
+              ],
+            });
+    final app = createApp(connectionForTest: (_) => connection);
+    addTearDown(app.dispose);
+    expect(
+      await app.installDsh('m', 'autonomous/autonomous-circuit'),
+      'Lost the connection to Test host while installing — it may still be finishing there. Try again in a moment.',
+    );
+    final catalog = app.stateOf('m')!.dsh;
+    expect(catalog.runs['autonomous/autonomous-circuit']!.code, 'CONNECTION');
+    expect(connection.calls.map((c) => c.$1), ['dsh_install']);
+    app.onMachineConnectedForTest('m');
+    await Future<void>.delayed(Duration.zero);
+    expect(connection.calls.where((c) => c.$1 == 'dsh_list'), hasLength(1));
+    expect(catalog['autonomous/autonomous-circuit']!.installed, isTrue);
+    // Once: the next reconnect has nothing new to ask about.
+    app.onMachineConnectedForTest('m');
+    await Future<void>.delayed(Duration.zero);
+    expect(connection.calls.where((c) => c.$1 == 'dsh_list'), hasLength(1));
+  });
+}
+
+void _authorAndKindTests() {
+  test('a row carries who made it, and a viewer package needs no engine', () {
+    final agent = DshEntry.fromJson({
+      'id': 'autonomous/text-to-cad',
+      'name': 'text-to-cad',
+      'category': 'CAD',
+      'author': '  Jake Fitzgerald  ',
+      'engine': 'claude',
+      'installed': true,
+      'viewer': true,
+      'tier': 2,
+    });
+    expect(agent, isNotNull);
+    expect(agent!.author, 'Jake Fitzgerald');
+    expect(agent.isViewerPackage, isFalse);
+    final viewer = DshEntry.fromJson({
+      'id': 'autonomous/cad-viewer',
+      'kind': 'viewer',
+      'name': 'CAD Viewer',
+      'installed': true,
+      'viewer': true,
+      'tier': 2,
+    });
+    expect(viewer, isNotNull);
+    expect(viewer!.isViewerPackage, isTrue);
+    expect(viewer.engine, '');
+    // an agent row without an engine is still refused
+    expect(DshEntry.fromJson({'id': 'a/b', 'name': 'B'}), isNull);
+  });
+}
+
+void _productPageTests() {
+  test('the product page reads only web links, and trims what it shows', () {
+    final long = 'x' * 400;
+    final entry = DshEntry.fromJson({
+      'id': 'autonomous/marp',
+      'engine': 'claude',
+      'name': '  ${'M' * 50}  ',
+      'description': '  $long  ',
+      'category': ' ${'c' * 30} ',
+      'author': 'a' * 100,
+      'license': '  ${'L' * 60}  ',
+      'tagline': '  ${'T' * 100}  ',
+      'repo': ' https://github.com/autonomous-ai/autonomous-marp ',
+      'homepage': 'http://marp.app',
+      'upstream': 'file:///etc/passwd',
+      'screenshots': [
+        'https://example.com/1.png',
+        'javascript:alert(1)',
+        'mailto:someone@example.com',
+        '//example.com/no-scheme.png',
+        'https://example.com/${'p' * 2100}.png',
+        42,
+        for (var i = 2; i <= 10; i++) 'https://example.com/$i.png',
+      ],
+      'linked': true,
+      'tier': 12,
+    })!;
+    expect(entry.name, 'M' * 40);
+    expect(entry.description, 'x' * 300);
+    expect(entry.category, 'c' * 24);
+    expect(entry.author, 'a' * 80);
+    expect(entry.license, 'L' * 40);
+    expect(entry.tagline, 'T' * 80);
+    expect(entry.repo, 'https://github.com/autonomous-ai/autonomous-marp');
+    expect(entry.homepage, 'http://marp.app');
+    expect(entry.upstream, isNull, reason: 'never a file: link');
+    expect(entry.screenshots, [
+      'https://example.com/1.png',
+      for (var i = 2; i <= 8; i++) 'https://example.com/$i.png',
+    ]);
+    expect(entry.linked, isTrue);
+    expect(entry.tier, 0, reason: 'a tier out of range is none');
+
+    final bare = DshEntry.fromJson({
+      'id': 'autonomous/marp',
+      'engine': 'claude',
+      'license': '   ',
+      'tagline': 7,
+      'screenshots': 'https://example.com/1.png',
+      'repo': 7,
+    })!;
+    expect(bare.license, isNull);
+    expect(bare.tagline, isNull);
+    expect(bare.screenshots, isEmpty);
+    expect(bare.repo, isNull);
+    expect(bare.linked, isFalse);
+    expect(
+      DshEntry.fromJson({'id': 'a/b', 'engine': 'e' * 65}),
+      isNull,
+      reason: 'an engine id past 64 characters is not one',
+    );
+  });
+}
+
+void _installRunTests() {
+  test('every phase reads as a sentence', () {
+    String label(String phase, [String? detail]) =>
+        DshInstallProgress(id: 'a/b', phase: phase, detail: detail).label;
+    expect(label('clone'), 'Fetching…');
+    expect(label('doctor'), 'Checking the machine…');
+    expect(label('done'), 'Installed');
+    expect(label('failed'), 'Install failed');
+    expect(label('failed', ''), 'Install failed');
+    expect(label('failed', 'no space left'), 'no space left');
+    expect(label('queued'), 'Installing…');
+    final done = DshInstallProgress.fromJson({'id': 'a/b', 'phase': 'done'})!;
+    expect(done.done, isTrue);
+    expect(done.inProgress, isFalse);
+  });
+
+  test('a push is read defensively: ids, phases, and lines without control characters', () {
+    expect(DshInstallProgress.fromJson(null), isNull);
+    expect(DshInstallProgress.fromJson({'id': '', 'phase': 'setup'}), isNull);
+    expect(DshInstallProgress.fromJson({'id': 'a/b', 'phase': ''}), isNull);
+    expect(DshInstallProgress.fromJson({'id': 1, 'phase': 'setup'}), isNull);
+    final escape = String.fromCharCode(27);
+    final bell = String.fromCharCode(7);
+    final push = DshInstallProgress.fromJson({
+      'id': 'a/b',
+      'phase': 'setup',
+      'detail': '   ',
+      'line': '$escape[32madded$bell ${'n' * 300}',
+    })!;
+    expect(push.detail, isNull);
+    expect(push.line, hasLength(200));
+    expect(push.line, startsWith('[32madded  n'));
+    expect(
+      DshInstallProgress.fromJson({'id': 'a/b', 'phase': 'setup', 'line': 3})!
+          .line,
+      isNull,
+    );
+    // The reason as a code: a short upper-case token or nothing.
+    expect(
+      DshInstallProgress.fromJson({
+        'id': 'a/b',
+        'phase': 'failed',
+        'error': 'CLONE_FAILED',
+      })!.code,
+      'CLONE_FAILED',
+    );
+    for (final bad in ['', 'clone failed', 'x' * 60, 7]) {
+      expect(
+        DshInstallProgress.fromJson({
+          'id': 'a/b',
+          'phase': 'failed',
+          'error': bad,
+        })!.code,
+        isNull,
+        reason: '$bad',
+      );
+    }
+  });
+
+  test(
+    'a run keeps its phases in order, a bounded log, and how long each took',
+    () {
+      final t0 = DateTime(2026, 9, 1, 9);
+      final run = DshInstallRun('a/b', startedAt: t0);
+      expect(run.phase, 'clone', reason: 'nothing heard yet is the fetch');
+      expect(run.inProgress, isTrue);
+      expect(run.took('clone'), isNull);
+      run.apply(
+        const DshInstallProgress(
+          id: 'a/b',
+          phase: 'clone',
+          detail: 'Resolving',
+        ),
+        now: t0,
+      );
+      run.apply(
+        const DshInstallProgress(id: 'a/b', phase: 'clone', line: 'cloned'),
+        now: t0.add(const Duration(seconds: 2)),
+      );
+      // The same line again is not a new line.
+      run.apply(
+        const DshInstallProgress(id: 'a/b', phase: 'clone', line: 'cloned'),
+        now: t0.add(const Duration(seconds: 3)),
+      );
+      run.apply(
+        const DshInstallProgress(id: 'a/b', phase: 'setup'),
+        now: t0.add(const Duration(seconds: 9)),
+      );
+      expect(run.phases.map((p) => p.phase), ['clone', 'setup']);
+      expect(
+        run.detail,
+        'Resolving',
+        reason: 'a push without detail keeps the last',
+      );
+      expect(run.log, ['cloned']);
+      expect(run.took('clone'), const Duration(seconds: 9));
+      expect(run.took('setup'), isNull, reason: 'still under way');
+      expect(run.took('doctor'), isNull, reason: 'never began');
+      expect(run.reached('setup'), isTrue);
+      expect(run.reached('doctor'), isFalse);
+
+      for (var i = 0; i < DshInstallRun.maxLog + 5; i++) {
+        run.apply(
+          DshInstallProgress(
+            id: 'a/b',
+            phase: 'doctor',
+            line: i.isEven ? 'ok tool$i' : 'step $i',
+          ),
+        );
+      }
+      expect(run.log, hasLength(DshInstallRun.maxLog));
+      expect(run.log.first, 'step 5');
+      expect(run.checks, everyElement(startsWith('ok ')));
+      expect(run.checks, hasLength(20));
+    },
+  );
+
+  test('a push after a finished run is a new attempt with its own clock', () {
+    final catalog = MachineDsh();
+    final t0 = DateTime(2026, 9, 1, 9);
+    catalog.applyInstall(
+      const DshInstallProgress(id: 'a/b', phase: 'setup'),
+      now: t0,
+    );
+    final first = catalog.runs['a/b']!;
+    expect(
+      first.startedAt,
+      t0,
+      reason: 'another window started it; it is watched all the same',
+    );
+    catalog.applyInstall(
+      const DshInstallProgress(
+        id: 'a/b',
+        phase: 'failed',
+        detail: 'no space left',
+      ),
+      now: t0.add(const Duration(minutes: 1)),
+    );
+    expect(identical(catalog.runs['a/b'], first), isTrue);
+    expect(catalog.installs['a/b']!.failed, isTrue);
+    catalog.applyInstall(
+      const DshInstallProgress(id: 'a/b', phase: 'clone'),
+      now: t0.add(const Duration(minutes: 5)),
+    );
+    expect(identical(catalog.runs['a/b'], first), isFalse);
+    expect(catalog.runs['a/b']!.phase, 'clone');
+    expect(catalog.installs['a/b']!.inProgress, isTrue);
+
+    catalog.error = 'UNSUPPORTED';
+    catalog.replace(const [
+      DshEntry(id: 'a/b', name: 'B', engine: 'claude'),
+      DshEntry(id: 'a/c', name: 'C', engine: 'codex'),
+    ]);
+    expect(catalog.loaded, isTrue);
+    expect(catalog.error, isNull, reason: 'an answer clears the refusal');
+    expect(catalog.entries.map((e) => e.id), ['a/b', 'a/c']);
+    expect(catalog['a/c']!.engine, 'codex');
+    expect(catalog['a/z'], isNull);
   });
 }

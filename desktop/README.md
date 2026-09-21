@@ -1,15 +1,17 @@
 # Harness Desktop
 
 Harness Desktop is the native Flutter client for browsing Harness machines and
-interacting with their terminal-backed agents. It runs natively on **macOS
-and Linux (Ubuntu)** and includes an unexercised Windows runner.
+interacting with their terminal-backed agents. **macOS is the primary supported and tested
+experience.** Linux builds exist, with feature parity still in progress; Windows support is
+planned and its runner is unexercised. Embedded harness viewers currently require macOS.
 
 ## Development
 
-Install a compatible Flutter SDK, then run the project from this repository
-root:
+Install a compatible Flutter SDK, then run the project from this directory
+(`desktop/` in the monorepo):
 
 ```bash
+cd desktop
 flutter pub get
 flutter test
 flutter run -d macos   # or: flutter run -d linux
@@ -57,12 +59,24 @@ The optional A/B smoke test uses isolated identities, two loopback WebSockets,
 the CLI's real E2EE handshake/media reader and ffmpeg-generated PNG/MP4 fixtures:
 
 ```bash
-REMOTE_MEDIA_CLI_ROOT=../autonomous-harness/cli flutter test test/remote_media_smoke_test.dart
+REMOTE_MEDIA_CLI_ROOT=../openharness/cli flutter test test/remote_media_smoke_test.dart
 ```
 
 Install the companion CLI's npm dependencies first; ffmpeg must be on PATH.
 The smoke test does not use a real account or remote machine. It verifies the OS
 launch URI; playback in the native viewer is a separate manual check.
+
+## Viewers on linked machines
+
+Open a harness on a linked machine and its viewer appears beside the terminal. The local CLI
+forwards it through the existing encrypted machine connection, including interactive controls,
+streaming updates and WebSockets. Both computers need a forwarding-capable Harness CLI. An older
+remote CLI shows update guidance in the viewer pane; reconnect after updating it.
+
+The local viewer endpoint is private to the machine connection and closes on disconnect or
+revocation. This feature uses your existing machine access; it does not create a public share link.
+Embedded viewers remain macOS-only. See the
+[remote viewer plan](../docs/plans/2026-09-17-004-remote-viewers.md) for compatibility and tests.
 
 ## Local Codex profiles
 
@@ -110,7 +124,7 @@ the backend is a sibling `autonomous-code` checkout. Their default layout is:
 ```text
 .../autonomous-ai/
   autonomous-code/
-  autonomous-harness/
+  openharness/
     cli/
     backend/
     desktop/        <- this app

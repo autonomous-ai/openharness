@@ -22,7 +22,9 @@ import {
 import { TmuxControlStream } from './tmuxStream.js'
 import {
   captureTmuxPane,
+  ENGINE_EXIT_PANE_OPTION,
   listPaneTitles,
+  LSTART_MARKER_RE,
   resolvePaneEngineProcess,
   sendKeyToTmux,
   sendLiteralToTmux,
@@ -163,7 +165,13 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    * instead of taking the pane down with it. Whoever calls this owns turning it back off.
    */
   async respawn(runtime: TmuxRuntimeRef, request: TerminalRespawnRequest): Promise<TerminalActionResult> {
-    const args = ['set-option', '-w', '-t', runtime.paneId, 'remain-on-exit', 'on', ';', 'respawn-pane', '-k']
+    // The engine-exit marker is the pane's, and a respawned pane is a new launch: cleared here, in
+    // the same invocation, or the new engine would read as exited the moment it started.
+    const args = [
+      'set-option', '-w', '-t', runtime.paneId, 'remain-on-exit', 'on', ';',
+      'set-option', '-p', '-t', runtime.paneId, ENGINE_EXIT_PANE_OPTION, '', ';',
+      'respawn-pane', '-k',
+    ]
     if (request.cwd) args.push('-c', request.cwd)
     for (const [key, value] of Object.entries(request.env ?? {})) args.push('-e', `${key}=${value}`)
     args.push('-t', runtime.paneId, ...request.command)
@@ -295,6 +303,18 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     try {
       const live = await resolvePaneEngineProcess(runtime.paneId, expected.engine)
       if (!live) return { state: 'gone', reason: `no ${expected.engine} process under tmux pane` }
+      // A saved marker that is not a C-locale `lstart` stamp was written either by the pre-fix parser,
+      // with its fields shifted, or by a `ps` that still inherited the user's LC_TIME (see psEnv in
+      // lib/childLocale.ts). Either way it can never equal the corrected stamp for the same live
+      // process, so comparing it would report a running engine as gone — once, on the upgrade that
+      // fixed the reading. The pane still has a matching engine process; take it.
+      //
+      // checkSessionRuntime makes the same allowance, but nothing calls that function today, so this
+      // is where the allowance has to live: coordinator.validate/acquireLease pass the PERSISTED
+      // identity straight through to here.
+      if (expected.processIdentity && !LSTART_MARKER_RE.test(expected.processIdentity.startMarker)) {
+        return { state: 'alive' }
+      }
       if (expected.processIdentity
         && (expected.processIdentity.pid !== live.pid || expected.processIdentity.startMarker !== live.startMarker)) {
         return { state: 'gone', reason: 'process changed under tmux pane' }
@@ -372,8 +392,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     expected: TerminalProcessExpectation,
     size: TerminalStreamSize,
     sink: TerminalStreamSink,
+    readOnly?: boolean,
   ): Promise<TerminalReadResult<TerminalStreamHandle<TmuxRuntimeRef>>> {
     void expected
-    return TmuxControlStream.open(runtime.paneId, size, sink)
+    return TmuxControlStream.open(runtime.paneId, size, sink, readOnly)
   }
 }

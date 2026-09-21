@@ -12,7 +12,7 @@
 # The CURRENT version is read from the remote metadata.json on GCS (single source of truth) and the
 # patch is bumped from there — nothing is git-committed (the version is injected into the bundle via
 # ADAPTER_VERSION, so the running binary's version equals the published manifest version).
-# Prereqs: `gcloud storage` (or gsutil) authenticated with WRITE access on the bucket; the
+# Prereqs: `gcloud storage` authenticated with WRITE access on the bucket; the
 # bucket/objects must be public-read; `node`+`npm`.
 set -euo pipefail
 
@@ -63,34 +63,40 @@ done
 
 command -v node >/dev/null 2>&1 || { echo "error: node not found" >&2; exit 1; }
 
-# --- GCS client: `gcloud storage` if we have it, else gsutil ---
-# gsutil is a standalone Python tool that only understands gcloud's *user* and *service-account-key*
-# credentials. It cannot use the external-account (federated) credential that Workload Identity
-# Federation issues, so a CI job authenticated by WIF fails on every gsutil call while the identical
-# `gcloud storage` call works — it is the same gcloud binary that performed the token exchange.
-# gsutil stays as the fallback for a laptop whose SDK predates `gcloud storage`.
-if command -v gcloud >/dev/null 2>&1 && gcloud storage --help >/dev/null 2>&1; then
-  GCS_CLI=gcloud
-elif command -v gsutil >/dev/null 2>&1; then
-  GCS_CLI=gsutil
-  echo ">> note: falling back to gsutil (no 'gcloud storage'); this will not work under workload identity federation" >&2
-else
-  echo "error: neither 'gcloud storage' nor gsutil found — install/authenticate the gcloud SDK" >&2
+# --- GCS client: `gcloud storage`, and only `gcloud storage` ---
+# gsutil was retired from this repo on 2026-09-17. It is a standalone Python tool that only
+# understands gcloud's *user* and *service-account-key* credentials: it cannot use the
+# external-account (federated) credential Workload Identity Federation issues, so every call fails
+# under WIF while the identical `gcloud storage` call works — it is the same gcloud binary that
+# performed the token exchange. Every release path here runs on WIF now. Do not reintroduce it.
+command -v gcloud >/dev/null 2>&1 || {
+  echo "error: gcloud not found — install/authenticate the gcloud SDK" >&2
   exit 1
-fi
+}
+gcloud storage --help >/dev/null 2>&1 || {
+  echo "error: this gcloud is too old for 'gcloud storage' — update the gcloud SDK" >&2
+  exit 1
+}
 
 # gcs_cp <src> <dst> [cache-control] [content-type] — either side may be gs:// or a local path or `-`.
 gcs_cp() {
-  local src="$1" dst="$2" cc="${3:-}" ct="${4:-}" args=()
-  if [ "$GCS_CLI" = gcloud ]; then
-    args=(storage cp)
-    if [ -n "$cc" ]; then args+=("--cache-control=$cc"); fi
-    if [ -n "$ct" ]; then args+=("--content-type=$ct"); fi
-    gcloud "${args[@]}" "$src" "$dst"
-  else
-    if [ -n "$cc" ]; then args+=(-h "Cache-Control:$cc"); fi
-    if [ -n "$ct" ]; then args+=(-h "Content-Type:$ct"); fi
-    gsutil "${args[@]}" cp "$src" "$dst"
+  local src="$1" dst="$2" cc="${3:-}" ct="${4:-}" args=(storage cp)
+  if [ -n "$cc" ]; then args+=("--cache-control=$cc"); fi
+  if [ -n "$ct" ]; then args+=("--content-type=$ct"); fi
+  gcloud "${args[@]}" "$src" "$dst"
+}
+
+# gcs_refuse_republish <gs://…> — a versioned artifact is IMMUTABLE once published: the CDN in front of
+# it caches for a year and serves the FIRST bytes it saw for that path, so a re-upload of the same
+# version leaves the manifest naming bytes no daemon will ever receive (the self-updater verifies the
+# sha and refuses). Same guard as desktop/scripts/upload-desktop.sh; always a new version, never an
+# overwrite.
+gcs_refuse_republish() {
+  local dst="$1"
+  if gcloud storage ls "$dst" >/dev/null 2>&1; then
+    echo "error: $dst already exists — versioned artifacts are immutable (the CDN keeps the first bytes)." >&2
+    echo "       Publish a NEW version instead of re-uploading this one (see cli/RELEASE.md)." >&2
+    exit 1
   fi
 }
 
@@ -146,6 +152,8 @@ NOTIFY_SHA="$(sha256_of "$NOTIFY")"; NOTIFY_SIZE="$(wc -c < "$NOTIFY" | tr -d ' 
 echo ">> uploading cli.js ($CLI_SIZE bytes) + notify.mjs ($NOTIFY_SIZE bytes)"
 # Immutable per-version path — see the CDN_ASSET_BASE_URL note above. Long max-age here is what
 # actually lets the CDN cache these instead of hitting GCS on every daemon's install/update.
+gcs_refuse_republish "gs://${GCS_BUCKET}/${CLI_GCS}"
+gcs_refuse_republish "gs://${GCS_BUCKET}/${NOTIFY_GCS}"
 gcs_cp "$CLI"    "gs://${GCS_BUCKET}/${CLI_GCS}"    "public, max-age=31536000, immutable"
 gcs_cp "$NOTIFY" "gs://${GCS_BUCKET}/${NOTIFY_GCS}" "public, max-age=31536000, immutable"
 

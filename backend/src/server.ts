@@ -9,8 +9,11 @@ import { errorHandler } from './middlewares/errorHandler.js'
 import { registerAuthMiddleware } from './middlewares/authMiddleware.js'
 import { cursorRoutes } from './routes/cursor.js'
 import { voiceRoutes } from './routes/voice.js'
+import { harnessShareRoutes } from './routes/harnessShares.js'
+import { deskRoutes } from './routes/desk.js'
+import { handleObserverUpgrade } from './lib/observerWs.js'
 import { deviceAuthRoutes } from './routes/deviceAuth.js'
-import { healthRoutes, authRoutes, userRoutes, machineRoutes, planRoutes, deviceRoutes, mobileRoutes, appRoutes, analyticsRoutes, agentRouteRoutes } from './routes/index.js'
+import { healthRoutes, authRoutes, userRoutes, machineRoutes, planRoutes, gridRoutes, deviceRoutes, mobileRoutes, appRoutes, analyticsRoutes, agentRouteRoutes, storeRoutes } from './routes/index.js'
 import { startSubdomainProxy, startMeshProxy } from './lib/subdomainProxy.js'
 import { handleDeviceUpgrade } from './lib/deviceWs.js'
 import { handleWebUpgrade } from './lib/webWs.js'
@@ -18,7 +21,8 @@ import { handleManagerUpgrade } from './lib/managerWs.js'
 import { handleAdapterUpgrade } from './lib/adapterWs.js'
 import { logger } from './utils/logger.js'
 import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
-import { closeBus } from './lib/bus.js'
+import { closeBus, redisSsoProfileStore } from './lib/bus.js'
+import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
 
 // Node ≥ 15 turns an unhandled rejection into a process exit. On a cluster worker that holds thousands of
@@ -76,6 +80,10 @@ const app = Fastify({
       // `ws` resets the timeout to 0 once it completes the upgrade, so this only ever fires pre-upgrade.
       if (socket instanceof net.Socket) socket.setTimeout(UPGRADE_HANDSHAKE_TIMEOUT_MS, () => socket.destroy())
       const path = (req.url ?? '').split('?')[0]
+      if (path === '/api/observer-ws') {
+        handleObserverUpgrade(req, socket, head)
+        return
+      }
       // Inverted-transport hub endpoints (terminated here, not proxied):
       //   /api/web-ws     — web clients (replaces the old proxied /proxy/api/ws)
       //   /api/manager-ws — managers dial in and multiplex all their agents
@@ -131,6 +139,10 @@ async function start(): Promise<void> {
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
   })
 
+  // Every process shares one memory of validated tokens; without it each worker asks the profile API
+  // for itself. Attached before anything can authenticate — the REST gate below and the socket upgrades.
+  useSharedSsoProfileStore(redisSsoProfileStore)
+
   // SSO access-token gate for the control API (data-plane auth happens before Fastify).
   registerAuthMiddleware(app)
 
@@ -139,6 +151,7 @@ async function start(): Promise<void> {
   await app.register(userRoutes)
   await app.register(machineRoutes)
   await app.register(planRoutes)
+  await app.register(gridRoutes) // the account's private harness grid name
   await app.register(deviceRoutes)
   await app.register(mobileRoutes)
   await app.register(appRoutes)
@@ -149,6 +162,9 @@ async function start(): Promise<void> {
   // Absent from the auth middleware's skip-list on purpose: that absence IS the gate.
   await app.register(voiceRoutes)
   await app.register(deviceAuthRoutes) // device-authorization grant: how the desktop app gets a machine key
+  await app.register(storeRoutes)      // the Harness Store's ratings and reviews; the catalogue is the CLI's registry
+  await app.register(harnessShareRoutes)
+  await app.register(deskRoutes)          // the account's tabs, the same on every computer (lib/desk.ts)
 
   // Dedicated public subdomain app-proxy on its own port (Host-header routed → tunnelled to the node app).
   const appProxyServer = startSubdomainProxy()

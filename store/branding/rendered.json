@@ -1,0 +1,128 @@
+[
+  {
+    "id": "autonomous/web-studio",
+    "sourceSha256": "52af77619d9b09d7604c678bd50df5eec57f7d58adf04a61a0a65742b0667363",
+    "pngSha256": "cdfacf7e71ff884ae9e2f5b64ad9d6f0f786597a35af4dfdb84c89d3f4ddb739"
+  },
+  {
+    "id": "autonomous/data-studio",
+    "sourceSha256": "8a69d6a14db21ee43c839d183a0607a7d314117f03c314de043ab077c3376ef4",
+    "pngSha256": "511b15eae998786bc8319fb81c1b1f928b8cc0eaeabaf53691e2c20220d89cf9"
+  },
+  {
+    "id": "autonomous/quantum-studio",
+    "sourceSha256": "d3652e1f4fec885301ccb6bb47a5554ade781d3bd2778a8142369d3feddf24c2",
+    "pngSha256": "cf9b482241eba9d11b2c07725352de9c5fb29f8d0df9fc66348e3e31b20dc743"
+  },
+  {
+    "id": "autonomous/gis",
+    "sourceSha256": "c517f589349d83b34c33ffdb82c4b6b458f6edd12ce469dfd9512d3fcae699e9",
+    "pngSha256": "3d185992dd80d6a8aa4c9285705fa7832b5f1e9a4e9dccf5bebefc0de5606cfc"
+  },
+  {
+    "id": "autonomous/openscad",
+    "sourceSha256": "d8e32d1988d289e493e8f7b6bf08257051f0cb357e36e0b74c440db84bc4b6dc",
+    "pngSha256": "d8e32d1988d289e493e8f7b6bf08257051f0cb357e36e0b74c440db84bc4b6dc"
+  },
+  {
+    "id": "autonomous/freecad",
+    "sourceSha256": "10a70c5cec0f5456c995f269fc2b73978f9b4b7eb193c5fab765ea97254682ba",
+    "pngSha256": "3531eee296856360603d73af3b27754745940840b32cb9f1ab5b716247cd9f8c"
+  },
+  {
+    "id": "autonomous/orca-slicer",
+    "sourceSha256": "c93399fb20d7c08dad4d7062b4bf4f6adfe1fed6fd4b2e840bc4c2ed6a49848a",
+    "pngSha256": "09cfaf341dfb3cef21356f8b53322a8cbeedf32329e7cb3e945c6e60c1b9c39d"
+  },
+  {
+    "id": "autonomous/firmware-studio",
+    "sourceSha256": "c8884c54a8abb4c96f92282dbb06b4b46a60efca2c40b335d9aded8a7a07974e",
+    "pngSha256": "45c4c35df05637ad329488398b2110673ee3efe51640e093f2f062a20d581c10"
+  },
+  {
+    "id": "autonomous/godot-studio",
+    "sourceSha256": "94f907f52f124c331615f32a79cff1921c352f0c3b9f3652b115f01aa5d2fffb",
+    "pngSha256": "cbddf2a277c50a94c721c7fda6c1e439df5c418ce4f0605b0ca22377963c6ece"
+  },
+  {
+    "id": "autonomous/home-assistant",
+    "sourceSha256": "488bde836247dc241b48cc990a46073532f1945de748c260d34651a12a60d65a",
+    "pngSha256": "28b72b71251117bf3a5cccf1a7d61143355db8344d7e11e0e25ba3277a98f518"
+  },
+  {
+    "id": "autonomous/score",
+    "sourceSha256": "7ed374a6d75b756e837f459b5bde6afe08f5f1e1e6f1b24cb274ae4ba62101be",
+    "pngSha256": "cecb33e1cbdc26996b688c945b03fce31b322c8e75dc44872f7efbfecae3fd81"
+  },
+  {
+    "id": "autonomous/sheet-docs",
+    "sourceSha256": "524c5ab52d59ebd034ff85b584a35c6c48b94fc5c495cd0fd60a4f20d26b68e5",
+    "pngSha256": "acfa469526b155815f8bf802bc5cc167a4e1e1810264f43e9d3fc5fe0c6c9a24"
+  },
+  {
+    "id": "autonomous/roundtable",
+    "sourceSha256": "7ae7cae5725cbc305875a40ea98087eea86bd8e5846508986679ae9fb6f1c0da",
+    "pngSha256": "adc9c425003372247f95f61890fbbe35cd25d591474f7c077bc681f2bc0ec01f",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/jev-browser",
+    "sourceSha256": "c171c81c07449d2a69419b896a837007c2df6afafd3138baa9e6665c0d37b23a",
+    "pngSha256": "245ccc97c17a1443ddefd6e3758a33583e72597aab9a4d0016ba140a937835a0",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/godogen",
+    "sourceSha256": "47070987c9b643b2385032d7097ca12c5469d06aa0c8d3ac08d88912b0d3287b",
+    "pngSha256": "bb978c3cc63c329bb264db308056446c2f8424566c2424d8808e776a648ae549",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/ableton-ai",
+    "sourceSha256": "a468eba9a0fc0ef38565a7f4b85c57252f37fc4de3c1d0bd4631c393e8b59b0a",
+    "pngSha256": "33eafef6453e233b7d3a9356458462271fe2bc1eb1cefc7c67547625c8630b56",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/autoresearch-mlx",
+    "sourceSha256": "7a178be086eadd729415a3fa3b5a9c6e35b1115c8340533b68a6ab74dd559109",
+    "pngSha256": "56403096b18bed9910295fa49c32a9c59eb65c9ea24a7d644d86cc2d4d4a6910",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/foam-agent",
+    "sourceSha256": "bca447cda1a8b6efb0fbfa21b7397c50fe5b2db28fbc9df0af1dddd877e32256",
+    "pngSha256": "25169f1d92cbaafda66b307d7d9ee6765951f0a9aa0cabfb393b37d7e4e6b611",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/juce-agent-toolkit",
+    "sourceSha256": "9cd011ca6711a9015a912035e9efeb9c464a46650198a7476a3abd96ae40cb44",
+    "pngSha256": "2dfb64560a5d6674d1251823eaf386a711dd25aa35f808151600d63f0e378acb",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/machine-monitor",
+    "sourceSha256": "2f8da5a8edcb60b4685195e5a9ee71114483c46a3678f606f356f14d104bd9c4",
+    "pngSha256": "927a256b879d02e10b61523c0a44683c5d044dc8f97a1c3bed033feeca09aa2c",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/simskill",
+    "sourceSha256": "985952cd34b88ea1a52d05704c60dc323f0116c635392366ca574844a9df7a7c",
+    "pngSha256": "daa81a8992f1ca067a7de12cc1671ba18a3408df91c4bdcf880a99b67dc3dd70",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/harness-monitor",
+    "sourceSha256": "a81cf91eb42f3ba28f46607158d5358570c085428cca16d828f414581d098347",
+    "pngSha256": "ab52f97dff0968be7435a7f9d9fbba5c52874f26bcf5e50063eb9108c5adb79f",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/harness-builder",
+    "sourceSha256": "445ec79ee22691822124eafbb2774295c8475444b307c8ef95a9ce7bf5966307",
+    "pngSha256": "6d59ad9cbf8afe6e4029c7a2c2508c20cd6498ce7092382fb6f9417c5dcb032e",
+    "renderer": "AppKit"
+  }
+]

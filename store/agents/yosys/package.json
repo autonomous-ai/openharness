@@ -1,0 +1,13 @@
+{
+  "name": "autonomous-yosys",
+  "private": true,
+  "type": "module",
+  "description": "Yosys as a Harness agent: netlistsvg draws the Yosys netlist, in the flow and in the pane's schematic",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test viewer/test/*.test.mjs && python3 -m unittest discover -s toolchain -p 'test_*.py'"
+  },
+  "dependencies": {
+    "netlistsvg": "1.0.2"
+  }
+}

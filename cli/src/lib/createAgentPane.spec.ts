@@ -98,6 +98,22 @@ describe('createAndRegisterPane', () => {
     expect(tmuxBackend.kill).toHaveBeenCalledTimes(3)
   })
 
+  it('records the named agent and the requested name on the row it opens', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const tmuxBackend = fakeTmux([succeeded('%1')])
+
+    const result = await createAndRegisterPane({
+      tmuxBackend, registry, engine: 'opencode', cwd: '/home/someone', sessionLabel: 'harness-opencode-1',
+      argv: ['opencode', '--agent', 'harness-compute'], agent: 'harness-compute', defaultName: 'Local model',
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.pending).toMatchObject({ engine: 'opencode', agent: 'harness-compute', defaultName: 'Local model' })
+    expect(registry.byAgent(result.pending.agentId)).toMatchObject({ agent: 'harness-compute' })
+  })
+
   it('does not retry a tmux spawn failure', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()

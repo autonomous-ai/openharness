@@ -107,7 +107,7 @@ void main() {
     // by accident. Measured on the clip box, not on a button — each button
     // keeps its own 24px inside it either way.
     final menu = find.byTooltip('Machine options');
-    final plus = find.byTooltip('Create Agent here…');
+    final plus = find.byTooltip('New Harness here…');
     expect(menu, findsOneWidget);
     expect(plus, findsOneWidget);
     Size actionsBox() => tester.getSize(

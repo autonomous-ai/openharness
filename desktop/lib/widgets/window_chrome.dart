@@ -3,6 +3,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/widgets.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../core/desktop_window.dart';
 import '../shared/theme/app_theme.dart' as grid;
 
 /// How far a full-width strip drawn at the very top of the window has to
@@ -95,7 +96,11 @@ class WindowDragArea extends StatelessWidget {
       // Translucent, like DragToMoveArea: the drag has to be available from
       // the gaps between whatever the region draws.
       behavior: HitTestBehavior.translucent,
-      onPanStart: (_) => windowManager.startDragging(),
+      // Null off the desktop, so no pan recognizer is registered at all rather
+      // than one that throws the moment someone drags the chrome.
+      onPanStart: hasManagedWindow
+          ? (_) => windowManager.startDragging()
+          : null,
       child: child,
     );
   }

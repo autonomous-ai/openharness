@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="studio-token" content="__STUDIO_TOKEN__" />
+    <title>Game Studio</title>
+    <link rel="stylesheet" href="/studio.css" />
+  </head>
+  <body>
+    <main class="studio">
+      <header class="masthead">
+        <div>
+          <div class="eyebrow">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m12 2 9 5v10l-9 5-9-5V7Zm0 0v10m9-5-9 5-9-5m9 5v10" />
+            </svg>
+            GAME STUDIO
+          </div>
+          <h1 id="title">Your world</h1>
+          <p id="description">A place to make something playable.</p>
+        </div>
+        <span class="connection"><i></i><span id="connection">Live</span></span>
+      </header>
+      <section class="workbench" aria-label="Interactive game studio">
+        <div class="toolbar">
+          <div class="mode" aria-label="Preview mode">
+            <button id="explore" aria-pressed="true">Explore</button
+            ><button id="play" aria-pressed="false" disabled>
+              <svg viewBox="0 0 20 20"><path d="m6 3 11 7-11 7Z" /></svg>Play
+            </button>
+          </div>
+          <span class="version" id="version">Opening</span>
+          <div class="tools">
+            <button id="pause" class="icon" aria-label="Pause game" disabled>
+              <svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" /></svg>
+            </button>
+            <button
+              id="restart"
+              class="icon"
+              aria-label="Restart game"
+              disabled
+            >
+              <svg viewBox="0 0 24 24">
+                <path d="M4 10a8 8 0 1 1 1 8M4 4v6h6" />
+              </svg>
+            </button>
+            <button
+              id="fit"
+              class="icon"
+              aria-label="Use widescreen preview"
+              aria-pressed="false"
+            >
+              <svg viewBox="0 0 24 24">
+                <rect x="3" y="5" width="18" height="14" rx="2" />
+                <path d="M8 9H6v2m10 4h2v-2" />
+              </svg>
+            </button>
+            <button id="fullscreen" class="icon" aria-label="Expand preview">
+              <svg viewBox="0 0 24 24">
+                <path d="M4 9V4h5m6 0h5v5m0 6v5h-5M9 20H4v-5" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div id="stage" class="stage">
+          <div id="empty" class="empty">
+            <div class="orbit"><span></span><span></span><span></span></div>
+            <h2>Opening your world</h2>
+            <p>Your first playable preview is being built.</p>
+          </div>
+          <div id="frames" class="frames"></div>
+          <button id="update" class="update" hidden>
+            <i></i> A new version is ready <strong>View update ↗</strong>
+          </button>
+          <div id="notice" class="notice" role="status" hidden></div>
+        </div>
+        <div class="game-footer">
+          <span id="controls">Drag to explore the world</span
+          ><span id="stats"></span>
+        </div>
+      </section>
+      <section class="progress" aria-label="Build progress">
+        <div class="progress-heading">
+          <span id="status-dot" class="status-dot"></span
+          ><span id="progress-message">Opening the studio</span
+          ><button id="details" aria-expanded="false" aria-controls="drawer">
+            Studio log <span id="log-count"></span
+            ><span class="chevron">⌄</span>
+          </button>
+        </div>
+        <div class="phases" id="phases" aria-label="Current stage"></div>
+        <details id="error" class="error" hidden>
+          <summary>Update needs a fix</summary>
+          <p id="error-message"></p>
+          <pre id="error-frame"></pre>
+        </details>
+      </section>
+      <section id="drawer" class="drawer" hidden>
+        <div class="drawer-head" role="tablist">
+          <button role="tab" id="tab-activity" aria-selected="true">
+            Activity</button
+          ><button role="tab" id="tab-versions" aria-selected="false">
+            Versions</button
+          ><button role="tab" id="tab-assets" aria-selected="false">
+            Assets</button
+          ><button id="export" class="export" disabled>
+            Export game <span>↗</span>
+          </button>
+        </div>
+        <div id="activity" class="activity" role="tabpanel"></div>
+        <div id="versions" class="versions" role="tabpanel" hidden></div>
+        <div id="assets" class="assets" role="tabpanel" hidden></div>
+      </section>
+      <div id="toast" class="toast" role="status" hidden></div>
+    </main>
+    <script src="/studio.js" type="module"></script>
+  </body>
+</html>

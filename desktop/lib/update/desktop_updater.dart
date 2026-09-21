@@ -36,7 +36,7 @@ String _currentArchitecture() => switch (Abi.current()) {
   Abi.linuxArm64 || Abi.macosArm64 || Abi.windowsArm64 => 'arm64',
   Abi.linuxX64 || Abi.macosX64 || Abi.windowsX64 => 'x64',
   _ => throw UnsupportedError(
-    'Harness Desktop updates do not support ${Abi.current()}',
+    'Harness updates do not support ${Abi.current()}',
   ),
 };
 
@@ -56,6 +56,26 @@ class UpdateInfo {
     required this.sha256,
     required this.size,
   });
+}
+
+enum DesktopUpdateCheckStatus { upToDate, available, disabled, failed }
+
+/// A failed or disabled check cannot establish that the installed app is current.
+class DesktopUpdateCheck {
+  final DesktopUpdateCheckStatus status;
+  final UpdateInfo? update;
+
+  const DesktopUpdateCheck.upToDate()
+    : status = DesktopUpdateCheckStatus.upToDate,
+      update = null;
+  const DesktopUpdateCheck.available(UpdateInfo this.update)
+    : status = DesktopUpdateCheckStatus.available;
+  const DesktopUpdateCheck.disabled()
+    : status = DesktopUpdateCheckStatus.disabled,
+      update = null;
+  const DesktopUpdateCheck.failed()
+    : status = DesktopUpdateCheckStatus.failed,
+      update = null;
 }
 
 /// A downloaded, sha256-verified build sitting in a temp directory, not yet swapped into place.
@@ -148,6 +168,11 @@ class DesktopUpdater {
   final bool _enabled;
   final bool _isLinux;
   final String _architecture;
+  final _checksInFlight = <String?, Future<DesktopUpdateCheck>>{};
+
+  static const checkInterval = Duration(hours: 6);
+
+  bool get canCheck => _enabled && _releaseMode;
 
   DesktopUpdater({
     this._enabled = true,
@@ -191,26 +216,41 @@ class DesktopUpdater {
     return const [_otaKeyMacOSArm64, _otaKeyMacOS];
   }
 
-  /// Fetches the manifest and returns the newer entry, or null if this app is already current (or
-  /// the manifest/network is unavailable — treated the same as "nothing to do", never surfaced as an
-  /// error; this runs unattended in the background).
-  ///
-  /// A debug or profile build never reports an update — self-installing (swapping the running .app
-  /// bundle for a downloaded release build and relaunching, see [applyStaged]) makes no sense for a
-  /// local dev build and would silently clobber it mid-session.
-  Future<UpdateInfo?> checkOnce({String? currentVersion}) async {
-    if (!_enabled || !_releaseMode) return null;
+  /// Unattended callers only need an offer. Interactive callers use [check]
+  /// so an unreachable service is not presented as "up to date".
+  Future<UpdateInfo?> checkOnce({String? currentVersion}) async =>
+      (await check(currentVersion: currentVersion)).update;
+
+  /// Manual and background callers share an in-flight manifest request.
+  /// Debug/profile and explicitly disabled builds never offer a release that
+  /// could replace the local development build.
+  Future<DesktopUpdateCheck> check({String? currentVersion}) =>
+      _checksInFlight.putIfAbsent(currentVersion, () async {
+        try {
+          return await _check(currentVersion: currentVersion);
+        } finally {
+          _checksInFlight.remove(currentVersion);
+        }
+      });
+
+  Future<DesktopUpdateCheck> _check({String? currentVersion}) async {
+    if (!canCheck) return const DesktopUpdateCheck.disabled();
     try {
       final running = currentVersion ?? await runningAppVersion();
+      if (_parseSemverCore(running) == null) {
+        return const DesktopUpdateCheck.failed();
+      }
       final response = await _dio.get<Map<String, dynamic>>(
         _metadataUrlForInstance,
       );
       final newest = _newestEntry(response.data);
-      if (newest == null || !semverGt(newest.version, running)) return null;
-      return newest;
+      if (newest == null) return const DesktopUpdateCheck.failed();
+      return semverGt(newest.version, running)
+          ? DesktopUpdateCheck.available(newest)
+          : const DesktopUpdateCheck.upToDate();
     } catch (error) {
-      debugPrint('DesktopUpdater.checkOnce: $error');
-      return null;
+      debugPrint('DesktopUpdater.check: $error');
+      return const DesktopUpdateCheck.failed();
     }
   }
 
@@ -238,6 +278,7 @@ class DesktopUpdater {
     final sha256 = entry['sha256'];
     final size = entry['size'];
     if (version is! String ||
+        _parseSemverCore(version) == null ||
         url is! String ||
         sha256 is! String ||
         size is! int) {
@@ -250,23 +291,33 @@ class DesktopUpdater {
   /// build is found (re-finding the same version on a later tick is harmless; the caller is expected
   /// to no-op if it's already showing that version). Cancel the returned [Timer] to stop.
   Timer startChecking({
-    Duration interval = const Duration(minutes: 1),
-    required void Function(UpdateInfo info) onUpdateAvailable,
+    Duration interval = checkInterval,
+    void Function(UpdateInfo info)? onUpdateAvailable,
+    void Function(DesktopUpdateCheck result)? onCheckCompleted,
     // Forwarded to checkOnce() on every tick — tests pass this to avoid checkOnce()'s default
     // runningAppVersion() call, which (via PackageInfo.fromPlatform()) needs a platform method
     // channel real production code gets for free but a plain `test()` doesn't.
     String? currentVersion,
   }) {
-    void tick() {
-      unawaited(
-        checkOnce(currentVersion: currentVersion).then((info) {
-          if (info != null) onUpdateAvailable(info);
-        }),
-      );
+    var checking = false;
+    late final Timer timer;
+    Future<void> tick() async {
+      if (checking || !timer.isActive) return;
+      checking = true;
+      try {
+        final result = await check(currentVersion: currentVersion);
+        if (!timer.isActive) return;
+        onCheckCompleted?.call(result);
+        final info = result.update;
+        if (info != null) onUpdateAvailable?.call(info);
+      } finally {
+        checking = false;
+      }
     }
 
-    tick();
-    return Timer.periodic(interval, (_) => tick());
+    timer = Timer.periodic(interval, (_) => unawaited(tick()));
+    unawaited(tick());
+    return timer;
   }
 
   /// Downloads [info] and verifies its sha256 BEFORE trusting the bytes. On macOS, unpacks the zip

@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import type { SessionEvent } from '../../lib/normalize.js'
+import { harnessWebTool, harnessWebToolKind, webReadUrl } from '../../lib/harnessWebTools.js'
 import { resolveCodexRollout } from './rollout.js'
 
 type JsonObject = Record<string, unknown>
@@ -59,10 +60,28 @@ function jsStringProperty(source: string, key: string): string {
   return quoted.slice(1, -1).replace(/\\'/g, "'").replace(/\\\\/g, '\\')
 }
 
+/**
+ * The strings of a JS array-literal property — `urls: ["a", 'b']` → `['a', 'b']`. Enough for a
+ * code-mode call read back out of its source, which is the only reason this exists.
+ */
+function jsStringArrayProperty(source: string, key: string): string[] {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = new RegExp(`(?:\\b${escapedKey}\\b|["']${escapedKey}["'])\\s*:\\s*\\[([^\\]]*)\\]`).exec(source)
+  if (!match) return []
+  return [...match[1].matchAll(/"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'/g)]
+    .map((m) => m[1] ?? m[2] ?? '')
+    .filter(Boolean)
+}
+
 function wrappedExecDescriptor(source: string): { tool: string; input: unknown } | null {
   const match = /\btools\.([a-zA-Z0-9_$]+)\s*\(/.exec(source)
   if (!match) return null
   const wrappedTool = match[1]
+  // The harness web tools, called by their MCP identifier — `tools.mcp__harness__web_search(...)`.
+  // The card wants the query or the urls, read back out of the source like `web__run`'s `q`.
+  const webTool = harnessWebToolKind(wrappedTool)
+  if (webTool === 'WebSearch') return { tool: webTool, input: { query: jsStringProperty(source, 'query') } }
+  if (webTool === 'WebFetch') return { tool: webTool, input: { url: webReadUrl(jsStringArrayProperty(source, 'urls')) } }
   switch (wrappedTool) {
     case 'web__run':
       return { tool: 'WebSearch', input: { query: jsStringProperty(source, 'q') } }
@@ -91,13 +110,23 @@ export function isCodexInternalToolCall(name: string, rawInput: unknown): boolea
     && !/\btools\.[a-zA-Z0-9_$]+\s*\(/.test(rawInput)
 }
 
-/** Codex rollout function name -> the existing Claude-style tool vocabulary used by web/device. */
-export function codexToolDescriptor(name: string, rawInput: unknown): { tool: string; input: unknown } {
+/**
+ * Codex rollout function name -> the existing Claude-style tool vocabulary used by web/device.
+ *
+ * `namespace` is the rollout item's own field. Codex records an MCP call as
+ * `name: "mcp__harness__web_search"`, or — measured on 0.154.0 rollouts — as `name: "web_search"`
+ * beside `namespace: "mcp__harness"`; the two are joined only to recognise the harness web tools,
+ * and every other name is passed through exactly as before.
+ */
+export function codexToolDescriptor(name: string, rawInput: unknown, namespace = ''): { tool: string; input: unknown } {
   if (name === 'exec' && typeof rawInput === 'string') {
     const wrapped = wrappedExecDescriptor(rawInput)
     if (wrapped) return wrapped
   }
   const args = parseObject(rawInput)
+  // The harness web tools, on a Local model: the native cards, as every other engine's web tool gets.
+  const webTool = harnessWebTool(namespace ? `${namespace}__${name}` : name, args)
+  if (webTool) return webTool
   switch (name) {
     case 'exec_command':
     case 'shell':
@@ -179,7 +208,8 @@ export function readChildRollout(file: string): CodexSubagentInfo | null {
         ? payload.name
         : (payloadType === 'tool_search_call' ? 'tool_search' : 'tool')
       if (isCodexInternalToolCall(name, payload.arguments ?? payload.input)) continue
-      const descriptor = codexToolDescriptor(name, payload.arguments ?? payload.input)
+      const namespace = typeof payload.namespace === 'string' ? payload.namespace : ''
+      const descriptor = codexToolDescriptor(name, payload.arguments ?? payload.input, namespace)
       calls.push({ id, tool: descriptor.tool, input: descriptor.input })
       continue
     }

@@ -1,0 +1,28 @@
+{
+  "listed": true,
+  "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/lab-bench",
+  "license": "MIT",
+  "tagline": "Turn a question into evidence you can act on",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/lab-bench/starter.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/lab-bench/canopy.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/lab-bench/fold.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Help me make my cold brew more consistent. Plan independent jars at different steeping times and coffee doses, import my measured extraction values, and compare two settings with fresh confirmation runs. Keep the original data and give me a reproducible report.",
+      "caption": "Clearwater Coffee \u00b7 confirmation workflow shown with explicitly synthetic acceptance data",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/lab-bench/starter.jpg"
+    },
+    {
+      "prompt": "I have seedlings on two shelves. Design a fair comparison of three growing media and two water allocations, keeping each pot independent. Let me import the height gains, account for shelf differences and investigate a recorded instrument problem without losing its data.",
+      "caption": "Canopy Seedlings \u00b7 categories, fixed blocks and sensitivity analysis; synthetic acceptance data",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/lab-bench/canopy.jpg"
+    },
+    {
+      "prompt": "Help our paper workshop test crease width and flap overlap. Give us a randomized collection sheet, analyze our measured peak loads, and add new interior settings to investigate curvature while preserving the original tests. Export the source, figures and report.",
+      "caption": "Fold Paperworks \u00b7 curved response model and new measurements; synthetic acceptance data",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/lab-bench/fold.jpg"
+    }
+  ]
+}

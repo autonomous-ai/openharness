@@ -3,6 +3,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../core/models.dart' show AgentVerdict;
 import '../core/test_run.dart';
@@ -32,10 +33,12 @@ class WebPanePanel extends StatefulWidget {
     super.key,
     required this.notifier,
     required this.pane,
+    this.title = 'Viewer',
     required this.ownerName,
     required this.ownerEngine,
     this.ownerDisplayName,
     this.verdict,
+    this.working = false,
     this.onClose,
     this.onToggleZoom,
     this.zoomed = false,
@@ -45,7 +48,10 @@ class WebPanePanel extends StatefulWidget {
   final AppNotifier notifier;
   final TerminalPane pane;
 
-  /// The agent this viewer belongs to, for the header.
+  /// What the pane is called in its header ("3D Viewer"); see viewerPaneName.
+  final String title;
+
+  /// The harness this viewer belongs to — in the header's tooltip, beside the URL.
   final String ownerName;
   final String? ownerEngine;
   final String? ownerDisplayName;
@@ -54,6 +60,9 @@ class WebPanePanel extends StatefulWidget {
   /// strip and the chip in the header. The viewer IS the product, so this
   /// header carries them in full where the terminal's shows only the chip.
   final AgentVerdict? verdict;
+
+  /// The agent is mid-turn: the header says so instead of the last verdict.
+  final bool working;
   final VoidCallback? onClose;
   final VoidCallback? onToggleZoom;
   final bool zoomed;
@@ -73,6 +82,9 @@ class _WebPanePanelState extends State<WebPanePanel> {
   bool _loading = false;
   String? _failure;
 
+  /// The appearance last stamped on the page, so a rebuild that changed nothing runs no script.
+  Brightness? _stampedBrightness;
+
   @override
   void initState() {
     super.initState();
@@ -80,7 +92,17 @@ class _WebPanePanelState extends State<WebPanePanel> {
   }
 
   void _mountController() {
-    final controller = WebViewController()
+    // WebKit's default media policy wants a click before any playback, which
+    // leaves a viewer's muted video sitting at 00:00 with a play button; a
+    // pane whose whole point is the render the harness just made autoplays it.
+    final controller = WebViewController.fromPlatformCreationParams(
+      WebViewPlatform.instance is WebKitWebViewPlatform
+          ? WebKitWebViewControllerCreationParams(
+              allowsInlineMediaPlayback: true,
+              mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
+            )
+          : const PlatformWebViewControllerCreationParams(),
+    )
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
@@ -88,7 +110,12 @@ class _WebPanePanelState extends State<WebPanePanel> {
             _loading = true;
             _failure = null;
           }),
-          onPageFinished: (_) => _set(() => _loading = false),
+          onPageFinished: (_) {
+            _set(() => _loading = false);
+            // A fresh document has no stamp; give it the app's appearance before it is looked at.
+            _stampedBrightness = null;
+            _stampTheme();
+          },
           onWebResourceError: (error) {
             // Only the page itself: a harness's viewer pulls fonts, models
             // and images of its own, and one of those failing is its business
@@ -129,6 +156,25 @@ class _WebPanePanelState extends State<WebPanePanel> {
     controller.loadRequest(uri);
   }
 
+  /// Tell the page which appearance the app is in.
+  ///
+  /// The web view follows the SYSTEM's light/dark setting on its own (`prefers-color-scheme`),
+  /// not the app's — so an app set to dark on a light Mac showed a light viewer inside a dark
+  /// window, and the two disagreed. The stamp is the same `data-theme` on the document root that
+  /// the app's own artifact pages honour; a viewer that styles for it follows the app, and one
+  /// that does not is unaffected. Runs on every load and whenever the app's theme changes.
+  void _stampTheme() {
+    final controller = _controller;
+    if (controller == null || _loadedUrl == null) return;
+    final brightness = grid.AppTheme.brightness.value;
+    if (brightness == _stampedBrightness) return;
+    _stampedBrightness = brightness;
+    final theme = brightness == Brightness.dark ? 'dark' : 'light';
+    controller
+        .runJavaScript("document.documentElement.setAttribute('data-theme','$theme')")
+        .catchError((_) {});
+  }
+
   void _reload() {
     if (_controller == null) return;
     if (_loadedUrl != widget.pane.url) {
@@ -151,6 +197,8 @@ class _WebPanePanelState extends State<WebPanePanel> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    // The theme is a dependency of this build; a change here reaches the page too.
+    _stampTheme();
     return ColoredBox(
       color: grid.AppPalette.windowBg,
       child: Column(
@@ -183,13 +231,16 @@ class _WebPanePanelState extends State<WebPanePanel> {
               // would only repeat what the pane shows. A status, not a history.
               Expanded(
                 child: Tooltip(
-                  message: widget.pane.url ?? '',
+                  message: [
+                    widget.ownerName,
+                    ?widget.pane.url,
+                  ].join('\n'),
                   waitDuration: const Duration(milliseconds: 700),
                   child: Row(
                     children: [
                       Flexible(
                         child: Text(
-                          widget.ownerName,
+                          widget.title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -209,13 +260,20 @@ class _WebPanePanelState extends State<WebPanePanel> {
                             fontWeight: FontWeight.w500,
                           ),
                         ),
-                        Flexible(child: VerdictStatus(verdict: verdict)),
+                        Flexible(
+                          child: VerdictStatus(
+                            verdict: verdict,
+                            working: widget.working,
+                          ),
+                        ),
                       ],
                     ],
                   ),
                 ),
               ),
               const SizedBox(width: 8),
+              // coverage:ignore-start
+              // Only a real webview's navigation sets _loading; none under test.
               if (_loading)
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 6),
@@ -225,6 +283,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
                     child: CircularProgressIndicator(strokeWidth: 1.5),
                   ),
                 ),
+              // coverage:ignore-end
               _ViewerActions(
                 zoomed: widget.zoomed,
                 onReload: _controller == null ? null : _reload,
@@ -239,6 +298,14 @@ class _WebPanePanelState extends State<WebPanePanel> {
   }
 
   Widget _body(BuildContext context) {
+    if (widget.pane.viewerError case final error?) {
+      return _Notice(
+        key: const ValueKey('web-pane-error'),
+        icon: LucideIcons.unplug,
+        title: 'Viewer unavailable',
+        detail: error,
+      );
+    }
     final controller = _controller;
     final url = widget.pane.url;
     if (controller == null) {

@@ -9,6 +9,7 @@ import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/swarm_catalog.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 
 import 'swarm_state_test.dart' show createApp;
@@ -26,6 +27,108 @@ class _RecordingApi extends ApiClient {
 }
 
 void main() {
+  test(
+    'shared machines never enter the general machine connection path',
+    () async {
+      var requestedConnections = 0;
+      final app = createApp(
+        connectionForTest: (_) {
+          requestedConnections++;
+          throw StateError('A shared machine requested a full connection');
+        },
+      );
+      const shared = Machine(
+        machineId: 'shared',
+        authMode: MachineAuthMode.remote,
+        isShared: true,
+      );
+      app.machines.add(shared);
+      app.machineStates['shared'] = MachineState(shared);
+      await expectLater(app.listRemoteFolder('shared', '/'), throwsStateError);
+      final restart = await app.restartAgent('shared', 'shared-agent');
+      expect(restart.error, contains('view-only'));
+      await app.gridModels('shared');
+      expect(requestedConnections, 0);
+      app.dispose();
+    },
+  );
+
+  testWidgets(
+    'shared machines expose only invited agents and carry a view-only owner label',
+    (tester) async {
+      const channel = MethodChannel('harness/swarm_tabs');
+      final messages = <MethodCall>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        messages.add(call);
+        return true;
+      });
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      final app = createApp();
+      final grant = SharedHarness(
+        id: 'grant',
+        agentId: 'shared-agent',
+        name: 'Climate dashboard',
+        expiresAt: DateTime(2027),
+      );
+      final shared = Machine(
+        machineId: 'shared',
+        authMode: MachineAuthMode.remote,
+        name: 'Studio',
+        isShared: true,
+        ownerName: 'D',
+        sharedHarnesses: [grant],
+      );
+      app.machines.add(shared);
+      app.machineStates['shared'] = MachineState(shared)
+        ..nodeOnline = true
+        ..agentLoadStatus = AgentLoadStatus.loaded
+        ..agents = [
+          const Agent(
+            id: 'shared-agent',
+            name: 'Climate dashboard',
+            terminalAvailable: true,
+          ),
+        ];
+      final projects = SwarmProjectStore();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SwarmScreen(
+            notifier: app,
+            nativeTabs: true,
+            projectStore: projects,
+          ),
+        ),
+      );
+      await tester.pump();
+      final state =
+          messages.lastWhere((m) => m.method == 'machinesState').arguments
+              as Map;
+      final machines = state['machines'] as List;
+      final row = machines.cast<Map>().firstWhere((m) => m['id'] == 'shared');
+      expect(row['shared'], isTrue);
+      expect(row['ownerName'], 'D');
+      expect(row['linkRequired'], isFalse);
+      expect(
+        (row['agents'] as List).single,
+        containsPair('id', 'shared-agent'),
+      );
+      expect((row['agents'] as List).single, containsPair('canOpen', true));
+      expect(
+        app.machineStates['shared']!.connectionStatus,
+        ConnectionStatus.disconnected,
+      );
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+      projects.dispose();
+    },
+  );
   testWidgets('tab navigation does not resend the agent inventory', (
     tester,
   ) async {
@@ -217,7 +320,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     await reply.future;
     expect(find.text('Delete machine'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Delete'), findsOneWidget);
+    expect(find.byKey(const Key('machine-delete-confirm')), findsOneWidget);
 
     // Cancelling leaves the machine in place.
     await tester.tap(find.text('Cancel'));
@@ -267,7 +370,7 @@ void main() {
     expect(find.text('Delete machine'), findsOneWidget);
 
     // Confirming drops the machine from the client and the API.
-    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.tap(find.byKey(const Key('machine-delete-confirm')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(api.deleted, ['m']);
@@ -311,6 +414,76 @@ void main() {
     await reply.future;
     expect(find.text('Delete machine'), findsNothing);
     expect(app.machineStates.containsKey('m'), isTrue);
+
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+    projects.dispose();
+  });
+
+  testWidgets('machinesState reports presence and link state independently', (
+    tester,
+  ) async {
+    const channel = MethodChannel('harness/swarm_tabs');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final messages = <MethodCall>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      messages.add(call);
+      return true;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    final app = createApp();
+    final state = app.machineStates['m']!;
+    final projects = SwarmProjectStore();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SwarmScreen(
+          notifier: app,
+          nativeTabs: true,
+          projectStore: projects,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    Map machine() =>
+        ((messages.lastWhere((c) => c.method == 'machinesState').arguments
+                        as Map)['machines']
+                    as List)
+                .single
+            as Map;
+
+    // Online + linked: presence shows "Online", trailing status drops out so
+    // the agent count can fill the slot.
+    state
+      ..needsLink = false
+      ..nodeOnline = true;
+    app.notifyListeners();
+    await tester.pump();
+    expect(machine()['presence'], 'Online');
+    expect(machine()['linkRequired'], isFalse);
+    expect(machine()['status'], '');
+
+    // Unlinked but the node is up: BOTH indicators are set — the whole point of
+    // splitting them. Link state no longer masks presence.
+    state.needsLink = true;
+    app.notifyListeners();
+    await tester.pump();
+    expect(machine()['presence'], 'Online');
+    expect(machine()['linkRequired'], isTrue);
+    expect(machine()['status'], 'Link required');
+
+    // Offline while agents are still cached (agentCount stays non-null): the
+    // "Offline" presence must survive rather than being masked by the count in
+    // the trailing slot.
+    state
+      ..needsLink = false
+      ..nodeOnline = false;
+    app.notifyListeners();
+    await tester.pump();
+    expect(machine()['presence'], 'Offline');
+    expect(machine()['linkRequired'], isFalse);
+    expect(machine()['status'], '');
+    expect(machine()['agentCount'], 70); // cached agents remain
 
     await tester.pumpWidget(const SizedBox());
     app.dispose();

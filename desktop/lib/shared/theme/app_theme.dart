@@ -1,4 +1,4 @@
-import 'dart:io' show Platform;
+import '../../core/apple_fonts.dart';
 
 import 'package:flutter/material.dart';
 
@@ -189,12 +189,19 @@ class _PaletteScope extends InheritedNotifier<ValueNotifier<HarnessPalette>> {
 abstract final class AppPalette {
   // Approved Swarms canvas and native tab-strip palette.
   static Color get swarmField => AppTheme.palette.value.workspace;
+  // The welcome illustration recedes behind the working command dock.
+  static Color get swarmWelcome => const Color(0xff171717);
   static Color get swarmTabBar => AppTheme.palette.value.tabBar;
   static Color get swarmAccent => AppTheme.palette.value.accent;
   // Shared with the native search field for a continuous input/results surface.
   static Color get swarmSearchSurface => AppTheme.palette.value.search;
   static const agentEntrySurface = Color(0xff101113);
   static const agentEntryField = Color(0xff1d1f22);
+  // The command field deliberately stays light, like a browser's new-tab omnibox.
+  static const commandField = Color(0xFFF7F8FA);
+  static const commandInk = Color(0xFF202124);
+  static const commandMuted = Color(0xFF646971);
+  static const commandChip = Color(0xFFE9EBEF);
 
   // the conversation / content area — pure white in light, like Codex.
   //
@@ -1449,7 +1456,7 @@ abstract final class AppFont {
   /// they cost nothing and are the right answer the moment the engine can
   /// reach them; `Noto Sans` and `DejaVu Sans` are what actually carries it.
   static String get sansDefault =>
-      Platform.isMacOS ? _macSansDefault : _linuxSansDefault;
+      hasAppleFonts ? _macSansDefault : _linuxSansDefault;
 
   static const String _macSansDefault = '.AppleSystemUIFont';
   static const String _linuxSansDefault = 'Ubuntu Sans';
@@ -1466,7 +1473,7 @@ abstract final class AppFont {
       : [sansDefault, ..._sansFallbackDefault];
 
   static List<String> get _sansFallbackDefault =>
-      Platform.isMacOS ? _macSansFallback : _linuxSansFallback;
+      hasAppleFonts ? _macSansFallback : _linuxSansFallback;
 
   static const List<String> _macSansFallback = [
     'SF Pro Text',
@@ -1503,7 +1510,7 @@ abstract final class AppFont {
   /// was not monospaced at all. The Linux chain is the terminal's own default
   /// (see `lib/terminal/terminal_typography.dart` for why DejaVu leads).
   static String get monoDefault =>
-      Platform.isMacOS ? _macMonoDefault : _linuxMonoDefault;
+      hasAppleFonts ? _macMonoDefault : _linuxMonoDefault;
 
   static const String _macMonoDefault = '.AppleSystemUIFontMonospaced';
   static const String _linuxMonoDefault = 'DejaVu Sans Mono';
@@ -1517,7 +1524,7 @@ abstract final class AppFont {
       : [monoDefault, ..._monoFallbackDefault];
 
   static List<String> get _monoFallbackDefault =>
-      Platform.isMacOS ? _macMonoFallback : _linuxMonoFallback;
+      hasAppleFonts ? _macMonoFallback : _linuxMonoFallback;
 
   static const List<String> _macMonoFallback = [
     'Menlo',

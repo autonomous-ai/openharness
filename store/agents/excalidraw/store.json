@@ -1,0 +1,18 @@
+{
+  "homepage": "https://excalidraw.com",
+  "upstream": "https://github.com/excalidraw/excalidraw",
+  "license": "MIT",
+  "tagline": "Collaborative whiteboarding made easy",
+  "examples": [
+    {
+      "prompt": "Map an online store's checkout as a flowchart: cart, sign-in or guest checkout, shipping, payment with a declined-card retry loop, a fraud check that can send orders to manual review, then order confirmed and the email receipt. Diamonds for decisions, one frame per stage.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/excalidraw/checkout-flowchart.jpg",
+      "caption": "Checkout flowchart · 3 decisions, retry loop, 3 frames · .excalidraw"
+    },
+    {
+      "prompt": "Draw the architecture of a URL shortener: browser, CDN, API service, Postgres, Redis cache, a click-tracking worker on a queue, and an analytics dashboard. Frame the backend and label the arrows.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/excalidraw/url-shortener-architecture.jpg",
+      "caption": "URL shortener architecture · 10 shapes, 8 labeled arrows · .excalidraw"
+    }
+  ]
+}

@@ -2,13 +2,15 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { ENGINES } from '../engines/types.js'
+import { PROCESS_ENGINES } from '../engines/types.js'
 import type { AgentCommandOwnershipSnapshot } from './engineBin.js'
 import {
   ambiguousAgentProcess,
   bypassPermissionActive,
+  permissionModeFromArgv,
   engineProcessMatch,
   engineProcessMatchScore,
+  LSTART_MARKER_RE,
   parseProcessRow,
   resumeSessionId,
   sendLiteralToTmux,
@@ -73,6 +75,54 @@ describe('tmux process primitives', () => {
    * the live pane. processRows() now reads ps under LC_ALL=C.UTF-8 and repairs any surviving `?` row from
    * /proc, which is raw bytes. These two cases pin the before and the after.
    */
+  /**
+   * `lstart`'s shape belongs to LC_TIME, not to `ps`. Captured with
+   * `LC_TIME=<locale> ps -axo pid=,ppid=,comm=,lstart=,args=` on macOS 15.5, one run per locale on the
+   * same machine in the same second. Of sixteen locales tried only C, en_US and hu_HU parse at all; the
+   * rest reorder the fields and yield ZERO rows out of ~590.
+   *
+   * Zero rows is the whole bug: processRows returns `[]`, not null, so "we looked and the machine is
+   * empty" is indistinguishable from the truth, resolvePaneEngineProcess finds no engine under any pane,
+   * and watchCreatedPane burns its full ten minutes before reporting START_TIMEOUT — "claude did not
+   * expose an engine process within 10 minutes" — against a pane where claude is running and still
+   * firing hooks. This is why processRows spawns ps under psEnv instead of inheriting the locale.
+   */
+  it('cannot parse an lstart column written by a locale that reorders it', () => {
+    const rows = [
+      '15160  2281 /Users/admin/.lo Tue 15 Sep 23:10:38 2026 /Users/admin/.local/bin/claude',
+      '15160  2281 /Users/admin/.lo Di. 15 Sep. 23:10:38 2026 /Users/admin/.local/bin/claude',
+      '15160  2281 /Users/admin/.lo mar. 15 sept. 23:10:38 2026 /Users/admin/.local/bin/claude',
+      '15160  2281 /Users/admin/.lo \u706b  9/15 23:10:38 2026 /Users/admin/.local/bin/claude',
+      '15160  2281 /Users/admin/.lo \u0432\u0442\u043e\u0440\u043d\u0438\u043a, 15 \u0441\u0435\u043d\u0442\u044f\u0431\u0440\u044f 2026 \u0433. 23:10:38 /Users/admin/.local/bin/claude',
+    ]
+    for (const row of rows) expect(parseProcessRow(row)).toBeNull()
+
+    // The same process, same second, under the LC_TIME=C that psEnv guarantees.
+    expect(parseProcessRow('15160  2281 /Users/admin/.lo Tue Sep 15 23:10:38 2026 /Users/admin/.local/bin/claude'))
+      .toEqual({
+        pid: 15160,
+        parentPid: 2281,
+        executable: '/Users/admin/.lo',
+        startMarker: 'Tue Sep 15 23:10:38 2026',
+        args: '/Users/admin/.local/bin/claude',
+      })
+  })
+
+  /**
+   * checkSessionRuntime adopts, rather than compares, any saved marker this rejects. It has to reject
+   * localized stamps too: a marker recorded before psEnv landed (hu_HU parsed fine, `K szept. 15 …`) can
+   * never equal the C-locale stamp read back for the same live process, and comparing them would evict a
+   * live pane exactly once per session on upgrade.
+   */
+  it('recognises only a C-locale lstart stamp as a comparable start marker', () => {
+    expect(LSTART_MARKER_RE.test('Tue Sep 15 23:10:38 2026')).toBe(true)
+    expect(LSTART_MARKER_RE.test('Fri Aug 21 09:28:14 2026')).toBe(true)
+
+    expect(LSTART_MARKER_RE.test('K szept. 15 23:10:38 2026')).toBe(false)   // hu_HU, parsed pre-fix
+    expect(LSTART_MARKER_RE.test('Tue 15 Sep 23:10:38 2026')).toBe(false)    // en_AU
+    expect(LSTART_MARKER_RE.test('Greeting Thu Jul 30 11:00:03 2026')).toBe(false) // pre-fix shifted comm
+  })
+
   it('scores Command Code from the real bytes, and cannot from the mangled ones', () => {
     const mangled = parseProcessRow('  185   178 ??? harness-cli Fri Aug 21 09:34:20 2026 ??? harness-cli ubuntu probe')
     expect(engineProcessMatchScore(mangled!, 'commandcode')).toBe(0)
@@ -119,7 +169,7 @@ describe('tmux process primitives', () => {
     expect(engineProcessMatchScore(row, 'claude', commands)).toBe(0)
   })
 
-  it.each(ENGINES)('recognises a renamed native %s image from installed file identity', (engine) => {
+  it.each(PROCESS_ENGINES)('recognises a renamed native %s image from installed file identity', (engine) => {
     const key = `native-${engine}`
     const commands: AgentCommandOwnershipSnapshot = {
       ...ownership(),
@@ -214,12 +264,61 @@ describe('tmux process primitives', () => {
     expect(resumeSessionId('grok', 'grok -r 53d3843c-724e-47ff-ae3a-9fedfa328bba'))
       .toBe('53d3843c-724e-47ff-ae3a-9fedfa328bba')
     expect(resumeSessionId('commandcode', 'cmd -r Greeting')).toBeNull()
-    expect(resumeSessionId('claude', 'claude --resume 53d3843c-724e-47ff-ae3a-9fedfa328bba')).toBeNull()
-    expect(resumeSessionId('codex', 'codex resume 53d3843c-724e-47ff-ae3a-9fedfa328bba')).toBeNull()
     expect(resumeSessionId('devin', 'devin --resume 53d3843c-724e-47ff-ae3a-9fedfa328bba')).toBeNull()
   })
 
+  it('reads a claude/codex resume id from argv, but never the parent of a fork', () => {
+    // A daemon that could not see the pane when SessionStart fired (a session named by an older build)
+    // has only argv to learn the session from — measured on machine-remote-1, where six agents sat
+    // sessionless for ten days and could not be forked.
+    expect(resumeSessionId('claude', '/opt/agent-cli/.local/bin/claude --resume f56f0a36-aa58-4af1-a6e2-a77386122332'))
+      .toBe('f56f0a36-aa58-4af1-a6e2-a77386122332')
+    expect(resumeSessionId('claude', 'claude --dangerously-skip-permissions -r f4749d75-aef8-4d07-8031-48e2abecf7e5'))
+      .toBe('f4749d75-aef8-4d07-8031-48e2abecf7e5')
+    expect(resumeSessionId('codex', 'node /usr/local/bin/codex resume 53d3843c-724e-47ff-ae3a-9fedfa328bba --approve-for-me'))
+      .toBe('53d3843c-724e-47ff-ae3a-9fedfa328bba')
+    // `--resume <parent> --fork-session` writes a NEW session: the id on argv is the parent's.
+    expect(resumeSessionId('claude', 'claude --resume 53d3843c-724e-47ff-ae3a-9fedfa328bba --fork-session')).toBeNull()
+    // `codex fork <parent>` likewise names the parent, and is not a resume.
+    expect(resumeSessionId('codex', 'codex fork 53d3843c-724e-47ff-ae3a-9fedfa328bba')).toBeNull()
+    expect(resumeSessionId('claude', 'claude --continue')).toBeNull()
+  })
+
+  it('reads the exact permission mode a live process was launched with', () => {
+    expect(permissionModeFromArgv('claude', '/usr/local/bin/claude --dangerously-skip-permissions')).toBe('full')
+    expect(permissionModeFromArgv('claude', 'claude --permission-mode plan --resume abc')).toBe('plan')
+    expect(permissionModeFromArgv('claude', 'claude --permission-mode=acceptEdits')).toBe('acceptEdits')
+    expect(permissionModeFromArgv('claude', 'claude --permission-mode auto')).toBe('auto')
+    expect(permissionModeFromArgv('codex', 'codex --dangerously-bypass-approvals-and-sandbox')).toBe('full')
+    expect(permissionModeFromArgv('codex', 'codex --sandbox read-only')).toBe('readOnly')
+    expect(permissionModeFromArgv('codex', 'codex resume abc --approve-for-me')).toBe('auto')
+    expect(permissionModeFromArgv('cursor', 'cursor-agent --force')).toBe('auto')
+    expect(permissionModeFromArgv('opencode', 'opencode --auto')).toBe('auto')
+    // Skip-everything outranks a mode named beside it: that process runs without permissions.
+    expect(permissionModeFromArgv('claude', 'claude --permission-mode plan --dangerously-skip-permissions')).toBe('full')
+  })
+
+  it('names no mode for an argv that carries none — never `ask`, never a guess', () => {
+    // No flag is silence, not a choice; `bypassPermission` keeps deciding there.
+    expect(permissionModeFromArgv('claude', 'claude --resume abc')).toBeNull()
+    // A mode the table does not know cannot be reapplied, so it is not recorded.
+    expect(permissionModeFromArgv('claude', 'claude --permission-mode bogus')).toBeNull()
+    expect(permissionModeFromArgv('claude', 'claude --permission-mode manual auto')).toBeNull()
+    expect(permissionModeFromArgv('codex', 'codex --sandbox workspace-write')).toBeNull()
+    // Only an exact token counts, as for the bypass flag.
+    expect(permissionModeFromArgv('claude', 'claude "please avoid --dangerously-skip-permissions for now"')).toBeNull()
+    expect(permissionModeFromArgv('claude', 'claude --dangerously-skip-permissions-explained')).toBeNull()
+    // Engines with no mode table.
+    expect(permissionModeFromArgv('pi', 'pi --dangerously-skip-permissions')).toBeNull()
+    expect(permissionModeFromArgv('terminal', 'zsh -l')).toBeNull()
+  })
+
   it('reads bypass-permission mode from a live process argv via exact token match', () => {
+    expect(bypassPermissionActive('claude', '/usr/local/bin/claude --permission-mode auto')).toBe(true)
+    expect(bypassPermissionActive('claude', 'claude --permission-mode=auto --resume abc')).toBe(true)
+    expect(bypassPermissionActive('codex', 'codex resume abc --approve-for-me')).toBe(true)
+    // Launched before the auto modes: the old flags still count as approving (and, recorded as the
+    // `full` mode, come back as themselves on a relaunch).
     expect(bypassPermissionActive('claude', '/usr/local/bin/claude --dangerously-skip-permissions'))
       .toBe(true)
     expect(bypassPermissionActive('codex', 'codex --dangerously-bypass-approvals-and-sandbox'))
@@ -237,6 +336,11 @@ describe('tmux process primitives', () => {
 
   it('reads false when the confirmed flag is absent', () => {
     expect(bypassPermissionActive('claude', 'claude --resume abc')).toBe(false)
+    // Another mode, or "auto" that is not the mode's value.
+    expect(bypassPermissionActive('claude', 'claude --permission-mode plan')).toBe(false)
+    expect(bypassPermissionActive('codex', 'codex --sandbox read-only')).toBe(false)
+    expect(bypassPermissionActive('claude', 'claude --permission-mode manual auto')).toBe(false)
+    expect(bypassPermissionActive('claude', 'claude auto --permission-mode')).toBe(false)
   })
 
   it('always reads false for engines with no confirmed bypass flag — never guesses', () => {

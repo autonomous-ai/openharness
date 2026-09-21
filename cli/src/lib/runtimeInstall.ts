@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join, sep } from 'node:path'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join, sep } from 'node:path'
 
 import { env } from '../config/env.js'
+import { gridChildEnv, managedGridPath, meetsVersionFloor } from './gridExec.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { downloadVerified } from './selfUpdate.js'
 
@@ -35,22 +36,162 @@ interface RuntimeArtifact {
   archiveRoot: string
 }
 
-function artifactFor(document: unknown, key: string): RuntimeArtifact | null {
-  const node = (document as { node?: Record<string, unknown> } | null)?.node
-  const raw = node?.[key] as Partial<RuntimeArtifact> | undefined
+/** The `<name>` → `<platform>` → entry document every managed runtime publishes, read for one runtime. */
+function artifactFor(document: unknown, name: string, key: string): RuntimeArtifact | null {
+  const runtime = (document as Record<string, Record<string, unknown> | undefined> | null)?.[name]
+  const raw = runtime?.[key] as Partial<RuntimeArtifact> | undefined
   if (!raw || typeof raw.version !== 'string' || typeof raw.url !== 'string') return null
   if (typeof raw.sha256 !== 'string' || typeof raw.archiveRoot !== 'string') return null
-  // Refuse a plaintext URL: this archive becomes the interpreter for everything the CLI runs.
+  // Refuse a plaintext URL: this archive becomes something the daemon executes.
   if (!raw.url.startsWith('https://')) return null
   return { version: raw.version, url: raw.url, sha256: raw.sha256, size: raw.size, archiveRoot: raw.archiveRoot }
 }
 
-function runs(node: string): boolean {
+/** Does `binary --version` answer? `env` and `timeout` for a runtime whose first run is slow — a
+ *  onefile grid unpacks itself the first time, and must not be told to update itself while it does. */
+function runs(binary: string, timeout: number = 15_000, childEnv?: NodeJS.ProcessEnv): boolean {
   try {
-    execFileSync(node, ['--version'], { timeout: 15_000, stdio: 'ignore' })
+    execFileSync(binary, ['--version'], { timeout, stdio: 'ignore', ...(childEnv ? { env: childEnv } : {}) })
     return true
   } catch {
     return false
+  }
+}
+
+/**
+ * One managed runtime, as this module lays it down. Node and grid differ in four things and share
+ * everything else: the archive shape (`<name>-<version>-<key>/bin/<name>`), the staging, the rename
+ * race, the pointer file — the convention nodejs.org's tarballs set and tmux and grid copy.
+ */
+interface ManagedArchive {
+  /** The manifest's top-level key and the runtime's name in every path. */
+  name: 'node' | 'grid'
+  /** How the runtime is named to a person. */
+  label: string
+  manifestUrl: string
+  /** The executable, relative to the archive root. */
+  binary: string
+  /** What this daemon already resolved to under the runtime dir, or null when nothing is there. */
+  installed: () => string | null
+  /**
+   * Whether an installed runtime that is not the manifest's version is replaced. Node stops at "one
+   * is installed" — which version is the installer's business, and a daemon must not swap the
+   * interpreter it is running on. The grid follows the PIN: the manifest names the version this build
+   * of the CLI drives, and a pin that moved must reach a machine that already has an older one.
+   */
+  followsPin: boolean
+  /** A version the manifest may not go below — this daemon's floor, which a manifest cannot lower. */
+  acceptsVersion?: (version: string) => boolean
+  /** Does the laid-down binary run on this computer? Asked before the pointer is written. */
+  runs: (binary: string) => boolean
+  /**
+   * Lay the binary and its directory down read-only. For a runtime whose own updater would replace
+   * the file in place — `grid update` is an os.replace INTO the directory — a directory it cannot
+   * write to is what makes that fail loudly instead of overwriting the pin.
+   */
+  readOnly?: boolean
+  log: (message: string) => void
+}
+
+/**
+ * Install [spec]'s runtime from its manifest, or move to the version the manifest pins, or leave it
+ * be. Returns the binary this daemon should use — which is whatever it already had whenever the
+ * manifest, the download or the unpacked binary cannot be trusted — or null when there is nothing.
+ *
+ * Everything here is best-effort and returns rather than throws: a daemon must not fail to start
+ * because a download failed.
+ */
+async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null> {
+  const installed = spec.installed()
+  if (installed && !spec.followsPin) return installed
+  const key = platformKey()
+  if (!key) return installed
+
+  try {
+    const response = await fetch(spec.manifestUrl)
+    if (!response.ok) return installed
+    const artifact = artifactFor(await response.json(), spec.name, key)
+    if (!artifact) return installed
+    if (spec.acceptsVersion && !spec.acceptsVersion(artifact.version)) return installed
+
+    const target = join(env.ADAPTER_RUNTIME_DIR, `${spec.name}-${artifact.version}-${key}`)
+    const binary = join(target, spec.binary)
+    // The pin is what is installed: nothing to fetch, nothing to write.
+    if (installed === binary) return installed
+    if (!existsSync(binary)) {
+      spec.log(`▸ installing the Harness ${spec.label} runtime (${artifact.version}, ${key})…`)
+      // downloadVerified checks the sha256 but not the length, so check it here: a truncated body
+      // that somehow collided would be caught by the hash anyway, but a mismatch here is the cheaper
+      // and clearer failure.
+      const bytes = await downloadVerified(artifact)
+      if (artifact.size !== undefined && bytes.length !== artifact.size) return installed
+
+      mkdirSync(env.ADAPTER_RUNTIME_DIR, { recursive: true, mode: 0o700 })
+      const staging = join(env.ADAPTER_RUNTIME_DIR, `.${spec.name}-staging-${process.pid}-${Date.now()}`)
+      try {
+        mkdirSync(staging, { recursive: true, mode: 0o700 })
+        const archive = join(staging, `${spec.name}.tar.gz`)
+        writeFileSync(archive, bytes)
+        execFileSync('/usr/bin/tar', ['-xzf', archive, '-C', staging], { timeout: 120_000, stdio: 'ignore' })
+        const unpacked = join(staging, artifact.archiveRoot)
+        if (!existsSync(join(unpacked, spec.binary))) return installed
+        // Another start may have won the race; theirs is as good as ours.
+        if (!existsSync(target)) renameSync(unpacked, target)
+      } finally {
+        rmSync(staging, { recursive: true, force: true })
+      }
+    }
+    // After the rename, never in staging: a read-only directory cannot be emptied, and staging must
+    // always be.
+    if (spec.readOnly) {
+      chmodSync(binary, 0o555)
+      chmodSync(dirname(binary), 0o555)
+    }
+
+    // A pin this computer could not run is tried ONCE and remembered. A runtime that follows its pin
+    // is asked on every daemon start, and without this a wrong-arch or broken build would cost a
+    // hung exec each time until the manifest moved. A new pin is a new directory, and starts clean.
+    const unrunnable = join(target, '.unrunnable')
+    if (spec.followsPin && existsSync(unrunnable)) return installed
+    if (!spec.runs(binary)) {
+      if (spec.followsPin) {
+        try { writeFileSync(unrunnable, `${new Date().toISOString()}\n`, { mode: 0o600 }) } catch { /* the retry is the cost */ }
+      }
+      return installed
+    }
+    // Written last, and only once the binary has answered: Desktop Harness and the hook installer
+    // both read this file to decide what to execute, so it must never name something that cannot run.
+    writeFileSync(join(env.ADAPTER_RUNTIME_DIR, `current-${spec.name}`), `${binary}\n`, { mode: 0o600 })
+    spec.log(`  ✓ ${spec.label} runtime ready → ${target}`)
+    if (spec.followsPin) retireSuperseded(spec.name, key, target, installed)
+    return binary
+  } catch {
+    return installed
+  }
+}
+
+/**
+ * Every `<name>-*-<key>` under the runtime dir except the one just installed and the one it
+ * replaced.
+ *
+ * One version back stays on purpose. A pane launched before the pin moved has the OLD directory on
+ * its PATH for as long as it lives (`gridPanePrelude` in engineLaunch.ts), and deleting it would
+ * take `grid` away from an agent mid-conversation. Two versions of a 20 MB runtime is the price;
+ * the third is not paid.
+ */
+function retireSuperseded(name: string, key: string, target: string, previous: string | null): void {
+  const keep = new Set([target, previous ? dirname(dirname(previous)) : ''])
+  try {
+    for (const entry of readdirSync(env.ADAPTER_RUNTIME_DIR)) {
+      if (!entry.startsWith(`${name}-`) || !entry.endsWith(`-${key}`)) continue
+      const dir = join(env.ADAPTER_RUNTIME_DIR, entry)
+      if (keep.has(dir)) continue
+      // A read-only `bin/` cannot be emptied as it is; give it back before the sweep.
+      try { chmodSync(join(dir, 'bin'), 0o755) } catch { /* not laid down read-only */ }
+      rmSync(dir, { recursive: true, force: true })
+    }
+  } catch {
+    // Disk housekeeping only; the runtime that matters is already in place and recorded.
   }
 }
 
@@ -62,53 +203,47 @@ function runs(node: string): boolean {
  * means the work is already done, and nothing is fetched.
  */
 export async function ensureManagedRuntime(log: (message: string) => void = () => {}): Promise<string | null> {
-  const existing = managedNodePath()
-  if (existing.startsWith(env.ADAPTER_RUNTIME_DIR + sep)) return existing
+  return ensureManagedArchive({
+    name: 'node',
+    label: 'Node',
+    manifestUrl: env.ADAPTER_RUNTIME_METADATA_URL,
+    binary: join('bin', 'node'),
+    installed: () => {
+      const existing = managedNodePath()
+      return existing.startsWith(env.ADAPTER_RUNTIME_DIR + sep) ? existing : null
+    },
+    followsPin: false,
+    runs: (node) => runs(node),
+    log,
+  })
+}
 
-  const key = platformKey()
-  if (!key) return null
-
-  try {
-    const response = await fetch(env.ADAPTER_RUNTIME_METADATA_URL)
-    if (!response.ok) return null
-    const artifact = artifactFor(await response.json(), key)
-    if (!artifact) return null
-
-    const target = join(env.ADAPTER_RUNTIME_DIR, `node-${artifact.version}-${key}`)
-    const node = join(target, 'bin', 'node')
-    if (!existsSync(node)) {
-      log(`▸ installing the Harness Node runtime (${artifact.version}, ${key})…`)
-      // downloadVerified checks the sha256 but not the length, so check it here: a truncated body
-      // that somehow collided would be caught by the hash anyway, but a mismatch here is the cheaper
-      // and clearer failure.
-      const bytes = await downloadVerified(artifact)
-      if (artifact.size !== undefined && bytes.length !== artifact.size) return null
-
-      mkdirSync(env.ADAPTER_RUNTIME_DIR, { recursive: true, mode: 0o700 })
-      const staging = join(env.ADAPTER_RUNTIME_DIR, `.node-staging-${process.pid}-${Date.now()}`)
-      try {
-        mkdirSync(staging, { recursive: true, mode: 0o700 })
-        const archive = join(staging, 'node.tar.gz')
-        writeFileSync(archive, bytes)
-        execFileSync('/usr/bin/tar', ['-xzf', archive, '-C', staging], { timeout: 120_000, stdio: 'ignore' })
-        const unpacked = join(staging, artifact.archiveRoot)
-        if (!existsSync(join(unpacked, 'bin', 'node'))) return null
-        // Another start may have won the race; theirs is as good as ours.
-        if (!existsSync(target)) renameSync(unpacked, target)
-      } finally {
-        rmSync(staging, { recursive: true, force: true })
-      }
-    }
-
-    if (!runs(node)) return null
-    // Written last, and only once the binary has answered: Desktop Harness and the hook installer
-    // both read this file to decide what to execute, so it must never name something that cannot run.
-    writeFileSync(join(env.ADAPTER_RUNTIME_DIR, 'current-node'), `${node}\n`, { mode: 0o600 })
-    log(`  ✓ Node runtime ready → ${target}`)
-    return node
-  } catch {
-    return null
-  }
+/**
+ * The managed grid at the version the harness manifest PINS — installing it, moving to it, or
+ * leaving it be. Returns its path, or null when there is none: callers fall back to whatever `grid`
+ * PATH has (`gridBinaryPath`), and an agent's pane is told when it has none (`gridCliPresence`).
+ *
+ * Best-effort like the Node runtime: a daemon must not fail to start because a download failed. Asked
+ * on every daemon start rather than on `--repair` only, because the pin is expected to MOVE and a
+ * machine installed last month has to notice. Never below [GRID_VERSION_FLOOR]: the floor is this
+ * daemon's, and a manifest cannot lower it. A developer's HARNESS_GRID_BIN is left alone entirely —
+ * it outranks the pin at resolution, so a pin laid down under it would be work nobody asked for.
+ */
+export async function ensureManagedGrid(log: (message: string) => void = () => {}): Promise<string | null> {
+  if (process.env.HARNESS_GRID_BIN?.trim()) return null
+  return ensureManagedArchive({
+    name: 'grid',
+    label: 'grid',
+    manifestUrl: env.ADAPTER_GRID_RUNTIME_METADATA_URL,
+    binary: join('bin', 'grid'),
+    installed: managedGridPath,
+    followsPin: true,
+    acceptsVersion: (version) => meetsVersionFloor(version),
+    // A minute, not fifteen seconds: a onefile grid unpacks itself the first time it runs.
+    runs: (grid) => runs(grid, 60_000, gridChildEnv()),
+    readOnly: true,
+    log,
+  })
 }
 
 /** The trailing `exec …` line, which is the only line any launcher we ship varies. */

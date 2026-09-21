@@ -13,6 +13,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_preset.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/widgets/agent_picker.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:xterm/xterm.dart';
 
@@ -79,7 +80,7 @@ void main() {
         final map = MemoryKeymap();
         if (remapped) {
           map.apply('''{"bindings":[
-            {"keys":"cmd+s","command":null},
+            {"keys":"cmd+shift+l","command":null},
             {"keys":"cmd+y","command":"pane.layout"}
           ]}''');
         }
@@ -110,15 +111,20 @@ void main() {
         final before = app.presetFor(2);
         final shortcut = remapped
             ? LogicalKeyboardKey.keyY
-            : LogicalKeyboardKey.keyS;
-        await key(tester, shortcut, cmd: true);
+            : LogicalKeyboardKey.keyL;
+        await key(tester, shortcut, cmd: true, shift: !remapped);
         await tester.pumpAndSettle();
-        if (remapped) await key(tester, LogicalKeyboardKey.keyS, cmd: true);
+        if (remapped)
+          await key(tester, LogicalKeyboardKey.keyL, cmd: true, shift: true);
         // Fast repeated chords can arrive before the next rendered frame.
         await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+        if (!remapped)
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
         await tester.sendKeyEvent(shortcut);
         await tester.sendKeyEvent(shortcut);
         await tester.sendKeyEvent(shortcut);
+        if (!remapped)
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
         await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
         await tester.pump();
         expect(find.byType(Dialog), findsOneWidget);
@@ -156,7 +162,7 @@ void main() {
     app.adoptSessionForTest(terminal('a1', []));
     await mount(tester, app, map);
     final before = app.presetFor(2);
-    await key(tester, LogicalKeyboardKey.keyS, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyL, cmd: true, shift: true);
     await tester.pumpAndSettle();
     for (final modifier in ['cmd', 'ctrl', 'alt', 'shift']) {
       await key(
@@ -177,7 +183,7 @@ void main() {
     map.dispose();
   });
 
-  testWidgets('Command-T opens New Tab and Command-S opens Layout', (
+  testWidgets('Command-T opens New Tab and Command-Shift-L opens Layout', (
     tester,
   ) async {
     final app = createApp();
@@ -187,7 +193,7 @@ void main() {
     final focused = app.adoptSessionForTest(terminal('a1', input));
     final original = app.activeSwarm;
     await mount(tester, app, map);
-    await key(tester, LogicalKeyboardKey.keyS, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyL, cmd: true, shift: true);
     await tester.pumpAndSettle();
     expect(find.text('Layout · 2 panes'), findsOneWidget);
     expect(app.focusedPane, same(focused));
@@ -196,15 +202,14 @@ void main() {
     await key(tester, LogicalKeyboardKey.keyT, cmd: true);
     expect(app.swarms, hasLength(2));
     expect(app.activeSwarm, isNot(same(original)));
-    expect(app.activeSwarm.panes, isEmpty);
     expect(
       tester
-          .widget<TextField>(find.byKey(const ValueKey('harness-start-search')))
+          .widget<TextField>(find.byKey(const ValueKey('swarm-search-input')))
           .focusNode!
           .hasPrimaryFocus,
       isTrue,
     );
-    expect(find.byType(SwarmSearchResults), findsNothing);
+    expect(find.byType(SwarmSearchResults), findsOneWidget);
     expect(original.panes.last, same(focused));
     expect(input, isEmpty);
     await tester.pumpWidget(const SizedBox());
@@ -358,7 +363,7 @@ void main() {
 
   for (final inline in [false, true]) {
     testWidgets(
-      'configured picker actions and hints stay in ${inline ? 'start-page' : 'Open Agent'} search',
+      'configured picker actions and hints stay in ${inline ? 'start-page' : 'Open Harness'} search',
       (tester) async {
         final map = MemoryKeymap()
           ..apply('''{"bindings":[
@@ -380,7 +385,7 @@ void main() {
         if (inline) {
           await tester.tap(input);
         } else {
-          await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+          await key(tester, LogicalKeyboardKey.keyP, cmd: true);
         }
         await tester.enterText(input, 'Agent');
         await tester.pump();
@@ -391,7 +396,10 @@ void main() {
         await key(tester, LogicalKeyboardKey.arrowDown);
         expect(search.cursor, initial);
         await key(tester, LogicalKeyboardKey.keyJ, ctrl: true);
-        expect(search.cursor, (initial - 1) % search.rows.length);
+        expect(
+          search.cursor,
+          inline ? (initial - 1) % search.rows.length : initial + 1,
+        );
         await tester.enterText(input, 'Agent 0');
         await tester.pump();
         expect(
@@ -449,14 +457,22 @@ void main() {
     await key(tester, LogicalKeyboardKey.keyG, ctrl: true);
     expect(search.cursor, (cursor + 1) % search.rows.length);
     await key(tester, LogicalKeyboardKey.keyD, cmd: true);
-    expect(search.isCommandMode, isTrue);
-    expect(tester.widget<TextField>(field).controller!.text, '> ');
+    final commands = tester
+        .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+        .search;
+    expect(commands.isCommandMode, isTrue);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const ValueKey('swarm-search-input')))
+          .controller!
+          .text,
+      '> ',
+    );
     await key(tester, LogicalKeyboardKey.escape);
     expect(field, findsOneWidget);
     expect(find.byType(SwarmSearchResults), findsNothing);
-    expect(tester.widget<TextField>(field).controller!.text, '> ');
-    expect(tester.widget<TextField>(field).focusNode!.hasFocus, isFalse);
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    expect(tester.widget<TextField>(field).controller!.text, isEmpty);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     final modal = find.byKey(const ValueKey('swarm-search-input'));
     expect(tester.widget<TextField>(modal).focusNode!.hasFocus, isTrue);
     expect(tester.widget<TextField>(modal).controller!.text, isEmpty);
@@ -486,9 +502,6 @@ void main() {
       final map = MemoryKeymap();
       final app = createApp();
       await mount(tester, app, map, native: true);
-      final newPage = native(tester, 'new');
-      await tester.pump();
-      await newPage;
       calls.clear();
       final field = find.byKey(const ValueKey('harness-start-search'));
       await tester.tap(field);
@@ -552,22 +565,22 @@ void main() {
         isEmpty,
         reason: 'Native chrome never mirrors the Flutter query',
       );
-      expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
-      expect(tester.widget<TextField>(field).controller!.text, '> ');
+      final commandField = find.byKey(const ValueKey('swarm-search-input'));
+      expect(commandField, findsOneWidget);
+      expect(tester.widget<TextField>(commandField).controller!.text, '> ');
       expect(
-        tester.widget<TextField>(field).focusNode!.hasPrimaryFocus,
+        tester.widget<TextField>(commandField).focusNode!.hasPrimaryFocus,
         isTrue,
       );
       expect(
-        tester.widget<TextField>(field).decoration!.hintText,
+        tester.widget<TextField>(commandField).decoration!.hintText,
         'Search commands…',
       );
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pump();
       expect(find.byType(SwarmSearchResults), findsNothing);
       expect(field, findsOneWidget);
-      expect(tester.widget<TextField>(field).controller!.text, '> ');
-      expect(tester.widget<TextField>(field).focusNode!.hasFocus, isFalse);
+      expect(tester.widget<TextField>(field).controller!.text, 'Agent');
       await tester.pumpWidget(const SizedBox());
       app.dispose();
       map.dispose();
@@ -614,9 +627,11 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byType(AlertDialog), findsOneWidget);
         expect(find.byType(SwarmSearchResults), findsNothing);
+        // The form opens with focus on its agent bar, and Escape there still
+        // closes the form.
         expect(
           tester
-              .widget<InkWell>(find.byKey(const Key('new-agent-folder')))
+              .widget<AgentPicker>(find.byType(AgentPicker))
               .focusNode!
               .hasPrimaryFocus,
           isTrue,
@@ -662,7 +677,7 @@ void main() {
         if (inline) {
           await tester.tap(field);
         } else {
-          await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+          await key(tester, LogicalKeyboardKey.keyP, cmd: true);
         }
         await tester.enterText(field, 'Agent');
         await tester.pump();
@@ -672,7 +687,10 @@ void main() {
         final secondRow = search.rows.firstWhere((row) => row.agentId == 'a1');
         await tabToResult(tester, id: secondRow.id);
         expect(search.selected, same(secondRow));
-        final next = search.rows[(search.cursor + 1) % search.rows.length];
+        final next =
+            search.rows[inline
+                ? (search.cursor + 1) % search.rows.length
+                : (search.cursor - 1).clamp(0, search.rows.length - 1)];
         await key(tester, LogicalKeyboardKey.arrowDown);
         expect(search.selected, same(secondRow));
         await key(tester, LogicalKeyboardKey.keyG, ctrl: true);
@@ -731,6 +749,7 @@ void main() {
       await tester.pump();
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
       expect(app.swarms, hasLength(2));
+      expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
       app.dispose();
       map.dispose();
@@ -780,7 +799,7 @@ void main() {
       );
       await native(tester, 'keymapCommand', {'command': 'swarm.new'});
       await tester.pump();
-      final field = find.byKey(const ValueKey('harness-start-search'));
+      final field = find.byKey(const ValueKey('swarm-search-input'));
       await tester.tap(field);
       await tester.enterText(field, 'Agent 0');
       await tester.pump();

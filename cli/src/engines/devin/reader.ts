@@ -3,29 +3,26 @@
  *
  * Devin keeps every session's history in ONE SQLite store (`<DEVIN_HOME>/sessions.db`, WAL) and writes no
  * transcript file unless the user passes `--export`, so there is nothing to byte-offset-tail. This polls
- * the DB every ~1s through the `sqlite3` CLI (shelled out, like tmux/git — keeps the adapter's single
- * pure-JS bundle; no native SQLite dependency) and feeds the same `emitSessionEvents` funnel the
- * file-based engines use. Same shape as the opencode/hermes readers.
+ * the DB every ~1s (through `lib/sqliteRead`: `node:sqlite` in-process, or the `sqlite3` CLI on a
+ * Node without it) and feeds the same `emitSessionEvents` funnel the file-based engines use. Same
+ * shape as the opencode/hermes readers.
  *
  * Two Devin specifics:
- *  - **The store is WAL.** The DB must be read IN PLACE (`file:…?mode=ro`), never from a copy of
+ *  - **The store is WAL.** The DB must be read IN PLACE (read-only, at its own path), never from a copy of
  *    `sessions.db` alone — a copy misses everything still in `-wal` (an in-flight session looks empty).
  *  - **Rows repeat.** `message_nodes` is a forest and Devin re-persists the whole chain per inference, so
  *    `row_id` alone is not a safe cursor. `row_id` drives the incremental read, `message_id` deduplicates:
  *    29 raw rows collapsed to 6 real messages in the captured session.
  */
 
-import { execFile } from 'child_process'
-import { promisify } from 'util'
 import type { LiveEvent, TurnState } from '../../lib/normalize.js'
 import { newTurnState } from '../../lib/normalize.js'
+import { sqliteReadAll } from '../../lib/sqliteRead.js'
 import { devinMessageToEvents, type DvMessage } from './normalizer.js'
 import { DevinErrorTail } from './errorLog.js'
 
-const execFileAsync = promisify(execFile)
-
-// Devin session ids are lowercase word slugs (`blue-agustinia`, `classy-tourmaline`). Strict, because the
-// id is interpolated into SQL.
+// Devin session ids are lowercase word slugs (`blue-agustinia`, `classy-tourmaline`). Strict: the id is
+// also a registry key and a log-file name.
 const SESSION_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const MAX_SESSION_ID_LEN = 64
 const POLL_MS = 1_000
@@ -44,7 +41,7 @@ const COLUMNS = [
 ].join(', ')
 
 export class DevinSqliteMissing extends Error {
-  constructor() { super('sqlite3 CLI not found on PATH — Devin sessions cannot be mirrored') }
+  constructor() { super('no SQLite reader (node:sqlite absent and no sqlite3 CLI on PATH) — Devin sessions cannot be mirrored') }
 }
 
 function str(value: unknown): string | null {
@@ -58,7 +55,7 @@ export function isDevinSessionId(sessionId: string): boolean {
 /**
  * Read a Devin session's messages, optionally only those after `afterRowId`, deduped by `message_id`
  * (first occurrence wins) and with the system prefix dropped.
- * Throws `DevinSqliteMissing` when the `sqlite3` binary is absent; returns [] on a transient error.
+ * Throws `DevinSqliteMissing` when this machine has no way to read SQLite; returns [] on a transient error.
  */
 export async function readDevinMessages(
   dbPath: string,
@@ -66,30 +63,17 @@ export async function readDevinMessages(
   afterRowId?: number | null,
 ): Promise<DvMessage[]> {
   if (!isDevinSessionId(sessionId)) return []
-  const after = Number.isFinite(afterRowId as number) && (afterRowId as number) > 0
-    ? ` AND row_id > ${Math.trunc(afterRowId as number)}`
-    : ''
-  const sql = `SELECT ${COLUMNS} FROM message_nodes WHERE session_id = '${sessionId}'${after}`
+  const bounded = Number.isFinite(afterRowId as number) && (afterRowId as number) > 0
+  const sql = `SELECT ${COLUMNS} FROM message_nodes WHERE session_id = ?${bounded ? ' AND row_id > ?' : ''}`
     + " AND json_extract(chat_message, '$.role') <> 'system' ORDER BY row_id;"
+  const params = bounded ? [sessionId, Math.trunc(afterRowId as number)] : [sessionId]
 
-  let stdout: string
-  try {
-    // `.timeout` is the SILENT dot-command form — `PRAGMA busy_timeout=…` prints a row under -json and
-    // would corrupt the single-array parse below. `query_only` is silent and guards against writes.
-    ;({ stdout } = await execFileAsync(
-      'sqlite3',
-      ['-json', '-cmd', '.timeout 3000', '-cmd', 'PRAGMA query_only=1', `file:${dbPath}?mode=ro`, sql],
-      { maxBuffer: MAX_BUFFER },
-    ))
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') throw new DevinSqliteMissing()
+  const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
+  if (!result.ok) {
+    if (result.reason === 'missing') throw new DevinSqliteMissing()
     return [] // db locked / mid-write — retry next tick
   }
-
-  const trimmed = stdout.trim()
-  if (!trimmed) return []
-  let rows: Array<Record<string, unknown>>
-  try { rows = JSON.parse(trimmed) } catch { return [] }
+  const rows = result.rows
 
   const seen = new Set<string>()
   const out: DvMessage[] = []
@@ -123,7 +107,7 @@ export interface DevinReaderDeps {
    * without it the turn never closes and the web spins forever.
    */
   onTurnAborted?: (message: string) => void
-  /** Reports the one-time fatal "sqlite3 missing" so the caller can warn + stop the reader. */
+  /** Reports the one-time fatal "no SQLite reader" so the caller can warn + stop the reader. */
   onFatal?: (err: Error) => void
   pollMs?: number
 }

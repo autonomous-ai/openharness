@@ -46,13 +46,19 @@ flutter build macos --release
 flutter build linux --release                     # Ubuntu build host only — no cross-compiling
 ```
 
-Integration tests (`integration_test/`) need a device: `flutter test integration_test/native_terminal_e2e_test.dart -d macos`
-(swap `-d linux` on an Ubuntu host).
-`local_terminal_e2e_test.dart` and `prod_terminal_e2e_test.dart` still import `package:harness/e2ee/*`
-and `widgets/remote_setup_screen.dart`, which no longer exist, and `native_terminal_e2e_test.dart`
-builds `TerminalPanel` without its required `focused` argument — all three fail `flutter analyze` and
-are the only analyzer errors in the repo (everything else is `info` inside `third_party/xterm`). Fix or
-delete them before relying on them.
+Native integration fixtures need a device and the test-mode environment:
+
+```bash
+FLUTTER_TEST=1 flutter test -d macos --no-pub integration_test/native_terminal_e2e_test.dart
+FLUTTER_TEST=1 flutter test -d macos --no-pub integration_test/native_workspace_e2e_test.dart
+```
+
+Both use in-memory state and fake terminal traffic; the workspace fixture also simulates agent
+creation and machine-link responses. They refuse to run without `FLUTTER_TEST=1`, which disables
+production-only pollers and persistence. The workspace fixture exercises the native macOS titlebar; its injected
+Flutter keys do not establish physical AppKit keyboard/IME behavior. A fixture build replaces
+`Harness.app`, so rebuild the normal review artifact afterward with
+`flutter build macos --debug --no-pub --target lib/main.dart`.
 
 Local stack / E2E scripts (the CLI comes from this repo's `../cli`; the backend from a sibling
 `autonomous-code` checkout next to `autonomous-harness` — override with `AUTONOMOUS_CODE_ROOT` /
@@ -94,9 +100,28 @@ holds an SSO token:
 
 - **Auth** lives in the CLI. `lib/auth/cli_login.dart` shells out to `harness auth status --json` and
   drives `harness login --json` (NDJSON event stream); `cli_link.dart` wraps `harness link create/import/list`.
+  Sign-out owns its CLI process, checks its exit, and terminates it on timeout. `AppNotifier` joins
+  repeated sign-out requests and blocks another sign-in until credential and connection cleanup
+  finish; failure offers keyboard-focused Retry sign out. Development fixture disconnects never
+  sign out the real CLI. Viewer builds use `viewer/direct_login.dart` and `viewer/direct_auth.dart`
+  instead: login attempts and token refreshes have session revisions, credential writes are
+  serialized, and cancelled or superseded responses cannot restore or clear another account.
+  Sign-out and runtime expiry clear live panes, inventory, and history without saving an empty
+  layout over the user's desk. Sign-in waits for old transports to close, then restores the saved
+  tabs, focus, pins, zoom, and layouts. Every layout read checks both account and layout revisions.
 - **REST** (`lib/api/api_client.dart`, Dio) goes to `AppConfig.localCliBaseUrl` (`http://127.0.0.1:18473`),
   and the CLI proxies to the backend with its own session. Responses are `{success, data|error}` and
   unwrapped into `ApiException`.
+  Machine responses carry their own cache freshness (`MachineInventory`). Sharing fallback is
+  cleared on account changes; only the latest request can publish inventory or clear its error.
+  `refreshMachines()` returns whether its result was applied, and retry uses that public path.
+  `machineInventoryLoaded` distinguishes an initial wait from a completed inventory with no row
+  for a restored pane. Missing, cached, and failed inventories give distinct recovery guidance;
+  Retry stays mounted and joins any pending retry, preserving its keyboard focus and position.
+  Agent discovery and terminal capabilities also belong to a machine's current connection
+  revision. Disconnect/reconnect releases obsolete discovery and recovery futures immediately;
+  late replies and timeouts cannot overwrite the replacement connection. Reconnect releases old
+  terminal stream IDs while retaining their renderer and output until the new keyframe arrives.
 - **WebSocket** (`lib/ws/`) — `WsPool` owns one `WsConn` per machine. Every real connection uses
   `WsTransportKind.localPlaintext` against the CLI daemon's loopback WS (discovered/started by
   `LocalCliDiscovery`, which runs `harness start` when needed). The CLI terminates E2EE for relayed
@@ -134,6 +159,21 @@ transaction (its clock-skew repair) and the one Terminal handoff. Gating readine
 was what sent a computer whose tmux ran fine into Terminal to reinstall developer tools after a macOS
 upgrade — the screen renders `plan`, it does not infer one.
 
+Installer-log polling reads only the last 64 KiB and keeps at most 200 lines, tolerating partial
+UTF-8 output. Truncated diagnostics include the full log path; the original file remains intact.
+A missing, unreadable, or partial Terminal result stays pending until a complete exit code or
+successful live probes establish the outcome. Copy failures in setup remain visible beside Retry,
+and only the latest clipboard attempt can update its feedback. The setup render fixture checks
+both themes and enlarged text at the minimum window size without running an installer.
+
+Read-only dependency probes own their subprocesses and have a ten-second deadline covering startup,
+exit, and output-pipe closure. A timeout reports a failed check, not a missing tool; Retry after the
+initial check stays read-only. Only an explicit install action permits automatic installation to
+continue after a Terminal handoff, and a failed recheck stops that continuation. Readiness requires
+the final ready phase and every required step, so old successful step values cannot flash a ready
+screen during a new verification. The preflight status is a live region and uses a static waiting
+icon when Reduce Motion is enabled.
+
 ### Boot and state
 
 `lib/main.dart`: `CrashLog.install()` → `loadPersistedSettings()` (theme mode + terminal font, awaited
@@ -149,6 +189,18 @@ the daemon, `api.me()`, `refreshMachines()`).
 
 Per-machine runtime state is `MachineState` (connection status, transport mode, agents, `nodeOnline`
 from `node_status` pushes — distinct from our own socket status, pending offline agent, turn activity).
+
+### Command dock
+
+`SwarmSearchController` owns search and selection; `SwarmSearchResults` keeps a bounded cache of
+visible/recent row controls. Query-dependent match text listens separately, so typing does not
+rebuild unchanged `ListTile` controls and arrows rebuild only changed highlights. The cache still
+invalidates for row metadata, availability, action, geometry, theme, and font changes. Keep focus,
+semantics, and traversal on the row; do not replace them with paint-only search results.
+Creation and draft precedence are documented in `design/new-harness-entry-rules.md` and exercised
+by its listed tests. Cmd-T/Cmd-P retarget the same draft/search; Store requests own their explicit
+product and machine. `test/benchmarks/swarm_benchmark.dart` measures large synthetic inventories;
+its headless debug timings do not establish native display or network latency.
 
 ### Terminals
 
@@ -299,10 +351,20 @@ from `node_status` pushes — distinct from our own socket status, pending offli
   **Off is the resting state**, per provider, persisted through `LocalKeyValueStore`: these transcripts
   hold every prompt, path and branch a session touched and this feature wants only the counts, so
   nothing is read until somebody switches it on — and switching one off deletes its snapshot from disk
-  as well as from memory. Scans are incremental against a `{path, mtime, size}` fingerprint cached in
-  `~/.harness/desktop-app/usage-ledger-<provider>.json`, and `kLedgerStaleAfter` (5 min) keeps opening
+  as well as from memory. JSONL scans are incremental against a `{path, mtime, size}` fingerprint cached in
+  `~/.harness/desktop-app/usage-ledger-<provider>.json`. OpenCode instead queries a committed SQLite
+  snapshot on each scan: the main database's metadata can stay unchanged while its WAL changes.
+  SQLite reads run in a worker isolate. `kLedgerStaleAfter` (5 min) keeps opening
   the pane from re-walking the disk; a cold Claude scan is ~3s over 71 transcripts, which is why
   neither of those is optional. Nothing polls — a ledger only moves when an agent writes here.
+  An unreadable OpenCode source is failed, not missing. If other databases are readable, the result
+  is partial and the UI marks its figures incomplete. Partial results are kept in memory, but never
+  restored as a fresh complete snapshot; reopening or Retry rescans them.
+  Claude/Codex share the same failure rules in `jsonl_ledger_scan.dart`: a failed read is never cached
+  as an empty successful source. Snapshot format 3 discards old snapshots that could contain that
+  mistake. Reads stop at the captured file size and tolerate an unfinished UTF-8 suffix while an
+  agent appends, preserving earlier complete records; completed corrupt text remains an error.
+  Model-name normalization has a small bounded cache, while per-turn token/tier pricing stays dynamic.
   ⚠️ **Local only, by decision.** Agents launched onto remote machines write their transcripts there and
   nothing here reaches them; the pane's subtitle says so, because a total that silently excluded most of
   a team's work would be worse than no total. `UsageSource` in `usage/usage_source.dart` is where a

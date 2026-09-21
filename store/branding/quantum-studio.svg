@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Quantum Studio — a qubit in view</title>
+  <circle cx="32" cy="32" r="24" fill="none" stroke="#9271cc" stroke-width="6"/>
+  <ellipse cx="32" cy="32" rx="11" ry="24" transform="rotate(34 32 32)" fill="none" stroke="#9271cc" stroke-width="4"/>
+  <path d="M10 40C21 48 43 45 54 24" fill="none" stroke="#b9a0e3" stroke-width="5"/>
+  <path d="M32 32L45 15" fill="none" stroke="#6947a2" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="45" cy="15" r="7" fill="#6947a2"/>
+</svg>

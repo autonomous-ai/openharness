@@ -1,0 +1,18 @@
+{
+  "homepage": "https://www.rdkit.org",
+  "upstream": "https://github.com/rdkit/rdkit",
+  "license": "MIT",
+  "tagline": "Open-source cheminformatics software",
+  "examples": [
+    {
+      "prompt": "Take capsaicin, the molecule behind chili heat, and design three analogues: a saturated tail (nonivamide), a shorter tail, and the ester capsiate. Give each a 3D conformer and compare their properties side by side.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/rdkit/capsaicin-analogues.jpg",
+      "caption": "Capsaicin + 3 analogues · 30-conformer ensembles · ESP surface + series table"
+    },
+    {
+      "prompt": "Design three analogues of ibuprofen that keep the propionic acid but replace the isobutyl group with alternatives that lower cLogP below 3 while staying Lipinski-compliant. For each: SMILES, properties, a 3D conformer and a similarity score to ibuprofen. Pick the best one and explain the choice.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/rdkit/ibuprofen-analogues.jpg",
+      "caption": "Ibuprofen + 3 lower-cLogP analogues · 3D conformers · ESP surface + series table"
+    }
+  ]
+}

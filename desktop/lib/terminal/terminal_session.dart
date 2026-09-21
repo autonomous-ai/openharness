@@ -26,6 +26,67 @@ enum TerminalSessionStatus {
   error,
 }
 
+/// Who a terminal client is, as it says on `terminal_open` (`client`) and as
+/// the daemon repeats to the client it displaces (`terminal_closed.takenBy`) —
+/// so the banner can say "Mac mini took control" rather than "another app".
+/// Self-declared: every client of a machine is the same account's, and the
+/// daemon has no better name for a relayed desktop or a phone. [machineId] is
+/// a desktop's own machine in the fleet, so the receiver can show that
+/// machine's current name over the one declared.
+class TerminalClientDescriptor {
+  const TerminalClientDescriptor({
+    required this.kind,
+    required this.name,
+    this.machineId,
+  });
+
+  /// `desktop`, `phone`, … — one lower-case word.
+  final String kind;
+  final String name;
+  final String? machineId;
+
+  static const nameMax = 64;
+
+  Map<String, dynamic> toJson() => {
+    'kind': kind,
+    'name': name,
+    if (machineId != null) 'machineId': machineId,
+  };
+
+  /// The wire shape, or null for anything else — a daemon that predates the
+  /// field sends nothing, and a malformed one is treated the same.
+  static TerminalClientDescriptor? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final kind = raw['kind'];
+    final name = raw['name'];
+    final machineId = raw['machineId'];
+    if (kind is! String || !RegExp(r'^[a-z]{1,16}$').hasMatch(kind)) {
+      return null;
+    }
+    if (name is! String) return null;
+    final clean = name.replaceAll(RegExp(r'[\u0000-\u001f\u007f]'), ' ').trim();
+    if (clean.isEmpty || clean.length > nameMax) return null;
+    if (machineId != null &&
+        (machineId is! String ||
+            !RegExp(r'^[a-f0-9]{16,64}$').hasMatch(machineId))) {
+      return null;
+    }
+    return TerminalClientDescriptor(
+      kind: kind,
+      name: clean,
+      machineId: machineId as String?,
+    );
+  }
+
+  /// The name to show: the fleet's current name for [machineId] when the
+  /// caller knows one, else the name the client declared.
+  String label(String? Function(String machineId) resolveMachine) {
+    final id = machineId;
+    final fleet = id == null ? null : resolveMachine(id)?.trim();
+    return fleet == null || fleet.isEmpty ? name : fleet;
+  }
+}
+
 /// Transient progress for an in-flight [TerminalSession.pasteImage]/[TerminalSession.pasteFile]
 /// chunked upload. `bytesWritten` reflects the daemon's own per-chunk ACKs, not bytes merely handed
 /// to the local socket.
@@ -75,10 +136,24 @@ class TerminalSession extends ChangeNotifier {
   final String machineId;
   final String agentId;
   String agentName;
-  final String? engineId;
+
+  /// The engine the pane runs — what `terminal_ready` said, until the daemon
+  /// says otherwise. Not final: a terminal tile becomes a Claude tile the
+  /// moment `claude` is typed into it (and a terminal again when it exits),
+  /// and the stream underneath is the same tmux pane throughout, so the
+  /// session is told rather than reopened — see [setEngineId].
+  String? engineId;
   final TerminalFrameSender send;
   final TerminalBinarySender sendBinary;
   final Duration resyncTimeout;
+  final bool readOnly;
+
+  // A controllable clock keeps coalescing tests independent of host scheduling.
+  final DateTime Function() _now;
+
+  /// Lets input batching tests hold the clock inside the four-millisecond window under host load.
+  @visibleForTesting
+  late DateTime Function() inputClockForTest = _now;
 
   /// Forces a fresh transport dial (see `WsConn.forceReconnect`) — called once when the very first
   /// `terminal_open` never gets a `terminal_ready` back within [resyncTimeout]. Covers the relay
@@ -87,6 +162,10 @@ class TerminalSession extends ChangeNotifier {
   /// of "attaching" instead of a hang the user has to notice and manually retry.
   final Future<void> Function()? onOpenStalled;
 
+  /// This client's own introduction, sent with every `terminal_open`; null
+  /// for a viewer that never takes control and so is never anyone's taker.
+  final TerminalClientDescriptor? client;
+
   TerminalSession({
     required this.machineId,
     required this.agentId,
@@ -94,9 +173,12 @@ class TerminalSession extends ChangeNotifier {
     required this.engineId,
     required this.send,
     required this.sendBinary,
+    this.client,
     this.onOpenStalled,
+    this.readOnly = false,
     this.resyncTimeout = const Duration(seconds: 4),
-  }) {
+    DateTime Function()? now,
+  }) : _now = now ?? DateTime.now {
     terminal = _newTerminal();
   }
 
@@ -116,6 +198,11 @@ class TerminalSession extends ChangeNotifier {
   String? linkMode;
   String? errorCode;
   String? errorMessage;
+
+  /// Who took this terminal, while [status] is [TerminalSessionStatus.takenOver]
+  /// and the daemon said (`terminal_closed.takenBy`); null from an older daemon
+  /// or a taker that did not introduce itself — "another app", then.
+  TerminalClientDescriptor? takenOverBy;
   int cols = 80;
   int rows = 24;
 
@@ -166,7 +253,9 @@ class TerminalSession extends ChangeNotifier {
   Future<void> _inputSendTail = Future<void>.value();
 
   bool get acceptsInput =>
-      status == TerminalSessionStatus.controlling && streamId != null;
+      !readOnly &&
+      status == TerminalSessionStatus.controlling &&
+      streamId != null;
 
   /// Grok's CLI declares terminal mouse-tracking (so tmux defers wheel bytes to it, same as any
   /// alt-buffer program) but doesn't correctly handle wheel reports itself — confirmed live: it
@@ -180,6 +269,15 @@ class TerminalSession extends ChangeNotifier {
     final cleanName = name.trim();
     if (cleanName.isEmpty || cleanName == agentName) return;
     agentName = cleanName;
+    notifyListeners();
+  }
+
+  /// The daemon re-labelled this pane's engine (`agent_synced` with a new
+  /// `engine`): the header mark, the model picker and the scroll strategy
+  /// follow, over the stream already open.
+  void setEngineId(String? engine) {
+    if (engine == engineId) return;
+    engineId = engine;
     notifyListeners();
   }
 
@@ -237,6 +335,7 @@ class TerminalSession extends ChangeNotifier {
     linkMode = null;
     errorCode = null;
     errorMessage = null;
+    takenOverBy = null;
     _expectedSeq = null;
     _lastRenderedSeq = -1;
     _framesSinceAck = 0;
@@ -291,6 +390,7 @@ class TerminalSession extends ChangeNotifier {
       'cols': cols,
       'rows': rows,
       'compression': const ['zlib', 'none'],
+      if (client != null) 'client': client!.toJson(),
     };
     var sent = await send('terminal_open', openPayload);
     if (!_isCurrent(generation) ||
@@ -469,8 +569,13 @@ class TerminalSession extends ChangeNotifier {
             ? TerminalSessionStatus.takenOver
             : TerminalSessionStatus.closed;
         errorCode = takenOver ? code : null;
+        takenOverBy = takenOver
+            ? TerminalClientDescriptor.fromJson(payload['takenBy'])
+            : null;
         errorMessage = takenOver
-            ? 'Another client connected to this terminal.'
+            ? (takenOverBy == null
+                  ? 'Another client connected to this terminal.'
+                  : '${takenOverBy!.name} connected to this terminal.')
             : payload['reason']?.toString();
         streamId = null;
         linkMode = null;
@@ -584,6 +689,7 @@ class TerminalSession extends ChangeNotifier {
             _autoReopenAttempts = 0;
             errorCode = null;
             errorMessage = null;
+            takenOverBy = null;
             _resyncTimer?.cancel();
             _resyncTimer = null;
             status = TerminalSessionStatus.controlling;
@@ -777,7 +883,9 @@ class TerminalSession extends ChangeNotifier {
   Terminal _newTerminal({bool bindCallbacks = true}) {
     final result = Terminal(
       maxLines: 10000,
-      platform: TerminalTargetPlatform.macos,
+      platform: defaultTargetPlatform == TargetPlatform.linux
+          ? TerminalTargetPlatform.linux
+          : TerminalTargetPlatform.macos,
       // ⌥⏎ and ⌥⌫ have to become Meta-prefixed before they reach the pty, or the engine's prompt
       // reads the first as the submit it is byte-identical to and never hears the second at all.
       // See [AltAsMetaInputHandler].
@@ -1029,7 +1137,7 @@ class TerminalSession extends ChangeNotifier {
       final last = _lastInputFlushAt;
       final idle =
           last == null ||
-          DateTime.now().difference(last) >= _inputCoalesceWindow;
+          inputClockForTest().difference(last) >= _inputCoalesceWindow;
       if (_inputTimer == null && idle) {
         unawaited(_flushInput());
       } else {
@@ -1050,7 +1158,7 @@ class TerminalSession extends ChangeNotifier {
     }
     final bytes = List<int>.from(_inputBytes);
     _inputBytes.clear();
-    _lastInputFlushAt = DateTime.now();
+    _lastInputFlushAt = inputClockForTest();
     final currentStreamId = streamId;
     if (currentStreamId == null) return;
     final generation = _generation;
@@ -1128,12 +1236,12 @@ class TerminalSession extends ChangeNotifier {
   static const _resizeCoalesceWindow = Duration(milliseconds: 50);
 
   void resize(int width, int height) {
+    if (readOnly) return;
     _pendingCols = _clampCols(width);
     _pendingRows = _clampRows(height);
     final last = _lastResizeFlushAt;
     final idle =
-        last == null ||
-        DateTime.now().difference(last) >= _resizeCoalesceWindow;
+        last == null || _now().difference(last) >= _resizeCoalesceWindow;
     if (_resizeTimer == null && idle) {
       unawaited(_flushResize());
       return;
@@ -1159,7 +1267,7 @@ class TerminalSession extends ChangeNotifier {
     if (nextCols == cols && nextRows == rows) return;
     cols = nextCols;
     rows = nextRows;
-    _lastResizeFlushAt = DateTime.now();
+    _lastResizeFlushAt = _now();
     final generation = _generation;
     final sent = await send('terminal_resize', {
       'streamId': streamId,
@@ -1242,7 +1350,7 @@ class TerminalSession extends ChangeNotifier {
   }
 
   Future<void> _sendHeartbeat() async {
-    if (!acceptsInput) return;
+    if (status != TerminalSessionStatus.controlling || streamId == null) return;
     final generation = _generation;
     final sent = await send('terminal_alive', {'streamId': streamId});
     if (!sent && _isCurrent(generation)) {

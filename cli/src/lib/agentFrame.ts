@@ -21,8 +21,18 @@
 import { stat } from 'node:fs/promises'
 import { agentProject, type AgentProject } from './agentProject.js'
 import type { GridAssignment } from './gridAssignment.js'
-import { projectDisplayName, type RegisteredSession } from './registry.js'
+import type { GridWebSearchStatus } from './gridLaunch.js'
+import { projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './registry.js'
+import { engineCanFork } from './forkAgent.js'
 import type { DshVerdict } from '../dsh/verdict.js'
+
+/**
+ * The grid block on the wire: where the agent's inference goes, and — when the daemon built the
+ * launch — whether it can search the web. `webSearch` is absent, not null, when there is nothing to
+ * say: a discovered grid agent, or a row from before the daemon recorded it. The app shows nothing
+ * for absent and for `on`; the two degraded words each get a sentence.
+ */
+export type GridFrameBlock = GridAssignment & { webSearch?: GridWebSearchStatus }
 
 /**
  * One agent as it travels to every client.
@@ -35,6 +45,13 @@ export type AgentFrame = {
   sessionId: string
   userId: string
   name: string
+  /**
+   * What the agent is on, in its own words — the session title (Claude Code's, Codex's), cleaned;
+   * null when there is none or it is the name already. It is usually the name too (registry.ts,
+   * projectDisplayName), but not once the person renames the agent, and a client searching for
+   * "board fab check" must still find it by this, not by luck in a recap.
+   */
+  title: string | null
   status: string
   launch: NonNullable<RegisteredSession['launch']>
   createdAt: string
@@ -43,7 +60,7 @@ export type AgentFrame = {
   terminal: { available: boolean; primary: string; runtimes: RegisteredSession['runtimes'] }
   engine: RegisteredSession['engine']
   selectedModel: string | null
-  grid: GridAssignment | null
+  grid: GridFrameBlock | null
   codexHome: string | null
   project: AgentProject | null
   /** The domain-specific harness this agent was created as, or null for a plain engine. */
@@ -52,8 +69,27 @@ export type AgentFrame = {
   dshName: string | null
   /** Where this agent's viewer is being served right now, or null when it has none up. */
   viewerUrl: string | null
+  /** What its viewer pane is called ("3D Viewer", "Marp Viewer"); null with no viewer or none known. */
+  viewerName: string | null
   /** The DSH's last verdict for this workspace, reduced for the pane header; null when none yet. */
   verdict: DshVerdict | null
+  /** The agent this one was forked from (`agent_fork`), or null — a real answer, like `dsh: null`. */
+  forkedFrom: { agentId: string; name: string } | null
+  /** Whether `agent_fork` can do anything for this engine (lib/forkAgent.ts) — natively, or by a
+   *  handoff. A client hides the Fork action on a false rather than offering a button that refuses. */
+  forkable: boolean
+  /**
+   * The launch choices a client needs to open ANOTHER agent like this one — the desktop's Clone
+   * (`agent_create` with the same `permissionMode`, `bypassPermission` and `agent`). Read off the
+   * registry row, never off the live process. Each null is a real answer: a row from before the
+   * choice existed, or an agent Harness did not launch, has none to report — and a clone of one
+   * falls back to the client's own defaults rather than to a guess made here.
+   */
+  permissionMode: string | null
+  bypassPermission: boolean | null
+  /** The engine's named agent (`agent_create`'s `agent`); `namedAgent` on the wire so an agent
+   *  object never carries a key called `agent`. */
+  namedAgent: string | null
 }
 
 /** What the daemon knows about an agent's DSH — looked up by the caller, never here. */
@@ -62,6 +98,8 @@ export interface AgentDshContext {
   id: string | null
   name: string | null
   viewerUrl: string | null
+  /** manifest.ts, dshViewerName. */
+  viewerName?: string | null
   verdict: DshVerdict | null
 }
 
@@ -76,26 +114,41 @@ export interface AgentFrameContext {
 }
 
 /**
- * One agent as every client consumes it.
+ * When the conversation last moved, in epoch ms: the transcript's mtime, else the last time the engine
+ * reported in (a hook, or a session bind — the agent's creation at the latest).
  *
- * `updatedAt` prefers the transcript's mtime over the registry's own bookkeeping so a client sorting
- * by recency follows the conversation rather than the daemon's housekeeping; an unreadable or absent
- * transcript falls back to the registry, never to "now".
+ * ⚠️ Never the registry's `updatedAt`. That is bookkeeping: discovery rewrites it on every pass
+ * (`updateRuntimes`), so falling back to it stamped every agent without a readable transcript "now"
+ * — and a client sorting by recency put exactly those agents above the ones just used.
+ */
+export async function lastActivityAt(s: RegisteredSession): Promise<number> {
+  const st = s.transcriptPath ? await stat(s.transcriptPath).catch(() => null) : null
+  return st?.mtimeMs ?? s.lastHookAt
+}
+
+function frameTitle(s: RegisteredSession): string | null {
+  const title = sessionDisplayTitle(s)
+  return title && title !== projectDisplayName(s) ? title : null
+}
+
+/**
+ * One agent as every client consumes it. `updatedAt` is {@link lastActivityAt}, so a client sorting by
+ * recency follows the conversation rather than the daemon's housekeeping.
  */
 export async function agentFrame(
   s: RegisteredSession,
   { selectedModel, terminalAvailable, dsh }: AgentFrameContext,
 ): Promise<AgentFrame> {
-  const st = s.transcriptPath ? await stat(s.transcriptPath).catch(() => null) : null
   return {
     id: s.agentId,
     sessionId: s.sessionId,
     userId: '',
     name: projectDisplayName(s),
+    title: frameTitle(s),
     status: s.active ? 'active' : 'offline',
     launch: s.launch ?? { state: 'ready' },
     createdAt: new Date(s.registeredAt).toISOString(),
-    updatedAt: new Date(st?.mtimeMs ?? s.updatedAt).toISOString(),
+    updatedAt: new Date(await lastActivityAt(s)).toISOString(),
     tmuxPane: s.tmuxPane || null,
     terminal: { available: terminalAvailable, primary: s.primaryRuntimeKey, runtimes: s.runtimes },
     engine: s.engine,
@@ -103,18 +156,25 @@ export async function agentFrame(
     // Where this agent's inference actually goes, so a client can tell which agents a newly picked
     // grid has left behind. Read off the live process by discovery; carries no credential. Null is
     // a real answer ("on no grid") and must be sent as one — omitting the key would make every push
-    // indistinguishable from a daemon too old to know about grids.
-    grid: s.grid ?? null,
+    // indistinguishable from a daemon too old to know about grids. The web-search status rides on
+    // the block — decided by the launch, kept on the row — so it is gone the moment the block is.
+    grid: s.grid ? { ...s.grid, ...(s.gridWebSearch ? { webSearch: s.gridWebSearch } : {}) } : null,
     // The Codex profile folder this agent launched against, if one was chosen instead of the
     // engine's own login. Codex only; null is a real answer ("uses ~/.codex") for the same reason
     // `grid: null` is above.
     codexHome: s.codexHome ?? null,
     project: await agentProject(s.cwd),
-    // All four are real answers when null, for the reason the module doc gives: a frame that omits
+    // All five are real answers when null, for the reason the module doc gives: a frame that omits
     // them would erase a viewer URL or a verdict an earlier frame had reported.
     dsh: dsh?.id ?? s.dsh ?? null,
     dshName: dsh?.name ?? null,
     viewerUrl: dsh?.viewerUrl ?? null,
+    viewerName: dsh?.viewerName ?? null,
     verdict: dsh?.verdict ?? null,
+    forkedFrom: s.forkedFrom ? { agentId: s.forkedFrom.agentId, name: s.forkedFrom.name } : null,
+    forkable: engineCanFork(s.engine),
+    permissionMode: s.permissionMode ?? null,
+    bypassPermission: s.bypassPermission ?? null,
+    namedAgent: s.agent ?? null,
   }
 }

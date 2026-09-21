@@ -3,6 +3,7 @@ import 'package:harness/core/models.dart';
 
 void main() {
   _dshTests();
+  _cloneTests();
   test('uses explicit terminal availability from a new CLI', () {
     final dormantPane = Agent.fromJson({
       'id': 'agent-1',
@@ -60,6 +61,60 @@ void main() {
     expect(agent.launchError, 'ENGINE_DID_NOT_START');
     expect(agent.launchDetail, 'Engine exited see terminal');
   });
+
+  group('web search on a Local model', () {
+    Agent onGrid(Map<String, Object?> grid) => Agent.fromJson({
+      'id': 'agent-1',
+      'name': 'Local',
+      'engine': 'claude',
+      'grid': {'baseUrl': 'https://grid.example/grid-abc/relay', ...grid},
+    });
+
+    test('reads the status off the grid block', () {
+      expect(
+        onGrid({'model': 'qwen', 'webSearch': 'on'}).gridWebSearch,
+        GridWebSearch.on,
+      );
+      expect(
+        onGrid({'model': 'qwen', 'webSearch': 'unavailable'}).gridWebSearch,
+        GridWebSearch.unavailable,
+      );
+      expect(
+        onGrid({'model': 'qwen', 'webSearch': 'unsupported'}).gridWebSearch,
+        GridWebSearch.unsupported,
+      );
+    });
+
+    test('has nothing to say when the daemon said nothing, or said a word it does not know', () {
+      // An older daemon, or a grid agent the daemon merely discovered: no field at all.
+      expect(onGrid({'model': 'qwen'}).gridWebSearch, isNull);
+      // A newer daemon with a fourth word: not printed verbatim, not guessed at.
+      expect(
+        onGrid({'model': 'qwen', 'webSearch': 'throttled'}).gridWebSearch,
+        isNull,
+      );
+      expect(onGrid({'model': 'qwen', 'webSearch': 7}).gridWebSearch, isNull);
+    });
+
+    test('has nothing to say off a grid', () {
+      final own = Agent.fromJson({
+        'id': 'agent-2',
+        'name': 'Own',
+        'grid': null,
+      });
+      expect(own.gridModel, isNull);
+      expect(own.gridWebSearch, isNull);
+    });
+
+    test('each degraded status is one sentence; on is none', () {
+      expect(GridWebSearch.unavailable.sentence, 'Web search unavailable');
+      expect(
+        GridWebSearch.unsupported.sentence,
+        'Web search not supported by this engine',
+      );
+      expect(GridWebSearch.on.sentence, isNull);
+    });
+  });
 }
 
 // ── domain-specific harness fields ────────────────────────────────────────────
@@ -70,8 +125,8 @@ void _dshTests() {
       'id': 'agent-1',
       'name': 'Board',
       'engine': 'claude',
-      'dsh': 'autonomous/copper',
-      'dshName': 'Copper',
+      'dsh': 'autonomous/autonomous-circuit',
+      'dshName': 'Autonomous Circuit',
       'viewerUrl': 'http://127.0.0.1:4179/?workspace=1',
       'verdict': {
         'ready': false,
@@ -83,10 +138,10 @@ void _dshTests() {
       },
     });
     expect(agent.engine, 'claude');
-    expect(agent.dsh, 'autonomous/copper');
-    expect(agent.dshName, 'Copper');
-    expect(agent.identityEngine, 'autonomous/copper');
-    expect(agent.identityDisplayName, 'Copper');
+    expect(agent.dsh, 'autonomous/autonomous-circuit');
+    expect(agent.dshName, 'Autonomous Circuit');
+    expect(agent.identityEngine, 'autonomous/autonomous-circuit');
+    expect(agent.identityDisplayName, 'Autonomous Circuit');
     expect(agent.viewerUrl, 'http://127.0.0.1:4179/?workspace=1');
     final verdict = agent.verdict!;
     expect(verdict.ready, isFalse);
@@ -96,7 +151,10 @@ void _dshTests() {
     expect(verdict.artifact, 'boards/main.board.json');
     expect(verdict.updatedAt, DateTime.utc(2026, 9, 14, 20));
     expect(agent.copyWith(name: 'Renamed').verdict, verdict);
-    expect(agent.copyWith(name: 'Renamed').dsh, 'autonomous/copper');
+    expect(
+      agent.copyWith(name: 'Renamed').dsh,
+      'autonomous/autonomous-circuit',
+    );
   });
 
   test('a plain engine agent has none of them and draws as its engine', () {
@@ -155,4 +213,61 @@ void _dshTests() {
       expect(odd.updatedAt, isNull);
     },
   );
+}
+
+/// What Clone (⌘⇧N) reads off the frame to open another of the same agent.
+void _cloneTests() {
+  test('parses the launch choices off an agent frame', () {
+    final agent = Agent.fromJson({
+      'id': 'agent-1',
+      'name': 'a',
+      'engine': 'claude',
+      'permissionMode': 'readOnly',
+      'bypassPermission': false,
+      'namedAgent': 'reviewer',
+    });
+    expect(agent.permissionMode, 'readOnly');
+    expect(agent.bypassPermission, isFalse);
+    expect(agent.namedAgent, 'reviewer');
+    expect(agent.canClone, isTrue);
+  });
+
+  test('an older daemon leaves them null, which is not the same as false', () {
+    final agent = Agent.fromJson({
+      'id': 'agent-1',
+      'name': 'a',
+      'engine': 'claude',
+    });
+    expect(agent.permissionMode, isNull);
+    expect(agent.bypassPermission, isNull);
+    expect(agent.namedAgent, isNull);
+    expect(agent.canClone, isTrue);
+  });
+
+  test('refuses a mode or named agent outside the flag-value shape', () {
+    Agent parse(Map<String, dynamic> extra) => Agent.fromJson({
+      'id': 'agent-1',
+      'name': 'a',
+      'engine': 'claude',
+      ...extra,
+    });
+    expect(parse({'permissionMode': 'read only'}).permissionMode, isNull);
+    expect(parse({'permissionMode': '--dangerous'}).permissionMode, isNull);
+    expect(parse({'namedAgent': '../etc/passwd'}).namedAgent, isNull);
+    expect(parse({'namedAgent': 'a b'}).namedAgent, isNull);
+    expect(parse({'bypassPermission': 'true'}).bypassPermission, isNull);
+  });
+
+  test('a grid agent, or one with no engine, cannot be cloned', () {
+    expect(
+      Agent.fromJson({
+        'id': 'agent-1',
+        'name': 'a',
+        'engine': 'claude',
+        'grid': {'model': 'DeepSeek-V4'},
+      }).canClone,
+      isFalse,
+    );
+    expect(Agent.fromJson({'id': 'agent-1', 'name': 'a'}).canClone, isFalse);
+  });
 }

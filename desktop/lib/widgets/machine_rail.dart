@@ -18,6 +18,7 @@ import '../state/app_state.dart';
 import 'agent_drag.dart';
 import 'machine_actions.dart';
 import 'delete_agent_dialog.dart';
+import 'fork_agent_dialog.dart';
 import 'restart_agent_action.dart';
 import 'rename_agent_dialog.dart';
 import 'account_footer.dart';
@@ -425,7 +426,7 @@ class _CaptionActions extends StatelessWidget {
         AppIconButton(
           icon: LucideIcons.plus300,
           size: 16,
-          tooltip: 'Create Agent here…',
+          tooltip: 'New Harness here…',
           onPressed: onNewAgent,
         ),
       ],
@@ -631,27 +632,36 @@ class _MachineNodeState extends State<_MachineNode> {
                         // _AgentTree's own "OFFLINE WINS").
                         if (state.nodeOnline == false)
                           const _OfflineWord()
-                        else if (state.needsLink)
-                          // Not known to be off, and never linked with this app
-                          // instance — the one click that fixes it, ALWAYS
-                          // visible rather than hidden behind hover like
-                          // _CaptionActions: that was the whole reason an
-                          // unlinked-but-alive machine read as unreachable in
-                          // the first place. Same gate as _LinkMachineRow.
-                          Padding(
-                            padding: const EdgeInsets.only(left: 6),
-                            child: AppIconButton(
-                              key: const ValueKey('machine-link-affordance'),
-                              icon: LucideIcons.link2300,
-                              size: 13,
-                              color: grid.AppPalette.accentOnSurface,
-                              hoverColor: grid.AppPalette.accentOnSurface,
-                              tooltip: 'Link this machine…',
-                              onPressed: () => notifier.selectMachineForSetup(
-                                machine.machineId,
+                        else ...[
+                          // Presence and link state are two independent slots,
+                          // the same split the native Machines menu uses.
+                          // "Online" is said for every reachable machine, so an
+                          // unlinked-but-running one reads "Online" AND still
+                          // offers the link beside it — the link state no longer
+                          // masks the fact that the computer is up. Offline,
+                          // above, still wins (a daemon that is not running
+                          // cannot shake hands — see "OFFLINE WINS").
+                          if (state.nodeOnline == true) const _OnlineWord(),
+                          if (state.needsLink)
+                            // The one click that fixes it, ALWAYS visible rather
+                            // than hidden behind hover like _CaptionActions: that
+                            // was the whole reason an unlinked-but-alive machine
+                            // read as unreachable. Same gate as _LinkMachineRow.
+                            Padding(
+                              padding: const EdgeInsets.only(left: 6),
+                              child: AppIconButton(
+                                key: const ValueKey('machine-link-affordance'),
+                                icon: LucideIcons.link2300,
+                                size: 13,
+                                color: grid.AppPalette.accentOnSurface,
+                                hoverColor: grid.AppPalette.accentOnSurface,
+                                tooltip: 'Link this machine…',
+                                onPressed: () => notifier.selectMachineForSetup(
+                                  machine.machineId,
+                                ),
                               ),
                             ),
-                          ),
+                        ],
                         // How many agents are inside something you have closed.
                         // Only when closed: with the list open you can count
                         // them, and a number beside a list you can see is noise.
@@ -684,87 +694,93 @@ class _MachineNodeState extends State<_MachineNode> {
                         // row. The `+` is what the rail's big Create Agent button
                         // used to be: that button had to guess which machine you
                         // meant, and this one cannot be wrong about it.
-                        _CaptionActions(
-                          shown: _hovered || _menuOpen,
-                          onNewAgent: () => showNewAgentDialog(
-                            context,
-                            notifier,
-                            machine.machineId,
-                            source: 'machine_row',
-                          ),
-                          menu: MenuAnchor(
-                            controller: _machineMenu,
-                            onOpen: () => setState(() => _menuOpen = true),
-                            onClose: () => setState(() => _menuOpen = false),
-                            menuChildren: [
-                              // Where the empty state's refresh went. It used to hang off a status line
-                              // that only existed while a machine had no agents, so the one machine you
-                              // could not reload was a machine whose list had gone stale WITH agents in
-                              // it. A per-machine action belongs with the machine's other ones.
-                              AppMenuItem(
-                                icon: LucideIcons.refreshCw300,
-                                label: 'Reload agents',
-                                onPressed: () {
-                                  _machineMenu.close();
-                                  notifier.reloadMachineData(machine.machineId);
-                                },
-                              ),
-                              AppMenuItem(
-                                icon: LucideIcons.pencil300,
-                                label: 'Rename Machine',
-                                onPressed: () {
-                                  _machineMenu.close();
-                                  _showRenameDialog();
-                                },
-                              ),
-                              if (state.isLocalMachine) ...[
-                                const AppMenuDivider(),
+                        if (!machine.isShared)
+                          _CaptionActions(
+                            shown: _hovered || _menuOpen,
+                            onNewAgent: () => showNewAgentDialog(
+                              context,
+                              notifier,
+                              machine.machineId,
+                              source: 'machine_row',
+                            ),
+                            menu: MenuAnchor(
+                              controller: _machineMenu,
+                              onOpen: () => setState(() => _menuOpen = true),
+                              onClose: () => setState(() => _menuOpen = false),
+                              menuChildren: [
+                                // Where the empty state's refresh went. It used to hang off a status line
+                                // that only existed while a machine had no agents, so the one machine you
+                                // could not reload was a machine whose list had gone stale WITH agents in
+                                // it. A per-machine action belongs with the machine's other ones.
                                 AppMenuItem(
-                                  icon: LucideIcons.keyRound300,
-                                  label: 'Set remote password',
+                                  icon: LucideIcons.refreshCw300,
+                                  label: 'Reload agents',
                                   onPressed: () {
                                     _machineMenu.close();
-                                    unawaited(
-                                      showLinkMachineDialog(context, notifier),
-                                    );
-                                  },
-                                ),
-                              ],
-                              if (!state.isLocalMachine) ...[
-                                const AppMenuDivider(),
-                                AppMenuItem(
-                                  icon: LucideIcons.link2300,
-                                  label: 'Remote into this machine…',
-                                  onPressed: () {
-                                    _machineMenu.close();
-                                    notifier.selectMachineForSetup(
+                                    notifier.reloadMachineData(
                                       machine.machineId,
                                     );
                                   },
                                 ),
-                                const AppMenuDivider(),
                                 AppMenuItem(
-                                  icon: LucideIcons.trash2300,
-                                  label: 'Delete machine',
-                                  danger: true,
+                                  icon: LucideIcons.pencil300,
+                                  label: 'Rename Machine',
                                   onPressed: () {
                                     _machineMenu.close();
-                                    _confirmDeleteMachine();
+                                    _showRenameDialog();
                                   },
                                 ),
+                                if (state.isLocalMachine) ...[
+                                  const AppMenuDivider(),
+                                  AppMenuItem(
+                                    icon: LucideIcons.keyRound300,
+                                    label: 'Set remote password',
+                                    onPressed: () {
+                                      _machineMenu.close();
+                                      unawaited(
+                                        showLinkMachineDialog(
+                                          context,
+                                          notifier,
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ],
+                                if (!state.isLocalMachine) ...[
+                                  const AppMenuDivider(),
+                                  AppMenuItem(
+                                    icon: LucideIcons.link2300,
+                                    label: 'Remote into this machine…',
+                                    onPressed: () {
+                                      _machineMenu.close();
+                                      notifier.selectMachineForSetup(
+                                        machine.machineId,
+                                      );
+                                    },
+                                  ),
+                                  const AppMenuDivider(),
+                                  AppMenuItem(
+                                    icon: LucideIcons.trash2300,
+                                    label: 'Delete machine',
+                                    danger: true,
+                                    onPressed: () {
+                                      _machineMenu.close();
+                                      _confirmDeleteMachine();
+                                    },
+                                  ),
+                                ],
                               ],
-                            ],
-                            builder: (context, controller, child) =>
-                                AppIconButton(
-                                  icon: LucideIcons.ellipsis300,
-                                  size: 16,
-                                  tooltip: 'Machine options',
-                                  onPressed: () => controller.isOpen
-                                      ? controller.close()
-                                      : controller.open(),
-                                ),
+                              builder: (context, controller, child) =>
+                                  AppIconButton(
+                                    icon: LucideIcons.ellipsis300,
+                                    size: 16,
+                                    tooltip: 'Machine options',
+                                    onPressed: () => controller.isOpen
+                                        ? controller.close()
+                                        : controller.open(),
+                                  ),
+                            ),
                           ),
-                        ),
                       ],
                     ),
                   ),
@@ -808,7 +824,7 @@ class _AgentTree extends StatelessWidget {
           return _AgentStatusRow(
             icon: Icons.sync,
             label: state.connectionStatus == ConnectionStatus.connected
-                ? 'preparing agent list…'
+                ? 'preparing harness list…'
                 : 'connecting…',
           );
         case AgentLoadStatus.needsLink:
@@ -858,11 +874,12 @@ class _AgentTree extends StatelessWidget {
       // nobody finds who does not already know it. Put where a new row would actually appear, it needs no
       // discovering. It joins `rows` rather than being appended after the loop so the guide's trunk runs
       // down to it and closes there, exactly as it would on a real last agent.
-      _NewAgentRow(
-        notifier: notifier,
-        machineId: state.machine.machineId,
-        source: 'rail_tail',
-      ),
+      if (!state.machine.isShared)
+        _NewAgentRow(
+          notifier: notifier,
+          machineId: state.machine.machineId,
+          source: 'rail_tail',
+        ),
     ];
 
     return Column(
@@ -1005,7 +1022,7 @@ class _AgentRowState extends State<_AgentRow> {
     notifier,
     state.machine.machineId,
     agent.id,
-    agent.name,
+    agent.displayName,
   );
 
   /// The row's way into the shared confirmation — see delete_agent_dialog.dart.
@@ -1014,11 +1031,21 @@ class _AgentRowState extends State<_AgentRow> {
     notifier,
     state.machine.machineId,
     agent.id,
-    agent.name,
+    agent.displayName,
+    engine: agent.engine,
   );
 
   Future<void> _restartAgent() =>
       restartHarness(context, notifier, state.machine.machineId, agent.id);
+
+  Future<void> _forkAgent() => forkHarness(
+    context,
+    notifier,
+    state.machine.machineId,
+    agent.id,
+    agent.displayName,
+    engine: agent.engine,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -1039,6 +1066,7 @@ class _AgentRowState extends State<_AgentRow> {
     final offlineSelectable =
         state.nodeOnline == false && agent.terminalAvailable;
     final enabled =
+        (state.machine.isShared && agent.terminalAvailable) ||
         offlineSelectable ||
         // `connected` never arrives until the local CLI has finished terminating E2EE for this
         // machine (or confirmed none is needed, for its own) — no separate readiness check left.
@@ -1067,7 +1095,7 @@ class _AgentRowState extends State<_AgentRow> {
       // Right-click opens the SAME menu the ⋯ does. Two menus carrying the same
       // two actions in two different shapes is the drift this avoids; the only
       // thing lost is opening at the cursor rather than at the button.
-      onSecondaryTap: _agentMenu.open,
+      onSecondaryTap: state.machine.isShared ? null : _agentMenu.open,
       child: Padding(
         // 28px is where a nested row's box starts, which is what the guide's
         // arm is drawn to reach (trunk at 19, arm 7 long, stopping 2px short of
@@ -1084,7 +1112,7 @@ class _AgentRowState extends State<_AgentRow> {
                     agentId: agent.id,
                   ),
           child: SidebarItem(
-            label: agent.name,
+            label: agent.displayName,
             selected: selected,
             enabled: enabled,
             dimmed: !visuallyEnabled,
@@ -1109,7 +1137,9 @@ class _AgentRowState extends State<_AgentRow> {
             },
             // The same "Edit name" the row's own menu opens — a double click is
             // just the shorter way to it, and the place a hand reaches first.
-            onDoubleTap: _showRenameDialog,
+            onDoubleTap: notifier.stateOf(machineId)?.machine.isShared == true
+                ? null
+                : _showRenameDialog,
 
             // No tooltip on a row that works. "Claude engine" only repeated what
             // the mark beside it already says, and it followed the pointer down
@@ -1179,46 +1209,60 @@ class _AgentRowState extends State<_AgentRow> {
             // its own menu is open, where a button that vanished under the menu
             // it opened would leave the panel pointing at nothing.
             trailingAlwaysVisible: _menuOpen,
-            trailing: MenuAnchor(
-              controller: _agentMenu,
-              onOpen: () => setState(() => _menuOpen = true),
-              onClose: () => setState(() => _menuOpen = false),
-              menuChildren: [
-                AppMenuItem(
-                  icon: LucideIcons.pencil300,
-                  label: 'Edit name',
-                  onPressed: () {
-                    _agentMenu.close();
-                    _showRenameDialog();
-                  },
-                ),
-                const AppMenuDivider(),
-                AppMenuItem(
-                  icon: LucideIcons.refreshCw300,
-                  label: 'Restart Agent',
-                  onPressed: () {
-                    _agentMenu.close();
-                    _restartAgent();
-                  },
-                ),
-                const AppMenuDivider(),
-                AppMenuItem(
-                  icon: Icons.stop_rounded,
-                  label: 'Stop Agent',
-                  danger: true,
-                  onPressed: () {
-                    _agentMenu.close();
-                    _confirmDelete();
-                  },
-                ),
-              ],
-              builder: (context, controller, child) => AppIconButton(
-                icon: LucideIcons.ellipsis300,
-                size: 16,
-                onPressed: () =>
-                    controller.isOpen ? controller.close() : controller.open(),
-              ),
-            ),
+            trailing: notifier.stateOf(machineId)?.machine.isShared == true
+                ? const Icon(Icons.visibility_outlined, size: 14)
+                : MenuAnchor(
+                    controller: _agentMenu,
+                    onOpen: () => setState(() => _menuOpen = true),
+                    onClose: () => setState(() => _menuOpen = false),
+                    menuChildren: [
+                      AppMenuItem(
+                        icon: LucideIcons.pencil300,
+                        label: 'Edit name',
+                        onPressed: () {
+                          _agentMenu.close();
+                          _showRenameDialog();
+                        },
+                      ),
+                      const AppMenuDivider(),
+                      AppMenuItem(
+                        icon: LucideIcons.refreshCw300,
+                        label: isTerminalEngine(agent.engine)
+                            ? 'Restart Terminal'
+                            : 'Restart Harness',
+                        onPressed: () {
+                          _agentMenu.close();
+                          _restartAgent();
+                        },
+                      ),
+                      if (agent.canFork)
+                        AppMenuItem(
+                          icon: LucideIcons.gitFork300,
+                          label: 'Fork Harness',
+                          onPressed: () {
+                            _agentMenu.close();
+                            _forkAgent();
+                          },
+                        ),
+                      const AppMenuDivider(),
+                      AppMenuItem(
+                        icon: Icons.stop_rounded,
+                        label: 'Stop Harness',
+                        danger: true,
+                        onPressed: () {
+                          _agentMenu.close();
+                          _confirmDelete();
+                        },
+                      ),
+                    ],
+                    builder: (context, controller, child) => AppIconButton(
+                      icon: LucideIcons.ellipsis300,
+                      size: 16,
+                      onPressed: () => controller.isOpen
+                          ? controller.close()
+                          : controller.open(),
+                    ),
+                  ),
           ),
         ),
       ),
@@ -1233,7 +1277,7 @@ class _AgentRowState extends State<_AgentRow> {
       data: AgentDragRef(
         machineId: machineId,
         agentId: agent.id,
-        name: agent.name,
+        name: agent.displayName,
       ),
       // Horizontal only, and the rail is a scrolling list — that is the whole
       // reason. An unrestricted Draggable competes with the list's own vertical
@@ -1245,11 +1289,14 @@ class _AgentRowState extends State<_AgentRow> {
       onDragStarted: () => agentDrag.value = AgentDragRef(
         machineId: machineId,
         agentId: agent.id,
-        name: agent.name,
+        name: agent.displayName,
       ),
       onDragEnd: (_) => agentDrag.value = null,
       onDraggableCanceled: (_, _) => agentDrag.value = null,
-      feedback: _DragChip(name: agent.name, engine: agent.identityEngine),
+      feedback: _DragChip(
+        name: agent.displayName,
+        engine: agent.identityEngine,
+      ),
       // The row stays put and dims. Removing it would reflow the list under the
       // pointer mid-drag, moving every other row out from under the place the
       // hand had already aimed at.
@@ -1499,6 +1546,30 @@ class _OfflineWord extends StatelessWidget {
   }
 }
 
+/// The counterpart to [_OfflineWord]: the machine's node is up. Same quiet
+/// treatment so online/offline read as the same kind of thing — the green
+/// connection dot beside the name already carries the colour; this is the word.
+class _OnlineWord extends StatelessWidget {
+  const _OnlineWord();
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    return Padding(
+      padding: const EdgeInsets.only(left: 8),
+      child: Text(
+        'online',
+        style: TextStyle(
+          color: grid.AppPalette.textFaint,
+          fontFamily: grid.AppFont.sans,
+          fontSize: 10,
+          letterSpacing: 0.2,
+        ),
+      ),
+    );
+  }
+}
+
 /// Why an offline machine has no agents under it.
 ///
 /// One sentence, in the colour every other quiet line in the rail uses. No icon,
@@ -1585,7 +1656,7 @@ class _AgentLoadError extends StatelessWidget {
   }
 }
 
-/// "Create Agent…", drawn as the row it would create.
+/// "New Harness", drawn as the row it would create.
 ///
 /// The rail is a LIST, and every framed control put in it has read as a foreign object — there is
 /// nothing else in this column with a border or a fill of its own. So this is not a button placed in a
@@ -1626,11 +1697,11 @@ class _NewAgentRow extends StatelessWidget {
       // one. A different indent here would bend the trunk at the last branch.
       padding: const EdgeInsets.only(left: 28),
       child: SidebarItem(
-        label: 'Create Agent…',
+        label: 'New Harness',
         // Dimmed rather than a colour of its own: this row is a placeholder until it is reached for, and
         // the hover state SidebarItem already owns is what says it is live.
         dimmed: true,
-        tooltip: 'Start an agent on this machine',
+        tooltip: 'Start a harness on this machine',
         onTap: () =>
             showNewAgentDialog(context, notifier, machineId, source: source),
         // The agent row's well, in dashes. Same 24px box and same 7px radius, so the column of marks
