@@ -162,7 +162,7 @@ class _DshInstallPanelState extends State<DshInstallPanel> {
                       ? 'The download and the toolchain are kept; Retry runs the check again.'
                       : run.done
                       ? 'Starting the harness…'
-                      : 'The first install takes a few minutes. You can keep using OpenHarness.',
+                      : 'The first install takes a few minutes. You can keep using Harness.',
                   style: TextStyle(
                     fontSize: 12,
                     color: grid.AppPalette.textFaint,

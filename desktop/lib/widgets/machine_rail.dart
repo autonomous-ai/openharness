@@ -228,7 +228,7 @@ class _MachineRailState extends State<MachineRail> {
                             children: [
                               Expanded(
                                 child: Text(
-                                  'OpenHarness',
+                                  'Harness',
                                   style: TextStyle(
                                     color: grid.AppPalette.textPrimary,
                                     fontSize: 16,

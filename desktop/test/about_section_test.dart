@@ -70,7 +70,7 @@ void main() {
     (tester) async {
       await pumpAbout(tester);
 
-      expect(find.text('OpenHarness'), findsOneWidget);
+      expect(find.text('Harness'), findsOneWidget);
       expect(find.text('1.0.0'), findsOneWidget);
       expect(find.text('Not checked'), findsOneWidget);
       expect(find.text('Up to date'), findsNothing);

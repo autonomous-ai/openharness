@@ -43,7 +43,7 @@ class EnvironmentPreflightScreen extends StatelessWidget {
                     key: const Key('environment-status'),
                     container: true,
                     liveRegion: true,
-                    label: 'OpenHarness setup status',
+                    label: 'Harness setup status',
                     child: AnimatedSwitcher(
                       duration: reduceMotion
                           ? Duration.zero
@@ -93,7 +93,7 @@ class _CheckingContent extends StatelessWidget {
       ),
       const SizedBox(height: 8),
       Text(
-        'Verifying the tools OpenHarness needs. This check is read-only and nothing is being installed.',
+        'Verifying the tools Harness needs. This check is read-only and nothing is being installed.',
         textAlign: TextAlign.center,
         style: Theme.of(context).textTheme.bodySmall,
       ),

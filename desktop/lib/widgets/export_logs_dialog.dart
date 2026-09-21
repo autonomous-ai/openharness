@@ -76,7 +76,7 @@ class _ExportLogsDialogState extends State<_ExportLogsDialog> {
         ? 'Could not export logs'
         : 'Logs exported';
     final body = busy
-        ? 'Zipping the last seven days of OpenHarness, CLI and dial logs. '
+        ? 'Zipping the last seven days of Harness, CLI and dial logs. '
               'Secrets are stripped first.'
         : failed
         ? result.error ?? 'The CLI did not answer.'
