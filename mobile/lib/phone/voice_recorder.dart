@@ -58,6 +58,24 @@ class MicVoiceRecorder implements VoiceRecorder {
   int _sampleRate = _requested.sampleRate;
   int _channels = _requested.numChannels;
 
+  /// How long [_stop] lets already-captured audio arrive before it closes the
+  /// microphone. See the note in [_stop].
+  ///
+  /// The tap's buffers are handed over one main-thread hop at a time, so this
+  /// only has to outlast a couple of event-loop turns plus the platform channel
+  /// — not a buffer's worth of recording. Long enough to catch the tail of a
+  /// sentence, short enough that nobody waits for the mic to let go.
+  static const _tailSettle = Duration(milliseconds: 120);
+
+  /// How long [_stop] waits for the stream to close after the plugin is
+  /// stopped.
+  ///
+  /// ⚠️ Only a backstop now. With [_tailSettle] doing the collecting, the
+  /// stream's own `onDone` normally arrives within a turn or two — and a stop
+  /// that never closes must not hold the mic for seconds with a finished take
+  /// already in hand.
+  static const _drainLimit = Duration(seconds: 2);
+
   @override
   Future<bool> allowed() => _recorder.hasPermission();
 
@@ -87,8 +105,16 @@ class MicVoiceRecorder implements VoiceRecorder {
       _sampleRate = config.sampleRate;
       _channels = config.numChannels;
     });
+    // ⚠️ **The plugin hands back a BROADCAST stream, which drops every buffer
+    // that arrives before something is listening** — `_startRecordStream` only
+    // forwards `when ctrl.hasListener`. So the subscription is made in the same
+    // synchronous step as the stream, with nothing awaited in between: an
+    // `await` here yields to the event loop, and the microphone's first buffers
+    // land on a stream nobody is on yet. That is the head of the sentence, and
+    // it is what came back as a take that transcribed to nothing.
     final stream = await _recorder.startStream(_requested);
-    final drained = _drained = Completer<void>();
+    final drained = Completer<void>();
+    _drained = drained;
     void finish([Object? _]) {
       if (!drained.isCompleted) drained.complete();
     }
@@ -102,10 +128,23 @@ class MicVoiceRecorder implements VoiceRecorder {
   Future<VoiceTake?> _stop() async {
     final drained = _drained;
     if (drained == null) return null;
+    // ⚠️ **The tail of the take is collected BEFORE the plugin is stopped, and
+    // that ordering is the whole of this method.** On iOS the engine's tap
+    // hands each buffer to the event sink with `DispatchQueue.main.async` —
+    // see `RecorderStreamDelegate.handleTap` — while `stop()` removes the tap
+    // and closes the Dart stream synchronously. Buffers already queued on the
+    // main thread then arrive at a controller that has been closed and are
+    // thrown away: the last word of every sentence, and a short take lost
+    // whole, which is what reached the backend as "Didn't catch that".
+    //
+    // One frame-ish pause lets those queued buffers land while the stream is
+    // still open. It costs a tenth of a second at the end of a take, against
+    // words that otherwise never existed.
+    await _settleTail();
     await _recorder.stop();
     // The plugin's own rule: the last buffer arrives with the stream's close,
     // not with `stop()`, so the take is only whole once the stream is done.
-    await drained.future.timeout(const Duration(seconds: 2), onTimeout: () {});
+    await drained.future.timeout(_drainLimit, onTimeout: () {});
     // Cancelled rather than dropped: after a timeout the stream is still open,
     // and a late buffer would otherwise land in the NEXT take.
     await _subscription?.cancel();
@@ -136,6 +175,34 @@ class MicVoiceRecorder implements VoiceRecorder {
   Future<void> _dispose() async {
     await _discardTake();
     await _recorder.dispose();
+  }
+
+  /// Waits for the audio already captured to finish arriving, up to
+  /// [_tailSettle].
+  ///
+  /// Waits for the STREAM to go quiet rather than for a fixed delay: it returns
+  /// as soon as a stretch passes with no buffer, so an idle mic costs one hop
+  /// and a mic still delivering gets the whole window. See [_stop] for why the
+  /// tail needs collecting at all.
+  Future<void> _settleTail() async {
+    if (_subscription == null) return;
+    const step = Duration(milliseconds: 20);
+    final deadline = DateTime.now().add(_tailSettle);
+    var seen = _pcm.length;
+    var quiet = 0;
+    while (DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(step);
+      // Stopped, cancelled or restarted from under us while we waited.
+      if (_subscription == null) return;
+      final length = _pcm.length;
+      if (length != seen) {
+        seen = length;
+        quiet = 0;
+        continue;
+      }
+      // Two quiet steps in a row: the queued buffers have all landed.
+      if (++quiet >= 2) return;
+    }
   }
 
   Future<void> _discardTake() async {
