@@ -691,6 +691,12 @@ static void handle_message(const cJSON *root)
         // for a day the dial updated its tile in complete silence: no beep, no wake, nothing in the
         // drawer — the one part of a finished turn a person is not looking at the screen for.
         //
+        // A SUB-AGENT'S turn (`silent`, decided by the daemon: an Orchestrator specialist, or its
+        // Director while specialists are still out) is not news at all — the tile above is redrawn and
+        // that is the whole of it. A project of four specialists used to ring eight times before the one
+        // ring that mattered (owner, 2026-09-21: "chỉ cần báo thằng main thôi"). Absent = false, so an
+        // older daemon rings exactly as before.
+        if (bool_of(p, "silent")) return;
         // THE BEEP ALWAYS SOUNDS. A finished turn is news even when the person is looking straight at
         // it: they are reading the last one, not watching for the next to end, and three tones is how
         // they learn a task is done without moving their eyes.

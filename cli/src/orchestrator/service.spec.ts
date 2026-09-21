@@ -80,6 +80,19 @@ describe('durable orchestrator lifecycle', () => {
     expect(sent).toHaveLength(4)
     expect(research.agentId).toBeTruthy()
   })
+  it('names each agent\'s role: specialists are never news, the Director only once nothing is left to run', async () => {
+    // What the daemon asks before it lets a turn end ring the dial (CommanderMirrorOpts.isSubagent).
+    await start(); await active()
+    expect(service.roleOf(launches[0].name === `Director ${id.slice(0, 8)}` ? 'agent-1' : '')).toEqual({ role: 'director', busy: false })
+    service.plan(id, [task('part')])
+    const part = await running('part')
+    expect(service.roleOf(part.agentId!)).toEqual({ role: 'worker' })
+    expect(service.roleOf('agent-1')).toEqual({ role: 'director', busy: true })
+    expect(service.roleOf('nobody')).toBeNull()
+    await service.finish(id, 'part', 1, 'Done', [])
+    expect(service.roleOf('agent-1')).toEqual({ role: 'director', busy: false })
+    expect(service.roleOf(part.agentId!)).toEqual({ role: 'worker' })   // a finished specialist stays one
+  })
   it('limits parallelism and treats a repeated plan as the same work', async () => {
     await start(); await active()
     const plan = [task('a'), task('b'), task('c')]

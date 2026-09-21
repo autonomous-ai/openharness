@@ -107,6 +107,23 @@ export class OrchestratorService {
     return message
   }
   catalog(): HarnessChoice[] { return this.deps.catalog() }
+  /**
+   * What an agent is to a project: a specialist (`worker`), the Director (with whether work is still
+   * out — a task queued, launching or running on an active run), or nothing. The daemon asks this for
+   * every turn that ends: a specialist's end is never announced, and the Director's only when nothing is
+   * left to run — the person asked for one notification per project, not one per sub-agent.
+   */
+  roleOf(agentId: string): { role: 'worker' } | { role: 'director'; busy: boolean } | null {
+    this.load()
+    for (const run of this.runs.values()) {
+      if (run.tasks.some(t => t.agentId === agentId)) return { role: 'worker' }
+      if (run.directorId === agentId) {
+        const busy = run.state === 'active' && run.tasks.some(t => t.state === 'queued' || t.state === 'launching' || t.state === 'running')
+        return { role: 'director', busy }
+      }
+    }
+    return null
+  }
   list(): Record<string, unknown>[] {
     this.load()
     return [...this.runs.values()].sort((a, b) => b.updatedAt - a.updatedAt).map(r => ({

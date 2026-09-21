@@ -1,7 +1,7 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
 import { describe, expect, it, vi } from 'vitest'
 
-import { DaemonCableHost, type CableHostWiring } from './cableHost.js'
+import { DaemonCableHost, cableEventFor, type CableHostWiring } from './cableHost.js'
 import type { FleetMachine, MachineFleet } from './machineFleet.js'
 
 const AGENTS: Array<{ agentId: string; registeredAt: number; active: boolean; terminalAvailable: boolean; engine: string }> = []
@@ -646,5 +646,15 @@ describe('DaemonCableHost.listSwarms', () => {
     const host = new DaemonCableHost(wiring(), fleetOf([]))
     host.setSwarms(null)
     expect(host.listSwarms()).toEqual({ selected: '', swarms: [] })
+  })
+})
+
+describe('cableEventFor', () => {
+  it('carries whether the card is a sub-agent\'s turn end, and nothing else about it', () => {
+    const base = { type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'body', recap: 'recap' } }
+    expect(cableEventFor(base)).toEqual({ kind: 'summary', agentId: 'a1', text: 'body', recap: 'recap', subagent: false })
+    expect(cableEventFor({ ...base, payload: { ...base.payload, subagent: true } })?.subagent).toBe(true)
+    expect(cableEventFor({ ...base, payload: { ...base.payload, subagent: 'yes' } })?.subagent).toBe(false)
+    expect(cableEventFor({ ...base, payload: { kind: 'tool', text: 'Bash' } })).toBeNull()
   })
 })

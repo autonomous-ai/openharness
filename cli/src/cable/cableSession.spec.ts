@@ -994,6 +994,12 @@ describe('cable session', () => {
     expect(sent.find((m) => m.agentId === 'a1')).not.toHaveProperty('quiet')
     // The recap still travels — the tile draws it either way. Only the beep and the drawer are withheld.
     expect(sent.find((m) => m.agentId === 'a2')).toMatchObject({ quiet: true, recap: 'recap two' })
+
+    // A sub-agent's turn: silent — no beep, no drawer row — and the recap still travels.
+    await session.summary('a1', 'recap three', 'body three', false, true)
+    const silent = port.sent.filter((m) => m.t === 'summary' && m.agentId === 'a1').pop()
+    expect(silent).toMatchObject({ silent: true, recap: 'recap three' })
+    expect(silent).not.toHaveProperty('quiet')
   })
 
   it('redraws a reattached dial with what each agent was last doing', async () => {
