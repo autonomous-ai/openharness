@@ -71,8 +71,9 @@ icon size in thirty seconds instead of in an email twenty minutes later.
 | `1.0.0 (20)` | 2026-09-21 | TestFlight. The phone holds only the agent on screen: the two beside it are no longer opened in advance, and the one swiped away from is closed — each hands its terminal back to the desktop. Voice keeps the audio at both ends of a take |
 | `1.0.0 (21)` | 2026-09-21 | TestFlight. The account's tabs reach the phone: a swipe stays inside the tab you are in, the tabs themselves sit behind a mark beside `⋯`, and an agent started here joins that tab |
 | `1.0.0 (22)` | 2026-09-21 | TestFlight. Named **Harness** on the home screen and in the app, with a new icon; the terminal runs to the bottom edge of the screen; only an explicit Take control press claims a terminal from the desktop |
+| `1.0.0 (23)` | 2026-09-21 | TestFlight. The tabs mark unrolls the account's tabs as a rail of names under the header — the tab you are in wears a bar under its name — instead of opening a sheet; picking one switches and puts the rail away |
 
-`pubspec.yaml` is therefore at `1.0.0+23`: the repo always holds the NEXT build number, so a release
+`pubspec.yaml` is therefore at `1.0.0+24`: the repo always holds the NEXT build number, so a release
 runs clean without anyone having to remember the last one.
 
 ### Why the app is iPhone-only
