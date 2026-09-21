@@ -59,6 +59,149 @@ void main() {
     final title = axis == PaneResizeAxis.x
         ? 'New Pane to the Right'
         : 'New Pane Below';
+    testWidgets('five-pane side tile can split $direction with scrolling', (
+      tester,
+    ) async {
+      final store = MemoryStore();
+      final app = createApp(store: store);
+      final machine = app.machineStates['m']!;
+      machine.nodeOnline = true;
+      machine.localOnly = true;
+      machine.agents[5] = const Agent(
+        id: 'a5',
+        name: 'Sixth helper',
+        engine: 'codex',
+        terminalAvailable: true,
+      );
+      final frames = <TerminalBinaryFrame>[];
+      final original = [
+        for (var i = 0; i < 5; i++)
+          app.adoptSessionForTest(terminal('a$i', frames)),
+      ];
+      final swarm = app.activeSwarm;
+      app.setPreset(5, PanePreset.middleMain);
+      app.newSwarm();
+      final helper = app.adoptSessionForTest(terminal('a5', frames));
+      app.selectSwarm(swarm.id);
+      final target = original[3];
+      app.focusPane(target.id);
+      await mount(tester, app);
+      final view = find.descendant(
+        of: find.byKey(target.cellKey),
+        matching: find.byType(TerminalView),
+      );
+      final retained = tester.element(view);
+      final button = find.descendant(
+        of: find.byKey(target.cellKey),
+        matching: find.byKey(ValueKey('pane-split-$direction')),
+      );
+      expect(tester.widget<IconButton>(button).onPressed, isNotNull);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      final targetRect = tester.getRect(find.byKey(target.cellKey));
+      await mouse.addPointer(location: targetRect.center);
+      await mouse.moveTo(
+        axis == PaneResizeAxis.x
+            ? Offset(targetRect.right - 2, targetRect.center.dy)
+            : Offset(targetRect.center.dx, targetRect.bottom - 2),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 120));
+      expect(button.hitTestable(), findsOneWidget);
+      await tester.tap(button);
+      await tester.pump();
+      expect(find.text(title), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(app.panes, original);
+      await chord(
+        tester,
+        axis == PaneResizeAxis.x
+            ? LogicalKeyboardKey.keyR
+            : LogicalKeyboardKey.keyD,
+      );
+      final search = find.byKey(const ValueKey('swarm-search-input'));
+      expect(search, findsOneWidget);
+      await tester.enterText(search, 'Sixth helper');
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(app.panes, [...original.take(4), helper, original.last]);
+      expect(tester.element(view), same(retained));
+      final before = tester.getRect(find.byKey(target.cellKey));
+      final after = tester.getRect(find.byKey(helper.cellKey));
+      if (axis == PaneResizeAxis.x) {
+        expect(after.left, greaterThan(before.right));
+        expect(after.top, before.top);
+      } else {
+        expect(after.top, greaterThan(before.bottom));
+        expect(after.left, before.left);
+      }
+      final viewport = tester.view.physicalSize;
+      expect(after.left, greaterThanOrEqualTo(0));
+      expect(after.top, greaterThanOrEqualTo(0));
+      expect(after.right, lessThanOrEqualTo(viewport.width));
+      expect(after.bottom, lessThanOrEqualTo(viewport.height));
+      final canvasScrolls = tester
+          .widgetList<SingleChildScrollView>(find.byType(SingleChildScrollView))
+          .where((widget) => widget.controller != null);
+      final scroll = canvasScrolls
+          .singleWhere(
+            (widget) =>
+                widget.scrollDirection ==
+                (axis == PaneResizeAxis.x ? Axis.horizontal : Axis.vertical),
+          )
+          .controller!;
+      expect(scroll.position.maxScrollExtent, greaterThan(0));
+      // Directional focus also reveals an existing pane outside the viewport.
+      app.focusPane(original[2].id);
+      await chord(tester, LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(app.focusedPaneId, original.last.id);
+      expect(
+        tester.getRect(find.byKey(original.last.cellKey)).right,
+        lessThanOrEqualTo(viewport.width + .001),
+      );
+      app.focusPane(original.last.id);
+      await chord(tester, LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expect(app.focusedPaneId, original[1].id);
+      final focused = tester.getRect(find.byKey(original[1].cellKey));
+      expect(focused.left, greaterThanOrEqualTo(0));
+      expect(focused.right, lessThanOrEqualTo(viewport.width + .001));
+      app.focusPane(helper.id, reveal: true);
+      await tester.pump();
+      expect(frames, isEmpty);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump(const Duration(milliseconds: 10));
+      expect(frames.single.streamId, helper.session!.streamId);
+      final savedTiles = app.activeSwarm.manualLayout!.tiles;
+      final savedExtent = scroll.position.maxScrollExtent;
+      await app.flushPaneLayout();
+      await mouse.removePointer();
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+      final restored = createApp(store: store);
+      await restored.restorePaneLayoutForTest();
+      await mount(tester, restored);
+      expect(restored.activeSwarm.manualLayout!.tiles, savedTiles);
+      final restoredScroll = tester
+          .widgetList<SingleChildScrollView>(find.byType(SingleChildScrollView))
+          .where((view) => view.controller != null)
+          .singleWhere(
+            (view) =>
+                view.scrollDirection ==
+                (axis == PaneResizeAxis.x ? Axis.horizontal : Axis.vertical),
+          )
+          .controller!;
+      expect(
+        restoredScroll.position.maxScrollExtent,
+        closeTo(savedExtent, .001),
+      );
+      await tester.pumpWidget(const SizedBox());
+      restored.dispose();
+    });
+
     for (final trigger in ['shortcut', 'palette', 'native menu']) {
       testWidgets('$trigger splits the focused pane $direction', (
         tester,
@@ -329,7 +472,7 @@ void main() {
       app.selectSwarm(original);
       app.focusPane(first.id);
       await mountWide(tester, app);
-      expect(app.preparePaneSplit(PaneResizeAxis.x), isNull);
+      expect(app.preparePaneSplit(PaneResizeAxis.x), isNotNull);
       tester.view.physicalSize = const Size(3000, 1800);
       await tester.pump();
       final unchanged = [second, third];
@@ -449,14 +592,19 @@ void main() {
         expect(app.panes, isEmpty);
         expect(
           original.panes.map((p) => p.agentId),
-          change == 'switch' ? ['a0', 'a1', 'created'] : ['a0', 'a1'],
+          change == 'switch' || change == 'window'
+              ? ['a0', 'a1', 'created']
+              : ['a0', 'a1'],
         );
-        expect(original.manualLayout != null, change == 'switch');
+        expect(
+          original.manualLayout != null,
+          change == 'switch' || change == 'window',
+        );
         expect(
           app.machineStates['m']!.agents.any((a) => a.id == 'created'),
           isTrue,
         );
-        if (change != 'switch') {
+        if (change != 'switch' && change != 'window') {
           expect(app.lastError, contains('harness started'));
         }
         expect(connection.calls, isNot(contains('agent_delete')));

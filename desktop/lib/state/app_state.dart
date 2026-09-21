@@ -7885,7 +7885,7 @@ class AppNotifier extends ChangeNotifier {
   /// not as a step.
   void focusPaneVertically(int delta) {
     final to = _neighbour(dx: 0, dy: delta) ?? _wrapVertically(delta);
-    if (to != null) focusPane(panes[to].id);
+    if (to != null) focusPane(panes[to].id, reveal: true);
   }
 
   /// The tile at the far end of this column — ⌘j off the bottom row, ⌘k off the
@@ -7948,12 +7948,12 @@ class AppNotifier extends ChangeNotifier {
     if (railFocused) {
       if (panes.isEmpty) return;
       unfocusRail();
-      focusPane(delta < 0 ? panes.last.id : panes.first.id);
+      focusPane(delta < 0 ? panes.last.id : panes.first.id, reveal: true);
       return;
     }
     final to = _neighbour(dx: delta, dy: 0);
     if (to != null) {
-      focusPane(panes[to].id);
+      focusPane(panes[to].id, reveal: true);
       return;
     }
     if (hasNavigationRail) focusRail();
@@ -7963,7 +7963,7 @@ class AppNotifier extends ChangeNotifier {
     // would simply do nothing at the edge, which is the exact behaviour the ring
     // exists to remove.
     if (!railFocused && panes.isNotEmpty) {
-      focusPane(delta < 0 ? panes.last.id : panes.first.id);
+      focusPane(delta < 0 ? panes.last.id : panes.first.id, reveal: true);
     }
   }
 
@@ -8043,7 +8043,7 @@ class AppNotifier extends ChangeNotifier {
       _previousPaneId = null;
       return;
     }
-    focusPane(back);
+    focusPane(back, reveal: true);
   }
 
   /// ⌘⏎ — one pane filling the grid, and back.
@@ -8072,7 +8072,7 @@ class AppNotifier extends ChangeNotifier {
   /// show it — a key meant only to look, rearranging the desk.
   void focusPaneByIndex(int index) {
     if (index < 0 || index >= panes.length) return;
-    focusPane(panes[index].id);
+    focusPane(panes[index].id, reveal: true);
   }
 
   /// Walk the focus one tile — ⌘← / ⌘→, and ⌘[ / ⌘].
@@ -8084,7 +8084,7 @@ class AppNotifier extends ChangeNotifier {
     if (panes.length < 2) return;
     final at = panes.indexWhere((pane) => pane.id == focusedPaneId);
     final next = at < 0 ? 0 : (at + delta + panes.length) % panes.length;
-    focusPane(panes[next].id);
+    focusPane(panes[next].id, reveal: true);
   }
 
   /// Move the focused pane one slot, for the keyboard twin of the drag.
