@@ -68,10 +68,13 @@ void main() {
   late PhoneDesk desk;
   var changes = 0;
 
-  PhoneDesk deskOver(_Backend backend) => PhoneDesk(
+  PhoneDesk deskOver(_Backend backend, {Duration? poll}) => PhoneDesk(
     read: backend.read,
     write: backend.write,
     onChanged: () => changes++,
+    // Fifteen seconds is the shipped beat; a test that waited one out would be
+    // fifteen seconds long.
+    pollInterval: poll ?? const Duration(seconds: 15),
   );
 
   setUp(() {
@@ -234,6 +237,38 @@ void main() {
     desk.adopt((machineId: 'm', agentId: 'later'));
     await pumpEventQueue();
     expect(backend.received, hasLength(1));
+  });
+
+  test('a foreground phone keeps reading the desk on its own', () async {
+    // ⚠️ The regression this is here for: a phone left on one screen never saw
+    // a tab made on a computer. `desk_changed` reaches a phone only over a
+    // machine's relay socket, so a backend that does not forward it — or a
+    // moment with no machine connected — delivered nothing, and the reading of
+    // the desk this app made at launch was the last one it ever made.
+    desk = deskOver(backend, poll: const Duration(milliseconds: 10));
+    await join();
+    expect(desk.tabs, hasLength(2));
+
+    backend.edit([
+      {'op': 'tab.create', 'id': 't3', 'name': 'test', 'index': 2},
+    ]);
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+
+    expect([for (final tab in desk.tabs) tab.name], [
+      'Desktop',
+      'Docker',
+      'test',
+    ]);
+
+    // And nothing while the app is in somebody's pocket.
+    desk.pause();
+    backend.edit([
+      {'op': 'tab.close', 'id': 't3'},
+    ]);
+    final reads = backend.reads;
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(backend.reads, reads);
+    expect(desk.tabs, hasLength(3));
   });
 
   test(
