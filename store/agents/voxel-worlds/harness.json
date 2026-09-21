@@ -1,0 +1,35 @@
+{
+  "spec": 1,
+  "id": "autonomous/voxel-worlds",
+  "name": "Voxel Worlds",
+  "category": "Games",
+  "author": "Autonomous",
+  "description": "Turn an idea into an editable 3D environment and a reusable asset kit. Shape named objects, sculpt terrain, walk the result, import voxel assets and export GLB, VOX and an offline walkthrough.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "world/index.html",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "VOXEL_DSH_DIR": "${dsh}"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "command": "toolchain/viewer.sh",
+    "artifactExtensions": [
+      ".html"
+    ],
+    "url": "http://127.0.0.1:${port}/"
+  },
+  "verdict": ".harness/verdict.json"
+}

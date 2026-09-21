@@ -1,0 +1,29 @@
+{
+  "spec": 1,
+  "id": "autonomous/mlx-lm",
+  "name": "MLX-LM",
+  "category": "Local AI",
+  "author": "OpenHarness contributors",
+  "description": "Run language models directly on Apple Silicon with MLX-LM. Talk to Codex to download, load and compare models, with live progress and native performance measurements.",
+  "engine": "codex",
+  "workspace": {
+    "template": "template",
+    "marker": "local-ai.json"
+  },
+  "agent": {
+    "instructions": "agent/AGENTS.md",
+    "env": {
+      "LOCAL_AI": "${dsh}/toolchain/local-ai",
+      "MLX_LM": "${dsh}/toolchain/mlx-lm"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "command": "./viewer.sh",
+    "url": "http://127.0.0.1:${port}/?view=grid"
+  },
+  "verdict": ".harness/verdict.json"
+}

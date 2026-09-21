@@ -1,0 +1,60 @@
+# Example devices, not discovered hardware. Keep disabled until installation review.
+- id: habitat_hallway
+  alias: Hallway lighting with quiet hours and manual hold
+  description: A two-second motion hold, dim quiet-hours branch, and restartable two-minute vacancy timer.
+  initial_state: false
+  mode: restart
+  trace:
+    stored_traces: 40
+  triggers:
+    - trigger: state
+      entity_id: binary_sensor.example_hall_motion
+      from: "off"
+      to: "on"
+      for:
+        seconds: 2
+  conditions:
+    - condition: state
+      entity_id: input_boolean.example_manual_hold
+      state: "off"
+    - condition: template
+      value_template: >-
+        {{ is_number(states('sensor.example_hall_lux'))
+           and states('sensor.example_hall_lux') | float(9999) < 30 }}
+  actions:
+    - choose:
+        - conditions:
+            - condition: state
+              entity_id: input_boolean.example_quiet_hours
+              state: "on"
+          sequence:
+            - action: light.turn_on
+              target:
+                entity_id: light.example_hall
+              data:
+                brightness_pct: 12
+                transition: 1
+      default:
+        - action: light.turn_on
+          target:
+            entity_id: light.example_hall
+          data:
+            brightness_pct: 45
+            transition: 1
+    - wait_for_trigger:
+        - trigger: state
+          entity_id: binary_sensor.example_hall_motion
+          to: "off"
+          for:
+            seconds: 120
+      timeout:
+        minutes: 30
+      continue_on_timeout: false
+    - condition: state
+      entity_id: input_boolean.example_manual_hold
+      state: "off"
+    - action: light.turn_off
+      target:
+        entity_id: light.example_hall
+      data:
+        transition: 1

@@ -1,0 +1,27 @@
+{
+  "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/creative-direction",
+  "license": "MIT",
+  "tagline": "Turn your business brief into an editable brand and complete launch kit",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/creative-direction/starter.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/creative-direction/vectorial.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/creative-direction/stillwater.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Create a warm, confident identity for Morrow, a neighborhood bakery. Show two different directions and deliver a bread label, opening poster, daily menu, social announcement and website.",
+      "caption": "Authored bakery brief · two directions, linked copy and six launch applications",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/creative-direction/starter.jpg"
+    },
+    {
+      "prompt": "Build a technical consultancy identity around our supplied Vectorial logo. Preserve the mark and create services, proposal, event and website materials.",
+      "caption": "Authored consultancy brief · supplied logo preserved in a complete identity",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/creative-direction/vectorial.jpg"
+    },
+    {
+      "prompt": "Create Stillwater, a community ceramics studio. Make it welcoming to beginners with an original identity, workshop materials, product tag and responsive website.",
+      "caption": "Authored ceramics brief · original vector illustrations and an editable launch kit",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/creative-direction/stillwater.jpg"
+    }
+  ]
+}

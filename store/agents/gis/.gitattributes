@@ -1,0 +1,2 @@
+# Preserve the upstream distribution's CRLF bytes and treat CR as a line ending.
+template/vendor/* -text whitespace=cr-at-eol

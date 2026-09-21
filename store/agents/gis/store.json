@@ -1,0 +1,17 @@
+{
+  "listed": false,
+  "homepage": "https://leafletjs.com",
+  "upstream": "https://github.com/Leaflet/Leaflet",
+  "license": "MIT",
+  "tagline": "An open-source JavaScript library for interactive maps",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/gis/starter.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Open the offline atlas, inspect the sample cities, and measure a great-circle distance.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/gis/starter.jpg",
+      "caption": "Atlas · offline map, GeoJSON inspection and measurement"
+    }
+  ]
+}

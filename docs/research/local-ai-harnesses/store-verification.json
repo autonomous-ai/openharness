@@ -1,0 +1,94 @@
+{
+  "sourceCommit": "05fcd5a6185f757259699f93e6ad0fa922a65892",
+  "platform": "Apple M2 Max, 64 GiB, macOS 26.6.2",
+  "checks": [
+    "fresh sparse installs into a temporary registry",
+    "isolated setup and doctor hooks, including native Metal cache kernel",
+    "independent viewer and assets",
+    "natural-language runner deployment of cached Qwen3 demo model",
+    "real arithmetic answers and token metrics",
+    "test viewer cleanup"
+  ],
+  "note": "vLLM answered with the expression 2 + 2 = 4; an initial exact-number assertion was too narrow. The successful stored job, correct answer, metrics and process exit were then checked.",
+  "results": [
+    {
+      "package": "autonomous/ollama",
+      "answer": "4",
+      "metrics": {
+        "model": "qwen3:0.6b",
+        "tokens": 90,
+        "promptTokens": 24,
+        "tokensPerSecond": 290.84234406002986,
+        "promptTokensPerSecond": 1017.5959296162816,
+        "loadMs": 0.631708,
+        "evalMs": 309.446,
+        "doneReason": "stop",
+        "firstTokenMs": 36.63487500000019,
+        "firstOutputMs": 334.022375,
+        "elapsedMs": 338.58695799999987,
+        "context": 4096,
+        "maxTokens": 512,
+        "temperature": 0.3,
+        "seed": 42,
+        "thinking": true
+      },
+      "jobStatus": "succeeded",
+      "testViewerStopped": true
+    },
+    {
+      "package": "autonomous/mlx-lm",
+      "answer": "4",
+      "metrics": {
+        "model": "mlx-community/Qwen3-0.6B-4bit",
+        "tokens": 249,
+        "promptTokens": 22,
+        "tokensPerSecond": 365.3933375725497,
+        "promptTokensPerSecond": 15.211015247795467,
+        "nativeFirstTokenMs": 1701.4684170717373,
+        "nativeFirstOutputMs": 2380.1687500672415,
+        "peakMemoryBytes": 462946604,
+        "thinking": true,
+        "doneReason": "stop",
+        "wallMs": 2390.8956249943003,
+        "measurement": "MLX-LM native generation_tps; TTFT includes local IPC; fresh prompt cache",
+        "firstTokenMs": 1713.313583,
+        "firstOutputMs": 2391.9136660000004
+      },
+      "jobStatus": "succeeded",
+      "testViewerStopped": true
+    },
+    {
+      "package": "autonomous/vllm",
+      "answer": "2 + 2 = 4",
+      "metrics": {
+        "model": "mlx-community/Qwen3-0.6B-4bit",
+        "tokens": 8,
+        "promptTokens": 26,
+        "tokensPerSecond": 28.04624175995718,
+        "firstTokenMs": 226.6821259999997,
+        "firstOutputMs": 226.72441799999797,
+        "totalMs": 285.2432090000002,
+        "thinking": false,
+        "doneReason": "stop",
+        "metric": "client_end_to_end",
+        "serving": {
+          "context": 4096,
+          "maxSequences": 4,
+          "memoryFraction": 0.1,
+          "prefixCaching": true
+        }
+      },
+      "jobStatus": "succeeded",
+      "testViewerStopped": true
+    }
+  ],
+  "verifiedAt": "2026-09-20T07:00:19.653951+00:00",
+  "automatedChecks": {
+    "harnessTests": 24,
+    "desktopTests": 17,
+    "storeRegistryAndCatalogTests": 448,
+    "targetedDartAnalysis": "passed",
+    "catalogPackages": 49,
+    "manifestConformance": "all three passed"
+  }
+}

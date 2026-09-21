@@ -13,7 +13,8 @@
  */
 
 import { readFile } from 'node:fs/promises'
-import { env } from '../config/env.js'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { GatewayRuntime } from './gatewayRuntime.js'
 
 const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions'
@@ -53,7 +54,10 @@ export function redactKeys(text: string): string {
  */
 async function keyFromCredentialsFile(): Promise<string | null> {
   try {
-    const parsed = JSON.parse(await readFile(env.ORI_CREDENTIALS_PATH, 'utf8')) as OriCredentials
+    // Keep credential lookup independent of daemon startup and its data migrations. The
+    // standalone command-bar experiment uses the same account without starting a daemon.
+    const path = process.env.ORI_CREDENTIALS_PATH ?? join(homedir(), '.ori', 'credentials.json')
+    const parsed = JSON.parse(await readFile(path, 'utf8')) as OriCredentials
     return typeof parsed.key === 'string' && parsed.key.trim() ? parsed.key.trim() : null
   } catch {
     // Absent, unreadable or corrupt is a normal state (no ori installed) — not an error worth logging.

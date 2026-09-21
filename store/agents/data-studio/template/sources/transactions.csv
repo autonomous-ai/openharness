@@ -1,0 +1,27 @@
+line_id,sold_on,product_id,region,quantity,unit_price_usd,discount_usd,refund_usd,status,note
+00001,2026-01-05,001,East,12,38.00,0.00,0.00,completed,Synthetic example — not real transactions
+00002,2026-01-08,002,East,24,12.50,5.00,0.00,completed,
+00003,2026-01-11,010,East,18,16.00,0.00,0.00,completed,
+00004,2026-01-14,011,East,8,32.00,0.00,0.00,completed,
+00005,2026-01-17,020,East,14,24.00,0.00,0.00,completed,
+00006,2026-01-20,021,East,6,65.00,0.00,0.00,completed,
+00007,2026-01-05,001,West,15,38.00,0.00,0.00,completed,Synthetic example — not real transactions
+00008,2026-01-08,002,West,27,12.50,5.00,0.00,completed,
+00009,2026-01-11,010,West,21,16.00,0.00,0.00,completed,
+00010,2026-01-14,011,West,11,32.00,0.00,0.00,completed,
+00011,2026-01-17,020,West,17,24.00,0.00,0.00,completed,
+00012,2026-01-20,021,West,9,65.00,0.00,0.00,completed,
+00013,2026-02-05,001,East,9,38.00,0.00,0.00,completed,Synthetic example — not real transactions
+00014,2026-02-08,002,East,18,12.50,5.00,0.00,completed,
+00015,2026-02-11,010,East,25,16.00,0.00,0.00,completed,
+00016,2026-02-14,011,East,16,32.00,0.00,0.00,completed,
+00017,2026-02-17,020,East,8,24.00,0.00,24.00,completed,
+00018,2026-02-20,021,East,4,65.00,0.00,0.00,completed,
+00019,2026-02-05,001,West,12,38.00,0.00,0.00,completed,Synthetic example — not real transactions
+00020,2026-02-08,002,West,21,12.50,5.00,0.00,completed,
+00021,2026-02-11,010,West,28,16.00,0.00,0.00,completed,
+00022,2026-02-14,011,West,19,32.00,0.00,0.00,completed,
+00023,2026-02-17,020,West,11,24.00,0.00,24.00,completed,
+00024,2026-02-20,021,West,7,65.00,0.00,0.00,completed,
+00025,2026-02-22,001,East,2,38.00,0.00,0.00,cancelled,Excluded by the saved query
+00026,2026-03-01,010,West,7,16.00,0.00,0.00,completed,Outside the default comparison

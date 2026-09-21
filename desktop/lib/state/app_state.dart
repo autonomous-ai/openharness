@@ -412,6 +412,16 @@ class AppNotifier extends ChangeNotifier {
   /// The last [ensureCliDaemonReady] did not reach a ready daemon — the one
   /// error the supervisor's ready transition is allowed to retry away.
   bool _daemonGateFailed = false;
+
+  /// The daemon's backend link as it last reported it (`/api/status.connected`), fed by the boot
+  /// probe and then by the supervisor's 5s tick. Null until a daemon has answered at all. False is
+  /// not an error: this computer's agents work over the loopback regardless; it is what makes the
+  /// rail say "offline copy" and what keeps a failed machine list from raising the red strip.
+  bool? _backendOnline;
+  bool? get backendOnline => _backendOnline;
+  // The last probe state the boot gate logged, so a daemon that sits in one state for a minute
+  // costs one line, not one per 500ms tick.
+  String? _loggedDaemonState;
   // Update checks do not depend on the daemon or SSO. A signed-out user should
   // still be able to replace a broken desktop build from the login screen.
   Timer? _updateCheckTimer;
@@ -1302,6 +1312,7 @@ class AppNotifier extends ChangeNotifier {
   bool get hasAvailableUpdate => availableUpdate != null;
 
   static const offlineRetryInterval = Duration(seconds: 5);
+  static const localDaemonReconnectDelay = Duration(seconds: 1);
   static const agentSyncInterval = Duration(seconds: 60);
 
   MachineState? stateOf(String machineId) => machineStates[machineId];
@@ -1629,6 +1640,13 @@ class AppNotifier extends ChangeNotifier {
     // with no separate app-side readiness gate to wait on anymore.
     if (machine.isLocalMachine) {
       machine.transportMode = MachineTransportMode.localPlaintext;
+      // The socket that just connected IS the endpoint. A machine refresh that ran while the
+      // daemon was restarting (connection refused, or still scanning) had probed nothing and
+      // cleared this — and with it `usesLocalTransport`, which `_canAttachPane` and the pane
+      // header both read. The socket then came back on its own 1s retry, `nodeOnline` went true,
+      // the offline poll (the one thing that would have re-probed) stopped, and the tiles sat on
+      // "Offline" over a live terminal with nothing left to restore them. Measured 2026-09-18 21:50.
+      machine.localEndpoint ??= _cliEndpoint;
     } else {
       machine.transportMode = MachineTransportMode.cloudE2ee;
     }
@@ -2330,24 +2348,33 @@ class AppNotifier extends ChangeNotifier {
     // answers. Waiting for the machine list first would leave the window empty
     // for as long as the slowest one takes, and would hand the first-run
     // auto-pick a window in which the grid still looks empty.
+    // Every exit below clears the message: a boot superseded by a sign-out/sign-in mid-way (the
+    // `_authWorkCurrent` returns) used to leave "Starting local service…" on a screen nothing would
+    // ever repaint.
     await _restorePaneLayout();
-    if (!_authWorkCurrent(revision)) return;
+    if (!_authWorkCurrent(revision)) {
+      _bootStatusMessage = null;
+      return;
+    }
     await dial.restore();
-    if (!_authWorkCurrent(revision)) return;
+    if (!_authWorkCurrent(revision)) {
+      _bootStatusMessage = null;
+      return;
+    }
     _ensurePool();
     try {
       await ensureCliDaemonReady();
     } catch (error) {
-      if (!_authWorkCurrent(revision)) return;
       _bootStatusMessage = null;
+      if (!_authWorkCurrent(revision)) return;
       status = AppStatus.authenticated;
       _lastError = '$error';
       _lastErrorRetryable = true;
       notifyListeners();
       return;
     }
-    if (!_authWorkCurrent(revision)) return;
     _bootStatusMessage = null;
+    if (!_authWorkCurrent(revision)) return;
     // `ensureCliDaemonReady` may have signed the app out instead of succeeding (daemon absent AND
     // the saved session gone) — that already routed to the login screen, so don't clobber it.
     if (status == AppStatus.unauthenticated) return;
@@ -2414,10 +2441,12 @@ class AppNotifier extends ChangeNotifier {
     final discovery = _discovery;
     final probe = await discovery.ensureRunning();
     if (!_authWorkCurrent(revision)) return;
+    _logDaemonProbe(probe);
     switch (probe.state) {
       case LocalCliProbeState.ready:
         _cliEndpoint = probe.endpoint;
         _daemonGateFailed = false;
+        _noteBackendOnline(probe.endpoint!.backendOnline);
       case LocalCliProbeState.notReady:
         _daemonGateFailed = true;
         // Running, not ready — most often a daemon fresh from a self-update still shaking hands
@@ -2426,9 +2455,8 @@ class AppNotifier extends ChangeNotifier {
         // retrying by itself; the supervisor below picks the app up the moment it gets there.
         _startDaemonSupervision(discovery);
         throw StateError(
-          'Harness is running${probe.version == null ? '' : ' (v${probe.version})'} but has not '
-          'connected to the backend yet — ${probe.reason}. It usually finishes on its own; '
-          'retry in a moment.',
+          'Harness is running${probe.version == null ? '' : ' (v${probe.version})'} but is not '
+          'ready yet — ${probe.reason}. It usually finishes on its own; retry in a moment.',
         );
       case LocalCliProbeState.down:
         _daemonGateFailed = true;
@@ -2449,6 +2477,40 @@ class AppNotifier extends ChangeNotifier {
     _startDaemonSupervision(discovery);
   }
 
+  /// One line per probe STATE the gate lands in, never per tick: this gate was silent, and the one
+  /// machine that sat on "Starting local service…" for good had nothing in any log to say why.
+  void _logDaemonProbe(LocalCliProbe probe) {
+    final line = switch (probe.state) {
+      LocalCliProbeState.ready =>
+        'ready · backend ${probe.endpoint!.backendOnline ? 'online' : 'OFFLINE'}'
+            '${probe.version == null ? '' : ' · v${probe.version}'}',
+      LocalCliProbeState.notReady =>
+        'not ready · ${probe.reason}${probe.version == null ? '' : ' · v${probe.version}'}',
+      LocalCliProbeState.down => 'down · ${probe.reason}',
+    };
+    if (line == _loggedDaemonState) return;
+    _loggedDaemonState = line;
+    appLog.info('daemon', line);
+  }
+
+  /// The daemon's backend link changed (or was first seen). Coming BACK is the moment the app has
+  /// been waiting for since it booted offline: the machine list (remote tiles, the real row for this
+  /// computer) and the profile can be fetched now, without a click.
+  ///
+  /// [refetch] is false when the caller IS a machine refresh that just observed the flip through
+  /// its own probe — it is already fetching, and a second run beside it would race the same state.
+  void _noteBackendOnline(bool online, {bool refetch = true}) {
+    if (_backendOnline == online) return;
+    final wasOffline = _backendOnline == false;
+    _backendOnline = online;
+    appLog.info('daemon', 'backend ${online ? 'online' : 'offline'}');
+    if (online && wasOffline && status == AppStatus.authenticated) {
+      if (refetch && !machinesRefreshing) unawaited(retryMachines());
+      if (currentUser == null) unawaited(_loadProfile());
+    }
+    notifyListeners();
+  }
+
   /// Supervision starts once the daemon is at least ANSWERING — ready or still connecting. It used to
   /// wait for ready, out of fear of a concurrent `harness start` from both places; the supervisor
   /// no longer spawns while anything answers on the port, so that race is gone, and starting it on
@@ -2459,6 +2521,7 @@ class AppNotifier extends ChangeNotifier {
       stillSignedIn: () async => (await cliLogin.checkStatus()).loggedIn,
       onSignedOut: () => _signedOutAtRuntime(_signedOutMessage),
       onSnapshot: _updateLocalProjectSnapshot,
+      onBackendOnline: _noteBackendOnline,
       onReady: (endpoint) {
         // Back (or here for the first time). If the app is sitting on the error strip from a boot
         // or reload that found the daemon not ready, this is the moment it was waiting for.
@@ -2813,7 +2876,14 @@ class AppNotifier extends ChangeNotifier {
 
   void _onLocalFailure(String machineId, int code, String reason) {
     final machine = machineStates[machineId];
-    if (machine == null || code != 4404) return;
+    if (machine == null) return;
+    if (code == 4403) {
+      if (machine.isLocalMachine) {
+        unawaited(_onLocalMachineMismatch(machine, reason));
+      }
+      return;
+    }
+    if (code != 4404) return;
     // The local CLI's relay found no linked trust for this machine — it now owns E2EE entirely.
     // A `harness link connect` run in a terminal (or another app instance) has no way to notify
     // this one directly, so poll every few seconds until it's picked up instead of waiting for
@@ -2834,6 +2904,54 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
     _startLinkRetry(machineId);
   }
+
+  /// The daemon on this computer closed our select with 4403: it serves a different machine id than
+  /// the row we hold for "this computer". Ask it which (`/api/status.machineId`), say so in the log —
+  /// this used to be a silent reconnect every 30s, forever — and stand its machine up beside the
+  /// stale row so the person can keep working; the stale row's tiles are told why they are dark. A
+  /// machine list refresh re-keys everything properly once the backend answers.
+  Future<void> _onLocalMachineMismatch(
+    MachineState machine,
+    String reason,
+  ) async {
+    final machineId = machine.machine.machineId;
+    if (!_localMismatchReported.add(machineId)) return;
+    final endpoint = viewer == null ? await _discovery.discover() : null;
+    final served = endpoint?.machineId;
+    appLog.warn(
+      'daemon',
+      'refused machine_select for $machineId ($reason) — the daemon serves '
+          '${served ?? 'an unknown machine id'}',
+    );
+    if (_disposed || served == null || served == machineId) return;
+    _markSessionsUnreachable(
+      machine,
+      'This computer now runs as a different machine (sign-in changed). Open it from the rail.',
+    );
+    // Awaited: the close reports `disconnected`, whose handler arms the offline retry — stopping
+    // it before that would be undone a microtask later. `_connectMachine` also refuses this id now.
+    await _pool?.closeMachine(machineId);
+    _stopOfflineRetry(machineId);
+    if (!machineStates.containsKey(served)) {
+      _adoptLocalMachineFromDaemon(
+        endpoint,
+        await _discovery.computerId(),
+        listUnavailable: _backendOnline == false,
+      );
+      final adopted = machineStates[served];
+      if (adopted != null) {
+        adopted.localEndpoint = endpoint;
+        adopted.transportMode = MachineTransportMode.localPlaintext;
+        _connectMachine(adopted);
+      }
+    }
+    notifyListeners();
+    if (_backendOnline != false) unawaited(retryMachines());
+  }
+
+  /// Local machine ids a 4403 has already been reported for — one log line and one adoption per
+  /// stale id, not one per 30s retry.
+  final Set<String> _localMismatchReported = {};
 
   void _ensurePool() {
     if (_pool != null) return;
@@ -2999,6 +3117,18 @@ class AppNotifier extends ChangeNotifier {
   }
 
   void _reportMachineLoadError(Object error, {bool automatic = false}) {
+    // Offline is not an error to shout about: the daemon said it has no backend, this computer's
+    // machine is standing in from the daemon (see _refreshMachines), and the rail already reads
+    // "offline copy". The strip is for a backend that SHOULD be reachable and is not.
+    if (_backendOnline == false) {
+      machinesAreStale = true;
+      // A strip this raised while the backend still looked reachable comes down with it.
+      if (_lastError != null && _lastError == _machineLoadError) {
+        _lastError = null;
+      }
+      _machineLoadError = null;
+      return;
+    }
     final message = 'Could not load machines: ${describeApiError(error)}';
     // A recovery must not replace a later agent error or redisplay a dismissed strip.
     if (!automatic || (_lastError != null && _lastError == _machineLoadError)) {
@@ -3006,6 +3136,43 @@ class AppNotifier extends ChangeNotifier {
       _lastErrorRetryable = true;
     }
     _machineLoadError = message;
+  }
+
+  /// The machine THIS computer's daemon serves, built from the daemon's own answer
+  /// (`/api/status.machineId`) when the backend could not list it — no cache yet, backend down. Its
+  /// local WS only selects that exact id (`localWsServer` `machine_select`), so nothing else would
+  /// attach. Added, never replaced: a later real list carries the same id and updates the row in
+  /// place through `machineStates.update` above. No-op when the daemon is not ready, reports no id,
+  /// or a row already exists for it.
+  ///
+  /// [listUnavailable] is true on the failure path: the rows are then a stand-in for a list that
+  /// never came, and the rail says so ("offline copy") while the recovery timer keeps asking. A
+  /// fresh list that simply does not name this computer is not stale — marking it so would keep
+  /// the recovery timer polling a backend that has already answered.
+  void _adoptLocalMachineFromDaemon(
+    LocalCliEndpoint? endpoint,
+    String? localComputerId, {
+    required bool listUnavailable,
+  }) {
+    final machineId = endpoint?.machineId;
+    if (endpoint == null || machineId == null) return;
+    if (machineStates.containsKey(machineId)) return;
+    final machine = Machine(
+      machineId: machineId,
+      computerId: localComputerId ?? endpoint.computerId,
+      authMode: MachineAuthMode.remote,
+      name: localHostnameOrNull(),
+      status: 'online',
+    );
+    machines = [...machines, machine];
+    machineStates[machineId] = MachineState(machine)
+      ..localOnly = true
+      ..nodeOnline = true;
+    if (listUnavailable) machinesAreStale = true;
+    appLog.info(
+      'daemon',
+      'no machine list from the backend — this computer stands in from the daemon',
+    );
   }
 
   /// What the loopback probe means for one machine's transport.
@@ -3022,6 +3189,15 @@ class AppNotifier extends ChangeNotifier {
       state.transportMode = state.connectionStatus == ConnectionStatus.connected
           ? MachineTransportMode.localPlaintext
           : MachineTransportMode.localOffline;
+    } else if (state.localOnly &&
+        localEndpoint == null &&
+        state.localEndpoint != null &&
+        state.connectionStatus == ConnectionStatus.connected) {
+      // The probe found nothing this time (the daemon mid-restart, or mid-scan) but the socket to
+      // it is open and answering right now — the socket is the better witness. Keep the endpoint
+      // it was dialed through; demoting a live connection to "offline" on a missed probe is what
+      // took a working terminal's tiles dark.
+      state.transportMode = MachineTransportMode.localPlaintext;
     } else if (state.localOnly) {
       // The token still identifies this as local, but the CLI is offline or
       // failed its identity/capability check. Never fall back to cloud E2EE.
@@ -3072,6 +3248,19 @@ class AppNotifier extends ChangeNotifier {
       await localSettled;
       if (_authWorkCurrent(revision)) {
         final endpoint = probed;
+        // The probe is the freshest word on the backend link — fresher than the supervisor's last
+        // tick — and it decides whether this failure is an outage to report or just "offline".
+        if (endpoint != null) {
+          _noteBackendOnline(endpoint.backendOnline, refetch: false);
+        }
+        // No list and no row for this computer — a first run offline, or a cache the daemon could
+        // not serve. The daemon knows the machine it serves; stand it up from that so the person
+        // can work locally, exactly as if the backend had listed it.
+        _adoptLocalMachineFromDaemon(
+          endpoint,
+          localComputerId,
+          listUnavailable: true,
+        );
         for (final state in machineStates.values) {
           _applyLocalTransport(state, endpoint, localComputerId);
           _connectMachine(state);
@@ -3086,6 +3275,9 @@ class AppNotifier extends ChangeNotifier {
     // sign-out or a dispose may still be published.
     if (!_authWorkCurrent(revision)) return;
     final localEndpoint = probed;
+    if (localEndpoint != null) {
+      _noteBackendOnline(localEndpoint.backendOnline, refetch: false);
+    }
     machines = list
         .where((machine) => machine.authMode == MachineAuthMode.remote)
         .toList();
@@ -3099,6 +3291,11 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     machineStates.removeWhere((id, _) => !visible.contains(id));
+    // A retired id the fresh list no longer carries has been re-keyed or removed — its 4403 verdict
+    // is over with it. One the list STILL carries keeps the verdict: on the loopback the daemon is
+    // the authority for which id it serves, and re-dialing on every 15s refresh would be a 4403
+    // and a log line each time.
+    _localMismatchReported.removeWhere((id) => !visible.contains(id));
     for (final machine in machines) {
       final state = machineStates.update(
         machine.machineId,
@@ -3140,6 +3337,22 @@ class AppNotifier extends ChangeNotifier {
           (state.nodeOnline == null || state.nodeOnline != reportedOnline)) {
         unawaited(_applyNodeStatus(state, reportedOnline));
       }
+    }
+    // A list that arrived but does not name this computer (a stale copy from before this computer
+    // was paired, say) still gets the daemon's own row, on the same rule as the failure path.
+    if (localEndpoint != null &&
+        localEndpoint.machineId != null &&
+        !machineStates.containsKey(localEndpoint.machineId)) {
+      _adoptLocalMachineFromDaemon(
+        localEndpoint,
+        localComputerId,
+        listUnavailable: false,
+      );
+      _applyLocalTransport(
+        machineStates[localEndpoint.machineId]!,
+        localEndpoint,
+        localComputerId,
+      );
     }
     if (localEndpoint != null) _updateLocalProjectSnapshot(localEndpoint);
     _autoConnectAndLoadMachines();
@@ -3418,6 +3631,9 @@ class AppNotifier extends ChangeNotifier {
         );
         if (endpoint == null || endpoint.computerId != localComputerId) return;
         machine.localEndpoint = endpoint;
+        // The gate never got here (the daemon was down at boot): this is the endpoint it would have
+        // recorded, and every later dial reads it.
+        _cliEndpoint ??= endpoint;
         machine.localOnly = true;
         machine.transportMode = MachineTransportMode.localPlaintext;
         machine.nodeOnline = true;
@@ -3579,6 +3795,10 @@ class AppNotifier extends ChangeNotifier {
 
   void _connectMachine(MachineState machine) {
     if (machine.machine.isShared) return;
+    // A row the daemon has refused as "not the machine I serve" is retired until a machine list
+    // re-keys it (_onLocalMachineMismatch): the offline poll and the 15s refresh both reconnect
+    // every row, and would otherwise dial that id again every few seconds, 4403 after 4403.
+    if (_localMismatchReported.contains(machine.machine.machineId)) return;
     // connFor() starts a new socket and reports `connecting` through onStatus,
     // or returns the existing socket with its current status intact. Do not
     // overwrite an already-connected socket when the user collapses and
@@ -3768,8 +3988,39 @@ class AppNotifier extends ChangeNotifier {
     await openStoreAgent(context, this, gridHarness, machineId);
   }
 
-  /// The machine Grid belongs on when no door named one: this computer's own
-  /// when the app has one, else whatever the person is looking at.
+  /// The Store harness the Machines menu opens: Machine Monitor, the fleet
+  /// itself, managed by talking to it, with the live map of every machine
+  /// beside the terminal.
+  static const machinesHarness = 'autonomous/machine-monitor';
+
+  /// Open Machine Monitor, the same way [runLocalModel] opens Grid.
+  ///
+  /// It belongs on THIS computer and nowhere else: everything it reads — the
+  /// machine list, each machine's roster — it reads through the local daemon,
+  /// so a copy opened on a remote machine would be describing that machine's
+  /// fleet, not the one in front of the person. Not installed here → the
+  /// Store, open on its page, whose Install is the way in.
+  Future<void> manageMachines(BuildContext context) async {
+    final machine = _localModelMachine();
+    if (machine == null) {
+      _lastError = 'Connect a machine before opening Machine Monitor.';
+      _lastErrorRetryable = false;
+      notifyListeners();
+      return;
+    }
+    final machineId = machine.machine.machineId;
+    await probeDsh(machineId);
+    if (machine.dsh[machinesHarness]?.installed != true) {
+      openStore(harness: machinesHarness);
+      return;
+    }
+    if (!context.mounted) return;
+    await openStoreAgent(context, this, machinesHarness, machineId);
+  }
+
+  /// The machine Grid and Machines belong on when no door named one: this
+  /// computer's own when the app has one, else whatever the person is looking
+  /// at.
   MachineState? _localModelMachine() {
     final local = machineStates.values
         .where((state) => state.isLocalMachine)
@@ -3796,9 +4047,23 @@ class AppNotifier extends ChangeNotifier {
         : _pool!.connFor(
             machineId,
             transportKind: WsTransportKind.localPlaintext,
-            localWsUri: _cliEndpoint?.wsUri,
+            // The endpoint the offline poll (or the machine refresh) found for THIS row first; the
+            // boot gate's global one only as the fallback. `_cliEndpoint` is set only by a gate that
+            // succeeded, so a boot that found the daemon down and a poll that later found it up
+            // used to dial a null uri — a StateError per attempt, never a socket.
+            localWsUri:
+                machineStates[machineId]?.localEndpoint?.wsUri ??
+                _cliEndpoint?.wsUri,
             localProtocolVersion:
-                _cliEndpoint?.protocolVersion ?? localWsProtocolVersion,
+                machineStates[machineId]?.localEndpoint?.protocolVersion ??
+                _cliEndpoint?.protocolVersion ??
+                localWsProtocolVersion,
+            // This computer's own daemon: retry every second (see WsConn.fixedReconnectDelay). A
+            // relayed machine keeps the backoff — its select costs the daemon a backend dial.
+            fixedReconnectDelay:
+                machineStates[machineId]?.isLocalMachine == true
+                ? localDaemonReconnectDelay
+                : null,
           );
     _wireConnectionHooks(connection, machineId);
     return connection;
@@ -5495,6 +5760,15 @@ class AppNotifier extends ChangeNotifier {
       }
       // Do not send terminal_close: the adapter is already gone and the
       // next client attachment should be the only stream that owns the pane.
+      //
+      // Once per outage, not once per reconnect attempt: the local socket retries every second
+      // now, and each attempt lands here again through the `reconnecting` status. A pane already
+      // dark with this very message has nothing to learn and nothing to repaint.
+      if (session.status == TerminalSessionStatus.error &&
+          session.errorCode == 'TERMINAL_DISCONNECTED' &&
+          session.errorMessage == message) {
+        continue;
+      }
       session.transportLost(message);
     }
   }

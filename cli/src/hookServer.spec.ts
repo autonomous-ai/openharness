@@ -3,8 +3,37 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { startHookServer, type HookServerHandlers, chooseHookAgent } from './hookServer.js'
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
+import { CommandBarService } from './lib/commandBar.js'
+import { ENGINES } from './engines/types.js'
 
 let server: Server | null = null
+
+describe('native command bar endpoints', () => {
+  it('requires a native local header and rejects browser origins before evaluating', async () => {
+    const decide = vi.fn()
+    const { base } = await start({ onCommandBar: { status: vi.fn(), decide } })
+    const attempts: Record<string, string>[] = [{}, { 'x-adapter-local': '1', origin: 'https://example.com' }]
+    for (const headers of attempts) {
+      const response = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: '{}' })
+      expect(response.status).toBe(403)
+    }
+    expect(decide).not.toHaveBeenCalled()
+  })
+
+  it('returns configuration without credentials and wraps useful setup errors', async () => {
+    const { base } = await start({ onCommandBar: new CommandBarService({ key: async () => null }) })
+    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
+    const status = await fetch(`${base}/api/command-bar/status`, { headers })
+    expect(await status.json()).toMatchObject({ success: true, data: { configured: false, provider: 'OpenRouter' } })
+    const response = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: JSON.stringify({ prompt: 'hello', candidates: [] }) })
+    expect(response.status).toBe(503)
+    expect(await response.json()).toMatchObject({ success: false, error: { code: 'OPENROUTER_REQUIRED' } })
+    const bad = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: '{' })
+    expect(bad.status).toBe(400)
+    const large = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: 'x'.repeat(129_000) })
+    expect(large.status).toBe(413)
+  })
+})
 
 afterEach(async () => {
   if (!server) return
@@ -192,23 +221,33 @@ describe('the Harness Store proxy', () => {
 
 describe('chooseHookAgent', () => {
   it('prefers caller ancestry, the evidence that cannot be guessed at', () => {
-    expect(chooseHookAgent(['strong'], ['weak'])).toEqual({ agent: 'strong', reason: 'ancestry' })
+    expect(chooseHookAgent(['strong'], ['weak'], 'codex')).toEqual({ agent: 'strong', reason: 'ancestry' })
   })
 
   it('accepts the runtime alone when ancestry is unavailable and the pane is unambiguous', () => {
     // Cursor posts its hooks from outside the pane's process tree — on tmux and on Herdr alike — so
     // demanding ancestry rejected every hook it ever sent and no session bound. The pane is the proof:
     // the hook named a runtime, and that runtime carries exactly one agent of this engine.
-    expect(chooseHookAgent([], ['only-agent-on-that-pane'])).toEqual({
+    expect(chooseHookAgent([], ['only-agent-on-that-pane'], 'cursor')).toEqual({
       agent: 'only-agent-on-that-pane', reason: 'runtime',
     })
   })
 
   it('answers nothing rather than guessing', () => {
-    expect(chooseHookAgent([], [])).toEqual({ agent: null, reason: 'none' })
-    expect(chooseHookAgent([], ['a', 'b'])).toEqual({ agent: null, reason: 'ambiguous' })
-    expect(chooseHookAgent(['a', 'b'], ['c'])).toEqual({ agent: null, reason: 'ambiguous' })
+    expect(chooseHookAgent([], [], 'cursor')).toEqual({ agent: null, reason: 'none' })
+    expect(chooseHookAgent([], ['a', 'b'], 'cursor')).toEqual({ agent: null, reason: 'ambiguous' })
+    expect(chooseHookAgent(['a', 'b'], ['c'], 'cursor')).toEqual({ agent: null, reason: 'ambiguous' })
   })
+
+  it.each(ENGINES.filter((engine) => engine !== 'cursor'))(
+    'rejects a late %s hook when the pane now belongs to a replacement process',
+    (engine) => {
+      const replacement = { agentId: 'replacement-agent', sessionId: 'new-session' }
+      expect(chooseHookAgent([], [replacement], engine)).toEqual({ agent: null, reason: 'none' })
+      expect(chooseHookAgent([replacement], [replacement], engine))
+        .toEqual({ agent: replacement, reason: 'ancestry' })
+    },
+  )
 })
 
 describe('/api/status', () => {

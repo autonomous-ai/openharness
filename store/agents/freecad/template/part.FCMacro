@@ -1,0 +1,85 @@
+# A measured enclosure with a lift-off lid. Millimetres; edit dimensions.json.
+# The build runner reopens this native document and exports only declared parts.
+import json
+import math
+import os
+import FreeCAD as App
+import Part
+
+workspace = os.environ.get("HARNESS_WORKSPACE", os.getcwd())
+outdir = os.environ.get("HARNESS_BUILD_DIR", workspace)
+with open(os.path.join(workspace, "dimensions.json"), encoding="utf8") as handle:
+    p = json.load(handle)
+for key, value in p.items():
+    if isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value):
+        raise ValueError("Dimension " + key + " must be a finite number in millimetres")
+board_l, board_w, board_t = p["board_length"], p["board_width"], p["board_thickness"]
+wall, floor = p["wall"], p["floor"]
+side, support = p["side_clearance"], p["support_height"]
+component_h, roof = p["component_height"], p["roof_clearance"]
+lid_t, lip_h, lip_wall, lip_gap = p["lid_thickness"], p["lip_height"], p["lip_wall"], p["lid_gap"]
+inner_l, inner_w = board_l + 2 * side, board_w + 2 * side
+length, width = inner_l + 2 * wall, inner_w + 2 * wall
+height = floor + support + board_t + component_h + roof + lip_h
+radius = p["corner_radius"]
+assert min(board_l, board_w) >= 20 and min(board_t, support, component_h, roof, lid_t, lip_h, lip_wall, lip_gap) > 0
+assert min(wall, floor) >= 1.2 and side >= 0.5 and radius > wall + lip_gap + lip_wall
+assert radius < min(length, width) / 4 and lip_gap < side and lip_wall < wall
+assert p["port_width"] > 0 and p["port_height"] > 0 and p["port_clearance"] > 0
+assert abs(p["port_x"]) + p["port_width"] / 2 + p["port_clearance"] < inner_l / 2 - radius
+assert p["port_z"] - p["port_height"] / 2 - p["port_clearance"] > floor
+assert p["port_z"] + p["port_height"] / 2 + p["port_clearance"] < height - lip_h
+
+doc = App.newDocument("MeasuredEnclosure")
+
+
+def rounded_box(l, w, h, r):
+    shape = Part.makeBox(l, w, h, App.Vector(-l / 2, -w / 2, 0))
+    edges = [edge for edge in shape.Edges if edge.BoundBox.ZLength > h - 1e-7
+             and edge.BoundBox.XLength < 1e-7 and edge.BoundBox.YLength < 1e-7]
+    return shape.makeFillet(r, edges)
+
+
+base = rounded_box(length, width, height, radius)
+cavity = rounded_box(inner_l, inner_w, height, radius - wall)
+cavity.translate(App.Vector(0, 0, floor))
+base = base.cut(cavity)
+# Two rails support the PCB from below. No promise of screw fastening or latching.
+for y in [-board_w / 2, board_w / 2 - 2]:
+    base = base.fuse(Part.makeBox(board_l, 2, support + 0.02, App.Vector(-board_l / 2, y, floor - 0.02)))
+opening_w = p["port_width"] + 2 * p["port_clearance"]
+opening_h = p["port_height"] + 2 * p["port_clearance"]
+opening = Part.makeBox(opening_w, wall + 0.2, opening_h,
+                       App.Vector(p["port_x"] - opening_w / 2, -width / 2 - 0.1, p["port_z"] - opening_h / 2))
+base = base.cut(opening).removeSplitter()
+
+lid = rounded_box(length, width, lid_t, radius)
+lid.translate(App.Vector(0, 0, height))
+lip_outer = rounded_box(inner_l - 2 * lip_gap, inner_w - 2 * lip_gap, lip_h + 0.02, radius - wall - lip_gap)
+lip_inner = rounded_box(inner_l - 2 * (lip_gap + lip_wall), inner_w - 2 * (lip_gap + lip_wall),
+                        lip_h + 0.2, radius - wall - lip_gap - lip_wall)
+lip_inner.translate(App.Vector(0, 0, -0.1))
+lip = lip_outer.cut(lip_inner)
+lip.translate(App.Vector(0, 0, height - lip_h))
+lid = lid.fuse(lip).removeSplitter()
+
+board_z = floor + support
+board = Part.makeBox(board_l, board_w, board_t, App.Vector(-board_l / 2, -board_w / 2, board_z))
+payload = Part.makeBox(board_l, board_w, component_h,
+                       App.Vector(-board_l / 2, -board_w / 2, board_z + board_t))
+plug = Part.makeBox(p["port_width"], wall + 8, p["port_height"],
+                    App.Vector(p["port_x"] - p["port_width"] / 2, -width / 2 - 4, p["port_z"] - p["port_height"] / 2))
+for name, label, shape in [("Base", "Enclosure base", base), ("Lid", "Lift-off lid", lid),
+                           ("Board", "REFERENCE: measured PCB", board),
+                           ("Components", "REFERENCE: component envelope", payload),
+                           ("Cable", "REFERENCE: cable envelope", plug)]:
+    feature = doc.addObject("Part::Feature", name)
+    feature.Label, feature.Shape = label, shape
+inputs = doc.addObject("App::FeaturePython", "DesignInputs")
+for name, value in p.items():
+    prop = "".join(word.title() for word in name.split("_"))
+    inputs.addProperty("App::PropertyLength", prop, "Source dimensions", "Edit dimensions.json and rebuild to regenerate geometry")
+    setattr(inputs, prop, value)
+doc.recompute()
+doc.saveAs(os.path.join(outdir, "part.FCStd"))
+App.closeDocument(doc.Name)

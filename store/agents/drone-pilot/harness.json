@@ -1,0 +1,35 @@
+{
+  "spec": 1,
+  "id": "autonomous/drone-pilot",
+  "name": "Drone Pilot",
+  "category": "Simulation",
+  "author": "Autonomous",
+  "description": "Plan a field survey from your own boundary and camera requirements. Edit routes and exclusions, compare capture directions, split time-bounded sorties, inspect recorded flight CSV and keep an editable GIS and report kit.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "flight/index.html",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "DRONE_DSH_DIR": "${dsh}"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "command": "toolchain/viewer.sh",
+    "artifactExtensions": [
+      ".html"
+    ],
+    "url": "http://127.0.0.1:${port}/"
+  },
+  "verdict": ".harness/verdict.json"
+}

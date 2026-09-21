@@ -20,6 +20,8 @@ import { hookCredentialMatches, loadOrCreateHookCredential } from './lib/hookAut
 import { routeStoreRequest, type StoreHandler } from './lib/storeProxy.js'
 import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
+import type { CommandBarService } from './lib/commandBar.js'
+import { handleCommandBarHttp } from './lib/commandBarHttp.js'
 
 /**
  * Which agent does a hook belong to, given the two grades of evidence?
@@ -29,17 +31,19 @@ import { ENGINES, type AgentEngine } from './engines/types.js'
  * on tmux and on Herdr alike, so requiring ancestry rejected every hook that engine ever sent and no
  * session bound at all.
  *
- * The weaker grade is the runtime itself: the hook named a pane, and that pane carries exactly one agent
- * of this engine. Accepted only when it is unambiguous, and only after the caller has already proven it
- * can read the 0600 hook credential. Two candidates is not a tie to break — it is a question we cannot
- * answer, so we answer nothing.
+ * Only Cursor may use the weaker runtime evidence: the hook named a pane carrying exactly one Cursor
+ * agent, and the caller already proved it can read the 0600 hook credential. Other engines must match
+ * ancestry. A delayed hook from an exited Codex process can name a pane now running a NEW Codex
+ * session; trusting that pane alone binds the old transcript to the replacement agent.
+ * Two candidates is not a tie to break, so we answer nothing.
  */
-export function chooseHookAgent<T>(byAncestry: readonly T[], byRuntimeOnly: readonly T[]): {
+export function chooseHookAgent<T>(byAncestry: readonly T[], byRuntimeOnly: readonly T[], engine: AgentEngine): {
   agent: T | null
   reason: 'ancestry' | 'runtime' | 'ambiguous' | 'none'
 } {
   if (byAncestry.length === 1) return { agent: byAncestry[0], reason: 'ancestry' }
   if (byAncestry.length > 1) return { agent: null, reason: 'ambiguous' }
+  if (engine !== 'cursor') return { agent: null, reason: 'none' }
   if (byRuntimeOnly.length === 1) return { agent: byRuntimeOnly[0], reason: 'runtime' }
   return { agent: null, reason: byRuntimeOnly.length ? 'ambiguous' : 'none' }
 }
@@ -50,6 +54,7 @@ export interface PairOutcome {
 }
 
 export interface HookServerHandlers {
+  onCommandBar?: Pick<CommandBarService, 'status' | 'decide'>
   onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
 
   onRegistered: (
@@ -374,6 +379,8 @@ export function startHookServer(
       if (req.method === 'GET' && url === '/api/health') {
         json(200, { ok: true, version: VERSION }); return
       }
+
+      if (await handleCommandBarHttp(req, res, handlers.onCommandBar)) return
 
       // Local dashboard (self-contained page) + its read-only status/logs.
       if (req.method === 'GET' && (url === '/' || url === '/index.html')) {

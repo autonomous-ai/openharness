@@ -394,6 +394,34 @@ void main() {
             .text,
         'typ',
       );
+      await tester.tap(find.byKey(const ValueKey('store-back')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('store-page:autonomous/typst')),
+        findsNothing,
+      );
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('store-search')))
+            .controller!
+            .text,
+        'typ',
+      );
+      await tester.tap(find.byKey(const ValueKey('store-back')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const PageStorageKey('store-discover-scroll')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('store-nav-forward')));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('store-search')))
+            .controller!
+            .text,
+        'typ',
+      );
       expect(tester.takeException(), isNull);
     },
   );
@@ -406,10 +434,12 @@ void main() {
     expect(
       notifier.engineProbes,
       1,
-      reason: 'and about its engines, for the Code shelf',
+      reason: 'and about its engines, for the Coding shelf',
     );
     expect(store.ratingReads, 1);
-    await tester.tap(find.byKey(const ValueKey('store-shelf-category:Media')));
+    await tester.tap(
+      find.byKey(const ValueKey('store-shelf-category:Productivity')),
+    );
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('store-card:autonomous/marp')),
@@ -566,13 +596,13 @@ void main() {
   );
 
   testWidgets(
-    'the built-in engines are on the shelf too, under Code, as the machines probed them',
+    'the built-in engines are on the shelf too, under Coding, as the machines probed them',
     (tester) async {
       await open(tester);
       expect(find.byKey(const ValueKey('store-card:claude')), findsOneWidget);
       expect(find.byKey(const ValueKey('store-card:codex')), findsOneWidget);
       expect(
-        find.byKey(const ValueKey('store-shelf-category:Code')),
+        find.byKey(const ValueKey('store-shelf-category:Coding')),
         findsOneWidget,
         reason: 'categories are always visible',
       );

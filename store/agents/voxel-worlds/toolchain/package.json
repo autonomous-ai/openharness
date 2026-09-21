@@ -1,0 +1,11 @@
+{
+  "name": "tidelands-world-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "three": "0.186.0",
+    "esbuild": "0.27.2",
+    "playwright-core": "1.63.0",
+    "gltf-validator": "2.0.0-dev.3.10"
+  }
+}

@@ -1100,10 +1100,13 @@ void main() {
 
   group('shelves', () {
     testWidgets(
-      'See all lists every harness, and the engines See all is Code',
+      'Browse all lists every harness, and All coding agents opens Coding',
       (tester) async {
         await _open(tester);
-        await tester.tap(find.widgetWithText(TextButton, 'See all').first);
+        await tester.ensureVisible(
+          find.widgetWithText(TextButton, 'Browse all'),
+        );
+        await tester.tap(find.widgetWithText(TextButton, 'Browse all'));
         await tester.pumpAndSettle();
         expect(_key('store-catalog:All harnesses'), findsOneWidget);
         expect(
@@ -1115,11 +1118,17 @@ void main() {
 
         await tester.tap(_key('store-shelf-discover'));
         await tester.pumpAndSettle();
-        await tester.tap(find.widgetWithText(TextButton, 'See all').last);
+        await tester.ensureVisible(
+          find.widgetWithText(TextButton, 'All coding agents'),
+        );
+        await tester.tap(find.widgetWithText(TextButton, 'All coding agents'));
         await tester.pumpAndSettle();
-        expect(_key('store-catalog:Code'), findsOneWidget);
+        expect(_key('store-catalog:Coding'), findsOneWidget);
         expect(_key('store-card:autonomous/marp'), findsNothing);
-        expect(find.textContaining('harnesses to explore.'), findsOneWidget);
+        expect(
+          find.textContaining('coding agents to explore.'),
+          findsOneWidget,
+        );
       },
     );
 
@@ -1148,7 +1157,7 @@ void main() {
         expect(find.text('1 harness to explore.'), findsOneWidget);
         expect(_key('store-card:someone/loom'), findsOneWidget);
 
-        await tester.tap(_key('store-shelf-category:Media'));
+        await tester.tap(_key('store-shelf-category:Productivity'));
         await tester.pumpAndSettle();
         // The machine answers again without Typst while the shelf is open.
         app.machineStates['machine-1']!.dsh.replace(const []);
@@ -1158,7 +1167,8 @@ void main() {
         // And with no machine left to ask, it is still asking.
         app.machineStates.clear();
         app.changed();
-        await tester.pumpAndSettle();
+        // The loading skeleton keeps animating until the local catalog arrives.
+        await tester.pump(const Duration(milliseconds: 200));
         expect(find.text('Asking this computer…'), findsOneWidget);
       },
     );
@@ -1227,7 +1237,7 @@ void main() {
           );
         },
       );
-      await tester.tap(_key('store-shelf-category:Media'));
+      await tester.tap(_key('store-shelf-category:Productivity'));
       await tester.pumpAndSettle();
       final tabs = app.swarms.length;
 
@@ -1235,6 +1245,7 @@ void main() {
         _in('store-action:autonomous/typst', find.text('Get')),
         findsOneWidget,
       );
+      await tester.ensureVisible(_key('store-action:autonomous/typst'));
       await tester.tap(_key('store-action:autonomous/typst'));
       await tester.pumpAndSettle();
       expect(_key('store-page:autonomous/typst'), findsOneWidget);
@@ -1261,6 +1272,7 @@ void main() {
         _in('store-action:autonomous/typst', find.text('Open')),
         findsOneWidget,
       );
+      await tester.ensureVisible(_key('store-action:autonomous/typst'));
       await tester.tap(_key('store-action:autonomous/typst'));
       await tester.pumpAndSettle();
       expect(
@@ -1278,8 +1290,8 @@ void main() {
     });
 
     for (final (id, name, category) in [
-      ('autonomous/marp', 'Marp', 'Media'),
-      ('claude', 'Claude Code', 'Code'),
+      ('autonomous/marp', 'Marp', 'Productivity'),
+      ('claude', 'Claude Code', 'Coding'),
     ]) {
       testWidgets(
         '$name uses local installation state in every store listing',

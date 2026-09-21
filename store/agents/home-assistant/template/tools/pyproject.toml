@@ -1,0 +1,12 @@
+[project]
+name = "habitat-core-lab"
+version = "1.0.0"
+description = "A device-free test runner for portable Home Assistant automations"
+requires-python = ">=3.14.2,<3.15"
+dependencies = [
+  "homeassistant==2026.9.3",
+  "time-machine==3.5.0",
+]
+
+[tool.uv]
+package = false

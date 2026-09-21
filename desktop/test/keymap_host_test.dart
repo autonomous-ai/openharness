@@ -70,6 +70,7 @@ void main() {
       ('cmd+left', 'pane.focus_left'),
       ('cmd+enter', 'pane.zoom'),
       ('cmd+shift+p', 'navigation.commands'),
+      ('cmd+shift+j', 'navigation.command_bar'),
       ('cmd+s', 'pane.layout'),
       ('cmd+b', 'task.route'),
       ('cmd+r', 'pane.split_right'),
@@ -96,7 +97,6 @@ void main() {
     for (final retired in [
       'cmd+shift+n',
       'cmd+shift+h',
-      'cmd+shift+j',
       'cmd+shift+k',
       'cmd+shift+l',
     ]) {

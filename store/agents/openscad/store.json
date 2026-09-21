@@ -1,0 +1,24 @@
+{
+  "listed": true,
+  "homepage": "https://openscad.org",
+  "upstream": "https://github.com/openscad/openscad",
+  "license": "MIT",
+  "tagline": "Your measurements. A family of usable parts.",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/openscad/drawer.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/openscad/handoff.jpg",
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/openscad/bottles.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Make a three-compartment drawer organizer in 150, 180 and 210 mm widths. Keep the floor and walls 2.4 mm thick; show the checks and give me the editable project.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/openscad/drawer.jpg",
+      "caption": "Drawer Grid · three verified sizes, separate STLs and an editable project"
+    },
+    {
+      "prompt": "Make a holder for six 26 mm craft-paint bottles. Compare three clearances and give me small fit-test rings before I print the rack.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/openscad/bottles.jpg",
+      "caption": "Bottle Bench · checked bores, clearance variants and matching fit-test rings"
+    }
+  ]
+}

@@ -1,0 +1,1046 @@
+{
+  "exportedAt": "2026-09-20T05:46:19.730Z",
+  "system": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "chip": "Apple M2 Max",
+    "totalMemory": 68719476736,
+    "cores": 12
+  },
+  "benchmarks": [
+    {
+      "id": "9453d1cf-1778-4b73-99e3-e95ab9cb70ad",
+      "model": "mlx-community/Qwen3-0.6B-4bit",
+      "digest": "73e3e38d981303bc594367cd910ea6eb48349da8",
+      "at": "2026-09-20T05:45:33.267Z",
+      "runtime": {
+        "name": "vLLM",
+        "version": "0.29.0+cpu",
+        "mlxVersion": "0.32.1"
+      },
+      "hardware": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "chip": "Apple M2 Max",
+        "totalMemory": 68719476736,
+        "cores": 12
+      },
+      "settings": {
+        "context": 2048,
+        "maxTokens": 128,
+        "seed": 42,
+        "temperature": 0,
+        "thinking": false
+      },
+      "prompt": "Explain how a bicycle works to a curious beginner. Discuss the pedals, chain, gears, wheels, brakes, and balance. Write a clear explanation of at least 250 words without a heading.",
+      "promptHash": "e3aff106a75867995dfbb42b73d60cb031d6d1d9511c155329d29033854e829a",
+      "mode": "warm server; repeated prompt may use prefix cache; client end-to-end token throughput, including prompt processing and HTTP",
+      "samples": [
+        {
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 54,
+          "tokensPerSecond": 188.87424931468553,
+          "firstTokenMs": 22.569000999999844,
+          "firstOutputMs": 22.569750999999087,
+          "totalMs": 677.6995829999978,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 54,
+          "tokensPerSecond": 203.99530673097718,
+          "firstTokenMs": 20.764125000001513,
+          "firstOutputMs": 20.764500000001135,
+          "totalMs": 627.4654159999991,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 54,
+          "tokensPerSecond": 207.23715033537437,
+          "firstTokenMs": 19.830541999999696,
+          "firstOutputMs": 19.83129199999894,
+          "totalMs": 617.6498749999992,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        }
+      ],
+      "medianTokensPerSecond": 203.99530673097718,
+      "medianFirstTokenMs": 20.764125000001513,
+      "medianFirstOutputMs": 20.764500000001135,
+      "residentBytes": 2444935168
+    },
+    {
+      "id": "fd7bf760-1a51-499d-ab6e-e1b85f0b09cd",
+      "model": "mlx-community/Qwen3-0.6B-4bit",
+      "digest": "73e3e38d981303bc594367cd910ea6eb48349da8",
+      "at": "2026-09-20T05:44:06.282Z",
+      "runtime": {
+        "name": "vLLM",
+        "version": "0.29.0+cpu",
+        "mlxVersion": "0.32.1"
+      },
+      "hardware": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "chip": "Apple M2 Max",
+        "totalMemory": 68719476736,
+        "cores": 12
+      },
+      "settings": {
+        "context": 2048,
+        "maxTokens": 128,
+        "seed": 42,
+        "temperature": 0,
+        "thinking": false
+      },
+      "prompt": "Explain how a bicycle works to a curious beginner. Discuss the pedals, chain, gears, wheels, brakes, and balance. Write a clear explanation of at least 250 words without a heading.",
+      "promptHash": "e3aff106a75867995dfbb42b73d60cb031d6d1d9511c155329d29033854e829a",
+      "mode": "warm server; repeated prompt may use prefix cache; client end-to-end token throughput, including prompt processing and HTTP",
+      "samples": [
+        {
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 54,
+          "tokensPerSecond": 223.0120888389493,
+          "firstTokenMs": 19.631916999998793,
+          "firstOutputMs": 19.632666999998037,
+          "totalMs": 573.9599170000001,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 54,
+          "tokensPerSecond": 219.83205734191475,
+          "firstTokenMs": 19.45866599999863,
+          "firstOutputMs": 19.458957999999257,
+          "totalMs": 582.262666999999,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 54,
+          "tokensPerSecond": 212.27963031834062,
+          "firstTokenMs": 19.63141700000415,
+          "firstOutputMs": 19.631875000002765,
+          "totalMs": 602.9782500000001,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        }
+      ],
+      "medianTokensPerSecond": 219.83205734191475,
+      "medianFirstTokenMs": 19.63141700000415,
+      "medianFirstOutputMs": 19.631875000002765,
+      "residentBytes": 2445688832
+    }
+  ],
+  "loadTests": [
+    {
+      "id": "19bf2bc2-11ef-4895-8733-e88c24376d3a",
+      "at": "2026-09-20T05:45:41.616Z",
+      "model": "mlx-community/Qwen3-0.6B-4bit",
+      "digest": "73e3e38d981303bc594367cd910ea6eb48349da8",
+      "runtime": {
+        "name": "vLLM",
+        "version": "0.29.0+cpu",
+        "backend": "Metal",
+        "backendVersion": "0.29.0"
+      },
+      "hardware": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "chip": "Apple M2 Max",
+        "totalMemory": 68719476736,
+        "cores": 12
+      },
+      "concurrency": 4,
+      "requests": 8,
+      "succeeded": 8,
+      "failed": 0,
+      "totalMs": 1746.6910419999986,
+      "aggregateTokensPerSecond": 586.2513606456114,
+      "medianLatencyMs": 872.0753120000008,
+      "p95LatencyMs": 910.880333000001,
+      "medianFirstTokenMs": 46.82056250000278,
+      "settings": {
+        "context": 2048,
+        "maxTokens": 128,
+        "seed": 42,
+        "temperature": 0,
+        "thinking": false
+      },
+      "serving": {
+        "context": 2048,
+        "maxSequences": 4,
+        "memoryFraction": 0.1,
+        "prefixCaching": true,
+        "status": "serving",
+        "model": "mlx-community/Qwen3-0.6B-4bit",
+        "processRssBytes": 2445279232,
+        "runningRequests": 0,
+        "waitingRequests": 0,
+        "cacheUsage": 0,
+        "prefixQueries": 773,
+        "prefixHits": 560
+      },
+      "prompt": "Explain how a bicycle works to a curious beginner. Discuss the pedals, chain, gears, wheels, brakes, and balance. Write a clear explanation of at least 250 words without a heading.",
+      "promptVariation": "Reference number: {1-based request index}.",
+      "mode": "one discarded warmup; repeated prompt prefixes may be cached; client end-to-end measurements",
+      "samples": [
+        {
+          "index": 0,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 153.38036698349822,
+          "firstTokenMs": 40.155791000001045,
+          "firstOutputMs": 40.15649900000062,
+          "totalMs": 834.5266249999986,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 1,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 153.22307130587717,
+          "firstTokenMs": 46.95591699999932,
+          "firstOutputMs": 46.95604200000162,
+          "totalMs": 835.383332999998,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 2,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 153.17860571694376,
+          "firstTokenMs": 46.82866700000159,
+          "firstOutputMs": 46.82900000000154,
+          "totalMs": 835.6258330000019,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 3,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 153.10183730302418,
+          "firstTokenMs": 46.81245800000397,
+          "firstOutputMs": 46.8126250000023,
+          "totalMs": 836.0448329999999,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 4,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 140.9527406042054,
+          "firstTokenMs": 41.461708000002545,
+          "firstOutputMs": 41.46200000000317,
+          "totalMs": 908.1057910000018,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 5,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 140.52339847807414,
+          "firstTokenMs": 47.61737500000163,
+          "firstOutputMs": 47.617542000003596,
+          "totalMs": 910.880333000001,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 6,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 140.59506862796826,
+          "firstTokenMs": 47.375374999995984,
+          "firstOutputMs": 47.375499999994645,
+          "totalMs": 910.4159999999974,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 7,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 140.63358369575838,
+          "firstTokenMs": 46.70749899999646,
+          "firstOutputMs": 46.707832999996754,
+          "totalMs": 910.1666659999973,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "f136d3c6-189d-4158-af01-37c69fad10c4",
+      "at": "2026-09-20T05:45:39.385Z",
+      "model": "mlx-community/Qwen3-0.6B-4bit",
+      "digest": "73e3e38d981303bc594367cd910ea6eb48349da8",
+      "runtime": {
+        "name": "vLLM",
+        "version": "0.29.0+cpu",
+        "backend": "Metal",
+        "backendVersion": "0.29.0"
+      },
+      "hardware": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "chip": "Apple M2 Max",
+        "totalMemory": 68719476736,
+        "cores": 12
+      },
+      "concurrency": 1,
+      "requests": 8,
+      "succeeded": 8,
+      "failed": 0,
+      "totalMs": 5719.136291999999,
+      "aggregateTokensPerSecond": 179.04801489560307,
+      "medianLatencyMs": 718.4712499999987,
+      "p95LatencyMs": 741.7076670000024,
+      "medianFirstTokenMs": 27.92120799999975,
+      "settings": {
+        "context": 2048,
+        "maxTokens": 128,
+        "seed": 42,
+        "temperature": 0,
+        "thinking": false
+      },
+      "serving": {
+        "context": 2048,
+        "maxSequences": 4,
+        "memoryFraction": 0.1,
+        "prefixCaching": true,
+        "status": "serving",
+        "model": "mlx-community/Qwen3-0.6B-4bit",
+        "processRssBytes": 2444935168,
+        "runningRequests": 0,
+        "waitingRequests": 0,
+        "cacheUsage": 0,
+        "prefixQueries": 239,
+        "prefixHits": 144
+      },
+      "prompt": "Explain how a bicycle works to a curious beginner. Discuss the pedals, chain, gears, wheels, brakes, and balance. Write a clear explanation of at least 250 words without a heading.",
+      "promptVariation": "Reference number: {1-based request index}.",
+      "mode": "one discarded warmup; repeated prompt prefixes may be cached; client end-to-end measurements",
+      "samples": [
+        {
+          "index": 0,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 176.83349917230174,
+          "firstTokenMs": 26.26654200000121,
+          "firstOutputMs": 26.267625000000407,
+          "totalMs": 723.8447500000002,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 1,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 172.57472949918903,
+          "firstTokenMs": 36.065999999998894,
+          "firstOutputMs": 36.06683300000077,
+          "totalMs": 741.7076670000024,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 2,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 177.9406738147618,
+          "firstTokenMs": 36.62258400000064,
+          "firstOutputMs": 36.623875999997836,
+          "totalMs": 719.340874999998,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 3,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 178.3719483634114,
+          "firstTokenMs": 29.575873999998294,
+          "firstOutputMs": 29.576498999998876,
+          "totalMs": 717.6016249999993,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 4,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 182.6634650461023,
+          "firstTokenMs": 25.506625000001804,
+          "firstOutputMs": 25.50733300000138,
+          "totalMs": 700.742209,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 5,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 188.17859839654844,
+          "firstTokenMs": 25.137167000000773,
+          "firstOutputMs": 25.13770800000202,
+          "totalMs": 680.2048750000031,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 6,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 173.38913618853095,
+          "firstTokenMs": 24.84412499999962,
+          "firstOutputMs": 24.84533399999782,
+          "totalMs": 738.2238749999997,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 7,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 183.87159977275672,
+          "firstTokenMs": 31.890665999999328,
+          "firstOutputMs": 31.89179100000183,
+          "totalMs": 696.1379579999993,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "f0435c5b-f9ed-4af3-9b63-1574412cce25",
+      "at": "2026-09-20T05:44:13.929Z",
+      "model": "mlx-community/Qwen3-0.6B-4bit",
+      "digest": "73e3e38d981303bc594367cd910ea6eb48349da8",
+      "runtime": {
+        "name": "vLLM",
+        "version": "0.29.0+cpu",
+        "backend": "Metal",
+        "backendVersion": "0.29.0"
+      },
+      "hardware": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "chip": "Apple M2 Max",
+        "totalMemory": 68719476736,
+        "cores": 12
+      },
+      "concurrency": 4,
+      "requests": 8,
+      "succeeded": 8,
+      "failed": 0,
+      "totalMs": 1733.193542000001,
+      "aggregateTokensPerSecond": 590.8168794688479,
+      "medianLatencyMs": 866.1290204999987,
+      "p95LatencyMs": 881.4543749999975,
+      "medianFirstTokenMs": 55.44614549999642,
+      "settings": {
+        "context": 2048,
+        "maxTokens": 128,
+        "seed": 42,
+        "temperature": 0,
+        "thinking": false
+      },
+      "serving": {
+        "context": 2048,
+        "maxSequences": 4,
+        "memoryFraction": 0.1,
+        "prefixCaching": true,
+        "status": "serving",
+        "model": "mlx-community/Qwen3-0.6B-4bit",
+        "processRssBytes": 2446032896,
+        "runningRequests": 0,
+        "waitingRequests": 0,
+        "cacheUsage": 0,
+        "prefixQueries": 773,
+        "prefixHits": 560
+      },
+      "prompt": "Explain how a bicycle works to a curious beginner. Discuss the pedals, chain, gears, wheels, brakes, and balance. Write a clear explanation of at least 250 words without a heading.",
+      "promptVariation": "Reference number: {1-based request index}.",
+      "mode": "one discarded warmup; repeated prompt prefixes may be cached; client end-to-end measurements",
+      "samples": [
+        {
+          "index": 0,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 145.2397942248954,
+          "firstTokenMs": 55.5712489999969,
+          "firstOutputMs": 55.57145799999853,
+          "totalMs": 881.3011659999975,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 1,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 145.38861122371307,
+          "firstTokenMs": 48.734040999999706,
+          "firstOutputMs": 48.734582999997656,
+          "totalMs": 880.3990829999966,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 2,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 145.335077543502,
+          "firstTokenMs": 55.288832999998704,
+          "firstOutputMs": 55.28924999999799,
+          "totalMs": 880.7233750000014,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 3,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 145.2145495335483,
+          "firstTokenMs": 55.32104199999594,
+          "firstOutputMs": 55.321375999996235,
+          "totalMs": 881.4543749999975,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 4,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 150.42366136741038,
+          "firstTokenMs": 45.1540419999983,
+          "firstOutputMs": 45.154458000000886,
+          "totalMs": 850.9299589999973,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 5,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 150.25961609949977,
+          "firstTokenMs": 58.28095899999971,
+          "firstOutputMs": 58.281041999998706,
+          "totalMs": 851.8589580000007,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 6,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 150.37047814371138,
+          "firstTokenMs": 57.71675100000357,
+          "firstOutputMs": 57.717209000002185,
+          "totalMs": 851.2309170000008,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 7,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 150.3561414856606,
+          "firstTokenMs": 57.47833299999547,
+          "firstOutputMs": 57.47845799999777,
+          "totalMs": 851.3120829999971,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "80fba206-1ab3-4762-b340-3b70aa46a441",
+      "at": "2026-09-20T05:44:11.759Z",
+      "model": "mlx-community/Qwen3-0.6B-4bit",
+      "digest": "73e3e38d981303bc594367cd910ea6eb48349da8",
+      "runtime": {
+        "name": "vLLM",
+        "version": "0.29.0+cpu",
+        "backend": "Metal",
+        "backendVersion": "0.29.0"
+      },
+      "hardware": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "chip": "Apple M2 Max",
+        "totalMemory": 68719476736,
+        "cores": 12
+      },
+      "concurrency": 1,
+      "requests": 8,
+      "succeeded": 8,
+      "failed": 0,
+      "totalMs": 5138.068124999998,
+      "aggregateTokensPerSecond": 199.2966957790192,
+      "medianLatencyMs": 631.5969165000024,
+      "p95LatencyMs": 715.6627919999992,
+      "medianFirstTokenMs": 23.968166500002553,
+      "settings": {
+        "context": 2048,
+        "maxTokens": 128,
+        "seed": 42,
+        "temperature": 0,
+        "thinking": false
+      },
+      "serving": {
+        "context": 2048,
+        "maxSequences": 4,
+        "memoryFraction": 0.1,
+        "prefixCaching": true,
+        "status": "serving",
+        "model": "mlx-community/Qwen3-0.6B-4bit",
+        "processRssBytes": 2445688832,
+        "runningRequests": 0,
+        "waitingRequests": 0,
+        "cacheUsage": 0,
+        "prefixQueries": 239,
+        "prefixHits": 144
+      },
+      "prompt": "Explain how a bicycle works to a curious beginner. Discuss the pedals, chain, gears, wheels, brakes, and balance. Write a clear explanation of at least 250 words without a heading.",
+      "promptVariation": "Reference number: {1-based request index}.",
+      "mode": "one discarded warmup; repeated prompt prefixes may be cached; client end-to-end measurements",
+      "samples": [
+        {
+          "index": 0,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 206.68862408193544,
+          "firstTokenMs": 23.63654200000383,
+          "firstOutputMs": 23.637125000004744,
+          "totalMs": 619.2890420000003,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 1,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 178.85518351777068,
+          "firstTokenMs": 24.39208399999916,
+          "firstOutputMs": 24.397000000000844,
+          "totalMs": 715.6627919999992,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 2,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 187.77378729303157,
+          "firstTokenMs": 70.14762400000109,
+          "firstOutputMs": 70.14837400000033,
+          "totalMs": 681.6712909999987,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 3,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 200.74512260945863,
+          "firstTokenMs": 26.628207000001566,
+          "firstOutputMs": 26.62870699999985,
+          "totalMs": 637.624458000002,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 4,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 203.2448384611681,
+          "firstTokenMs": 22.722499999999854,
+          "firstOutputMs": 22.723042000001442,
+          "totalMs": 629.7822910000032,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 5,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 202.08030879235176,
+          "firstTokenMs": 23.09137500000361,
+          "firstOutputMs": 23.091958000004524,
+          "totalMs": 633.4115420000016,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 6,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 210.60627447064996,
+          "firstTokenMs": 24.299791000001278,
+          "firstOutputMs": 24.300415999998222,
+          "totalMs": 607.7691669999986,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        },
+        {
+          "index": 7,
+          "status": "succeeded",
+          "model": "mlx-community/Qwen3-0.6B-4bit",
+          "tokens": 128,
+          "promptTokens": 60,
+          "tokensPerSecond": 209.28292394405048,
+          "firstTokenMs": 23.36149999999907,
+          "firstOutputMs": 23.361958999998024,
+          "totalMs": 611.612250000002,
+          "thinking": false,
+          "doneReason": "length",
+          "metric": "client_end_to_end",
+          "serving": {
+            "context": 2048,
+            "maxSequences": 4,
+            "memoryFraction": 0.1,
+            "prefixCaching": true
+          }
+        }
+      ]
+    }
+  ]
+}

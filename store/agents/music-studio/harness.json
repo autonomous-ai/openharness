@@ -1,0 +1,35 @@
+{
+  "spec": 1,
+  "id": "autonomous/music-studio",
+  "name": "Music Studio",
+  "category": "Audio",
+  "author": "Autonomous",
+  "description": "Compose and revise original music from your brief. Edit notes and arrangements, import MIDI and recordings, shape each instrument, and deliver stereo WAV, aligned stems, MIDI and an editable project.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "piece/index.html",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "MUSIC_DSH_DIR": "${dsh}"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/web-viewer",
+    "artifactExtensions": [
+      ".html"
+    ],
+    "url": "http://127.0.0.1:${port}/?file=${artifact}"
+  },
+  "verdict": ".harness/verdict.json"
+}

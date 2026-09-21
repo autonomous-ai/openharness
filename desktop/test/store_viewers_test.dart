@@ -1,11 +1,11 @@
 // The store's quieter surfaces, as widgets on their own: the Viewers page
 // (shared previews and the agents that use them), a listing row for a viewer
-// package, and a Discover collection whose harnesses have no artwork.
+// package, and a Discover category whose harnesses have no artwork.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/store/store_discover.dart';
-import 'package:harness/store/store_editorial.dart';
+import 'package:harness/store/store_listing.dart';
 import 'package:harness/store/store_models.dart';
 import 'package:harness/store/store_viewers.dart';
 import 'package:harness/widgets/engine_identity.dart';
@@ -168,12 +168,12 @@ void main() {
   });
 
   testWidgets(
-    'a collection whose harnesses have no artwork wears the first one\'s mark',
+    'a category whose harnesses have no artwork wears the first one\'s mark',
     (tester) async {
       tester.view.devicePixelRatio = 1;
       tester.view.physicalSize = const Size(1200, 1400);
       addTearDown(tester.view.reset);
-      StoreCollection? picked;
+      String? picked;
       await _show(
         tester,
         StoreDiscover(
@@ -190,31 +190,33 @@ void main() {
           installed: (_) => false,
           onOpen: (_) {},
           onAction: (_) {},
-          onCollection: (collection) => picked = collection,
+          onCategory: (category) => picked = category,
           onAll: () {},
           onEngines: () {},
         ),
       );
-      final play = find.byKey(const ValueKey('store-collection:play'));
+      final play = find.byKey(const ValueKey('store-category:Music'));
       expect(play, findsOneWidget);
       expect(
         find.descendant(of: play, matching: find.byType(EngineMark)),
-        findsOneWidget,
+        findsNWidgets(2),
       );
       expect(
         tester
             .widget<EngineMark>(
-              find.descendant(of: play, matching: find.byType(EngineMark)),
+              find
+                  .descendant(of: play, matching: find.byType(EngineMark))
+                  .first,
             )
             .engine,
         'autonomous/strudel',
       );
       expect(
-        find.descendant(of: play, matching: find.text('1 harness to explore')),
+        find.descendant(of: play, matching: find.text('1 harness')),
         findsOneWidget,
       );
       await tester.tap(play);
-      expect(picked?.id, 'play');
+      expect(picked, 'Music');
     },
   );
 }

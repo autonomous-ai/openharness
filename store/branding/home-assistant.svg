@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Habitat — the OpenHarness Home Assistant wrapper</title>
+  <path d="M7 56V29A14 14 0 0 1 35 29V56Z" fill="#b88159"/>
+  <path d="M29 56V22A14 14 0 0 1 57 22V56Z" fill="#557d68"/>
+  <path d="M15 41V30A6 6 0 0 1 27 30V41Z" fill="#f5dfb1"/>
+  <path d="M37 34V23A6 6 0 0 1 49 23V34Z" fill="#c4dcac"/>
+  <path d="M38 56V45A5 5 0 0 1 48 45V56Z" fill="#eff1df"/>
+  <circle cx="14" cy="9" r="5" fill="#d9aa5c"/>
+</svg>

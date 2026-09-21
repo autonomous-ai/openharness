@@ -1,0 +1,34 @@
+{
+  "spec": 1,
+  "id": "autonomous/web-studio",
+  "name": "Web Studio",
+  "category": "Web",
+  "author": "OpenHarness contributors",
+  "description": "Build interactive pages and generative instruments with live previews, accessible controls, image export and real browser verification.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "index.html",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "WEB_SKILLS": "${dsh}/skills"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/isolated-web-viewer",
+    "artifactExtensions": [
+      ".html"
+    ]
+  },
+  "verdict": ".harness/verdict.json"
+}

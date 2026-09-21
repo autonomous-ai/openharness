@@ -1,0 +1,9 @@
+{
+  "name": "Bell state",
+  "qubits": ["q0", "q1"],
+  "gates": [
+    { "gate": "H",  "target": 0 },
+    { "gate": "CX", "control": 0, "target": 1 }
+  ],
+  "shots": 1024
+}

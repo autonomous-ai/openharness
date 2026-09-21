@@ -1,0 +1,12 @@
+{
+  "name": "@autonomous/gis-harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "perf": "node skills/gis/scripts/perf.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

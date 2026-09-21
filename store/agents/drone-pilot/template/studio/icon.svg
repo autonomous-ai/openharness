@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 96 96">
+  <title>Drone Pilot — vector through a gate</title>
+  <rect x="4" y="4" width="88" height="88" rx="23" fill="#18323b"/>
+  <path d="m48 17 27 15v32L48 79 21 64V32Z" fill="none" stroke="#739798" stroke-width="5" stroke-linejoin="round"/>
+  <path d="m29 60 34-31-9 40-8-15Z" fill="#d3eb9c"/>
+  <path d="m21 75 9-9" stroke="#d3eb9c" stroke-width="5" stroke-linecap="round"/>
+</svg>

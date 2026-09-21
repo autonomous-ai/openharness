@@ -1,0 +1,7 @@
+{
+  "version": "3.53.4",
+  "url": "https://www.sqlite.org/2026/sqlite-wasm-3530400.zip",
+  "archiveSHA3_256": "e4fa7e1750b42f6954115d8e69ffff7dc08da7e9fee6e28a2a0ea6bf228a49f2",
+  "sqlite3.js": "b6f472d13f7030d3ca60b8c592ffb84507ef4300e1276dd81b96bd3030d9ec6b",
+  "sqlite3.wasm": "3929b5b2a1cd7d7c32171e1f654fce0355191b7c9bc84afc61d9b2b99b96531f"
+}

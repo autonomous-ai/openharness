@@ -51,6 +51,9 @@ import '../widgets/swarm_wallpaper.dart';
 import '../widgets/agent_action_icons.dart';
 import '../widgets/swarm_icon.dart';
 import '../widgets/task_palette.dart';
+import '../state/command_bar.dart';
+import '../state/command_bar_catalog.dart';
+import '../widgets/harness_command_bar.dart';
 import '../orchestrator/orchestrator_launcher.dart';
 import '../orchestrator/orchestrator_workspace.dart';
 
@@ -61,11 +64,18 @@ class SwarmScreen extends StatefulWidget {
     this.nativeTabs,
     this.projectStore,
     this.modelsMenu,
+    this.commandBarEnabled = const bool.fromEnvironment(
+      'JEV_COMMAND_BAR',
+      defaultValue: true,
+    ),
+    this.commandResolver,
   });
   final AppNotifier notifier;
   final bool? nativeTabs;
   final SwarmProjectStore? projectStore;
   final ModelsMenuController? modelsMenu;
+  final bool commandBarEnabled;
+  final CommandResolver? commandResolver;
   @override
   State<SwarmScreen> createState() => _SwarmScreenState();
 }
@@ -80,6 +90,28 @@ class _SwarmScreenState extends State<SwarmScreen> {
   StreamSubscription<SpokenTaskRequest>? _spokenTasks;
   final _shellFocus = FocusNode(debugLabel: 'Swarm shell');
   final _startSearchFocus = FocusNode(debugLabel: 'Start page search');
+  final _commandFocus = FocusNode(debugLabel: 'Ask Harness');
+  bool _commandBarOpen = false;
+  bool _commandActionInFlight = false;
+  FocusNode? _commandReturnFocus;
+  bool get _hasCommandBar => widget.commandBarEnabled && app.viewer == null;
+  late final _commandBar = CommandBarController(
+    catalog: () => buildCommandBarCatalog(
+      app,
+      commands: _searchCommands(),
+      runCommand: _runShortcut,
+      recent: _navigation.recent,
+      create: (machineId, engine, prompt) => _newAgent(
+        machineId: machineId,
+        initialEngine: engine,
+        initialPrompt: prompt,
+      ),
+    ),
+    resolve:
+        widget.commandResolver ??
+        (request, cancel) =>
+            app.api.resolveCommandBar(request, cancelToken: cancel),
+  )..addListener(_commandChanged);
   final _canvasFocus = FocusNode(
     debugLabel: 'Swarm canvas',
     canRequestFocus: false,
@@ -108,6 +140,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   String? _nativeKeyContext;
   String _pendingKeys = '';
   AppNotifier get app => widget.notifier;
+  String? _commandCatalogMachine;
 
   @override
   void initState() {
@@ -150,10 +183,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final current = ModalRoute.isCurrentOf(context) ?? true;
     if (_routeIsCurrent == current) return;
     _routeIsCurrent = current;
-    if (!current && _search != null) {
+    if (!current && (_search != null || _commandBarOpen)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && !_routeIsCurrent) {
           _closeSearch(restoreFocus: false);
+          _closeCommandBar(restoreFocus: false);
         }
       });
     }
@@ -176,6 +210,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _canvasFocus.dispose();
     _shellFocus.dispose();
     _startSearchFocus.dispose();
+    _commandFocus.dispose();
+    if (_hasCommandBar) _commandBar.dispose();
     unawaited(_spokenTasks?.cancel());
     if (_native) {
       _modelsMenu?.removeListener(_syncModels);
@@ -204,7 +240,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _sentKeymap = _keymap;
     _sentKeymapVersion = _keymap.version;
     unawaited(
-      _channel.invokeMethod<void>('keymapState', nativeKeymapSnapshot(_keymap)),
+      _channel.invokeMethod<void>(
+        'keymapState',
+        nativeKeymapSnapshot(
+          _keymap,
+          disabledCommands: _hasCommandBar
+              ? const {}
+              : const {'navigation.command_bar'},
+        ),
+      ),
     );
   }
 
@@ -231,6 +275,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       mounted && _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen;
 
   void _runShortcut(String id) {
+    if (id != 'navigation.command_bar') _closeCommandBar();
     if (id == 'agent.new' && _search != null) {
       final target = _search!.targetId;
       final split = _search!.split;
@@ -247,6 +292,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   void _recordNavigation() {
     _navigation.record(app);
+    if (_hasCommandBar && _commandBarOpen) {
+      final local = app.localMachineState;
+      if (local != null &&
+          local.nodeOnline == true &&
+          _commandCatalogMachine != local.machine.machineId) {
+        _commandCatalogMachine = local.machine.machineId;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(app.probeDsh(local.machine.machineId));
+        });
+      }
+    }
     if (_search != null &&
         (_search!.targetId != app.activeSwarmId ||
             (_lastWorkspace?.$2 == true && app.panes.isNotEmpty))) {
@@ -254,6 +310,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     final workspace = (app.activeSwarmId, app.panes.isEmpty);
     if (_lastWorkspace == workspace) return;
+    if (_commandBarOpen && _lastWorkspace != null) {
+      _closeCommandBar(restoreFocus: false);
+    }
+    if (_hasCommandBar &&
+        _lastWorkspace != null &&
+        (_commandBar.phase == CommandPhase.resolving ||
+            _commandBar.phase == CommandPhase.searching)) {
+      _commandBar.dismiss();
+    }
     _lastWorkspace = workspace;
   }
 
@@ -265,6 +330,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         app.panes.isNotEmpty ||
         _dialogOpen ||
         _spokenPaletteOpen ||
+        _commandBarOpen ||
         _search != null ||
         ModalRoute.of(context)?.isCurrent == false ||
         _shellFocus.hasFocus) {
@@ -553,7 +619,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
         .toList();
     if (sections.any((s) => s.own)) return sections;
     return [
-      GridSection(name: answer.gridName ?? '', own: true, models: answer.models),
+      GridSection(
+        name: answer.gridName ?? '',
+        own: true,
+        models: answer.models,
+      ),
       ...sections,
     ];
   }
@@ -727,6 +797,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
       case 'linkMachine':
         await _dialog(() => showSwarmLinkDialog(context, app));
       case 'manageMachines':
+        // Machine Monitor: the fleet managed by talking to it, with the live
+        // map beside the terminal. Wrapped like Open Grid because the
+        // notifier opens New Harness here and the tab it makes takes focus.
+        await _dialog(() => app.manageMachines(context));
+      // BRIDGE, until the Machines menu goes: the old list, so nothing is lost
+      // between this release and that one. When the menu is removed, delete
+      // this case, `machines.list` below, machines_manager.dart and its test,
+      // and the `machineList` action in SwarmTitlebar.swift + keymap_commands.
+      case 'machineList':
         unawaited(_dialog(() => showMachinesManager(context, app)));
       case 'refreshMachines':
         unawaited(app.retryMachines());
@@ -813,6 +892,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           'newAgent',
           'newTerminal',
           'manageMachines',
+          'machineList',
           'deleteMachine',
           'splitRight',
           'splitDown',
@@ -833,6 +913,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     bool restoreEntry = true,
   }) async {
     if (_dialogOpen || _spokenPaletteOpen || !mounted) return;
+    _closeCommandBar();
     _closeSearch();
     _dialogOpen = true;
     // The route must not restore an old terminal while the destination changes
@@ -870,6 +951,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     String? folder,
     String? swarmId,
     PaneSplitRequest? split,
+    String? initialEngine,
+    String? initialPrompt,
   }) async {
     // A pane never lands in the store tab: New Harness from there goes to
     // the empty starter tab (or a fresh one), the way New Tab does.
@@ -906,6 +989,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         initialFolder: initialFolder,
         swarmId: target,
         split: requestedSplit,
+        initialEngine: initialEngine,
+        initialPrompt: initialPrompt,
       );
     }, restoreEntry: false);
     await _ensureEmptyEntry();
@@ -1022,6 +1107,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         !_routeIsCurrent) {
       return;
     }
+    _closeCommandBar();
     _searchReturnFocus ??= FocusManager.instance.primaryFocus == _searchFocus
         ? null
         : FocusManager.instance.primaryFocus;
@@ -1300,6 +1386,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     _closeSearch();
     _spokenPaletteOpen = true;
+    _closeCommandBar(restoreFocus: false);
     if (_native) _syncNative();
     try {
       await revealWindow();
@@ -1321,6 +1408,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         !machine.needsLink ||
         machine.isLocalMachine ||
         _dialogOpen ||
+        _commandBarOpen ||
         _search != null ||
         app.isLinkPromptDismissed(machine.machine.machineId) ||
         _linkDialogMachineId != null) {
@@ -1403,6 +1491,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   };
 
   late final Map<String, VoidCallback> _commands = {
+    if (_hasCommandBar) 'navigation.command_bar': _focusCommandBar,
     for (final command in harnessCommands)
       if (command.action != null && _actionHandlers.containsKey(command.action))
         command.id: _actionHandlers[command.action]!,
@@ -1412,7 +1501,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'pane.focus_$i': () => app.focusPaneByIndex(i - 1),
     'navigation.commands': _showSearchCommands,
     'machine.link': () => _dialog(() => showSwarmLinkDialog(context, app)),
-    'machines.manage': () => _dialog(() => showMachinesManager(context, app)),
+    'machines.manage': () => _dialog(() => app.manageMachines(context)),
+    'machines.list': () => _dialog(() => showMachinesManager(context, app)),
     'project.add': _addProject,
     'keyboard.open_config': () => openKeyboardConfig(context),
     'pane.resize': app.beginPaneResize,
@@ -1468,6 +1558,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   List<SwarmDestination> _searchCommands() => [
     for (final command in harnessCommands)
       if (command.id != 'navigation.commands' &&
+          command.id != 'navigation.command_bar' &&
           !RegExp(r'^pane\.focus_[1-9]$').hasMatch(command.id) &&
           _canExecuteCommand(command.id))
         SwarmDestination(
@@ -1481,6 +1572,123 @@ class _SwarmScreenState extends State<SwarmScreen> {
           searchFields: [command.id],
         ),
   ];
+
+  void _focusCommandBar() {
+    if (_commandBarOpen) {
+      _closeCommandBar();
+      return;
+    }
+    _closeSearch(restoreFocus: false);
+    _commandReturnFocus = FocusManager.instance.primaryFocus;
+    _preparePaneFocus();
+    _canvasFocus.descendantsAreFocusable = false;
+    setState(() => _commandBarOpen = true);
+    _recordNavigation();
+    _commandFocus.requestFocus();
+  }
+
+  void _closeCommandBar({bool restoreFocus = true, bool clear = true}) {
+    if (!_commandBarOpen) return;
+    _canvasFocus.descendantsAreFocusable =
+        _search == null && !_dialogOpen && !_spokenPaletteOpen;
+    setState(() => _commandBarOpen = false);
+    if (clear) _commandBar.dismiss();
+    _commandFocus.unfocus();
+    final previous = _commandReturnFocus;
+    _commandReturnFocus = null;
+    if (restoreFocus) {
+      if (previous?.context != null && previous!.canRequestFocus) {
+        previous.requestFocus();
+      } else if (app.focusedPane?.session?.focusInput() != true) {
+        _shellFocus.requestFocus();
+      }
+      FocusManager.instance.applyFocusChangesIfNeeded();
+    }
+  }
+
+  void _commandChanged() {
+    if (!mounted) return;
+    if (_commandBarOpen && _commandBar.phase == CommandPhase.executing) {
+      _commandActionInFlight = true;
+      _closeCommandBar(clear: false);
+    } else if (_commandActionInFlight &&
+        _commandBar.phase == CommandPhase.done) {
+      _commandActionInFlight = false;
+      final message = _commandBar.error ?? _commandBar.message;
+      final goBack = _commandBar.goBack;
+      if (message.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              message,
+              style: TextStyle(
+                fontFamily: grid.AppFont.sans,
+                fontFamilyFallback: grid.AppFont.sansFallback,
+              ),
+            ),
+            action: goBack == null
+                ? null
+                : SnackBarAction(
+                    label: 'Go back',
+                    onPressed: () => _returnFromCommand(goBack),
+                  ),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _returnFromCommand(Future<String?> Function() goBack) async {
+    if (!mounted) return;
+    String? failure;
+    try {
+      failure = await goBack();
+    } catch (_) {
+      failure = 'The previous view is no longer available.';
+    }
+    if (mounted && failure != null) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(failure)));
+    }
+  }
+
+  Widget _commandPalette() => Positioned.fill(
+    key: const ValueKey('jev-command-palette'),
+    child: Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _closeCommandBar,
+            child: const ColoredBox(color: kDialogVeilTint),
+          ),
+        ),
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 760),
+                child: SingleChildScrollView(
+                  child: HarnessCommandBar(
+                    controller: _commandBar,
+                    focusNode: _commandFocus,
+                    onDismiss: _closeCommandBar,
+                    onNew: _newAgent,
+                    onStore: () {
+                      _closeCommandBar(restoreFocus: false);
+                      app.openStore();
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -1666,6 +1874,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                               ),
                             ),
                           ),
+                        if (_hasCommandBar && _commandBarOpen)
+                          _commandPalette(),
                       ],
                     ),
                   ),

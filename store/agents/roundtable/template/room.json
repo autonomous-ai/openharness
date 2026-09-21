@@ -1,0 +1,13 @@
+{
+  "spec": 1,
+  "motion": "",
+  "status": "seating",
+  "evidence": [],
+  "wordCap": 250,
+  "rounds": [
+    { "id": "opening", "name": "Openings", "state": "pending" },
+    { "id": "cross", "name": "Cross-examination", "state": "pending" },
+    { "id": "converge", "name": "Convergence", "state": "pending" }
+  ],
+  "seats": []
+}

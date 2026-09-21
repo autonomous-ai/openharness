@@ -48,6 +48,12 @@ Map<ShortcutAction, List<String>> _readWorkspaceKeys() {
 
 final harnessCommands = <HarnessCommand>[
   const HarnessCommand(
+    'navigation.command_bar',
+    'Ask Harness',
+    ShortcutGroup.actions,
+    extraKeys: ['cmd+shift+j'],
+  ),
+  const HarnessCommand(
     'navigation.commands',
     'Search commands',
     ShortcutGroup.actions,
@@ -294,11 +300,18 @@ final harnessCommands = <HarnessCommand>[
     action: ShortcutAction.newTerminal,
     nativeAction: 'newTerminal',
   ),
+  // The id is a user's keybinding and does not move; the label is the app's name.
   const HarnessCommand(
     'machines.manage',
-    'Open Machines Manager',
+    'Open Machine Monitor',
     ShortcutGroup.actions,
     nativeAction: 'manageMachines',
+  ),
+  const HarnessCommand(
+    'machines.list',
+    'Open Machines Manager',
+    ShortcutGroup.actions,
+    nativeAction: 'machineList',
   ),
   const HarnessCommand(
     'machine.link',

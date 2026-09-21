@@ -17,13 +17,18 @@ import { resolveInstallSource } from './install.js'
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const STORE = join(ROOT, 'store')
 
-function storeFolders(): { folder: string; kind: 'agent' | 'viewer'; name: string; dir: string }[] {
-  const out: { folder: string; kind: 'agent' | 'viewer'; name: string; dir: string }[] = []
+/** `"listed": false` in store.json keeps a package's code in the repo and takes it off the shelf. */
+function isListed(dir: string): boolean {
+  try { return (JSON.parse(readFileSync(join(dir, 'store.json'), 'utf8')) as { listed?: unknown }).listed !== false } catch { return true }
+}
+
+function storeFolders(): { folder: string; kind: 'agent' | 'viewer'; name: string; dir: string; listed: boolean }[] {
+  const out: { folder: string; kind: 'agent' | 'viewer'; name: string; dir: string; listed: boolean }[] = []
   for (const [plural, kind] of STORE_KINDS) {
     const base = join(STORE, plural)
     for (const name of readdirSync(base).sort()) {
       const dir = join(base, name)
-      if (statSync(dir).isDirectory()) out.push({ folder: `store/${plural}/${name}`, kind, name, dir })
+      if (statSync(dir).isDirectory()) out.push({ folder: `store/${plural}/${name}`, kind, name, dir, listed: isListed(dir) })
     }
   }
   return out
@@ -34,15 +39,18 @@ describe('the built-in shelf (store/)', () => {
   const registry = bundledDshRegistry()
   const folders = storeFolders()
 
-  it('has agents and viewers, and every folder is in the registry exactly once', () => {
+  it('has agents and viewers, and every listed folder is in the registry exactly once', () => {
     expect(folders.filter((f) => f.kind === 'agent').length).toBeGreaterThan(0)
     expect(folders.filter((f) => f.kind === 'viewer').length).toBeGreaterThan(0)
     const ids = registry.map((entry) => entry.id)
     expect(new Set(ids).size).toBe(ids.length)
-    for (const { name } of folders) expect(ids, name).toContain(`autonomous/${name}`)
+    for (const { name, listed } of folders) {
+      if (listed) expect(ids, name).toContain(`autonomous/${name}`)
+      else expect(ids, `${name} is unlisted`).not.toContain(`autonomous/${name}`)
+    }
   })
 
-  for (const { folder, kind, name, dir } of folders) {
+  for (const { folder, kind, name, dir, listed } of folders) {
     describe(folder, () => {
       const read = readDshManifest(dir)
 
@@ -70,8 +78,9 @@ describe('the built-in shelf (store/)', () => {
         expect(readFileSync(join(dir, 'README.md'), 'utf8')).toMatch(/Credit and stewardship/)
       })
 
-      it('is listed from this folder, saying what the manifest says', () => {
+      it(listed ? 'is listed from this folder, saying what the manifest says' : 'is unlisted: kept in the repo, absent from the registry', () => {
         if (!read.ok) return
+        if (!listed) { expect(registry.find((row) => row.id === read.manifest.id)).toBeUndefined(); return }
         const entry = registry.find((row) => row.id === read.manifest.id)!
         const m = read.manifest
         expect(entry).toMatchObject({ repo: HARNESS_MONOREPO, ref: 'main', path: folder, verified: true, tier: dshTier(m) })

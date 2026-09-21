@@ -1,0 +1,17 @@
+{
+  "listed": true,
+  "homepage": "https://www.home-assistant.io",
+  "upstream": "https://github.com/home-assistant/core",
+  "license": "MIT",
+  "tagline": "Home automation ideas → tested YAML, native traces and a real handoff",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/home-assistant/starter.jpg"
+  ],
+  "examples": [
+    {
+      "prompt": "Build hallway lighting that adapts to quiet hours, ignores motion glitches and respects a manual override. Test the important cases and give me editable Home Assistant YAML.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/home-assistant/starter.jpg",
+      "caption": "Habitat · actual Core scenarios, native traces and a portable project"
+    }
+  ]
+}

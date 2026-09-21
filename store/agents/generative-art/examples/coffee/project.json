@@ -1,0 +1,19 @@
+{
+  "spec": "fieldwork/1", "id": "canopy-coffee", "title": "Canopy Coffee",
+  "brief": "Create a woodcut-inspired packaging identity for Canopy Coffee, using our own logo. Deliver a portrait bag label, a square launch card and a wide shop banner. Preserve editable product details and embed the logo in every deliverable.",
+  "notes": "Acceptance brief authored for this rebuild. The botanical illustration is original procedural vector geometry; this is not a label-compliance or dieline guarantee.",
+  "seed": "canopy-01",
+  "formats": [{ "name": "Bag label", "width": 1000, "height": 1500 }, { "name": "Launch card", "width": 1200, "height": 1200 }, { "name": "Shop banner", "width": 2000, "height": 800 }],
+  "controls": [
+    { "key": "brand", "type": "text", "label": "Roastery", "value": "CANOPY" },
+    { "key": "origin", "type": "text", "label": "Origin", "value": "SIERRA NEVADA · COLOMBIA" },
+    { "key": "lot", "type": "text", "label": "Coffee", "value": "LOT 042 / WASHED CATURRA" },
+    { "key": "tasting", "type": "text", "label": "Tasting notes", "value": "COCOA · ORANGE BLOSSOM · HONEY" },
+    { "key": "weight", "type": "text", "label": "Net weight", "value": "250 g" },
+    { "key": "paper", "type": "color", "label": "Stock", "value": "#e9e1c7" },
+    { "key": "ink", "type": "color", "label": "Print ink", "value": "#273c35" },
+    { "key": "accent", "type": "color", "label": "Lot mark", "value": "#b3432d" },
+    { "key": "detail", "type": "range", "label": "Engraving detail", "min": 6, "max": 28, "value": 18 }
+  ],
+  "assets": [{ "key": "logo", "label": "Roastery logo", "file": "logo.svg" }]
+}

@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="habitat-token" content="__HABITAT_TOKEN__" />
+    <title>Habitat · Home Assistant</title>
+    <link rel="icon" href="brand.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="style.css" />
+    <script src="studio.mjs" type="module"></script>
+  </head>
+  <body data-busy="false" data-ready="false" data-dirty="false">
+    <header class="topbar">
+      <a class="identity" href="./" aria-label="Habitat home"
+        ><img src="brand.svg" alt="" width="36" height="36" /><span
+          >habitat<small>HOME ASSISTANT STUDIO</small></span
+        ></a
+      >
+      <div class="connection">
+        <span class="dot"></span> Isolated lab
+        <span class="muted">· no home connected</span>
+      </div>
+      <div class="top-actions">
+        <label class="button secondary file-button"
+          >Open project<input
+            id="open-project"
+            type="file"
+            accept=".json,.habitat.json"
+            data-edit /></label
+        ><button id="download-project" class="secondary" data-edit>
+          Download draft</button
+        ><button id="save" data-edit>Save to workspace</button>
+      </div>
+    </header>
+    <main>
+      <section class="intro">
+        <div>
+          <p class="eyebrow">FROM AN IDEA TO AN AUTOMATION YOU CAN TRUST</p>
+          <h1 id="title">Make your home work around you.</h1>
+          <p id="brief" class="brief"></p>
+        </div>
+        <div class="engine-card">
+          <span class="engine-icon">HA</span>
+          <div>
+            <strong>Home Assistant Core</strong
+            ><span id="engine-version"
+              >2026.9.3 · actual automation engine</span
+            >
+          </div>
+        </div>
+      </section>
+      <div class="disclosure" id="disclosure">
+        Example devices. Tests run real automation logic with controlled time
+        and device doubles. They do not validate physical hardware.
+      </div>
+      <section class="workspace-status" aria-label="Workspace status">
+        <span id="source-status">Loading workspace…</span
+        ><span id="source-revision" class="mono"></span>
+      </section>
+      <div id="status" role="status" aria-live="polite"></div>
+      <div class="workbench">
+        <aside class="sidebar">
+          <div class="section-heading">
+            <h2>Test the moments that matter</h2>
+            <span id="case-count" class="count"></span>
+          </div>
+          <div
+            id="scenarios"
+            class="scenario-list"
+            role="tablist"
+            aria-label="Test scenarios"
+          ></div>
+          <button id="add-scenario" class="secondary wide" data-edit>
+            + Duplicate this scenario
+          </button>
+          <div class="suite-summary" id="suite-summary">
+            Run all scenarios to check a complete behavior.
+          </div>
+          <button id="run-all" class="wide" data-edit>
+            Test all scenarios
+          </button>
+          <button id="cancel" class="secondary wide" hidden>
+            Cancel running test
+          </button>
+          <div id="progress" class="progress" hidden>
+            <progress id="progress-bar" max="1" value="0"></progress
+            ><span id="progress-text"></span>
+          </div>
+          <details class="inventory">
+            <summary>Entity inventory <span id="entity-count"></span></summary>
+            <div id="entities"></div>
+            <p class="small muted">
+              These are declared test inputs and device doubles, not discovered
+              devices.
+            </p>
+          </details>
+        </aside>
+        <section
+          class="scenario-panel"
+          id="selected-panel"
+          role="tabpanel"
+          aria-label="Selected scenario"
+        >
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">SELECTED SCENARIO</p>
+              <h2 id="scenario-title">Loading…</h2>
+            </div>
+            <button id="run-case" data-edit>Run this scenario</button>
+          </div>
+          <p id="scenario-why" class="muted"></p>
+          <div class="scenario-settings">
+            <label
+              >Start, with UTC offset<input
+                id="scenario-start"
+                data-edit /></label
+            ><label
+              >Observe for (seconds)<input
+                id="scenario-until"
+                type="number"
+                min="0"
+                max="172800"
+                step="1"
+                data-edit
+            /></label>
+          </div>
+          <details id="initial-editor" class="edit-section">
+            <summary>
+              Starting conditions
+              <span class="small">Change “what if” inputs</span>
+            </summary>
+            <div id="initial-states" class="state-editor"></div>
+          </details>
+          <div class="section-heading subheading">
+            <h3>What happens</h3>
+            <button id="add-event" class="text-button" data-edit>
+              + State change
+            </button>
+          </div>
+          <div id="timeline-editor" class="timeline-editor"></div>
+          <details class="edit-section">
+            <summary>
+              Expected behavior
+              <span class="small">The assertions are yours to inspect</span>
+            </summary>
+            <div id="expect-summary"></div>
+            <label class="small"
+              >Expected calls, final states and pending runs (JSON)<textarea
+                id="expect-json"
+                class="code compact"
+                spellcheck="false"
+                data-edit
+              ></textarea></label
+            ><button id="apply-expect" class="secondary" data-edit>
+              Apply expected behavior
+            </button>
+            <button id="discard-expect" class="text-button" data-edit>
+              Discard JSON edits
+            </button>
+          </details>
+          <section class="result-section" aria-label="Actual engine result">
+            <div class="section-heading">
+              <h3>What Home Assistant actually did</h3>
+              <span id="result-badge" class="badge neutral">Not tested</span>
+            </div>
+            <p id="result-summary" class="muted">
+              Run this scenario to see real service calls, state changes and
+              engine traces.
+            </p>
+            <div id="actual-timeline"></div>
+            <div id="checks" class="checks"></div>
+            <div id="trace-panel" hidden>
+              <div class="section-heading subheading">
+                <h3>Follow the decision</h3>
+                <button id="download-trace" class="text-button" data-edit>
+                  Download native trace
+                </button>
+              </div>
+              <label class="small"
+                >Execution<select id="trace-select"></select
+              ></label>
+              <div id="trace-steps"></div>
+              <details>
+                <summary>Unmodified Core trace data</summary>
+                <pre id="trace-json" class="code"></pre>
+              </details>
+            </div>
+          </section>
+        </section>
+        <aside class="source-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">EDITABLE SOURCE</p>
+              <h2>Your automation</h2>
+            </div>
+            <span class="badge neutral">YAML</span>
+          </div>
+          <p class="small muted">
+            Ask the agent to change the behavior, or edit the real Home
+            Assistant source here. Every edit requires new tests.
+          </p>
+          <label class="sr-only" for="yaml">Automation YAML</label
+          ><textarea
+            id="yaml"
+            class="code yaml"
+            spellcheck="false"
+            data-edit
+          ></textarea>
+          <details class="edit-section">
+            <summary>Project details and complete test model</summary>
+            <p class="small muted">
+              Edit entities, custom-event steps or the brief here. Applying this
+              replaces the current draft only, not workspace files.
+            </p>
+            <label class="sr-only" for="project-json"
+              >Complete project JSON</label
+            ><textarea
+              id="project-json"
+              class="code compact"
+              spellcheck="false"
+              data-edit
+            ></textarea
+            ><button id="apply-project" class="secondary" data-edit>
+              Apply project details
+            </button>
+            <button id="discard-project" class="text-button" data-edit>
+              Discard JSON edits
+            </button>
+          </details>
+          <label class="notes-label"
+            >Decisions and installation notes<textarea
+              id="notes"
+              rows="3"
+              data-edit
+            ></textarea>
+          </label>
+          <section class="delivery-card">
+            <p class="eyebrow">TAKE YOUR WORK WITH YOU</p>
+            <h2>A real handoff.</h2>
+            <p id="export-status">
+              Test all scenarios for this exact draft to unlock checked exports.
+            </p>
+            <button
+              id="export-zip"
+              class="wide"
+              data-export="project.zip"
+              disabled
+            >
+              Export tested project
+            </button>
+            <div class="export-links">
+              <button data-export="automations.yaml" disabled>
+                Automation YAML</button
+              ><button data-export="report.html" disabled>HTML report</button
+              ><button data-export="results.json" disabled>Test evidence</button
+              ><button data-export="INTEGRATION.md" disabled>
+                Installation guide
+              </button>
+            </div>
+            <p class="small">
+              Imports stay disabled until reviewed. Nothing here deploys to a
+              home. Exports include entity states and source text—review before
+              sharing.
+            </p>
+          </section>
+        </aside>
+      </div>
+    </main>
+    <footer>
+      <span
+        >Built on the official Home Assistant Core · an independent OpenHarness
+        wrapper</span
+      ><span id="footer-proof">Logic tested ≠ hardware verified</span>
+    </footer>
+  </body>
+</html>

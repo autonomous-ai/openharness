@@ -1,0 +1,160 @@
+{
+  "spec": 1,
+  "id": "pocket-conservatory",
+  "title": "Pocket Conservatory",
+  "subtitle": "Grow a garden. Pass a possibility. A tiny drafting game for two.",
+  "players": 2,
+  "settings": [
+    {
+      "id": "rounds",
+      "label": "Cards in each starting hand",
+      "value": 6,
+      "min": 3,
+      "max": 8,
+      "step": 1
+    },
+    {
+      "id": "pair_bonus",
+      "label": "Flower + water pair bonus",
+      "value": 4,
+      "min": 0,
+      "max": 10,
+      "step": 1
+    },
+    {
+      "id": "variety_bonus",
+      "label": "Points per different plant group",
+      "value": 1,
+      "min": 0,
+      "max": 5,
+      "step": 1
+    }
+  ],
+  "components": [
+    {
+      "id": "fern",
+      "name": "Silver fern",
+      "body": "A quiet beginning.",
+      "kind": "card",
+      "widthMm": 63,
+      "heightMm": 88,
+      "quantity": 4,
+      "color": "#244c40",
+      "ink": "#fff8e9",
+      "symbol": "✦",
+      "values": {
+        "group": "leaf",
+        "points": 2
+      },
+      "locked": false
+    },
+    {
+      "id": "poppy",
+      "name": "Coral poppy",
+      "body": "Pairs with water for a flourishing garden.",
+      "kind": "card",
+      "widthMm": 63,
+      "heightMm": 88,
+      "quantity": 4,
+      "color": "#a44736",
+      "ink": "#fff8e9",
+      "symbol": "✿",
+      "values": {
+        "group": "flower",
+        "points": 2
+      },
+      "locked": false
+    },
+    {
+      "id": "pond",
+      "name": "Rain pool",
+      "body": "Each flower + water pair earns the pair bonus.",
+      "kind": "card",
+      "widthMm": 63,
+      "heightMm": 88,
+      "quantity": 4,
+      "color": "#365e7a",
+      "ink": "#fff8e9",
+      "symbol": "≈",
+      "values": {
+        "group": "water",
+        "points": 1
+      },
+      "locked": false
+    },
+    {
+      "id": "herb",
+      "name": "Wild thyme",
+      "body": "A little color and a different kind of leaf.",
+      "kind": "card",
+      "widthMm": 63,
+      "heightMm": 88,
+      "quantity": 4,
+      "color": "#62642f",
+      "ink": "#fff8e9",
+      "symbol": "❋",
+      "values": {
+        "group": "herb",
+        "points": 3
+      },
+      "locked": false
+    },
+    {
+      "id": "aster",
+      "name": "Evening aster",
+      "body": "A second flower for a generous garden.",
+      "kind": "card",
+      "widthMm": 63,
+      "heightMm": 88,
+      "quantity": 4,
+      "color": "#795c79",
+      "ink": "#fff8e9",
+      "symbol": "✳",
+      "values": {
+        "group": "flower",
+        "points": 3
+      },
+      "locked": false
+    },
+    {
+      "id": "moss",
+      "name": "Velvet moss",
+      "body": "Make room for small beginnings.",
+      "kind": "card",
+      "widthMm": 63,
+      "heightMm": 88,
+      "quantity": 4,
+      "color": "#3e6d53",
+      "ink": "#fff8e9",
+      "symbol": "⋆",
+      "values": {
+        "group": "moss",
+        "points": 1
+      },
+      "locked": false
+    }
+  ],
+  "boards": [],
+  "rulebook": [
+    {
+      "heading": "A garden for two",
+      "body": "Pocket Conservatory is a two-player drafting game. Build a little garden by choosing one card at a time from a hand that you will pass to the other gardener. You need the printed deck and a way to note scores."
+    },
+    {
+      "heading": "Set up",
+      "body": "Shuffle all printed cards. Deal each gardener the number of cards shown in the rule settings. Put the rest aside face down without looking. Each gardener keeps their hand private. Gardener 1 chooses first each round."
+    },
+    {
+      "heading": "Plant and pass",
+      "body": "Each round, Gardener 1 chooses one card and places it face up in their garden, then Gardener 2 does the same. Neither gardener takes another card until both have planted. Swap the remaining hands. Begin the next round. When both hands are empty, the game ends."
+    },
+    {
+      "heading": "Score your garden",
+      "body": "Add each planted card’s printed points. Earn the flower + water pair bonus for every pair you can make; each card counts in one pair. Add the variety bonus once per distinct group in your garden. The gardener with the highest score wins; tied scores share the win. The settings and component values printed with this rulebook define this edition."
+    },
+    {
+      "heading": "At the same screen",
+      "body": "The hand curtain lets gardeners pass the computer between turns. It conceals the hand from casual view; the offline file and replay are not secret from someone who can inspect the browser or source. Undo is a playtesting tool: it can reveal previous hands. For physical play, reveal only each planted card."
+    }
+  ]
+}

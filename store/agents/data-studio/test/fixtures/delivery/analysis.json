@@ -1,0 +1,181 @@
+{
+  "spec": 1,
+  "title": "Where are deliveries slipping?",
+  "question": "Which routes missed their promised date, and how many shipments are still open as of a chosen day?",
+  "example": true,
+  "method": "Join each shipment to a unique route. A shipment is delivered only when its recorded delivery date is on or before the as-of date. On-time rate = delivered on or before promised date / all delivered shipments; open shipments are excluded from this denominator. Each shipment counts once regardless of package quantity.",
+  "limitations": [
+    "Synthetic operations data, not an assessment of a real carrier.",
+    "Open or future-dated deliveries have no observed delivery outcome. Their on-time status is not imputed as zero.",
+    "Descriptive route comparisons do not establish the cause of delays. Results do not predict future delivery dates."
+  ],
+  "tables": [
+    {
+      "id": "shipments",
+      "file": "sources/shipments.csv",
+      "label": "Shipment log · synthetic",
+      "key": [
+        "shipment_id"
+      ],
+      "columns": [
+        {
+          "name": "shipment_id",
+          "source": "shipment_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "route_id",
+          "source": "route_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "promised_on",
+          "source": "promised_on",
+          "type": "date",
+          "nullable": false
+        },
+        {
+          "name": "delivered_on",
+          "source": "delivered_on",
+          "type": "date",
+          "nullable": true
+        },
+        {
+          "name": "packages",
+          "source": "packages",
+          "type": "integer",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "id": "routes",
+      "file": "sources/routes.csv",
+      "label": "Route catalog · synthetic",
+      "key": [
+        "route_id"
+      ],
+      "columns": [
+        {
+          "name": "route_id",
+          "source": "route_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "route",
+          "source": "route",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "region",
+          "source": "region",
+          "type": "text",
+          "nullable": false
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from": {
+        "table": "shipments",
+        "column": "route_id"
+      },
+      "to": {
+        "table": "routes",
+        "column": "route_id"
+      },
+      "allowMissing": false
+    }
+  ],
+  "parameters": [
+    {
+      "id": "as_of",
+      "label": "As of",
+      "type": "date",
+      "default": "2026-04-30"
+    },
+    {
+      "id": "region",
+      "label": "Region",
+      "type": "text",
+      "default": "",
+      "choices": [
+        "",
+        "South",
+        "North",
+        "Central"
+      ]
+    },
+    {
+      "id": "route",
+      "label": "Drilldown route",
+      "type": "text",
+      "default": "",
+      "hidden": true
+    }
+  ],
+  "queries": [
+    {
+      "id": "headline",
+      "title": "Delivery snapshot",
+      "file": "queries/headline.sql",
+      "kind": "metric",
+      "formats": {
+        "on_time_rate": {
+          "style": "percent",
+          "digits": 1
+        }
+      },
+      "explanation": "Counts of shipments, not packages. Open shipments stay outside the delivered denominator."
+    },
+    {
+      "id": "routes_summary",
+      "title": "On-time delivery by route",
+      "file": "queries/routes.sql",
+      "kind": "bar",
+      "x": "route",
+      "y": "on_time_rate",
+      "formats": {
+        "on_time_rate": {
+          "style": "percent",
+          "digits": 1
+        }
+      },
+      "trace": {
+        "query": "shipment_detail",
+        "bindings": {
+          "route": "route"
+        }
+      },
+      "explanation": "Each rate is calculated from its own delivered count. A route with no delivered shipments has a missing rate, not 0%."
+    },
+    {
+      "id": "shipment_detail",
+      "title": "Shipment evidence",
+      "file": "queries/detail.sql",
+      "kind": "detail",
+      "sourceLinks": {
+        "shipments_record": "shipments",
+        "routes_record": "routes"
+      },
+      "explanation": "Joined source records with outcome as of the selected day. Open shipments retain a missing delivery date."
+    }
+  ],
+  "checks": [
+    {
+      "id": "packages_positive",
+      "file": "checks/packages.sql",
+      "description": "Every shipment has a positive number of packages."
+    },
+    {
+      "id": "reconcile_deliveries",
+      "file": "checks/reconcile.sql",
+      "description": "Route-level delivered counts reconcile to the shipment-level total."
+    }
+  ]
+}

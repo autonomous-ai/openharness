@@ -1,0 +1,1 @@
+{"actions":[{"selector":"#tab-config","click":true},{"selector":"#tab-config","attribute":{"name":"aria-selected","value":"true"}},{"selector":"#tab-pins","click":true},{"selector":"#tab-pins","attribute":{"name":"aria-selected","value":"true"}},{"selector":"#tab-log","click":true},{"selector":"#tab-log","attribute":{"name":"aria-selected","value":"true"}}]}

@@ -1,0 +1,35 @@
+{
+  "spec": 1,
+  "id": "autonomous/creative-direction",
+  "name": "Creative Direction",
+  "category": "Design",
+  "author": "Autonomous",
+  "description": "Turn a business brief into an editable brand and a complete launch kit. Art-direct original identities, revise linked layouts, keep approved versions, and deliver vector artwork, print PDFs, a brand guide and a responsive website.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "board/index.html",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "FORME_DSH_DIR": "${dsh}"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "command": "toolchain/viewer.sh",
+    "artifactExtensions": [
+      ".html"
+    ],
+    "url": "http://127.0.0.1:${port}/"
+  },
+  "verdict": ".harness/verdict.json"
+}

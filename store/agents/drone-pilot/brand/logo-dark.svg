@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="112" viewBox="0 0 480 112">
+  <title>Drone Pilot logo</title>
+  <rect width="480" height="112" rx="24" fill="#18252b"/>
+  <g transform="translate(8 8)"><rect x="4" y="4" width="88" height="88" rx="23" fill="#18323b"/>
+  <path d="m48 17 27 15v32L48 79 21 64V32Z" fill="none" stroke="#739798" stroke-width="5" stroke-linejoin="round"/>
+  <path d="m29 60 34-31-9 40-8-15Z" fill="#d3eb9c"/>
+  <path d="m21 75 9-9" stroke="#d3eb9c" stroke-width="5" stroke-linecap="round"/></g>
+  <text x="120" y="53" fill="#f4f0e4" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="600" letter-spacing="-.8">Drone Pilot</text>
+  <text x="121" y="76" fill="#a7bbb7" font-family="Arial, Helvetica, sans-serif" font-size="10" font-weight="600" letter-spacing="2.1">VECTOR · AUTONOMOUS</text>
+</svg>

@@ -1,0 +1,35 @@
+{
+  "spec": 1,
+  "id": "autonomous/data-studio",
+  "name": "Data Studio",
+  "category": "Data",
+  "author": "OpenHarness contributors",
+  "description": "Turn CSV files and a question into a repeatable local analysis: checked joins, exact calculations, source-record drilldown, revisions and portable SQLite/report/project exports.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "index.html",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "DATA_TOOLCHAIN": "${dsh}/toolchain",
+      "DATA_SKILLS": "${dsh}/skills"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/isolated-web-viewer",
+    "artifactExtensions": [
+      ".html"
+    ]
+  },
+  "verdict": ".harness/verdict.json"
+}
