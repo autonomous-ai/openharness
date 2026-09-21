@@ -327,7 +327,9 @@ class NewHarnessController extends ChangeNotifier {
 
   /// The engine a choice launches: a store harness runs ON one of them.
   String _baseOf(String engine) => isHarnessId(engine)
-      ? _machine?.dsh[engine]?.engine ?? knownHarnessBase[engine] ?? 'claude'
+      ? _machine?.dsh[engine]?.engine ??
+            knownHarnessBase[canonicalHarnessId(engine)] ??
+            'claude'
       : engine;
   String get _base => _baseOf(_engine);
 
@@ -1988,7 +1990,9 @@ class NewHarnessController extends ChangeNotifier {
     final terminal = isTerminalEngine(choice);
     final base = harness == null
         ? choice
-        : machine.dsh[choice]?.engine ?? knownHarnessBase[choice] ?? 'claude';
+        : machine.dsh[choice]?.engine ??
+              knownHarnessBase[canonicalHarnessId(choice)] ??
+              'claude';
     // The daemon's launch installs a missing engine inside its new terminal.
     // A cached availability probe must not block that first launch.
     final recheck = checking;

@@ -351,7 +351,9 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   /// The engine a choice actually launches: a harness runs ON one of them, and
   /// that is what travels as `engine` beside the harness id.
   String _baseEngine(String id) => isHarnessId(id)
-      ? _harness(id)?.engine ?? knownHarnessBase[id] ?? 'claude'
+      ? _harness(id)?.engine ??
+            knownHarnessBase[canonicalHarnessId(id)] ??
+            'claude'
       : id;
 
   /// What to call [id] on screen: the machine's name for a harness when it has

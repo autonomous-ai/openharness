@@ -96,6 +96,28 @@ Iterable<String> found(NewHarnessController box) => box.options
     .map((option) => option.title);
 
 void main() {
+  test(
+    'legacy Codex harnesses retain profile support before the catalog loads',
+    () {
+      final app = createApp();
+      addTearDown(app.dispose);
+      for (final id in [
+        'local/ollama',
+        'local/mlx-lm',
+        'local/vllm',
+        'autonomous/solid',
+      ]) {
+        final box = NewHarnessController(app, machineId: 'm', engine: id);
+        addTearDown(box.dispose);
+        expect(
+          box.hasProfile,
+          isTrue,
+          reason: '$id must not fall back to Claude while loading',
+        );
+      }
+    },
+  );
+
   test('agent choices consolidate prototypes while preserving the actual launch id', () {
     final app = createApp();
     addTearDown(app.dispose);
