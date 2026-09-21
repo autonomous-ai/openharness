@@ -5377,9 +5377,18 @@ void ui_project_set_name(const char *project_id, const char *name)
     display_unlock();
 }
 
+// The words this device will store as an engine. An unknown one is dropped rather than shown, so a
+// daemon that learns a new engine cannot put a name on this screen that nothing here can draw.
+//
+// `terminal` is in the list and is NOT a product: it is the shell a pane holds when no engine is
+// running in it, and three things on a tile read it — the `>_` mark instead of a product logo, the
+// resting line, and the Voice button, which a shell must not offer. Leaving it out did not merely
+// hide the mark: the word was erased on arrival, so every one of those tests silently answered "not
+// a terminal" and the tile drew itself as an agent that had simply gone quiet.
 static const char *normalized_engine(const char *engine)
 {
-    return engine && (!strcmp(engine, "claude") || !strcmp(engine, "codex") ||
+    return engine && (!strcmp(engine, "terminal") ||
+                      !strcmp(engine, "claude") || !strcmp(engine, "codex") ||
                       !strcmp(engine, "cursor") || !strcmp(engine, "opencode") ||
                       !strcmp(engine, "pi") || !strcmp(engine, "hermes") ||
                       !strcmp(engine, "commandcode") || !strcmp(engine, "devin") ||
