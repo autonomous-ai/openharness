@@ -14,6 +14,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/store/store_controller.dart';
 import 'package:harness/store/store_models.dart';
 import 'package:harness/store/store_screen.dart';
+import 'package:harness/widgets/open_harness_intent.dart';
 
 const _marp = DshEntry(
   id: 'autonomous/marp',
@@ -61,6 +62,7 @@ class _Notifier extends AppNotifier {
 
   final installs = <(String, String)>[];
   final removals = <(String, String)>[];
+  final updates = <(String, String)>[];
   int probes = 0;
   int engineProbes = 0;
   final probedMachines = <String>[];
@@ -80,6 +82,12 @@ class _Notifier extends AppNotifier {
   @override
   Future<String?> installDsh(String machineId, String id) async {
     installs.add((machineId, id));
+    return null;
+  }
+
+  @override
+  Future<String?> updateDsh(String machineId, String id) async {
+    updates.add((machineId, id));
     return null;
   }
 
@@ -173,11 +181,13 @@ const _machine = Machine(
 Future<(_Notifier, _FakeStore)> open(
   WidgetTester tester, {
   String? initialHarness,
+  List<DshEntry>? entries,
+  void Function(OpenHarnessIntent)? onNew,
 }) async {
   final notifier = _Notifier();
   addTearDown(notifier.dispose);
   final state = MachineState(_machine)..localOnly = true;
-  state.dsh.replace(const [_marp, _typst, _docViewer]);
+  state.dsh.replace(entries ?? const [_marp, _typst, _docViewer]);
   state.engines.replace(const [
     EngineAvailability(engine: 'claude', installed: true),
     EngineAvailability(
@@ -191,12 +201,23 @@ Future<(_Notifier, _FakeStore)> open(
   final store = _FakeStore();
   await tester.pumpWidget(
     MaterialApp(
-      home: Scaffold(
-        body: StoreTab(
-          notifier: notifier,
-          api: store,
-          source: 'test',
-          initialHarness: initialHarness,
+      home: Actions(
+        actions: {
+          if (onNew != null)
+            OpenHarnessIntent: CallbackAction<OpenHarnessIntent>(
+              onInvoke: (intent) {
+                onNew(intent);
+                return null;
+              },
+            ),
+        },
+        child: Scaffold(
+          body: StoreTab(
+            notifier: notifier,
+            api: store,
+            source: 'test',
+            initialHarness: initialHarness,
+          ),
         ),
       ),
     ),
@@ -207,6 +228,93 @@ Future<(_Notifier, _FakeStore)> open(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets(
+    'a current Store page opens and removes the installed legacy package',
+    (tester) async {
+      final opened = <OpenHarnessIntent>[];
+      final (notifier, _) = await open(
+        tester,
+        initialHarness: 'autonomous/ollama',
+        onNew: opened.add,
+        entries: const [
+          DshEntry(
+            id: 'local/ollama',
+            name: 'Old prototype',
+            engine: 'codex',
+            installed: true,
+            linked: true,
+            category: 'Compute',
+          ),
+          DshEntry(
+            id: 'autonomous/ollama',
+            name: 'Ollama',
+            engine: 'codex',
+            category: 'Local AI',
+          ),
+        ],
+      );
+      expect(find.text('Old prototype'), findsNothing);
+      expect(find.text('Get'), findsNothing);
+      final action = find.byKey(const ValueKey('store-primary-action'));
+      await tester.ensureVisible(action);
+      await tester.tap(action);
+      await tester.pumpAndSettle();
+      expect(opened.single.engine, 'local/ollama');
+      expect(opened.single.machineId, 'machine-1');
+      expect(notifier.installs, isEmpty);
+      final remove = find.byKey(const ValueKey('store-remove:machine-1'));
+      await tester.ensureVisible(remove);
+      await tester.pumpAndSettle();
+      await tester.tap(remove);
+      await tester.pumpAndSettle();
+      expect(find.text('Remove Ollama from studio-mac?'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('store-confirm')));
+      await tester.pumpAndSettle();
+      expect(notifier.removals, [('machine-1', 'local/ollama')]);
+    },
+  );
+
+  testWidgets(
+    'a retired deep link opens the current page and updates the actual install',
+    (tester) async {
+      final (notifier, _) = await open(
+        tester,
+        initialHarness: 'autonomous/copper',
+        entries: const [
+          DshEntry(
+            id: 'autonomous/copper',
+            name: 'Copper',
+            engine: 'claude',
+            installed: true,
+            updateAvailable: true,
+            category: 'PCB',
+          ),
+          DshEntry(
+            id: 'autonomous/autonomous-circuit',
+            name: 'Autonomous Circuit',
+            engine: 'claude',
+            category: 'PCB',
+          ),
+        ],
+      );
+      expect(
+        find.byKey(const ValueKey('store-page:autonomous/autonomous-circuit')),
+        findsOneWidget,
+      );
+      expect(find.text('New Harness'), findsNothing);
+      expect(find.text('Resume Harness'), findsNothing);
+      final action = find.byKey(const ValueKey('store-primary-action'));
+      expect(
+        find.descendant(of: action, matching: find.text('Update')),
+        findsOneWidget,
+      );
+      await tester.ensureVisible(action);
+      await tester.tap(action);
+      await tester.pumpAndSettle();
+      expect(notifier.updates, [('machine-1', 'autonomous/copper')]);
+    },
+  );
 
   testWidgets(
     'the bottom sidebar icon shows viewers and their dependent agents',
@@ -519,7 +627,7 @@ void main() {
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('store-primary-action')),
-          matching: find.text('Open'),
+          matching: find.text('New Harness'),
         ),
         findsOneWidget,
       );
@@ -609,16 +717,16 @@ void main() {
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('store-card:claude')),
-          matching: find.text('Open'),
+          matching: find.text('New Harness'),
         ),
-        findsOneWidget,
+        findsNothing,
       );
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('store-card:codex')),
           matching: find.text('Get'),
         ),
-        findsOneWidget,
+        findsNothing,
       );
 
       await tester.ensureVisible(

@@ -68,10 +68,9 @@ const storeDisciplines = <String, StoreDiscipline>{
     invitation: 'Start with one circuit. See where it takes you.',
     color: Color(0xffffcf9e),
     featured: [
-      'autonomous/autonomous-circuit',
-      'autonomous/copper',
-      'autonomous/circuitjs',
       'autonomous/kicad',
+      'autonomous/autonomous-circuit',
+      'autonomous/circuitjs',
     ],
   ),
   'Media': StoreDiscipline(
@@ -97,8 +96,8 @@ const storeDisciplines = <String, StoreDiscipline>{
     invitation: 'Start with a rhythm you cannot get out of your head.',
     color: Color(0xffe6c6f3),
     featured: [
-      'autonomous/score',
       'autonomous/music-studio',
+      'autonomous/score',
       'autonomous/strudel',
     ],
   ),
@@ -176,7 +175,6 @@ const storeDisciplines = <String, StoreDiscipline>{
     featured: [
       'autonomous/autonomous-grid',
       'autonomous/ollama',
-      'local/ollama',
       'autonomous/mlx-lm',
     ],
   ),
@@ -200,7 +198,6 @@ const storeProjectAssets = <String, String>{
   'autonomous/blender': 'assets/store/projects/blender.jpg',
   'autonomous/text-to-cad': 'assets/store/projects/cad.jpg',
   'autonomous/autonomous-circuit': 'assets/store/projects/circuit.jpg',
-  'autonomous/copper': 'assets/store/copper-board.png',
   'autonomous/mujoco': 'assets/store/projects/robot.jpg',
   'autonomous/godogen': 'assets/store/projects/game.jpg',
   'autonomous/phaser': 'assets/store/phaser-bricks.png',

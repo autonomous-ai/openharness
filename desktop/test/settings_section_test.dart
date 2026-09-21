@@ -32,6 +32,7 @@ void main() {
       // files, and it reads nothing at all until a provider is switched on, so
       // there is nothing here for a shipped build to hide.
       SettingsSection.usage,
+      SettingsSection.customize,
       SettingsSection.devices,
       SettingsSection.account,
       SettingsSection.shortcuts,

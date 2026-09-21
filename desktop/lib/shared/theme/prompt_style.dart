@@ -5,7 +5,7 @@ const kHarnessPromptMarker = '>_';
 enum PromptStyle {
   plain('Plain', 'ASCII markers, quiet and compact'),
   symbols('Symbols', 'Harness, machine, folder and branch marks'),
-  powerline('Powerline', 'Joined segments, like a shell prompt');
+  powerline('Powerline', 'Joined segments with angled separators');
 
   const PromptStyle(this.label, this.description);
   final String label, description;

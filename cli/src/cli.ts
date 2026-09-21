@@ -55,7 +55,7 @@ import { stopDaemonProcess } from './lib/daemonStop.js'
 import { ensureTmuxOnPath, requireTmuxAvailable } from './lib/tmuxOnPath.js'
 import { flashCommand } from './lib/flash.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
-import { renderLoginSuccessHtml } from './lib/loginPage.js'
+import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE } from './lib/loginCallback.js'
 import { AuthSessionError, AuthSessionManager, clearAuthSession, readAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { ensureGridInstalled, type GridInstallResult } from './lib/gridInstall.js'
@@ -70,7 +70,7 @@ import { gridAvailable } from './lib/gridExec.js'
 import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, engineBin, enginePathOverride } from './lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from './engines/types.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
-import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, namedAgentArgs } from './lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, commandSupportsFlagInInteractiveShell, namedAgentArgs, permissionModeFlags } from './lib/engineLaunch.js'
 import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, gridEnvVarNames, type GridLaunchMachine, type GridWebSearchStatus } from './lib/gridLaunch.js'
 import { HERMES_SYSTEM_MANAGED_DIR } from './lib/gridWebMcp.js'
 import { writeGridConfigDir } from './lib/gridConfigDir.js'
@@ -78,7 +78,7 @@ import { tmuxSupportsSessionEnv, TMUX_SESSION_ENV_MIN } from './lib/tmuxVersion.
 import { clearDeleted, isRecentlyDeleted, markDeleted } from './lib/deletedSessions.js'
 import { terminateDeletedAgent, checkPidRuntime } from './lib/deleteAgentFallback.js'
 import { AgentRestartCoordinator, restartAgent, type RestartAgentDeps } from './lib/restartAgent.js'
-import { claudeContinuation, findLiveSession } from './lib/sessionRepair.js'
+import { claudeContinuation, findLiveSession, findResumedTranscript } from './lib/sessionRepair.js'
 import { TmuxBackend } from './lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from './lib/hostTheme.js'
 import { createAndRegisterPane } from './lib/createAgentPane.js'
@@ -90,7 +90,7 @@ import { createResumeAgentService } from './lib/resumeAgentService.js'
 import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from './lib/launchOverrides.js'
 import { prepareCodexResume } from './engines/codex/portableHistory.js'
 import { buildHarnessSessionLabel } from './lib/harnessSessionLabel.js'
-import { listTmuxPanes } from './lib/tmuxAgentDiscovery.js'
+import { adoptLegacyHarnessSessions, listTmuxPanes } from './lib/tmuxAgentDiscovery.js'
 import { installedDsh } from './dsh/installed.js'
 import { dshVerdictPath, dshViewerName } from './dsh/manifest.js'
 import { catalogEntry } from './dsh/catalog.js'
@@ -768,25 +768,9 @@ async function browserSignIn(
     const manual = !json && process.stdin.isTTY ? promptForCallbackUrl(redirectUri) : null
     let callbackResult: { code: string; state: string }
     try {
-      callbackResult = await new Promise<{ code: string; state: string }>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('SSO login timed out')), 5 * 60_000)
-        callback.on('request', (req, res) => {
-          const url = new URL(req.url ?? '/', redirectUri)
-          const code = url.searchParams.get('code')
-          const state = url.searchParams.get('state')
-          const error = url.searchParams.get('error')
-          res.writeHead(error || !code || !state ? 400 : 200, { 'content-type': 'text/html; charset=utf-8' })
-          res.end(error || !code || !state
-            ? '<h1>Harness login failed</h1><p>You can close this window.</p>'
-            : renderLoginSuccessHtml())
-          clearTimeout(timeout)
-          if (error) reject(new Error(`SSO login failed: ${error}`))
-          else if (code && state) resolve({ code, state })
-        })
-        manual?.promise.then(resolve, reject)
-      })
+      callbackResult = await awaitLoginCallback({ server: callback, redirectUri, manual: manual?.promise ?? null, timeoutMs: 5 * 60_000 })
     } catch (err) {
-      const timedOut = (err as Error).message === 'SSO login timed out'
+      const timedOut = (err as Error).message === LOGIN_TIMEOUT_MESSAGE
       if (json) { emit({ type: 'result', status: 'error', code: timedOut ? 'TIMEOUT' : 'CALLBACK_ERROR', message: (err as Error).message }); process.exitCode = 1; return { signedIn: false } }
       throw err
     } finally {
@@ -822,6 +806,9 @@ async function browserSignIn(
     }
     return await succeed()
   } finally {
+    // A keep-alive socket the browser left open would hold `close()` until it idles out (a pinned
+    // ADAPTER_LOGIN_CALLBACK_PORT behind an SSH tunnel is where that shows up); drop it first.
+    callback.closeAllConnections?.()
     await new Promise<void>((resolve) => callback.close(() => resolve()))
   }
 }
@@ -919,28 +906,6 @@ async function gridLogoutCommand(args: string[]): Promise<void> {
   // `grid` as a clean sign-out.
   if (outcome.ran === false) console.error(`\n  ✗ ${outcome.message}\n`)
   process.exitCode = outcome.exitCode
-}
-
-/**
- * Pulls `code`/`state`/`error` out of whatever the user pasted — the full callback URL, just its query
- * string (with or without a leading `?`), or a bare `code=...&state=...` pair with no URL shape at all.
- * `new URL(input, redirectUri)` never throws (a base makes it permissive), but a bare `code=...&state=...`
- * parses as a relative PATH against that base, landing in an empty query — so a URL parse that comes up
- * empty falls back to treating the whole input as a raw query string instead.
- */
-function extractCallbackParams(input: string, redirectUri: string): {
-  code: string | null
-  state: string | null
-  error: string | null
-} {
-  const read = (params: URLSearchParams) => ({
-    code: params.get('code'),
-    state: params.get('state'),
-    error: params.get('error'),
-  })
-  const viaUrl = read(new URL(input, redirectUri).searchParams)
-  if (viaUrl.code || viaUrl.state || viaUrl.error) return viaUrl
-  return read(new URLSearchParams(input))
 }
 
 /**
@@ -1414,6 +1379,14 @@ async function runForeground(session: AuthSession): Promise<void> {
   }
   console.log(`[terminal] enabled backends: ${terminalConfig.backends.join(', ')}`)
   if (tmuxBackend) {
+    // Before the first inventory: sessions a pre-prefix build named `<engine>-<ts>` are renamed to
+    // `harness-<engine>-<ts>` so discovery's whitelist sees the registry's own panes again.
+    const ownedPanes = new Map(registry.list().flatMap((session) => session.runtimes
+      .filter((runtime) => runtime.backend === 'tmux')
+      .map((runtime) => [runtime.paneId, session.engine] as const)))
+    for (const adopted of await adoptLegacyHarnessSessions(ownedPanes)) {
+      console.log(`[terminal] renamed tmux session ${adopted.from} → ${adopted.to} (pane ${adopted.paneId}) · named by a build before the harness- prefix`)
+    }
     const tmuxStartup = await tmuxBackend.inventory()
     console.log(tmuxStartup.state === 'available'
       ? '[terminal] tmux: available'
@@ -2818,8 +2791,13 @@ async function runForeground(session: AuthSession): Promise<void> {
             ? await findAgyTranscript(env.AGY_HOME, sessionId) ?? undefined
             : observed.engine === 'copilot'
               ? await findCopilotTranscript(env.COPILOT_HOME, sessionId) ?? undefined
-              : undefined
-      if ((observed.engine === 'cursor' || observed.engine === 'grok') && !transcriptPath) return
+              : observed.engine === 'claude' || observed.engine === 'codex'
+                ? await findResumedTranscript(observed.engine, sessionId, { codexHome: agent.codexHome ?? undefined }) ?? undefined
+                : undefined
+      // The registry refuses a claude/codex session without its file, so a resume of a transcript this
+      // machine does not have is not a session — the hook that follows the user's next prompt will say.
+      if ((observed.engine === 'cursor' || observed.engine === 'grok' || observed.engine === 'claude' || observed.engine === 'codex')
+        && !transcriptPath) return
     } else {
       const attempts = repairAttempts.get(agent.agentId) ?? 0
       const lastAttempt = lastRepairAttempt.get(agent.agentId) ?? 0
@@ -4254,6 +4232,27 @@ async function runForeground(session: AuthSession): Promise<void> {
       if (!statSync(cwd).isDirectory()) return { ok: false, error: 'CWD_NOT_FOUND' }
     } catch {
       return { ok: false, error: 'CWD_NOT_FOUND' }
+    }
+    // `--approve-for-me` was added after older Codex CLI releases. Refuse the
+    // incompatible Auto mode before opening a pane, rather than letting Codex
+    // reject the flag and leaving the person in an unexpected fallback shell.
+    // Ask mode has no flag and remains a useful workaround until Codex updates.
+    const codexAutoApprove =
+      engine === 'codex' &&
+      (permissionMode !== null
+        ? permissionModeFlags(engine, permissionMode)?.includes('--approve-for-me') === true
+        : bypassPermission)
+    if (codexAutoApprove) {
+      const support = await commandSupportsFlagInInteractiveShell(
+        engineBin('codex'),
+        '--approve-for-me',
+      )
+      if (support === 'unsupported') {
+        const detail =
+          'Your installed Codex CLI does not support --approve-for-me, which Harness uses for Auto approvals. Update Codex and try again, or choose Ask permissions for this harness.'
+        console.warn(`[agent] create codex refused · ${detail}`)
+        return { ok: false, error: 'CODEX_CLI_TOO_OLD', detail }
+      }
     }
     // A domain-specific harness: put its files into the workspace first (template, AGENTS.md, skill
     // links) and take its env/argv for the launch. Refused, never approximated, when it is not here.

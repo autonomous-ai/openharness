@@ -224,28 +224,35 @@ Escape or Cmd-Shift-J closes the experimental prompt.
     and reopen to check its draft, then fork. The source should stay intact;
     the new agent should open at the original destination. The prompt explains
     conversation continuation versus a handoff when supported by the engine.
-25. **Restart Agent / Restart Terminal.** This starts immediately. Check the
+25. **Clone Agent (⇧⌘N).** On an owned agent in Plan or Read-only mode, with a
+    Codex profile or a named agent if one is at hand. A new tile opens beside
+    it at once, named `<source> - clone`, in the same folder with the same mode
+    (check the launch argv) and an empty conversation; the source is untouched
+    and the tab count does not change. Works the same on a linked remote
+    machine; a remote CLI too old to report modes clones in auto mode. A
+    terminal pane clones to a terminal; a grid agent is refused with a message.
+26. **Restart Agent / Restart Terminal.** This starts immediately. Check the
     compact pending prompt; close/reopen it while pending if timing permits.
     Existing views should remain. A fresh agent conversation should be clearly
     reported; a shell restart simply starts a fresh shell.
-26. **Stop Agent / Stop Terminal.** The confirmation names the target and
+27. **Stop Agent / Stop Terminal.** The confirmation names the target and
     initially focuses Cancel. Enter should cancel; Tab then Enter should stop.
     A confirmed stop should close that agent's views across tabs and leave
     unrelated terminals usable.
 
 ## Machines and keyboard customization
 
-27. **Open Machines Manager.** Filter by name or status, Enter into actions,
+28. **Open Machines Manager.** Filter by name or status, Enter into actions,
     and Escape back twice. Queries and selection should survive nested
     prompts and refresh. Try keyboard-only machine renaming if desired.
-28. **Link machine.** Search existing machines or open desktop/SSH setup.
+29. **Link machine.** Search existing machines or open desktop/SSH setup.
     Copy controls, links, refresh, and back navigation should work without a
     mouse. A machine's password prompt should accept typing immediately.
-29. **This computer's password / Links from this computer.** Open these via
+30. **This computer's password / Links from this computer.** Open these via
     Machines Manager. Review the wording and keyboard navigation; setting or
     clearing a password and unlinking make real changes. Clear/unlink
     confirmations start on Cancel and explain their scope.
-30. **Keyboard shortcuts and Edit keybindings.** Find both through command
+31. **Keyboard shortcuts and Edit keybindings.** Find both through command
     search. Try a custom binding in `~/.config/harness/keybindings.jsonc`
     (or the shown XDG config path). Live hints and prompt behavior should follow
     the change; invalid config should keep the last working bindings.

@@ -64,7 +64,6 @@ import '../widgets/swarm_search_input.dart';
 import '../widgets/swarm_attention.dart';
 import '../widgets/swarm_switcher.dart';
 import '../widgets/swarm_wallpaper.dart';
-import '../widgets/agent_action_icons.dart';
 import '../widgets/swarm_icon.dart';
 import '../widgets/task_palette.dart';
 import '../state/command_bar.dart';
@@ -900,6 +899,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'commands' => 'navigation.commands',
       'newAgent' => 'agent.new',
       'newTerminal' => 'terminal.new',
+      'cloneAgent' => 'agent.clone',
       _ => null,
     };
     if (nativeCommand != null) {
@@ -1002,6 +1002,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         unawaited(_newAgent(swarmId: app.activeSwarmId));
       case 'newTerminal':
         unawaited(_newTerminal());
+      case 'cloneAgent':
+        unawaited(_cloneAgent());
       case 'runLocalModel':
         // Native commands arrive above the Actions subtree. Use the same
         // product entry directly; a dialog guard would block the dock.
@@ -1112,6 +1114,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         unawaited(_notifications());
       case 'settings':
         await _settings();
+      case 'customize':
+        await _customize();
     }
     if (mounted &&
         const {
@@ -1125,6 +1129,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           'addAgent',
           'newAgent',
           'newTerminal',
+          'cloneAgent',
           'runLocalModel',
           'manageMachines',
           'machineList',
@@ -1257,25 +1262,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       keymap: _keymap,
     );
   });
-  Future<void> _customize() => _dialog(() async {
-    await showAppDialog<void>(
-      context: context,
-      veilTint: Colors.transparent,
-      veilBlur: 0,
-      transitionDuration: Duration.zero,
-      builder: (context) => Align(
-        alignment: Alignment.centerRight,
-        child: SizedBox(
-          width: (440 * MediaQuery.textScalerOf(context).scale(13) / 13).clamp(
-            0,
-            MediaQuery.sizeOf(context).width,
-          ),
-          height: double.infinity,
-          child: HarnessCustomizePane(onClose: () => Navigator.pop(context)),
-        ),
-      ),
-    );
-  });
+  Future<void> _customize() => _dialog(() => showHarnessCustomizePane(context));
 
   Future<void> _settings([SettingsSection? section]) => _dialog(
     () => showSettingsScreen(
@@ -1790,6 +1777,32 @@ class _SwarmScreenState extends State<SwarmScreen> {
     unawaited(_ensureEmptyEntry());
   }
 
+  /// ⌘⇧N — another agent of the focused pane's kind, fresh conversation.
+  /// No dialog, like ⌘⇧T: the answer to every question a dialog would ask is
+  /// already on the source agent's frame (`AppNotifier.cloneAgent`). The
+  /// chord is gated by `_canExecuteCommand`; the File menu is not, so a click
+  /// with nothing to clone from says so instead of doing nothing.
+  Future<void> _cloneAgent() async {
+    final pane = app.focusedPane;
+    final agent = _focusedAgent;
+    final String? error;
+    if (pane == null || agent == null) {
+      error = 'Focus an agent pane to clone it.';
+    } else if (app.stateOf(pane.machineId)?.machine.isShared != false) {
+      error = 'Shared agents are view-only.';
+    } else {
+      error = await app.cloneAgent(
+        pane.machineId,
+        agent.id,
+        swarmId: app.activeSwarmId,
+      );
+    }
+    if (error != null && mounted) {
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(SnackBar(content: Text(error)));
+    }
+  }
+
   /// ⌘⇧T: a shell in a new tile, no dialog — the way a terminal app opens a
   /// tab. It lands on the machine the focused tile is on (this computer when
   /// nothing is focused), in the folder that tile's harness works in, else
@@ -1834,19 +1847,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
   }
 
-  Future<void> _splitAgent(
-    PaneResizeAxis axis, {
-    int? paneId,
-    bool create = false,
-  }) async {
+  Future<void> _splitAgent(PaneResizeAxis axis, {int? paneId}) async {
     final split = app.preparePaneSplit(axis, paneId: paneId);
     if (split == null) return;
     if (paneId != null) app.focusPane(split.paneId);
-    if (create) {
-      await _newAgent(split: split);
-    } else {
-      _openSearch(adding: true, split: split);
-    }
+    _openSearch(adding: true, split: split);
   }
 
   Future<void> _showHistory() async {
@@ -2132,7 +2137,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   Widget _buildSearchOverlay(BuildContext context) {
     final search = _search!;
-    final commandsOnly = search.isCommandMode;
     // Results sit above a stable input line in the workspace command dock.
     // The input is visually below results, but Tab still starts at the first
     // result rather than a cached, offscreen ListView row below the input.
@@ -2154,7 +2158,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     search.title,
                     style: boxMonoStyle(size: 12, color: kBoxFaint),
                   ),
-                  if (search.placement == HarnessPlacement.currentTab)
+                  if (search.placement == HarnessPlacement.currentTab ||
+                      search.split != null)
                     Expanded(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -2204,22 +2209,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     fontSize: 13,
                     terminal: true,
                     hintText: search.hint,
-                    trailing: !commandsOnly && search.split != null
-                        ? KeymapRegion(
-                            contextKind: KeymapContext.workspace,
-                            child: IconButton(
-                              key: const ValueKey('harness-picker-new'),
-                              tooltip: 'New Harness',
-                              onPressed: search.canCreate
-                                  ? () => _runShortcut('agent.new')
-                                  : null,
-                              icon: const Icon(
-                                AgentActionIcons.create,
-                                size: 18,
-                              ),
-                            ),
-                          )
-                        : null,
                   ),
                 ),
               ),
@@ -2497,6 +2486,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     },
     ShortcutAction.newAgent: _newAgent,
     ShortcutAction.newTerminal: _newTerminal,
+    ShortcutAction.cloneAgent: _cloneAgent,
     ShortcutAction.routeTask: () =>
         _dialog(() => showTaskPalette(context, app)),
     ShortcutAction.orchestrate: () =>
@@ -2570,13 +2560,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (id == 'agent.rename' ||
         id == 'agent.stop' ||
         id == 'agent.fork' ||
+        id == 'agent.clone' ||
         id == 'agent.restart') {
       final pane = app.focusedPane;
       final machine = pane == null ? null : app.stateOf(pane.machineId);
+      // Clone and restart both ask the daemon for a launch, so both need it
+      // reachable; clone is not gated on `canFork` — any engine can be opened
+      // again, only a fork needs the engine to carry a conversation over.
       return machine != null &&
           !machine.machine.isShared &&
           (id != 'agent.fork' || _focusedAgent?.canFork == true) &&
-          (id != 'agent.restart' ||
+          (id != 'agent.clone' || _focusedAgent?.canClone == true) &&
+          ((id != 'agent.restart' && id != 'agent.clone') ||
               (machine.nodeOnline != false && !machine.needsLink)) &&
           machine.agents.any((agent) => agent.id == pane!.agentId);
     }
@@ -2661,6 +2656,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ?mode('agent.new', 'New Harness', 'agent · machine · project'),
       ?mode('app.store', 'Harness Store', 'Browse and install harnesses'),
       ?mode('terminal.new', 'New terminal', 'A shell where you are'),
+      ?mode(
+        'agent.clone',
+        'Clone Agent',
+        'Another of this one, fresh conversation',
+      ),
       ?mode('navigation.needs_input', 'Agents needing input', 'Who is waiting'),
       ?mode('navigation.history', 'History', 'Where you have been'),
       ?mode('task.route', 'Boss mode', 'Describe a task, it picks the agent'),
@@ -3000,6 +3000,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                         child: PaneGrid(
                                           notifier: app,
                                           swarmMode: true,
+                                          onSplit: (paneId, axis) =>
+                                              _splitAgent(axis, paneId: paneId),
                                           empty:
                                               app.panes.isEmpty &&
                                                   !app.activeSwarm.isStore &&
@@ -3114,6 +3116,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             StoreTab(
                               key: ValueKey('store-tab:${app.activeSwarmId}'),
                               notifier: app,
+                              recentHarnesses: _navigation.recent,
                               source: 'tab',
                             ),
                           if (_hasCommandBar && _commandBarOpen)

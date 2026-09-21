@@ -489,6 +489,25 @@ legacy response requires checking existing agents before explicitly starting
 another. The desktop draft and receipt reference last for the current window,
 not across app restarts.
 
+## Cloning an agent
+
+“Clone Agent” (⇧⌘N, File menu, pane command search) is fork minus the
+context: another agent of the focused pane's kind with a fresh conversation.
+There is no prompt, as with ⇧⌘T — every answer is already on the agent's
+frame: its machine (its own or a relayed one), project folder, engine or
+harness, Codex profile, named agent, and permission mode. The clone is named
+`<source> - clone`, opens as another tile in the current tab, and takes
+focus; the source is not touched, so a clone works while the source is busy
+or has no session yet, where a fork would wait or refuse. A terminal clones
+to a terminal in the same folder. An agent on a grid is refused before asking,
+since the frame carries the grid's model and never its key.
+
+The launch choices come from the CLI's agent frame (`permissionMode`,
+`bypassPermission`, `namedAgent`). A daemon that predates them reports none,
+and the clone then opens the way New Harness would by default — folder,
+harness and profile still carry. Errors surface as a snackbar; there is no
+receipt to reopen, and a second ⇧⌘N is a second clone.
+
 A confirmed fork opens in its original tab without stealing focus if the user
 has moved elsewhere. If that tab closed, or filled while the user moved away,
 the agent stays available through New Pane/New Tab. A full tab still in focus

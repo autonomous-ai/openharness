@@ -129,7 +129,11 @@ class SwarmSearchController extends ChangeNotifier {
       ? 'Machines'
       : _groupScope != null
       ? 'Agents · ${_groupScope!.name}'
-      : placement?.title ?? 'Search';
+      : switch (split?.axis) {
+          PaneResizeAxis.x => 'New Pane to the Right',
+          PaneResizeAxis.y => 'New Pane Below',
+          null => placement?.title ?? 'Search',
+        };
 
   bool _previewVisible;
   bool get previewVisible => _previewVisible;
@@ -524,12 +528,12 @@ class SwarmSearchController extends ChangeNotifier {
         ? 0
         : index >= 0
         ? index
-        // The box opens on the most recent harness, not on the create row above
-        // it: Return on a fresh box goes back to work, it does not make more.
+        // New Tab, New Pane and directional splits start on creation with an
+        // empty query. Other searches and typed queries prefer a match.
         : preferred == null &&
               rows.length > 1 &&
               rows.first.isCreate &&
-              (placement == null || query.trim().isNotEmpty)
+              ((placement == null && split == null) || query.trim().isNotEmpty)
         ? 1
         : cursor.clamp(0, rows.length - 1);
     // Nor on a row Return cannot take: "Already added", dimmed, with its

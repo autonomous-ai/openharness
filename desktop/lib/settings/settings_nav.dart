@@ -5,7 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../shared/layouts/widgets/rail_section_header.dart';
 import '../shared/layouts/widgets/sidebar_item.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../widgets/window_chrome.dart';
+import '../shared/widgets/section_scaffold.dart';
 import 'settings_section.dart';
 
 /// The settings list: the way back, a field that narrows the list to what you
@@ -101,31 +101,36 @@ class _SettingsNavState extends State<SettingsNav> {
 
   @override
   Widget build(BuildContext context) {
-    // The rail owns its fill and spans the window's full height, so the fill
-    // runs under the traffic lights too — head and column read as one surface
-    // rather than two shades.
+    // The rail and the section begin below the native title bar.
     grid.AppTheme.watch(context);
     return Container(
       width: SettingsNav.width,
       color: grid.AppSurface.recess,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10),
+        // Rows add their own icon gutter: their glyphs and group captions sit
+        // on the same 24px content inset as the section on the right.
+        padding: const EdgeInsets.symmetric(
+          horizontal: SectionScaffold.contentPadding - SidebarItem.iconGutter,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Clearance for the traffic lights, and the rail's share of the
-            // window drag handle.
-            const WindowDragStrip(),
-            const SizedBox(height: 6),
+            const SizedBox(height: SectionScaffold.contentPadding),
             // A SidebarItem like the rows below, so the way out hovers,
             // highlights and aligns exactly like them instead of being a
             // shrink-wrapped button in its own grey.
-            SidebarItem(
-              icon: LucideIcons.arrowLeft300,
-              label: 'Back to app',
-              onTap: () => Navigator.of(context).maybePop(),
+            SizedBox(
+              height: SectionScaffold.headingHeight(context),
+              child: Center(
+                child: SidebarItem(
+                  key: const Key('settings-back-button'),
+                  icon: LucideIcons.arrowLeft300,
+                  label: 'Back to app',
+                  onTap: () => Navigator.of(context).maybePop(),
+                ),
+              ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
             Focus(
               onKeyEvent: _searchKey,
               skipTraversal: true,
@@ -136,7 +141,7 @@ class _SettingsNavState extends State<SettingsNav> {
                 onSubmitted: (_) => _chooseMatch(),
               ),
             ),
-            const SizedBox(height: 2),
+            const SizedBox(height: 8),
             Expanded(child: _navList()),
           ],
         ),

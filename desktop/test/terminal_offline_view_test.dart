@@ -78,7 +78,10 @@ void main() {
       app.dismissError();
       await tester.pump();
       expect(terminalView(tester, session), same(view));
-      expect(find.text('Reconnect'), findsOneWidget);
+      // Offered twice once the machine is back: the header chip and the
+      // in-pane banner over the retained output.
+      expect(find.widgetWithText(TextButton, 'Reconnect'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Reconnect'), findsOneWidget);
       expect(session.status, TerminalSessionStatus.error);
       await tester.pumpWidget(const SizedBox());
       selection.dispose();

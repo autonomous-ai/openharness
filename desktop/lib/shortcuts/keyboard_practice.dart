@@ -73,6 +73,7 @@ class KeyboardLesson {
     'agent.restart' => 'Restart Harness\nRestarts the harness in the same pane and tries to resume its conversation.',
     'agent.fork' =>
       'Fork Harness\nChoose a name and first task. The source stays open.',
+    'agent.clone' => 'Clone Harness\nAnother of this one opens beside it: same folder and settings, fresh conversation.',
     'app.store' =>
       '[Harness Store]\nFind a harness for the kind of work you want to do.',
     'pane.focus_left' ||

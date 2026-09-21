@@ -247,12 +247,14 @@ final harnessCommands = <HarnessCommand>[
     'pane.split_right',
     'Split right…',
     ShortcutGroup.panes,
+    extraKeys: ['cmd+r'],
     nativeAction: 'splitRight',
   ),
   const HarnessCommand(
     'pane.split_down',
     'Split down…',
     ShortcutGroup.panes,
+    extraKeys: ['cmd+d'],
     nativeAction: 'splitDown',
   ),
   const HarnessCommand(
@@ -301,10 +303,14 @@ final harnessCommands = <HarnessCommand>[
   const HarnessCommand('agent.stop', 'Stop Harness', ShortcutGroup.actions),
   const HarnessCommand('agent.fork', 'Fork Harness', ShortcutGroup.actions),
   const HarnessCommand(
-    'agent.restart',
-    'Restart Harness',
+    'agent.clone',
+    'Clone Harness',
     ShortcutGroup.actions,
+    action: ShortcutAction.cloneAgent,
+    nativeAction: 'cloneAgent',
+    keywords: ['duplicate', 'another', 'fresh'],
   ),
+  const HarnessCommand('agent.restart', 'Restart Harness', ShortcutGroup.actions),
   const HarnessCommand(
     'terminal.new',
     'New Terminal',
@@ -360,6 +366,7 @@ final harnessCommands = <HarnessCommand>[
     'app.customize',
     'Customize OpenHarness',
     ShortcutGroup.actions,
+    nativeAction: 'customize',
   ),
   const HarnessCommand(
     'app.store',

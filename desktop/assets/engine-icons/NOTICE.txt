@@ -86,6 +86,46 @@ autonomous/godogen
 License: MIT
 Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/godogen.svg
 
+autonomous/ableton-ai
+© 2026 OpenHarness contributors
+License: MIT
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/ableton-ai.svg
+
+autonomous/autoresearch-mlx
+© 2026 OpenHarness contributors
+License: MIT
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/autoresearch-mlx.svg
+
+autonomous/foam-agent
+© 2026 OpenHarness contributors
+License: MIT
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/foam-agent.svg
+
+autonomous/juce-agent-toolkit
+© 2026 OpenHarness contributors
+License: MIT
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/juce-agent-toolkit.svg
+
+autonomous/machine-monitor
+© 2026 OpenHarness contributors
+License: MIT
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/machine-monitor.svg
+
+autonomous/simskill
+© 2026 OpenHarness contributors
+License: MIT
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/simskill.svg
+
+autonomous/harness-monitor
+© 2026 OpenHarness contributors
+License: MIT
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/harness-monitor.svg
+
+autonomous/harness-builder
+© 2026 OpenHarness contributors
+License: MIT
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/harness-builder.svg
+
 licenses/original.txt
 
 MIT License

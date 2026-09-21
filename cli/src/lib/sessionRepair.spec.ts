@@ -380,3 +380,36 @@ describe('claudeContinuation', () => {
     await expect(claudeContinuation('/nonexistent/path/session.jsonl')).resolves.toBeNull()
   })
 })
+
+describe('findResumedTranscript', () => {
+  // A `claude --resume <id>` / `codex resume <id>` names its session on argv, and discovery binds that
+  // id without waiting for a hook — but only to a transcript this machine actually holds, because the
+  // registry refuses a claude/codex session with no file behind it.
+  it('finds a claude transcript by its id across the project folders', async () => {
+    const root = tempRoot()
+    const id = 'f56f0a36-aa58-4af1-a6e2-a77386122332'
+    writeTranscript(root, '-home-agent-abc', id, '/home/agent/abc', STARTED_AT)
+    writeTranscript(root, '-home-agent-proj', 'other-session', '/home/agent/proj', STARTED_AT)
+    const { findResumedTranscript } = await load(root)
+
+    await expect(findResumedTranscript('claude', id)).resolves.toBe(join(root, '-home-agent-abc', `${id}.jsonl`))
+    await expect(findResumedTranscript('claude', 'f56f0a36-0000-4af1-a6e2-a77386122332')).resolves.toBeNull()
+  })
+
+  it('finds a codex rollout under the agent\'s own profile', async () => {
+    const profile = tempRoot()
+    const id = 'a1b2c3d4-1111-4a4a-8a8a-000000000003'
+    const file = writeCodexRollout(profile, id, CWD, STARTED_AT)
+    vi.resetModules()
+    const { findResumedTranscript } = await import('./sessionRepair.js')
+
+    await expect(findResumedTranscript('codex', id, { codexHome: profile })).resolves.toBe(file)
+  })
+
+  it('never treats an argv value that is not a session id as one', async () => {
+    const root = tempRoot()
+    const { findResumedTranscript } = await load(root)
+    await expect(findResumedTranscript('claude', '../../etc/passwd')).resolves.toBeNull()
+    await expect(findResumedTranscript('cursor', 'f56f0a36-aa58-4af1-a6e2-a77386122332')).resolves.toBeNull()
+  })
+})

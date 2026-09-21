@@ -1,4 +1,5 @@
 import '../core/dsh_catalog.dart';
+import '../core/harness_catalog.dart';
 import 'store_categories.g.dart';
 import 'store_project_examples.dart';
 export 'store_categories.g.dart';
@@ -6,7 +7,12 @@ export 'store_categories.g.dart';
 String storeCategoryFor(DshEntry entry) {
   if (entry.isEngine) return 'Coding';
   // Legacy Grid/Ollama packages used Compute before Local AI existed.
-  if (const {'autonomous/autonomous-grid', 'local/ollama'}.contains(entry.id)) {
+  if (const {
+    'autonomous/autonomous-grid',
+    'autonomous/ollama',
+    'autonomous/mlx-lm',
+    'autonomous/vllm',
+  }.contains(canonicalHarnessId(entry.id))) {
     return 'Local AI';
   }
   // Published Home Assistant packages also use the older Automation domain.
@@ -50,7 +56,7 @@ const _pcb = StoreStory(
   headline: 'That board in your head?\nMake it real.',
   description: 'Design circuits, lay out a board, and inspect it in 3D.',
   asset: 'assets/store/copper-board.png',
-  caption: 'Terminal keyboard · Copper example board',
+  caption: 'Terminal keyboard · Autonomous Circuit example board',
   prompts: [
     'Design a six-key USB macropad. Start with the schematic.',
     'Walk me through the components on this board and what they do.',
@@ -80,7 +86,6 @@ const storeStories = <String, StoreStory>{
       'Design a ceramic mug with a rounded handle. Show me a turntable view.',
     ],
   ),
-  'autonomous/copper': _pcb,
   'autonomous/autonomous-circuit': _pcb,
   'autonomous/text-to-cad': StoreStory(
     benefit: 'Describe a part. Make it yours.',
@@ -195,6 +200,38 @@ const storeStories = <String, StoreStory>{
   ),
 };
 
+/// Brief captions for icon lists. Full technical descriptions stay on each
+/// harness page and in package metadata; community tools retain their own copy.
+const _browseBenefits = <String, String>{
+  'autonomous/ableton-ai': 'Turn a small loop into a whole mood.',
+  'autonomous/autoresearch-mlx': 'Train, compare, and follow the evidence.',
+  'autonomous/bonsai-mcp': 'Shape a building. Explore its spaces.',
+  'autonomous/comfy-mcp': 'Explore images. Keep the recipe.',
+  'autonomous/creative-direction': 'Give your next idea an identity.',
+  'autonomous/dimos': 'Send a rover on a new adventure.',
+  'autonomous/drone-pilot': 'Plan a flight. See the bigger picture.',
+  'autonomous/foam-agent': 'Change a shape. Follow the flow.',
+  'autonomous/freecad': 'Make a custom part that fits your idea.',
+  'autonomous/game-master': 'Invent a game. Play with the rules.',
+  'autonomous/generative-art': 'Draw with code. Explore the variations.',
+  'autonomous/godogen': 'Build a world you can play.',
+  'autonomous/home-assistant': 'Make your home work your way.',
+  'autonomous/jev-browser': 'Turn web pages into answers you can use.',
+  'autonomous/juce-agent-toolkit': 'Shape a synth. Find your sound.',
+  'autonomous/kicad': 'Design a board. Explore every connection.',
+  'autonomous/lab-bench': 'Turn a good question into an experiment.',
+  'autonomous/mlx-lm': 'Explore language models on your Mac.',
+  'autonomous/openscad': 'Code a shape. Make it your own.',
+  'autonomous/orca-slicer': 'Prepare your next 3D print.',
+  'autonomous/score': 'Put the music in your head on the page.',
+  'autonomous/simskill': 'Change the lights. Make a city flow.',
+  'autonomous/vllm': 'Put your own models to work.',
+  'autonomous/voxel-worlds': 'Build a place you can step inside.',
+};
+
+String storeBrowseBenefit(DshEntry entry) =>
+    _browseBenefits[entry.id] ?? storeBenefit(entry);
+
 String storeBenefit(DshEntry entry) =>
     storeStories[entry.id]?.benefit ??
     entry.description ??
@@ -206,12 +243,16 @@ bool storeMatches(DshEntry entry, String query) {
   final text = [
     entry.name,
     entry.id,
+    // Old names remain searchable, but lead to the one current product page.
+    for (final alias in retiredHarnessIds.entries)
+      if (alias.value == canonicalHarnessId(entry.id)) alias.key,
     entry.author,
     entry.category,
     storeCategoryFor(entry),
     entry.description,
     entry.tagline,
     storeBenefit(entry),
+    storeBrowseBenefit(entry),
     ...?storeStories[entry.id]?.prompts,
     storeProjectExamples[entry.id]?.prompt,
     storeProjectExamples[entry.id]?.title,

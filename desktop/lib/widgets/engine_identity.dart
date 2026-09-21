@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../core/harness_catalog.dart';
 import '../core/models.dart';
 import '../theme/app_theme.dart';
 
@@ -222,6 +223,61 @@ const _engines = <String, EngineIdentity>{
 /// own. It is only a face. A harness absent here still draws — the daemon
 /// sends its name, and [engineIdentity] falls back to an initial.
 const _harnesses = <String, EngineIdentity>{
+  'autonomous/ableton-ai': EngineIdentity(
+    id: "autonomous/ableton-ai",
+    label: "Ableton AI",
+    category: "Music",
+    tagline: "Control Ableton Live from an AI assistant via MCP",
+    creator: "Freek Van der Herten and contributors",
+    color: Color(0xffeba67d),
+    asset: 'assets/engine-icons/ableton-ai.png',
+  ),
+  'autonomous/autoresearch-mlx': EngineIdentity(
+    id: "autonomous/autoresearch-mlx",
+    label: "autoresearch-mlx",
+    category: "Science",
+    tagline: "Karpathy's autoresearch on Apple Silicon, no PyTorch required",
+    creator: "Trevin creator; Andrej Karpathy",
+    color: Color(0xffc7b2e6),
+    asset: 'assets/engine-icons/autoresearch-mlx.png',
+  ),
+  'autonomous/foam-agent': EngineIdentity(
+    id: "autonomous/foam-agent",
+    label: "Foam-Agent",
+    category: "Simulation",
+    tagline: "Composable multi-agent framework for CFD simulations in OpenFOAM",
+    creator: "Foam-Agent team",
+    color: Color(0xff8cd0c8),
+    asset: 'assets/engine-icons/foam-agent.png',
+  ),
+  'autonomous/juce-agent-toolkit': EngineIdentity(
+    id: "autonomous/juce-agent-toolkit",
+    label: "JUCE Agent Toolkit",
+    category: "Audio",
+    tagline: "JUCE workflow skills for Codex, Cursor, Claude Code and other agent CLIs",
+    creator: "Daniel Raffel",
+    color: Color(0xffa2c995),
+    asset: 'assets/engine-icons/juce-agent-toolkit.png',
+  ),
+  'autonomous/machine-monitor': EngineIdentity(
+    id: "autonomous/machine-monitor",
+    label: "Machine Monitor",
+    category: "Compute",
+    tagline: "Every computer you own, on one live map",
+    creator: "Autonomous",
+    color: Color(0xff9bd9dd),
+    asset: 'assets/engine-icons/machine-monitor.png',
+  ),
+  'autonomous/simskill': EngineIdentity(
+    id: "autonomous/simskill",
+    label: "SimSkill",
+    category: "Simulation",
+    tagline: "A lifelong-learning AI agent for mastering traffic simulation",
+    creator: "Qiliu Chen and contributors",
+    color: Color(0xff8bb8d5),
+    asset: 'assets/engine-icons/simskill.png',
+  ),
+
   'autonomous/vllm': EngineIdentity(
     id: 'autonomous/vllm',
     tagline:
@@ -253,38 +309,6 @@ const _harnesses = <String, EngineIdentity>{
     label: 'Ollama',
     category: 'Local AI',
     creator: 'OpenHarness contributors',
-    color: Color(0xfff4f6ef),
-    asset: 'assets/engine-icons/ollama.png',
-    homepage: 'https://ollama.com',
-    blurb:
-        'Run and benchmark Ollama models on your Mac through natural language.',
-  ),
-  'local/vllm': EngineIdentity(
-    id: 'local/vllm',
-    label: 'vLLM',
-    category: 'Local AI',
-    creator: 'Local',
-    color: Color(0xffffc743),
-    asset: 'assets/engine-icons/vllm.png',
-    homepage: 'https://github.com/vllm-project/vllm-metal',
-    blurb: 'Serve models with vLLM Metal and measure concurrent request performance.',
-  ),
-  'local/mlx-lm': EngineIdentity(
-    id: 'local/mlx-lm',
-    label: 'MLX-LM',
-    category: 'Local AI',
-    creator: 'Local',
-    color: Color(0xffa9caff),
-    asset: 'assets/engine-icons/mlx.png',
-    homepage: 'https://github.com/ml-explore/mlx-lm',
-    blurb:
-        'Run and compare language models directly on Apple Silicon with MLX.',
-  ),
-  'local/ollama': EngineIdentity(
-    id: 'local/ollama',
-    label: 'Ollama',
-    category: 'Local AI',
-    creator: 'Local',
     color: Color(0xfff4f6ef),
     asset: 'assets/engine-icons/ollama.png',
     homepage: 'https://ollama.com',
@@ -698,7 +722,8 @@ const _harnesses = <String, EngineIdentity>{
     id: 'autonomous/home-assistant',
     label: "Home Assistant",
     category: "Automation",
-    tagline: "Home automation ideas → tested YAML, native traces and a real handoff",
+    tagline:
+        "Home automation ideas → tested YAML, native traces and a real handoff",
     creator: "OpenHarness contributors",
     color: Color(0xffb88159),
     asset: 'assets/engine-icons/home-assistant.png',
@@ -723,19 +748,45 @@ const _harnesses = <String, EngineIdentity>{
   ),
 };
 
+// Marks for locally linked tools which have not joined the public catalog.
+// Recognize them when a daemon reports them, without offering phantom installs.
+const _linkedHarnesses = <String, EngineIdentity>{
+  'autonomous/harness-monitor': EngineIdentity(
+    id: "autonomous/harness-monitor",
+    label: "Harness Monitor",
+    category: "Compute",
+    tagline: "htop for your harnesses: pause the idle ones, keep the fleet in your head",
+    creator: "Autonomous",
+    color: Color(0xffadd1a3),
+    asset: 'assets/engine-icons/harness-monitor.png',
+  ),
+  'autonomous/harness-builder': EngineIdentity(
+    id: "autonomous/harness-builder",
+    label: "Harness Builder",
+    category: "Harnesses",
+    creator: "Autonomous",
+    color: Color(0xffb7a9de),
+    asset: 'assets/engine-icons/harness-builder.png',
+  ),
+};
+
 /// The base engine each first-party harness runs on, so the Create dialog can
 /// say "Runs on Claude Code" — and send the right `engine` — before the machine
 /// has answered `dsh_list`. The daemon's catalog is authoritative when present.
 const knownHarnessBase = <String, String>{
+  'autonomous/ableton-ai': 'codex',
+  'autonomous/autoresearch-mlx': 'codex',
+  'autonomous/foam-agent': 'codex',
+  'autonomous/juce-agent-toolkit': 'codex',
+  'autonomous/machine-monitor': 'claude',
+  'autonomous/simskill': 'codex',
+
   'autonomous/roundtable': 'claude',
   'autonomous/jev-browser': 'claude',
   'autonomous/godogen': 'claude',
   'autonomous/ollama': 'codex',
   'autonomous/mlx-lm': 'codex',
   'autonomous/vllm': 'codex',
-  'local/ollama': 'codex',
-  'local/mlx-lm': 'codex',
-  'local/vllm': 'codex',
   'autonomous/voxel-worlds': 'claude',
   'autonomous/generative-art': 'claude',
   'autonomous/music-studio': 'claude',
@@ -826,7 +877,8 @@ EngineIdentity engineIdentity(String? engine, {String? displayName}) {
   final id = engine?.trim().toLowerCase() ?? '';
   final known =
       _engines[id] ??
-      _harnesses[id] ??
+      _harnesses[canonicalHarnessId(id)] ??
+      _linkedHarnesses[id] ??
       (id == kTerminalEngine ? _terminal : null);
   if (known != null) return known;
   final raw = displayName?.trim().isNotEmpty == true

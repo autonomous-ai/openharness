@@ -23,13 +23,24 @@ void main() {
     for (final mark in _marks) {
       final id = mark['id'] as String;
       final name = id.split('/').last;
+      final identity = engineIdentity(id);
+      if (mark['catalog'] == 'linked') {
+        // These tools arrive through local links, not the published catalog.
+        expect(
+          id,
+          isIn(['autonomous/harness-monitor', 'autonomous/harness-builder']),
+        );
+        expect(knownHarnesses.any((h) => h.id == id), isFalse);
+        expect(identity.asset, 'assets/engine-icons/$name.png');
+        expect(identity.label, isNotEmpty);
+        continue;
+      }
       final manifest = jsonDecode(
         File('../store/agents/$name/harness.json').readAsStringSync(),
       ) as Map<String, dynamic>;
       final facts = jsonDecode(
         File('../store/agents/$name/store.json').readAsStringSync(),
       ) as Map<String, dynamic>;
-      final identity = engineIdentity(id);
       expect(identity.label, manifest['name'], reason: id);
       expect(identity.category, manifest['category'], reason: id);
       expect(identity.creator, manifest['author'], reason: id);

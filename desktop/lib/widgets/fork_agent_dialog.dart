@@ -3,14 +3,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/agent_names.dart';
 import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
 import '../terminal/terminal_font_store.dart';
 import 'box_chrome.dart';
 import 'terminal_prompt.dart';
 
-String forkNameFor(String name) =>
-    '${name.trim().isEmpty ? 'Harness' : name.trim()} - fork';
+export '../core/agent_names.dart' show forkNameFor;
 
 /// The model retains the draft, receipt and destination across dismissal.
 Future<void> forkHarness(

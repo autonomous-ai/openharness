@@ -140,35 +140,31 @@ void main() {
     },
   );
 
-  testWidgets('a viewer package in a listing is viewed, never got or opened', (
+  testWidgets('a viewer row opens details without launch buttons', (
     tester,
   ) async {
     final opened = <String>[];
-    final acted = <String>[];
     await _show(
       tester,
       StoreListing(
         entries: const [_cadViewer],
         ratingFor: (entry) => StoreRating.none(entry.id),
-        installed: (_) => true,
         onOpen: opened.add,
-        onAction: (entry) => acted.add(entry.id),
       ),
     );
     final action = find.byKey(
-      const ValueKey('store-action:autonomous/cad-viewer'),
+      const ValueKey('store-card:autonomous/cad-viewer'),
     );
     expect(
-      find.descendant(of: action, matching: find.text('View')),
-      findsOneWidget,
+      find.descendant(of: action, matching: find.byType(TextButton)),
+      findsNothing,
     );
     await tester.tap(action);
     expect(opened, ['autonomous/cad-viewer']);
-    expect(acted, isEmpty);
   });
 
   testWidgets(
-    'a category whose harnesses have no artwork wears the first one\'s mark',
+    'a category uses its featured app icon instead of an image',
     (tester) async {
       tester.view.devicePixelRatio = 1;
       tester.view.physicalSize = const Size(1200, 1400);
@@ -187,9 +183,7 @@ void main() {
           ],
           loaded: true,
           ratingFor: (entry) => StoreRating.none(entry.id),
-          installed: (_) => false,
           onOpen: (_) {},
-          onAction: (_) {},
           onCategory: (category) => picked = category,
           onAll: () {},
           onEngines: () {},
@@ -199,7 +193,7 @@ void main() {
       expect(play, findsOneWidget);
       expect(
         find.descendant(of: play, matching: find.byType(EngineMark)),
-        findsNWidgets(2),
+        findsOneWidget,
       );
       expect(
         tester

@@ -19,8 +19,11 @@ import 'package:harness/widgets/agent_picker.dart';
 import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/store/store_controller.dart';
+import 'package:harness/store/store_cover_art.dart';
+import 'package:harness/store/store_explore_widgets.dart';
 import 'package:harness/store/store_editorial.dart';
 import 'package:harness/store/store_exploration.dart';
+import 'package:harness/store/store_featured_art.dart';
 import 'package:harness/store/store_models.dart';
 import 'package:harness/store/store_screen.dart';
 
@@ -29,7 +32,7 @@ import 'support/real_fonts.dart';
 final _catalog = [
   for (final (id, name, category) in [
     ('blender', 'Blender', '3D'),
-    ('copper', 'Copper', 'PCB'),
+    ('autonomous-circuit', 'Autonomous Circuit', 'PCB'),
     ('text-to-cad', 'text-to-cad', 'CAD'),
     ('phaser', 'Phaser', 'Games'),
     ('strudel', 'Strudel', 'Music'),
@@ -50,7 +53,7 @@ final _catalog = [
       name: name,
       engine: 'claude',
       category: category,
-      installed: ['blender', 'copper', 'marp'].contains(id),
+      installed: ['blender', 'autonomous-circuit', 'marp'].contains(id),
       viewerUse: switch (id) {
         'blender' => 'autonomous/model-viewer',
         'text-to-cad' => 'autonomous/cad-viewer',
@@ -99,12 +102,13 @@ class _App extends AppNotifier {
 }
 
 class _Api implements StoreApi {
-  _Api({this.unavailable = false});
+  _Api({this.unavailable = false, this.items = const []});
   final bool unavailable;
+  final List<StoreRating> items;
   @override
   Future<List<StoreRating>> ratings() async {
     if (unavailable) throw StateError('service unavailable');
-    return [];
+    return items;
   }
 
   @override
@@ -133,6 +137,7 @@ Future<(_App, GlobalKey)> _open(
   List<DshEntry>? entries,
   String? initialHarness,
   bool unavailable = false,
+  List<StoreRating> ratings = const [],
   double width = 1440,
   double height = 1000,
   double scale = 1,
@@ -186,7 +191,7 @@ Future<(_App, GlobalKey)> _open(
               enabled: () => true,
               child: StoreTab(
                 notifier: app,
-                api: _Api(unavailable: unavailable),
+                api: _Api(unavailable: unavailable, items: ratings),
                 initialHarness: initialHarness,
               ),
             ),
@@ -209,6 +214,8 @@ Future<(_App, GlobalKey)> _open(
     }
     for (final asset in {
       ...storeProjectAssets.values,
+      ...storeCoverArt.values.map((cover) => cover.asset),
+      ...storeFeaturedArt.values,
       'assets/store/blender-studio.png',
     }) {
       await precacheImage(AssetImage(asset), context);
@@ -246,6 +253,187 @@ Future<void> _capture(WidgetTester tester, GlobalKey key, String name) async {
 }
 
 void main() {
+  test('every listed harness has a bundled cover and source record', () {
+    final listed = _listedCatalog().map((entry) => entry.id).toSet();
+    expect(storeCoverArt.keys.toSet(), listed);
+    final sources = (jsonDecode(
+      File('assets/store/covers/sources.json').readAsStringSync(),
+    ) as List).cast<Map>();
+    expect(sources.map((source) => source['harness']).toSet(), listed);
+    expect(sources.length, listed.length);
+    for (final entry in storeCoverArt.entries) {
+      final source = sources.singleWhere(
+        (source) => source['harness'] == entry.key,
+      );
+      expect(entry.value.asset, 'assets/store/covers/${source['asset']}');
+      expect(File(entry.value.asset).existsSync(), isTrue, reason: entry.key);
+      expect(source['source'], isNotEmpty, reason: entry.key);
+      if (entry.value.credit != null) {
+        expect(source['license'], isNotEmpty, reason: entry.key);
+        expect(
+          File('assets/store/covers/${source['licenseFile']}').existsSync(),
+          isTrue,
+          reason: entry.key,
+        );
+      }
+    }
+  });
+
+  testWidgets('bundled covers decode and fit thumbnail frames', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1180, 980);
+    addTearDown(tester.view.reset);
+    final ids = storeCoverArt.keys.toList();
+    for (var start = 0; start < ids.length; start += 25) {
+      final pageIds = ids.skip(start).take(25).toList();
+      final key = GlobalKey();
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: key,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: Scaffold(
+              body: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Wrap(
+                  spacing: 16,
+                  runSpacing: 18,
+                  children: [
+                    for (final id in pageIds)
+                      SizedBox(
+                        width: 212,
+                        child: Column(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: AspectRatio(
+                                aspectRatio: 1.65,
+                                child: StoreProjectArt(
+                                  entry: DshEntry(
+                                    id: id,
+                                    name: id.split('/').last,
+                                    engine: 'codex',
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(id.split('/').last),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.runAsync(() async {
+        for (final id in pageIds) {
+          final cover = storeCoverArt[id]!;
+          final bytes = await rootBundle.load(cover.asset);
+          final codec = await ui.instantiateImageCodec(
+            bytes.buffer.asUint8List(),
+          );
+          final frame = await codec.getNextFrame();
+          expect(
+            frame.image.width,
+            greaterThanOrEqualTo(400),
+            reason: cover.asset,
+          );
+          if (cover.viewport case final viewport?) {
+            expect(
+              cover.imageSize,
+              Size(frame.image.width.toDouble(), frame.image.height.toDouble()),
+              reason: cover.asset,
+            );
+            expect(viewport.left, greaterThanOrEqualTo(0), reason: cover.asset);
+            expect(viewport.top, greaterThanOrEqualTo(0), reason: cover.asset);
+            expect(
+              viewport.right,
+              lessThanOrEqualTo(frame.image.width),
+              reason: cover.asset,
+            );
+            expect(
+              viewport.bottom,
+              lessThanOrEqualTo(frame.image.height),
+              reason: cover.asset,
+            );
+            expect(viewport.shortestSide, greaterThan(0), reason: cover.asset);
+          }
+          frame.image.dispose();
+          codec.dispose();
+          await precacheImage(AssetImage(cover.asset), key.currentContext!);
+        }
+      });
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await _capture(tester, key, 'cover-selection-${start ~/ 25 + 1}');
+    }
+  });
+
+  testWidgets('covers stay separate from prompt examples', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Row(
+          children: [
+            for (final showExample in [false, true])
+              SizedBox(
+                width: 300,
+                height: 190,
+                child: StoreProjectArt(
+                  key: ValueKey(showExample ? 'proof' : 'cover'),
+                  entry: _catalog.first,
+                  showExample: showExample,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+    await tester.runAsync(() async {
+      final context = tester.element(find.byKey(const ValueKey('cover')));
+      await precacheImage(
+        const AssetImage('assets/store/covers/blender.jpg'),
+        context,
+      );
+      await precacheImage(
+        const AssetImage('assets/store/projects/blender.jpg'),
+        context,
+      );
+    });
+    await tester.pumpAndSettle();
+    final coverImage = tester.widget<Image>(
+      find.descendant(
+        of: find.byKey(const ValueKey('cover')),
+        matching: find.byType(Image),
+      ),
+    );
+    final proofImage = tester.widget<Image>(
+      find.descendant(
+        of: find.byKey(const ValueKey('proof')),
+        matching: find.byType(Image),
+      ),
+    );
+    expect(
+      (coverImage.image as AssetImage).assetName,
+      'assets/store/covers/blender.jpg',
+    );
+    expect(
+      (proofImage.image as AssetImage).assetName,
+      'assets/store/projects/blender.jpg',
+    );
+    expect(
+      find.byTooltip(
+        'DOGWALK: a snowy world made in Blender\nBlender Foundation · DOGWALK · CC BY 4.0\nView source',
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   test(
     'every listed harness has a browsing category and a discipline invitation',
     () {
@@ -354,7 +542,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.byKey(const ValueKey('store-card:autonomous/copper')),
+        find.byKey(const ValueKey('store-card:autonomous/autonomous-circuit')),
         findsNothing,
       );
       expect(tester.getRect(search), initialRect);
@@ -439,7 +627,7 @@ void main() {
       );
       expect(tester.widget<SidebarItem>(nav).selected, isTrue);
       final harness = find.byKey(
-        const ValueKey('store-card:autonomous/copper'),
+        const ValueKey('store-card:autonomous/autonomous-circuit'),
       );
       await tester.ensureVisible(harness);
       await tester.pumpAndSettle();
@@ -447,7 +635,7 @@ void main() {
       await tester.tap(harness);
       await tester.pumpAndSettle();
       expect(
-        find.byKey(const ValueKey('store-page:autonomous/copper')),
+        find.byKey(const ValueKey('store-page:autonomous/autonomous-circuit')),
         findsOneWidget,
       );
       expect(tester.widget<SidebarItem>(nav).selected, isTrue);
@@ -490,7 +678,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.widget<TextField>(search).controller!.text, 'copper');
       await tester.tap(
-        find.byKey(const ValueKey('store-card:autonomous/copper')),
+        find.byKey(const ValueKey('store-card:autonomous/autonomous-circuit')),
       );
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('store-back')));
@@ -731,7 +919,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.byKey(const ValueKey('store-card:autonomous/copper')),
+        find.byKey(const ValueKey('store-card:autonomous/autonomous-circuit')),
         findsNothing,
       );
       await tester.tap(find.byKey(const ValueKey('store-shelf-discover')));
@@ -744,7 +932,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(
-        find.byKey(const ValueKey('store-card:autonomous/copper')),
+        find.byKey(const ValueKey('store-card:autonomous/autonomous-circuit')),
         findsOneWidget,
       );
       expect(
@@ -757,7 +945,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(
-        find.byKey(const ValueKey('store-card:autonomous/copper')),
+        find.byKey(const ValueKey('store-card:autonomous/autonomous-circuit')),
         findsOneWidget,
       );
       expect(find.byKey(const ValueKey('store-card:codex')), findsNothing);
@@ -822,56 +1010,113 @@ void main() {
   });
 
   testWidgets(
-    'a project card copies its full prompt without opening the page',
+    'discovery has three illustrated features and categories have one',
     (tester) async {
-      String? copied;
-      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        SystemChannels.platform,
-        (call) async {
-          if (call.method == 'Clipboard.setData') {
-            copied = (call.arguments as Map)['text'] as String;
-          }
-          return null;
-        },
-      );
-      addTearDown(
-        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          SystemChannels.platform,
-          null,
-        ),
-      );
       final (_, key) = await _open(tester);
-      await tester.tap(
-        find.byKey(const ValueKey('store-shelf-category:Design')),
-      );
-      await tester.pumpAndSettle();
-      final copy = find.byKey(
-        const ValueKey('store-copy-idea:autonomous/blender'),
-      );
-      await tester.ensureVisible(copy);
-      await tester.pumpAndSettle();
-      await _capture(tester, key, 'project-prompts');
-      await tester.tap(copy);
-      await tester.pumpAndSettle();
+      expect(find.byType(StoreProjectArt), findsNothing);
+      expect(find.byType(StoreFeaturedArt), findsNWidgets(3));
       expect(
-        copied,
-        storeProjectPrompt(
-          _catalog.firstWhere((e) => e.id == 'autonomous/blender'),
+        find.byKey(const ValueKey('store-feature-art:codex')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('store-feature-art:autonomous/blender')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const ValueKey('store-feature-art:autonomous/autonomous-circuit'),
         ),
+        findsOneWidget,
       );
-      expect(copied, contains('armchair'));
+      final category = find.byKey(const ValueKey('store-category:Design'));
       expect(
-        find.byKey(const ValueKey('store-page:autonomous/blender')),
-        findsNothing,
+        find.descendant(of: category, matching: find.byType(EngineMark)),
+        findsOneWidget,
       );
-      expect(find.text('Prompt copied'), findsOneWidget);
+      await tester.ensureVisible(category);
+      await _capture(tester, key, 'discover-disciplines');
+      await tester.tap(category);
+      await tester.pumpAndSettle();
+      expect(find.byType(StoreProjectArt), findsNothing);
+      expect(find.byType(StoreFeaturedArt), findsOneWidget);
+      for (final entry in _catalog.where(
+        (entry) =>
+            storeCategoryFor(entry) == 'Design' && !entry.isViewerPackage,
+      )) {
+        final row = find.byKey(ValueKey('store-card:${entry.id}'));
+        expect(row, findsOneWidget);
+        expect(
+          find.descendant(of: row, matching: find.byType(EngineMark)),
+          findsOneWidget,
+        );
+      }
+      expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('top rated appears only with enough community reviews', (
+    tester,
+  ) async {
+    final (_, key) = await _open(
+      tester,
+      ratings: [
+        for (final (id, average, count) in [
+          ('autonomous/blender', 4.8, 5),
+          ('autonomous/strudel', 4.5, 8),
+          ('autonomous/marp', 5.0, 1),
+        ])
+          StoreRating(
+            harnessId: id,
+            average: average,
+            count: count,
+            histogram: const [],
+          ),
+      ],
+    );
+    expect(
+      find.byKey(const ValueKey('store-recent-collection')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('store-top-rated-collection')),
+      findsOneWidget,
+    );
+    final first = find.byKey(
+      const ValueKey('store-top-rated:autonomous/blender'),
+    );
+    expect(first, findsOneWidget);
+    expect(
+      find.descendant(of: first, matching: find.text('1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('store-top-rated:autonomous/strudel')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('store-top-rated:autonomous/marp')),
+      findsNothing,
+    );
+    await tester.ensureVisible(find.text('Top rated'));
+    await _capture(tester, key, 'discover-top-rated');
+    await tester.tap(first);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('store-page:autonomous/blender')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'unavailable reviews do not become a release notice in discovery or detail',
     (tester) async {
       await _open(tester, unavailable: true);
+      expect(
+        find.byKey(const ValueKey('store-top-rated-collection')),
+        findsNothing,
+      );
       expect(find.textContaining('not available'), findsNothing);
       await tester.tap(
         find.byKey(const ValueKey('store-feature:autonomous/blender')),
@@ -901,7 +1146,7 @@ void main() {
   });
 
   testWidgets(
-    'Open launches the installed harness and cancel abandons only its draft',
+    'a browse row opens details; New Harness starts work from the page',
     (tester) async {
       final (app, _) = await _open(tester);
       await tester.tap(
@@ -910,11 +1155,19 @@ void main() {
       await tester.pumpAndSettle();
       final count = app.swarms.length;
       await tester.ensureVisible(
-        find.byKey(const ValueKey('store-action:autonomous/blender')),
+        find.byKey(const ValueKey('store-card:autonomous/blender')),
       );
       await tester.tap(
-        find.byKey(const ValueKey('store-action:autonomous/blender')),
+        find.byKey(const ValueKey('store-card:autonomous/blender')),
       );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('store-page:autonomous/blender')),
+        findsOneWidget,
+      );
+      expect(app.swarms.length, count);
+      expect(find.text('Resume Harness'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('store-primary-action')));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('create-agent-submit')), findsOneWidget);
       expect(

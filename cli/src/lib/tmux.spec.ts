@@ -263,9 +263,24 @@ describe('tmux process primitives', () => {
     expect(resumeSessionId('grok', 'grok -r 53d3843c-724e-47ff-ae3a-9fedfa328bba'))
       .toBe('53d3843c-724e-47ff-ae3a-9fedfa328bba')
     expect(resumeSessionId('commandcode', 'cmd -r Greeting')).toBeNull()
-    expect(resumeSessionId('claude', 'claude --resume 53d3843c-724e-47ff-ae3a-9fedfa328bba')).toBeNull()
-    expect(resumeSessionId('codex', 'codex resume 53d3843c-724e-47ff-ae3a-9fedfa328bba')).toBeNull()
     expect(resumeSessionId('devin', 'devin --resume 53d3843c-724e-47ff-ae3a-9fedfa328bba')).toBeNull()
+  })
+
+  it('reads a claude/codex resume id from argv, but never the parent of a fork', () => {
+    // A daemon that could not see the pane when SessionStart fired (a session named by an older build)
+    // has only argv to learn the session from — measured on machine-remote-1, where six agents sat
+    // sessionless for ten days and could not be forked.
+    expect(resumeSessionId('claude', '/opt/agent-cli/.local/bin/claude --resume f56f0a36-aa58-4af1-a6e2-a77386122332'))
+      .toBe('f56f0a36-aa58-4af1-a6e2-a77386122332')
+    expect(resumeSessionId('claude', 'claude --dangerously-skip-permissions -r f4749d75-aef8-4d07-8031-48e2abecf7e5'))
+      .toBe('f4749d75-aef8-4d07-8031-48e2abecf7e5')
+    expect(resumeSessionId('codex', 'node /usr/local/bin/codex resume 53d3843c-724e-47ff-ae3a-9fedfa328bba --approve-for-me'))
+      .toBe('53d3843c-724e-47ff-ae3a-9fedfa328bba')
+    // `--resume <parent> --fork-session` writes a NEW session: the id on argv is the parent's.
+    expect(resumeSessionId('claude', 'claude --resume 53d3843c-724e-47ff-ae3a-9fedfa328bba --fork-session')).toBeNull()
+    // `codex fork <parent>` likewise names the parent, and is not a resume.
+    expect(resumeSessionId('codex', 'codex fork 53d3843c-724e-47ff-ae3a-9fedfa328bba')).toBeNull()
+    expect(resumeSessionId('claude', 'claude --continue')).toBeNull()
   })
 
   it('reads bypass-permission mode from a live process argv via exact token match', () => {

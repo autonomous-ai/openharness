@@ -60,6 +60,9 @@ void main() {
       ('cmd+t', 'swarm.new'),
       ('cmd+n', 'agent.new'),
       ('cmd+p', 'agent.add'),
+      ('cmd+r', 'pane.split_right'),
+      ('cmd+d', 'pane.split_down'),
+      ('cmd+shift+n', 'agent.clone'),
       ('cmd+h', 'pane.focus_left'),
       ('cmd+j', 'pane.focus_below'),
       ('cmd+k', 'pane.focus_above'),
@@ -93,7 +96,7 @@ void main() {
       final id = command(stroke.toString());
       expect(harnessCommandById[id]?.action, shortcut.action);
     }
-    for (final retired in ['cmd+shift+n', 'cmd+shift+h', 'cmd+shift+k']) {
+    for (final retired in ['cmd+shift+h', 'cmd+shift+k']) {
       expect(command(retired), isNull, reason: retired);
     }
     expect(command('cmd+alt+left'), isNull);

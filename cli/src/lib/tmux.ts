@@ -540,15 +540,23 @@ function selectEngineProcess(
  * SessionStart hook fires for a NEW session, so a pane that reattached to an old one is invisible to the
  * daemon until the user happens to type. Read from each CLI's own `--help` on 2026-08-03.
  *
- * Two deliberate holes:
- *   - `--continue` / `-c` carries NO id on any of these CLIs. Nothing can be recovered from argv there.
- *   - claude and codex are absent: `registry.register` demands a transcript path for those two, which
- *     argv does not carry — and both DO fire SessionStart on resume, so there is nothing to repair.
+ * One deliberate hole: `--continue` / `-c` carries NO id on any of these CLIs. Nothing can be
+ * recovered from argv there.
+ *
+ * claude and codex DO fire SessionStart on resume, so their argv is normally redundant — but a hook
+ * only helps a daemon that was listening for it. An agent whose SessionStart landed while the daemon
+ * could not see its pane (a session named by an older build, before the `harness-` whitelist) sits
+ * with no session until the user types again, and cannot be forked meanwhile. Their ids are read
+ * here for that case; `registry.register` still demands the transcript, which sessionRepair's
+ * `findResumedTranscript` derives from the id. `--fork-session` (claude) writes a NEW session, so
+ * that argv names the PARENT and must not bind — `codex fork <id>` never matched `resume` to begin with.
  *
  * The id pattern is a filter, not decoration: `-r` on Command Code takes "a name (use quotes for
  * multi-word names)", so a title would otherwise be registered as a session id.
  */
-const RESUME_ARGS: Partial<Record<RegisteredSession['engine'], { flags: string[]; id: RegExp }>> = {
+const RESUME_ARGS: Partial<Record<RegisteredSession['engine'], { flags: string[]; id: RegExp; unless?: string[] }>> = {
+  claude: { flags: ['--resume', '-r'], id: /^[0-9a-f-]{16,}$/i, unless: ['--fork-session'] },
+  codex: { flags: ['resume'], id: /^[0-9a-f-]{16,}$/i },
   cursor: { flags: ['--resume'], id: /^[0-9a-f-]{16,}$/i },
   opencode: { flags: ['--session', '-s'], id: /^ses_[A-Za-z0-9]+$/ },
   // Kilo inherits opencode's resume flags and its `ses_` id prefix — measured on this machine's kilo.db:
@@ -605,6 +613,10 @@ const LEGACY_BYPASS_FLAGS: Partial<Record<RegisteredSession['engine'], string[][
 export function resumeSessionId(engine: RegisteredSession['engine'], args: string): string | null {
   const spec = RESUME_ARGS[engine]
   if (!spec) return null
+  if (spec.unless) {
+    const tokens = argvTokens(args)
+    if (spec.unless.some((flag) => tokens.includes(flag))) return null
+  }
   for (const flag of spec.flags) {
     const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const value = new RegExp(`(?:^|\\s)${escaped}(?:=|\\s+)(\\S+)`, 'i').exec(args)?.[1]
