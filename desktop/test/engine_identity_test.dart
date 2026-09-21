@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/core/harness_catalog.dart';
 import 'package:harness/widgets/engine_identity.dart';
 
 /// A bundle with no pictures in it: every load fails, as a missing or corrupt
@@ -37,7 +38,10 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: Row(
-          children: [for (final id in ids) EngineMark(engine: id, size: 32)],
+          children: [
+            for (final id in ids)
+              EngineMark(key: ValueKey('sample-$id'), engine: id, size: 32),
+          ],
         ),
       ),
     );
@@ -51,13 +55,18 @@ void main() {
     });
     await tester.pump();
     for (final id in ids) {
-      expect(find.byKey(ValueKey('engine-icon-$id')), findsOneWidget);
-      expect(find.byKey(ValueKey('engine-fallback-$id')), findsNothing);
+      final sample = find.byKey(ValueKey('sample-$id'));
+      final canonical = canonicalHarnessId(id);
       expect(
         find.descendant(
-          of: find.byKey(ValueKey('engine-icon-$id')),
-          matching: find.byType(RawImage),
+          of: sample,
+          matching: find.byKey(ValueKey('engine-icon-$canonical')),
         ),
+        findsOneWidget,
+      );
+      expect(find.byKey(ValueKey('engine-fallback-$canonical')), findsNothing);
+      expect(
+        find.descendant(of: sample, matching: find.byType(RawImage)),
         findsOneWidget,
       );
     }
@@ -117,7 +126,11 @@ void main() {
     for (final dir in Directory(
       '../store/agents',
     ).listSync().whereType<Directory>()) {
-      if (!File('${dir.path}/brand/icon.svg').existsSync()) continue;
+      final facts = File('${dir.path}/store.json');
+      if (!facts.existsSync() ||
+          jsonDecode(facts.readAsStringSync())['listed'] == false) {
+        continue;
+      }
       final manifest = jsonDecode(
         File('${dir.path}/harness.json').readAsStringSync(),
       );
@@ -125,8 +138,9 @@ void main() {
       expect(
         engineIdentity(id).asset,
         isNotNull,
-        reason: '$id ships an original mark but still draws a fallback initial',
+        reason: '$id is published but still draws a fallback initial',
       );
+      expect(retiredHarnessIds, isNot(contains(id)), reason: '$id is retired');
     }
     for (final identity in knownHarnesses) {
       final asset = identity.asset!;
@@ -162,11 +176,7 @@ void main() {
       expect(identity.category, package['category'], reason: '$id category');
       checked++;
     }
-    // Linked local harnesses are intentionally outside store/agents.
-    expect(
-      checked,
-      knownHarnesses.where((h) => !h.id.startsWith('local/')).length,
-    );
+    expect(checked, knownHarnesses.length);
     for (final engine in allEngines) {
       expect(engine.tagline, isNotEmpty, reason: engine.id);
       expect(engine.tagline!.length, lessThanOrEqualTo(80), reason: engine.id);

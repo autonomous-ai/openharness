@@ -11,6 +11,7 @@ import '../state/pane_arrangement.dart';
 import '../core/engine_availability.dart';
 import '../core/codex_profiles.dart';
 import '../core/dsh_catalog.dart';
+import '../core/harness_catalog.dart';
 import '../core/first_task.dart';
 import '../core/permission_modes.dart';
 import '../core/project_folder.dart';
@@ -338,7 +339,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   DshEntry? _harness(String id) {
     final machine = widget.notifier.stateOf(_machineId);
     if (machine == null || !machine.dsh.loaded) return null;
-    return machine.dsh[id];
+    return harnessForOperation(machine.dsh.entries, id);
   }
 
   bool get _engineIsHarness => isHarnessId(_engine);
@@ -355,9 +356,11 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
 
   /// What to call [id] on screen: the machine's name for a harness when it has
   /// answered, else this build's.
-  String _labelOf(String id) =>
-      _harness(id)?.name ??
-      (id == 'claude' ? 'Claude Code' : engineIdentity(id).label);
+  String _labelOf(String id) => currentHarnessName(
+    id,
+    _harness(id)?.name ??
+        (id == 'claude' ? 'Claude Code' : engineIdentity(id).label),
+  );
 
   /// The harness is absent from this machine and Harness would install it
   /// before launching. False until the machine has answered: a harness cannot
@@ -394,7 +397,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
       // A viewer package is installed beside the harnesses that use it; it is
       // not something to create.
       return [
-        for (final entry in machine.dsh.entries)
+        for (final entry in currentHarnessCatalog(machine.dsh.entries))
           if (!entry.isViewerPackage) entry,
       ];
     }
@@ -572,7 +575,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
       return;
     }
     final choice = _engine;
-    final harness = _engineIsHarness ? choice : null;
+    final harness = _engineIsHarness ? (_harness(choice)?.id ?? choice) : null;
     final engine = _baseEngine(choice);
     final profile = _codexProfile;
     final hasModes = permissionModesOf(engine).isNotEmpty;
@@ -1155,7 +1158,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
               // machine named when it has answered, else this build's own.
               for (final harness in _harnessOptions)
                 AgentChoice(
-                  id: harness.id,
+                  id: _harness(harness.id)?.id ?? harness.id,
                   label: harness.name,
                   // "MuJoCo by Google DeepMind" over "Advanced physics
                   // simulation" (owner, 2026-09-17). No "on Codex": the engine

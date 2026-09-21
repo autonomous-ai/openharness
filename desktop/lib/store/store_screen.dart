@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../analytics/analytics.dart';
 import '../core/dsh_catalog.dart';
+import '../core/harness_catalog.dart';
 import '../core/models.dart' show ConnectionStatus;
 import '../core/test_run.dart';
 import '../shared/layouts/widgets/sidebar_item.dart';
@@ -260,7 +261,9 @@ class _StoreTabState extends State<StoreTab> {
         installed: _installedOnMachine(local, identity.id),
       );
     }
-    for (final entry in local?.dsh.entries ?? const <DshEntry>[]) {
+    for (final entry in currentHarnessCatalog(
+      local?.dsh.entries ?? const <DshEntry>[],
+    )) {
       rows.putIfAbsent(entry.id, () => entry);
     }
     return rows;
@@ -425,7 +428,9 @@ class _StoreTabState extends State<StoreTab> {
             listenable: Listenable.merge([widget.notifier, _store]),
             builder: (context, _) {
               final catalog = _catalog;
-              final selected = _selected == null ? null : catalog[_selected!];
+              final selected = _selected == null
+                  ? null
+                  : catalog[canonicalHarnessId(_selected!)];
               final category = selected != null
                   ? storeCategoryFor(selected)
                   : (_shelf is _Category ? (_shelf as _Category).name : null);
@@ -857,8 +862,14 @@ class _Stars extends StatelessWidget {
 // ─── the page ────────────────────────────────────────────────────────────────
 
 bool _installedOnMachine(MachineState? machine, String id) => isHarnessId(id)
-    ? machine?.dsh[id]?.installed == true
+    ? _machineHarness(machine, id)?.installed == true
     : machine?.engines[id]?.installed == true;
+
+DshEntry? _machineHarness(MachineState? machine, String id) =>
+    harnessForOperation(machine?.dsh.entries ?? const <DshEntry>[], id);
+
+String _operationId(MachineState? machine, String id) =>
+    _machineHarness(machine, id)?.id ?? canonicalHarnessId(id);
 
 bool _canGetOnMachine(MachineState machine, DshEntry entry) {
   if (machine.needsLink || machine.nodeOnline == false) return false;
@@ -866,9 +877,10 @@ bool _canGetOnMachine(MachineState machine, DshEntry entry) {
     return machine.engines.loaded &&
         machine.engines[entry.id]?.installable == true;
   }
+  final id = _operationId(machine, entry.id);
   return machine.dsh.loaded &&
-      machine.dsh[entry.id] != null &&
-      machine.dsh.runs[entry.id]?.inProgress != true;
+      machine.dsh[id] != null &&
+      machine.dsh.runs[id]?.inProgress != true;
 }
 
 /// Open the workspace's New Harness dock with this product and machine chosen.
@@ -884,6 +896,7 @@ Future<void> openStoreAgent(
   String machineId, {
   String? prompt,
 }) async {
+  harnessId = _operationId(notifier.machineStates[machineId], harnessId);
   final intent = OpenHarnessIntent(harnessId, machineId, task: prompt);
   if (Actions.maybeFind<OpenHarnessIntent>(context) != null) {
     final opening = Actions.maybeInvoke(context, intent);
@@ -972,7 +985,7 @@ class _ProductPageState extends State<_ProductPage> {
     setState(() {});
     final failure = await widget.notifier.installDsh(
       machineId,
-      widget.entry.id,
+      _operationId(local, widget.entry.id),
     );
     _busy.remove(machineId);
     if (mounted) setState(() {});
@@ -983,26 +996,32 @@ class _ProductPageState extends State<_ProductPage> {
     final local = widget.notifier.localMachineState;
     if (local == null ||
         local.machine.machineId != machineId ||
-        local.dsh[widget.entry.id]?.hasUpdate != true ||
+        _machineHarness(local, widget.entry.id)?.hasUpdate != true ||
         !_busy.add(machineId)) {
       return;
     }
     setState(() {});
-    final failure = await widget.notifier.updateDsh(machineId, widget.entry.id);
+    final failure = await widget.notifier.updateDsh(
+      machineId,
+      _operationId(local, widget.entry.id),
+    );
     _busy.remove(machineId);
     if (mounted) setState(() {});
     if (failure != null) _say(failure);
   }
 
   Future<void> _remove(String machineId, String machineName) async {
-    if (widget.notifier.localMachineState?.machine.machineId != machineId) {
+    final local = widget.notifier.localMachineState;
+    final installation = _machineHarness(local, widget.entry.id);
+    if (local?.machine.machineId != machineId ||
+        installation?.installed != true) {
       return;
     }
     final ok = await showAppDialog<bool>(
       context: context,
       builder: (context) => _ConfirmCard(
         title: 'Remove ${widget.entry.name} from $machineName?',
-        detail: widget.entry.linked
+        detail: installation!.linked
             ? 'This is linked to a checkout on that machine; only the link goes. Harnesses already open keep running.'
             : 'Its files and toolchain on that machine go. Harnesses already open keep running.',
         action: 'Remove',
@@ -1013,7 +1032,10 @@ class _ProductPageState extends State<_ProductPage> {
     // one runs the row shows progress instead of the button.
     _busy.add(machineId);
     setState(() {});
-    final failure = await widget.notifier.removeDsh(machineId, widget.entry.id);
+    final failure = await widget.notifier.removeDsh(
+      machineId,
+      installation!.id,
+    );
     _busy.remove(machineId);
     if (mounted) setState(() {});
     if (failure != null) _say(failure);
@@ -1067,14 +1089,15 @@ class _ProductPageState extends State<_ProductPage> {
     final page = widget.store.reviews[_key];
     final local = widget.notifier.localMachineState;
     final localInstalled = _installedOnMachine(local, entry.id);
-    final hasUpdate = local?.dsh[entry.id]?.hasUpdate == true;
+    final operationId = _operationId(local, entry.id);
+    final hasUpdate = _machineHarness(local, entry.id)?.hasUpdate == true;
     final base = entry.engine.isNotEmpty
         ? entry.engine
         : (knownHarnessBase[entry.id] ?? '');
     final baseLabel = base.isEmpty ? null : engineIdentity(base).label;
     final description = entry.description ?? identity.blurb;
-    final installing = local?.dsh.runs[entry.id]?.inProgress == true;
-    final failed = local?.dsh.runs[entry.id]?.failed == true;
+    final installing = local?.dsh.runs[operationId]?.inProgress == true;
+    final failed = local?.dsh.runs[operationId]?.failed == true;
     final busy = local != null && _busy.contains(local.machine.machineId);
     // New Harness installs a harness the machine lacks before it creates, so
     // an example can be tried from here whether or not Get was pressed.
@@ -1084,10 +1107,7 @@ class _ProductPageState extends State<_ProductPage> {
         !busy &&
         !installing &&
         (localInstalled || _canGetOnMachine(local, entry));
-    final showLaunch =
-        !entry.isViewerPackage &&
-        !hasUpdate &&
-        localInstalled;
+    final showLaunch = !entry.isViewerPackage && !hasUpdate && localInstalled;
     // A package that has not published its own examples yet still leads with
     // prompts — the editorial ones — so every page reads the same way.
     final examples = entry.examples.isNotEmpty
@@ -1449,8 +1469,8 @@ class _InstallLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final row = state.dsh[entry.id];
-    final run = state.dsh.runs[entry.id];
+    final row = _machineHarness(state, entry.id);
+    final run = state.dsh.runs[_operationId(state, entry.id)];
     final installing = run != null && run.inProgress;
     final installed = !entry.isEngine && row?.installed == true;
     final String status;

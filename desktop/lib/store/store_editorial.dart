@@ -1,4 +1,5 @@
 import '../core/dsh_catalog.dart';
+import '../core/harness_catalog.dart';
 import 'store_categories.g.dart';
 import 'store_project_examples.dart';
 export 'store_categories.g.dart';
@@ -6,7 +7,12 @@ export 'store_categories.g.dart';
 String storeCategoryFor(DshEntry entry) {
   if (entry.isEngine) return 'Coding';
   // Legacy Grid/Ollama packages used Compute before Local AI existed.
-  if (const {'autonomous/autonomous-grid', 'local/ollama'}.contains(entry.id)) {
+  if (const {
+    'autonomous/autonomous-grid',
+    'autonomous/ollama',
+    'autonomous/mlx-lm',
+    'autonomous/vllm',
+  }.contains(canonicalHarnessId(entry.id))) {
     return 'Local AI';
   }
   // Published Home Assistant packages also use the older Automation domain.
@@ -50,7 +56,7 @@ const _pcb = StoreStory(
   headline: 'That board in your head?\nMake it real.',
   description: 'Design circuits, lay out a board, and inspect it in 3D.',
   asset: 'assets/store/copper-board.png',
-  caption: 'Terminal keyboard · Copper example board',
+  caption: 'Terminal keyboard · Autonomous Circuit example board',
   prompts: [
     'Design a six-key USB macropad. Start with the schematic.',
     'Walk me through the components on this board and what they do.',
@@ -80,7 +86,6 @@ const storeStories = <String, StoreStory>{
       'Design a ceramic mug with a rounded handle. Show me a turntable view.',
     ],
   ),
-  'autonomous/copper': _pcb,
   'autonomous/autonomous-circuit': _pcb,
   'autonomous/text-to-cad': StoreStory(
     benefit: 'Describe a part. Make it yours.',
@@ -238,6 +243,9 @@ bool storeMatches(DshEntry entry, String query) {
   final text = [
     entry.name,
     entry.id,
+    // Old names remain searchable, but lead to the one current product page.
+    for (final alias in retiredHarnessIds.entries)
+      if (alias.value == canonicalHarnessId(entry.id)) alias.key,
     entry.author,
     entry.category,
     storeCategoryFor(entry),

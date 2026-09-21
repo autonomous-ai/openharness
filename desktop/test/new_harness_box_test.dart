@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/engine_availability.dart';
+import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/core/repository_clone.dart';
@@ -95,6 +96,47 @@ Iterable<String> found(NewHarnessController box) => box.options
     .map((option) => option.title);
 
 void main() {
+  test('agent choices consolidate prototypes while preserving the actual launch id', () {
+    final app = createApp();
+    addTearDown(app.dispose);
+    final box = NewHarnessController(app, machineId: 'm', engine: 'codex');
+    addTearDown(box.dispose);
+    app.machineStates['m']!.dsh.replace(const [
+      DshEntry(
+        id: 'local/ollama',
+        name: 'Old Ollama',
+        engine: 'codex',
+        installed: true,
+      ),
+      DshEntry(id: 'autonomous/ollama', name: 'Ollama', engine: 'codex'),
+      DshEntry(
+        id: 'autonomous/copper',
+        name: 'Copper',
+        engine: 'claude',
+        installed: true,
+      ),
+      DshEntry(
+        id: 'autonomous/autonomous-circuit',
+        name: 'Autonomous Circuit',
+        engine: 'claude',
+      ),
+    ]);
+    box.focusField(NewHarnessField.agent);
+    final ollama = box.options.where((o) => o.title == 'Ollama').single;
+    expect(ollama.id, 'local/ollama');
+    expect(
+      box.options.where((o) => o.title == 'Autonomous Circuit').single.id,
+      'autonomous/copper',
+    );
+    expect(
+      box.options.any((o) => o.title == 'Copper' || o.title == 'Old Ollama'),
+      isFalse,
+    );
+    box.accept(ollama);
+    expect(box.engine, 'local/ollama');
+    expect(box.agentLabel, 'Ollama');
+  });
+
   test('a named new project gets that folder, and never a changed name', () async {
     final root = await Directory.systemTemp.createTemp('harness-named-test-');
     addTearDown(() => root.delete(recursive: true));

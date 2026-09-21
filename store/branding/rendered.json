@@ -76,5 +76,53 @@
     "sourceSha256": "47070987c9b643b2385032d7097ca12c5469d06aa0c8d3ac08d88912b0d3287b",
     "pngSha256": "bb978c3cc63c329bb264db308056446c2f8424566c2424d8808e776a648ae549",
     "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/ableton-ai",
+    "sourceSha256": "a468eba9a0fc0ef38565a7f4b85c57252f37fc4de3c1d0bd4631c393e8b59b0a",
+    "pngSha256": "33eafef6453e233b7d3a9356458462271fe2bc1eb1cefc7c67547625c8630b56",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/autoresearch-mlx",
+    "sourceSha256": "7a178be086eadd729415a3fa3b5a9c6e35b1115c8340533b68a6ab74dd559109",
+    "pngSha256": "56403096b18bed9910295fa49c32a9c59eb65c9ea24a7d644d86cc2d4d4a6910",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/foam-agent",
+    "sourceSha256": "bca447cda1a8b6efb0fbfa21b7397c50fe5b2db28fbc9df0af1dddd877e32256",
+    "pngSha256": "25169f1d92cbaafda66b307d7d9ee6765951f0a9aa0cabfb393b37d7e4e6b611",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/juce-agent-toolkit",
+    "sourceSha256": "9cd011ca6711a9015a912035e9efeb9c464a46650198a7476a3abd96ae40cb44",
+    "pngSha256": "2dfb64560a5d6674d1251823eaf386a711dd25aa35f808151600d63f0e378acb",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/machine-monitor",
+    "sourceSha256": "2f8da5a8edcb60b4685195e5a9ee71114483c46a3678f606f356f14d104bd9c4",
+    "pngSha256": "927a256b879d02e10b61523c0a44683c5d044dc8f97a1c3bed033feeca09aa2c",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/simskill",
+    "sourceSha256": "985952cd34b88ea1a52d05704c60dc323f0116c635392366ca574844a9df7a7c",
+    "pngSha256": "daa81a8992f1ca067a7de12cc1671ba18a3408df91c4bdcf880a99b67dc3dd70",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/harness-monitor",
+    "sourceSha256": "a81cf91eb42f3ba28f46607158d5358570c085428cca16d828f414581d098347",
+    "pngSha256": "ab52f97dff0968be7435a7f9d9fbba5c52874f26bcf5e50063eb9108c5adb79f",
+    "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/harness-builder",
+    "sourceSha256": "445ec79ee22691822124eafbb2774295c8475444b307c8ef95a9ce7bf5966307",
+    "pngSha256": "6d59ad9cbf8afe6e4029c7a2c2508c20cd6498ce7092382fb6f9417c5dcb032e",
+    "renderer": "AppKit"
   }
 ]
