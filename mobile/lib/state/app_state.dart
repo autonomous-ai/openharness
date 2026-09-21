@@ -5117,6 +5117,14 @@ class AppNotifier extends ChangeNotifier {
       selectedMachineId = machineId;
       machineStates[machineId]?.activeAgentId = agentId;
       focusPane(existing.id);
+      // A tile the pager opened ahead of time is being looked at now, so it
+      // joins the saved layout like any tile a person chose. Left warm, a
+      // relaunch would restore the tile before it AND reopen this agent from
+      // `lastOpenedAgent` — two streams for one screen. See [TerminalPane.warm].
+      if (existing.warm) {
+        existing.warm = false;
+        _persistLayout();
+      }
       final terminal = existing.session;
       if (terminal == null) {
         // The pane wanted this agent before `_attachSession` could actually attach it (the agent's
@@ -5134,6 +5142,42 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     await addAgentToSwarm(machineId, agentId);
+  }
+
+  /// Opens [agentId]'s stream for a tile nobody is looking at yet — the phone's
+  /// pager attaching the agents either side of the one on screen, so the next
+  /// swipe lands on output instead of on "Attaching…".
+  ///
+  /// Everything [selectAgent] does BESIDES attaching is deliberately left out:
+  /// no focus, no `selectedMachineId`, no `activeAgentId`, no announcement to
+  /// the daemon, no layout write. The tile is a guess about where the thumb
+  /// goes next, and none of those should move for a guess. [TerminalPane.warm]
+  /// is the one thing that marks it, and [selectAgent] is what happens when the
+  /// guess comes true.
+  ///
+  /// A tile already there is left alone — except one holding a dead stream,
+  /// which is reopened the way `_attachPendingPanes` would. A stream someone
+  /// else took over is NOT reopened from here: that is the tug-of-war
+  /// `_paneNeedsAttach` exists to avoid, and a page nobody is looking at has no
+  /// business starting it.
+  Future<void> warmAgentPane(String machineId, String agentId) async {
+    if (_disposed) return;
+    final existing = paneOfAgent(machineId, agentId);
+    if (existing != null) {
+      if (_paneNeedsAttach(existing)) await _reattachPane(existing);
+      return;
+    }
+    if (!canAddPane || !_canAttachAgent(machineId, agentId)) return;
+    final pane = TerminalPane(
+      id: _nextPaneId++,
+      machineId: machineId,
+      agentId: agentId,
+    )..warm = true;
+    panes.add(pane);
+    // Told, so the parked page for this agent builds its panel — which is what
+    // measures the viewport `_attachSession` is about to wait for.
+    notifyListeners();
+    await _attachSession(pane);
   }
 
   /// Show a MACHINE in the grid, for the states that belong to the machine
@@ -5718,7 +5762,9 @@ class AppNotifier extends ChangeNotifier {
   Future<void> closePane(int paneId, {bool persist = true}) async {
     final pane = panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return;
-    if (pane.agentId != null) {
+    // A warm tile was never something the person had open — see
+    // [TerminalPane.warm] — so closing it is not something to offer undoing.
+    if (pane.agentId != null && !pane.warm) {
       final machine = stateOf(pane.machineId);
       final agent = machine?.agents
           .where((a) => a.id == pane.agentId)

@@ -725,6 +725,34 @@ class _TerminalPanelState extends State<TerminalPanel>
     }
   }
 
+  /// The one thing a pane nobody is looking at contributes to its session: how
+  /// big it is, before the stream opens. True when there is nothing (more) to
+  /// do; false when the view has not laid out yet and this should be asked
+  /// again next frame.
+  ///
+  /// ⚠️ **Only until `streamId` is set.** The phone's pager mounts the pages
+  /// either side of the one on screen and attaches them ahead of a swipe (see
+  /// `AgentSwipeHost`); their `open(waitForViewportSize: true)` would otherwise
+  /// wait two seconds for a measurement that never came, fall back to 80×24,
+  /// and pay a resize and a second keyframe on arrival. Once the stream is open
+  /// a parked pane goes back to saying nothing: a resize from a page nobody is
+  /// looking at is a SIGWINCH and a full TUI redraw on the far machine, which
+  /// is what gating everything else on `visible` is for.
+  bool _reportInitialViewport() {
+    if (widget.session.streamId != null) return true;
+    final view = _laidOutTerminalView();
+    if (view == null) return false;
+    final renderTerminal = view.renderTerminal;
+    final cellSize = renderTerminal.cellSize;
+    final renderSize = renderTerminal.size;
+    if (cellSize.width <= 0 || cellSize.height <= 0) return false;
+    widget.session.reportViewport(
+      renderSize.width ~/ cellSize.width,
+      renderSize.height ~/ cellSize.height,
+    );
+    return true;
+  }
+
   void _afterTerminalMounted({
     bool clearSelection = false,
     bool scrollToEnd = true,
@@ -739,7 +767,21 @@ class _TerminalPanelState extends State<TerminalPanel>
       _laidOutTerminalView()?.scrollToBottom();
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !widget.visible) return;
+      if (!mounted) return;
+      if (!widget.visible) {
+        // A parked pane does one thing, and only until its stream opens — see
+        // [_reportInitialViewport]. Retried like the visible path below: the
+        // view may not have laid out yet on the frame this was asked in.
+        if (!_reportInitialViewport() && retries > 0) {
+          _afterTerminalMounted(
+            clearSelection: clearSelection,
+            scrollToEnd: scrollToEnd,
+            claimFocus: claimFocus,
+            retries: retries - 1,
+          );
+        }
+        return;
+      }
       if (clearSelection) _controller.clearSelection();
       final view = _laidOutTerminalView();
       if (view == null) {

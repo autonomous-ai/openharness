@@ -73,6 +73,20 @@ class TerminalPane {
   /// pane pays a network round trip per keystroke. Off by default, and remembered, so the choice
   /// survives a restart the way the rest of the layout does.
   bool composerVisible = false;
+
+  /// Whether this tile was opened AHEAD of anyone looking at it — the phone's
+  /// pager attaching the agents beside the one on screen, so a swipe lands on
+  /// output rather than on "Attaching…". See `AppNotifier.warmAgentPane`.
+  ///
+  /// ⚠️ **Not persisted, and that is the point of the flag.** A warm tile is a
+  /// guess about where the thumb goes next; restored at launch it would open
+  /// every guess as a stream before the one agent the person actually left on.
+  /// `Swarm.toJson` leaves it out, and `selectAgent` clears it the moment the
+  /// tile is looked at — from then on it is an ordinary tile.
+  ///
+  /// Also what keeps the closed-history clean: a warm tile closed by the pager
+  /// was never something the person had open, so it is not remembered as such.
+  bool warm = false;
 }
 
 /// A tile as it survives a restart: intent only, never the session.

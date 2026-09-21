@@ -68,8 +68,11 @@ class Swarm {
   }
 
   Map<String, Object?> toJson() {
+    // Warm tiles are the pager's guesses, not the person's layout — see
+    // [TerminalPane.warm]. Saved, a relaunch would open every one of them as a
+    // stream before the agent the person was actually reading.
     final agents = panes
-        .where((p) => p.agentId != null)
+        .where((p) => p.agentId != null && !p.warm)
         .toList(growable: false);
     return {
       'id': id,

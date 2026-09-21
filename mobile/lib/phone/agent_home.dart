@@ -695,13 +695,17 @@ class _AgentHomeState extends State<AgentHome> {
     });
   }
 
-  /// Attaches the agent a new pager opened on, then closes every other pane.
+  /// Attaches the agent a new pager opened on, then closes every other pane no pager is holding.
   ///
   /// The close is what `openAgent` used to do beside its push (`keepOthers: false`), and it matters
   /// more now that agents are switched IN PLACE: the pager being replaced keeps the pane of the
   /// agent it last showed — right for a pager popped back to a list, wrong here, where nothing will
   /// ever show that pane again. Without it every agent picked from search would leave a live remote
   /// stream behind.
+  ///
+  /// ⚠️ **Not the panes the new pager holds.** It attaches the pages beside its own ahead of the
+  /// first swipe (see [agentPaneHeldByPager]), and closing those here would undo that a frame after
+  /// it started; they are that pager's to close, and it does, a beat after each swipe.
   ///
   /// Skipped if the screen has moved on to another pager by the time the attach lands.
   Future<void> _attachOnly(({String machineId, String agentId}) agent) async {
@@ -710,6 +714,14 @@ class _AgentHomeState extends State<AgentHome> {
     if (!mounted || _neighboursFor != agent) return;
     for (final pane in [...notifier.panes]) {
       if (pane.machineId == agent.machineId && pane.agentId == agent.agentId) {
+        continue;
+      }
+      final paneAgentId = pane.agentId;
+      if (paneAgentId != null &&
+          agentPaneHeldByPager((
+            machineId: pane.machineId,
+            agentId: paneAgentId,
+          ))) {
         continue;
       }
       await notifier.closePane(pane.id);
