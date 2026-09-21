@@ -293,16 +293,29 @@ jobs:
           # annotated tag. Re-fetch the tag object to restore the annotation before reading it.
           git fetch --force origin tag "$REF_NAME"
           # A lightweight tag has no message of its own, and %(contents) would quietly fall through
-          # to the commit's — publishing "chore(release): vX.Y.Z" as the notes.
-          if [ "$(git cat-file -t "$REF_NAME")" != tag ]; then
-            echo "::error::$REF_NAME is a lightweight tag, so it carries no release notes."
-            echo "::error::Re-tag with:  git tag -a $REF_NAME --cleanup=verbatim -F notes.md"
-            exit 1
+          # to the commit's — publishing "chore(release): vX.Y.Z" as the notes. The release scripts
+          # always push an annotated tag with notes, but a hand-made `git tag` does not, and this
+          # job runs AFTER publish: failing here left a live build with no Release page (v0.2.82_cli,
+          # 2026-09-21). So fall back to the same commit list the script would have generated —
+          # everything since the previous _cli tag — and warn, rather than leave the release half done.
+          if [ "$(git cat-file -t "$REF_NAME")" = tag ]; then
+            git tag -l --format='%(contents)' "$REF_NAME" > RELEASE_NOTES.md
+          else
+            : > RELEASE_NOTES.md
           fi
-          git tag -l --format='%(contents)' "$REF_NAME" > RELEASE_NOTES.md
           if [ ! -s RELEASE_NOTES.md ]; then
-            echo "::error::$REF_NAME has an empty tag message — no notes to publish."
-            exit 1
+            echo "::warning::$REF_NAME carries no release notes (lightweight or empty tag) — generating them from the commit list. Next time: make release-cli"
+            prev="$(git tag -l 'v*_cli' \
+              | { grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)_cli$' || true; } \
+              | grep -vx "$REF_NAME" | sort -V | tail -1)"
+            {
+              printf 'Harness CLI %s\n\n' "$VERSION"
+              if [ -n "$prev" ]; then
+                git log --no-merges --pretty='- %s' "${prev}..${REF_NAME}"
+              else
+                git log --no-merges --pretty='- %s' -20 "$REF_NAME"
+              fi
+            } > RELEASE_NOTES.md
           fi
           base="https://cdn.autonomous.ai/harness/cli/${VERSION}"
           cat >> RELEASE_NOTES.md <<EOF
