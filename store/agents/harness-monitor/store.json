@@ -1,0 +1,18 @@
+{
+  "license": "MIT",
+  "tagline": "htop for your harnesses: pause the idle ones, keep the fleet in your head",
+  "examples": [
+    {
+      "prompt": "I have 84 harnesses and I only use six. Show me the fleet, then pause everything nobody has touched since Tuesday.",
+      "caption": "84 rows, 63 idle three days or more · paused 58, freed 13.7 GB, every conversation resumable"
+    },
+    {
+      "prompt": "Propose a policy that keeps my machine under 12 running agents, and simulate it before anything moves.",
+      "caption": "Dry run first: what each rule would touch, and why"
+    },
+    {
+      "prompt": "Which harnesses are on a branch that already merged? Retire those and tell me what you kept.",
+      "caption": "Retire with a receipt, resume with the conversation intact"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "spec": 1,
+  "id": "autonomous/harness-monitor",
+  "name": "Harness Monitor",
+  "category": "Compute",
+  "author": "Autonomous",
+  "description": "htop for your harnesses. Every harness on every machine in one dense list — running, paused, idle for a week — with a policy you can drag until the numbers look right, and one keystroke to pause an idle one or resume it with its conversation intact.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "NOTES.md",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ],
+    "env": {
+      "HPS_CLI": "${dsh}/toolchain/hps",
+      "MONITOR_DSH_DIR": "${dsh}"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "command": "./viewer.sh",
+    "url": "http://127.0.0.1:${port}/"
+  },
+  "verdict": ".harness/verdict.json"
+}
