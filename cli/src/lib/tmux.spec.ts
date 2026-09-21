@@ -7,6 +7,7 @@ import type { AgentCommandOwnershipSnapshot } from './engineBin.js'
 import {
   ambiguousAgentProcess,
   bypassPermissionActive,
+  permissionModeFromArgv,
   engineProcessMatch,
   engineProcessMatchScore,
   LSTART_MARKER_RE,
@@ -283,11 +284,41 @@ describe('tmux process primitives', () => {
     expect(resumeSessionId('claude', 'claude --continue')).toBeNull()
   })
 
+  it('reads the exact permission mode a live process was launched with', () => {
+    expect(permissionModeFromArgv('claude', '/usr/local/bin/claude --dangerously-skip-permissions')).toBe('full')
+    expect(permissionModeFromArgv('claude', 'claude --permission-mode plan --resume abc')).toBe('plan')
+    expect(permissionModeFromArgv('claude', 'claude --permission-mode=acceptEdits')).toBe('acceptEdits')
+    expect(permissionModeFromArgv('claude', 'claude --permission-mode auto')).toBe('auto')
+    expect(permissionModeFromArgv('codex', 'codex --dangerously-bypass-approvals-and-sandbox')).toBe('full')
+    expect(permissionModeFromArgv('codex', 'codex --sandbox read-only')).toBe('readOnly')
+    expect(permissionModeFromArgv('codex', 'codex resume abc --approve-for-me')).toBe('auto')
+    expect(permissionModeFromArgv('cursor', 'cursor-agent --force')).toBe('auto')
+    expect(permissionModeFromArgv('opencode', 'opencode --auto')).toBe('auto')
+    // Skip-everything outranks a mode named beside it: that process runs without permissions.
+    expect(permissionModeFromArgv('claude', 'claude --permission-mode plan --dangerously-skip-permissions')).toBe('full')
+  })
+
+  it('names no mode for an argv that carries none — never `ask`, never a guess', () => {
+    // No flag is silence, not a choice; `bypassPermission` keeps deciding there.
+    expect(permissionModeFromArgv('claude', 'claude --resume abc')).toBeNull()
+    // A mode the table does not know cannot be reapplied, so it is not recorded.
+    expect(permissionModeFromArgv('claude', 'claude --permission-mode bogus')).toBeNull()
+    expect(permissionModeFromArgv('claude', 'claude --permission-mode manual auto')).toBeNull()
+    expect(permissionModeFromArgv('codex', 'codex --sandbox workspace-write')).toBeNull()
+    // Only an exact token counts, as for the bypass flag.
+    expect(permissionModeFromArgv('claude', 'claude "please avoid --dangerously-skip-permissions for now"')).toBeNull()
+    expect(permissionModeFromArgv('claude', 'claude --dangerously-skip-permissions-explained')).toBeNull()
+    // Engines with no mode table.
+    expect(permissionModeFromArgv('pi', 'pi --dangerously-skip-permissions')).toBeNull()
+    expect(permissionModeFromArgv('terminal', 'zsh -l')).toBeNull()
+  })
+
   it('reads bypass-permission mode from a live process argv via exact token match', () => {
     expect(bypassPermissionActive('claude', '/usr/local/bin/claude --permission-mode auto')).toBe(true)
     expect(bypassPermissionActive('claude', 'claude --permission-mode=auto --resume abc')).toBe(true)
     expect(bypassPermissionActive('codex', 'codex resume abc --approve-for-me')).toBe(true)
-    // Launched before the auto modes: the old flags still count, and a relaunch uses the auto mode.
+    // Launched before the auto modes: the old flags still count as approving (and, recorded as the
+    // `full` mode, come back as themselves on a relaunch).
     expect(bypassPermissionActive('claude', '/usr/local/bin/claude --dangerously-skip-permissions'))
       .toBe(true)
     expect(bypassPermissionActive('codex', 'codex --dangerously-bypass-approvals-and-sandbox'))
@@ -307,6 +338,7 @@ describe('tmux process primitives', () => {
     expect(bypassPermissionActive('claude', 'claude --resume abc')).toBe(false)
     // Another mode, or "auto" that is not the mode's value.
     expect(bypassPermissionActive('claude', 'claude --permission-mode plan')).toBe(false)
+    expect(bypassPermissionActive('codex', 'codex --sandbox read-only')).toBe(false)
     expect(bypassPermissionActive('claude', 'claude --permission-mode manual auto')).toBe(false)
     expect(bypassPermissionActive('claude', 'claude auto --permission-mode')).toBe(false)
   })

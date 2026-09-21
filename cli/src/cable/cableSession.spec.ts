@@ -195,13 +195,13 @@ describe('cable session', () => {
   })
 
   it('names the swarms once and again only when they change, and relays a pick', async () => {
-    let swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Workshop', agents: 2 }, { id: 's2', name: 'Launch', agents: 0 }] }
+    let swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Workshop', agents: 2, panes: 2 }, { id: 's2', name: 'Launch', agents: 0, panes: 0 }] }
     const host = makeHost({ listSwarms: () => swarms })
     const { session, port } = await connect(host)
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
     await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
     expect(port.sent.filter((m) => m.t === 'swarms')).toEqual([
-      { t: 'swarms', selected: 's1', items: [{ id: 's1', name: 'Workshop', agents: 2 }, { id: 's2', name: 'Launch', agents: 0 }] },
+      { t: 'swarms', selected: 's1', items: [{ id: 's1', name: 'Workshop', agents: 2, panes: 2 }, { id: 's2', name: 'Launch', agents: 0, panes: 0 }] },
     ])
 
     // Ticks with nothing new say nothing new — the same rule as the wheel.
@@ -216,6 +216,24 @@ describe('cable session', () => {
     swarms = { ...swarms, selected: 's2' }
     await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(2))
     expect(port.sent.filter((m) => m.t === 'swarms')[1]).toMatchObject({ selected: 's2' })
+    await session.stop()
+  })
+
+  it('pushes again when a tab gains a tile but no agent', async () => {
+    // The change this field exists for: a terminal opened on a tab that holds no agent moves the
+    // TILE count and nothing else. A diff watching only `agents` swallowed that push and left the
+    // dial showing a row it still believed was empty — the row it would then refuse to list.
+    let swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Shell', agents: 0, panes: 0 }] }
+    const host = makeHost({ listSwarms: () => swarms })
+    const { session, port } = await connect(host)
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(1))
+
+    swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Shell', agents: 0, panes: 1 }] }
+    await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(2))
+    expect(port.sent.filter((m) => m.t === 'swarms')[1]).toMatchObject({
+      items: [{ id: 's1', agents: 0, panes: 1 }],
+    })
     await session.stop()
   })
 

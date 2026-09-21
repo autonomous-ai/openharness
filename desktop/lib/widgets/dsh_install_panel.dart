@@ -212,15 +212,59 @@ class _DshInstallPanelState extends State<DshInstallPanel> {
 
 /// What a failed install means for the person, from the machine's `miss` line.
 ///
+/// What kind of thing went wrong, for the one decision a person makes at a
+/// failed install: try again, or fix something first.
+enum InstallFailureKind {
+  /// The download — the connection, a resolver, a 5xx. Trying again is the fix.
+  network,
+
+  /// The package itself: no manifest, the wrong id, an unknown catalog entry.
+  /// Trying again answers the same; it needs a fix in the Store.
+  package,
+
+  /// This machine: a tool the toolchain needs, a setup that failed, a doctor
+  /// that found something missing.
+  runtime,
+
+  /// Another install of the same package is under way on the machine.
+  busy,
+
+  unknown,
+}
+
 /// The doctor's lines name the missing tool and a URL; this turns the common
 /// ones into a sentence and the command that fixes it. Anything it does not
 /// know is shown as the machine wrote it.
 class InstallFailure {
-  const InstallFailure({required this.title, this.body, this.command});
+  const InstallFailure({
+    required this.title,
+    this.body,
+    this.command,
+    this.hint,
+    this.kind = InstallFailureKind.unknown,
+  });
   final String title;
   final String? body;
   final String? command;
+
+  /// What to do about it, when [kind] settles that — "Try again", "Retrying
+  /// will not help". Null when the [title]/[body] already say.
+  final String? hint;
+  final InstallFailureKind kind;
 }
+
+/// The wording git and curl use for the connection, as opposed to the
+/// repository: the same list the daemon retries on. Read here only for a
+/// daemon old enough to send no code.
+final _transientGit = RegExp(
+  r'\bcurl \d+\b|RPC failed|early EOF|unexpected disconnect|remote end hung up|'
+  r'Could not resolve host|Connection (?:reset|refused|timed out)|Operation too slow|'
+  r'Timeout was reached|Failed to connect to|returned error: 5\d\d|'
+  r'GnuTLS recv error|SSL_read|TLS connect error|Empty reply from server',
+  caseSensitive: false,
+);
+
+final _gaveUp = RegExp(r'gave up after (\d+) attempts');
 
 InstallFailure describeInstallFailure(DshInstallRun run, String harnessName) {
   final miss =
@@ -231,8 +275,43 @@ InstallFailure describeInstallFailure(DshInstallRun run, String harnessName) {
     '',
   );
   final lower = text.toLowerCase();
+  final code = run.code;
+  // The code first, where there is one: it says which step failed without
+  // reading git's wording, and a `miss` line only exists once the doctor ran.
+  switch (code) {
+    case 'DSH_BUSY':
+      return InstallFailure(
+        kind: InstallFailureKind.busy,
+        title: 'Already installing $harnessName on this machine.',
+        body: text,
+        hint: 'Wait for it to finish.',
+      );
+    case 'CONNECTION':
+    case 'TIMEOUT':
+      // This app's own sentence about the request, not the machine's — a
+      // doctor line heard before the socket went must not replace it.
+      return InstallFailure(
+        kind: InstallFailureKind.network,
+        title: run.detail ?? text,
+      );
+    case 'INVALID_MANIFEST':
+    case 'PACKAGE_ID_MISMATCH':
+    case 'PACKAGE_KIND_MISMATCH':
+    case 'INVALID_DSH':
+    case 'INVALID_SOURCE':
+    case 'SOURCE_NOT_FOUND':
+      return InstallFailure(
+        kind: InstallFailureKind.package,
+        title: 'The $harnessName package is broken.',
+        body: text,
+        hint: 'Trying again will not help — this needs a fix in the Store.',
+      );
+    case 'CLONE_FAILED':
+      return _downloadFailure(text, harnessName);
+  }
   if (lower.startsWith('codex')) {
     return InstallFailure(
+      kind: InstallFailureKind.runtime,
       title: 'Codex is not installed on this machine.',
       body: '$harnessName runs on Codex. Install it, then retry.',
       command: 'npm install -g @openai/codex',
@@ -240,6 +319,7 @@ InstallFailure describeInstallFailure(DshInstallRun run, String harnessName) {
   }
   if (lower.startsWith('claude')) {
     return InstallFailure(
+      kind: InstallFailureKind.runtime,
       title: 'Claude Code is not installed on this machine.',
       body: '$harnessName runs on Claude Code. Install it, then retry.',
       command: 'npm install -g @anthropic-ai/claude-code',
@@ -247,6 +327,7 @@ InstallFailure describeInstallFailure(DshInstallRun run, String harnessName) {
   }
   if (lower.startsWith('uv')) {
     return const InstallFailure(
+      kind: InstallFailureKind.runtime,
       title: 'uv is not installed on this machine.',
       body: 'The toolchain is a Python environment that uv builds. Install it, then retry.',
       command: 'curl -LsSf https://astral.sh/uv/install.sh | sh',
@@ -254,24 +335,59 @@ InstallFailure describeInstallFailure(DshInstallRun run, String harnessName) {
   }
   if (lower.startsWith('node')) {
     return InstallFailure(
+      kind: InstallFailureKind.runtime,
       title: 'Node.js is missing or too old.',
       body: text,
       command: 'brew install node@22',
     );
   }
   if (lower.contains('doctor still running')) {
-    return InstallFailure(
+    return const InstallFailure(
+      kind: InstallFailureKind.runtime,
       title: 'The check is taking longer than five minutes.',
       body: 'Usually the first load of a large toolchain. Retry runs only the check again.',
     );
   }
   if (lower.contains('clone') || lower.contains('git ')) {
+    return _downloadFailure(text, harnessName);
+  }
+  if (miss != null) {
+    // A doctor line this does not know a command for: still what is missing,
+    // said as that rather than as the bare check line.
     return InstallFailure(
-      title: 'Could not download $harnessName.',
+      kind: InstallFailureKind.runtime,
+      title: 'Missing on this machine: $text',
+      hint: 'Install it, then try again.',
+    );
+  }
+  if (code == 'SETUP_FAILED' || code == 'DOCTOR_FAILED') {
+    return InstallFailure(
+      kind: InstallFailureKind.runtime,
+      title: code == 'SETUP_FAILED'
+          ? 'Setting up the $harnessName toolchain failed on this machine.'
+          : '$harnessName is installed, but the check found something missing.',
       body: text,
     );
   }
   return InstallFailure(title: text);
+}
+
+/// A failed download: the network when git said so (or when the daemon
+/// already retried it, which it does only for the network), else whatever git
+/// said — a repository that is not there, a ref that is not.
+InstallFailure _downloadFailure(String text, String harnessName) {
+  final tries = _gaveUp.firstMatch(text)?.group(1);
+  final transient = tries != null || _transientGit.hasMatch(text);
+  return InstallFailure(
+    kind: transient ? InstallFailureKind.network : InstallFailureKind.unknown,
+    title: 'Could not download $harnessName.',
+    body: text,
+    hint: tries != null
+        ? 'Tried $tries times. Check the connection on this machine, then try again.'
+        : transient
+        ? 'Usually the network. Try again.'
+        : null,
+  );
 }
 
 class _Step {
@@ -459,17 +575,18 @@ class _FailureCard extends StatelessWidget {
               color: grid.AppPalette.textPrimary,
             ),
           ),
-          if (failure.body != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                failure.body!,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: grid.AppPalette.textSecondary,
+          for (final line in [failure.body, failure.hint])
+            if (line != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  line,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: grid.AppPalette.textSecondary,
+                  ),
                 ),
               ),
-            ),
           if (failure.command != null)
             Padding(
               padding: const EdgeInsets.only(top: 6),

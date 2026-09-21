@@ -149,6 +149,11 @@ typedef struct {
     char id[SWARM_ID_MAX];
     char name[NAME_MAX];
     int  agents;          // how many agents it holds — drawn as a count, never as members
+    // How many TILES it holds, of any kind: agents, shells, viewers. A tab with a terminal and no
+    // agent has agents=0 and panes=1, and the difference is what keeps it in the switcher — see
+    // swarm_picker_rebuild(). A daemon too old to send it reports panes==agents, which is the old
+    // behaviour exactly.
+    int  panes;
 } cable_swarm_t;
 
 // The user tapped a swarm. Not answered — see above.

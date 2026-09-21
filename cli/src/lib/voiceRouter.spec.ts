@@ -246,6 +246,26 @@ describe('routeVoiceTask', () => {
     routerImpl = async () => ({ text: '', sessionId: null })
   })
 
+  it('never routes to a terminal, and treats a machine of only terminals as having no agent', async () => {
+    // Delivery is a paste and an Enter. In an agent's composer that is a prompt somebody can still
+    // read and edit; in a shell it is a command that has already run, so a spoken sentence must not
+    // be able to land in one — however it was routed, and whoever asked.
+    const withShell: RouterAgent[] = [
+      { id: 'sh', name: 'harness', engine: 'terminal' },
+      { id: '2', name: 'Auth', recentSummary: 'JWT refresh', engine: 'claude' },
+    ]
+    // One real agent left after the shell is dropped: it takes the "only agent" path and no engine or
+    // backend is consulted at all.
+    const one = await routeVoiceTask('rotate the signing key', withShell)
+    expect(one).toMatchObject({ agentId: '2', reason: 'only agent in machine' })
+    expect(rankAgents).not.toHaveBeenCalled()
+
+    // And with nothing but shells there is nobody to route to — the same answer an empty machine gets,
+    // which is what offers to make a new agent rather than silently picking the shell.
+    const none = await routeVoiceTask('rotate the signing key', [{ id: 'sh', name: 'harness', engine: 'terminal' }])
+    expect(none).toMatchObject({ agentId: '', needNewAgent: true })
+  })
+
   it('takes the backend ranking when there is one, and asks no engine', async () => {
     rankAgents.mockResolvedValue([
       { agentId: '2', score: 0.92, reason: 'auth' },

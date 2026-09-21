@@ -157,7 +157,7 @@ describe('local CLI WebSocket', () => {
     ws.send(JSON.stringify({ type: 'app_swarms', payload: {
       active: 's2',
       swarms: [
-        { id: 's1', name: 'Workshop', agentIds: ['a1', '', 7, 'a2'] },
+        { id: 's1', name: 'Workshop', agentIds: ['a1', '', 7, 'a2'], panes: 3 },
         { id: '', name: 'no id' },
         'junk',
         { id: 's2', name: 'Launch' },
@@ -165,8 +165,12 @@ describe('local CLI WebSocket', () => {
     } }))
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(seen).toEqual([{ active: 's2', swarms: [
-      { id: 's1', name: 'Workshop', agentIds: ['a1', 'a2'] },
-      { id: 's2', name: 'Launch', agentIds: [] },
+      // Three tiles, two of them agents: the third is a shell or a viewer, and saying so is the
+      // point — see the terminal-only tab below.
+      { id: 's1', name: 'Workshop', agentIds: ['a1', 'a2'], panes: 3 },
+      // No count at all, from a window too old to send one: as many tiles as agents, which is what
+      // this row meant before the field existed.
+      { id: 's2', name: 'Launch', agentIds: [], panes: 0 },
     ] }])
     // Like app_panes: a fact about this desk, so the machine never sees it.
     expect(backend.frames.map((frame) => frame.type)).toEqual([])

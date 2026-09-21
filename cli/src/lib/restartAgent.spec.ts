@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { AgentRestartCoordinator, restartAgent, type RestartAgentDeps } from './restartAgent.js'
+import { AgentRestartCoordinator, bypassPermissionFor, restartAgent, type RestartAgentDeps } from './restartAgent.js'
 import type { ProcessIdentity } from './registry.js'
 
 const IDENTITY: ProcessIdentity = { pid: 555, executable: 'claude', startMarker: 'Mon Aug  3 09:05:00 2026' }
@@ -217,5 +217,31 @@ describe('restart cancellation', () => {
     const coordinator = new AgentRestartCoordinator()
     await expect(coordinator.run('a', async () => { throw new Error('lost') })).rejects.toThrow('lost')
     expect(await coordinator.run('a', async () => ({ ok: false, error: 'fresh' }))).toEqual({ ok: false, error: 'fresh' })
+  })
+})
+
+describe('bypassPermissionFor', () => {
+  const probe = () => {
+    const fn = vi.fn(async () => true)
+    return fn
+  }
+
+  it('answers from the recorded mode without touching the live process', async () => {
+    const live = probe()
+    await expect(bypassPermissionFor({ permissionMode: 'full' }, live)).resolves.toBe(true)
+    await expect(bypassPermissionFor({ permissionMode: 'auto', bypassPermission: false }, live)).resolves.toBe(true)
+    // Plan is not a yes, whatever the boolean beside it says.
+    await expect(bypassPermissionFor({ permissionMode: 'plan', bypassPermission: true }, live)).resolves.toBe(false)
+    await expect(bypassPermissionFor({ permissionMode: 'ask' }, live)).resolves.toBe(false)
+    expect(live).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the recorded flag, then to the live process only for a row that has neither', async () => {
+    const live = probe()
+    await expect(bypassPermissionFor({ bypassPermission: true }, live)).resolves.toBe(true)
+    await expect(bypassPermissionFor({ bypassPermission: false }, live)).resolves.toBe(false)
+    expect(live).not.toHaveBeenCalled()
+    await expect(bypassPermissionFor({}, live)).resolves.toBe(true)
+    expect(live).toHaveBeenCalledTimes(1)
   })
 })

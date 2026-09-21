@@ -559,6 +559,22 @@ static proj_t *s_proj;   // MAX_PROJECTS array, allocated in PSRAM at ui_init (o
 static int s_proj_count;
 static int s_active_idx;   // currently-visible agent index (updated on swipe; defaults to 0)
 
+// A shell, rather than an engine. The daemon sends the same `terminal` word the registry keeps, and
+// three things on a tile turn on it: the mark beside the name, the Voice button, and what the body
+// says while nothing is happening.
+static bool is_terminal_tile(const proj_t *p)
+{
+    return p && strcmp(p->engine, "terminal") == 0;
+}
+
+// What the body says with no events behind it. "No activity yet" promises a stream that is coming;
+// for a shell none ever is, and saying so of a pane the person is typing in reads as a fault.
+static const char *tile_resting_text(const proj_t *p)
+{
+    return is_terminal_tile(p) ? "Terminal" : "No activity yet";
+}
+
+
 // --- Carousel scroll helpers ---
 // `tileview` is now a plain horizontally-scrollable lv_obj (NOT lv_tileview): paging is done with
 // LV_SCROLL_SNAP_CENTER + LV_OBJ_FLAG_SCROLL_ONE (exactly what lv_tileview uses internally, so the feel
@@ -2981,6 +2997,10 @@ static void agent_actions_apply(void)
     bool on = lv_screen_active() == scr_projects && !s_overview_active && !s_settings_active
               && !s_machines_active && !s_notif_open && !display_is_asleep()
               && s_active_idx >= 0 && s_active_idx < s_proj_count;
+    // …and never on a SHELL. Voice sends words to whatever is in the pane, and in a terminal that is
+    // a command line: a misheard word would not be a bad prompt, it would be a command that already
+    // ran. A shell tile is reachable and scrollable, and that is deliberately all it is.
+    if (on && is_terminal_tile(&s_proj[s_active_idx])) on = false;
     set_hidden(s_agent_acts, !on);
 }
 
@@ -4656,6 +4676,16 @@ static void apply_engine_label(proj_t *p)
     bool recolor = false;
     const lv_image_dsc_t *src = engine_mark(p->engine, &recolor);
     if (p->engine_text_lbl) lv_obj_add_flag(p->engine_text_lbl, LV_OBJ_FLAG_HIDDEN);   // product-mark path only
+    // A shell has no product mark to wear, and inventing one would put a brand on a thing that has
+    // none. It gets the prompt every terminal in the world draws instead, in the muted grey the app
+    // gives the Terminal engine, through the text path that was already here for exactly this.
+    if (is_terminal_tile(p) && p->engine_text_lbl) {
+        lv_obj_add_flag(p->engine_lbl, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(p->engine_text_lbl, ">_");
+        lv_obj_clear_flag(p->engine_text_lbl, LV_OBJ_FLAG_HIDDEN);
+        shell_name_fit(p);
+        return;
+    }
     if (src) {
         lv_image_set_src(p->engine_lbl, src);
         // Box = exactly one pill, artwork CENTRED inside it. Sizing the box to the zoomed bitmap instead
@@ -4703,7 +4733,13 @@ static void build_shell(proj_t *p)
     lv_obj_set_style_pad_column(p->header, SHELL_MARK_GAP, 0);
 
     p->engine_lbl = lv_image_create(p->header);        // engine product mark, sized by apply_engine_label
-    p->engine_text_lbl = NULL;                         // the text fallback went with the chip row
+    // The text mark, for the one "engine" that is not a product: a terminal (see apply_engine_label).
+    // Built hidden and shown only there, so a tile that wears an image never also carries a glyph.
+    p->engine_text_lbl = lv_label_create(p->header);
+    lv_label_set_text(p->engine_text_lbl, ">_");
+    lv_obj_set_style_text_color(p->engine_text_lbl, COL_MUTED, 0);
+    lv_obj_set_style_text_font(p->engine_text_lbl, &geist_med_28, 0);
+    lv_obj_add_flag(p->engine_text_lbl, LV_OBJ_FLAG_HIDDEN);
     p->name_lbl = lv_label_create(p->header);
     lv_obj_set_style_text_color(p->name_lbl, COL_FG, 0);
     lv_obj_set_style_text_font(p->name_lbl, &geist_med_38, 0);   // agent name — Medium for emphasis
@@ -4794,7 +4830,7 @@ static void materialize_content(int i)
     lv_obj_clear_flag(p->list, LV_OBJ_FLAG_SCROLLABLE);
 
     if (p->m_preview) render_recap_block(p);
-    else p->empty = make_label(p->list, "No activity yet", lv_color_hex(0x585863), &geist_reg_38);
+    else p->empty = make_label(p->list, tile_resting_text(p), lv_color_hex(0x585863), &geist_reg_38);
 
     if (p->busy_model) {                         // a turn is processing → show the Working… row, hide card
         lv_obj_add_flag(p->list, LV_OBJ_FLAG_HIDDEN);
@@ -5341,9 +5377,18 @@ void ui_project_set_name(const char *project_id, const char *name)
     display_unlock();
 }
 
+// The words this device will store as an engine. An unknown one is dropped rather than shown, so a
+// daemon that learns a new engine cannot put a name on this screen that nothing here can draw.
+//
+// `terminal` is in the list and is NOT a product: it is the shell a pane holds when no engine is
+// running in it, and three things on a tile read it — the `>_` mark instead of a product logo, the
+// resting line, and the Voice button, which a shell must not offer. Leaving it out did not merely
+// hide the mark: the word was erased on arrival, so every one of those tests silently answered "not
+// a terminal" and the tile drew itself as an agent that had simply gone quiet.
 static const char *normalized_engine(const char *engine)
 {
-    return engine && (!strcmp(engine, "claude") || !strcmp(engine, "codex") ||
+    return engine && (!strcmp(engine, "terminal") ||
+                      !strcmp(engine, "claude") || !strcmp(engine, "codex") ||
                       !strcmp(engine, "cursor") || !strcmp(engine, "opencode") ||
                       !strcmp(engine, "pi") || !strcmp(engine, "hermes") ||
                       !strcmp(engine, "commandcode") || !strcmp(engine, "devin") ||
@@ -5967,7 +6012,13 @@ static void swarm_picker_rebuild(void)
         // An untouched welcome tab — the window's default name and nothing in it — is not a place the
         // dial can go, so it is not a row (owner, 2026-09-14: "không có New swarm"). The one on screen
         // is still listed, whatever it is called.
-        if (!here && w->agents == 0) continue;   // an empty tab has no pane the dial could walk to (the app calls it "New Harness" now)
+        //
+        // The test is TILES, not agents. Those two used to be the same number here, and the day a tab
+        // could hold something the dial does not drive — a terminal, a viewer — they stopped being:
+        // such a tab reported no agents, read as empty, and dropped out of this list the moment you
+        // switched away from it, with no way back (openharness#160). A tab with a tile in it is a
+        // place the dial can send the window, whatever is on that tile.
+        if (!here && w->panes == 0) continue;
         shown++;
         lv_obj_t *row = lv_button_create(s_swarm_list);
         lv_obj_set_width(row, lv_pct(100));
@@ -5999,7 +6050,10 @@ static void swarm_picker_rebuild(void)
         lv_obj_set_style_text_color(sub, COL_MUTED, 0);
         lv_obj_set_width(sub, lv_pct(100));
         lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
-        lv_label_set_text_fmt(sub, "%d agent%s", w->agents, w->agents == 1 ? "" : "s");
+        // Say what is actually there. A tab whose tiles are all shells or viewers would otherwise read
+        // "0 agents", which is true and useless — it is the line that made such a tab look empty.
+        if (w->agents > 0) lv_label_set_text_fmt(sub, "%d agent%s", w->agents, w->agents == 1 ? "" : "s");
+        else               lv_label_set_text_fmt(sub, "%d pane%s",  w->panes,  w->panes  == 1 ? "" : "s");
     }
     if (shown == 0) make_label(s_swarm_list, "No tabs — open the app", COL_MUTED, &geist_med_28);
 }
@@ -6819,7 +6873,7 @@ void ui_project_clear_event(const char *project_id)
         p->card = NULL;   // it lived in the list just emptied — ui_tap reads this
         if (!p->busy_model) {
             lv_obj_clear_flag(p->list, LV_OBJ_FLAG_HIDDEN);
-            p->empty = make_label(p->list, "No activity yet", lv_color_hex(0x585863), &geist_reg_38);
+            p->empty = make_label(p->list, tile_resting_text(p), lv_color_hex(0x585863), &geist_reg_38);
         }
         tile_layout_apply(p);
     }

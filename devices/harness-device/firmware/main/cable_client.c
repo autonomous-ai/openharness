@@ -415,6 +415,10 @@ static void handle_swarms(const cJSON *p)
         snprintf(rows[n].name, sizeof(rows[n].name), "%s", cJSON_IsString(name) ? name->valuestring : "");
         const cJSON *agents = cJSON_GetObjectItemCaseSensitive(it, "agents");
         rows[n].agents = cJSON_IsNumber(agents) ? (int)agents->valuedouble : 0;
+        // Absent from an older daemon: fall back to the agent count, which is what this row meant
+        // before tiles were counted separately.
+        const cJSON *panes = cJSON_GetObjectItemCaseSensitive(it, "panes");
+        rows[n].panes = cJSON_IsNumber(panes) ? (int)panes->valuedouble : rows[n].agents;
         n++;
     }
     ui_swarms_replace(rows, n, str_of(p, "selected"));

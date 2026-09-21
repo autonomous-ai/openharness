@@ -165,12 +165,22 @@ export interface CableSwarm {
   name: string
   /** How many agents it holds — the dial draws the count, never the members. */
   agents: number
+  /**
+   * How many TILES it holds, of any kind — agents, shells, viewers.
+   *
+   * Separate from `agents` because the two answer different questions, and the dial needs the second
+   * one: a tab holding only a terminal drives no agent, so `agents` is 0 for it exactly as it is for
+   * an untouched New Harness tab. Filtering the switcher on `agents` therefore hid a tab that had
+   * real content in it, with no way back to it from the dial. Nothing here ever becomes a roster
+   * entry — a shell is still never named to the dial.
+   */
+  panes: number
 }
 
 /** The window's swarms as it last described them, or null while no window is connected. */
 export interface AppSwarms {
   active: string
-  swarms: Array<{ id: string; name: string; agentIds: string[] }>
+  swarms: Array<{ id: string; name: string; agentIds: string[]; panes: number }>
 }
 
 /** Why the list is as short as it is. The dial renders this, instead of drawing an empty wheel. */
@@ -1258,13 +1268,16 @@ export class CableSession {
 
   private async syncSwarmsNow(force: boolean): Promise<void> {
     const { selected, swarms } = this.host.listSwarms()
-    const key = `${selected}|${swarms.map((s) => `${s.id}:${s.name}:${s.agents}`).join('|')}`
+    // `panes` belongs in the key as much as `agents` does. Opening a terminal on a tab that holds no
+    // agent moves only the tile count, and a key blind to it would swallow that push and leave the
+    // dial showing a tab it still believes is empty — the very row this field exists to keep.
+    const key = `${selected}|${swarms.map((s) => `${s.id}:${s.name}:${s.agents}:${s.panes}`).join('|')}`
     if (!force && key === this.lastSwarmsKey) return
     this.lastSwarmsKey = key
     this.log(`cable: swarms → ${swarms.length}${selected ? ` (on ${selected})` : ''}${force ? ' [push]' : ''}`)
     // ONE frame, not a begin/row/end stream: two dozen rows of an id, a name and a count fit in a
     // kilobyte, and the dial replaces the whole list on arrival either way.
-    await this.send({ t: 'swarms', selected, items: swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agents })) })
+    await this.send({ t: 'swarms', selected, items: swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agents, panes: s.panes })) })
   }
 
   // ── machines ──────────────────────────────────────────────────────────────────────────────────────

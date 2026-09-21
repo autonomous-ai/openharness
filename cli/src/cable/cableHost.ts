@@ -12,7 +12,6 @@ import { join } from 'node:path'
 
 import { AuthSessionManager, readAuthSession } from '../lib/authSession.js'
 import { registry, projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { isTerminalEngine } from '../engines/types.js'
 import { fetchRelease, loadImage, shouldOffer } from './fwPush.js'
 import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
 import { env } from '../config/env.js'
@@ -285,10 +284,17 @@ export class DaemonCableHost implements CableHost {
     // `advertised()`, not `list()` — the SAME set `agents_list` answers the web and the desktop app with. They
     // read one registry and must not disagree about what is on it: a dead agent holding a tile on the dial
     // and nowhere else is a tile that cannot be driven and cannot be explained.
-    // Minus the terminals: the dial drives agents, and a shell with nobody in it has no turn to
-    // watch or model to switch (`deviceAgentRow` keeps `agents_list` to the same set for the
-    // device). A terminal that has adopted an engine is that engine here, as everywhere.
-    const sessions = registry.advertised().filter((s) => !isTerminalEngine(s.engine))
+    // Terminals INCLUDED. A shell has no turn to watch and no model to switch, and the dial does not
+    // pretend otherwise — it draws the tile and offers no Voice on it. What it does offer is the
+    // thing that was missing: the tile can be reached. The window draws a shell as a tile like any
+    // other, so a dial that skipped it disagreed with the app about what was on the desk, and a pane
+    // the carousel cannot walk to is a pane the dial cannot explain either. A terminal that has
+    // adopted an engine is that engine here, as everywhere.
+    //
+    // ⚠️ NOT the same question as `deviceAgentRow` in backendSocket.ts, which keeps shells out of the
+    // `agents_list` RPC a CLOUD device asks over the backend. This is the cable's own list, pulled by
+    // `listAgents()` on the session's tick; the two surfaces answer separately and always did.
+    const sessions = registry.advertised()
     // Oldest → newest, and TOTAL: the id breaks a tie so the order cannot fall through to array position,
     // which is Map insertion order and differs between daemon runs. Both producers sort identically, so
     // the dial and the app cannot drift apart while reading the same registry.
@@ -367,7 +373,7 @@ export class DaemonCableHost implements CableHost {
     if (!app) return { selected: '', swarms: [] }
     return {
       selected: app.active,
-      swarms: app.swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agentIds.length })),
+      swarms: app.swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agentIds.length, panes: s.panes })),
     }
   }
 
@@ -415,7 +421,8 @@ export class DaemonCableHost implements CableHost {
   }
 
   /** How many agents the account has across every machine — the overview's number, sent beside the
-   *  tab's list rather than as 70 rows the dial would hold for a digit. Read from the last flat list. */
+   *  tab's list rather than as 70 rows the dial would hold for a digit. Read from the last flat list,
+   *  minus the terminals in it: the list is every TILE, this is every AGENT. */
   agentTotal(): number {
     return this.flatCount
   }
@@ -508,7 +515,11 @@ export class DaemonCableHost implements CableHost {
     }
     for (const id of [...this.deskHeld]) if (!missing.includes(id)) this.deskHeld.delete(id)
 
-    this.flatCount = out.length
+    // The overview's number is AGENTS, and a shell is not one. The carousel carries shell tiles now —
+    // they are panes the window has and the dial can reach — but "12 agents · all idle" is read as how
+    // much work is in flight, and counting empty terminals in it would answer a question nobody asked.
+    // Two different numbers about the same desk, each honest about what it counts.
+    this.flatCount = out.filter((a) => a.engine !== 'terminal').length
     return out
   }
 

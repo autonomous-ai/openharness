@@ -14,7 +14,7 @@ import {
   executableFileIdentity,
   type AgentCommandOwnershipSnapshot,
 } from './engineBin.js'
-import { BYPASS_PERMISSION_FLAGS } from './engineLaunch.js'
+import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } from './engineLaunch.js'
 import { psEnv } from './childLocale.js'
 
 function cleanPaneTitle(title: string): string | null {
@@ -585,28 +585,55 @@ const RESUME_ARGS: Partial<Record<RegisteredSession['engine'], { flags: string[]
 
 /**
  * Whether a live process's argv already contains every flag this engine's confirmed bypass-permission
- * mode requires — read from the running process BEFORE restart signals it, so the relaunch can reapply
- * the exact autonomy mode the agent had (there is nowhere else to read it from once the process is
- * dead). Token-exact via `argvTokens`, not a substring `.includes()` check on the raw string, so a
- * prompt or argument that merely CONTAINS the flag text cannot false-positive. Engines with no
- * confirmed bypass flag (`BYPASS_PERMISSION_FLAGS[engine] === null`) always read false — never guess.
+ * mode requires. Discovery reads it off every running agent and keeps the registry row's
+ * `bypassPermission` in step with it, which is what a relaunch reads (a row written before the field
+ * existed learns it here). Token-exact via `argvTokens`, not a substring `.includes()` check on the raw
+ * string, so a prompt or argument that merely CONTAINS the flag text cannot false-positive. Engines
+ * with no confirmed bypass flag (`BYPASS_PERMISSION_FLAGS[engine] === null`) always read false — never
+ * guess.
  */
 export function bypassPermissionActive(engine: RegisteredSession['engine'], args: string): boolean {
   const flags = BYPASS_PERMISSION_FLAGS[engine]
   if (!flags) return false
+  // A named mode says exactly how much the engine approves on its own (`full` — the old
+  // skip-everything flag — included); only an argv naming none falls back to the bare flag check.
   const tokens = argvTokens(args)
-  // The flags in order, as launch writes them (`--permission-mode auto` is two tokens, and "auto"
-  // alone elsewhere in argv is not the mode) — or `--flag=value` as one.
-  const inOrder = (want: readonly string[]): boolean => tokens.some((_, i) => want.every((flag, j) => tokens[i + j] === flag))
-    || (want.length === 2 && tokens.includes(`${want[0]}=${want[1]}`))
-  // An agent launched before the auto modes carried the old skip-everything flag; it still counts as
-  // approving on its own, and a relaunch brings it back in the auto mode.
-  return inOrder(flags) || (LEGACY_BYPASS_FLAGS[engine] ?? []).some((legacy) => inOrder(legacy))
+  const mode = permissionModeFromTokens(engine, tokens)
+  return mode ? permissionModeApproves(mode) : flagsInOrder(tokens, flags)
 }
 
-const LEGACY_BYPASS_FLAGS: Partial<Record<RegisteredSession['engine'], string[][]>> = {
-  claude: [['--dangerously-skip-permissions']],
-  codex: [['--dangerously-bypass-approvals-and-sandbox']],
+/**
+ * The permission mode a live process's argv names — the inverse of `permissionModeFlags`, so the row
+ * of an agent somebody typed into a terminal (or one written before modes were recorded) can carry
+ * the SAME mode a created one does, and a relaunch brings it back exactly: `--dangerously-skip-permissions`
+ * comes back as `--dangerously-skip-permissions`, not downgraded to the auto mode. Null when argv
+ * names no mode — which is not `ask` (a person picking Ask records it; an argv with no flag is just
+ * silent), so `bypassPermission` keeps deciding there as before. Token-exact like
+ * `bypassPermissionActive`; an engine with no mode table reads null.
+ */
+export function permissionModeFromArgv(engine: RegisteredSession['engine'], args: string): string | null {
+  return permissionModeFromTokens(engine, argvTokens(args))
+}
+
+function permissionModeFromTokens(engine: RegisteredSession['engine'], tokens: readonly string[]): string | null {
+  const modes = PERMISSION_MODES[engine]
+  if (!modes) return null
+  // `full` is checked ahead of the rest where the engine has it: its flag is a single token no other
+  // mode shares, and an argv carrying both it and `--permission-mode` is running without permissions
+  // whatever else it says. `ask` is empty and can never be "found".
+  const names = ['full', ...Object.keys(modes).filter((mode) => mode !== 'full')]
+  for (const mode of names) {
+    const flags = modes[mode]
+    if (flags?.length && flagsInOrder(tokens, flags)) return mode
+  }
+  return null
+}
+
+/** The flags in order, as launch writes them (`--permission-mode auto` is two tokens, and "auto"
+ *  alone elsewhere in argv is not the mode) — or `--flag=value` as one. */
+function flagsInOrder(tokens: readonly string[], want: readonly string[]): boolean {
+  return tokens.some((_, i) => want.every((flag, j) => tokens[i + j] === flag))
+    || (want.length === 2 && tokens.includes(`${want[0]}=${want[1]}`))
 }
 
 /** The session id an engine was told to resume, or null when argv does not name one. */

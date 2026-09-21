@@ -230,11 +230,19 @@ class DshInstallProgress {
     required this.phase,
     this.detail,
     this.line,
+    this.code,
   });
 
   final String id;
   final String phase;
   final String? detail;
+
+  /// On `failed`: the machine's reason as a code (`CLONE_FAILED`,
+  /// `SETUP_FAILED`, `DOCTOR_FAILED`…), or one of this app's own
+  /// (`CONNECTION`, `TIMEOUT`) when the request never came back. What lets
+  /// the Store say "the network" rather than "the package" without guessing
+  /// from the wording. Null from a daemon that predates it.
+  final String? code;
 
   /// The line the phase's command is on right now, as the machine narrates it
   /// (throttled there). What turns "Setting up…" for three minutes into
@@ -264,6 +272,7 @@ class DshInstallProgress {
     }
     final detail = raw['detail'];
     final line = raw['line'];
+    final error = raw['error'];
     return DshInstallProgress(
       id: id,
       phase: phase,
@@ -271,8 +280,11 @@ class DshInstallProgress {
           ? _clean(detail, 500)
           : null,
       line: line is String && line.trim().isNotEmpty ? _clean(line, 200) : null,
+      code: error is String && _codeRe.hasMatch(error) ? error : null,
     );
   }
+
+  static final _codeRe = RegExp(r'^[A-Z][A-Z0-9_]{1,40}$');
 
   static String _clean(String raw, int max) {
     final text = raw.replaceAll(RegExp(r'[\x00-\x1f\x7f]'), ' ').trim();
@@ -302,6 +314,7 @@ class DshInstallRun {
 
   String? line;
   String? detail;
+  String? code;
 
   String get phase => phases.isEmpty ? 'clone' : phases.last.phase;
   bool get done => phase == 'done';
@@ -333,6 +346,7 @@ class DshInstallRun {
       phases.add((phase: progress.phase, at: at));
     }
     if (progress.detail != null) detail = progress.detail;
+    if (progress.code != null) code = progress.code;
     if (progress.line != null && progress.line != line) {
       line = progress.line;
       log.add(progress.line!);
@@ -378,6 +392,30 @@ class MachineDsh {
       runs[progress.id] = run;
     }
     run.apply(progress, now: now);
+  }
+
+  /// Close [id]'s run as failed with the reply's reason. The machine usually
+  /// pushed its own `failed` a moment earlier; that run is kept — its phases
+  /// and doctor lines are what explains the failure — and only the reason is
+  /// set, rather than a second push opening a fresh run holding nothing but
+  /// the sentence. A run that is not already closed is closed by this push.
+  void failInstall(String id, String detail, {String? code, DateTime? now}) {
+    final run = runs[id];
+    if (run != null && run.failed) {
+      run.detail = detail;
+      if (code != null) run.code = code;
+      installs[id] = DshInstallProgress(
+        id: id,
+        phase: 'failed',
+        detail: detail,
+        code: code ?? run.code,
+      );
+      return;
+    }
+    applyInstall(
+      DshInstallProgress(id: id, phase: 'failed', detail: detail, code: code),
+      now: now,
+    );
   }
 
   DshEntry? operator [](String id) => byId[id];

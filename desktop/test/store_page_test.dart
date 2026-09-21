@@ -280,10 +280,7 @@ void main() {
         );
         expect(find.text('Your projects and files are kept.'), findsOneWidget);
         expect(find.text('aaaaaaaa'), findsOneWidget);
-        expect(
-          find.text('Resume Harness'),
-          findsNothing,
-        );
+        expect(find.text('Resume Harness'), findsNothing);
         expect(find.text('New Harness'), findsNothing);
         app.updateGate = Completer<String?>();
         await tester.tap(_key('store-primary-action'));
@@ -347,10 +344,7 @@ void main() {
       );
       await tester.enterText(_key('store-search'), 'Updateable');
       await tester.pumpAndSettle();
-      expect(
-        find.text('New Harness'),
-        findsNothing,
-      );
+      expect(find.text('New Harness'), findsNothing);
       await tester.tap(_key('store-card:${entry.id}'));
       await tester.pumpAndSettle();
       expect(_key('store-page:${entry.id}'), findsOneWidget);
@@ -369,7 +363,10 @@ void main() {
       ]);
       app.changed();
       await tester.pumpAndSettle();
-      expect(_in('store-primary-action', find.text('New Harness')), findsOneWidget);
+      expect(
+        _in('store-primary-action', find.text('New Harness')),
+        findsOneWidget,
+      );
     },
   );
   // Real glyph widths: the review dialog's buttons are laid out against Arial,
@@ -581,7 +578,10 @@ void main() {
       (tester) async {
         final (app, _) = await _open(tester, initialHarness: 'autonomous/marp');
         final tabs = app.swarms.length;
-        expect(_in('store-primary-action', find.text('New Harness')), findsOneWidget);
+        expect(
+          _in('store-primary-action', find.text('New Harness')),
+          findsOneWidget,
+        );
         await tester.tap(_key('store-primary-action'));
         await tester.pumpAndSettle();
         expect(
@@ -685,10 +685,53 @@ void main() {
         ..apply(DshInstallProgress(id: _typst.id, phase: 'failed'));
       app.changed();
       await tester.pumpAndSettle();
-      says('miss typst-cli (cargo install typst-cli)');
+      says(
+        'Missing on this machine: typst-cli (cargo install typst-cli) Install it, then try again.',
+      );
       await tester.tap(_key('store-primary-action'));
       await tester.pumpAndSettle();
       expect(app.installs, [('machine-1', _typst.id)]);
+
+      // A fetch the network dropped (issue #109): the line says so, says what
+      // to do, and keeps git's own words a hover away. A broken package says
+      // that retrying is not the fix.
+      local.dsh.runs[_typst.id] = DshInstallRun(_typst.id)
+        ..apply(DshInstallProgress(id: _typst.id, phase: 'clone'))
+        ..apply(
+          DshInstallProgress(
+            id: _typst.id,
+            phase: 'failed',
+            code: 'CLONE_FAILED',
+            detail: 'git clone exited 128: error: RPC failed; curl 28 Operation too slow · gave up after 3 attempts',
+          ),
+        );
+      app.changed();
+      await tester.pumpAndSettle();
+      says(
+        'Could not download Typst. Tried 3 times. Check the connection on this machine, then try again.',
+      );
+      expect(
+        tester.widget<Tooltip>(_key('store-install-failure-detail')).message,
+        contains('curl 28 Operation too slow'),
+      );
+      expect(
+        _in('store-primary-action', find.text('Try again')),
+        findsOneWidget,
+      );
+      local.dsh.runs[_typst.id] = DshInstallRun(_typst.id)
+        ..apply(
+          DshInstallProgress(
+            id: _typst.id,
+            phase: 'failed',
+            code: 'INVALID_MANIFEST',
+            detail: 'no harness.json in /tmp/x',
+          ),
+        );
+      app.changed();
+      await tester.pumpAndSettle();
+      says(
+        'The Typst package is broken. Trying again will not help — this needs a fix in the Store.',
+      );
 
       local.dsh.runs.clear();
       local.dsh.loaded = false;
@@ -724,7 +767,10 @@ void main() {
       app.changed();
       await tester.pumpAndSettle();
       says('Installed · linked to a checkout');
-      expect(_in('store-primary-action', find.text('New Harness')), findsOneWidget);
+      expect(
+        _in('store-primary-action', find.text('New Harness')),
+        findsOneWidget,
+      );
       expect(_key('store-remove:machine-1'), findsOneWidget);
     },
   );
@@ -833,7 +879,10 @@ void main() {
       ]);
       app.changed();
       await tester.pumpAndSettle();
-      expect(_in('store-primary-action', find.text('New Harness')), findsOneWidget);
+      expect(
+        _in('store-primary-action', find.text('New Harness')),
+        findsOneWidget,
+      );
     },
   );
 
@@ -1245,10 +1294,7 @@ void main() {
       await tester.pumpAndSettle();
       final tabs = app.swarms.length;
 
-      expect(
-        find.text('Get'),
-        findsNothing,
-      );
+      expect(find.text('Get'), findsNothing);
       await tester.ensureVisible(_key('store-card:autonomous/typst'));
       await tester.tap(_key('store-card:autonomous/typst'));
       await tester.pumpAndSettle();
@@ -1273,15 +1319,15 @@ void main() {
       );
       app.changed();
       await tester.pumpAndSettle();
-      expect(
-        find.text('New Harness'),
-        findsNothing,
-      );
+      expect(find.text('New Harness'), findsNothing);
       await tester.ensureVisible(_key('store-card:autonomous/typst'));
       await tester.tap(_key('store-card:autonomous/typst'));
       await tester.pumpAndSettle();
       expect(_key('store-page:autonomous/typst'), findsOneWidget);
-      expect(_in('store-primary-action', find.text('New Harness')), findsOneWidget);
+      expect(
+        _in('store-primary-action', find.text('New Harness')),
+        findsOneWidget,
+      );
       await tester.tap(_key('store-primary-action'));
       await tester.pumpAndSettle();
       expect(
@@ -1339,6 +1385,7 @@ void main() {
             expect(find.text('New Harness'), findsNothing);
             expect(find.text('Get'), findsNothing);
           }
+
           expectBrowseOnly(); // Discover.
           await tester.tap(_key('store-shelf-category:$category'));
           await tester.pumpAndSettle();

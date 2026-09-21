@@ -1844,6 +1844,12 @@ class AppNotifier extends ChangeNotifier {
     // instead of leaving the user stuck on the empty "select a machine" placeholder.
     unawaited(_applyNodeStatus(machine, true));
     unawaited(_loadMachineData(machine, force: true));
+    // An install this socket was carrying when it dropped went on without it
+    // (the daemon never heard the socket go); its outcome is in the list, so
+    // the list is asked again now that someone is there to ask.
+    if (_dshProbeOnReconnect.remove(machineId)) {
+      unawaited(probeDsh(machineId, force: true));
+    }
     _startAgentSyncTimer(machineId);
   }
 
@@ -1900,18 +1906,20 @@ class AppNotifier extends ChangeNotifier {
   void _announceOpenPanesToDial() {
     final pool = _pool;
     if (pool == null) return;
-    // A terminal tile is not the dial's: the dial drives agents, and the daemon
-    // never lists a shell to it. Naming one here would make the daemon "hold"
-    // an id it has nothing for. The same tile IS named once an engine has been
-    // typed into it — `_upsertAgent` re-announces on the engine change.
-    bool onDial(TerminalPane pane) {
-      final agentId = pane.agentId;
-      if (agentId == null) return false;
-      final agent = machineStates[pane.machineId]?.agents
-          .where((agent) => agent.id == agentId)
-          .firstOrNull;
-      return !isTerminalEngine(agent?.engine);
-    }
+    // Every tile that HAS an agent id, shells included. A terminal used to be
+    // left out here — the dial drives agents, and a shell has no turn to watch
+    // — but leaving it out is what made the dial disagree with its own promise
+    // ("the dial follows the app. It shows what the app shows"): the window
+    // drew a tile the dial had no row for, so it could neither be reached nor
+    // explained. It is a real registry row on the daemon, with an id, and the
+    // dial now draws it as what it is and stops short of driving it. The same
+    // row becomes an ordinary agent the moment an engine is typed into it
+    // (`registry.adoptEngine`), which `_upsertAgent` re-announces.
+    //
+    // A viewer tile still names nothing: it belongs to its agent through
+    // `ownerAgentId` and carries no `agentId` of its own, so it is counted in
+    // `panes` below and named nowhere.
+    bool onDial(TerminalPane pane) => pane.agentId != null;
 
     final agentIds = <String>[
       for (final pane in panes)
@@ -1929,6 +1937,16 @@ class AppNotifier extends ChangeNotifier {
             for (final pane in swarm.panes)
               if (onDial(pane)) pane.agentId!,
           ],
+          // NOT the length of `agentIds`, and the difference is the whole point
+          // of sending it. A tab holding nothing but a shell — or nothing but a
+          // viewer — names no agent the dial can drive, so its `agentIds` is
+          // empty exactly as an untouched New Harness tab's is. The dial read
+          // that emptiness as "nothing here" and left such a tab out of its
+          // switcher, so a tab you could see while standing on it became
+          // unreachable the moment you left it. This answers what the switcher
+          // is actually asking — is there anything on this tab — and this side
+          // is the only one that knows.
+          'panes': swarm.panes.length,
         },
     ];
     for (final machineId in machineStates.keys) {
@@ -5019,6 +5037,11 @@ class AppNotifier extends ChangeNotifier {
   /// narrates progress through `dsh_install_status` pushes, which land in
   /// [MachineDsh.installs] for the dialog's status line. Null on success, else
   /// a sentence for the person who clicked.
+  /// Machines whose socket dropped under a `dsh_install`/`dsh_update`: the
+  /// daemon went on without us, so the list is asked once more when the
+  /// socket is back. Consumed by [_onMachineConnected].
+  final Set<String> _dshProbeOnReconnect = {};
+
   Future<String?> installDsh(String machineId, String id) =>
       _installOrUpdateDsh(machineId, id, update: false);
 
@@ -5048,12 +5071,14 @@ class AppNotifier extends ChangeNotifier {
       );
       if (result['ok'] != true) {
         final detail = result['detail'];
+        final error = result['error'];
         return _finishInstall(
           machine,
           id,
           detail is String && detail.isNotEmpty
               ? detail
               : '$action failed on $machineName',
+          code: error is String ? error : null,
         );
       }
     } on WsRequestFailure catch (failure) {
@@ -5064,15 +5089,29 @@ class AppNotifier extends ChangeNotifier {
           failure.detail?.isNotEmpty == true
               ? failure.detail!
               : '$action failed on $machineName (${failure.code})',
-      });
+      }, code: failure.code);
     } on WsRequestTimeout {
       return _finishInstall(
         machine,
         id,
         '$machineName is still ${update ? 'updating' : 'installing'}. Try again in a few minutes.',
+        code: 'TIMEOUT',
       );
-    } catch (_) {
-      return _finishInstall(machine, id, '$action failed on $machineName');
+    } catch (error) {
+      // The socket went away under the request — the daemon does not know, and
+      // is most likely still ${verb}ing. Said as that, not as "failed"; the
+      // list is asked again when the socket is back (`_onMachineConnected`), so an
+      // install that landed reads as installed without another click. (Issue
+      // #109: this was the bare "Install failed" whose retry "just worked".)
+      appLog.warn('app', 'dsh_$verb $id on $machineName', error: error);
+      _dshProbeOnReconnect.add(machineId);
+      return _finishInstall(
+        machine,
+        id,
+        'Lost the connection to $machineName while ${update ? 'updating' : 'installing'} — '
+        'it may still be finishing there. Try again in a moment.',
+        code: 'CONNECTION',
+      );
     }
     machine.dsh.applyInstall(DshInstallProgress(id: id, phase: 'done'));
     notifyListeners();
@@ -5081,10 +5120,13 @@ class AppNotifier extends ChangeNotifier {
     return null;
   }
 
-  String _finishInstall(MachineState machine, String id, String error) {
-    machine.dsh.applyInstall(
-      DshInstallProgress(id: id, phase: 'failed', detail: error),
-    );
+  String _finishInstall(
+    MachineState machine,
+    String id,
+    String error, {
+    String? code,
+  }) {
+    machine.dsh.failInstall(id, error, code: code);
     notifyListeners();
     return error;
   }
