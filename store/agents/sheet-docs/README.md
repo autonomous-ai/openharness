@@ -36,6 +36,11 @@ portable OOXML writer. PPTX and arbitrary spreadsheet formulas are not implement
 - `out.xlsx`: editable workbook, recalculated and re-saved by LibreOffice.
 - `out.pdf`: fresh Word-to-PDF conversion, shown in the shared Doc Viewer.
 
+In the viewer, **Review → Hold this draft** lets you attach feedback to selected words,
+an area or a page. **Keep review** preserves that exact PDF and the notes as a portable
+packet. Ask the agent to read its `.harness/doc-reviews/<id>/review.md` before revising
+`doc.json`. **Compare latest** opens the new export while the old review stays intact.
+
 Every build clears readiness before validating input. Fresh staging and an
 isolated LibreOffice profile prevent stale files or an open desktop session from
 being mistaken for a new export. Failures preserve the previous successful

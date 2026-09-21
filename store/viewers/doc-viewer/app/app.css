@@ -380,8 +380,79 @@ kbd {
 .hk:last-child { border-bottom: 0; }
 .hk .keys { display: flex; gap: 3px; flex: none; }
 
+/* ---------- review: an exact draft, with notes beside the native PDF pages ---------- */
+.review-button {
+  border: 1px solid var(--guide); border-radius: 6px; padding: 6px 9px;
+  background: var(--bg); color: var(--text); font-size: 12px; cursor: pointer; white-space: nowrap; flex-shrink: 0;
+}
+.review-button:hover { background: var(--hover); }
+.review-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.review-button:disabled { opacity: .4; cursor: default; }
+.review-button[aria-pressed="true"] { border-color: var(--accent-ring); background: var(--accent-soft); color: var(--accent-ink); }
+#btn-review { padding: 4px 8px; margin-right: 5px; }
+#btn-review.held::before { content: ""; display: inline-block; width: 5px; height: 5px; margin-right: 5px; border-radius: 50%; background: var(--accent); vertical-align: 2px; }
+#review-panel {
+  flex: none; width: 340px; padding: 18px; overflow: auto; overscroll-behavior: contain;
+  border-left: 1px solid var(--divider); background: var(--panel); line-height: 1.5;
+}
+.review-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.review-heading strong { font-size: 14px; letter-spacing: -.2px; }
+.review-heading.shelf { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--guide); }
+.review-intro { color: var(--text-2); font-size: 12px; }
+#review-status { font-size: 12px; line-height: 1.5; margin: 14px 0; }
+#review-status.error { color: var(--danger); }
+#review-title, #review-text, #review-kind {
+  width: 100%; border: 1px solid var(--guide); border-radius: 6px; padding: 8px 9px;
+  background: var(--bg); color: var(--text); font: inherit;
+}
+#review-title { font-weight: 600; margin: 0 0 10px; }
+#review-text { resize: vertical; min-height: 88px; margin: 8px 0; line-height: 1.5; }
+#review-kind { width: auto; }
+#review-panel :is(textarea, select, a):focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+.review-row, .review-save { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 9px 0; }
+.review-save { margin-top: 16px; }
+#review-pending { font-size: 12px; padding: 9px 10px; color: var(--accent-ink); background: var(--accent-soft); border-radius: 6px; }
+#review-composer { padding: 12px; margin: 12px 0; border: 1px solid var(--accent-ring); background: var(--bg); border-radius: 8px; }
+#review-anchor { font-size: 12px; color: var(--text-2); margin: 0 0 10px; overflow-wrap: anywhere; }
+.review-note { border: 1px solid var(--guide); border-left: 3px solid #d19b32; border-radius: 7px; padding: 12px; margin-top: 12px; background: var(--bg); }
+.review-note.keep { border-left-color: #39a37b; }
+.review-note.question { border-left-color: #688cdd; }
+.review-note.selected { box-shadow: 0 0 0 1px var(--accent-ring); }
+.review-note p { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.review-note blockquote { margin: 8px 0; padding: 0 0 0 9px; border-left: 2px solid var(--guide); color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+.review-jump { border: 0; padding: 0; background: transparent; font-weight: 600; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.review-jump:hover { color: var(--accent-ink); }
+.review-note .review-row { margin: 10px 0 0; }
+.review-note .review-button { border-color: transparent; padding: 2px 5px; font-size: 11px; color: var(--text-2); }
+.review-saved { padding: 13px 0; border-bottom: 1px solid var(--divider); }
+.review-saved p { margin: 4px 0; font-size: 11px; color: var(--text-2); overflow-wrap: anywhere; }
+#review-panel a { color: var(--accent-ink); font-size: 12px; }
+#review-saved-path { font: 10px/1.6 var(--mono); color: var(--text-3); overflow-wrap: anywhere; }
+.review-marks, .review-pick-layer { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
+.review-highlight { position: absolute; background: #f8c45d40; border: 1px solid #c2862680; pointer-events: none; }
+.review-highlight.keep { background: #5ed3a130; border-color: #25885c80; }
+.review-highlight.question { background: #85a5f030; border-color: #3469ce80; }
+.review-highlight.selected { outline: 1px solid #315eaa; outline-offset: 1px; }
+.review-pin { position: absolute; width: 21px; height: 21px; border: 1px solid #fff; border-radius: 50%; background: #986312; color: #fff; font-size: 11px; line-height: 19px; padding: 0; text-align: center; pointer-events: auto; cursor: pointer; box-shadow: 0 1px 4px #0003; transform: translate(-50%, -50%); }
+.review-pin.keep { background: #237553; }
+.review-pin.question { background: #315eaa; }
+.review-pick-layer { pointer-events: auto; cursor: crosshair; touch-action: none; z-index: 7; }
+@media (max-width: 760px) {
+  #app.review-open #main { flex-direction: column; }
+  #app.review-open #stage { min-height: 150px; }
+  #review-panel { width: 100%; flex-basis: 48%; max-height: 55%; padding: 13px 16px; border-left: 0; border-top: 1px solid var(--guide); }
+  #review-panel .review-heading.shelf { margin-top: 18px; }
+  #review-panel .review-intro { margin: 7px 0; }
+}
+@container tb (max-width: 360px) { #btn-find { display: none; } }
+@media (max-width: 700px) {
+  #toolbar { display: flex; gap: 4px; }
+  .tb-left { flex: 1; }
+  .tb-center, .tb-right { flex: none; }
+}
+
 /* ---------- presenting ---------- */
-#app.presenting #toolbar, #app.presenting #sidebar, #app.presenting #sidebar-scrim, #app.presenting #findbar, #app.presenting #error-card, #app.presenting #back-chip { display: none !important; }
+#app.presenting #toolbar, #app.presenting #sidebar, #app.presenting #sidebar-scrim, #app.presenting #findbar, #app.presenting #error-card, #app.presenting #back-chip, #app.presenting #review-panel { display: none !important; }
 #app.presenting #stage, #app.presenting .viewerContainer { background: #000; }
 #app.presenting .viewerContainer { overflow: hidden; }
 #app.presenting .pdfViewer { padding: 0; min-height: 100%; display: flex; align-items: center; justify-content: center; }

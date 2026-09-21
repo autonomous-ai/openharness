@@ -385,3 +385,104 @@ barriers, free energies, solution populations, kinetics or activity predictions.
 live in the current tab; a reload discards them. No installed package or existing user molecule was
 changed. The full catalog goal remains active; remaining detailed review includes productivity,
 research/browser, monitoring, local AI and the unlisted Jev experiments.
+
+## Sixth improvement: keep a document review attached to its actual draft
+
+Expanded the source review across productivity, research, monitoring and local AI before choosing
+the shared Doc Viewer:
+
+- **Marp** already combines arbitrary Markdown authoring, native Marp exports, slide notes,
+  presenter timing, filmstrip/grid navigation and live changed-slide feedback. **Typst** and
+  **Doc Viewer** already have native compilation, genuine pdf.js search/selection/outline/zoom,
+  stable reader position across recompiles and useful compiler diagnostics. Those paths remain.
+- **Sheet & Docs Studio** coordinates native DOCX, formula-driven XLSX and LibreOffice PDF output
+  from an editable shared source. Its generic literal table and regional-comparison schema are
+  bounded; it does not implement arbitrary spreadsheet formulas or PPTX. The shared PDF review
+  improvement now applies to it too.
+- **Jev Sheets** has row-plus-context classification, per-cell distributions, confidence filtering,
+  file import, original-column CSV export and source attribution. **Jev Browser** has an actual
+  Chrome crawler and source selection. **Roundtable** preserves a motion, separate model responses,
+  a moderator's claim map and exports. These received source/README review here, not fresh paid
+  API calls, a panel run or a claim that every judgment is correct.
+- **Harness Monitor** uses daemon, process, tmux and transcript observations with guarded runtime
+  controls. **Machine Monitor** exposes paired-machine observations with explicit stale/unknown
+  states. **Grid** reuses CLI-backed workers. **Ollama, MLX-LM and vLLM** have native local-runtime,
+  model and job paths, with a shared implementation for the local AI packages. No actual user
+  workers, remote machines, downloaded models or monitoring controls were changed in this review.
+- Read the complete README contracts of all 17 unlisted **Jev experiments**. Archer/Catcher/Slalom
+  are synthetic tracking/intercept problems; Arena supplies path counts to the decision model;
+  Duel's rules engine supplies legal Reversi moves; Blocks models decision time against the fall;
+  FPS is an independently authored software-raycast arena; Lander/Pendulum/Pong are toy control
+  loops. Conductor's notes become browser audio; Compactor can analyze a bounded imported transcript
+  without changing its live session; Firehose can triage a user's bounded data file and export CSV.
+  Launcher launches only on paper; Shopper and Trader use synthetic prices; Guard is a demo,
+  not a security boundary. Their reported mock measurements and earlier live-model samples were
+  read as historical evidence, not rerun or promoted into new performance claims. Further detailed
+  implementation review of these experiments remains, especially preserving useful decisions
+  beyond transient controls. They remain unlisted.
+- **Firmware Studio** compiles through PlatformIO and reports native memory/build output without
+  claiming device verification. **Godot Studio** retains native Godot export and arbitrary source
+  authoring. **Web Studio** retains arbitrary web authoring and an original interactive starter.
+
+The selected gap: someone could read an excellent live PDF, but their judgment was not anchored
+to the exact draft they had read. Added **Review → Hold this draft**:
+
+- Capture the already parsed PDF's actual bytes, not whatever may have just overwritten the file.
+  Select native PDF text, drag a page region, or leave a page note. Label it **Change**, **Keep** or
+  **Question**. Numbered pins reopen and reveal the corresponding feedback. Area picking supports
+  pointer cancellation and Escape; ordinary button activation works from the keyboard.
+- Keep a title, quoted text, page numbers and normalized rectangles with the exact PDF and SHA-256.
+  Each immutable `.harness/doc-reviews/<id>/` packet has `reference.pdf`, `review.md`, `review.json`
+  and a portable ZIP with an explanation. It does not rewrite the source or embed PDF annotations.
+  Editable source and assets stay in the workspace, as the UI documentation and archive explain.
+- Agent recompiles wait while the review is held. **Compare latest** opens the actual latest PDF;
+  quoted notes locate exact normalized wording across changed pagination. A missing or repeated
+  quotation is reported explicitly. Page/area anchors always describe the old PDF. Returning to
+  the reviewed draft restores its bytes and highlights; **Back to live** resumes workspace output.
+- Native PDF download and browser printing use the displayed bytes. In-flight live loads cannot
+  replace a held draft. A delayed reader-position callback was fixed when returning to an empty
+  workspace, and empty workspaces can still reopen their kept reviews.
+- Saves publish atomically with strict metadata, coordinate, PDF signature/hash and size checks;
+  the browser's native pdf.js parses the document. Server validation is not a second full PDF
+  parser. Write requests require a per-process page token, same Origin and loopback Host. Uploads
+  are bounded even without Content-Length; archive paths reject symlinks. A failed save retains
+  browser notes, a lost acknowledgement retries the same ID, and a restarted server refreshes its
+  token without discarding the draft. Unsaved work survives Back to live but not a tab reload.
+- Reviews support 30 MB / 500 pages, 100 notes and 2,000 characters per note. Narrow windows put
+  the PDF above a scrollable review panel. Typst and Sheet & Docs Studio guidance now teaches the
+  agent how to read the packet and revise the original source while preserving the review.
+
+Verified:
+
+- **83 Node checks** pass: existing reader/server/workspace/shell behavior plus packet identity,
+  byte preservation, independent ZIP extraction, immutable retry, failure cleanup, symlink bounds,
+  token/Host/Origin checks, declared/chunked upload bounds and interrupted requests. Archived PDFs
+  cannot become the live artifact. **15 Typst checks** pass with the native compiler enabled.
+- **Nine native Chrome journeys** pass with no page errors. They cover actual mouse text selection,
+  rectangle/page notes, pin navigation and Escape; browser ZIP and displayed-PDF downloads;
+  deferred updates; a quote moving from page 1 to page 2; missing and ambiguous wording;
+  lost-acknowledgement retry and process restart; removal of the original PDF; 390 px layout and
+  scaled highlights; unsaved-draft return and deliberate discard; a pending-load race; and a real
+  failed native compile followed by recovery. The core nine journeys were also run with the forced
+  legacy pdf.js build. This is Chrome verification, not independent Safari/iOS/WKWebView testing.
+- Authored a fictional portable-light brief in Typst, compiled the three-page original and four-page
+  revision with **Typst 0.15.1**, rendered all seven pages with Poppler and visually inspected them.
+  The downloaded review ZIP was read independently with Python's `zipfile`: the stored PDF SHA-256
+  matched the exact original and all four notes were present. The original editable source remains
+  editable and is not limited to this fixture.
+- Visually checked desktop, narrow layout and revision-comparison screenshots. Recorded a paced
+  **13.72-second native walkthrough**, H.264 1280×960, from actual pointer interactions and native
+  recompilation. No simulated PDF renderer or generated screenshots. The three affected packages
+  pass conformance; generated presentation metadata and the 59-entry catalog validate.
+
+Evidence: [desktop](../docs/images/doc-review.png),
+[latest revision](../docs/images/doc-review-latest.png),
+[narrow layout](../docs/images/doc-review-mobile.png), and
+[native walkthrough](../docs/images/doc-review-demo.mp4).
+Repeatable acceptance: `store/viewers/doc-viewer/test/review-browser.mjs`. JSON results, raw video,
+the separate demo script and portable packets are under
+`/private/tmp/openharness-harness-improvements-evidence/doc-review-{final,legacy,demo}/`.
+
+The full catalog objective remains active. No installed harness, original user workspace, paid
+model account, remote service or published catalog was modified. Remaining work includes deeper
+implementation review of the unlisted experiments and selecting the next high-value interaction.

@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Doc Viewer</title>
+<meta name="review-token" content="__REVIEW_TOKEN__">
 <link rel="stylesheet" href="/vendor/web/pdf_viewer.css">
 <link rel="stylesheet" href="/app/app.css">
 <script>
@@ -27,6 +28,7 @@
       <button id="btn-next" class="icon-btn" data-icon="chevron-down" data-tip="Next page" data-key="→" aria-label="Next page"></button>
     </div>
     <div class="tb-right">
+      <button id="btn-review" class="review-button" aria-pressed="false">Review</button>
       <button id="build-pill" class="pill" hidden></button>
       <div class="zoom-group">
         <button id="btn-zoom-out" class="icon-btn" data-icon="minus" data-tip="Zoom out" data-key="−" aria-label="Zoom out"></button>
@@ -78,6 +80,29 @@
         <button id="hud-exit" class="icon-btn" data-icon="close" aria-label="Exit presentation"></button>
       </div>
     </section>
+    <aside id="review-panel" aria-label="Document review" hidden>
+      <div class="review-heading"><strong>Review this draft</strong><button id="review-close" class="review-button">Back to live</button></div>
+      <p class="review-intro">Keep the words, the page and the decision together.</p>
+      <button id="review-start" class="review-button primary">Hold this draft</button>
+      <p id="review-status" role="status">Hold the current PDF to begin, or open a kept review.</p>
+      <div id="review-work" hidden>
+        <input id="review-title" maxlength="120" placeholder="Name this review" aria-label="Review name">
+        <div class="review-row"><button id="review-original" class="review-button" aria-pressed="true">Reviewed draft</button><button id="review-latest" class="review-button">Compare latest</button></div>
+        <p id="review-pending" hidden>A new draft is waiting. Compare it when you are ready.</p>
+        <div class="review-row"><button id="review-selection" class="review-button">Note selected text</button><button id="review-area" class="review-button">Pin an area</button><button id="review-page" class="review-button">Page note</button></div>
+        <div id="review-composer" hidden>
+          <p id="review-anchor"></p>
+          <select id="review-kind" aria-label="Note kind"><option value="change">Change</option><option value="keep">Keep</option><option value="question">Question</option></select>
+          <textarea id="review-text" rows="3" maxlength="2000" placeholder="What would make this draft better?" aria-label="Review note"></textarea>
+          <div class="review-row"><button id="review-add" class="review-button primary">Add note</button><button id="review-cancel" class="review-button">Cancel</button></div>
+        </div>
+        <div id="review-notes"></div>
+        <div class="review-save"><button id="review-save" class="review-button primary">Keep review</button><button id="review-discard" class="review-button">Clear draft</button><a id="review-download" hidden>Download kept review</a></div>
+        <p id="review-saved-path"></p>
+      </div>
+      <div class="review-heading shelf"><strong>Kept reviews</strong><button id="review-refresh" class="review-button">Refresh</button></div>
+      <div id="review-library"></div>
+    </aside>
   </div>
 
   <div id="menu" role="menu" hidden></div>
