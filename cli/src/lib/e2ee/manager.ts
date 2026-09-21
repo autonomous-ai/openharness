@@ -156,6 +156,11 @@ export class E2eeManager {
   hasSession(connId: string): boolean { return this.sessions.has(connId) }
   sessionIdentity(connId: string): string | null { return this.sessions.get(connId)?.webIdentityPub ?? null }
   sessionRole(connId: string): C.PairRole | null { return this.sessions.get(connId)?.role ?? null }
+  /** The label this connection's identity was paired under, or null for a session with none on file. */
+  sessionLabel(connId: string): string | null {
+    const pub = this.sessions.get(connId)?.webIdentityPub
+    return pub ? this.store.pairedLabel(pub) : null
+  }
   deviceConnected(): boolean { return [...this.sessions.values()].some((s) => s.role === 'device') }
   dropSessionsByRole(role: C.PairRole, preserve: (connId: string) => boolean = () => false): void {
     for (const [connId, s] of [...this.sessions.entries()]) {

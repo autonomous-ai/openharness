@@ -486,9 +486,8 @@ class _TerminalPageState extends State<TerminalPage>
   /// Awaited for the same reason [_newAgent] is: the list is backed out of as often as it is tapped
   /// through, and this page gets no rebuild when it lands back on top.
   Future<void> _openAgentList() async {
-    await Navigator.of(context).push(
-      phoneRoute((_) => AgentsListPage(notifier: widget.notifier)),
-    );
+    await Navigator.of(context)
+        .push(phoneRoute((_) => AgentsListPage(notifier: widget.notifier)));
     if (mounted) setState(() {});
   }
 
@@ -817,9 +816,7 @@ class _TerminalPageState extends State<TerminalPage>
     _watchKeyBar();
     final pane = widget.notifier.panes
         .where(
-          (p) =>
-              p.machineId == widget.machineId &&
-              p.agentId == widget.agentId,
+          (p) => p.machineId == widget.machineId && p.agentId == widget.agentId,
         )
         .firstOrNull;
     if (pane != null) {
@@ -872,6 +869,11 @@ class _TerminalPageState extends State<TerminalPage>
     // Captured while the agent is still listed, for the sentence above.
     if (agent != null) _cachedAgentName = agent.name;
     final reclaim = phoneReclaimAction(session);
+    final takerName = phoneTakerName(
+      session,
+      (id) => widget.notifier.stateOf(id)?.machine.displayName,
+    );
+    final takeoverNotice = phoneTakeoverNotice(session, takerName);
     // Creating needs the machine to list its folders and name its engines,
     // so one that is offline or still wants its password cannot host a new
     // agent — the same gate the Agents tab puts on its fab.
@@ -1052,14 +1054,12 @@ class _TerminalPageState extends State<TerminalPage>
                       // older CLI never advertises the binary kind, so the
                       // upload would go nowhere silently. Null leaves the
                       // buttons undrawn rather than drawn dead.
-                      onPickImage:
-                          machine?.terminalImagePasteAvailable == true
+                      onPickImage: machine?.terminalImagePasteAvailable == true
                           ? () => unawaited(
                               _sendImage(session, ImageSource.gallery),
                             )
                           : null,
-                      onTakePhoto:
-                          machine?.terminalImagePasteAvailable == true
+                      onTakePhoto: machine?.terminalImagePasteAvailable == true
                           ? () => unawaited(
                               _sendImage(session, ImageSource.camera),
                             )
@@ -1102,7 +1102,10 @@ class _TerminalPageState extends State<TerminalPage>
                     children: [
                       TerminalHeader(
                         agent: agent,
-                        status: phoneSessionSummary(session),
+                        status: phoneSessionSummary(
+                          session,
+                          takerName: takerName,
+                        ),
                         trailing: [
                           // Read-only is a state to get OUT of, so its way
                           // out is a labelled button in the header rather
@@ -1110,7 +1113,10 @@ class _TerminalPageState extends State<TerminalPage>
                           // where you go having decided to do something,
                           // and this is the thing telling you that typing
                           // will go nowhere until you do.
-                          if (reclaim != null)
+                          // While the strip below says who took over, its
+                          // button is the way back; two "Take control" a
+                          // finger apart would be noise.
+                          if (reclaim != null && takeoverNotice == null)
                             _ReclaimButton(
                               action: reclaim,
                               onPressed: () => widget.notifier.selectAgent(
@@ -1130,8 +1136,7 @@ class _TerminalPageState extends State<TerminalPage>
                               // the header's own right inset.
                               last: true,
                               onPressed: () => _showActions(
-                                machineName:
-                                    machine?.machine.displayName ?? '',
+                                machineName: machine?.machine.displayName ?? '',
                                 agentName: agent.name,
                                 project: agent.project,
                               ),
@@ -1139,6 +1144,17 @@ class _TerminalPageState extends State<TerminalPage>
                         ],
                       ),
                       Divider(height: 1, color: AppGlass.hair),
+                      // The desktop's "took control" band, at phone size: a
+                      // status dot alone is easy to miss, and the person is
+                      // about to wonder why typing does nothing.
+                      if (takeoverNotice != null)
+                        _TakeoverStrip(
+                          notice: takeoverNotice,
+                          onTakeControl: () => widget.notifier.selectAgent(
+                            widget.machineId,
+                            widget.agentId,
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -1314,6 +1330,61 @@ class _TerminalPageState extends State<TerminalPage>
     final error = result.error;
     if (error == null || messenger == null || !mounted) return;
     messenger.showSnackBar(SnackBar(content: Text(error)));
+  }
+}
+
+/// One line under the header while another client drives this terminal:
+/// who, and the way back. Pairs with [_ReclaimButton] in the header; the
+/// strip says who, the button in it is the same gesture.
+class _TakeoverStrip extends StatelessWidget {
+  const _TakeoverStrip({required this.notice, required this.onTakeControl});
+
+  final String notice;
+  final VoidCallback onTakeControl;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final color = phoneToneColor(PhoneTone.attention);
+    return Semantics(
+      key: const ValueKey('phone-takeover-strip'),
+      liveRegion: true,
+      child: Container(
+        color: color.withValues(alpha: 0.12),
+        padding: const EdgeInsets.only(left: 14, right: 6, top: 4, bottom: 4),
+        child: Row(
+          children: [
+            Icon(LucideIcons.lock300, size: 13, color: color),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                notice,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: color,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: onTakeControl,
+              style: TextButton.styleFrom(
+                foregroundColor: color,
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              ),
+              child: const Text(
+                'Take control',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

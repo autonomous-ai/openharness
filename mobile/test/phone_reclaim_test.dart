@@ -47,4 +47,76 @@ void main() {
       expect(action?.tone, PhoneTone.bad, reason: '$status');
     }
   });
+
+  group('who took control', () {
+    TerminalSession taken({Map<String, dynamic>? takenBy}) {
+      final session = _session(TerminalSessionStatus.controlling)
+        ..streamId = 's';
+      session.handleFrame('terminal_closed', {
+        'streamId': 's',
+        'code': 'TERMINAL_TAKEN_OVER',
+        'reason': 'another client connected',
+        'takenBy': ?takenBy,
+      });
+      return session;
+    }
+
+    test('the summary and the strip name the taker when the daemon said', () {
+      final session = taken(
+        takenBy: {
+          'kind': 'desktop',
+          'name': 'Mac mini',
+          'machineId': 'ab12ab12ab12ab12',
+        },
+      );
+      expect(session.status, TerminalSessionStatus.takenOver);
+      final name = phoneTakerName(session, (_) => null);
+      expect(name, 'Mac mini');
+      expect(
+        phoneSessionSummary(session, takerName: name).label,
+        'Taken over by Mac mini',
+      );
+      expect(
+        phoneTakeoverNotice(session, name),
+        'Mac mini took control of this terminal',
+      );
+      // The fleet's current name for that machine wins over the declared one.
+      expect(
+        phoneTakerName(
+          session,
+          (id) => id == 'ab12ab12ab12ab12' ? 'Studio' : null,
+        ),
+        'Studio',
+      );
+    });
+
+    test('an older daemon, or a nameless taker, reads as another app', () {
+      final session = taken();
+      expect(phoneTakerName(session, (_) => null), isNull);
+      expect(phoneSessionSummary(session).label, 'Taken over');
+      expect(
+        phoneTakeoverNotice(session, null),
+        'Another app took control of this terminal',
+      );
+      expect(
+        phoneTakerName(
+          taken(takenBy: {'kind': 'not a kind', 'name': 'x'}),
+          (_) => null,
+        ),
+        isNull,
+      );
+    });
+
+    test('nothing to say while this phone drives, or nobody does', () {
+      expect(phoneTakeoverNotice(null, null), isNull);
+      for (final status in [
+        TerminalSessionStatus.controlling,
+        TerminalSessionStatus.closed,
+        TerminalSessionStatus.error,
+      ]) {
+        expect(phoneTakeoverNotice(_session(status), 'Mac'), isNull);
+        expect(phoneTakerName(_session(status), (_) => 'Mac'), isNull);
+      }
+    });
+  });
 }

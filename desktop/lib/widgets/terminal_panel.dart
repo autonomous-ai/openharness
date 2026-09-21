@@ -1519,6 +1519,10 @@ class _TerminalPanelState extends State<TerminalPanel>
                         busy: !_inputBlocked,
                         nudged: _controlNudged,
                         nudge: _controlNudge,
+                        takerName: session.takenOverBy?.label(
+                          (id) =>
+                              widget.notifier.stateOf(id)?.machine.displayName,
+                        ),
                         onTakeControl: _inputBlocked
                             ? () => unawaited(_takeControl())
                             : null,
@@ -1719,6 +1723,9 @@ class _TerminalHeader extends StatelessWidget {
         .where((agent) => agent.id == session.agentId)
         .firstOrNull
         ?.codexHome;
+    final taker = session.takenOverBy?.label(
+      (id) => notifier.stateOf(id)?.machine.displayName,
+    );
     final status =
         notice ??
         switch (session.status) {
@@ -1737,7 +1744,8 @@ class _TerminalHeader extends StatelessWidget {
           TerminalSessionStatus.takenOver => (
             label: 'Take control',
             icon: Icons.lock_outline,
-            detail: 'Read only: another app controls this terminal. Take control moves input ownership to this app.',
+            detail:
+                'Read only: ${taker ?? 'another app'} controls this terminal. Take control moves input ownership to this app.',
           ),
           TerminalSessionStatus.error || TerminalSessionStatus.closed => (
             label: 'Reconnect',
@@ -2138,16 +2146,25 @@ class _ControlBanner extends StatelessWidget {
   /// even when the person reached the pane with the mouse.
   final VoidCallback? onFocusTerminal;
 
+  /// Who has the terminal now, when the daemon said (`terminal_closed.takenBy`
+  /// — the fleet's current name for that machine when this app knows it);
+  /// null from an older daemon or a taker that did not introduce itself.
+  final String? takerName;
+
   const _ControlBanner({
     required this.busy,
     required this.nudged,
     required this.nudge,
     required this.onTakeControl,
     required this.onFocusTerminal,
+    this.takerName,
   });
 
-  String get title =>
-      busy ? 'Taking control…' : 'Another app took control of this terminal';
+  String get title => busy
+      ? 'Taking control…'
+      : takerName == null
+      ? 'Another app took control of this terminal'
+      : '$takerName took control of this terminal';
 
   String? get detail {
     if (busy) return null;
