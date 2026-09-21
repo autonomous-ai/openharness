@@ -1385,13 +1385,15 @@ export class CableSession {
    * A finished turn's recap.
    *
    * `quiet` means the window already has this agent on screen: draw the tile,
-   * skip the beep and the notification drawer. An extra field rather than a
-   * different frame, so firmware that predates it simply notifies as it always
-   * did instead of losing the recap.
+   * skip the notification drawer (the beep still sounds). `silent` means the
+   * turn was a sub-agent's: draw the tile, skip the beep AND the drawer — the
+   * main agent's own end is the one the person is waiting for. Extra fields
+   * rather than different frames, so firmware that predates them simply
+   * notifies as it always did instead of losing the recap.
    */
-  async summary(agentId: string, recap: string, text: string, quiet = false): Promise<void> {
+  async summary(agentId: string, recap: string, text: string, quiet = false, silent = false): Promise<void> {
     const who = this.whoIs(agentId)
-    await this.send(quiet ? { t: 'summary', agentId, ...who, recap, text, quiet: true } : { t: 'summary', agentId, ...who, recap, text })
+    await this.send({ t: 'summary', agentId, ...who, recap, text, ...(quiet ? { quiet: true } : {}), ...(silent ? { silent: true } : {}) })
   }
 
   /**

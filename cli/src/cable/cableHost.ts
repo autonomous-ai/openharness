@@ -987,12 +987,13 @@ export function multipart(file: Buffer, filename: string, mimeType: string, boun
  * kind reaches the cable the day it reaches the socket.
  */
 export function cableEventFor(
-  frame: { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string } },
-): { kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string } | null {
+  frame: { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string; subagent?: unknown } },
+): { kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent: boolean } | null {
   if (frame.type !== 'commander_event' || !frame.agentId) return null
   const kind = frame.payload?.kind
   if (kind !== 'processing' && kind !== 'done' && kind !== 'summary' && kind !== 'error') return null
-  return { kind, agentId: frame.agentId, text: frame.payload?.text ?? '', recap: frame.payload?.recap ?? '' }
+  // `subagent`: a sub-agent's turn end — the tile redraws, nobody is told (CommanderMirrorOpts.isSubagent).
+  return { kind, agentId: frame.agentId, text: frame.payload?.text ?? '', recap: frame.payload?.recap ?? '', subagent: frame.payload?.subagent === true }
 }
 
 /**

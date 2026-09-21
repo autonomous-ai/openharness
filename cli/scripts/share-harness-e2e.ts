@@ -121,6 +121,7 @@ try {
   const backendEnv = { ...process.env, NODE_ENV: 'test', PORT: String(backendPort), PORT_APP_PROXY: String(proxyPort),
     DATABASE_URL: mongo.href, REDIS_URL: redis.href, HARNESS_BILLING_ENABLED: 'false', MESH_ENABLED: 'false',
     SSO_PROFILE_URL: `http://127.0.0.1:${(sso.address() as { port: number }).port}/profile`,
+    SSO_IDENTITY_URL: '', // the stand-in SSO has only /profile; never prove rig tokens against the real BFF
     TERMINAL_P2P_ROLLOUT_PERCENT: '0', HARNESS_CREDENTIAL_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }
   await exec(join(repo, 'backend/node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'], { cwd: join(repo, 'backend'), env: backendEnv, timeout: 60_000 })
   run('backend', join(repo, 'backend'), ['--import', 'tsx', 'src/server.ts'], backendEnv)

@@ -3,11 +3,12 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { randomUUID } from 'node:crypto'
 const mocks = vi.hoisted(() => ({
   prisma: { harnessShare: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
-    machine: { findFirst: vi.fn(), findMany: vi.fn() }, user: { findMany: vi.fn() } },
-  presence: vi.fn(), changed: vi.fn(), auth: vi.fn(),
+    machine: { findFirst: vi.fn(), findMany: vi.fn() }, user: { findMany: vi.fn(), findUnique: vi.fn() } },
+  presence: vi.fn(), changed: vi.fn(), listChanged: vi.fn(), auth: vi.fn(),
 }))
 vi.mock('../lib/prisma.js', () => ({ prisma: mocks.prisma, machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] } }))
-vi.mock('../lib/bus.js', () => ({ getAgentPresenceMany: mocks.presence, publishShareChanged: mocks.changed }))
+vi.mock('../lib/bus.js', () => ({ getAgentPresenceMany: mocks.presence, publishShareChanged: mocks.changed,
+  publishDeviceMachineListChanged: mocks.listChanged }))
 vi.mock('../lib/ssoAuth.js', async original => ({ ...await original<typeof import('../lib/ssoAuth.js')>(), authenticateAccessToken: mocks.auth }))
 import { harnessShareRoutes, recipientShare } from './harnessShares.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
@@ -117,6 +118,33 @@ describe('account-bound harness invitations', () => {
     mocks.prisma.harnessShare.updateMany.mockResolvedValue({ count: 0 })
     expect((await remove()).statusCode).toBe(404)
     expect(mocks.changed).toHaveBeenCalledTimes(1)
+  })
+  it('tells the invited account that its list changed, so its apps need not poll for invitations', async () => {
+    const id = randomUUID()
+    // First read is the "may this grant be changed" check (no row yet); the second is the saved invitation.
+    mocks.prisma.harnessShare.findUnique.mockResolvedValueOnce(null).mockResolvedValue({ id, recipientEmail: 'ken@example.com' })
+    mocks.prisma.user.findUnique.mockResolvedValue({ id: 'ken' })
+    expect((await put(input(), id)).statusCode).toBe(200)
+    expect(mocks.prisma.user.findUnique).toHaveBeenCalledWith({ where: { email: 'ken@example.com' }, select: { id: true } })
+    expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'updated' })
+  })
+  it('tells the invited account when the owner takes the invitation back', async () => {
+    const id = randomUUID()
+    mocks.prisma.harnessShare.findUnique.mockResolvedValue({ id, recipientEmail: 'ken@example.com' })
+    mocks.prisma.user.findUnique.mockResolvedValue({ id: 'ken' })
+    expect((await app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })).statusCode).toBe(200)
+    expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'updated' })
+  })
+  it('invites an address with no account yet, and survives the lookup failing, without telling anyone', async () => {
+    const id = randomUUID(), remove = () => app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })
+    mocks.prisma.harnessShare.findUnique.mockResolvedValue({ id, recipientEmail: 'nobody@example.com' })
+    mocks.prisma.user.findUnique.mockResolvedValue(null)
+    expect((await remove()).statusCode).toBe(200)
+    mocks.prisma.user.findUnique.mockRejectedValue(new Error('db unavailable'))
+    expect((await remove()).statusCode).toBe(200)
+    mocks.prisma.harnessShare.findUnique.mockResolvedValue(null)
+    expect((await remove()).statusCode).toBe(200)
+    expect(mocks.listChanged).not.toHaveBeenCalled()
   })
   it('rechecks exact recipient, expiry, current machine ownership and billing on socket admission', async () => {
     const grant = { ...input(), id: 'share', ownerId: 'owner' }

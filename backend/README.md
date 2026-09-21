@@ -46,7 +46,8 @@ npm run dev            # tsx watch, :8085 by default
 
 Copy `.env.example` → `.env` and set at least `MANAGER_API_KEY` (to match the manager) and a
 `DATABASE_URL` pointing at the **same** MongoDB the manager uses. Production SSO/profile URLs are
-the defaults; override `SSO_ISSUER` and `SSO_PROFILE_URL` with the staging hosts for local testing.
+the defaults; override `SSO_ISSUER`, `SSO_PROFILE_URL` and `SSO_IDENTITY_URL` with the staging hosts for local testing
+(the identity URL is asked first — leave it on production and staging tokens are refused there).
 
 | dev | build | other |
 |-----|-------|-------|

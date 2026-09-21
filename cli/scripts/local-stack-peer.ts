@@ -114,7 +114,7 @@ try {
   const backendEnv = { ...process.env, NODE_ENV: 'test', PORT: String(backendPort), PORT_APP_PROXY: String(proxyPort),
     DATABASE_URL: `mongodb://127.0.0.1:${mongoPort}/harness?replicaSet=rs0&directConnection=true`,
     REDIS_URL: `redis://127.0.0.1:${redisPort}`, HARNESS_BILLING_ENABLED: 'false', MESH_ENABLED: 'false',
-    SSO_PROFILE_URL: `http://127.0.0.1:${ssoPort}/profile`, TERMINAL_P2P_ROLLOUT_PERCENT: '0',
+    SSO_PROFILE_URL: `http://127.0.0.1:${ssoPort}/profile`, SSO_IDENTITY_URL: '', TERMINAL_P2P_ROLLOUT_PERCENT: '0',
     HARNESS_CREDENTIAL_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }
   await exec(join(repo, 'backend/node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'],
     { cwd: join(repo, 'backend'), env: backendEnv, timeout: 60_000 })

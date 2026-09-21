@@ -30,7 +30,7 @@ export class FleetError extends Error {
 
 /** A card from an attached machine, already translated into the dial's four kinds. */
 export type FleetEvent =
-  | { machineId: string; kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string }
+  | { machineId: string; kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent?: boolean }
   | { machineId: string; kind: 'question'; agentId: string; requestId: string; questions: unknown }
   | { machineId: string; kind: 'state'; state: FleetMachine['state'] }
 

@@ -1,0 +1,18 @@
+{
+  "license": "MIT",
+  "tagline": "htop for your harnesses: pause the idle ones, resume any of them",
+  "examples": [
+    {
+      "prompt": "Show me every harness on this machine, then pause everything nobody has touched in a day.",
+      "caption": "The fleet, freshest first · a dry run, then the pause, then how much memory came back"
+    },
+    {
+      "prompt": "Which of my harnesses are actually doing something right now, and which are just holding memory?",
+      "caption": "Running, waiting on you, and idle — with what each one holds"
+    },
+    {
+      "prompt": "Which harnesses are on a branch that already merged? Pause those and tell me what you kept.",
+      "caption": "Paused with the reason recorded; each one resumes with its conversation"
+    }
+  ]
+}

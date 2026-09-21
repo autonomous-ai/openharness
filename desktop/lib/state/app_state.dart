@@ -550,6 +550,7 @@ class AppNotifier extends ChangeNotifier {
   Timer? _machineRecoveryTimer;
   Timer? _sharingDiscoveryTimer;
   bool _sharingDiscoveryBusy = false;
+  bool _sharingDiscoveryAgain = false;
   int _machineRecoveryAttempts = 0;
   String? _machineLoadError;
 
@@ -1535,6 +1536,14 @@ class AppNotifier extends ChangeNotifier {
   static const offlineRetryInterval = Duration(seconds: 5);
   static const localDaemonReconnectDelay = Duration(seconds: 1);
   static const agentSyncInterval = Duration(seconds: 60);
+
+  /// How often the machine list is re-read with nothing having asked for it.
+  /// The list is PUSHED (`machines_changed`, backend → daemon → this window);
+  /// this only catches a push that was missed. Minutes, never seconds: a re-read
+  /// is two authenticated backend requests (`/api/machines` +
+  /// `/api/harness-shares`) from every open app, and at 15s that — not people —
+  /// was most of the backend's traffic.
+  static const machineListSafetyNetInterval = Duration(minutes: 5);
 
   MachineState? stateOf(String machineId) => machineStates[machineId];
 
@@ -2880,6 +2889,7 @@ class AppNotifier extends ChangeNotifier {
     _sharingDiscoveryTimer?.cancel();
     _sharingDiscoveryTimer = null;
     _sharingDiscoveryBusy = false;
+    _sharingDiscoveryAgain = false;
     _daemonGateFailed = false;
     _bootStatusMessage = null;
     _clearAllTurnActivity();
@@ -3797,32 +3807,76 @@ class AppNotifier extends ChangeNotifier {
     }
     if (localEndpoint != null) _updateLocalProjectSnapshot(localEndpoint);
     _autoConnectAndLoadMachines();
-    _sharingDiscoveryTimer ??= Timer.periodic(const Duration(seconds: 15), (
+    // The list is pushed (`machines_changed`); this only catches a missed push.
+    _sharingDiscoveryTimer ??= Timer.periodic(machineListSafetyNetInterval, (
       _,
-    ) async {
-      if (_disposed ||
-          status != AppStatus.authenticated ||
-          _sharingDiscoveryBusy ||
-          machinesRefreshing) {
-        return;
+    ) {
+      // The desk is pushed too, and a missed desk push is caught here as well:
+      // one small GET, and an unchanged revision applies nothing.
+      if (!_disposed &&
+          status == AppStatus.authenticated &&
+          _desk.enabled &&
+          _desk.pending.isEmpty) {
+        unawaited(_deskFetch());
       }
-      final discoveryRevision = _authRevision;
-      _sharingDiscoveryBusy = true;
-      // A push that was missed is caught here: the desk read is one small
-      // GET, and an unchanged revision applies nothing.
-      if (_desk.enabled && _desk.pending.isEmpty) unawaited(_deskFetch());
-      try {
-        await refreshMachines();
-      } catch (error) {
-        if (_authWorkCurrent(discoveryRevision)) {
-          _reportMachineLoadError(error, automatic: true);
-          notifyListeners();
-        }
-      } finally {
-        if (_authWorkCurrent(discoveryRevision)) _sharingDiscoveryBusy = false;
-      }
+      unawaited(_rereadMachinesInBackground(pushed: false));
     });
     notifyListeners();
+  }
+
+  /// Re-read the machine list because something other than the person asked:
+  /// a `machines_changed` push, or the safety-net timer.
+  ///
+  /// One at a time. A push that arrives while a read is open marks it dirty
+  /// instead of starting another — the open read may predate that change, so
+  /// exactly one more follows it. A bulk rename pushes once per machine;
+  /// without this each push would be its own pair of requests. A timer tick
+  /// that finds a read open has nothing to add and is dropped.
+  Future<void> _rereadMachinesInBackground({required bool pushed}) async {
+    if (_disposed || status != AppStatus.authenticated) return;
+    if (_sharingDiscoveryBusy) {
+      if (pushed) _sharingDiscoveryAgain = true;
+      return;
+    }
+    if (machinesRefreshing && !pushed) return;
+    final discoveryRevision = _authRevision;
+    _sharingDiscoveryBusy = true;
+    try {
+      // This call owes one read; every push that lands while we are busy owes
+      // one more (collapsed into a single follow-up by the flag).
+      var owed = true;
+      while (owed || _sharingDiscoveryAgain) {
+        // Still ours? Checked BEFORE the flag is cleared: a run left over from
+        // a session that has since signed out must not eat the dirty flag that
+        // belongs to the new session's run.
+        if (_disposed ||
+            status != AppStatus.authenticated ||
+            !_authWorkCurrent(discoveryRevision)) {
+          return;
+        }
+        // A reload (the person's, or recovery's) that is open right now: let it
+        // finish first, on EVERY pass. Its read may predate this push, and
+        // starting ours beside it would supersede its request — it would then
+        // give up before clearing its error and reloading the open machines.
+        final reload = _retryInFlight;
+        if (reload != null) {
+          try {
+            await reload;
+          } catch (_) {}
+          continue;
+        }
+        owed = false;
+        _sharingDiscoveryAgain = false;
+        await refreshMachines();
+      }
+    } catch (error) {
+      if (_authWorkCurrent(discoveryRevision)) {
+        _reportMachineLoadError(error, automatic: true);
+        notifyListeners();
+      }
+    } finally {
+      if (_authWorkCurrent(discoveryRevision)) _sharingDiscoveryBusy = false;
+    }
   }
 
   // The daemon reports `connected` only once its own backend socket is open, but
@@ -9387,6 +9441,12 @@ class AppNotifier extends ChangeNotifier {
             );
           }
         }
+        break;
+      case 'machines_changed':
+        // The account's machine list changed somewhere: a machine created,
+        // renamed or deleted, or a shared harness invited or taken back. The
+        // payload is only a reason; the list itself is re-read.
+        unawaited(_rereadMachinesInBackground(pushed: true));
         break;
       case 'desk_changed':
         // Another window — on another computer, or this one — changed the

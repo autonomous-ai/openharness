@@ -262,9 +262,12 @@ void main() {
       expect(app.lastError, isNull);
       expect(app.machineStates['fixture']!.agents, hasLength(1));
       expect(app.daemonChecks, 2);
-      await tester.pump(const Duration(seconds: 35));
-      // Invitation discovery continues after recovery without probing the daemon again.
-      // Its pending poll is coalesced across subsequent ticks.
+      await tester.pump(
+        AppNotifier.machineListSafetyNetInterval * 2 +
+            const Duration(seconds: 5),
+      );
+      // The safety-net re-read continues after recovery without probing the daemon again.
+      // Its pending read is coalesced across subsequent ticks.
       expect(api.lists, hasLength(3));
       api.lists.last.complete([_machine]);
       await tester.pump();
@@ -283,7 +286,7 @@ void main() {
       await tester.pump();
       await start;
 
-      await tester.pump(const Duration(seconds: 15));
+      await tester.pump(AppNotifier.machineListSafetyNetInterval);
       expect(api.lists, hasLength(2));
       api.lists.last.completeError(
         ApiException('Backend unreachable', status: 502),
@@ -295,16 +298,19 @@ void main() {
 
       await tester.pump(const Duration(seconds: 2));
       expect(api.lists, hasLength(3));
-      // Discovery must not duplicate a recovery request that is still pending.
-      await tester.pump(const Duration(seconds: 30));
+      // The safety net must not duplicate a recovery request that is still pending.
+      await tester.pump(AppNotifier.machineListSafetyNetInterval);
       expect(api.lists, hasLength(3));
       api.lists.last.complete([_machine]);
       await tester.pump();
       expect(app.machinesRefreshing, isFalse);
-      await tester.pump(const Duration(seconds: 15));
+      await tester.pump(AppNotifier.machineListSafetyNetInterval);
       expect(api.lists, hasLength(4));
       api.lists.last.complete([_machine]);
       await tester.pump();
+      // …nor remember the tick it skipped: one read per tick, not a second one owed from before.
+      await tester.pump();
+      expect(api.lists, hasLength(4));
       disposeApp();
     },
   );
