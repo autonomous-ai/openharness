@@ -1618,9 +1618,11 @@ private final class SwarmTabStrip: NSView {
     let occupied = min(available, CGFloat(tabs.count) * width)
     scroll.frame = NSRect(x: leading, y: 0, width: occupied, height: bounds.height)
     document.frame = NSRect(x: 0, y: 0, width: max(occupied, CGFloat(tabs.count) * width), height: bounds.height)
+    // The chips sit 5pt above centre — a little air between the tab row and the
+    // pane titles under it (owner, 2026-09-21; the workspace adds its own 10 below).
     for (index, tab) in tabs.enumerated() {
-      tab.frame = NSRect(x: CGFloat(index) * width, y: 0, width: width, height: bounds.height - 4)
-      tab.contentCenterY = bounds.midY
+      tab.frame = NSRect(x: CGFloat(index) * width, y: 0, width: width, height: bounds.height - 2)
+      tab.contentCenterY = bounds.midY + 5
     }
     let buttonY = (bounds.height - 28) / 2
     notificationButton.frame = NSRect(x: 0, y: buttonY, width: 28, height: 28)
@@ -1712,7 +1714,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     get { iconView.image }
     set { iconView.image = newValue }
   }
-  var labelFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) {
+  // 14.3: a tenth up from the 13 the rest of the chrome uses (owner, 2026-09-21).
+  var labelFont = NSFont.monospacedSystemFont(ofSize: 14.3, weight: .regular) {
     didSet { if oldValue != labelFont { invalidateLabel() } }
   }
   private var cachedLabel: NSAttributedString?
@@ -1843,7 +1846,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       path.fill()
     } else if hovered && actionsEnabled {
       NSColor(white: 1, alpha: 0.05).setFill()
-      let hoverRect = NSRect(x: 8, y: contentCenterY - 14, width: bounds.width - 16, height: 28)
+      let hoverRect = NSRect(x: 8, y: contentCenterY - 13, width: bounds.width - 16, height: 26)
       NSBezierPath(roundedRect: hoverRect, xRadius: 3, yRadius: 3).fill()
     }
     if showsDivider && !hovered {

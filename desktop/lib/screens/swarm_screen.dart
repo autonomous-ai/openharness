@@ -2988,9 +2988,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                   app.activeSwarm.isStore ||
                                   app.activeSwarm.isOrchestrator,
                               child: Padding(
+                                // Under the native tab strip the canvas starts
+                                // 10 lower, so the pane titles do not crowd the
+                                // tabs (owner, 2026-09-21; the strip lifts its
+                                // chips 5 to match).
                                 padding: app.panes.isEmpty
                                     ? EdgeInsets.zero
-                                    : const EdgeInsets.all(kWorkspaceInset),
+                                    : EdgeInsets.fromLTRB(
+                                        kWorkspaceInset,
+                                        kWorkspaceInset + (_native ? 10 : 0),
+                                        kWorkspaceInset,
+                                        kWorkspaceInset,
+                                      ),
                                 child: Focus.withExternalFocusNode(
                                   focusNode: _canvasFocus,
                                   includeSemantics: false,
