@@ -1586,6 +1586,20 @@ class Registry {
     return true
   }
 
+  /** Fill in the mode a row did not record — discovery read it off the live argv — so a relaunch can
+   *  reapply exactly that mode rather than the yes/no `bypassPermission` reduces it to. Fill-only,
+   *  like `setCodexHome`: the mode create recorded is the person's choice and is never re-derived
+   *  (the same name again is a no-op). A name that is not a mode is refused, as on load. */
+  setPermissionMode(agentId: string, permissionMode: string): boolean {
+    const session = this.agents.get(agentId)
+    if (!session || !permissionModeName(permissionMode)) return false
+    if (session.permissionMode) return session.permissionMode === permissionMode
+    session.permissionMode = permissionMode
+    session.updatedAt = Date.now()
+    this.save()
+    return true
+  }
+
   /** Fill in the Codex profile a row did not know (discovery read it off the live process). Never
    *  replaces one it already has — the profile is chosen once, see `codexHome`. */
   setCodexHome(agentId: string, codexHome: string): boolean {

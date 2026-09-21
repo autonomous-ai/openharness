@@ -12,6 +12,27 @@
 import type { AgentEngine } from '../engines/types.js'
 import type { RegisteredSession, ProcessIdentity } from './registry.js'
 import type { TerminateOutcome } from './deleteAgentFallback.js'
+import { permissionModeApproves } from './engineLaunch.js'
+
+/**
+ * Whether the relaunch approves on its own — from the ROW first, and the live process only for a row
+ * that never learned.
+ *
+ * The row is what create wrote and what discovery keeps in step with the live argv, so it is the
+ * answer even once the process is dead or `ps` has failed. Reading the live argv instead was the
+ * original design (there was nothing else to read then), and it is what lost the flag: a `ps` that
+ * timed out read as "no", and an agent typed into a terminal with the skip-everything flag came back
+ * in the auto mode. The mode outranks the boolean — Plan is not a yes — and `buildArgv` reapplies the
+ * mode itself; this only settles the yes/no the engines without a mode table launch with.
+ */
+export async function bypassPermissionFor(
+  session: Pick<RegisteredSession, 'permissionMode' | 'bypassPermission'>,
+  probeLive: () => Promise<boolean>,
+): Promise<boolean> {
+  if (session.permissionMode) return permissionModeApproves(session.permissionMode)
+  if (session.bypassPermission !== undefined) return session.bypassPermission
+  return probeLive()
+}
 
 export type RestartOutcome =
   | { ok: true; processIdentity: ProcessIdentity; resumed: boolean }

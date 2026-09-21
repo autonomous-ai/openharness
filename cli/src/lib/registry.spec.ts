@@ -1382,6 +1382,32 @@ describe('registry across a reboot and pane loss', () => {
     expect(saved[0]).not.toHaveProperty('bypassPermission')
   })
 
+  it('fills in the permission mode discovery read off a live argv, and keeps it across a reload', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({
+      engine: 'claude',
+      runtimes: [{ backend: 'tmux', paneId: '%9' }],
+      cwd: '/tmp/demo',
+      bypassPermission: true,
+    })
+    expect(pending).not.toHaveProperty('permissionMode')
+
+    expect(registry.setPermissionMode(pending!.agentId, 'full')).toBe(true)
+    expect(registry.byAgent(pending!.agentId)?.permissionMode).toBe('full')
+    // Idempotent; fill-only, so the recorded mode is never re-derived into another; and a name that
+    // is not a mode is refused as it is on load.
+    expect(registry.setPermissionMode(pending!.agentId, 'full')).toBe(true)
+    expect(registry.setPermissionMode(pending!.agentId, 'plan')).toBe(false)
+    expect(registry.setPermissionMode(pending!.agentId, '--dangerously-skip-permissions')).toBe(false)
+    expect(registry.setPermissionMode('nope', 'full')).toBe(false)
+    expect(registry.byAgent(pending!.agentId)?.permissionMode).toBe('full')
+
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(pending!.agentId)?.permissionMode).toBe('full')
+  })
+
   const GRID_LAUNCH = {
     networkId: 'grid-abc',
     networkName: 'Team grid',

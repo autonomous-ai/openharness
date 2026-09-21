@@ -77,7 +77,7 @@ import { writeGridConfigDir } from './lib/gridConfigDir.js'
 import { tmuxSupportsSessionEnv, TMUX_SESSION_ENV_MIN } from './lib/tmuxVersion.js'
 import { clearDeleted, isRecentlyDeleted, markDeleted } from './lib/deletedSessions.js'
 import { terminateDeletedAgent, checkPidRuntime } from './lib/deleteAgentFallback.js'
-import { AgentRestartCoordinator, restartAgent, type RestartAgentDeps } from './lib/restartAgent.js'
+import { AgentRestartCoordinator, bypassPermissionFor, restartAgent, type RestartAgentDeps } from './lib/restartAgent.js'
 import { claudeContinuation, findLiveSession, findResumedTranscript } from './lib/sessionRepair.js'
 import { TmuxBackend } from './lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from './lib/hostTheme.js'
@@ -102,6 +102,7 @@ import type { AgentDshContext } from './lib/agentFrame.js'
 import { basename } from 'node:path'
 import {
   bypassPermissionActive,
+  permissionModeFromArgv,
   clearPaneRemainOnExit,
   resolvePaneEngineProcess,
   tmuxPaneState,
@@ -2885,6 +2886,14 @@ async function runForeground(session: AuthSession): Promise<void> {
       // `observed.engine`, not `current.engine`: for a terminal that just adopted one, the row's
       // engine was `terminal` a line ago, which has no bypass flag and would read every launch as "no".
       registry.setBypassPermission(current.agentId, bypassPermissionActive(observed.engine, observed.args))
+      // And the exact MODE, fill-only: a row that recorded one at create is authoritative, and one
+      // that never did (adopted from a terminal, written by an older build, created by a path that
+      // passes no mode) learns it from the same argv — so its restart brings back
+      // `--dangerously-skip-permissions`, not the auto mode `bypassPermission` alone would pick.
+      if (!current.permissionMode) {
+        const mode = permissionModeFromArgv(observed.engine, observed.args)
+        if (mode) registry.setPermissionMode(current.agentId, mode)
+      }
       // Same idea for a Codex profile: a row that never learned which CODEX_HOME its process runs
       // under learns it from the process, before the hook path validates a transcript against it.
       // Fill-only — a profile the row already knows is never re-derived.
@@ -4553,8 +4562,9 @@ async function runForeground(session: AuthSession): Promise<void> {
     log: (message) => console.log(message),
   })
 
-  /** The bypass-permission mode the LIVE process was launched with — there is nowhere to read it from
-   *  once that process is dead, so both swap paths read it before signalling anything. */
+  /** The bypass-permission flag the LIVE process was launched with. The fallback behind
+   *  `bypassPermissionFor` for a row that recorded neither a mode nor the flag (written before either
+   *  was persisted, and not yet seen by a discovery scan); read before anything is signalled. */
   const liveBypassPermission = async (session: RegisteredSession): Promise<boolean> => {
     const identity = session.processIdentity
     if (!identity) return false
@@ -4716,7 +4726,7 @@ async function runForeground(session: AuthSession): Promise<void> {
       }
       const outcome = await restartAgent(
         { engine: session.engine, sessionId: session.sessionId },
-        await liveBypassPermission(session),
+        await bypassPermissionFor(session, () => liveBypassPermission(session)),
         paneSwapDeps(session, pane, built.overrides),
       )
       if (!outcome.ok) {
@@ -4823,10 +4833,11 @@ async function runForeground(session: AuthSession): Promise<void> {
    *    mid-kill, or — worse — mint a brand-new agent for the relaunched process the instant it appears,
    *    before this handler gets to rebind it.
    *
-   * The bypass-permission mode is read from the LIVE process argv before anything is signalled (there is
-   * nowhere else to read it from once the process is dead); the sessionId to resume comes from the
-   * registry's live-synced field, not from the original launch argv (the user may have resumed/switched
-   * sessions from inside the engine's own terminal since launch).
+   * The permission mode comes from the registry row (`bypassPermissionFor`): what create recorded, or
+   * what discovery read off the live argv since — the live process is probed only for a row that has
+   * neither, and before anything is signalled. The sessionId to resume comes from the registry's
+   * live-synced field, not from the original launch argv (the user may have resumed/switched sessions
+   * from inside the engine's own terminal since launch).
    */
   backend.onRestartAgent = (agentId) => restartJobs.run(registry.resolve(agentId)?.agentId ?? agentId, async (operationCurrent) => {
     const session = registry.resolve(agentId)
@@ -4847,8 +4858,13 @@ async function runForeground(session: AuthSession): Promise<void> {
     if (isTerminalEngine(engine)) {
       agentReconciler.holdRoute(routeKey)
       try {
+        // The same opening a fresh terminal tile prints (`onCreateAgent`'s `terminalHint`): a
+        // restarted tile is a fresh shell too, and should look like one.
         const respawned = await tmuxBackend.respawn(runtime, {
-          command: buildEngineLaunchArgv(engine, session.cwd ? { cwd: session.cwd } : {}),
+          command: buildEngineLaunchArgv(engine, {
+            ...(session.cwd ? { cwd: session.cwd } : {}),
+            terminalHint: { machineName: terminalHintMachineName() },
+          }),
           cwd: homedir(),
         })
         if (!current()) return changed
@@ -4878,7 +4894,7 @@ async function runForeground(session: AuthSession): Promise<void> {
 
     agentReconciler.holdRoute(routeKey)
     try {
-      const bypassPermission = await liveBypassPermission(session)
+      const bypassPermission = await bypassPermissionFor(session, () => liveBypassPermission(session))
       const outcome = await restartAgent(
         { engine, sessionId: session.sessionId },
         bypassPermission,
