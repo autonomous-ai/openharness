@@ -57,14 +57,10 @@ Future<void> showDeskTabsPopup(
     useRootNavigator: true,
     showDragHandle: true,
     backgroundColor: AppPalette.panelBg,
-    // A column of rows outgrows Flutter's 9/16 cap on the second tab of any
-    // real desk — and short of the top on purpose, so the terminal underneath
-    // stays recognisable while its own panel is open. Same two lines every
-    // phone sheet here is built with; see [showPhoneSheet].
+    // A column of rows outgrows Flutter's 9/16 cap, which is not a height
+    // anything here asked for — see [_DeskTabsPanelState.build] for the one
+    // this panel keeps.
     isScrollControlled: true,
-    constraints: BoxConstraints(
-      maxHeight: MediaQuery.sizeOf(context).height * 0.85,
-    ),
     builder: (sheetContext) => _DeskTabsPanel(
       groups: groups,
       initialId: active.id,
@@ -131,46 +127,48 @@ class _DeskTabsPanelState extends State<_DeskTabsPanel> {
             onPick: (picked) => setState(() => _selectedId = picked.id),
           ),
           const SizedBox(height: 6),
-          if (group.isEmpty)
-            const _TabIsEmpty()
-          else
-            // Flexible, not Expanded: a tab of two agents makes a panel two
-            // rows tall, and only a long one grows to the cap and scrolls.
-            Flexible(
-              child: ListView.separated(
-                shrinkWrap: true,
-                padding: EdgeInsets.fromLTRB(
-                  _sideInset,
-                  4,
-                  _sideInset,
-                  MediaQuery.paddingOf(context).bottom + 8,
-                ),
-                itemCount: group.entries.length,
-                separatorBuilder: (context, index) =>
-                    const SizedBox(height: kPhoneCardGap),
-                itemBuilder: (context, index) {
-                  final entry = group.entries[index];
-                  final showing =
-                      entry.machineId == widget.showing.machineId &&
-                      entry.agent.id == widget.showing.agentId;
-                  return AgentTile(
-                    machine: entry.machine,
-                    agent: entry.agent,
-                    // The agent already on screen keeps its row — it is the one
-                    // you came from, and the list would read as missing an
-                    // agent without it — and wears the accent rim instead.
-                    border: showing
-                        ? Border.all(
-                            color: AppPalette.accentOnSurface,
-                            width: 1.5,
-                          )
-                        : null,
-                    onTap: () => widget.onOpen(group, entry),
-                  );
-                },
-              ),
-            ),
-          const SizedBox(height: 4),
+          // ⚠️ **One height, whatever the tab holds.** Sized to its contents,
+          // the panel stood up and sat down as tabs were read — a tab of one
+          // agent, then a tab of six — and the names along the top moved with
+          // it, so the next tab was somewhere else by the time the thumb got
+          // there. Half the screen: enough for four rows, and the terminal
+          // keeps the other half.
+          SizedBox(
+            height: MediaQuery.sizeOf(context).height * 0.5,
+            child: group.isEmpty
+                ? const _TabIsEmpty()
+                : ListView.separated(
+                    padding: EdgeInsets.fromLTRB(
+                      _sideInset,
+                      4,
+                      _sideInset,
+                      MediaQuery.paddingOf(context).bottom + 8,
+                    ),
+                    itemCount: group.entries.length,
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(height: kPhoneCardGap),
+                    itemBuilder: (context, index) {
+                      final entry = group.entries[index];
+                      final showing =
+                          entry.machineId == widget.showing.machineId &&
+                          entry.agent.id == widget.showing.agentId;
+                      return AgentTile(
+                        machine: entry.machine,
+                        agent: entry.agent,
+                        // The agent already on screen keeps its row — it is the
+                        // one you came from, and the list would read as missing
+                        // an agent without it — and wears the accent rim.
+                        border: showing
+                            ? Border.all(
+                                color: AppPalette.accentOnSurface,
+                                width: 1.5,
+                              )
+                            : null,
+                        onTap: () => widget.onOpen(group, entry),
+                      );
+                    },
+                  ),
+          ),
         ],
       ),
     );

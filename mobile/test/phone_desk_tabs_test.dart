@@ -198,6 +198,26 @@ void main() {
     expect(swipesOver(tester), ['c', 'd']);
   });
 
+  testWidgets('the panel stays put whatever the tab holds', (tester) async {
+    await pumpHome(
+      tester,
+      tabs: [
+        deskTab('t1', 'Desktop', ['a', 'b', 'c']),
+        deskTab('t2', 'Docker', ['d']),
+      ],
+    );
+
+    await openPanel(tester);
+    final names = tester.getTopLeft(find.byType(DeskTabStrip)).dy;
+
+    await showTab(tester, 'Docker');
+
+    // A tab of one agent after a tab of three: the panel is the same height,
+    // so the names are where the thumb left them.
+    expect(agentsShown(tester), ['d']);
+    expect(tester.getTopLeft(find.byType(DeskTabStrip)).dy, names);
+  });
+
   testWidgets('the agent on screen keeps its row, and wears the rim', (
     tester,
   ) async {

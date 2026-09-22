@@ -75,8 +75,9 @@ icon size in thirty seconds instead of in an email twenty minutes later.
 | `1.0.0 (24)` | 2026-09-21 | TestFlight. The tabs mark brings a panel up from the bottom: the account's tabs as a row of names, and the agents of the one picked as cards beside each other. A name changes the cards alone — another tab can be read into without leaving the terminal you are in — and a card is what opens an agent |
 | `1.0.0 (25)` | 2026-09-22 | TestFlight. Opening an agent takes its terminal again: no read-only stream and no "Take control" band in front of an agent a desktop has open, including the one the app opens on. The band is left for the case it is about — a terminal taken back off this phone |
 | `1.0.0 (26)` | 2026-09-22 | TestFlight. The tabs panel lists a tab's agents DOWN the page, as the rows the Agents tab draws, instead of as cards read sideways through a letterbox |
+| `1.0.0 (27)` | 2026-09-22 | TestFlight. The tabs panel keeps one height — half the screen — whatever the tab holds, so reading a tab of one agent after a tab of six no longer moves the names along its top |
 
-`pubspec.yaml` is therefore at `1.0.0+27`: the repo always holds the NEXT build number, so a release
+`pubspec.yaml` is therefore at `1.0.0+28`: the repo always holds the NEXT build number, so a release
 runs clean without anyone having to remember the last one.
 
 ### Why the app is iPhone-only
