@@ -1,6 +1,6 @@
 # New-tab wallpapers
 
-Blank remains the default and uses the selected tab's workspace color. The optional artwork appears only on empty welcome/new-tab pages. The welcome text and wallpaper stay mounted at their original position while the New Harness and Open Harness panels overlay the page.
+Blank remains the default and uses the selected tab's workspace color. Choose artwork under Customize Harness → Wallpaper. It appears only on empty welcome/new-tab pages. The welcome text and wallpaper stay mounted at their original position while the New Harness and Open Harness panels overlay the page.
 
 The four images below were created with the built-in image generation tool. The PNG outputs were copied into the app without retouching. They are bundled locally; changing wallpaper does not make a network request. The center is deliberately quiet so the terminal-font welcome message remains readable.
 

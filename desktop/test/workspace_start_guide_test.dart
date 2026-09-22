@@ -475,7 +475,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('welcome-customize')));
     await tester.pumpAndSettle();
     expect(find.byType(HarnessCustomizePane), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('customize-appearance')));
+    await tester.tap(find.byKey(const ValueKey('customize-wallpaper')));
     await tester.pumpAndSettle();
     expect(find.byType(WallpaperSection), findsOneWidget);
     expectCentered();
