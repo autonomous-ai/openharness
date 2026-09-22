@@ -720,6 +720,8 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
           ? widget.initialDraft?.worktree
           : null,
       branchRef: _sameGitProject ? widget.initialDraft?.branchRef : null,
+      branchName: _sameGitProject ? widget.initialDraft?.branchName : null,
+      placeholder: _sameGitProject ? widget.initialDraft?.placeholder : null,
       gitProject: _sameGitProject ? widget.initialDraft?.gitProject : null,
       profile: _codexProfile,
       profileChosen: _codexProfileChosen,

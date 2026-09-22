@@ -1,15 +1,18 @@
 import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
+import { placeholderBranch, sessionBranchSlug, worktreeFolderName } from './agentNames.js'
+import { nameBranchAfterSession } from './branchNaming.js'
 import { prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
 import { parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
 
 const exec = promisify(execFile)
-describe('launch Git preparation', () => {
+// Real Git, several worktrees a test: slower than the default 5s under a full, parallel run.
+describe('launch Git preparation', { timeout: 30_000 }, () => {
   let root: string, repo: string
   const git = async (...args: string[]) => (await exec('git', ['-C', repo, ...args])).stdout.trim()
   beforeEach(async () => {
@@ -34,8 +37,10 @@ describe('launch Git preparation', () => {
   })
   afterEach(async () => { vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true }) })
   const options = () => ({ root: join(root, 'harnesses'), label: 'Codex', now: () => new Date(2026, 8, 21, 12, 0) })
-  const prepare = (source: 'worktree' | 'branch', branchRef = 'refs/heads/feature', path = repo) =>
-    prepareProjectFolder(parseProjectFolder({ projectSource: source, gitSource: path, branchRef })!, options())
+  const prepare = (source: 'worktree' | 'branch', branchRef = 'refs/heads/feature', path = repo, extra: Record<string, unknown> = {}) =>
+    prepareProjectFolder(parseProjectFolder({ projectSource: source, gitSource: path, branchRef, ...extra })!, options())
+  const worktrees = () => join(root, 'harnesses', 'worktrees', 'project with spaces')
+  const current = async (path: string) => (await exec('git', ['-C', path, 'branch', '--show-current'])).stdout.trim()
 
   it('encrypts Git metadata requests and replies', () => {
     expect(encryptDownFrame('git_project_info')).toBe(true)
@@ -62,7 +67,7 @@ describe('launch Git preparation', () => {
     for (const path of paths) {
       expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('feature')
       const branch = (await exec('git', ['-C', path, 'branch', '--show-current'])).stdout.trim()
-      expect(branch).toMatch(/^harness\//)
+      expect(branch).toMatch(/^[a-z]+-[a-z]+(-\d+)?$/)
       branches.push(branch)
     }
     expect(new Set(branches).size).toBe(2)
@@ -70,27 +75,135 @@ describe('launch Git preparation', () => {
     expect(await git('branch', '--show-current')).toBe('main')
   })
 
-  it('names worktrees for the harness and the time, grouped by repository, skipping names already taken', async () => {
-    await git('branch', 'harness/codex-0921-1200-2', 'main')
-    const paths = [await prepare('worktree'), await prepare('worktree')]
-    const folder = join(root, 'harnesses', 'worktrees', 'project with spaces')
-    expect(paths).toEqual([join(folder, 'codex-0921-1200'), join(folder, 'codex-0921-1200-3')])
-    for (const path of paths) {
-      expect((await exec('git', ['-C', path, 'branch', '--show-current'])).stdout.trim()).toBe(`harness/${basename(path)}`)
+  it('makes up a two-word branch no branch uses, in a folder named for it, grouped by repository', async () => {
+    expect(placeholderBranch([], () => 0)).toBe('amber-badger')
+    expect(placeholderBranch(['refs/heads/amber-badger', 'amber-badger-2'], () => 0)).toBe('amber-badger-3')
+    expect(worktreeFolderName('deehw/brave-otter')).toBe('brave-otter')
+    expect(worktreeFolderName('fix/login page')).toBe('loginpage')
+    expect(sessionBranchSlug('Worktree and branches organization')).toBe('worktree-and-branches-organization')
+    expect(sessionBranchSlug('✳ Fix: the login page — redirects twice?')).toBe('fix-the-login-page-redirects-twice')
+    expect(sessionBranchSlug('a'.repeat(30) + ' ' + 'b'.repeat(30))).toBe('a'.repeat(30))
+    expect(sessionBranchSlug('✳ ✳')).toBeNull()
+    const made = [await prepare('worktree'), await prepare('worktree')]
+    expect(new Set(made).size).toBe(2)
+    for (const path of made) {
+      const branch = await current(path)
+      expect(branch).toMatch(/^[a-z]+-[a-z]+(-\d+)?$/)
+      expect(path).toBe(join(worktrees(), worktreeFolderName(branch)))
+      expect(await git('config', '--get', `branch.${branch}.harness`)).toBe('placeholder')
     }
   })
 
+  it('creates a named branch once, and refuses names Git would not take', async () => {
+    const named = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'fix/login' })
+    expect(named).toBe(join(worktrees(), 'login'))
+    expect(await current(named)).toBe('fix/login')
+    expect(await git('config', '--get', 'branch.fix/login.harness')).toBe('created')
+    const made = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-owl', branchMode: 'placeholder' })
+    expect(await current(made)).toBe('quiet-owl')
+    expect(await git('config', '--get', 'branch.quiet-owl.harness')).toBe('placeholder')
+    const info = await readGitProject(repo) as { branches: Array<{ name: string; harness?: true }> }
+    expect(info.branches.filter(b => b.harness).map(b => b.name).sort()).toEqual(['fix/login', 'quiet-owl'])
+    await expect(prepare('worktree', 'refs/heads/feature', repo, { branchName: 'fix/login' })).rejects.toMatchObject({ code: 'BRANCH_EXISTS' })
+    await expect(prepare('worktree', 'refs/heads/feature', repo, { branchName: 'bad..name' })).rejects.toMatchObject({ code: 'INVALID_BRANCH' })
+    for (const extra of [{ branchName: '-x' }, { branchName: 'a b' }, { branchName: 'ok', branchMode: 'other' }]) {
+      expect(() => parseProjectFolder({ projectSource: 'worktree', gitSource: repo, ...extra })).toThrow()
+    }
+  })
+
+  it('makes a new branch for the folder itself, keeping its uncommitted work, and refuses one that exists', async () => {
+    await writeFile(join(repo, 'src', 'value'), 'in progress')
+    expect(await prepare('branch', 'refs/heads/login-fix', repo, { branchName: 'login-fix' })).toBe(repo)
+    expect(await git('branch', '--show-current')).toBe('login-fix')
+    expect(await readFile(join(repo, 'src', 'value'), 'utf8')).toBe('in progress')
+    await expect(prepare('branch', 'refs/heads/feature', repo, { branchName: 'feature' })).rejects.toMatchObject({ code: 'BRANCH_EXISTS' })
+    expect(() => parseProjectFolder({ projectSource: 'branch', gitSource: repo, branchRef: 'refs/heads/other', branchName: 'login-fix' })).toThrow()
+  })
+
+  it('names a made-up worktree branch after its session once, and never a pushed or chosen one', async () => {
+    const path = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-owl', branchMode: 'placeholder' })
+    expect(await nameBranchAfterSession(path, null)).toBeNull()
+    expect(await nameBranchAfterSession(path, 'Worktree and branches organization')).toBe('worktree-and-branches-organization')
+    expect(await current(path)).toBe('worktree-and-branches-organization')
+    expect(await git('config', '--get', 'branch.worktree-and-branches-organization.harness')).toBe('created')
+    expect(await nameBranchAfterSession(path, 'A later name')).toBeNull()
+    expect(await current(path)).toBe('worktree-and-branches-organization')
+    const second = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'calm-fox', branchMode: 'placeholder' })
+    expect(await nameBranchAfterSession(second, 'Worktree and branches organization')).toBe('worktree-and-branches-organization-2')
+    // A name a remote has is taken too.
+    const third = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-fox', branchMode: 'placeholder' })
+    await git('update-ref', 'refs/remotes/origin/onboarding-experience', 'main')
+    expect(await nameBranchAfterSession(third, 'Onboarding experience')).toBe('onboarding-experience-2')
+    const chosen = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'fix/mine' })
+    expect(await nameBranchAfterSession(chosen, 'Anything')).toBeNull()
+    const pushed = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'sunny-owl', branchMode: 'placeholder' })
+    await git('config', 'branch.sunny-owl.remote', 'origin')
+    expect(await nameBranchAfterSession(pushed, 'Anything')).toBeNull()
+    expect(await current(pushed)).toBe('sunny-owl')
+  })
+
+  it('checks out an existing branch as it is in a new worktree, once', async () => {
+    await git('branch', 'topic', 'main')
+    const path = await prepare('worktree', 'refs/heads/topic', repo, { branchName: 'topic', branchMode: 'existing' })
+    expect(path).toBe(join(worktrees(), 'topic'))
+    expect(await current(path)).toBe('topic')
+    expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
+    await expect(prepare('worktree', 'refs/heads/topic', repo, { branchName: 'topic', branchMode: 'existing' }))
+      .rejects.toMatchObject({ code: 'BRANCH_IN_USE' })
+  })
+
+  it('fetches a remote base first, reports the default, and tracks a remote branch under its own name', async () => {
+    const origin = join(root, 'origin.git'), upstream = join(root, 'upstream')
+    await exec('git', ['clone', '--quiet', '--bare', repo, origin])
+    await git('remote', 'add', 'origin', origin)
+    await git('fetch', '--quiet', 'origin')
+    await git('remote', 'set-head', 'origin', 'main')
+    expect(await readGitProject(repo)).toMatchObject({ defaultRef: 'refs/remotes/origin/main' })
+    await exec('git', ['clone', '--quiet', origin, upstream])
+    const up = (...args: string[]) => exec('git', ['-C', upstream, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args])
+    await writeFile(join(upstream, 'src', 'value'), 'pushed')
+    await up('commit', '-qam', 'pushed')
+    await up('push', '--quiet', 'origin', 'main', 'main:fix/typo')
+    await git('fetch', '--quiet', 'origin', 'fix/typo:refs/remotes/origin/fix/typo')
+    const fresh = await prepare('worktree', 'refs/remotes/origin/main', repo, { branchName: 'harness/fresh' })
+    expect(await readFile(join(fresh, 'src', 'value'), 'utf8')).toBe('pushed')
+    await expect(exec('git', ['-C', fresh, 'rev-parse', '--abbrev-ref', '@{upstream}'])).rejects.toThrow()
+    // A local branch starts from the newer of itself and its upstream.
+    await git('branch', '--set-upstream-to=origin/main', 'main')
+    await git('update-ref', 'refs/remotes/origin/main', 'main')
+    const behind = await prepare('worktree', 'refs/heads/main', repo, { branchName: 'from-behind' })
+    expect(await readFile(join(behind, 'src', 'value'), 'utf8')).toBe('pushed')
+    await writeFile(join(repo, 'src', 'value'), 'local')
+    await git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qam', 'local')
+    const ahead = await prepare('worktree', 'refs/heads/main', repo, { branchName: 'from-ahead' })
+    expect(await readFile(join(ahead, 'src', 'value'), 'utf8')).toBe('local')
+    const tracking = await prepare('worktree', 'refs/remotes/origin/fix/typo', repo, { branchName: 'fix/typo' })
+    expect((await exec('git', ['-C', tracking, 'rev-parse', '--abbrev-ref', '@{upstream}'])).stdout.trim()).toBe('origin/fix/typo')
+  })
+
+  it('copies ignored files named in .worktreeinclude into new worktrees', async () => {
+    await writeFile(join(repo, '.gitignore'), '.env\n*.log\nlocal/\n')
+    await writeFile(join(repo, '.worktreeinclude'), '.env\nlocal/\n')
+    await writeFile(join(repo, '.env'), 'SECRET=1')
+    await writeFile(join(repo, 'debug.log'), 'noise')
+    await mkdir(join(repo, 'local'))
+    await writeFile(join(repo, 'local', 'settings.json'), '{}')
+    const path = await prepare('worktree')
+    expect(await readFile(join(path, '.env'), 'utf8')).toBe('SECRET=1')
+    expect(await readFile(join(path, 'local', 'settings.json'), 'utf8')).toBe('{}')
+    await expect(readFile(join(path, 'debug.log'))).rejects.toThrow()
+  })
+
   it('reads a linked worktree as its repository, and a worktree started from one joins the same repository', async () => {
-    const linked = await prepare('worktree')
+    const linked = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'harness/linked' })
     const info = await readGitProject(join(linked, 'src'))
-    expect(info).toMatchObject({ isGit: true, branch: 'harness/codex-0921-1200', mainBranch: 'main' })
+    expect(info).toMatchObject({ isGit: true, branch: 'harness/linked', mainBranch: 'main' })
     expect(await realpath((info as { mainFolder: string }).mainFolder)).toBe(await realpath(join(repo, 'src')))
     const branches = (info as { branches: Array<{ name: string; worktree?: string }> }).branches
-    expect(await realpath(branches.find(branch => branch.name === 'harness/codex-0921-1200')!.worktree!)).toBe(await realpath(linked))
+    expect(await realpath(branches.find(branch => branch.name === 'harness/linked')!.worktree!)).toBe(await realpath(linked))
     expect(await realpath(branches.find(branch => branch.name === 'main')!.worktree!)).toBe(await realpath(repo))
     expect(await readGitProject(repo)).not.toHaveProperty('mainFolder')
-    const second = await prepare('worktree', 'refs/heads/main', linked)
-    expect(second).toBe(join(root, 'harnesses', 'worktrees', 'project with spaces', 'codex-0921-1200-2'))
+    expect(await prepare('worktree', 'refs/heads/main', linked, { branchName: 'harness/second' })).toBe(join(worktrees(), 'second'))
   })
 
   it('keeps the selected subfolder in its new worktree', async () => {
@@ -109,6 +222,10 @@ describe('launch Git preparation', () => {
     expect(await git('stash', 'list')).toBe('')
     // Selecting the current branch is a no-op even with dirty files.
     expect(await prepare('branch')).toBe(repo)
+    await git('checkout', '--', '.')
+    await writeFile(join(repo, 'notes.txt'), 'untracked')
+    await expect(prepare('branch', 'refs/heads/main')).rejects.toMatchObject({ code: 'BRANCH_SWITCH_FAILED' })
+    expect(await git('branch', '--show-current')).toBe('feature')
   })
 
   it('opens a branch checked out elsewhere in its worktree, and refuses missing refs, revision expressions, and untracked subfolders', async () => {
@@ -159,7 +276,7 @@ describe('launch Git preparation', () => {
     expect(await readGitProject(repo)).toMatchObject({ isGit: true, branch: null })
     const path = await prepareGitProject(repo, { root, worktree: true })
     expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
-    expect(path).toMatch(/\/worktrees\/project with spaces\/harness-\d{4}-\d{4}$/)
+    expect(path).toMatch(/\/worktrees\/project with spaces\/[a-z]+-[a-z]+(-\d+)?$/)
     expect(await prepare('branch')).toBe(repo)
     expect(await git('branch', '--show-current')).toBe('feature')
   })

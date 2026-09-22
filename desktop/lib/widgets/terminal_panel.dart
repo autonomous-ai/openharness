@@ -1895,12 +1895,6 @@ class _TerminalHeader extends StatelessWidget {
         pickerWidth +
         (onFork == null ? 0 : 30) +
         (agent?.viewerUrl == null && agent?.viewerError == null ? 0 : 30);
-    final folder =
-        project?.cwd
-            .split(RegExp(r'[/\\]'))
-            .where((part) => part.isNotEmpty)
-            .lastOrNull ??
-        project?.name;
     // A fork says so first: "forked from X" is the one fact about this pane
     // that the folder and the branch — shared with its source — cannot tell.
     final forkedFrom = agent?.forkedFrom;
@@ -2139,9 +2133,18 @@ class _TerminalHeader extends StatelessWidget {
                         ].join('\n'),
                         child: PromptContextView(
                           contextData: PromptContext(
-                            machine: machineName,
-                            project: narrow ? null : folder,
-                            branch: narrow ? null : project?.branch,
+                            // This computer goes without saying.
+                            machine: machine?.isLocalMachine == true
+                                ? null
+                                : machineName,
+                            // The folder as it was chosen and its repository's branch;
+                            // the full working folder is in the tooltip.
+                            project: narrow ? null : project?.label,
+                            // Waiting for the session's name, a branch Harness made
+                            // up at Start is not worth reading.
+                            branch: narrow || project?.branchPending == true
+                                ? null
+                                : project?.branch,
                             leading: !narrow && forkedFrom != null
                                 ? 'forked from ${forkedFrom.name}'
                                 : null,

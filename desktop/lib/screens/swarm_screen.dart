@@ -1299,11 +1299,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
             ?.machine
             .machineId ??
         app.machineStates.keys.firstOrNull;
-    final initialFolder =
-        folder ??
-        (projectName != null || agent == null || id != focused?.machineId
-            ? null
-            : machine?.projectOf(agent)?.cwd);
+    final paneProject =
+        projectName != null || agent == null || id != focused?.machineId
+        ? null
+        : machine?.projectOf(agent);
+    final initialFolder = folder ?? paneProject?.cwd;
+    // Another one of these: on the branch the pane is on, as well as its folder.
+    final initialBranch = folder == null ? paneProject?.branch : null;
     if (id == null) {
       await _dialog(
         () => showSwarmLinkDialog(context, app, keymap: _keymap),
@@ -1330,6 +1332,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // ⌘⇧T is how a shell is made; New Harness from a shell means an agent.
       engine: engine ?? (isTerminalEngine(inherited) ? null : inherited),
       folder: initialFolder,
+      branch: initialBranch,
       projectName: projectName,
       autoProject:
           projectName == null &&
@@ -1414,6 +1417,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     required String machineId,
     String? engine,
     String? folder,
+    String? branch,
     String? projectName,
     bool autoProject = false,
     String? task,
@@ -1492,6 +1496,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       machineId: machineId,
       engine: engine,
       folder: folder,
+      branch: branch,
       projectName: projectName,
       task: task,
       draft: resumed,

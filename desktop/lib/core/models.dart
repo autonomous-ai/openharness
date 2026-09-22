@@ -781,12 +781,37 @@ class AgentProject {
     this.root,
     this.remote,
     this.branch,
+    this.worktree = false,
+    this.branchPending = false,
   });
   final String name;
   final String cwd;
   final String? root;
   final String? remote;
   final String? branch;
+
+  /// In a linked worktree rather than the repository's own checkout.
+  final bool worktree;
+
+  /// [branch] still has the name Harness made up at Start; it is shown once
+  /// the session's name replaces it.
+  final bool branchPending;
+
+  /// The folder as the person chose it: inside a Git checkout, a subfolder
+  /// shows as itself and the checkout's root as its repository ([name]), even
+  /// when the checkout is a temporary worktree. Outside Git it is [name], the
+  /// folder itself. The branch beside it is the repository's.
+  String get label {
+    final checkout = root;
+    if (checkout == null) return name;
+    String trimmed(String path) => path.replaceFirst(RegExp(r'[/\\]+$'), '');
+    if (trimmed(checkout) == trimmed(cwd)) return name;
+    return cwd
+            .split(RegExp(r'[/\\]'))
+            .where((part) => part.isNotEmpty)
+            .lastOrNull ??
+        name;
+  }
 
   String identity(String machineId) =>
       remote != null ? 'repo:$remote' : 'folder:$machineId:${root ?? cwd}';
@@ -798,9 +823,12 @@ class AgentProject {
       cwd == other.cwd &&
       root == other.root &&
       remote == other.remote &&
-      branch == other.branch;
+      branch == other.branch &&
+      worktree == other.worktree &&
+      branchPending == other.branchPending;
   @override
-  int get hashCode => Object.hash(name, cwd, root, remote, branch);
+  int get hashCode =>
+      Object.hash(name, cwd, root, remote, branch, worktree, branchPending);
 
   static AgentProject? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -823,6 +851,8 @@ class AgentProject {
       root: field('root'),
       remote: field('remote'),
       branch: field('branch', 256),
+      worktree: raw['worktree'] == true,
+      branchPending: raw['branchPending'] == true,
     );
   }
 }

@@ -427,11 +427,11 @@ class _AgentPreview extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: excerpt == null ? muted : body,
           ),
-          if (project?.name != null)
+          if (project != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                [project!.name, project.branch].whereType<String>().join(' · '),
+                [project.label, project.branch].whereType<String>().join(' · '),
                 style: muted,
               ),
             ),
