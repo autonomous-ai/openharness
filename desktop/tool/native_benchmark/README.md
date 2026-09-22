@@ -1,5 +1,8 @@
 # Native Release interaction benchmark
 
+Start with the [September 22 wrap-up and resume notes](../../../docs/performance/2026-09-22-wrap-up.md)
+for the ready PRs, measured improvements, rejected experiments and remaining priorities.
+
 ## Framework-dispatch comparison and manual feature checks
 
 The fixture supports three separate modes:
