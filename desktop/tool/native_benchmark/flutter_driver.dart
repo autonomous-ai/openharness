@@ -14,6 +14,7 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/widgets/new_harness_box.dart';
 import 'package:harness/widgets/swarm_search_input.dart';
 import 'package:harness/widgets/terminal_find_bar.dart';
+import 'package:harness/widgets/workspace_welcome.dart';
 
 typedef _Key = (LogicalKeyboardKey, PhysicalKeyboardKey);
 const _escape = (LogicalKeyboardKey.escape, PhysicalKeyboardKey.escape);
@@ -181,6 +182,43 @@ Future<void> runFlutterDispatchBenchmark(
           'creation field ${(_find((w) => w is NewHarnessBox)?.widget as NewHarnessBox?)?.controller.field}',
         );
       }
+    }
+  }
+  // Cmd+T creates a blank tab; Escape does not close that tab. Validate both
+  // its first welcome frame and the Cmd+W return to the retained workspace.
+  for (var sample = -5; sample < 40; sample++) {
+    await _frame();
+    final previousTab = app.activeSwarmId;
+    final previousCount = app.swarms.length;
+    final began = DateTime.now().microsecondsSinceEpoch;
+    _key((LogicalKeyboardKey.keyT, PhysicalKeyboardKey.keyT));
+    final dispatched = DateTime.now().microsecondsSinceEpoch;
+    final frame = await _frame();
+    if (app.activeSwarmId == previousTab ||
+        app.swarms.length != previousCount + 1 ||
+        app.panes.isNotEmpty ||
+        _find((widget) => widget is WorkspaceWelcome) == null) {
+      throw StateError('Cmd+T did not create its welcome tab');
+    }
+    rows.add({
+      'operation': 'cmd_t',
+      'phase': sample < 0 ? 'warmup' : 'measured',
+      'startedWallMicros': began,
+      'dispatchMicros': dispatched - began,
+      'firstFrame': frame,
+      'readyFrame': frame,
+    });
+    _key((LogicalKeyboardKey.keyW, PhysicalKeyboardKey.keyW));
+    await _frame();
+    if (app.swarms.length != previousCount ||
+        _find((widget) => widget is WorkspaceWelcome) != null) {
+      throw StateError('Cmd+W did not close the benchmark welcome tab');
+    }
+    // Closing selects the adjacent tab; return to the exact starting context.
+    app.selectSwarm(previousTab, attachPending: false);
+    await _frame();
+    if (app.activeSwarmId != previousTab || app.panes.isEmpty) {
+      throw StateError('Cmd+T did not restore the original workspace');
     }
   }
   for (final operation in ['tab', 'focus', 'zoom']) {

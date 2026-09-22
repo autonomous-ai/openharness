@@ -15,7 +15,7 @@ The dispatch mode runs and exits automatically, writing `interactive.json` in
 `BENCHMARK_ROOT`; the interactive mode remains open for manual checks. They
 cannot be combined. Neither mode opens a real transport or uses saved sessions.
 
-`--flutter-dispatch` measures Cmd+N/O/P/comma/slash/F, tab changes, pane focus,
+`--flutter-dispatch` measures Cmd+N/O/T/P/comma/slash/F, tab changes, pane focus,
 and zoom in the macOS Release renderer. It calls the framework's keyboard-state
 and focus dispatch stages, validates the resulting widget/state, and joins the
 exact first frame and fully opened route frame to `FrameTiming`. Each operation
@@ -31,6 +31,19 @@ opened frame includes any route fade; the first frame is reported separately.
 The reported display maximum is metadata, not an asserted refresh rate.
 Use manual mode for visual/interaction QA, not timing claims. See the
 [September 22 results](../../../docs/performance/2026-09-22-desktop-latency.md).
+
+For primary-workflow debug CPU comparisons at 16/48 retained terminals:
+
+```sh
+flutter test --no-pub test/benchmarks/primary_workflows_benchmark.dart --concurrency=1 --reporter expanded
+```
+
+The fixture exercises Cmd+N/O/T and workspace switching with synthetic metadata
+replies and 1,000 scrollback rows per terminal. It checks the destination and
+terminal input isolation for every action. Five warmups and a separate rebuild
+instrumentation pass precede 40 timed samples per action. Optional
+`HARNESS_PRIMARY_CPU_PROFILE=/private/tmp/primary` with `--enable-vmservice`
+records profiles; `HARNESS_PRIMARY_OPERATION=cmd_t` restricts the action.
 
 ## Original AppKit event-queue runner
 
