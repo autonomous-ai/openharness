@@ -145,12 +145,21 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
       if (!/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/.test(options.ref)) throw new Error('Invalid branch')
       await git(source, ['show-ref', '--verify', '--hash', '--', options.ref])
     }
-    // New work from a remote branch starts from where it is now, not from the last fetch. Offline,
-    // slow or refused, it starts from what is here.
+    // New work starts from where its branch is now, not from the last fetch: a remote branch is
+    // fetched; a local one is fetched against its upstream and the newer of the two taken, so nothing
+    // only the local one has is lost. Offline, slow or refused, it starts from what is here.
+    let start = existing ? `refs/heads/${options.branchName}` : creating ? 'HEAD' : options.ref ?? 'HEAD'
     const remote = options.worktree && !existing ? remoteBranch(options.ref) : null
-    if (remote) await git(source, ['fetch', '--quiet', '--no-tags', remote.remote, remote.refspec], 10_000).catch(() => '')
-    head = await git(source, ['rev-parse', '--verify', '--end-of-options',
-      `${existing ? `refs/heads/${options.branchName}` : creating ? 'HEAD' : options.ref ?? 'HEAD'}^{commit}`])
+    const upstream = options.worktree && !existing && !remote && options.ref
+      ? await git(source, ['for-each-ref', '--format=%(upstream)', options.ref]).then(ref => remoteBranch(ref) ? ref : null, () => null)
+      : null
+    const fetch = remote ?? remoteBranch(upstream ?? undefined)
+    if (fetch) await git(source, ['fetch', '--quiet', '--no-tags', fetch.remote, fetch.refspec], 10_000).catch(() => '')
+    // Behind or level with its upstream: the upstream is the newer.
+    if (upstream && options.ref && await git(source, ['merge-base', '--is-ancestor', options.ref, upstream]).then(() => true, () => false)) {
+      start = upstream
+    }
+    head = await git(source, ['rev-parse', '--verify', '--end-of-options', `${start}^{commit}`])
     prefix = await git(source, ['rev-parse', '--show-prefix'])
     if (prefix && await git(source, ['cat-file', '-t', `${head}:${prefix.replace(/\/$/, '')}`]) !== 'tree') throw new Error('Missing folder')
   } catch {

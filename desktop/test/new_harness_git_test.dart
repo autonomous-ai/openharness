@@ -24,6 +24,11 @@ const _git = <String, dynamic>{
     {'ref': 'refs/heads/main', 'name': 'main'},
     {'ref': 'refs/heads/feature', 'name': 'feature'},
     {'ref': 'refs/remotes/origin/main', 'name': 'origin/main', 'remote': true},
+    {
+      'ref': 'refs/remotes/origin/release',
+      'name': 'origin/release',
+      'remote': true,
+    },
   ],
 };
 
@@ -231,6 +236,7 @@ void main() {
     'branch': branch,
     'mainFolder': '/repo',
     'mainBranch': 'main',
+    'owner': 'deehw',
   };
 
   test(
@@ -252,6 +258,11 @@ void main() {
       expect(box.project.folder, '/repo');
       expect(box.worktree, true);
       expect(box.branchLabel, 'main');
+      expect(
+        box.placeholder,
+        startsWith('deehw/'),
+        reason: 'The login survives the switch to the repository.',
+      );
       expect(box.projectFolderRequest!.payload, {
         'projectSource': 'worktree',
         'gitSource': '/repo',
@@ -364,22 +375,31 @@ void main() {
         reason: 'Made up under the GitHub login the machine reported.',
       );
       expect(box.worktree, true);
-      expect(box.branchRowLabel, 'origin/main', reason: 'The remote default.');
+      expect(
+        box.branchRowLabel,
+        'main',
+        reason: 'The default branch; Start brings it up to origin/main.',
+      );
       expect(box.worktreePlan!.branch, placeholder);
       expect(box.createLabel, 'Start Harness');
       expect(box.projectFolderRequest!.payload, {
         'projectSource': 'worktree',
         'gitSource': '/repo',
-        'branchRef': 'refs/remotes/origin/main',
+        'branchRef': 'refs/heads/main',
         'branchName': placeholder,
         'branchMode': 'placeholder',
       });
 
       box.focusField(NewHarnessField.branch);
       final rows = {for (final row in box.options) row.title: row.detail};
-      expect(rows.keys.take(2), ['main', 'origin/main']);
+      expect(rows.keys.first, 'main');
+      expect(
+        rows.containsKey('origin/main'),
+        false,
+        reason: 'The local main stands for it.',
+      );
+      expect(rows['origin/fix-typo'], 'remote');
       expect(rows['main'], 'default · current');
-      expect(rows['origin/main'], 'default · remote');
       expect(rows['feature/pay'], 'worktree');
       expect(rows['harness/live'], 'worktree');
       expect(
@@ -422,13 +442,13 @@ void main() {
       box.focusField(NewHarnessField.branch);
       box.setQuery('my work');
       expect(box.options.last.title, 'Create branch my-work');
-      expect(box.options.last.detail, 'New branch from origin/main');
+      expect(box.options.last.detail, 'New branch from main');
       box.accept(box.options.last);
-      expect(box.branchRowLabel, 'my-work · new from origin/main');
+      expect(box.branchRowLabel, 'my-work · new from main');
       expect(box.projectFolderRequest!.payload, {
         'projectSource': 'worktree',
         'gitSource': '/repo',
-        'branchRef': 'refs/remotes/origin/main',
+        'branchRef': 'refs/heads/main',
         'branchName': 'my-work',
       });
       box.focusField(NewHarnessField.branch);
@@ -499,6 +519,35 @@ void main() {
     expect(branchNameFrom('a..b//c/.d.lock'), 'a.b/c/d');
     expect(branchNameFrom('-.lead'), 'lead');
     expect(branchNameFrom('~^:'), '');
+  });
+
+  test('Branch starts on the branch of the pane it was opened from', () async {
+    final connection = _Connection()..answers['/repo'] = rich;
+    final app = createApp(connectionForTest: (_) => connection);
+    addTearDown(app.dispose);
+    Future<NewHarnessController> from(String? branch) async {
+      final box = NewHarnessController(
+        app,
+        machineId: 'm',
+        engine: 'codex',
+        folder: '/repo',
+        branch: branch,
+      );
+      addTearDown(box.dispose);
+      await settle();
+      return box;
+    }
+
+    final feature = await from('feature');
+    expect(feature.branchRef, 'refs/heads/feature');
+    expect(feature.worktreePlan!.kind, WorktreeStart.existingBranch);
+    final pay = await from('feature/pay');
+    expect(pay.opensWorktree, true, reason: 'Another agent on that branch.');
+    expect(pay.createLabel, 'Start in Worktree');
+    final gone = await from('deleted-branch');
+    expect(gone.branchRef, 'refs/heads/main', reason: 'The default instead.');
+    final none = await from(null);
+    expect(none.branchRef, 'refs/heads/main');
   });
 
   test('Create branch cleans up a typed name', () async {
@@ -631,7 +680,7 @@ void main() {
       await mouse.removePointer();
       expect(box.options.where(box.isCurrent).single.title, 'main');
       expect(
-        box.options.firstWhere((row) => row.title == 'origin/main').enabled,
+        box.options.firstWhere((row) => row.title == 'origin/release').enabled,
         false,
       );
       final input = find.byKey(const ValueKey('new-harness-input'));
@@ -643,14 +692,14 @@ void main() {
       await openLaunchRow(tester, 'worktree');
       expect(box.worktree, true);
       await openLaunchRow(tester, 'branch');
-      await tester.enterText(input, 'origin/main');
+      await tester.enterText(input, 'origin/release');
       await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
       await tester.pump();
       expect(
         connection.starts.single,
-        containsPair('branchRef', 'refs/remotes/origin/main'),
+        containsPair('branchRef', 'refs/remotes/origin/release'),
       );
       expect(connection.starts.single['projectSource'], 'worktree');
       expect(connection.starts.single.containsKey('prompt'), false);
@@ -717,7 +766,7 @@ void main() {
       await openLaunchRow(tester, 'branch');
       await tester.enterText(
         find.byKey(const ValueKey('new-harness-input')),
-        'origin/main',
+        'origin/release',
       );
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();

@@ -51,10 +51,16 @@ in the repository's main checkout, so Cmd-N from a worktree pane starts beside
 it rather than inside it. Worktrees Start made are never offered as recent
 projects.
 
-With `[x]`, **Branch** is what the new worktree works from: the remote's
-default branch (`origin/HEAD`) unless another is picked. A remote base is
-fetched at Start, for at most ten seconds; offline, it starts from the last
-fetch. The branch the harness works on follows from it, with no row of its
+**Branch** starts on the branch of the pane New Harness was opened from, and
+otherwise on the default branch (Worktree on) or the folder's own branch (off).
+The picker names local branches; a remote branch is listed only when no local
+branch has its name.
+
+With `[x]`, **Branch** is what the new worktree works from. At Start a new
+branch starts from the newer of that branch and its upstream, fetched for at
+most ten seconds: `main` behind `origin/main` starts from `origin/main`, and
+`main` with commits of its own starts from `main`, so nothing is lost; offline,
+it starts from the last fetch. The branch the harness works on follows from it, with no row of its
 own: the default or current branch gets a new branch named after the session,
 `<login>/<session name>` (the machine's GitHub login, else Git's `user.name`);
 another local branch is checked out as it is; a remote branch nobody has

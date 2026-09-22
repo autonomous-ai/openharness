@@ -916,7 +916,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                     NewHarnessField.branch,
                     box.branchRowLabel,
                     tooltip: box.worktree
-                        ? 'What the worktree works from. The default branch gets a new branch named after the session; another is checked out as it is. Type a name to create one.'
+                        ? 'What the worktree works from, brought up to date with its remote at Start. The default branch gets a new branch named after the session; another is checked out as it is. Type a name to create one.'
                         : box.opensWorktree
                         ? '${box.branchLabel} has a worktree of its own: the harness starts there.'
                         : 'The branch the project folder is on.',

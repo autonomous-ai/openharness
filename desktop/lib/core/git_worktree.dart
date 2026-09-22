@@ -438,31 +438,56 @@ Future<String> prepareGitProject(
       );
     }
   }
-  // New work from a remote branch starts from where it is now, not from the
-  // last fetch. Offline, slow or refused, it starts from what is here.
+  // New work starts from where its branch is now, not from the last fetch: a
+  // remote branch is fetched; a local one is fetched against its upstream and
+  // the newer of the two taken, so nothing only the local one has is lost.
+  // Offline, slow or refused, it starts from what is here.
   final remote = worktree && !existingBranch ? _remoteBranch(branchRef) : null;
-  if (remote != null) {
+  var start = existingBranch
+      ? 'refs/heads/$branchName'
+      : creating
+      ? 'HEAD'
+      : branchRef ?? 'HEAD';
+  String? upstream;
+  if (worktree && !existingBranch && branchRef != null && remote == null) {
+    final tracked = await git([
+      'for-each-ref',
+      '--format=%(upstream)',
+      branchRef,
+    ]);
+    if (tracked.code == 0 && _remoteBranch(tracked.output) != null) {
+      upstream = tracked.output;
+    }
+  }
+  final fetch = remote ?? _remoteBranch(upstream);
+  if (fetch != null) {
     try {
       await git([
         'fetch',
         '--quiet',
         '--no-tags',
-        remote.remote,
-        remote.refspec,
+        fetch.remote,
+        fetch.refspec,
       ], timeout: const Duration(seconds: 10));
     } on RepositoryCloneException {
       // Too slow: start from the last fetch.
     }
   }
+  if (upstream != null && branchRef != null) {
+    // Behind or level with its upstream: the upstream is the newer.
+    final behind = await git([
+      'merge-base',
+      '--is-ancestor',
+      branchRef,
+      upstream,
+    ]);
+    if (behind.code == 0) start = upstream;
+  }
   final head = await git([
     'rev-parse',
     '--verify',
     '--end-of-options',
-    '${existingBranch
-        ? 'refs/heads/$branchName'
-        : creating
-        ? 'HEAD'
-        : branchRef ?? 'HEAD'}^{commit}',
+    '$start^{commit}',
   ]);
   if (head.code != 0) {
     throw const RepositoryCloneException(

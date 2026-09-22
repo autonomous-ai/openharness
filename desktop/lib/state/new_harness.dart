@@ -137,12 +137,19 @@ String? currentBranchRef(GitProjectInfo info) =>
 bool worktreeByDefault(GitProjectInfo info) =>
     info.isGit && info.branches.any((branch) => !branch.remote);
 
-/// Where Start begins when no branch was chosen: new work from the remote's
-/// default branch, work in the folder on the branch it is on.
-String? defaultBranchRef(GitProjectInfo info, {required bool worktree}) =>
-    worktree
-    ? info.defaultRef ?? currentBranchRef(info)
-    : currentBranchRef(info);
+/// Where Start begins when no branch was chosen: new work from the default
+/// branch (the local one, which Start brings up to its remote), work in the
+/// folder on the branch it is on.
+String? defaultBranchRef(GitProjectInfo info, {required bool worktree}) {
+  if (!worktree) return currentBranchRef(info);
+  final remote = info.defaultRef;
+  final local = remote == null
+      ? null
+      : 'refs/heads/${remote.split('/').skip(3).join('/')}';
+  return info.branches.any((b) => b.ref == local)
+      ? local
+      : remote ?? currentBranchRef(info);
+}
 
 /// The branch a worktree started from [base] is on, unless [name] was typed:
 /// the default or current branch gets a new [placeholder] branch; another
@@ -374,6 +381,7 @@ class NewHarnessController extends ChangeNotifier {
     required String machineId,
     String? engine,
     String? folder,
+    String? branch,
     String? projectName,
     bool autoProject = false,
     DateTime Function()? now,
@@ -386,6 +394,7 @@ class NewHarnessController extends ChangeNotifier {
     String? home,
     Random? random,
   }) : _random = random ?? Random(),
+       _paneBranch = branch,
        placement =
            placement ?? (split == null ? HarnessPlacement.currentTab : null),
        _targetId = swarmId ?? app.activeSwarmId,
@@ -488,6 +497,10 @@ class NewHarnessController extends ChangeNotifier {
   String get machineId => _machineId;
   NewHarnessProject get project => _project;
   final Random _random;
+
+  /// The branch the pane New Harness was opened from is on: Branch starts
+  /// there, for that pane's project only.
+  String? _paneBranch;
   bool? _worktree;
   String? _branchRef, _branchName, _placeholder;
   GitProjectInfo _gitProject = const GitProjectInfo();
@@ -618,6 +631,7 @@ class NewHarnessController extends ChangeNotifier {
       _branchRef = null;
       _branchName = null;
       _placeholder = null;
+      _paneBranch = null;
       _gitProject = const GitProjectInfo();
     }
     _gitKey = key;
@@ -654,9 +668,16 @@ class NewHarnessController extends ChangeNotifier {
         branch: info.mainBranch,
         branches: info.branches,
         defaultRef: info.defaultRef,
+        owner: info.owner,
       );
     }
     _gitProject = info;
+    // Another one of the pane it came from: on that pane's branch, if it is
+    // still a local branch here.
+    if (_branchRef == null &&
+        info.branches.any((b) => !b.remote && b.name == _paneBranch)) {
+      _branchRef = 'refs/heads/$_paneBranch';
+    }
     // A name made up before the branches were known may already be taken.
     if (_placeholder != null &&
         info.branches.any((branch) => branch.name == _placeholder)) {
@@ -1887,11 +1908,20 @@ class NewHarnessController extends ChangeNotifier {
     bool isDefault(GitBranch b) =>
         b.ref == info.defaultRef || !b.remote && b.name == defaultName;
     bool isCurrent(GitBranch b) => !b.remote && b.name == info.branch;
+    // A remote branch with a local one of its name is that branch: Start
+    // brings the local one up to it.
+    final locals = {
+      for (final branch in info.branches)
+        if (!branch.remote) branch.name,
+    };
+    bool hasLocal(GitBranch b) =>
+        b.remote && locals.contains(b.name.split('/').skip(1).join('/'));
     final shown = [
       for (final branch in info.branches)
         if (!((branch.harness || branch.name.startsWith('harness/')) &&
-            branch.worktree == null &&
-            branch.ref != branchRef))
+                branch.worktree == null &&
+                branch.ref != branchRef) &&
+            !(hasLocal(branch) && branch.ref != branchRef))
           branch,
     ];
     int rank(GitBranch b) => isDefault(b)

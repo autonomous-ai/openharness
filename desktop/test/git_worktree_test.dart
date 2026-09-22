@@ -305,6 +305,23 @@ void main() {
       isNot(0),
       reason: 'A new branch never pushes onto its base.',
     );
+    // A local branch starts from the newer of itself and its upstream.
+    await git(['branch', '--set-upstream-to=origin/main', 'main']);
+    await git(['update-ref', 'refs/remotes/origin/main', 'main']);
+    final behind = await worktree(ref: 'refs/heads/main', name: 'from-behind');
+    expect(
+      await File(p.join(behind, 'src', 'value')).readAsString(),
+      'pushed',
+      reason: 'main was behind origin/main, fetched at Start.',
+    );
+    await File(p.join(repo, 'src', 'value')).writeAsString('local');
+    await git(['commit', '-qam', 'local']);
+    final ahead = await worktree(ref: 'refs/heads/main', name: 'from-ahead');
+    expect(
+      await File(p.join(ahead, 'src', 'value')).readAsString(),
+      'local',
+      reason: 'A commit only main has is never left behind.',
+    );
     final tracking = await worktree(
       ref: 'refs/remotes/origin/fix/typo',
       name: 'fix/typo',
