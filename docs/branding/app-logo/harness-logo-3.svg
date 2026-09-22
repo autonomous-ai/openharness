@@ -1,8 +1,4 @@
-<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- The mark, 400x400 as the design ships it (docs/branding/app-logo/harness-logo-3.svg), fitted into the 916px box this icon set
-       has always used: 54px of margin on every side is what keeps macOS from clipping the corners of its own squircle.
-       Every app icon, desktop and mobile, is rendered from this file: docs/branding/app-logo/render-app-icon.swift. -->
-  <g transform="translate(54 54) scale(2.29)">
+<svg width="400" height="400" viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg">
 <g clip-path="url(#clip0_6337_1342)">
 <rect width="400" height="400" rx="60" fill="url(#paint0_linear_6337_1342)"/>
 <circle cx="200" cy="192" r="192" stroke="#030303" stroke-width="2.2"/>
@@ -18,5 +14,4 @@
 <rect width="400" height="400" rx="60" fill="white"/>
 </clipPath>
 </defs>
-  </g>
 </svg>
