@@ -96,9 +96,6 @@ class PaneGrid extends StatelessWidget {
     );
   }
 
-  /// Row-major, and the odd count spans rather than leaving a hole: three tiles
-  /// are two over one, not two over one-and-a-gap.
-  ///
   /// Keyed on the number of CELLS, not of panes: mid-drag an extra drop slot
   /// joins them, and the grid on screen is the one the shape has to describe.
   Widget _arrange(List<Widget> cells) {
@@ -110,10 +107,8 @@ class PaneGrid extends StatelessWidget {
       return _PresetCells(cells: cells, preset: preset);
     }
 
-    // Above four, one family of shapes: a grid whose COLUMN COUNT is either
-    // stated by the preset or measured from the width. The hand-tuned shapes
-    // below stay as they are — three tiles are two over one with the bottom one
-    // SPANNING, and no uniform grid can say that.
+    // Lattices use a stated or measured column count. Spanning presets keep
+    // their own geometry, including the default five-pane middle column.
     if (cells.length == 5 && preset == PanePreset.middleMain) {
       // The one five-tile shape that is not a lattice: a full-height column down
       // the middle, two stacked either side. Read in TILE order — 1 and 4 to the

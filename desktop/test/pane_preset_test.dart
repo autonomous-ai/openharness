@@ -161,7 +161,6 @@ void main() {
     // down the left, 2 in the middle, 3 and 5 down the right — so a person
     // reading across the top gets 1, 2, 3.
     final notifier = _withPanes(5);
-    notifier.setPreset(5, PanePreset.middleMain);
     final shape = await _layout(tester, notifier);
 
     expect(shape[0].right, closeTo(1 / 3, 0.02), reason: 'tile 1: left column');
@@ -187,7 +186,7 @@ void main() {
   });
 
   test('a big grid offers concrete balanced arrangements', () {
-    expect(PanePreset.forCount(5).first, PanePreset.balanced3);
+    expect(PanePreset.forCount(5).first, PanePreset.middleMain);
     for (var count = 5; count <= 9; count++) {
       for (final preset in PanePreset.forCount(count)) {
         final columns = preset.statedColumns;
