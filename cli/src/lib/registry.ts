@@ -144,6 +144,20 @@ export interface RegisteredSession {
    */
   codexHome?: string | null
   /**
+   * The Hermes home this session's history lives in — `~/.hermes/profiles/<name>` for an agent started
+   * with `hermes -p <name>`, null for this machine's default home.
+   *
+   * Unlike `codexHome` this is not a launch choice the daemon makes: `hermes -p` is how a person starts
+   * one, and the daemon meets the pane afterwards. So it is FOUND rather than recorded — by the session
+   * id, in whichever store holds its row (`engines/hermes/home.ts`) — and then kept here so the lookup
+   * happens once per agent instead of once per poll. Fill-only, like `codexHome`.
+   *
+   * Everything Hermes-shaped reads it: the live mirror, `agent_recent`, the recap fallback, the hook's
+   * source check and the model/effort poll. Reading one fixed home instead is what left a profile
+   * fleet's activity cards empty forever while their terminals streamed perfectly (openharness#191).
+   */
+  hermesHome?: string | null
+  /**
    * The domain-specific harness this agent was created as (`autonomous/copper`), or null for a plain
    * engine. NOT a second engine: `engine` stays the base (`claude`, `codex`, …) and every normalizer,
    * probe and install path keys on that. Chosen at creation, carried forward, and re-read off the
@@ -231,6 +245,10 @@ export interface RegisterInput {
   runtimeHints?: HookTerminalHint[]
   callerPid?: number
   hookEvent?: string
+  /** Hermes only: the home whose store holds this session, when it is not the machine's default one.
+   *  Found by the hook gate (`awaitHermesKind`), which has to look the session up anyway, and by the
+   *  hook script itself when the daemon was down. Fill-only — see RegisteredSession.hermesHome. */
+  hermesHome?: string
 }
 
 /** Display name for a session's "project" tab/tile. A user rename (persisted override) is
@@ -870,6 +888,7 @@ class Registry {
           gateway: raw.gateway === 'ori' ? 'ori' : null,
           grid: normalizedGridAssignment(raw.grid),
           codexHome: typeof rawCodexHome === 'string' && rawCodexHome ? rawCodexHome : null,
+          hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
           agent: normalizedAgentName((raw as { agent?: unknown }).agent),
           ...(rawGridLaunch !== undefined ? { gridLaunch: rawGridLaunch } : {}),
@@ -975,6 +994,8 @@ class Registry {
     /** Codex only: the CODEX_HOME the process was launched under, read off its environment. Fills a
      *  row that does not know its profile yet; never overwrites one that does (see `codexHome`). */
     codexHome?: string | null
+    /** The Hermes home this session's store lives in, if it is not the default. Fill-only. */
+    hermesHome?: string | null
     /** The DSH read off the process's `HARNESS_DSH`, if any. Fill-only, like `codexHome`. */
     dsh?: string | null
   }):
@@ -1031,6 +1052,7 @@ class Registry {
       if (input.gateway !== undefined) existing.gateway = input.gateway
       if (input.grid !== undefined) existing.grid = input.grid
       if (input.codexHome && !existing.codexHome) existing.codexHome = input.codexHome
+      if (input.hermesHome && !existing.hermesHome) existing.hermesHome = input.hermesHome
       if (input.dsh && !existing.dsh) existing.dsh = input.dsh
       existing.updatedAt = Date.now()
       this.index(existing)
@@ -1074,6 +1096,7 @@ class Registry {
       gridLaunch: null,
       gridWebSearch: null,
       codexHome: input.codexHome ?? null,
+      hermesHome: input.hermesHome ?? null,
       dsh: input.dsh ?? null,
       // A discovered pane's named agent is only visible in its argv; nothing here reads it, so the
       // row cannot relaunch it as one. Fill-only, like `dsh`.
@@ -1142,6 +1165,9 @@ class Registry {
       gridLaunch: input.gridLaunchRecord?.override ?? null,
       gridWebSearch: input.gridLaunchRecord?.webSearch ?? null,
       codexHome: input.codexHome ?? null,
+      // A pane Harness opens starts in the default home; `hermes -p` is the person's own doing, and
+      // the row learns it from the session that lands in it. See RegisteredSession.hermesHome.
+      hermesHome: null,
       dsh: input.dsh ?? null,
       agent: normalizedAgentName(input.agent),
       ...(input.bypassPermission ? { bypassPermission: true } : {}),
@@ -1395,6 +1421,10 @@ class Registry {
       // re-reads off the live process on every discovery) — a hook-triggered bind must carry it
       // forward or the very first SessionStart hook would silently wipe the agent's chosen profile.
       codexHome: existing?.codexHome ?? null,
+      // The home the gate looked this session up in, or whatever the row already knew. Carried
+      // forward like every field here: a bind REBUILDS the row, and a home dropped at the first hook
+      // would send the mirror back to the default store (openharness#191).
+      hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
       dsh: existing?.dsh ?? null,
       agent: existing?.agent ?? null,
       ...(existing?.bypassPermission ? { bypassPermission: true } : {}),
@@ -1681,6 +1711,18 @@ class Registry {
     const session = this.agents.get(agentId)
     if (!session || session.engine !== 'codex' || session.codexHome) return false
     session.codexHome = codexHome
+    session.updatedAt = Date.now()
+    this.save()
+    return true
+  }
+
+  /** Fill in the Hermes home a row did not know — found by looking for its session in each store, or
+   *  read off the live process. Never overwrites: like `setCodexHome`, a session does not move between
+   *  homes, and a later probe that could not read the process must not take the answer away. */
+  setHermesHome(agentId: string, hermesHome: string): boolean {
+    const session = this.agents.get(agentId)
+    if (!session || session.engine !== 'hermes' || session.hermesHome) return false
+    session.hermesHome = hermesHome
     session.updatedAt = Date.now()
     this.save()
     return true

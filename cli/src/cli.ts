@@ -202,6 +202,7 @@ import { CopilotNormalizer, copilotHistoryTurnOpen, lastCopilotTurnText } from '
 import { copilotSessionForPid, findCopilotTranscript } from './engines/copilot/session.js'
 import { PiNormalizer, lastPiTurnText } from './engines/pi/normalizer.js'
 import { HermesReader, readHermesMessages } from './engines/hermes/reader.js'
+import { hermesDbForSession } from './lib/hermesHome.js'
 import { DevinReader, readDevinMessages } from './engines/devin/reader.js'
 import { lastHermesTurnText } from './engines/hermes/normalizer.js'
 import { lastDevinTurnText } from './engines/devin/normalizer.js'
@@ -291,8 +292,9 @@ let deviceLinkRef: DeviceLink | null = null
 const OPENCODE_DB = join(env.OPENCODE_DATA_DIR, 'opencode.db')
 // Kilo's SQLite store — same shape, its own file and its own reader (see engines/kilo/).
 const KILO_DB = join(env.KILO_DATA_DIR, 'kilo.db')
-// Hermes keeps every surface's history in one SQLite store — polled per session by HermesReader.
-const HERMES_DB = join(env.HERMES_HOME, 'state.db')
+// Hermes keeps every surface's history in one SQLite store PER HOME — polled per session by
+// HermesReader, against the home that session lives in (`hermesDbForSession`; `hermes -p <name>` has
+// its own). Reading one fixed store is what left profile agents' activity empty (openharness#191).
 // Devin likewise keeps all history in one SQLite store (WAL) — polled per session by DevinReader.
 const DEVIN_DB = join(env.DEVIN_HOME, 'sessions.db')
 /** How many agents' histories are read at once — the first reconcile pass after a boot asks for every
@@ -2111,7 +2113,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     } else if (session.engine === 'hermes') {
       // Hermes has no transcript file — poll its SQLite store, like opencode.
       const reader = new HermesReader({
-        dbPath: HERMES_DB,
+        dbPath: await hermesDbForSession(session),
         sessionId: session.sessionId,
         onEvents: (events) => emitSessionEvents(session.sessionId, events),
         onFatal: (err) => console.warn(`[hermes] ${sid(session.sessionId)} ${err.message}`),
@@ -2436,7 +2438,7 @@ async function runForeground(session: AuthSession): Promise<void> {
       if (!s) return null
       if (s.engine === 'opencode') return lastOpencodeTurnText(await readOpencodeMessages(OPENCODE_DB, sessionId))
       if (s.engine === 'kilo') return lastKiloTurnText(await readKiloMessages(KILO_DB, sessionId))
-      if (s.engine === 'hermes') return lastHermesTurnText(await readHermesMessages(HERMES_DB, sessionId))
+      if (s.engine === 'hermes') return lastHermesTurnText(await readHermesMessages(await hermesDbForSession(s), sessionId))
       if (s.engine === 'devin') return lastDevinTurnText(await readDevinMessages(DEVIN_DB, sessionId))
       if (!s.transcriptPath) return null
       const lines = await tailFile(s.transcriptPath, Infinity)
@@ -2863,6 +2865,7 @@ async function runForeground(session: AuthSession): Promise<void> {
 
     let sessionId = observed.resumeSessionId
     let transcriptPath: string | undefined
+    let hermesHome: string | undefined
     let source = 'terminal-resume'
     if (sessionId) {
       if (isRecentlyDeleted(sessionId)) return
@@ -2905,6 +2908,9 @@ async function runForeground(session: AuthSession): Promise<void> {
       if (!found || registry.has(found.sessionId) || isRecentlyDeleted(found.sessionId)) return
       sessionId = found.sessionId
       transcriptPath = found.transcriptPath
+      // Which Hermes home the repair found it in, so the row starts life reading the right store
+      // rather than looking it up again on its first poll.
+      hermesHome = found.hermesHome
       source = 'process-repair'
     }
 
@@ -2913,6 +2919,7 @@ async function runForeground(session: AuthSession): Promise<void> {
       engine: observed.engine,
       sessionId,
       transcriptPath,
+      ...(hermesHome ? { hermesHome } : {}),
       cwd: observed.cwd,
       source,
       runtimes: observed.runtimes,
@@ -3011,6 +3018,9 @@ async function runForeground(session: AuthSession): Promise<void> {
       // under learns it from the process, before the hook path validates a transcript against it.
       // Fill-only — a profile the row already knows is never re-derived.
       if (observed.codexHome && !current.codexHome) registry.setCodexHome(current.agentId, observed.codexHome)
+      // …and a Hermes home the same way, when the process names one. A row that learns it here never
+      // has to look its session up store by store (openharness#191).
+      if (observed.hermesHome && !current.hermesHome) registry.setHermesHome(current.agentId, observed.hermesHome)
       // And the DSH: a row minted by discovery (or written before the field existed) learns it from
       // the process's own `HARNESS_DSH`, and gets its viewer and verdict watch from here on.
       if (observed.dsh && !current.dsh) registry.setDsh(current.agentId, observed.dsh)

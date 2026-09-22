@@ -373,6 +373,66 @@ describe('Hermes hook installation', () => {
     expect(readFileSync(file, 'utf8')).toBe(mine)
     expect(existsSync(join(hermesHome, 'shell-hooks-allowlist.json'))).toBe(false)
   })
+
+  // `hermes -p <name>` runs against ~/.hermes/profiles/<name> — its own config, its own store. Hermes
+  // COPIES config.yaml when it creates a profile, so the block in there is a frozen snapshot no
+  // installer revisited, carrying an old command and the DEFAULT home's path. The hook then looked the
+  // session up in a store it was not in, and a profile fleet's activity stayed empty (openharness#191).
+  describe('profiles', () => {
+    const profileConfig = (name: string): string => {
+      const dir = join(hermesHome, 'profiles', name)
+      mkdirSync(dir, { recursive: true })
+      const path = join(dir, 'config.yaml')
+      writeFileSync(path, USER_CONFIG)
+      return path
+    }
+
+    it('installs into every profile, each naming ITS OWN home', async () => {
+      const demo = profileConfig('demo')
+      const { installHermesHooks } = await loadHooks()
+      installHermesHooks(18473)
+
+      const out = readFileSync(demo, 'utf8')
+      expect(blockCount(out)).toBe(1)
+      expect(out).toContain(`--hermes-home '${join(hermesHome, 'profiles', 'demo')}'`)
+      expect(out).not.toContain(`--hermes-home '${hermesHome}'`)
+      // …and the default home still names itself, unchanged by any of this.
+      expect(readFileSync(file, 'utf8')).toContain(`--hermes-home '${hermesHome}'`)
+      // The allowlist is exact-match on (event, command), so the profile's own command needs its own.
+      const allow = JSON.parse(readFileSync(join(hermesHome, 'profiles', 'demo', 'shell-hooks-allowlist.json'), 'utf8')) as {
+        approvals: Array<{ event: string; command: string }>
+      }
+      const cmd = /- command: "(.*?)"/.exec(out)![1]
+      expect(allow.approvals.map((a) => a.event).sort()).toEqual(['on_session_start', 'pre_llm_call'])
+      for (const a of allow.approvals) expect(a.command).toBe(cmd)
+    })
+
+    it('replaces the stale block a profile was created with', async () => {
+      // What `hermes profile create` leaves behind: our own block, frozen at the version that was
+      // current when the ROOT config was last written — old port, old path, default home.
+      const stale = "\n# machine-adapter: session discovery (managed block — safe to delete)\nhooks:\n"
+        + "  on_session_start:\n    - command: \"node '/old/notify.mjs' --port 19918 --hermes-home '/home/u/.hermes' --engine hermes\"\n      timeout: 10\n"
+        + '# machine-adapter: end\n'
+      const demo = profileConfig('demo')
+      writeFileSync(demo, `${USER_CONFIG}${stale}`)
+
+      const { installHermesHooks } = await loadHooks()
+      installHermesHooks(18473)
+
+      const out = readFileSync(demo, 'utf8')
+      expect(blockCount(out)).toBe(1)
+      expect(out).not.toContain('19918')
+      expect(out).toContain(`--hermes-home '${join(hermesHome, 'profiles', 'demo')}'`)
+      expect(out).toContain('model:\n  default: minimax/minimax-m3') // the user's own config survives
+    })
+
+    it('a profile with no config of its own is not written to', async () => {
+      mkdirSync(join(hermesHome, 'profiles', 'fresh'), { recursive: true })
+      const { installHermesHooks } = await loadHooks()
+      installHermesHooks(18473)
+      expect(existsSync(join(hermesHome, 'profiles', 'fresh', 'config.yaml'))).toBe(false)
+    })
+  })
 })
 
 /**
