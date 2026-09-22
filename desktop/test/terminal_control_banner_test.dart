@@ -95,6 +95,7 @@ void main() {
     bool focused = true,
     bool visible = true,
     int focusRequest = 0,
+    bool focusByUser = true,
     double width = 900,
     Widget? beside,
   }) async {
@@ -114,6 +115,7 @@ void main() {
                     focused: focused,
                     visible: visible,
                     focusRequest: focusRequest,
+                    focusByUser: focusByUser,
                     readOnly: readOnly,
                     notice: notice,
                     composerVisible: composerVisible,
@@ -462,13 +464,21 @@ void main() {
     await finish(tester);
   });
 
-  testWidgets('the window coming back retakes the others too', (tester) async {
+  testWidgets('the window coming back leaves the others alone too', (
+    tester,
+  ) async {
+    // Same rule as this tile's own: the window arriving is not a gesture on
+    // any pane. A click in this one still brings every other back with it.
     await pump(tester);
     takeOverOther();
     await tester.pump();
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
     await tester.pump();
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(opensOther(), isEmpty);
+
+    await tester.tap(find.byType(TerminalView));
     await tester.pump();
     expect(opensOther(), ['terminal_open']);
     await finish(tester);
@@ -673,6 +683,59 @@ void main() {
     },
   );
 
+  testWidgets('a focus from the device takes nothing back', (tester) async {
+    // The dial turning onto this tile, or a question shown there for it, bumps
+    // `focusRequest` exactly as ⌘1 does — with `focusByUser` false. The
+    // keyboard still lands here; the stream stays with whoever holds it, and
+    // so does every other tile's (owner, 2026-09-22: a question re-shown on
+    // the dial took the whole desk back, 1.5s round, until the cable came out).
+    await pump(tester);
+    takeOver();
+    takeOverOther();
+    await tester.pump();
+    await pump(tester, focusRequest: 1, focusByUser: false);
+    expect(opens(), isEmpty);
+    expect(opensOther(), isEmpty);
+
+    // Flipping `focused` on from the device is the same non-event.
+    await pump(tester, focused: false, focusRequest: 1, focusByUser: false);
+    await pump(tester, focused: true, focusRequest: 1, focusByUser: false);
+    expect(opens(), isEmpty);
+
+    // A person's ⌘1 after it takes back as ever.
+    await pump(tester, focusRequest: 2);
+    expect(opens(), ['terminal_open']);
+    expect(opensOther(), ['terminal_open']);
+    await finish(tester);
+  });
+
+  testWidgets('the keyboard still lands on a tile the device focused', (
+    tester,
+  ) async {
+    // Focus-only is not band-only: the band's ⏎ is live at once, and pressing
+    // it is the person taking back.
+    await pump(tester);
+    takeOver();
+    await tester.pump();
+    await pump(tester, focusRequest: 1, focusByUser: false);
+    expect(opens(), isEmpty);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(opens(), ['terminal_open']);
+    await finish(tester);
+  });
+
+  testWidgets('a tab the device switched to is nobody arriving', (
+    tester,
+  ) async {
+    await pump(tester, visible: false);
+    takeOver();
+    await tester.pump();
+    await pump(tester, visible: true, focusByUser: false);
+    expect(opens(), isEmpty);
+    await finish(tester);
+  });
+
   testWidgets('a tile shown again unfocused stays as it is', (tester) async {
     await pump(tester, visible: false, focused: false);
     takeOver();
@@ -682,51 +745,26 @@ void main() {
     await finish(tester);
   });
 
-  testWidgets('the window coming back to the front takes control back', (
-    tester,
-  ) async {
+  testWidgets('the window coming forward takes nothing back', (tester) async {
+    // It used to: the focused tile retook on every `inactive → resumed`. The
+    // window comes forward for things nobody did to a pane — ⌘-Tab, a
+    // notification, a screen waking — and each one pulled the terminal off the
+    // phone the person was typing into (owner, 2026-09-22). The band stays;
+    // ⏎ or a click takes back.
     await pump(tester);
     takeOver();
     await tester.pump();
-    // The launch's own first `resumed` is nobody coming back.
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await tester.pump();
-    expect(opens(), isEmpty);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
     await tester.pump();
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(opens(), isEmpty);
+    expect(hint, findsOneWidget, reason: 'the band is still offering ⏎');
+
+    // And the gesture the band promises still works.
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     expect(opens(), ['terminal_open']);
-    await finish(tester);
-  });
-
-  testWidgets(
-    'a tile opened while the window was behind still sees it return',
-    (tester) async {
-      // Mounted with the window already inactive: the very next `resumed` IS
-      // the person coming back, not the launch's first one.
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      await pump(tester);
-      takeOver();
-      await tester.pump();
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-      await tester.pump();
-      expect(opens(), ['terminal_open']);
-      await finish(tester);
-    },
-  );
-
-  testWidgets('the window coming back leaves an unfocused tile alone', (
-    tester,
-  ) async {
-    await pump(tester, focused: false);
-    takeOver();
-    await tester.pump();
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-    await tester.pump();
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await tester.pump();
-    expect(opens(), isEmpty);
     await finish(tester);
   });
 

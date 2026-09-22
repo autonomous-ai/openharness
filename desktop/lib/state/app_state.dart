@@ -939,6 +939,7 @@ class AppNotifier extends ChangeNotifier {
     }
     _activeSwarmId = id;
     railFocused = false;
+    _noteNavigation();
     final pane = focusedPane;
     selectedMachineId = pane?.machineId;
     _persistLayout();
@@ -1015,6 +1016,7 @@ class AppNotifier extends ChangeNotifier {
     _activeSwarmId = owner.id;
     railFocused = false;
     selectedMachineId = machineId;
+    _noteNavigation();
     _paneFocusRequest++;
     _persistLayout();
     _announceAppFocus();
@@ -1308,6 +1310,42 @@ class AppNotifier extends ChangeNotifier {
 
   /// Explicit navigation must reveal and refocus even an already-selected pane.
   int get paneFocusRequest => _paneFocusRequest;
+
+  bool _paneFocusByUser = true;
+
+  /// Whether the latest navigation — [paneFocusRequest], a tab switch, a
+  /// focus move — was a person's gesture on this app.
+  ///
+  /// False while it was a device's doing: the dial turning, a notification or
+  /// question shown there, the WiFi device asking for an agent. Those move the
+  /// view and the keyboard exactly as a click does, and must NOT take a
+  /// terminal back from whichever client holds it — `_autoTakeControl` in
+  /// `terminal_panel.dart` reads this before retaking. A question re-shown on
+  /// the dial used to count as a click: the app took back every pane, the
+  /// re-attach redrew the dialog, the daemon announced it as a new question,
+  /// the dial beeped and asked again, 1.5s round, until the cable came out
+  /// (owner, 2026-09-22).
+  bool get paneFocusByUser => _paneFocusByUser;
+
+  bool _navigatingFromDevice = false;
+
+  /// Run [navigate] as the device's move, not a person's — see
+  /// [paneFocusByUser]. Covers only the synchronous part: an `async`
+  /// navigation's body runs up to its first `await` inside this, which is
+  /// where every focus and tab change happens, and the attach it waits on
+  /// afterwards is not the device's to be blamed for.
+  T _fromDevice<T>(T Function() navigate) {
+    _navigatingFromDevice = true;
+    try {
+      return navigate();
+    } finally {
+      _navigatingFromDevice = false;
+    }
+  }
+
+  void _noteNavigation() {
+    _paneFocusByUser = !_navigatingFromDevice;
+  }
 
   /// An explicit relayout reveals live output even in tiles whose rectangle
   /// does not change. This is view intent, so it is never persisted.
@@ -1765,6 +1803,7 @@ class AppNotifier extends ChangeNotifier {
     if (moved) _previousPaneId = focusedPaneId;
     focusedPaneId = paneId;
     selectedMachineId = focusedPane?.machineId;
+    _noteNavigation();
     if (reveal) _paneFocusRequest++;
     if (zoomedPaneId != null) zoomedPaneId = paneId;
     // Announced even when this tile was ALREADY focused.
@@ -7849,12 +7888,16 @@ class AppNotifier extends ChangeNotifier {
   /// unanswered question is re-shown on each reconnect, and a blink in the
   /// link used to open a row of tabs — on every Mac, once tabs were shared
   /// (owner, 2026-09-21).
+  ///
+  /// The device's move, never a person's — see [paneFocusByUser]: bringing
+  /// the agent forward takes nothing back from another client, and the tile
+  /// a tap opens claims only its own terminal.
   Future<void> openAgentFromDial(
     String machineId,
     String agentId, {
     bool fromQuestion = false,
   }) async {
-    if (revealAgentView(machineId, agentId)) {
+    if (_fromDevice(() => revealAgentView(machineId, agentId))) {
       selectedMachineId = machineId;
       notifyListeners();
       return;
@@ -7869,8 +7912,10 @@ class AppNotifier extends ChangeNotifier {
     // Its own tab. newSwarm reuses an unused start page when there is one, and
     // at the tab limit leaves the current tab selected — the agent then lands
     // there, with the usual capacity message if that tab is full.
-    newSwarm();
-    await addAgentToSwarm(machineId, agentId, swarmId: activeSwarmId);
+    await _fromDevice(() {
+      newSwarm();
+      return addAgentToSwarm(machineId, agentId, swarmId: activeSwarmId);
+    });
   }
 
   /// Enable-time fallback: preserve the user's current choice and acknowledge it.
@@ -7898,21 +7943,46 @@ class AppNotifier extends ChangeNotifier {
     late Future<void> selection;
     _deviceFocusRevision = focusRevision;
     try {
-      selection = selectAgent(machineId, agentId);
+      selection = focusAgentFromDevice(machineId, agentId);
     } finally {
       _deviceFocusRevision = null;
     }
     await selection;
   }
 
-  /// The dial turned to an agent. Ordinary selection, the same path a click on the rail takes.
+  /// The dial turned to an agent. Focus, the same move a click on the rail makes — minus the retake.
   ///
   /// It used to take a `DeskEdge` and, for an agent with no tile, replace the pane at that end — the
   /// dial's carousel could walk past the end of the desk onto an unopened agent, and the edge said
   /// which tile it had walked off. The carousel walks only open panes now, so there is no off-desk
   /// landing left to place and nothing to replace.
-  Future<void> selectAgentFromDial(String machineId, String agentId) async {
-    await selectAgent(machineId, agentId);
+  Future<void> selectAgentFromDial(String machineId, String agentId) =>
+      focusAgentFromDevice(machineId, agentId);
+
+  /// Bring [agentId]'s tile forward because a device asked — the dial's
+  /// carousel, the WiFi device's focus. The tab switches, the tile gets the
+  /// keyboard and `app_focus` goes back to the daemon, exactly as
+  /// [selectAgent] does; what it does NOT do is reopen a stream another
+  /// client holds. [selectAgent] reopens every dead pane it lands on, and a
+  /// `takenOver` pane is dead by that measure — so a turn of the dial was a
+  /// takeover, and a question re-shown there took the whole desk back from
+  /// the other Mac (see [paneFocusByUser]). Here the band stays up with its
+  /// button, and only a hand on this app presses it.
+  ///
+  /// A tile that never attached (its machine was offline when it was
+  /// restored) is attached now, as the ordinary reconnect would: nobody else
+  /// can be holding a stream this app never opened. No tile at all opens one,
+  /// the way a rail click does — that is an open, not a focus, and it claims
+  /// only its own terminal.
+  Future<void> focusAgentFromDevice(String machineId, String agentId) async {
+    final existing = paneOfAgent(machineId, agentId);
+    if (existing == null) {
+      await _fromDevice(() => addAgentToSwarm(machineId, agentId));
+      return;
+    }
+    _fromDevice(() => revealAgentView(machineId, agentId));
+    machineStates[machineId]?.activeAgentId = agentId;
+    if (existing.session == null) await _attachSession(existing);
   }
 
   Future<void> selectAgent(String machineId, String agentId) async {
@@ -9075,6 +9145,9 @@ class AppNotifier extends ChangeNotifier {
     if (!swarms.any((s) => s.id == _activeSwarmId)) {
       _activeSwarmId = swarms.first.id;
       selectedMachineId = focusedPane?.machineId;
+      // Another Mac closed the tab this one was on. The tab that comes forward
+      // instead is nobody's arrival here — see [paneFocusByUser].
+      _paneFocusByUser = false;
     }
 
     // Streams nobody shows any more.
@@ -9555,7 +9628,9 @@ class AppNotifier extends ChangeNotifier {
         // the tab: the desk changes, `_persistLayout` re-describes it, and the dial's ring and swarm
         // line follow from that — nothing is answered to the dial directly.
         final swarmId = payload['swarmId'];
-        if (swarmId is String && swarmId.isNotEmpty) selectSwarm(swarmId);
+        if (swarmId is String && swarmId.isNotEmpty) {
+          _fromDevice(() => selectSwarm(swarmId));
+        }
         break;
       case 'dial_forked':
         // The dial forked an agent; the daemon already opened the pane on its
@@ -9567,10 +9642,12 @@ class AppNotifier extends ChangeNotifier {
           final targetMachineId = _dialFocusMachine(payload, forkId);
           if (targetMachineId != null) {
             unawaited(
-              placeFork(
-                targetMachineId,
-                forkId,
-                sourceAgentId: forkSource is String ? forkSource : '',
+              _fromDevice(
+                () => placeFork(
+                  targetMachineId,
+                  forkId,
+                  sourceAgentId: forkSource is String ? forkSource : '',
+                ),
               ),
             );
           }

@@ -85,6 +85,12 @@ class TerminalPanel extends StatefulWidget {
   final bool showHeader;
   final int focusRequest;
 
+  /// Whether the navigation that focused or showed this tile was a person's
+  /// gesture on this app (`AppNotifier.paneFocusByUser`). A device's — the
+  /// dial turning, a question shown there — moves the keyboard here just the
+  /// same, but never retakes a terminal another client holds.
+  final bool focusByUser;
+
   /// Whether this tile's composer textbox is showing. Only consulted for a remote machine.
   final bool composerVisible;
   final bool readOnly;
@@ -114,6 +120,7 @@ class TerminalPanel extends StatefulWidget {
     this.compactHeader = false,
     this.showHeader = true,
     this.focusRequest = 0,
+    this.focusByUser = true,
     this.composerVisible = false,
     this.readOnly = false,
     this.notice,
@@ -213,7 +220,6 @@ class _TerminalPanelState extends State<TerminalPanel>
     _focusNode.addListener(_handleFocusChange);
     _composerFocus.addListener(_handleComposerFocusChange);
     WidgetsBinding.instance.addObserver(this);
-    _lastLifecycle = WidgetsBinding.instance.lifecycleState;
     widget.session.attachViewport(this);
     widget.session.addListener(_onSessionChanged);
     terminalFontStore.addListener(_onFontChanged);
@@ -254,22 +260,20 @@ class _TerminalPanelState extends State<TerminalPanel>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _syncCursorBlink();
-    // The window came back to the front (⌘-Tab, a click on it): that is a
-    // person returning, and the tile they left focused takes its stream back.
-    // `inactive → resumed` only — the first `resumed` of a launch is nobody
-    // coming back, and a restored pane is not taken over at that point anyway.
-    final returned =
-        state == AppLifecycleState.resumed &&
-        _lastLifecycle != null &&
-        _lastLifecycle != AppLifecycleState.resumed;
-    _lastLifecycle = state;
-    if (returned && widget.focused) _autoTakeControl();
+    // ⚠️ **The window coming forward is NOT a retake.** It used to be: the tile
+    // the person left focused took its stream back on every `inactive →
+    // resumed`, on the reading that somebody had returned to the app. But the
+    // window comes forward for things nobody did to a pane — ⌘-Tab to read
+    // something, a notification, a screen waking, another app handing focus
+    // back — and every one of them pulled the terminal off the phone the
+    // person was actually typing into. Measured 2026-09-22: a phone holding
+    // one agent lost it 13s later to a window that was never touched, over and
+    // over.
+    //
+    // Taking control is a gesture AIMED at a pane now: a click in it, ⏎ on its
+    // band, its button, or a focus move (⌘1–9, ⌘]). Coming back to the window
+    // and typing costs one ⏎, which is what the band promises anyway.
   }
-
-  /// Seeded from the binding at mount, so a tile opened while the window was
-  /// in the background still sees the `inactive → resumed` that brings it
-  /// forward, rather than mistaking it for the launch's first `resumed`.
-  AppLifecycleState? _lastLifecycle;
 
   @override
   void didUpdateWidget(TerminalPanel oldWidget) {
@@ -315,9 +319,13 @@ class _TerminalPanelState extends State<TerminalPanel>
       _afterTerminalMounted();
     }
     // Shown again (a tab switched to, a zoom undone) while it is the tile the
-    // person left focused: they are back on it.
-    if (widget.visible && !oldWidget.visible && widget.focused) {
-      _autoTakeControl();
+    // person left focused: they are back on it — unless a device switched the
+    // tab, which is nobody being back anywhere.
+    if (widget.visible &&
+        !oldWidget.visible &&
+        widget.focused &&
+        widget.focusByUser) {
+      _autoTakeControlAfterBuild();
     }
     if (oldWidget.viewportSize != widget.viewportSize ||
         oldWidget.layoutRequest != widget.layoutRequest) {
@@ -329,7 +337,9 @@ class _TerminalPanelState extends State<TerminalPanel>
         (!oldWidget.focused || oldWidget.focusRequest != widget.focusRequest)) {
       _claimFocusAfterFrame();
       // ⌘1–9, ⌘], an attention jump, a click: the person chose this tile.
-      _autoTakeControl();
+      // The dial choosing it is not that — the keyboard still lands here, the
+      // stream stays with whoever has it (see `AppNotifier.paneFocusByUser`).
+      if (widget.focusByUser) _autoTakeControlAfterBuild();
     }
     // Showing or hiding the box changes how many rows the terminal has. Re-measure so the remote
     // grid is resized to what is actually on screen.
@@ -702,6 +712,14 @@ class _TerminalPanelState extends State<TerminalPanel>
     } else {
       unawaited(widget.notifier.retakeTakenOverPanes());
     }
+  }
+
+  /// [_autoTakeControl] from `didUpdateWidget`, which runs inside the build:
+  /// a reopen notifies the session's listeners at once, and a `setState` from
+  /// there is the "called during build" error the crash log was full of.
+  /// Deferred one frame, the retake lands on a built tree.
+  void _autoTakeControlAfterBuild() {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _autoTakeControl());
   }
 
   /// A keystroke was typed into a pane that cannot take it. Flash the banner
