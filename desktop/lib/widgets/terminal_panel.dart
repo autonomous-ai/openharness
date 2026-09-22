@@ -1895,12 +1895,6 @@ class _TerminalHeader extends StatelessWidget {
         pickerWidth +
         (onFork == null ? 0 : 30) +
         (agent?.viewerUrl == null && agent?.viewerError == null ? 0 : 30);
-    final folder =
-        project?.cwd
-            .split(RegExp(r'[/\\]'))
-            .where((part) => part.isNotEmpty)
-            .lastOrNull ??
-        project?.name;
     // A fork says so first: "forked from X" is the one fact about this pane
     // that the folder and the branch — shared with its source — cannot tell.
     final forkedFrom = agent?.forkedFrom;
@@ -2140,7 +2134,10 @@ class _TerminalHeader extends StatelessWidget {
                         child: PromptContextView(
                           contextData: PromptContext(
                             machine: machineName,
-                            project: narrow ? null : folder,
+                            // The project and its branch identify the pane. Where the
+                            // agent stands inside it (a subfolder, a temporary worktree)
+                            // is the working folder in the tooltip.
+                            project: narrow ? null : project?.name,
                             branch: narrow ? null : project?.branch,
                             leading: !narrow && forkedFrom != null
                                 ? 'forked from ${forkedFrom.name}'

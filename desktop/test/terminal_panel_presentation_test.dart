@@ -74,17 +74,24 @@ void main() {
           engine: 'codex',
           terminalAvailable: true,
           project: AgentProject(
-            name: 'Terminal project',
-            cwd: '/work/terminal',
-            branch: 'fast-focus',
+            name: 'harness',
+            cwd: '/work/worktrees/harness/codex-0922-1136/desktop',
+            root: '/work/worktrees/harness/codex-0922-1136',
+            branch: 'harness/codex-0922-1136',
           ),
         ),
       ];
       revision.value = 2;
       await tester.pump();
       expect(find.text('Renamed terminal'), findsOneWidget);
-      expect(find.text('fast-focus'), findsOneWidget);
-      expect(find.text('terminal'), findsOneWidget);
+      expect(find.text('harness/codex-0922-1136'), findsOneWidget);
+      expect(
+        find.text('harness'),
+        findsOneWidget,
+        reason: 'The header names the project, not the folder the agent is in.',
+      );
+      expect(find.text('desktop'), findsNothing);
+      expect(find.text('codex-0922-1136'), findsNothing);
       expect(find.byTooltip('Zoom Pane'), findsOneWidget);
       session.status = TerminalSessionStatus.takenOver;
       revision.value = 3;
@@ -129,7 +136,7 @@ void main() {
             engine: 'codex',
             terminalAvailable: true,
             project: AgentProject(
-              name: 'Harness project',
+              name: 'harness',
               cwd: '/work/harness',
               branch: 'main',
             ),
