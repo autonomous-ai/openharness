@@ -267,10 +267,12 @@ export async function initScopeLab({ getSim, getSourceFile }) {
     return takes.get(id)
   }
   function showTake(take) {
+    if (selected !== take.id) {
+      cursors = {}
+      viewWindow = null
+    }
     selected = take.id
     activeDraft = null
-    cursors = {}
-    viewWindow = null
     if (reference === selected) reference = null
     $('slTitle').value = take.title
     $('slNote').value = take.note || ''

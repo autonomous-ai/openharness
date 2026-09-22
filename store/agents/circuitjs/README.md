@@ -24,6 +24,8 @@ export, the capture instance's export, timestamped CSV/JSON measurements, a stan
 your notes, runtime fingerprints, checksums and a ZIP. Reopen it from **Your captures**, including
 after a restart or after removing the original circuit. Unsaved takes stay in this tab; keep or
 discard them before closing. Arrow keys move the active cursor; Enter switches A/B.
+Within this tab, reopening Scope Lab or keeping the current capture preserves its cursors and zoom.
+Choosing a different capture starts a fresh measurement view.
 
 The capture is a new simulation of an exported circuit, not a full checkpoint of the running
 solver. It uses a fresh time origin and faster display pacing; imported internal state can produce
