@@ -1,0 +1,238 @@
+{
+  "revision": "6aa43136",
+  "sourceLog": "/private/tmp/rapid-moose-performance-prs/primary-after-actions.log",
+  "observations": [
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_n",
+      "terminals": 16,
+      "discoveredAgents": 70,
+      "scrollbackRowsPerTerminal": 1000,
+      "firstAfterFixtureWarmupMs": 127.063,
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 15.35,
+        "p95Ms": 19.444,
+        "p99Ms": 31.67
+      },
+      "rebuilds": 344,
+      "mostRebuiltWidgets": {
+        "Positioned": 21,
+        "_FocusInheritedScope": 20,
+        "_PaneLayer": 16,
+        "RawGestureDetector": 16,
+        "Focus": 16,
+        "Builder": 14,
+        "Text": 12,
+        "Actions": 12,
+        "_ActionsScope": 12,
+        "GestureDetector": 10,
+        "DefaultTextStyle": 8,
+        "DefaultSelectionStyle": 8
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_o",
+      "terminals": 16,
+      "discoveredAgents": 70,
+      "scrollbackRowsPerTerminal": 1000,
+      "firstAfterFixtureWarmupMs": 102.53,
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 31.942,
+        "p95Ms": 60.035,
+        "p99Ms": 196.632
+      },
+      "rebuilds": 1413,
+      "mostRebuiltWidgets": {
+        "Flexible": 123,
+        "Builder": 116,
+        "Text": 92,
+        "SearchResultText": 62,
+        "_FocusInheritedScope": 62,
+        "DefaultTextStyle": 45,
+        "AnimatedDefaultTextStyle": 44,
+        "Focus": 42,
+        "_Sized": 40,
+        "RawGestureDetector": 34,
+        "_ActionsScope": 32,
+        "Actions": 32
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_t",
+      "terminals": 16,
+      "discoveredAgents": 70,
+      "scrollbackRowsPerTerminal": 1000,
+      "firstAfterFixtureWarmupMs": 24.668,
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 12.387,
+        "p95Ms": 20.837,
+        "p99Ms": 56.786
+      },
+      "rebuilds": 764,
+      "mostRebuiltWidgets": {
+        "_FocusInheritedScope": 49,
+        "Positioned": 38,
+        "Focus": 32,
+        "DefaultSelectionStyle": 24,
+        "RawGestureDetector": 24,
+        "IconTheme": 24,
+        "Actions": 18,
+        "_ActionsScope": 18,
+        "_FocusWithExternalFocusNode": 17,
+        "_PaneLayer": 16,
+        "DefaultTextStyle": 14,
+        "ExcludeFocus": 14
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "switch_tab",
+      "terminals": 16,
+      "discoveredAgents": 70,
+      "scrollbackRowsPerTerminal": 1000,
+      "firstAfterFixtureWarmupMs": 19.303,
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 18.473,
+        "p95Ms": 20.861,
+        "p99Ms": 64.575
+      },
+      "rebuilds": 1309,
+      "mostRebuiltWidgets": {
+        "_FocusInheritedScope": 71,
+        "Positioned": 62,
+        "Focus": 60,
+        "RawGestureDetector": 43,
+        "DefaultSelectionStyle": 40,
+        "IconTheme": 40,
+        "Actions": 32,
+        "_ActionsScope": 32,
+        "Tooltip": 29,
+        "Container": 26,
+        "ExcludeFocus": 26,
+        "ValueListenableBuilder<PaneDragRef?>": 24
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_n",
+      "terminals": 48,
+      "discoveredAgents": 2000,
+      "scrollbackRowsPerTerminal": 1000,
+      "firstAfterFixtureWarmupMs": 43.703,
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 11.55,
+        "p95Ms": 13.748,
+        "p99Ms": 14.109
+      },
+      "rebuilds": 408,
+      "mostRebuiltWidgets": {
+        "Positioned": 53,
+        "_PaneLayer": 48,
+        "_FocusInheritedScope": 20,
+        "RawGestureDetector": 16,
+        "Focus": 16,
+        "Builder": 14,
+        "Text": 12,
+        "Actions": 12,
+        "_ActionsScope": 12,
+        "GestureDetector": 10,
+        "DefaultTextStyle": 8,
+        "DefaultSelectionStyle": 8
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_o",
+      "terminals": 48,
+      "discoveredAgents": 2000,
+      "scrollbackRowsPerTerminal": 1000,
+      "firstAfterFixtureWarmupMs": 96.498,
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 24.328,
+        "p95Ms": 27.397,
+        "p99Ms": 30.986
+      },
+      "rebuilds": 1477,
+      "mostRebuiltWidgets": {
+        "Flexible": 123,
+        "Builder": 116,
+        "_FocusInheritedScope": 94,
+        "Text": 92,
+        "SearchResultText": 62,
+        "_FocusWithExternalFocusNode": 49,
+        "DefaultTextStyle": 45,
+        "AnimatedDefaultTextStyle": 44,
+        "Focus": 42,
+        "_Sized": 40,
+        "RawGestureDetector": 34,
+        "_ActionsScope": 32
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_t",
+      "terminals": 48,
+      "discoveredAgents": 2000,
+      "scrollbackRowsPerTerminal": 1000,
+      "firstAfterFixtureWarmupMs": 16.299,
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 10.581,
+        "p95Ms": 13.356,
+        "p99Ms": 82.647
+      },
+      "rebuilds": 892,
+      "mostRebuiltWidgets": {
+        "_FocusInheritedScope": 81,
+        "Positioned": 70,
+        "_FocusWithExternalFocusNode": 49,
+        "_PaneLayer": 48,
+        "Focus": 32,
+        "DefaultSelectionStyle": 24,
+        "RawGestureDetector": 24,
+        "IconTheme": 24,
+        "Actions": 18,
+        "_ActionsScope": 18,
+        "DefaultTextStyle": 14,
+        "ExcludeFocus": 14
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "switch_tab",
+      "terminals": 48,
+      "discoveredAgents": 2000,
+      "scrollbackRowsPerTerminal": 1000,
+      "firstAfterFixtureWarmupMs": 18.627,
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 18.723,
+        "p95Ms": 22.508,
+        "p99Ms": 27.033
+      },
+      "rebuilds": 1373,
+      "mostRebuiltWidgets": {
+        "Positioned": 94,
+        "_FocusInheritedScope": 71,
+        "Focus": 60,
+        "_PaneLayer": 48,
+        "RawGestureDetector": 43,
+        "DefaultSelectionStyle": 40,
+        "IconTheme": 40,
+        "Actions": 32,
+        "_ActionsScope": 32,
+        "Tooltip": 29,
+        "ExcludeFocus": 26,
+        "Container": 26
+      }
+    }
+  ]
+}

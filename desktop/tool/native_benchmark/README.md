@@ -44,6 +44,8 @@ terminal input isolation for every action. Five warmups and a separate rebuild
 instrumentation pass precede 40 timed samples per action. Optional
 `HARNESS_PRIMARY_CPU_PROFILE=/private/tmp/primary` with `--enable-vmservice`
 records profiles; `HARNESS_PRIMARY_OPERATION=cmd_t` restricts the action.
+See the [primary-workflow results](../../../docs/performance/2026-09-22-primary-workflows.md)
+for the isolated Cmd+O comparison, unchanged controls and rejected new-tab experiment.
 
 ## Original AppKit event-queue runner
 

@@ -107,7 +107,7 @@ After splitting, each production PR also passed its checks independently against
 
 ## Next priority: primary workflows
 
-The next optimization pass prioritizes Cmd+N, Cmd+O, Cmd+T and switching active workspaces. The results here do not establish a material Release improvement in Cmd+N/O, and the current release driver does not measure Cmd+T creation. New-tab creation needs an explicit workload and correctness checks before making latency claims for that action. Less frequently used settings/help surfaces are lower priority for further work.
+The [primary-workflow follow-up](2026-09-22-primary-workflows.md) prioritizes Cmd+N, Cmd+O, Cmd+T and switching active workspaces. The comparison above did not include Cmd+T and does not establish a material Release improvement in Cmd+N/O. The extended driver now verifies new-tab creation and closing, and the follow-up measures a separate, isolated Cmd+O improvement in #226. It also preserves a rejected new-tab experiment and unchanged controls. Less frequently used settings/help surfaces are lower priority for further work.
 
 ## Reproduction
 
