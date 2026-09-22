@@ -773,6 +773,10 @@ class RouteCandidate {
 
 String _str(Object? value) => value is String ? value : '';
 
+/// How a checkout on no branch reports itself, `Detached 65281563`: the
+/// daemon (cli/src/lib/agentProject.ts) and [LocalGitProjects] both say so.
+const kDetachedBranchPrefix = 'Detached ';
+
 /// Context reported by the owning daemon. Missing on older daemons.
 class AgentProject {
   const AgentProject({
@@ -812,6 +816,20 @@ class AgentProject {
             .lastOrNull ??
         name;
   }
+
+  /// On a commit rather than a branch: an agent reading or testing one.
+  bool get detached => branch?.startsWith(kDetachedBranchPrefix) == true;
+
+  /// The branch worth showing beside the folder: none while Harness's made-up
+  /// name waits for the session's, and none on no branch at all.
+  String? get shownBranch => branchPending || detached ? null : branch;
+
+  /// The branch as a tooltip says it.
+  String? get branchDetail => branch == null
+      ? null
+      : detached
+      ? 'No branch: on commit ${branch!.substring(kDetachedBranchPrefix.length)}'
+      : 'Branch: $branch';
 
   String identity(String machineId) =>
       remote != null ? 'repo:$remote' : 'folder:$machineId:${root ?? cwd}';

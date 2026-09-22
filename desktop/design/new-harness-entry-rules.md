@@ -43,8 +43,10 @@ folder it was started in and its repository's branch. Pane headers read
 `folder › branch`, with the machine first only for another computer: the folder
 the harness started in (a subfolder as itself, a checkout's root — a
 worktree's too — as its repository), which does not follow the agent's shell,
-and the branch with the same icon everywhere. Worktree folders are never shown;
-the header's tooltip has the full path. Cut short, the folder shortens in the
+and the branch with the same icon everywhere. A checkout on no branch — a
+commit an agent checked out to read or test — shows no branch; the tooltip says
+`No branch: on commit 65281563`. Worktree folders are never shown; the header's
+tooltip has the full path. Cut short, the folder shortens in the
 middle before the branch does. A folder inside a linked
 worktree (the focused pane's, or one typed or browsed) shows as the same folder
 in the repository's main checkout, so Cmd-N from a worktree pane starts beside
