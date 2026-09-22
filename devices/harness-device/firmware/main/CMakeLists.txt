@@ -94,7 +94,7 @@ if(DEVICE_BOARD_M5CORES3)
         "ui/icons_c3.c"
         "wifi_sta.c"
         "wifi_cable.c"
-        "ui/geist_c3_reg_10.c" "ui/geist_c3_reg_12.c" "ui/geist_c3_reg_15.c" "ui/geist_c3_reg_20.c"
+        "ui/geist_c3_reg_10.c" "ui/geist_c3_reg_12.c" "ui/geist_c3_reg_15.c" "ui/geist_c3_reg_18.c" "ui/geist_c3_reg_20.c"
         "ui/geist_c3_reg_21.c" "ui/geist_c3_reg_23.c" "ui/geist_c3_med_17.c" "ui/geist_c3_med_20.c"
         "ui/geist_c3_med_23.c" "ui/geist_c3_med_29.c" "ui/geist_c3_med_39.c" "ui/geist_c3_sem_15.c"
     )

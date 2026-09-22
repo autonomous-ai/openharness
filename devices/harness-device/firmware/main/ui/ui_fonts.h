@@ -29,6 +29,7 @@ extern const lv_font_t geist_sem_24;
 extern const lv_font_t geist_c3_reg_10;
 extern const lv_font_t geist_c3_reg_12;
 extern const lv_font_t geist_c3_reg_15;
+extern const lv_font_t geist_c3_reg_18;   // the reader's body, a step under the dial's 34 at 0.6x
 extern const lv_font_t geist_c3_reg_20;
 extern const lv_font_t geist_c3_reg_21;
 extern const lv_font_t geist_c3_reg_23;

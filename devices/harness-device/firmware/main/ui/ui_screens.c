@@ -2571,7 +2571,13 @@ void ui_init(void)
     reader_lbl = lv_label_create(scr_reader);
     lv_label_set_long_mode(reader_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(reader_lbl, lv_pct(100));
+#if defined(DEVICE_BOARD_M5CORES3)
+    // A step smaller than the dial's 34 at 0.6x (21): the reader carries the whole message now, and 18px
+    // fits a few more words a line on the narrower glass while staying comfortable to read.
+    lv_obj_set_style_text_font(reader_lbl, &geist_c3_reg_18, 0);
+#else
     lv_obj_set_style_text_font(reader_lbl, &geist_reg_34, 0);   // full-text detail body
+#endif
     lv_obj_set_style_text_color(reader_lbl, COL_FG, 0);
     lv_obj_set_style_text_align(reader_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_line_space(reader_lbl, PX(4), 0);   // readable long-form text
@@ -7525,10 +7531,12 @@ static void project_apply_event(const char *project_id, const char *session_id, 
     const char *sym; lv_color_t col;
     kind_style(kind, &sym, &col);
     const char *body = (text && text[0]) ? text : (kind ? kind : "");
-    // Scratch in PSRAM (~5.3KB off internal RAM): all four fields are used within this one call, which
+    // Scratch in PSRAM (~17KB off internal RAM): all four fields are used within this one call, which
     // runs on the small commander WS task and is serialized under display_lock. Was static .bss; on the
     // stack it overflowed and smashed the return address (crash on long events), hence the shared buffer.
-    static struct emit_scratch { char clean[2100]; char full[2160]; char preview[520]; char recap_clean[512]; } *s_emit;
+    // clean/full hold a whole message for the reader: the daemon sends the complete answer now, sized to
+    // one cable frame (8 KB), where it used to send a 250-character glance.
+    static struct emit_scratch { char clean[8200]; char full[8260]; char preview[520]; char recap_clean[512]; } *s_emit;
     if (!s_emit) s_emit = ram_psram_alloc(sizeof(*s_emit), "event_format_scratch");
     if (!s_emit) { display_unlock(); return; }   // PSRAM exhausted (never in practice) → bail, don't crash
     char *clean = s_emit->clean, *full = s_emit->full, *preview = s_emit->preview, *recap_clean = s_emit->recap_clean;

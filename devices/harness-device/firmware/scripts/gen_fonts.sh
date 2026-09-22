@@ -56,7 +56,7 @@ gen3() {  # gen3 <src> <tag> <size>
   sed -i '' "s/\bgeist_$2_$3\b/geist_c3_$2_$3/g" "$out"
   printf "  %-26s %6.0f KB\n" "$out" "$(($(stat -f%z "$out")/1024))"
 }
-for s in 10 12 15 20 21 23; do gen3 "$REG" reg "$s"; done
+for s in 10 12 15 18 20 21 23; do gen3 "$REG" reg "$s"; done
 for s in 17 20 23 29;       do gen3 "$MED" med "$s"; done
 for s in 15;                do gen3 "$SEM" sem "$s"; done
 out="main/ui/geist_c3_med_39.c"
