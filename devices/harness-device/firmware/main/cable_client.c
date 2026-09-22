@@ -1,4 +1,9 @@
 #include "cable_client.h"
+#if defined(DEVICE_BOARD_M5CORES3)
+#include "display.h"
+#include "display_cores3.h"
+#include "board/cores3_clock.h"
+#endif
 
 #include <stdlib.h>
 #include <string.h>
@@ -434,6 +439,12 @@ static void handle_swarms(const cJSON *p)
 static void session_up(const cJSON *p)
 {
 #if defined(DEVICE_BOARD_M5CORES3)
+    // The computer's clock, for the chrome's time (and the RTC that keeps it between sessions).
+    const cJSON *now = p ? cJSON_GetObjectItemCaseSensitive(p, "now") : NULL;
+    const cJSON *tz = p ? cJSON_GetObjectItemCaseSensitive(p, "tzOffsetMin") : NULL;
+    if (cJSON_IsNumber(now)) cores3_clock_set((int64_t)now->valuedouble, cJSON_IsNumber(tz) ? (int)tz->valuedouble : 0);
+#endif
+#if defined(DEVICE_BOARD_M5CORES3)
     const char *bind = str_of(p, "bind");
     const bool tcp = cable_link_rx_is_tcp() && !cable_link_host_present();
     if (tcp) {
@@ -651,6 +662,11 @@ static void handle_message(const cJSON *root)
     if (!p) p = root;   // flat messages are legal; `p` is a convenience, not a requirement
 
     if (strcmp(t, "welcome") == 0) { session_up(p); return; }
+#if defined(DEVICE_BOARD_M5CORES3)
+    // Debug: what is on the glass, back over the cable (scripts/cores3-snap.py).
+    if (strcmp(t, "debug.snap") == 0) { display_lock(); display_cores3_snapshot(); display_unlock(); return; }
+    if (strcmp(t, "debug.show") == 0) { ui_debug_show(str_of(p, "what")); return; }
+#endif
     if (strcmp(t, "ping") == 0) { send_json(msg("pong")); return; }
     if (strcmp(t, "agents.begin") == 0) { handle_agents_begin(); return; }
     if (strcmp(t, "agent") == 0) { handle_agent(p); return; }

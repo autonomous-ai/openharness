@@ -361,7 +361,8 @@ void ui_stop_active_turn(void);
 
 // Physical BOOT button pressed. Routes to "back" (cancel voice / dismiss the question) while a
 // question is on screen, otherwise to ui_stop_active_turn(). Safe from a non-LVGL task.
-void ui_boot_pressed(void);
+// Returns whether it did anything (the CoreS3's on-screen key goes on to "back" when it did not).
+bool ui_boot_pressed(void);
 
 // --- Screen lock (3×3 pattern passcode) ---
 // Wire the sleep/wake power hook and lock now if a passcode is set (called once at the end of ui_init).
@@ -374,3 +375,8 @@ bool ui_lock_active(void);
 // One line on the log whenever what covers the face changes (screen, overlay, drawer, lock, sleep).
 // Called from the LVGL task every loop; cheap when nothing changed.
 void ui_log_state_if_changed(void);
+
+#if defined(DEVICE_BOARD_M5CORES3)
+// Debug: put the face in a named state (cable `debug.show`), for screenshots.
+void ui_debug_show(const char *what);
+#endif

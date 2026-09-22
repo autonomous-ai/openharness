@@ -1,4 +1,4 @@
-// M5Stack CoreS3 display bring-up + virtual round-screen compositor. See display_cores3.h.
+// M5Stack CoreS3 display: panel bring-up, the native 320x240 flush, and a debug snapshot. See display_cores3.h.
 #include "display_cores3.h"
 
 #include <stdio.h>
@@ -19,21 +19,16 @@
 #include "esp_attr.h"
 #include "ram_telemetry.h"
 #include "touch.h"
+#include "cable_link.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
 static const char *TAG = "display.c3";
 
-#define PANEL_W   BSP_PANEL_H_RES   // 320
-#define PANEL_H   BSP_PANEL_V_RES   // 240
-#define SCALE_NUM BSP_SCALE_NUM     // 1
-#define SCALE_DEN BSP_SCALE_DEN     // 2
-#define OFF_X     BSP_PANEL_OFF_X   // -86
-#define OFF_Y     BSP_PANEL_OFF_Y   // -6
-
-// Dest chunk height for DMA staging: 16 panel rows x 320 px = 10 KiB per chunk.
-#define FLUSH_CHUNK_ROWS 16
+#define PANEL_W   BSP_LCD_H_RES   // 320
+#define PANEL_H   BSP_LCD_V_RES   // 240
 
 // ── panel revision: ILI9342C vs ILI9342E ────────────────────────────────────────────────────────────
 // CoreS3 ships two panel revisions. Which one is mounted is told by the FT5x06-family touch
@@ -135,31 +130,21 @@ static const ili9341_vendor_config_t s_ili9342e_vendor = {
 // ── panel bring-up ──────────────────────────────────────────────────────────────────────────────────
 
 static esp_lcd_panel_handle_t s_panel;
-static SemaphoreHandle_t s_tx_done;   // given by the esp_lcd color-done callback (per DMA chunk)
-// Dest chunk: 16 panel rows x 320 px = 10 KiB. DMA-capable internal BSS.
-static DMA_ATTR uint16_t s_chunk[PANEL_W * FLUSH_CHUNK_ROWS];
-// Complete 466×466 virtual frame in PSRAM. Partial LVGL flushes are copied here, then the
-// panel is sampled from this image so glyphs/layers always have real neighbors.
-static uint16_t *s_fb;
-#define FB_W BSP_LCD_H_RES
-#define FB_H BSP_LCD_V_RES
+static lv_display_t *s_disp;          // the one LVGL display; its flush completes in on_color_done
+static uint8_t s_backlight = 255;     // the level Brightness last set, restored on wake
 
+// The DMA finished pushing a strip: hand the buffer back to LVGL, which has been rendering the next
+// strip into the other one meanwhile. That overlap is the whole point of the pair of draw buffers.
 static bool on_color_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *edata, void *ctx)
 {
     (void)io; (void)edata; (void)ctx;
-    if (s_tx_done) xSemaphoreGive(s_tx_done);
+    if (s_disp) lv_display_flush_ready(s_disp);
     return false;
 }
 
 void panel_bringup_cores3(void)
 {
     cores3_board_power_init();
-    if (!s_tx_done) s_tx_done = xSemaphoreCreateBinary();
-    if (!s_fb) {
-        s_fb = ram_psram_alloc((size_t)FB_W * FB_H * sizeof(uint16_t), "cores3_fb");
-        if (s_fb) memset(s_fb, 0, (size_t)FB_W * FB_H * sizeof(uint16_t));
-        else ESP_LOGE(TAG, "virtual framebuffer alloc failed");
-    }
     // Hardware reset BEFORE SPI, leave RST high. esp-bsp's bsp_feature_enable(LCD) just
     // drives P1.1 high; M5GFX issue 192 pulses low 20 ms / high 120 ms first. SWRESET
     // (panel_reset with rst_gpio=-1) only reaches the chip once RST is high.
@@ -171,7 +156,9 @@ void panel_bringup_cores3(void)
         .sclk_io_num = BSP_LCD_SCLK,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = PANEL_W * 32 * BSP_LCD_BIT_PER_PIXEL / 8,
+        // One whole draw strip per transaction (display.c sizes the strips); esp_lcd splits anything
+        // larger itself, and signals done once for the lot.
+        .max_transfer_sz = PANEL_W * 48 * BSP_LCD_BIT_PER_PIXEL / 8,
     };
     ESP_ERROR_CHECK(spi_bus_initialize(BSP_LCD_SPI_HOST, &bus, SPI_DMA_CH_AUTO));
 
@@ -207,362 +194,147 @@ void panel_bringup_cores3(void)
     esp_lcd_panel_swap_xy(s_panel, false);
     esp_lcd_panel_mirror(s_panel, false, false);
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
-    cores3_backlight_set(255);
+    cores3_backlight_set(s_backlight);
     ESP_LOGI(TAG, "ILI9342%s up (%dx%d) spi_mode=0 bgr invert vendor=%s",
              is_e ? "E" : "C", PANEL_W, PANEL_H, is_e ? "E-list" : "ili9341-default");
 }
 
 void panel_disp_on_off_cores3(bool on)
 {
-    if (s_panel) esp_lcd_panel_disp_on_off(s_panel, on);
-}
-
-// panel coord → virtual coord (the inverse of the flush mapping). Round-nearest, clamped
-// into the virtual face. Lives here so touch.c and this file share one definition.
-void panel_to_virtual(int px, int py, int *vx, int *vy)
-{
-    int x = OFF_X + (px * SCALE_DEN + SCALE_NUM / 2) / SCALE_NUM;
-    int y = OFF_Y + (py * SCALE_DEN + SCALE_NUM / 2) / SCALE_NUM;
-    if (x < 0) x = 0;
-    if (x > BSP_LCD_H_RES - 1) x = BSP_LCD_H_RES - 1;
-    if (y < 0) y = 0;
-    if (y > BSP_LCD_V_RES - 1) y = BSP_LCD_V_RES - 1;
-    *vx = x; *vy = y;
-}
-
-// Integer 1/2 downsample from a complete 466×466 PSRAM frame: each panel pixel is the
-// 2×2 average of virtual pixels (the usual way to shrink bitmap text). SPI wants swapped RGB565.
-
-static inline uint16_t rgb565_spi(uint16_t native)
-{
-    return (uint16_t)((native >> 8) | (native << 8));
-}
-
-static inline uint16_t rgb565_box2(uint16_t a, uint16_t b, uint16_t c, uint16_t d)
-{
-    int r = ((a >> 11) + (b >> 11) + (c >> 11) + (d >> 11)) >> 2;
-    int g = (((a >> 5) & 63) + ((b >> 5) & 63) + ((c >> 5) & 63) + ((d >> 5) & 63)) >> 2;
-    int bl = ((a & 31) + (b & 31) + (c & 31) + (d & 31)) >> 2;
-    return (uint16_t)((r << 11) | (g << 5) | bl);
-}
-
-// Physical top-right letterbox (virtual face ends ~x=276). 5×7 digits so "100%" fits in 44px.
-#define HUD_X 278
-#define HUD_Y 4
-#define HUD_W 40
-#define HUD_H 9
-#define GLYPH_W 5
-#define GLYPH_H 7
-
-static int s_hud_pct = -1;
-static bool s_hud_chg;
-static int s_wifi_bars = -1;   // 0..4, -1 = hide
-
-#define WIFI_X 4
-#define WIFI_Y 4
-#define WIFI_W 20
-#define WIFI_H 11
-
-// bit0 = left. Rows top→bottom.
-static const uint8_t k_digit[10][GLYPH_H] = {
-    {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E},
-    {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E},
-    {0x0E, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1F},
-    {0x0E, 0x11, 0x01, 0x06, 0x01, 0x11, 0x0E},
-    {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02},
-    {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E},
-    {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E},
-    {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08},
-    {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E},
-    {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C},
-};
-static const uint8_t k_pct[GLYPH_H]  = {0x19, 0x1A, 0x04, 0x04, 0x04, 0x0B, 0x13};
-static const uint8_t k_bolt[GLYPH_H] = {0x02, 0x06, 0x0C, 0x1F, 0x06, 0x0C, 0x08};
-
-static void hud_put(uint16_t *buf, int x, const uint8_t *rows, uint16_t col)
-{
-    if (x + GLYPH_W > HUD_W) return;
-    for (int y = 0; y < GLYPH_H; y++) {
-        uint8_t bits = rows[y];
-        for (int b = 0; b < GLYPH_W; b++) {
-            if (bits & (1u << (GLYPH_W - 1 - b)))
-                buf[(size_t)(y + 1) * HUD_W + (size_t)(x + b)] = rgb565_spi(col);
-        }
-    }
-}
-
-static void wifi_blit(void)
-{
-    if (!s_panel || s_wifi_bars < 0) return;
-    uint16_t buf[WIFI_W * WIFI_H];
-    memset(buf, 0, sizeof(buf));
-    const uint16_t on = rgb565_spi(0xFFFF);
-    const uint16_t off = rgb565_spi(0x4208);
-    for (int i = 0; i < 4; i++) {
-        int bw = 3, gap = 2;
-        int bh = 3 + i * 2;           // 3,5,7,9
-        int bx = 1 + i * (bw + gap);
-        int by = WIFI_H - 1 - bh;
-        uint16_t col = (i < s_wifi_bars) ? on : off;
-        for (int y = 0; y < bh; y++) {
-            for (int x = 0; x < bw; x++) {
-                buf[(size_t)(by + y) * WIFI_W + (size_t)(bx + x)] = col;
-            }
-        }
-    }
-    esp_lcd_panel_draw_bitmap(s_panel, WIFI_X, WIFI_Y, WIFI_X + WIFI_W, WIFI_Y + WIFI_H, buf);
-    xSemaphoreTake(s_tx_done, portMAX_DELAY);
-}
-
-static void hud_blit(void)
-{
     if (!s_panel) return;
-    wifi_blit();
-    if (s_hud_pct < 0) return;
-    uint16_t buf[HUD_W * HUD_H];
-    memset(buf, 0, sizeof(buf));
-    uint16_t col = s_hud_chg ? 0x07E0 : (s_hud_pct <= 15 ? 0xFFE0 : 0xFFFF);
-    char txt[8];
-    snprintf(txt, sizeof(txt), "%d%%", s_hud_pct);
-    int n = (int)strlen(txt);
-    int w = n * (GLYPH_W + 1) - 1;
-    if (s_hud_chg) w += GLYPH_W + 1;
-    int x = HUD_W - w;
-    if (x < 0) x = 0;
-    if (s_hud_chg) { hud_put(buf, x, k_bolt, col); x += GLYPH_W + 1; }
-    for (int i = 0; i < n; i++) {
-        char c = txt[i];
-        if (c >= '0' && c <= '9') hud_put(buf, x, k_digit[c - '0'], col);
-        else if (c == '%') hud_put(buf, x, k_pct, col);
-        x += GLYPH_W + 1;
+    // The panel's own display-off blanks the glass but leaves the backlight burning, which is most of
+    // the power. Off: backlight first, then the panel; on: the reverse, so no stale frame flashes up.
+    if (on) {
+        esp_lcd_panel_disp_on_off(s_panel, true);
+        cores3_backlight_set(s_backlight);
+    } else {
+        cores3_backlight_set(0);
+        esp_lcd_panel_disp_on_off(s_panel, false);
     }
-    esp_lcd_panel_draw_bitmap(s_panel, HUD_X, HUD_Y, HUD_X + HUD_W, HUD_Y + HUD_H, buf);
-    xSemaphoreTake(s_tx_done, portMAX_DELAY);
 }
 
-void display_cores3_set_battery(int pct, bool charging)
-{
-    if (pct > 100) pct = 100;
-    if (pct == s_hud_pct && charging == s_hud_chg) return;
-    s_hud_pct = pct;
-    s_hud_chg = charging;
-    if (!display_is_asleep()) hud_blit();
-}
 
-void display_cores3_set_wifi(bool connected, int rssi)
-{
-    int bars = 0;
-    if (connected) {
-        if (rssi >= -55) bars = 4;
-        else if (rssi >= -65) bars = 3;
-        else if (rssi >= -75) bars = 2;
-        else if (rssi >= -85) bars = 1;
-        else bars = 0;
-    }
-    if (bars == s_wifi_bars) return;
-    s_wifi_bars = bars;
-    if (!display_is_asleep()) hud_blit();
-}
-
-// ── native-resolution layer ─────────────────────────────────────────────────────────────────────────
+// ── the flush ───────────────────────────────────────────────────────────────────────────────────────
 //
-// A SECOND LVGL display, 320x240, one-to-one with the glass. It exists for the screens the round face
-// cannot serve: the 466 virtual face lands on 233x233 after the integer-half downsample, so a 10-key
-// keyboard row gets ~18 px per key, about 2.5 mm, against the ~7 mm a fingertip wants. No amount of
-// styling inside the virtual face fixes that, because the half mapping is uniform.
-//
-// Two displays, ONE panel. They must never paint at the same time, so activate() pauses the refresh
-// timer of whichever is going dark. That is the whole concurrency story: LVGL walks displays
-// sequentially inside lv_timer_handler, and the flush below is fully synchronous (it blocks on
-// s_tx_done per chunk), so a paused display cannot be mid-flush when the other starts.
-//
-// The draw buffers are SHARED with the virtual display on purpose. A 320-wide partial buffer is 31%
-// smaller than the 466-wide one already allocated, and internal DMA RAM on this board is down to tens
-// of kilobytes; allocating a second pair to hold strictly less data would be the wrong trade.
-static lv_display_t *s_native;
-static bool s_native_on;
+// Native, one pixel to one pixel. LVGL renders plain RGB565 into a strip; the panel wants it big-endian,
+// so the strip is byte-swapped in place and handed to the SPI DMA as it is — no staging copy, no
+// framebuffer. The flush returns at once and on_color_done tells LVGL when the strip is on the glass,
+// so the next strip renders while this one travels. (RGB565_SWAPPED rendering would skip the swap, but
+// LVGL 9's swapped path mis-draws fonts and layers on this panel: lvgl#9387.)
 
-bool display_cores3_native_active(void) { return s_native_on; }
-
-// Straight to the glass: no s_fb composite, no downsample, no letterbox. Same chunked DMA and the same
-// byte swap as the compositor path, because the panel's expectations do not change with the source.
-static void lvgl_flush_cores3_native(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
-{
-    if (display_is_asleep() || !s_panel) { lv_display_flush_ready(disp); return; }
-
-    int dx1 = area->x1, dy1 = area->y1, dx2 = area->x2, dy2 = area->y2;
-    if (dx1 < 0) dx1 = 0;
-    if (dy1 < 0) dy1 = 0;
-    if (dx2 > PANEL_W - 1) dx2 = PANEL_W - 1;
-    if (dy2 > PANEL_H - 1) dy2 = PANEL_H - 1;
-    if (dx2 < dx1 || dy2 < dy1) { lv_display_flush_ready(disp); return; }
-
-    // PARTIAL mode packs by dirty width, but the stride can still be aligned past it — read it from the
-    // draw buffer rather than assuming, exactly as the compositor path does.
-    const int aw = area->x2 - area->x1 + 1;
-    int src_stride_px = aw;
-    lv_draw_buf_t *db = lv_display_get_buf_active(disp);
-    if (db && db->header.stride >= (uint32_t)aw * sizeof(uint16_t)) {
-        src_stride_px = (int)(db->header.stride / sizeof(uint16_t));
-    }
-    const uint16_t *src = (const uint16_t *)px;
-    const int dw = dx2 - dx1 + 1;
-
-    int dy = dy1;
-    while (dy <= dy2) {
-        int rows = dy2 - dy + 1;
-        if (rows > FLUSH_CHUNK_ROWS) rows = FLUSH_CHUNK_ROWS;
-        for (int r = 0; r < rows; r++) {
-            const uint16_t *srow = src + (size_t)(dy + r - area->y1) * src_stride_px + (dx1 - area->x1);
-            uint16_t *drow = s_chunk + (size_t)r * dw;
-            for (int i = 0; i < dw; i++) drow[i] = rgb565_spi(srow[i]);
-        }
-        esp_lcd_panel_draw_bitmap(s_panel, dx1, dy, dx2 + 1, dy + rows, s_chunk);
-        xSemaphoreTake(s_tx_done, portMAX_DELAY);
-        dy += rows;
-    }
-    lv_display_flush_ready(disp);
-}
-
-lv_display_t *display_cores3_native_display(void)
-{
-    if (s_native) return s_native;
-    lv_display_t *virt = lv_display_get_default();
-    s_native = lv_display_create(PANEL_W, PANEL_H);
-    if (!s_native) {
-        ESP_LOGE(TAG, "native display create failed — keyboard stays on the virtual face");
-        return NULL;
-    }
-    lv_display_set_flush_cb(s_native, lvgl_flush_cores3_native);
-    lv_display_set_color_format(s_native, LV_COLOR_FORMAT_RGB565);
-    // Same buffers as the virtual display. Safe only because exactly one of the two is ever unpaused —
-    // see the note above; if that invariant is ever broken these must become separate allocations.
-    void *b1 = NULL, *b2 = NULL;
-    uint32_t bytes = 0;
-    display_shared_draw_buffers(&b1, &b2, &bytes);
-    if (!b1 || !bytes) {
-        ESP_LOGE(TAG, "no shared draw buffers — native display cannot render");
-        lv_display_delete(s_native);
-        s_native = NULL;
-        lv_display_set_default(virt);
-        return NULL;
-    }
-    lv_display_set_buffers(s_native, b1, b2, bytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
-    // Created paused: the virtual face owns the panel until something asks otherwise.
-    lv_timer_t *t = lv_display_get_refr_timer(s_native);
-    if (t) lv_timer_pause(t);
-    lv_obj_set_style_bg_color(lv_display_get_screen_active(s_native), lv_color_black(), 0);
-    lv_display_set_default(virt);
-    ESP_LOGI(TAG, "native %dx%d display ready (1:1, no downsample)", PANEL_W, PANEL_H);
-    return s_native;
-}
-
-void display_cores3_native_activate(bool on)
-{
-    lv_display_t *native = on ? display_cores3_native_display() : s_native;
-    if (!native) return;
-    if (s_native_on == on) return;
-    lv_display_t *virt = display_virtual_display();
-    if (!virt) return;
-
-    lv_display_t *up   = on ? native : virt;
-    lv_display_t *down = on ? virt   : native;
-    lv_timer_t *tu = lv_display_get_refr_timer(up);
-    lv_timer_t *td = lv_display_get_refr_timer(down);
-    // Down FIRST. Resuming the newcomer before stopping the incumbent leaves a window where both own
-    // the panel, and what lands there is whichever flush finished last — which reads as a torn frame.
-    if (td) lv_timer_pause(td);
-    if (tu) lv_timer_resume(tu);
-
-    s_native_on = on;
-    lv_display_set_default(up);
-    touch_bind_display(up);
-
-    // Nothing of the other face may survive: the two disagree about where every pixel goes, and a
-    // partial repaint would leave the previous screen showing through wherever the new one is not dirty.
-    lv_obj_t *scr = lv_display_get_screen_active(up);
-    if (scr) lv_obj_invalidate(scr);
-    ESP_LOGI(TAG, "display: %s", on ? "native 320x240" : "virtual 466 face");
-}
+static void snap_capture(const lv_area_t *area, const uint16_t *px);
 
 void lvgl_flush_cores3(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
 {
-    if (display_is_asleep() || !s_fb) { lv_display_flush_ready(disp); return; }
-
-    int vx1 = area->x1, vy1 = area->y1, vx2 = area->x2, vy2 = area->y2;
-    if (vx1 < 0) vx1 = 0;
-    if (vy1 < 0) vy1 = 0;
-    if (vx2 > FB_W - 1) vx2 = FB_W - 1;
-    if (vy2 > FB_H - 1) vy2 = FB_H - 1;
-    const int aw = area->x2 - area->x1 + 1;
-    // PARTIAL reshape packs by the dirty width, but stride may still be aligned past aw.
-    int src_stride_px = aw;
-    lv_draw_buf_t *db = lv_display_get_buf_active(disp);
-    if (db && db->header.stride >= (uint32_t)aw * sizeof(uint16_t)) {
-        src_stride_px = (int)(db->header.stride / sizeof(uint16_t));
-    }
-    const uint16_t *src = (const uint16_t *)px;
-    for (int y = vy1; y <= vy2; y++) {
-        memcpy(s_fb + (size_t)y * FB_W + vx1,
-               src + (size_t)(y - area->y1) * src_stride_px + (vx1 - area->x1),
-               (size_t)(vx2 - vx1 + 1) * sizeof(uint16_t));
-    }
-
-    int dx1 = (vx1 - OFF_X) * SCALE_NUM / SCALE_DEN;
-    int dy1 = (vy1 - OFF_Y) * SCALE_NUM / SCALE_DEN;
-    int dx2 = ((vx2 + 1 - OFF_X) * SCALE_NUM + SCALE_DEN - 1) / SCALE_DEN - 1;
-    int dy2 = ((vy2 + 1 - OFF_Y) * SCALE_NUM + SCALE_DEN - 1) / SCALE_DEN - 1;
-    // Full virtual frame: also paint the letterbox so leftover panel pixels don't stick.
-    if (vx1 <= 0) dx1 = 0;
-    if (vy1 <= 0) dy1 = 0;
-    if (vx2 >= FB_W - 1) dx2 = PANEL_W - 1;
-    if (vy2 >= FB_H - 1) dy2 = PANEL_H - 1;
-    if (dx1 < 0) dx1 = 0;
-    if (dy1 < 0) dy1 = 0;
-    if (dx2 > PANEL_W - 1) dx2 = PANEL_W - 1;
-    if (dy2 > PANEL_H - 1) dy2 = PANEL_H - 1;
-    if (dx2 < dx1 || dy2 < dy1) { lv_display_flush_ready(disp); return; }
-
-    // esp_lcd_panel_draw_bitmap wants a tightly packed bitmap of (dx2-dx1+1) * rows.
-    // Writing into 320-wide rows and then handing that buffer over made the first
-    // full-screen paint look fine (width happened to be 320) and every later text
-    // invalidate look like noise (width 50–230, next row starts 320 pixels later).
-    const int dw = dx2 - dx1 + 1;
-    int dy = dy1;
-    while (dy <= dy2) {
-        int rows = dy2 - dy + 1;
-        if (rows > FLUSH_CHUNK_ROWS) rows = FLUSH_CHUNK_ROWS;
-        for (int r = 0; r < rows; r++) {
-            int sy = OFF_Y + (dy + r) * SCALE_DEN / SCALE_NUM;
-            uint16_t *drow = s_chunk + (size_t)r * dw;
-            for (int i = 0; i < dw; i++) {
-                int sx = OFF_X + (dx1 + i) * SCALE_DEN / SCALE_NUM;
-                if (sx < 0 || sx > FB_W - 1 || sy < 0 || sy > FB_H - 1) {
-                    drow[i] = 0;
-                    continue;
-                }
-                int sx1 = sx + 1;
-                if (sx1 > FB_W - 1) sx1 = FB_W - 1;
-                int sy1 = sy + 1;
-                if (sy1 > FB_H - 1) sy1 = FB_H - 1;
-                const uint16_t *row0 = s_fb + (size_t)sy * FB_W;
-                const uint16_t *row1 = s_fb + (size_t)sy1 * FB_W;
-                drow[i] = rgb565_spi(rgb565_box2(row0[sx], row0[sx1], row1[sx], row1[sx1]));
-            }
-        }
-        esp_lcd_panel_draw_bitmap(s_panel, dx1, dy, dx2 + 1, dy + rows, s_chunk);
-        xSemaphoreTake(s_tx_done, portMAX_DELAY);
-        dy += rows;
-    }
-    // Compositor paints the letterbox black on a full-frame flush. Restamp the HUD so it stays
-    // in the physical top-right, not on the virtual face.
-    if (dy1 <= HUD_Y + HUD_H - 1 && (dx1 <= WIFI_X + WIFI_W - 1 || dx2 >= HUD_X)) hud_blit();
-    lv_display_flush_ready(disp);
+    s_disp = disp;
+    if (display_is_asleep() || !s_panel) { lv_display_flush_ready(disp); return; }
+    const uint32_t n = (uint32_t)lv_area_get_width(area) * (uint32_t)lv_area_get_height(area);
+    snap_capture(area, (const uint16_t *)px);
+    lv_draw_sw_rgb565_swap(px, n);
+    esp_lcd_panel_draw_bitmap(s_panel, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px);
 }
+
+// ── debug snapshot ──────────────────────────────────────────────────────────────────────────────────
+//
+// What is on the glass, sent back over the cable, so the UI can be looked at without a camera: the host
+// sends {"t":"debug.snap"} and gets the frame as SNAP frames — each a 4-byte little-endian offset, then
+// RGB565 pixels, 320x240 in all (scripts/cores3-snap.py turns them into a PNG). It captures from the
+// flush, so the top layer, overlays and dim are all in it, exactly as shown.
+
+#define SNAP_FRAME_TYPE  0x05
+#define SNAP_CHUNK_BYTES 1024   // under the USB-JTAG driver's 2 KB TX ring: a larger write never fits
+
+enum { SNAP_IDLE, SNAP_ARMED, SNAP_CAPTURING };
+static volatile int s_snap_state = SNAP_IDLE;
+static uint16_t *s_snap;
+
+static void snap_capture(const lv_area_t *area, const uint16_t *px)
+{
+    if (s_snap_state != SNAP_CAPTURING || !s_snap) return;
+    const int w = lv_area_get_width(area);
+    for (int y = area->y1; y <= area->y2; y++) {
+        if (y < 0 || y >= PANEL_H) continue;
+        memcpy(s_snap + (size_t)y * PANEL_W + area->x1, px + (size_t)(y - area->y1) * w, (size_t)w * 2);
+    }
+}
+
+static void snap_send(void)
+{
+    const uint8_t *bytes = (const uint8_t *)s_snap;
+    const size_t total = (size_t)PANEL_W * PANEL_H * 2;
+    static uint8_t frame[4 + SNAP_CHUNK_BYTES];
+    for (size_t off = 0; off < total; off += SNAP_CHUNK_BYTES) {
+        size_t len = total - off < SNAP_CHUNK_BYTES ? total - off : SNAP_CHUNK_BYTES;
+        frame[0] = off & 0xFF; frame[1] = (off >> 8) & 0xFF; frame[2] = (off >> 16) & 0xFF; frame[3] = (off >> 24) & 0xFF;
+        memcpy(frame + 4, bytes + off, len);
+        // A full TX ring refuses the write rather than waiting past its budget; give the host a moment.
+        for (int tries = 0; tries < 5 && !cable_link_send(SNAP_FRAME_TYPE, frame, 4 + len); tries++) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+    }
+    ESP_LOGI(TAG, "snapshot sent (%ux%u)", PANEL_W, PANEL_H);
+}
+
+static void snap_refr_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_REFR_START) {
+        if (s_snap_state == SNAP_ARMED) s_snap_state = SNAP_CAPTURING;
+        return;
+    }
+    // REFR_READY: the whole screen was invalidated, so this refresh drew all of it.
+    if (s_snap_state != SNAP_CAPTURING) return;
+    s_snap_state = SNAP_IDLE;
+    snap_send();
+}
+
+void display_cores3_snapshot(void)
+{
+    if (!s_disp) return;
+    if (!s_snap) {
+        s_snap = heap_caps_malloc((size_t)PANEL_W * PANEL_H * 2, MALLOC_CAP_SPIRAM);
+        if (!s_snap) { ESP_LOGE(TAG, "snapshot buffer alloc failed"); return; }
+        lv_display_add_event_cb(s_disp, snap_refr_cb, LV_EVENT_REFR_START, NULL);
+        lv_display_add_event_cb(s_disp, snap_refr_cb, LV_EVENT_REFR_READY, NULL);
+    }
+    memset(s_snap, 0, (size_t)PANEL_W * PANEL_H * 2);
+    s_snap_state = SNAP_ARMED;
+    lv_obj_invalidate(lv_display_get_screen_active(s_disp));
+    lv_obj_invalidate(lv_display_get_layer_top(s_disp));
+    lv_obj_invalidate(lv_display_get_layer_sys(s_disp));
+}
+
+void display_cores3_bind(lv_display_t *disp) { s_disp = disp; }
 
 // ── backlight ───────────────────────────────────────────────────────────────────────────────────────
 
 void display_set_brightness_cores3(uint8_t level)
 {
-    cores3_backlight_set(level);   // AXP2101 DLDO1 — 0 = LDO off, 255 ≈ 3.3V
+    s_backlight = level;
+    if (!display_is_asleep()) cores3_backlight_set(level);   // AXP2101 DLDO1 — 0 = LDO off, 255 ≈ 3.3V
+}
+
+// ── status the chrome draws (battery, WiFi) ─────────────────────────────────────────────────────────
+
+static int s_batt_pct = -1;
+static bool s_batt_chg;
+static int s_wifi_bars = -1;
+
+void display_cores3_set_battery(int pct, bool charging)
+{
+    s_batt_pct = pct > 100 ? 100 : pct;
+    s_batt_chg = charging;
+}
+
+void display_cores3_set_wifi(bool connected, int rssi)
+{
+    int bars = 0;
+    if (connected) bars = rssi >= -55 ? 4 : rssi >= -65 ? 3 : rssi >= -75 ? 2 : rssi >= -85 ? 1 : 0;
+    s_wifi_bars = connected ? bars : -1;
+}
+
+void display_cores3_status(int *batt_pct, bool *charging, int *wifi_bars)
+{
+    if (batt_pct) *batt_pct = s_batt_pct;
+    if (charging) *charging = s_batt_chg;
+    if (wifi_bars) *wifi_bars = s_wifi_bars;
 }

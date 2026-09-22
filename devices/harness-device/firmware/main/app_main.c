@@ -38,6 +38,7 @@
 #include "ui/ui_screens.h"
 #if defined(DEVICE_BOARD_M5CORES3)
 #include "wifi_sta.h"
+#include "board/cores3_clock.h"
 #endif
 
 static const char *TAG = "app";
@@ -211,6 +212,9 @@ void app_main(void)
     board_probe_run();   // bring-up only — see board/board_probe.c
 #endif
     display_init();
+#if defined(DEVICE_BOARD_M5CORES3)
+    cores3_clock_init();   // the RTC's time, so the chrome can show it before a daemon says
+#endif
     ui_init();
     ui_set_brightness(config_load_brightness());
 #if defined(DEVICE_BOARD_M5CORES3)

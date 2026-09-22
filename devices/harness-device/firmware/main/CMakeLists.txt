@@ -81,16 +81,22 @@ idf_component_register(
         ${CORES3_PRIV_REQUIRES}
 )
 
-# CoreS3 port (DEVICE_BOARD_M5CORES3): swap the panel driver in, add the board bring-up and
-# the virtual-screen compositor, and pull the ILI9341/FT5x06 drivers the round dial doesn't use.
+# CoreS3 port (DEVICE_BOARD_M5CORES3): swap the panel driver in, add the board bring-up and its native
+# 320x240 flush, the 0.6x Geist faces (ui_fonts.h maps the dial's names onto them), and pull the
+# ILI9341/FT5x06 drivers the round dial doesn't use.
 # Build:  . ~/esp/esp-idf/export.sh && scripts/build-cores3.sh
 if(DEVICE_BOARD_M5CORES3)
     target_compile_definitions(${COMPONENT_LIB} PUBLIC DEVICE_BOARD_M5CORES3=1)
     target_sources(${COMPONENT_LIB} PRIVATE
         "board/cores3_board.c"
+        "board/cores3_clock.c"
         "ui/display_cores3.c"
+        "ui/icons_c3.c"
         "wifi_sta.c"
         "wifi_cable.c"
+        "ui/geist_c3_reg_10.c" "ui/geist_c3_reg_12.c" "ui/geist_c3_reg_15.c" "ui/geist_c3_reg_20.c"
+        "ui/geist_c3_reg_21.c" "ui/geist_c3_reg_23.c" "ui/geist_c3_med_17.c" "ui/geist_c3_med_20.c"
+        "ui/geist_c3_med_23.c" "ui/geist_c3_med_29.c" "ui/geist_c3_med_39.c" "ui/geist_c3_sem_15.c"
     )
 endif()
 

@@ -23,12 +23,11 @@ static const char *TAG = "ptt";
 //     never reaches us.
 // Voice is gesture-driven (touch.c); neither key touches it.
 //
-// CoreS3 (DEVICE_BOARD_M5CORES3): the PWR key is the only physical button and it takes the BOOT key's
-// action role — tap = back / stop turn (ui_boot_pressed). The port keeps the screen always on, so no
-// key controls the panel here; a long press is left to AXP2101 hardware (power-off / reset).
+// CoreS3 (DEVICE_BOARD_M5CORES3): the PWR key is the only physical button, and it is the dial's Button A —
+// a tap toggles the screen. The BOOT key's back / stop turn is on the glass instead (the chrome's key,
+// ui_screens.c). A long press is left to AXP2101 hardware (power-off / reset).
 #define BOOT_LONG_PRESS_MS 800
 
-#if !defined(DEVICE_BOARD_M5CORES3)   // CoreS3 keeps the screen always on — no key toggles the panel
 static void screen_toggle(const char *why)
 {
     // Hold the LVGL lock: display_sleep/wake touch LVGL timers + the panel, and normally run on the LVGL
@@ -38,17 +37,10 @@ static void screen_toggle(const char *why)
     else                     { ESP_LOGI(TAG, "%s → screen OFF", why); display_sleep(); }
     display_unlock();
 }
-#endif
 
 static void pwr_action(void)
 {
-#if defined(DEVICE_BOARD_M5CORES3)
-    // The dial's BOOT press: back / stop turn. The screen is always on, so no wake needed first.
-    ESP_LOGI(TAG, "PWR tap → back / stop turn");
-    ui_boot_pressed();
-#else
     screen_toggle("PWR tap");
-#endif
 }
 
 static void ptt_task(void *arg)

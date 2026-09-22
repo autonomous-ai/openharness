@@ -10,7 +10,6 @@
 #include "esp_lcd_panel_io.h"
 #if defined(DEVICE_BOARD_M5CORES3)
 #include "esp_lcd_touch_ft5x06.h"   // CoreS3: FT6336U, FT5x06-register-compatible
-#include "display_cores3.h"         // panel_to_virtual: 320×240 panel → 466 virtual
 #else
 #include "esp_lcd_touch_cst816s.h"
 #include "esp_lcd_touch_cst9217.h"
@@ -57,6 +56,11 @@ static bool     s_stuck_warned;       // the ">held 5s" line for this press alre
 #define LONG_MOVE_PX  30
 
 #define DOUBLE_TAP_MS 500   // two taps within this window (and close in position) = a double-tap. Also the
+#if defined(DEVICE_BOARD_M5CORES3)
+#define DOUBLE_TAP_RADIUS_PX 40     // the dial's 80, at the CoreS3's coarser pixel (see below)
+#else
+#define DOUBLE_TAP_RADIUS_PX 80
+#endif
                             // delay before a single tap opens the detail reader — 500ms so a (slightly slow)
                             // double-tap-to-voice is recognised first instead of the 1st tap firing detail.
 // Single writer (LVGL touch task), lock-free readers. A 32-bit aligned load/store is atomic on ESP32-S3;
@@ -79,7 +83,7 @@ static bool double_tap(bool pressed, uint16_t x, uint16_t y)
     if (pressed && !prev) {                          // rising edge = a tap
         uint32_t now = lv_tick_get();
         int dx = (int)x - lx, dy = (int)y - ly;
-        if (now - last_ms < DOUBLE_TAP_MS && dx * dx + dy * dy < 80 * 80) {
+        if (now - last_ms < DOUBLE_TAP_MS && dx * dx + dy * dy < DOUBLE_TAP_RADIUS_PX * DOUBLE_TAP_RADIUS_PX) {
             hit = true; last_ms = 0;                 // consumed — a 3rd tap won't re-trigger
         } else {
             last_ms = now; lx = x; ly = y;
@@ -113,6 +117,25 @@ static bool double_tap(bool pressed, uint16_t x, uint16_t y)
 // On the detail reader the ONLY non-scroll vertical gesture is a tight bottom-edge up-swipe → Overview, so it
 // uses a much narrower band than the carousel screens: a swipe that STARTS within the bottom ~20px (panel 466).
 #define READER_HOME_EDGE_PX 446
+
+#if defined(DEVICE_BOARD_M5CORES3)
+// The same finger travel on the CoreS3's glass: its pixels are about twice the dial's (0.127 mm against
+// 0.067 mm), so every distance halves, and the edge bands are measured up from the real bottom edge.
+// Scroll deltas go out in the dial's pixels, so the desktop scrolls as far for the same stroke.
+#undef LONG_MOVE_PX
+#undef SCROLL_MIN_PX
+#undef SWIPE_MIN_PX
+#undef BOTTOM_EDGE_PX
+#undef READER_HOME_EDGE_PX
+#define LONG_MOVE_PX          15
+#define SCROLL_MIN_PX         4
+#define SWIPE_MIN_PX          28
+#define BOTTOM_EDGE_PX        (BSP_LCD_V_RES - (466 - 400) / 2)
+#define READER_HOME_EDGE_PX   (BSP_LCD_V_RES - (466 - 446) / 2)
+#define SCROLL_OUT(v)         ((v) * 2)
+#else
+#define SCROLL_OUT(v)         (v)
+#endif
 // A single tap toggles the detail reader (open on projects / close on the reader), but a double-tap
 // starts voice. They're indistinguishable until the double-tap window passes, so DEFER the tap's action
 // by DOUBLE_TAP_MS and cancel it if a 2nd tap arrives (that's a start-voice). A tap while RECORDING is
@@ -219,7 +242,7 @@ static void swipe_track(bool pressed, uint16_t x, uint16_t y)
             // A window with no travel still counts toward the speed above (that is what lets a resting
             // finger decay), but there is nothing to send.
             if (s_scroll_acc) {
-                cable_client_send_scroll(CABLE_SCROLL_MOVE, scroll_sign() * s_scroll_acc, 0);
+                cable_client_send_scroll(CABLE_SCROLL_MOVE, SCROLL_OUT(scroll_sign() * s_scroll_acc), 0);
                 s_scroll_sent += scroll_sign() * s_scroll_acc;
             }
             s_scroll_acc = 0;
@@ -232,7 +255,7 @@ static void swipe_track(bool pressed, uint16_t x, uint16_t y)
             scroll_measure(s_scroll_acc, lv_tick_elaps(s_scroll_at));
             // The throw is signed with the drag. Flipping only the travel would send the flick off in the
             // opposite direction to the finger that made it.
-            cable_client_send_scroll(CABLE_SCROLL_UP, scroll_sign() * s_scroll_acc, scroll_sign() * s_scroll_v);
+            cable_client_send_scroll(CABLE_SCROLL_UP, SCROLL_OUT(scroll_sign() * s_scroll_acc), SCROLL_OUT(scroll_sign() * s_scroll_v));
             s_scroll_sent += scroll_sign() * s_scroll_acc;
             // One line per STROKE, at the lift — the proof of which way this went. A setting whose whole
             // effect happens on another computer is otherwise judged by eye alone, and "it didn't work"
@@ -370,18 +393,6 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
             touch_reinit();
         }
     }
-#if defined(DEVICE_BOARD_M5CORES3)
-    // The driver reports PANEL coordinates (320×240); everything below — LVGL, the gesture
-    // recognizers, the hit tests — lives in the 466×466 virtual round-screen space. Scale once,
-    // here, so every consumer sees the same geometry the flush callback drew.
-    // ...unless the native 320x240 display owns the panel, where the driver's coordinates already ARE
-    // LVGL's. Scaling them there would double every tap and push most of the keyboard off-screen.
-    if (pressed && !display_cores3_native_active()) {
-        int vx, vy;
-        panel_to_virtual(x, y, &vx, &vy);
-        x = (uint16_t)vx; y = (uint16_t)vy;
-    }
-#endif
     if (pressed && !activity_prev) {
         s_activity_gen++;
         s_presses++;
@@ -557,8 +568,7 @@ static bool touch_open(void)
 #if defined(DEVICE_BOARD_M5CORES3)
     (void)b;
     // FT6336U behind the AW9523B (which board power bring-up already enabled and took out of
-    // reset). Driver-level range is the PANEL (320×240); touch_read scales into the 466 virtual
-    // space, so every gesture band below keeps its round-screen pixel values.
+    // reset). The panel is rendered 1:1, so the driver's coordinates are LVGL's.
     esp_lcd_panel_io_i2c_config_t io_cfg = (esp_lcd_panel_io_i2c_config_t)ESP_LCD_TOUCH_IO_I2C_FT5x06_CONFIG();
     io_cfg.scl_speed_hz = BSP_I2C_FREQ_HZ;
     if (esp_lcd_new_panel_io_i2c(bus, &io_cfg, &s_tp_io) != ESP_OK) {
@@ -568,8 +578,8 @@ static bool touch_open(void)
     }
 
     esp_lcd_touch_config_t tp_cfg = {
-        .x_max = BSP_PANEL_H_RES,
-        .y_max = BSP_PANEL_V_RES,
+        .x_max = BSP_LCD_H_RES,
+        .y_max = BSP_LCD_V_RES,
         .rst_gpio_num = -1,                  // reset handled by the board bring-up (AW9523B)
         .int_gpio_num = -1,                  // INT reaches the ESP via the expander; poll instead
         .flags = { .swap_xy = 0, .mirror_x = 0, .mirror_y = 0 },
@@ -641,16 +651,6 @@ void touch_stats(touch_stats_t *out)
 }
 
 static lv_indev_t *s_indev;
-
-#if defined(DEVICE_BOARD_M5CORES3)
-// Point the one pointer indev at whichever display currently owns the panel. LVGL resolves a pointer's
-// coordinates against its display, so leaving it on the virtual face while the native one is up would
-// scale every tap by two and land it off-screen.
-void touch_bind_display(lv_display_t *d)
-{
-    if (s_indev && d) lv_indev_set_display(s_indev, d);
-}
-#endif
 
 void touch_init(void)
 {

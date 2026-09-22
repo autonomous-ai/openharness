@@ -27,7 +27,3 @@ typedef struct {
 } touch_stats_t;
 void touch_stats(touch_stats_t *out);
 
-#if defined(DEVICE_BOARD_M5CORES3)
-// Move the pointer indev to the display that currently owns the panel. See display_cores3.h.
-void touch_bind_display(lv_display_t *d);
-#endif

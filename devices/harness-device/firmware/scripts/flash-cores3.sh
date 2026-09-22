@@ -25,12 +25,14 @@ if [ -z "$PORT" ]; then
     exit 1
 fi
 
-# Anything else holding the port corrupts the transfer — find and stop it.
+# Anything else holding the port corrupts the transfer. Say who and stop, rather than kill it: the usual
+# holder is the Harness daemon itself, and killing that takes the whole desk down with the port.
 HOLDERS=$(lsof -t "$PORT" 2>/dev/null || true)
 if [ -n "$HOLDERS" ]; then
-    echo "Killing processes holding $PORT: $HOLDERS"
-    kill $HOLDERS 2>/dev/null || true
-    sleep 2
+    echo "$PORT is held by:" >&2
+    ps -o pid=,command= -p $(echo $HOLDERS | tr ' ' ',') >&2 || true
+    echo "Free it first (for the Harness daemon: harness stop). Not flashing." >&2
+    exit 1
 fi
 
 # Build first so the artifacts always match the working tree (the flash below uses

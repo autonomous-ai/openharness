@@ -30,3 +30,7 @@ CONFIG_SPIRAM_RODATA=n
 # the next boot when someone resets it by hand.
 CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT=y
 CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=n
+
+# The symbol faces at the 0.6x the CoreS3 draws everything at (ui_fonts.h maps 14/18 -> 12).
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_16=y

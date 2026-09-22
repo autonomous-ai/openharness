@@ -62,19 +62,21 @@ void cores3_board_power_init(void)
 {
     if (s_aw) return;
 
-    // AW9523B: P0 drives the enables (P0_0 touch, P0_2 audio front-end, P0_7 SY7088 boost);
-    // P1_1 is the LCD reset and must drive; P1_2 stays an input (touch INT comes through it).
+    // AW9523B: P0 drives the enables (P0_0 touch, P0_1 BUS EN — the external 5V ports, P0_2 the AW88298's
+    // enable); P1_1 is the LCD reset and P1_7 the SY7088 boost enable, both driven; P1_2 stays an input
+    // (touch INT comes through it). Pin roles per M5Unified (Power_Class.inl, M5Unified.inl): the boost is
+    // P1_7 — this once drove P0_7 believing it was, and left P1_7 an input, so the boost never came on.
     // LEDMODE must be GPIO (1), not LED current-sink (0): LCD RST in LED mode cannot drive high,
     // which is a known CoreS3 blank-panel failure. Matches 78/xiaozhi-esp32 m5stack/core-s3.
     s_aw = dev_add(BSP_AW9523_I2C_ADDR);
     if (!s_aw) { ESP_LOGE(TAG, "AW9523B @0x%02X not answering — LCD/audio rails stay off", BSP_AW9523_I2C_ADDR); return; }
     wr(s_aw, AW9523_P0_CFG, 0x00);        // P0[7:0] all outputs
-    wr(s_aw, AW9523_P1_CFG, 0b11111101);  // P1_1 output, P1_2 (touch INT) input, rest input
+    wr(s_aw, AW9523_P1_CFG, 0b01111101);  // P1_1 (LCD reset) and P1_7 (boost) outputs; P1_2 (touch INT) input
     wr(s_aw, AW9523_GCR, 0x10);           // P1 push-pull (P0 keeps its default mode)
     wr(s_aw, AW9523_LEDMODE_P0, 0xFF);    // GPIO mode, not LED
     wr(s_aw, AW9523_LEDMODE_P1, 0xFF);
     wr(s_aw, AW9523_P0_OUT, 0b10000111);  // boost + touch + AW88298 out of reset + audio FE ON
-    wr(s_aw, AW9523_P1_OUT, 0x00);        // LCD held in reset until cores3_lcd_reset()
+    wr(s_aw, AW9523_P1_OUT, 0b10000000);  // boost on, as M5Unified has it; LCD held in reset until cores3_lcd_reset()
 
     // AXP2101 rails, per M5Unified's Power.begin for this board. ALDO1 (1.8V) feeds the
     // AW88298, ALDO2 (3.3V) the ES7210; camera (ALDO3) and TF (ALDO4) stay off — this app
@@ -131,12 +133,14 @@ void cores3_audio_rail(bool on)
 
 void cores3_aw88298_reset(void)
 {
-    // Xiaozhi / M5Unified: AW88298 RST is AW9523 P0.1, active-low. Pulse it after the 1.8V rail is up.
+    // The AW88298's enable is AW9523 P0_2 (M5Unified's _speaker_enabled_cb_cores3 drives register 0x02 bit 2);
+    // low holds the amp in reset. This used to pulse P0_1, which is BUS EN — the external ports' 5V — and
+    // only ever worked because P0_2 happened to be high already.
     cores3_board_power_init();
     if (!s_aw) return;
-    aw_bit(AW9523_P0_OUT, 0b00000010, false);
+    aw_bit(AW9523_P0_OUT, 0b00000100, false);
     vTaskDelay(pdMS_TO_TICKS(10));
-    aw_bit(AW9523_P0_OUT, 0b00000010, true);
+    aw_bit(AW9523_P0_OUT, 0b00000100, true);
     vTaskDelay(pdMS_TO_TICKS(50));
 }
 

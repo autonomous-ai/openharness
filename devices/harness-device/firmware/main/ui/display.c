@@ -11,7 +11,7 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #if defined(DEVICE_BOARD_M5CORES3)
-#include "display_cores3.h"     // CoreS3: panel + virtual-screen compositor live here
+#include "display_cores3.h"     // CoreS3: panel bring-up and the native flush live here
 #else
 #include "esp_lcd_co5300.h"
 #endif
@@ -49,24 +49,6 @@ static const char *TAG = "display";
 static esp_lcd_panel_handle_t s_panel;
 static esp_lcd_panel_io_handle_t s_io;   // kept so brightness (DCS 0x51) can be re-sent at runtime
 static lv_display_t *s_disp;
-#if defined(DEVICE_BOARD_M5CORES3)
-// TEMP bring-up diagnostics: count invalidations vs renders vs flushes, 5 s cadence.
-static volatile uint32_t s_invalidate_cnt, s_render_cnt, s_flush_cnt, s_request_cnt;
-static void invalidate_stats_event_cb(lv_event_t *e) { (void)e; s_invalidate_cnt++; }
-static void refr_stats_event_cb(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_REFR_REQUEST) { s_request_cnt++; return; }   // don't gate: every one logs via REFR_START
-    s_render_cnt++;
-    static uint32_t last;
-    uint32_t now = lv_tick_get();
-    if (last && now - last < 5000) return;
-    last = now;
-    ESP_LOGW(TAG, "refr stats: invalidations=%lu renders=%lu flushes_seen=%lu tick=%lu",
-             (unsigned long)s_invalidate_cnt, (unsigned long)s_render_cnt,
-             (unsigned long)s_flush_cnt, (unsigned long)now);
-}
-#endif
 static SemaphoreHandle_t s_lvgl_mutex;
 static bool s_asleep;                   // panel turned off after idle to save battery
 static void *s_lvgl_psram_pool;          // lifetime-owned 64KiB secondary LVGL TLSF pool
@@ -78,18 +60,21 @@ static void *s_lvgl_psram_pool;          // lifetime-owned 64KiB secondary LVGL 
 // double-buffered for about 1/8 screen total.
 // NOTE: in LVGL v9, sizeof(lv_color_t) is NOT the pixel byte size — for RGB565
 // each pixel is 2 bytes regardless. Size buffers explicitly by bytes-per-pixel.
+#if defined(DEVICE_BOARD_M5CORES3)
+// 320 x 40 x 2 = 25.6 KB each, about what the 466-wide virtual strips cost before; a sixth of the screen
+// per strip, and the SPI DMA sends one while LVGL renders the other.
+#define DRAW_LINES   40
+#else
 #define DRAW_LINES   (BSP_LCD_V_RES / 16)   // smaller so both draw buffers fit in internal DMA RAM
+#endif
 #define BYTES_PER_PX (BSP_LCD_BIT_PER_PIXEL / 8)   // RGB565 -> 2
 static uint8_t *s_buf1;
-#if defined(DEVICE_BOARD_M5CORES3)
-static uint32_t s_buf_bytes;   // size of each, shared with the native display (display_cores3.c)
-#endif
 static uint8_t *s_buf2;
 
 // esp_lcd "color trans done" → tell LVGL the flush finished. Uses the global
 // display handle (the callback fires only after s_disp is created and rendering
 // has started, so it is always valid by then).
-#if !defined(DEVICE_BOARD_M5CORES3)   // CoreS3 flush is blocking — no callback needed
+#if !defined(DEVICE_BOARD_M5CORES3)   // CoreS3's lives in display_cores3.c, beside its flush
 static bool on_color_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *e, void *ctx)
 {
     if (s_disp) lv_display_flush_ready(s_disp);
@@ -99,11 +84,10 @@ static bool on_color_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_d
 
 // LVGL flush callback → push the rendered area to the CO5300. The SW renderer already emits big-endian
 // RGB565 (display color format = RGB565_SWAPPED), so no per-pixel swap here — just DMA the area out.
-// CoreS3: the flush downscales the 466×466 virtual screen onto the 320×240 ILI9342C instead.
+// CoreS3: native 320x240, byte-swapped in place for the ILI9342 (display_cores3.c).
 static void lvgl_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
 {
 #if defined(DEVICE_BOARD_M5CORES3)
-    s_flush_cnt++;
     lvgl_flush_cores3(disp, area, px);
 #else
     // Asleep: the panel is off — don't push pixels (events still update the offscreen tree and are
@@ -132,18 +116,6 @@ static void heartbeat(void)
     touch_stats(&t);
     lv_mem_monitor_t m;
     lv_mem_monitor(&m);
-#if defined(DEVICE_BOARD_M5CORES3)
-    // TEMP bring-up diagnostics: is the refr timer alive, paused, and when did it last run?
-    lv_timer_t *rt = s_disp ? lv_display_get_refr_timer(s_disp) : NULL;
-    if (rt) {
-        ESP_LOGW(TAG, "refr tmr: paused=%d inv_cnt=%lu render_cnt=%lu flush_cnt=%lu tick=%lu",
-                 (int)lv_timer_get_paused(rt), (unsigned long)s_invalidate_cnt,
-                 (unsigned long)s_render_cnt, (unsigned long)s_flush_cnt,
-                 (unsigned long)lv_tick_get());
-    } else {
-        ESP_LOGW(TAG, "refr tmr NULL!");
-    }
-#endif
     ESP_LOGI(TAG, "alive up=%lus heap=%u/%u psram=%u lv=%u%%used frag=%u%% touches=%lu last_press=%lus%s%s%s%s",
              (unsigned long)(lv_tick_get() / 1000),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -172,11 +144,7 @@ static void lvgl_task(void *arg)
         // touch (indev read), so this fires only after IDLE_MS with no touch. Fires REGARDLESS of charging
         // (user wants it to off even while plugged in); plugging in still wakes once (ui_screens tick) and
         // a whole voice turn is kept awake via display_bump_activity. Double-tap/PWR key wake it back.
-        // CoreS3: the port spec is "screen always on" — the panel stays on whenever the device is
-        // on, and the PWR key is the action button instead of a sleep/wake control.
-#if !defined(DEVICE_BOARD_M5CORES3)
         if (!s_asleep && lv_display_get_inactive_time(s_disp) > IDLE_MS) display_sleep();
-#endif
         display_unlock();
         // Keep a responsive loop even while asleep: touch_read (the double-tap-to-wake detector) is the
         // indev read that runs inside lv_timer_handler, so slowing this loop down slows touch sampling —
@@ -190,19 +158,8 @@ static void lvgl_task(void *arg)
 
 // CO5300 addresses pixels in 2px units, so partial-update areas must start on an
 // even coordinate and end on an odd one (matches the vendor BSP's rounder).
-// CoreS3: ILI9342C takes any alignment — pad each invalidate area by 2px so the
-// downscale has clamp room and flush-area edges stay artifact-free.
-#if defined(DEVICE_BOARD_M5CORES3)
-static void rounder_cb(lv_event_t *e)
-{
-    lv_area_t *area = lv_event_get_param(e);
-    // Pad enough that a 29/50 bilinear kernel (one extra virtual px) stays inside the flush.
-    if (area->x1 >= 4) area->x1 -= 4;
-    if (area->y1 >= 4) area->y1 -= 4;
-    if (area->x2 < BSP_LCD_H_RES - 5) area->x2 += 4;
-    if (area->y2 < BSP_LCD_V_RES - 5) area->y2 += 4;
-}
-#else
+// CoreS3: the ILI9342 takes any alignment, so no rounder at all.
+#if !defined(DEVICE_BOARD_M5CORES3)
 static void rounder_cb(lv_event_t *e)
 {
     lv_area_t *area = lv_event_get_param(e);
@@ -305,8 +262,7 @@ static void display_init_impl(int draw_lines, bool with_touch)
     // Draw buffers in INTERNAL DMA RAM (not PSRAM), LVGL partial mode — the dial's proven
     // architecture, used unchanged on CoreS3. (A direct-mode full PSRAM frame was tried and
     // hung LVGL 9.5's draw dispatch before the first flush — see PORT_CORES3.md. PARTIAL is
-    // also what keeps OTA-boot-mode memory use small.) The CoreS3 flush downscales each
-    // rendered area onto the 320×240 panel (display_cores3.c).
+    // also what keeps OTA-boot-mode memory use small.)
     size_t buf_bytes = BSP_LCD_H_RES * draw_lines * BYTES_PER_PX;
     s_buf1 = heap_caps_malloc(buf_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     s_buf2 = heap_caps_malloc(buf_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
@@ -317,11 +273,7 @@ static void display_init_impl(int draw_lines, bool with_touch)
     s_disp = lv_display_create(BSP_LCD_H_RES, BSP_LCD_V_RES);
     lv_display_set_flush_cb(s_disp, lvgl_flush);
 #if defined(DEVICE_BOARD_M5CORES3)
-    // TEMP bring-up diagnostics: count invalidations vs renders vs flushes, 5 s cadence.
-    s_render_cnt = 0; s_invalidate_cnt = 0;
-    lv_display_add_event_cb(s_disp, refr_stats_event_cb, LV_EVENT_REFR_START, NULL);
-    lv_display_add_event_cb(s_disp, invalidate_stats_event_cb, LV_EVENT_INVALIDATE_AREA, NULL);
-    lv_display_add_event_cb(s_disp, refr_stats_event_cb, LV_EVENT_REFR_REQUEST, NULL);
+    display_cores3_bind(s_disp);   // its DMA-done callback completes this display's flushes
 #endif
     // Dial (CO5300): render already byte-swapped so flush is a DMA copy.
     // CoreS3 (ILI9342 SPI): LVGL 9's RGB565_SWAPPED path is incomplete for fonts/layers
@@ -333,10 +285,9 @@ static void display_init_impl(int draw_lines, bool with_touch)
     lv_display_set_color_format(s_disp, LV_COLOR_FORMAT_RGB565_SWAPPED);
 #endif
     lv_display_set_buffers(s_disp, s_buf1, s_buf2, buf_bytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
-#if defined(DEVICE_BOARD_M5CORES3)
-    s_buf_bytes = buf_bytes;
-#endif
+#if !defined(DEVICE_BOARD_M5CORES3)
     lv_display_add_event_cb(s_disp, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL);
+#endif
 
     // The LVGL default theme is light (LV_THEME_DEFAULT_DARK 0) → the auto-created default screen is WHITE.
     // The refresh task paints that white screen for a few frames on every boot/reboot before app_main loads
@@ -402,26 +353,11 @@ void display_set_power_cb(void (*cb)(bool on)) { s_power_cb = cb; }
 // Reset the idle-off timer WITHOUT a touch. Voice uses the PWR key (not the touchscreen), so a whole
 // voice turn (record + upload + the agent working) has no touch and the screen would auto-off mid-task.
 // ui_screens bumps this while a voice/turn is active. No-op while asleep (the timer is moot then).
-#if defined(DEVICE_BOARD_M5CORES3)
-lv_display_t *display_virtual_display(void) { return s_disp; }
-
-void display_shared_draw_buffers(void **b1, void **b2, uint32_t *bytes)
-{
-    if (b1) *b1 = s_buf1;
-    if (b2) *b2 = s_buf2;
-    if (bytes) *bytes = s_buf_bytes;
-}
-#endif
-
 void display_bump_activity(void) { if (!s_asleep) lv_display_trigger_activity(s_disp); }
 
 // Both run on the LVGL task (idle check / touch_read), so LVGL calls here need no extra lock.
 void display_sleep(void)
 {
-#if defined(DEVICE_BOARD_M5CORES3)
-    // PWR is back/stop, not a wake key. The panel stays on whenever the device is on.
-    return;
-#endif
     if (s_asleep) return;
     s_asleep = true;
 #if defined(DEVICE_BOARD_M5CORES3)

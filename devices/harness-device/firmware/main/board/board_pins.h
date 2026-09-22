@@ -7,16 +7,15 @@
 // DEVICE_BOARD_M5CORES3: M5Stack CoreS3 port (ESP32-S3R8, 2.0" 320x240 ILI9342C, FT6336U
 // touch, AXP2101 PMIC, AW9523B IO expander, ES7210 mic ADC, AW88298 speaker amp).
 // Pins cross-checked against m5stack/M5GFX, m5stack/M5Unified and espressif/esp-bsp
-// (bsp/m5stack_core_s3). The 466x466 round UI renders into a virtual LVGL display and is
-// downscaled onto the 320x240 panel — see ui/display.c.
+// (bsp/m5stack_core_s3). LVGL renders natively at 320x240 and the UI lays itself out for it.
 #pragma once
 
 #if defined(DEVICE_BOARD_M5CORES3)
 
-// ---- ILI9342C panel: SPI (landscape 320x240) ----
-// Same SPI2 bus also carries the TF card (CS GPIO4); this app does not use the card.
-#define BSP_PANEL_H_RES       320
-#define BSP_PANEL_V_RES       240
+// ---- ILI9342C panel: SPI (landscape 320x240), rendered 1:1 ----
+// The same SPI3 bus also carries the TF card (CS GPIO4); this app does not use the card.
+#define BSP_LCD_H_RES         320
+#define BSP_LCD_V_RES         240
 #define BSP_LCD_BIT_PER_PIXEL 16          // RGB565
 
 #define BSP_LCD_SPI_HOST      SPI3_HOST
@@ -27,15 +26,6 @@
 #define BSP_LCD_RST_GPIO      -1          // reset lives on the AW9523B expander (P1_1), not a GPIO
 #define BSP_LCD_PIXEL_CLK_HZ  (40 * 1000 * 1000)
 
-// Virtual 466×466 LVGL surface, integer-halved onto the 320×240 panel.
-// Non-integer nearest-neighbour (29/50) shreds 4-bpp fonts (bell, "0 agents"); 1/2 is the
-// standard downsample: every panel pixel is a 2×2 of virtual pixels, centred with black bars.
-#define BSP_LCD_H_RES         466
-#define BSP_LCD_V_RES         466
-#define BSP_SCALE_NUM         1
-#define BSP_SCALE_DEN         2
-#define BSP_PANEL_OFF_X       (-86)       // (320 - 233) / 2 = 43 → virtual 0 at panel x=43
-#define BSP_PANEL_OFF_Y       (-6)        // (240 - 233) / 2 = 3  → virtual 0 at panel y=3
 
 // ---- I2C bus (touch + PMIC + codec + expander share it) ----
 #define BSP_I2C_SDA          12

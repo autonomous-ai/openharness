@@ -36,14 +36,3 @@ void display_set_power_cb(void (*cb)(bool on));
 // uploading/processing (voice uses the PWR key, not the touchscreen, so the screen must not auto-off).
 void display_bump_activity(void);
 
-#if defined(DEVICE_BOARD_M5CORES3)
-// The 466x466 virtual display. Exposed for the CoreS3 native layer, which has to pause this one's
-// refresh before it may paint: two displays, one panel.
-lv_display_t *display_virtual_display(void);
-
-// The draw buffers this display already owns, so the native 320x240 display can share them instead of
-// allocating a second pair. A 320-wide partial buffer needs strictly less room than the 466-wide one
-// here, and internal DMA RAM on this board is down to tens of kilobytes. Safe ONLY while exactly one
-// of the two displays is unpaused - see display_cores3_native_activate().
-void display_shared_draw_buffers(void **b1, void **b2, uint32_t *bytes);
-#endif

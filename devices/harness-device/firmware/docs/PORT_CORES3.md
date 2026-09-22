@@ -3,11 +3,11 @@
 OpenHarness device firmware on the M5Stack CoreS3, packaged as an app the
 [M5Launcher](https://github.com/bmorcelli/Launcher) installs from the SD card.
 
-> **STATUS (2026-09-19): usable on hardware.** Panel, Geist text, audio, USB cable, Settings → WiFi
-> (STA join + NVS), and CoreS3-only tile layout are on the device. LAN cable (`_harness-dial._tcp`)
-> is in firmware + this checkout's daemon; the installed OpenHarness app does not have it yet.
-> Do not open an upstream PR until WiFi-to-agents is tested with USB unplugged. History:
-> [`PORT_CORES3_DEBUG_LOG.md`](PORT_CORES3_DEBUG_LOG.md).
+> **STATUS (2026-09-22): native 320x240 face on hardware.** LVGL renders the dial's UI directly at the
+> panel's resolution (no virtual screen, no side bars), in the Apple Watch clone's frame: the time top-left,
+> the dial's key as a circle top-right, WiFi and battery in the bottom corners. The PWR key is the screen's
+> on/off again. Screenshots over the cable: `scripts/cores3-shots.py`. History:
+> [`PORT_CORES3_DEBUG_LOG.md`](PORT_CORES3_DEBUG_LOG.md) (the virtual-screen era).
 
 ## Upgrade path (how upstream updates reach this port)
 
@@ -19,11 +19,14 @@ files, so most upstream changes merge without touching the port:
 | New (port-only) files | Purpose |
 |---|---|
 | `main/board/cores3_board.h/.c` | AW9523B expander + AXP2101 rails + LCD reset + backlight + ES7210 sequence |
-| `main/ui/display_cores3.h/.c` | ILI9342C/E bring-up, 466→320×240 compositor, brightness |
+| `main/ui/display_cores3.h/.c` | ILI9342C/E bring-up, the native async flush, backlight, debug snapshot |
+| `main/board/cores3_clock.h/.c` | BM8563 RTC + the computer's UTC offset (from `welcome`) |
+| `main/ui/geist_c3_*.c`, `main/ui/icons_c3.c/.h` | the dial's faces and icons at 0.6x (`scripts/gen_fonts.sh`, `tools/gen_c3_icons.py`) |
 | `main/ui/ui_fonts.h` | Geist `extern`s (Montserrat only for `LV_SYMBOL_*`) |
 | `main/wifi_sta.h/.c` | STA scan / join / NVS SSID+PSK |
 | `main/wifi_cable.h/.c` | mDNS `_harness-dial._tcp:17420`, one TCP client, USB-bind only |
 | `scripts/build-cores3.sh`, `scripts/flash-cores3.sh`, `scripts/update-upstream.sh` | build / flash / rebase tooling |
+| `scripts/cores3-snap.py`, `scripts/cores3-shots.py` | screenshots over the cable (`debug.snap` / `debug.show`) |
 | `docs/PORT_CORES3.md` | this file |
 
 Daemon (this checkout, not the App Store / Applications binary):
@@ -65,60 +68,46 @@ then the rebase flow above is the plan.
 | PMIC | AXP2101 @0x34 | same chip as the dial; battery/PWR-key code reused as-is |
 | USB | GPIO19/20 → USB-Serial-JTAG | identical link to the daemon; no firmware change |
 
-## Buttons and the always-on screen (port decision)
+## Buttons, the key on the glass, and sleep
 
-The round dial has two keys and sleeps its panel after 5 idle minutes. The CoreS3
-has exactly one physical key and this port keeps the screen on whenever the
-device is on, so the key map was re-cut (`main/ptt.c`):
+The round dial has two keys: BOOT (back / stop turn) and PWR (the screen). The CoreS3 has only PWR, so the
+dial's BOOT key is drawn on the glass instead (the circle in the top-right corner, as on the Apple Watch
+clone), and PWR does what it does on the dial:
 
-| Input | Round dial | CoreS3 port |
+| Input | Round dial | CoreS3 |
 |---|---|---|
-| PWR key tap (AXP2101 PWRON, I2C-IRQ) | toggle screen on/off | **action button** — same as the dial's BOOT tap: back / stop turn (`ui_boot_pressed`) |
-| PWR long press | — (never reaches the firmware) | AXP2101 hardware: power-off at ~4 s (reg 0x27 = 0x00, as M5Unified sets it) |
-| BOOT tap (GPIO0) | back / stop turn | n/a — CoreS3 has no exposed BOOT key; GPIO0 is the ES7210 MCLK |
-| BOOT hold ≥ 800 ms | screen on/off | n/a |
-| Voice | touch only: double-tap starts, tap stops | unchanged (see `ui/touch.c`) |
-| Screen idle | panel off after IDLE_MS (5 min), double-tap/PWR wakes | **always on** — the idle-off in `ui/display.c` is compiled out; no key controls the panel |
+| PWR key tap (AXP2101 PWRON) | screen on/off | screen on/off (`ptt.c`) |
+| PWR long press | nothing | AXP2101 hardware: power-off at ~4 s |
+| BOOT tap | back / stop turn (`ui_boot_pressed`) | the on-screen key: the same, then **back**: it closes whatever is open, then leaves for the Overview (`ui_key_pressed`) |
+| Screen idle | panel off after 5 min | the same, backlight off too |
 
-Implementation notes:
+The key turns red whenever it would stop something (a voice turn, or the busy agent on screen). It sits
+above every overlay, and a press on it is never taken for the notification pull or a tap-to-stop.
+There is no factory-reset-at-boot gesture (no BOOT key): Settings → Reset device, behind the dial's own
+confirm, does it.
 
-- The screen-never-sleeps rule lives in one place: the idle check in
-  `ui/display.c`'s LVGL task is guarded by `#if !defined(DEVICE_BOARD_M5CORES3)`.
-  `display_sleep()`/`display_wake()` still exist (sleep-mode plumbing), they just
-  never fire on this board — and `lvgl_flush_cores3` still acks LVGL if a flush
-  ever lands while asleep.
-- The PWR tap is latched by the AXP2101 IRQ and read via
-  `power_take_pwrkey_tap()` (unchanged from the dial — same PMIC, same wiring
-  through `board/power.c`); `pwr_action()` dispatches it to `ui_boot_pressed()`
-  on CoreS3 and to the screen toggle on the dial.
-- Consequence: the factory-reset-at-boot gesture (BOOT held at power-on,
-  `app_main.c`) does not exist on CoreS3. Nothing on this device needs it — NVS
-  holds brightness, voice-language, WiFi SSID/PSK, and the USB bind token — and clearing those means reinstalling.
 
-## The virtual round screen
+## Rendering at 320x240
 
-The 8,400-line UI is designed for the 466×466 round AMOLED. Rather than rewrite it, LVGL still
-renders a 466×466 virtual display (partial render mode — a direct-mode full PSRAM frame hung
-LVGL 9.5's draw dispatch under `LV_OS_NONE`). Each flush is copied into a full 466×466 PSRAM
-framebuffer, then the panel is sampled from that complete image: integer 1/2 plus a 2×2 RGB565
-box average (~233×233 centred in 320×240, black bars). Touch maps back by ×2. Non-integer
-nearest-neighbour (29/50) shredded 4-bpp glyphs; scaling only the dirty rectangle garbled later
-paints because the 2×2 kernel needed neighbours outside the flush. `esp_lcd_panel_draw_bitmap`
-wants packed rows of the dirty width: a 320-wide staging buffer made the first full-screen paint
-look fine and every later text invalidate look like noise — which is why swapping Geist for
-Montserrat changed nothing on the panel. See `main/ui/display_cores3.c`.
+LVGL renders at the panel's own resolution (`BSP_LCD_H_RES/V_RES` = 320x240). The flush byte-swaps each
+40-line strip in place (`lv_draw_sw_rgb565_swap`) and hands it to the SPI DMA; the DMA-done callback
+completes the flush, so LVGL renders the next strip while this one travels. No framebuffer, no copy.
+
+The layout is the dial's, scaled rather than rewritten: every geometry number in `ui_screens.c` is in the
+dial's 466-pixel design and passes through `PX()`: identity on the dial, 0.6x here, which is the dial's
+physical size on this glass (~326 ppi against ~200). Fonts and icons are generated at the same scale and
+mapped onto the dial's names (`ui_fonts.h`, `icons_c3.h`), so one source serves both boards. Where the
+rectangle wants something the circle does not, a few `DEVICE_BOARD_M5CORES3` values say so: the content
+column (`SAFE_CONTENT_W` 500 → 300 px), the Overview's seats, the Settings row width, the lock grid, and
+square full-screen overlays. Touch distances are halved (`touch.c`), the same finger travel as the dial;
+scroll deltas go out in the dial's pixels.
+
 
 ## Fonts
 
-Geist is compiled on CoreS3 (same faces as the dial). A packed-row bug in the compositor
-(`esp_lcd_panel_draw_bitmap` needs tightly packed dirty-width rows, not a 320-wide staging
-buffer) made later text invalidates look like noise. That was mistaken for a font bug and
-briefly aliased to Montserrat; Montserrat lacks `›` `✓` `✗` `…`, so those showed as rectangles.
-Geist is back. `LV_SYMBOL_*` (bell, close) stay on Montserrat (FontAwesome). Emoji are stripped
-by `utf8_filter`.
+The dial's Geist faces at 0.6x (`geist_c3_*`, generated by `scripts/gen_fonts.sh`), mapped in `ui_fonts.h`.
+`LV_SYMBOL_*` stay on Montserrat, at 12/14/18/24.
 
-Also required for readable text: native RGB565 + byte-swap in the flush (not `RGB565_SWAPPED`,
-lvgl#9387); skip AMOLED software-dim (AXP2101 DLDO1 only); opaque overview circles.
 
 ## WiFi and the cable
 
@@ -135,13 +124,12 @@ The LAN client is `cli/src/cable/tcpLink.ts` + `dialBind.ts` in **this** tree. R
 this checkout, plug USB once (mints the token), then unplug. The Applications-folder desktop app
 does not speak this yet.
 
-## CoreS3-only tile layout (`DEVICE_BOARD_M5CORES3` in `ui_screens.c`)
+## The clock
 
-- Agent tile: engine mark 80px **above** tab pill then session title (not beside the name).
-- Title / Thinking… / recap column `TILE_COL_W` 454. Name clip 26 glyphs (dial is 15). Recap 64
-  glyphs, two-line fit. Agent mic at virtual y=383.
-- Empty tab: pill is **Switch tab** (opens the tab list). Empty “New Harness” rows are omitted
-  from the picker so you are not stuck with a nameless entry. Does not close the tab on the Mac.
+The daemon states its time and UTC offset in every `welcome` (`now`, `tzOffsetMin`). The CoreS3 sets its
+system time and the BM8563 RTC from it, and keeps the offset in NVS, so the chrome shows the time from boot.
+Until the time has been set once (a fresh RTC reports lost power), the time is simply not shown.
+
 
 ## Build
 
@@ -175,14 +163,10 @@ round dial.
 
 ## Known deltas vs the round dial
 
-- One key, remapped: the PWR key is the action button (back / stop turn) and the
-  screen is always on — see "Buttons and the always-on screen" above. The
-  factory-reset-at-boot gesture has no CoreS3 equivalent (no BOOT key).
+- One physical key: the BOOT key's role is on the glass (see "Buttons" above).
 - Host-driven firmware updates (`fw_update.c`) need a second OTA slot; under
   Launcher's single-app partition the update request reports failure instead of
   flashing. Reinstall via the SD card instead.
-- Rendering the 466×466 virtual screen scaled down costs CPU on the LVGL task; if a screen
-  ever feels heavy, shrink `DRAW_LINES` in `ui/display.c` or drop the LVGL pool.
 - A USB **host** module on the CoreS3 can blank the panel; flash/use the USB-Serial/JTAG port
   (`/dev/cu.usbmodem*`), not a host dongle.
 - WiFi STA is on the device; agents over WiFi need this checkout's daemon (see "WiFi and the
