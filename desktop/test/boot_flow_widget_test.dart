@@ -992,6 +992,11 @@ void main() {
       app.selectedMachineId = machine.machineId;
       await app.selectAgent(machine.machineId, 'offline-agent');
 
+      // Tall enough for the full guide: a pane beside others needs 546px of
+      // body, which the default 600px window no longer leaves once the
+      // workspace gutter is taken out.
+      await tester.binding.setSurfaceSize(const Size(800, 700));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
         ProviderScope(
           overrides: [appStateProvider.overrideWithValue(app)],
@@ -1003,7 +1008,6 @@ void main() {
       expect(find.text('Harness is offline'), findsOneWidget);
       expect(app.panes.single.agentId, 'offline-agent');
       await tester.binding.setSurfaceSize(const Size(800, 560));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pump();
       expect(
         find.text('Harness is not running on this computer.'),
