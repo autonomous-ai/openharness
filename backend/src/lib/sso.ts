@@ -126,6 +126,22 @@ export function webCallbackUri(webOrigin: string): string {
   return env.SSO_REDIRECT_URI || `${webOrigin.replace(/\/$/, '')}/auth/callback`
 }
 
+/**
+ * Where a sign-in started, as auth-service's login tracking records it (`entry_point` on
+ * `login_events`, and from there BigQuery). Ours are `cli` and `desktop`; the storefront sends
+ * keys like `sign-modal--orders_and_returns`.
+ *
+ * Narrowed to a plain key on purpose: `/api/auth/authorize-native` needs no token, this value goes
+ * into the authorize URL's query and then into a reporting column, and auth-service only truncates
+ * at 255. Anything else is dropped rather than passed on — a missing entry point reports as "none",
+ * which is honest, while a junk one is a row nobody can read.
+ */
+export function normalizeEntryPoint(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  const value = raw.trim().toLowerCase()
+  return /^[a-z0-9][a-z0-9._-]{0,63}$/.test(value) ? value : undefined
+}
+
 /** Where to send the browser to log in. `prompt=select_account` (env) forces the account picker so
  *  a user can switch accounts even when an SSO session already exists. */
 export function authorizeUrl(
@@ -133,6 +149,7 @@ export function authorizeUrl(
   state: string,
   redirectUri: string,
   autonomousEnv: AutonomousEnvironment,
+  entryPoint?: string,
 ): string {
   const config = autonomousEnvironmentConfig(autonomousEnv)
   const u = new URL('/oauth2/authorize', config.ssoIssuer)
@@ -144,6 +161,7 @@ export function authorizeUrl(
   u.searchParams.set('code_challenge_method', 'S256')
   u.searchParams.set('state', state)
   if (env.SSO_PROMPT) u.searchParams.set('prompt', env.SSO_PROMPT)
+  if (entryPoint) u.searchParams.set('entry_point', entryPoint)
   return u.toString()
 }
 

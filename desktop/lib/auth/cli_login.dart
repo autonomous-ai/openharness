@@ -82,7 +82,14 @@ class CliLogin implements SignInClient {
     final revision = ++_loginRevision;
     final Process process;
     try {
-      process = await _runner.start(['login', '--force', '--json']);
+      // `--entry-point=desktop` tells login tracking this sign-in came from the app rather than a
+      // terminal. One token, so a CLI that predates the flag ignores it like any unknown flag.
+      process = await _runner.start([
+        'login',
+        '--force',
+        '--json',
+        '--entry-point=desktop',
+      ]);
     } catch (error) {
       throw CliNotAvailableException('Could not run the harness CLI: $error');
     }
