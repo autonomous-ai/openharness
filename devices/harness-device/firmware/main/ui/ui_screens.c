@@ -2991,13 +2991,16 @@ static void pending_focus_clear(void);   // a hand outranks a held focus — def
 static lv_obj_t *s_agent_prev_btn, *s_agent_next_btn;   // ‹ › — the swipe, as two buttons (owner, 2026-09-22)
 static lv_obj_t *s_agent_prev_glyph, *s_agent_next_glyph;
 static bool agent_step_enabled(void) { return s_ring == RING_AGENTS && ring_len() > 1; }
+/// Where the ‹ › press now sliding is headed, so the next press adds to it rather than to the column the
+/// strip has not left yet. INT32_MIN = nothing in flight; cleared on every settle (tile_changed).
+static int32_t s_step_to_x = INT32_MIN;
 static void agent_step_paint(void)
 {
     if (!s_agent_prev_glyph || !s_agent_next_glyph) return;
-    // One agent on the ring: the pair stays, in the disabled ink, so the arc never changes shape.
-    lv_color_t c = agent_step_enabled() ? COL_MUTED : COL_INK_LOW;
-    lv_obj_set_style_line_color(s_agent_prev_glyph, c, 0);
-    lv_obj_set_style_line_color(s_agent_next_glyph, c, 0);
+    // The muted ink is the pair's resting colour; agent_step_press brightens it under the finger. There is
+    // no disabled ink any more — with one agent the pair is GONE, not greyed (owner, 2026-09-22).
+    lv_obj_set_style_line_color(s_agent_prev_glyph, COL_MUTED, 0);
+    lv_obj_set_style_line_color(s_agent_next_glyph, COL_MUTED, 0);
 }
 static void agent_actions_apply(void)
 {
@@ -3015,20 +3018,45 @@ static void agent_actions_apply(void)
     // only when the tile is not an agent's at all, and Voice alone goes on a shell.
     set_hidden(s_agent_acts, !on);
     if (s_agent_voice_btn) set_hidden(s_agent_voice_btn, !on || is_terminal_tile(&s_proj[s_active_idx]));
+    // …and ‹ › only where there is somewhere to go. A tab with ONE agent has no next and no previous, so
+    // the pair leaves the arc entirely rather than sitting there greyed (owner, 2026-09-22: "khi tab chỉ
+    // có 1 agent thì bỏ luôn 2 nút"). A button that cannot do anything is furniture, and the arc reads
+    // better with Voice alone than with two dead circles beside it.
+    const bool step = on && agent_step_enabled();
+    if (s_agent_prev_btn) set_hidden(s_agent_prev_btn, !step);
+    if (s_agent_next_btn) set_hidden(s_agent_next_btn, !step);
     agent_step_paint();
 }
 
-// ‹ › — the swipe as a press. The strip scrolls one column, with the carousel's own slide, and settles
-// through the same tile_changed → apply_active_from_col path a finger's stroke ends in, so the window
-// follows exactly as it would for a swipe. A person did this, so the focus report is live (carousel_goto
-// mutes it, which is right for code moving the strip and wrong here). Visual direction, not index
-// direction: › slides in the column on the right whatever the swipe setting says about strokes.
+// ‹ › — one step along the ring, with the carousel's own slide, settling through the same
+// tile_changed → apply_active_from_col path a finger's stroke ends in, so the window follows exactly as
+// it would for a swipe. A person did this, so the focus report is live (carousel_goto mutes it, which is
+// right for code moving the strip and wrong here).
+//
+// ⚠️ **THE ARROW HAS ONE RULE AND THE SWIPE SETTING IS NOT PART OF IT** (owner, 2026-09-22: "mũi tên thì
+// chỉ có 1 rule, là đi theo hướng mũi tên và xoay vòng"). `dir` is a step through the PANES — › is the
+// next one, ‹ the one before, wrapping at either end — and ring_dir() is only what that step costs in
+// columns. It used to move the strip one COLUMN, which reads as "the tile to the right" and is a
+// different question: on a dial set to Reversed the columns run backwards, so › walked the panes
+// BACKWARDS (measured on this desk: ring 0 → 2 → 1 → 0 from a right-pointing arrow). Swipe direction is
+// a preference about STROKES; a labelled button is not a stroke.
+//
+// Wrapping needs nothing here: the strip is CAROUSEL_M copies of the ring, so one step past the last
+// pane is an ordinary adjacent slide that lands on the first (carousel_ring_of_col's modulo), and the
+// pair is disabled outright while the ring is one long (agent_step_enabled).
 static void agent_step(int dir)
 {
     if (!tileview || !agent_step_enabled()) return;
     pending_focus_clear();
     s_focus_report_muted = false;
-    lv_obj_scroll_to_x(tileview, (carousel_col() + dir) * carousel_w(), LV_ANIM_ON);
+    const int32_t w = carousel_w();
+    // A second press while the first is still sliding counts. `carousel_col()` reads where the strip IS,
+    // which mid-animation is still the column it started from, so two quick taps used to move one pane.
+    const int base = (s_step_to_x != INT32_MIN && lv_anim_get(tileview, NULL))
+                         ? (int)((s_step_to_x + w / 2) / w)
+                         : carousel_col();
+    s_step_to_x = (base + dir * ring_dir()) * w;
+    lv_obj_scroll_to_x(tileview, s_step_to_x, LV_ANIM_ON);
 }
 static void agent_prev_tap(lv_event_t *e) { (void)e; agent_step(-1); }
 static void agent_next_tap(lv_event_t *e) { (void)e; agent_step(+1); }
@@ -8075,6 +8103,7 @@ bool ui_peek_agent_reload_req(void)     { return s_req_reload_agents; }   // non
 static void tile_changed(lv_event_t *e)
 {
     (void)e;
+    s_step_to_x = INT32_MIN;   // the ‹ › slide (if that is what this was) has arrived
     apply_active_from_col();   // active/settings from the centered ring position
     update_content_window();   // materialize the newly-active tile ± window, free the rest
     rebuild_page_dots();       // move the green sparkle to the newly-centered page
