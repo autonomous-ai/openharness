@@ -40,8 +40,9 @@ async function updatePackage(opts: DshUpdateOptions): Promise<DshInstallResult> 
     const entry = catalog && samePackageSource(record, catalog) ? catalog : undefined
     const ref = entry?.ref ?? record.ref ?? undefined
     const path = record.path ?? undefined
-    opts.onProgress?.({ id: opts.id, phase: 'clone', detail: `fetching ${record.source}` })
-    const cloned = await cloneInstall(record.source, ref, path, opts.onLine, opts.cloneRetryDelaysMs)
+    const source = entry?.repo ?? record.source
+    opts.onProgress?.({ id: opts.id, phase: 'clone', detail: `fetching ${source}` })
+    const cloned = await cloneInstall(source, ref, path, opts.onLine, opts.cloneRetryDelaysMs)
     if (!cloned.ok) return cloned
     staged = cloned.tmpDir
     if (cloned.manifest.id !== record.id) {
@@ -66,10 +67,10 @@ async function updatePackage(opts: DshUpdateOptions): Promise<DshInstallResult> 
     mkdirSync(dirname(record.dir), { recursive: true, mode: 0o700 })
     renameSync(staged, record.dir)
     placed = true
-    const installed: InstalledDsh = { ...record, ref: ref ?? null, commit: cloned.commit, revision: cloned.revision,
+    const installed: InstalledDsh = { ...record, source, ref: ref ?? null, commit: cloned.commit, revision: cloned.revision,
       updatedAt: Date.now(), manifest: cloned.manifest, realDir: realpathSync(record.dir) }
     const result = await finishInstall(installed, {
-      ...opts, source: record.source,
+      ...opts, source,
       onProgress: p => { if (p.phase !== 'done' && p.phase !== 'failed') opts.onProgress?.(p) },
     }, false)
     committed = result.ok
