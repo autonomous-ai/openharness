@@ -2224,7 +2224,7 @@ class _EmptyGrid extends StatelessWidget {
     final machineId = _machineId;
     // Holds the keyboard while there is no terminal to hold it.
     //
-    // App shortcuts are bound above this screen (home_screen.dart) and, like
+    // App shortcuts are bound above this screen (swarm_screen.dart) and, like
     // every Flutter shortcut, they are delivered along the focus chain — from
     // whatever has focus up through its ancestors. With no pane open nothing
     // inside the screen has any, so the chain starts at the route's own scope,

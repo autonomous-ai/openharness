@@ -272,8 +272,8 @@ its headless debug timings do not establish native display or network latency.
 - **The status rail is where the app polls** (`lib/widgets/status_rail/`): a 26px full-bleed strip
   along the window's bottom edge carrying what the agent accounts have spent, right-aligned against
   the key hints (`key_hints.dart`). The hover/pin surface is `rail_figure.dart` + `rail_panel.dart`.
-  The `UsageController` behind it is owned by `_HomeScreenState`, not by the rail, because the rail
-  unmounts when the sidebar folds and a poller living in it would restart on every unfold.
+  ⚠️ Nothing mounts it since `HomeScreen` was removed: the workspace is `SwarmScreen`, and this
+  strip, the machine rail and the account footer are reached only from their own tests.
 - **Agent-account usage is what the rail reads** (`lib/usage/`, `widgets/status_rail/usage_readout.dart`
   + `usage_panel.dart`): what the Claude and Codex accounts on this machine — and on the remote
   machines that answer `usage_read` — have spent. **The strip prints ONE figure per account — the WEEKLY
