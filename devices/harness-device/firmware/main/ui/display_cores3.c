@@ -205,6 +205,15 @@ void panel_disp_on_off_cores3(bool on)
     // The panel's own display-off blanks the glass but leaves the backlight burning, which is most of
     // the power. Off: backlight first, then the panel; on: the reverse, so no stale frame flashes up.
     if (on) {
+        // Re-initialised, not just switched on. Sleep takes DLDO1 down, and whatever else hangs off that
+        // rail, the panel comes back from it with its registers at their defaults — inversion off, which on
+        // this panel draws black as WHITE (the whole screen, from the first wake). Reset + init + invert
+        // is what bring-up does; doing it again costs ~130 ms on a wake nobody is timing.
+        esp_lcd_panel_reset(s_panel);
+        esp_lcd_panel_init(s_panel);
+        esp_lcd_panel_invert_color(s_panel, true);
+        esp_lcd_panel_swap_xy(s_panel, false);
+        esp_lcd_panel_mirror(s_panel, false, false);
         esp_lcd_panel_disp_on_off(s_panel, true);
         cores3_backlight_set(s_backlight);
     } else {

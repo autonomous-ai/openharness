@@ -1309,7 +1309,11 @@ static void busy_dots_tick(lv_timer_t *t)
             const int ai = s_active_idx;
             const bool tile_working = ai >= 0 && ai < s_proj_count && s_proj[ai].busy_model;
             const bool timed_out = s_voice_route_ms && lv_tick_elaps(s_voice_route_ms) > VOICE_ROUTE_WAIT_MS;
-            if (tile_working || timed_out) {
+            // Only once the words are UP (s_voice_route_ms marks the upload finishing). Asked while still
+            // recording, "is the tile working?" is already yes for an agent that was busy before you spoke —
+            // and the overlay vanished 80 ms into the capture, leaving the mic open with nothing on screen
+            // to say so. Measured on the CoreS3: 225 s recorded before anything noticed.
+            if ((tile_working && s_voice_route_ms) || timed_out) {
                 s_voice_routing = false; s_voice_route_ms = 0;
                 voice_icon_apply(VIC_NONE);
                 voice_overlay_set(false);
@@ -2174,7 +2178,7 @@ void ui_init(void)
         lv_obj_set_style_border_opa(var, LV_OPA_10, 0); \
         OV_ROUND_FILL(var); \
         lv_obj_set_ext_click_area(var, PX(16)); \
-        lv_obj_clear_flag(var, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE); \
+        lv_obj_clear_flag(var, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE | LV_OBJ_FLAG_PRESS_LOCK); \
         lv_obj_add_event_cb(var, cb, LV_EVENT_CLICKED, NULL); \
     } while (0)
 
@@ -3285,7 +3289,9 @@ static lv_obj_t *agent_act_btn(int32_t x, int32_t y, lv_event_cb_t cb)
     lv_obj_set_style_border_width(b, 0, 0);
     lv_obj_set_style_shadow_width(b, 0, 0);
     lv_obj_set_style_pad_all(b, 0, 0);
-    lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+    // No PRESS_LOCK: a finger that lands on Voice and slides away (the home swipe starts right here) has not
+    // pressed it. With the lock, LVGL clicked on release wherever the finger ended, and started a recording.
+    lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE | LV_OBJ_FLAG_PRESS_LOCK);
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
     return b;
 }
@@ -7782,7 +7788,12 @@ void ui_question_close(const char *project_id, const char *request_id)
     // away an answer the user is halfway through choosing.
     if (s_q.active && project_id && strcmp(s_q.project, project_id) == 0
         && (!request_id || !request_id[0] || strcmp(s_q.request_id, request_id) == 0)) {
+        ESP_LOGI(TAG, "question.close %s: answered elsewhere", request_id ? request_id : "-");
         q_leave("answered elsewhere");
+    } else {
+        // Said, because a question left on screen after it was answered is otherwise unexplainable.
+        ESP_LOGW(TAG, "question.close %s for %.8s ignored (showing: %s %s for %.8s)", request_id ? request_id : "-",
+                 project_id ? project_id : "-", s_q.active ? "active" : "none", s_q.request_id, s_q.project);
     }
     display_unlock();
 }

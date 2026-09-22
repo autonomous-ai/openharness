@@ -427,12 +427,25 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
     // state for LVGL below. This prevents Voice-button holds/double-taps from also firing the hidden global
     // Goal/Voice gestures. A drag can still leave the button and scroll the carousel through LVGL normally.
     static bool action_prev;
+    static int ax0, ay0, axl, ayl;           // where an action press began, and where it last was
     if (pressed && !action_prev) {
         s_action_capture = ui_action_hit(x, y);
         if (s_action_capture) { s_tap_pending = false; ESP_LOGI(TAG, "press on a round action — LVGL's until release"); }
+        ax0 = axl = x; ay0 = ayl = y;
     }
+    if (pressed) { axl = x; ayl = y; }
     bool action_touch = s_action_capture && (pressed || action_prev);
     bool gesture_pressed = pressed && !action_touch;
+    if (!pressed && action_prev && s_action_capture) {
+        // The Voice buttons sit on the bottom edge, where the home swipe starts. A press that begins on one
+        // and leaves as a swipe up is the home gesture, not a tap: the button lost it the moment the finger
+        // slid off (no PRESS_LOCK, ui_screens.c), and the recognisers never saw it, so it is decided here.
+        int dx = axl - ax0, dy = ayl - ay0;
+        if (!ui_voice_is_active() && ay0 >= BOTTOM_EDGE_PX && dy < -SWIPE_MIN_PX && abs(dy) > abs(dx)) {
+            ESP_LOGI(TAG, "gesture: home (from a round action, dy=%d)", dy);
+            ui_home_overview();
+        }
+    }
     if (!pressed && action_prev) s_action_capture = false;
     action_prev = pressed;
 

@@ -379,6 +379,8 @@ void display_wake(void)
     s_asleep = false;                       // clear FIRST so the repaint actually flushes
     lv_timer_resume(lv_display_get_refr_timer(s_disp));  // re-enable rendering (paused in display_sleep)
     lv_obj_invalidate(lv_screen_active());  // repaint current screen (flushed by the LVGL task's refr timer)
+    lv_obj_invalidate(lv_layer_top());      // …and what sits over it: a panel that lost its frame has nothing
+                                            // under the chrome and the overlays either
     lv_display_trigger_activity(s_disp);    // re-arm the idle timer
 #if defined(DEVICE_BOARD_M5CORES3)
     panel_disp_on_off_cores3(true);
