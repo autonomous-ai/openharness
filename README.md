@@ -1,17 +1,24 @@
-> “World-class entrepreneurs are polymaths.”
->
-> — [Peter Thiel](https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s)
+# One workspace for all your coding agents.
 
-# Follow your curiosity. Build across disciplines.
+OpenHarness brings Claude Code, Codex, and your other coding agents into one open-source workspace.
 
-OpenHarness is open-source software and hardware for building with coding agents. Use Claude Code,
-Codex, and others to make software, design parts and circuit boards, explore data, and create videos,
-with your agents, domain tools, and live viewers in one place and sessions that persist across every
-machine you own.
+- **Keyboard first.** Launch, split, search, and switch with a few keystrokes.
+- **Multiple machines.** Your laptop, desktop, and servers in one window.
+- **Multiple harnesses.** Run different coding agents side by side in persistent terminals.
+- **End-to-end encryption.** Remote terminal traffic is encrypted; the relay sees only ciphertext.
 
-[Download the app](https://harness.autonomous.ai/desktop) · [Watch the demos](#get-your-hands-on-it) ·
-[What you can make](#domain-specific-harnesses-dsh) · [Run it](#run-it) ·
-[Harness device](#harness-device) · [Contribute](#contributing)
+[Download the app](https://harness.autonomous.ai/desktop) · [Keybindings](docs/keyboard.md) ·
+[Run it](#run-it) · [Beyond coding](#beyond-coding)
+
+<p align="center">
+  <a href="https://cdn.autonomous.ai/development/ecm/260910/Thumb-harness-app.mp4"><img src=".github/assets/coding/workspace.gif" width="1280" alt="Animated Harness coding workspace: switch between machines and arrange Claude Code, Codex, Cursor, and other agents side by side. Click to watch the original video."></a>
+</p>
+
+## Beyond coding
+
+You already know how to build with code. Take those same skills into CAD, circuits, robotics,
+games, music, and science. Give your agent a domain-specific harness, then shape, test, and explore
+what it makes in a live viewer.
 
 <p align="center">
   <a href="desktop/design/review/store-discover.png"><img src="desktop/design/review/store-discover.png" width="1280" alt="Harness Store Discover, with illustrated invitations to coding, design and engineering, followed by coding agents and new harnesses."></a>
@@ -19,7 +26,7 @@ machine you own.
 
 Discover a craft in the Store. Open **Featured** to watch recorded sessions and find something you want to make.
 
-## Get your hands on it
+### Get your hands on it
 
 Shape a lamp. Change a robot's world. Rewind a jump. Perform a track. The agent builds with the
 tools of a craft; you explore the result, make choices and keep the version you like.
@@ -89,6 +96,10 @@ Pick a preview to watch its recording, or **Try it** for a starting prompt and a
 [Explore all eight experiences](docs/hands-on.md) · [Run a native starter](docs/try-hands-on.md)
 
 ## For polymaths in the making.
+
+> “World-class entrepreneurs are polymaths.”
+>
+> — [Peter Thiel](https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s)
 
 The old rule said ten thousand hours to a craft. That was the tax on curiosity, and most of us could
 only afford to pay it once, so we specialized and called the rest hobbies.
@@ -214,34 +225,7 @@ Every picture in this slideshow is output from the harness's own toolchain, with
 
 </details>
 
-## Coding agents, on every machine
-
-Keep the agents doing that work together, wherever they run.
-
-- **Real terminals that outlive the window.** Every agent runs in a persistent tmux session. Close the
-  app and the agents keep working; if tmux goes down with a reboot, the daemon brings the panes back and
-  resumes the sessions.
-- **Every engine, no wrappers.** Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin,
-  Muse Code, Amp, Kilo, Grok Build, Antigravity and GitHub Copilot. OpenHarness reads the transcript each
-  agent already writes and installs the vendor's own hooks. Your credentials stay in `~/.claude`, `~/.codex` and
-  so on. See the [engine list](docs/engines.md).
-- **All your machines in one window.** The laptop, the Mac mini at home, the server in the rack. Each
-  runs a daemon with outbound connections only. Terminal traffic is end-to-end encrypted, the relay only
-  forwards ciphertext, and it goes peer to peer over WebRTC when it can. No SSH server, VPN, or open
-  port.
-- **Built for many agents at once.** Split panes, a keyboard-driven layout, fuzzy search across
-  sessions and machines (**⌘O**), and one shortcut to the agents waiting on you (**⇧⌘I**). The
-  [workspace guide](docs/app.md) and [keybindings](docs/keyboard.md) cover the rest.
-
-<p align="center">
-
-<img width="1280" height="716" alt="ezgif-3355e1eae4366c76" src="https://github.com/user-attachments/assets/e3401aae-9402-4710-a46d-1da150ff96bf" />
-
-
-</p>
-
-
-### Run it
+## Run it
 
 1. [Download the desktop app](https://harness.autonomous.ai/desktop) for macOS or Linux.
 2. Sign in to a coding agent you already use, with your own subscription, API key, or local model.
