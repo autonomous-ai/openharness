@@ -6,6 +6,7 @@ import 'package:harness/terminal/terminal_text.dart';
 import '../core/models.dart';
 import '../core/test_run.dart';
 import '../state/app_state.dart';
+import '../shared/theme/app_type.dart';
 import '../theme/app_theme.dart';
 import '../usage/models_menu_controller.dart';
 import 'engine_identity.dart';
@@ -469,7 +470,10 @@ class _GridModelPickerState extends State<GridModelPicker> {
                   ],
                   Text(
                     'Model',
-                    style: terminalTextStyle(color: AppColors.textSoft),
+                    style: AppType.monoLabel(
+                      fontWeight: FontWeight.w400,
+                      color: AppColors.textSoft,
+                    ),
                   ),
                   Icon(
                     Icons.arrow_drop_down,
@@ -510,7 +514,6 @@ class _ManagerInvitationState extends State<_ManagerInvitation> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Padding(
       // Wider than a row's inset on purpose: this block is not one of them.
       padding: const EdgeInsets.fromLTRB(
@@ -531,7 +534,7 @@ class _ManagerInvitationState extends State<_ManagerInvitation> {
                 child: Text(
                   'Manage the models on your machines',
                   textAlign: TextAlign.center,
-                  style: terminalTextStyle(color: AppColors.mutedStrong),
+                  style: AppType.caption(color: AppColors.mutedStrong),
                 ),
               ),
               const SizedBox(width: 8),
@@ -557,8 +560,7 @@ class _ManagerInvitationState extends State<_ManagerInvitation> {
                 ),
                 child: Text(
                   'Open Grid',
-                  style: terminalTextStyle(
-                    fontWeight: FontWeight.w500,
+                  style: AppType.label(
                     color: _hovered ? AppColors.text : AppColors.textSoft,
                   ),
                 ),

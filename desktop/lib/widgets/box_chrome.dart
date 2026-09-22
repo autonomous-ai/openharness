@@ -68,7 +68,6 @@ class CommandDock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return LayoutBuilder(
       builder: (context, constraints) {
         final available =
@@ -76,8 +75,7 @@ class CommandDock extends StatelessWidget {
               0.0,
               double.infinity,
             );
-        final scale =
-            MediaQuery.textScalerOf(context).scale(terminalFontStore.size) / 13;
+        final scale = grid.appTextScaleOf(context);
         // A shallow dock at ordinary sizes, with room for readable defaults and
         // key hints when accessibility text or a narrow window needs more rows.
         final minimum = constraints.maxWidth < 800 * scale ? 320.0 : 280.0;
@@ -112,11 +110,12 @@ class CommandDock extends StatelessWidget {
   }
 }
 
-/// Shared typography and frame for prompts that sit over the terminals.
-TextStyle boxMonoStyle({Color? color, FontWeight? weight}) => terminalTextStyle(
+/// Shared typography and frame for prompts that sit over the terminals: the
+/// terminal's face at [grid.AppType.monoSize], which ⌘+ and ⌘− leave alone.
+TextStyle boxMonoStyle({Color? color, FontWeight? weight}) => grid.AppType.mono(
   height: 1.35,
   color: color ?? Colors.white,
-  fontWeight: weight ?? FontWeight.w400,
+  fontWeight: weight,
 );
 
 class TerminalBox extends StatelessWidget {
@@ -150,11 +149,11 @@ class TerminalBox extends StatelessWidget {
 
 /// A compact text row that grows with the user's accessibility text size.
 double boxRowHeight(TextScaler scale) =>
-    (scale.scale(terminalFontStore.size) * 1.35 + 8).clamp(26, double.infinity);
+    (scale.scale(grid.AppType.monoSize) * 1.35 + 8).clamp(26, double.infinity);
 
-/// Secondary text keeps the same typography, with a quieter color.
+/// Key hints, shortcut glyphs and counts: the box's meta line.
 const kBoxFaint = Colors.white54;
-TextStyle get kBoxFaintStyle => terminalTextStyle(color: kBoxFaint);
+TextStyle get kBoxFaintStyle => grid.AppType.monoMeta(color: kBoxFaint);
 
 /// Keep the user's actual binding, printed like a terminal's local key guide.
 String boxKeyLabel(String hint) => hint
@@ -186,7 +185,6 @@ class BoxRowHighlight extends StatelessWidget {
   // Material, and a plain fill between the two hides it (Flutter asserts so).
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Material(
       color: highlighted
           ? Colors.white.withValues(alpha: .10)
@@ -473,7 +471,6 @@ class _ReadlineKeysState extends State<ReadlineKeys> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyW, control: true):

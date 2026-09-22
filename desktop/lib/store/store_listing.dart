@@ -16,7 +16,6 @@ class StoreAppIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Container(
       width: size,
       height: size,
@@ -54,10 +53,9 @@ class StoreListing extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return LayoutBuilder(
       builder: (context, box) {
-        final scale = terminalTextScaleOf(context);
+        final scale = grid.appTextScaleOf(context);
         final columns = (box.maxWidth / (340 * scale)).floor().clamp(1, 3);
         final width = (box.maxWidth - (columns - 1) * 28) / columns;
         final reserveRating = entries.any((entry) => !ratingFor(entry).isEmpty);
@@ -105,7 +103,7 @@ class _ProductRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
-    final scale = terminalTextScaleOf(context);
+    final scale = grid.appTextScaleOf(context);
     final benefit = entry.isEngine
         ? entry.tagline ??
               engineIdentity(entry.id).tagline ??
@@ -129,8 +127,7 @@ class _ProductRow extends StatelessWidget {
                   width: 18,
                   child: Text(
                     '$rank',
-                    style: terminalTextStyle(
-                      fontWeight: FontWeight.w600,
+                    style: grid.AppType.monoLabel(
                       color: grid.AppPalette.textSecondary,
                     ),
                   ),
@@ -149,20 +146,20 @@ class _ProductRow extends StatelessWidget {
                         entry.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: terminalTextStyle(
-                          fontWeight: FontWeight.w600,
+                        style: grid.AppType.label(
                           color: grid.AppPalette.textPrimary,
                         ),
                       ),
                     ),
                     const SizedBox(height: 4),
+                    // Two lines of the description: 2 × 13 × 1.3.
                     SizedBox(
-                      height: 32 * scale,
+                      height: 34 * scale,
                       child: Text(
                         benefit,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: terminalTextStyle(
+                        style: grid.AppType.body(
                           height: 1.3,
                           color: grid.AppPalette.textSecondary,
                         ),
@@ -172,7 +169,7 @@ class _ProductRow extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         entry.hasUpdate ? 'Update available' : ' ',
-                        style: terminalTextStyle(
+                        style: grid.AppType.body(
                           color: grid.AppPalette.accentOnSurface,
                         ),
                       ),
@@ -193,7 +190,7 @@ class _ProductRow extends StatelessWidget {
                                   const SizedBox(width: 3),
                                   Text(
                                     '${rating.average.toStringAsFixed(1)} · ${rating.count}',
-                                    style: terminalTextStyle(
+                                    style: grid.AppType.monoMeta(
                                       color: grid.AppPalette.textSecondary,
                                     ),
                                   ),

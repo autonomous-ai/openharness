@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -24,22 +23,18 @@ class StoreViewers extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return ListView(
       key: const ValueKey('store-viewers'),
       padding: const EdgeInsets.all(28),
       children: [
         Text(
           'Viewers',
-          style: terminalTextStyle(
-            fontWeight: FontWeight.w700,
-            color: grid.AppPalette.textPrimary,
-          ),
+          style: grid.AppType.display(color: grid.AppPalette.textPrimary),
         ),
         const SizedBox(height: 8),
         Text(
           'Shared previews and the agents that use them.',
-          style: terminalTextStyle(color: grid.AppPalette.textSecondary),
+          style: grid.AppType.body(color: grid.AppPalette.textSecondary),
         ),
         const SizedBox(height: 24),
         if (viewers.isEmpty)
@@ -87,8 +82,7 @@ class StoreViewers extends StatelessWidget {
               Expanded(
                 child: Text(
                   viewer.name,
-                  style: terminalTextStyle(
-                    fontWeight: FontWeight.w600,
+                  style: grid.AppType.heading(
                     color: grid.AppPalette.textPrimary,
                   ),
                 ),
@@ -104,7 +98,7 @@ class StoreViewers extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               viewer.description!,
-              style: terminalTextStyle(
+              style: grid.AppType.body(
                 height: 1.4,
                 color: grid.AppPalette.textSecondary,
               ),
@@ -115,21 +109,18 @@ class StoreViewers extends StatelessWidget {
             machines.isEmpty
                 ? 'Not installed'
                 : 'Installed on ${machines.join(', ')}',
-            style: terminalTextStyle(color: grid.AppPalette.textSecondary),
+            style: grid.AppType.body(color: grid.AppPalette.textSecondary),
           ),
           const SizedBox(height: 14),
           Text(
             'Used by',
-            style: terminalTextStyle(
-              fontWeight: FontWeight.w600,
-              color: grid.AppPalette.textSecondary,
-            ),
+            style: grid.AppType.label(color: grid.AppPalette.textSecondary),
           ),
           const SizedBox(height: 4),
           if (uses.isEmpty)
             Text(
               'No agents reported in this catalog.',
-              style: terminalTextStyle(color: grid.AppPalette.textSecondary),
+              style: grid.AppType.body(color: grid.AppPalette.textSecondary),
             )
           else
             Wrap(

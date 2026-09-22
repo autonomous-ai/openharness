@@ -90,7 +90,7 @@ class ShortcutsDeck extends StatelessWidget {
         final width = math.min(constraints.maxWidth, maxWidth);
         // Preserve room for the label as its keycaps grow. Otherwise large
         // text keeps three narrow lanes and leaves only a word per line.
-        final textScale = terminalTextScaleOf(context);
+        final textScale = grid.appTextScaleOf(context);
         final minWidth = minCardWidth * math.max(1.0, textScale);
         final columns = ((width + _gap) / (minWidth + _gap)).floor().clamp(
           1,
@@ -164,7 +164,7 @@ class _ShortcutCard extends StatelessWidget {
                 Expanded(child: _CardTitle(title)),
                 Text(
                   '${rows.length}',
-                  style: terminalTextStyle(
+                  style: grid.AppType.monoMeta(
                     color: grid.AppPalette.textFaint,
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
@@ -214,7 +214,7 @@ class _TerminalCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       key.label,
-                      style: terminalTextStyle(
+                      style: grid.AppType.body(
                         color: grid.AppPalette.textFaint,
                       ),
                     ),
@@ -244,9 +244,8 @@ class _CardTitle extends StatelessWidget {
     grid.AppTheme.watch(context);
     return Text(
       label.toUpperCase(),
-      style: terminalTextStyle(
+      style: grid.AppType.monoMeta(
         color: grid.AppPalette.textFaint,
-        letterSpacing: 0.08 * 10.5,
         fontWeight: grid.AppFont.medium,
       ),
     );
@@ -270,7 +269,7 @@ class ShortcutsNote extends StatelessWidget {
       'Harness shortcuts control your workspace. Other input goes to the '
       'focused agent, where prompt editing and cancellation follow that '
       'coding agent’s behavior.',
-      style: terminalTextStyle(
+      style: grid.AppType.body(
         color: grid.AppPalette.textSecondary,
         height: 1.5,
       ),
@@ -334,7 +333,7 @@ class _ShortcutRowView extends StatelessWidget {
             Expanded(
               child: Text(
                 row.label,
-                style: terminalTextStyle(color: grid.AppPalette.textSecondary),
+                style: grid.AppType.body(color: grid.AppPalette.textSecondary),
               ),
             ),
             const SizedBox(width: _gutter),
@@ -345,7 +344,7 @@ class _ShortcutRowView extends StatelessWidget {
               child: row.chords.isEmpty
                   ? Text(
                       'Unassigned',
-                      style: terminalTextStyle(
+                      style: grid.AppType.body(
                         color: grid.AppPalette.textFaint,
                       ),
                     )

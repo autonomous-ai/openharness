@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../../theme/app_theme.dart';
 
 /// A quiet caption over a run of rail rows, with an optional `+` beside it.
 ///
-/// Micro-type — 11pt, faint — because it names a group rather than competing
-/// with the rows under it. Both halves of the sidebar use it, which is the
+/// Micro-type — [AppType.monoMeta], uppercase, faint — because it names a
+/// group rather than competing with the rows under it. Both halves of the sidebar use it, which is the
 /// point: "Projects" in Home and "Projects" in Code list entirely different
 /// things, and the one thing they must not differ on is how a rail heading
 /// looks.
@@ -39,11 +38,11 @@ class RailSectionHeader extends StatelessWidget {
     final text = Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Text(
-        label,
-        style: terminalTextStyle(
+        label.toUpperCase(),
+        semanticsLabel: label,
+        style: AppType.monoMeta(
           color: AppPalette.textFaint,
           fontWeight: AppFont.medium,
-          letterSpacing: 0.2,
         ),
       ),
     );

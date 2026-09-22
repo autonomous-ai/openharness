@@ -280,11 +280,21 @@ class _SheetRow extends StatelessWidget {
             ),
             if (value != null) ...[
               const SizedBox(width: 12),
-              Text(
-                value,
-                style: TextStyle(
-                  color: action.valueColor ?? AppPalette.textFaint,
-                  fontSize: 13,
+              // Capped rather than left to its own width: a value can be as
+              // long as a model id, and a Row lays a non-flex child out before
+              // it gives the label what is left — so an uncapped one would eat
+              // the label first and then run off the end of the sheet.
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 150),
+                child: Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: TextStyle(
+                    color: action.valueColor ?? AppPalette.textFaint,
+                    fontSize: 13,
+                  ),
                 ),
               ),
             ],

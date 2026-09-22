@@ -580,8 +580,8 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
             box.field == NewHarnessField.projectName ||
             box.field == NewHarnessField.projectRepository ||
             _projectMenu)
-        ? scale.scale(terminalFontStore.size) * 1.35 +
-              scale.scale(terminalFontStore.size) * 1.35 +
+        ? scale.scale(grid.AppType.monoSize) * 1.35 +
+              scale.scale(grid.AppType.monoSize) * 1.35 +
               10
         : boxRowHeight(scale);
     final input = Semantics(
@@ -1248,7 +1248,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                 : 'Nothing matches “${box.query.trim()}” in '
                       '${_fieldName(box.field)}. Escape goes back.',
             textAlign: TextAlign.center,
-            style: terminalTextStyle(color: kBoxFaint),
+            style: boxMonoStyle(color: kBoxFaint),
           ),
         ),
       );
@@ -1611,7 +1611,6 @@ class _AgentSettingsButtonState extends State<_AgentSettingsButton> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Focus(
       onFocusChange: (focused) => setState(() => _focused = focused),
       child: Opacity(

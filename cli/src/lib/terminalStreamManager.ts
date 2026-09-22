@@ -97,6 +97,9 @@ interface ActiveStream {
   /** What the client declared on open, or what `describeClient` could tell; absent when neither knew. */
   client?: TerminalClientDescriptor
   streamId: string
+  /** A stream opened as a WATCHER: it renders, but it never took the control lease and its input is
+   *  refused. See the `takeover: false` branch of `open()`. */
+  watching: boolean
   agentId: string
   engineId: string
   placementKey: string
@@ -207,9 +210,33 @@ export class TerminalStreamManager {
     }
   }
 
+  /** The frames a stream that does not hold the terminal may still send: they read, ack or end it. */
+  private static readonly WATCH_SAFE_TYPES = [
+    'terminal_capabilities', 'terminal_open', 'terminal_alive', 'terminal_ack', 'terminal_resync', 'terminal_close',
+  ]
+
+  /** Whether this frame names a WATCHER's stream — one that renders without holding the terminal. */
+  private isWatching(connId: string, payload: FramePayload): boolean {
+    const streamId = typeof payload.streamId === 'string' ? payload.streamId : ''
+    if (!streamId) return false
+    const state = this.streams.get(streamId)
+    return state?.connId === connId && state.watching
+  }
+
   async handleFrame(connId: string, type: string, payload: FramePayload): Promise<boolean> {
-    if (this.deps.readOnly && !['terminal_capabilities', 'terminal_open', 'terminal_alive', 'terminal_ack', 'terminal_resync', 'terminal_close'].includes(type)) {
+    if (this.deps.readOnly && !TerminalStreamManager.WATCH_SAFE_TYPES.includes(type)) {
       this.sendError(connId, 'VIEW_ONLY', { requestId: payload.requestId })
+      return true
+    }
+    // ⚠️ **One gate, not one per write path.** A watcher shares every other code path with a real
+    // controller, so anything that reaches tmux — input, resize, paste, scroll, an upload — has to
+    // be stopped, and stopping them one by one is how the next write path added gets forgotten.
+    // Same allow-list a read-only deployment uses, for the same reason.
+    if (!TerminalStreamManager.WATCH_SAFE_TYPES.includes(type) && this.isWatching(connId, payload)) {
+      this.sendError(connId, 'VIEW_ONLY', {
+        requestId: payload.requestId,
+        streamId: typeof payload.streamId === 'string' ? payload.streamId : undefined,
+      })
       return true
     }
     switch (type) {
@@ -262,6 +289,10 @@ export class TerminalStreamManager {
 
   async handleBinary(connId: string, frame: TerminalBinaryClear): Promise<void> {
     if (this.deps.readOnly) return
+    // Every binary kind below writes to the terminal, so a watcher's are dropped outright — see the
+    // gate in `handleFrame`. Silent, like the other drops here: the client already knows it is
+    // read-only (`terminal_ready`) and withholds input itself; this is the backstop.
+    if (this.isWatching(connId, { streamId: frame.streamId })) return
     if (frame.kind !== TerminalBinaryKind.input && frame.kind !== TerminalBinaryKind.paste
       && frame.kind !== TerminalBinaryKind.imagePaste && frame.kind !== TerminalBinaryKind.pasteFile) return
     const state = this.streams.get(frame.streamId)
@@ -313,6 +344,12 @@ export class TerminalStreamManager {
         // though creating an agent is not terminal streaming; this is the message a client already
         // asks every machine.
         projectFolder: !this.deps.readOnly,
+        // `terminal_open` honours `takeover: false`: never close the incumbent. A terminal nobody
+        // else holds opens as usual; one another client is driving opens READ-ONLY, so the asking
+        // client renders it without taking it (`readOnly` on `terminal_ready`) — see `open()`. A
+        // client has to see this before relying on it: a CLI that predates it ignores the key and
+        // takes the terminal over like any other open, which is the one thing the key is for.
+        noTakeover: !this.deps.readOnly,
       },
       engines: terminalEngineCapabilities(this.deps.streamingAvailable),
     })
@@ -363,14 +400,32 @@ export class TerminalStreamManager {
       return
     }
     const reservedPlacement = terminalPlacementKey(streamRuntime)
+    // `takeover: false` is a client opening a terminal AHEAD of anyone looking at it — the phone's
+    // pager attaching the agents a swipe away from the one on screen. That is a guess, and a guess
+    // must not cost another client the terminal it is working in: refused while anyone else holds
+    // it, and the client asks again, without the key, once a person actually lands there. Absent
+    // (every older client) is the takeover it has always been.
+    const takeover = payload.takeover !== false
     // The fallback is read as strictly as a claim: a machine name the backend handed out is not
     // this module's to trust with the wire shape either.
     const client = clientDescriptorFrom(payload.client) ?? clientDescriptorFrom(this.deps.describeClient?.(connId))
     await this.withLeaseLock(reservedPlacement, async () => {
+      const incumbents = this.incumbentsFor(session.agentId, reservedPlacement, connId)
+      // Inside the lock, so the answer cannot go stale against an open racing this one for the
+      // same placement.
+      //
+      // ⚠️ **Refusing would have been the wrong answer.** A client that asks not to take over still
+      // wants to SEE the terminal — the phone swiping onto an agent the desktop is driving shows
+      // its output, and only typing is withheld until a person asks for it. So the open succeeds as
+      // a WATCHER: tmux attaches read-only (no control lease, no resize, no input), the incumbent
+      // keeps the terminal, and the client is told which it got by `readOnly` on `terminal_ready`.
+      const watching = !this.deps.readOnly && !takeover && incumbents.length > 0
       // A terminal is single-controller. A later client explicitly wins the lease and the incumbent
       // receives a targeted close notification; it must not be broadcast to other clients. The
       // notification names the winner when it can (`takenBy`), so the incumbent's banner can too.
-      if (!this.deps.readOnly) await this.closeStreamsForTakeover(session.agentId, reservedPlacement, connId, client)
+      if (!this.deps.readOnly && !watching) {
+        await this.closeStreamsForTakeover(session.agentId, reservedPlacement, connId, client)
+      }
       // Only THIS connection's stream for THIS terminal, not every stream it holds.
       //
       // It used to be closeConnection(connId), i.e. "opening a terminal ends every other terminal
@@ -381,8 +436,9 @@ export class TerminalStreamManager {
       // looked alive, but its session never reached `controlling`, so every keystroke into it was
       // dropped in silence.
       await this.closeOwnStreamsFor(connId, session.agentId, reservedPlacement)
-      if (!this.deps.readOnly) this.controllerByAgent.set(session.agentId, connId)
-      if (!this.deps.readOnly) this.controllerByPlacement.set(reservedPlacement, connId)
+      // A watcher never becomes the controller — that is the whole point of it.
+      if (!this.deps.readOnly && !watching) this.controllerByAgent.set(session.agentId, connId)
+      if (!this.deps.readOnly && !watching) this.controllerByPlacement.set(reservedPlacement, connId)
       const streamId = randomUUID()
       const buffered: Buffer[] = []
       let state: ActiveStream | null = null
@@ -396,7 +452,7 @@ export class TerminalStreamManager {
           onClose: (reason) => {
             if (state) void this.closeStream(state, reason, true)
           },
-        }, this.deps.readOnly)
+        }, this.deps.readOnly || watching)
       } catch {
         if (this.controllerByAgent.get(session.agentId) === connId) this.controllerByAgent.delete(session.agentId)
         if (this.controllerByPlacement.get(reservedPlacement) === connId) this.controllerByPlacement.delete(reservedPlacement)
@@ -412,7 +468,7 @@ export class TerminalStreamManager {
 
       const placementKey = terminalPlacementKey(opened.value.runtime)
       const actualController = this.controllerByPlacement.get(placementKey)
-      if (!this.deps.readOnly && actualController && actualController !== connId) {
+      if (!this.deps.readOnly && !watching && actualController && actualController !== connId) {
         if (this.controllerByAgent.get(session.agentId) === connId) this.controllerByAgent.delete(session.agentId)
         if (this.controllerByPlacement.get(reservedPlacement) === connId) this.controllerByPlacement.delete(reservedPlacement)
         await opened.value.close().catch(() => { /* best effort */ })
@@ -422,7 +478,7 @@ export class TerminalStreamManager {
       if (reservedPlacement !== placementKey && this.controllerByPlacement.get(reservedPlacement) === connId) {
         this.controllerByPlacement.delete(reservedPlacement)
       }
-      if (!this.deps.readOnly) this.controllerByPlacement.set(placementKey, connId)
+      if (!this.deps.readOnly && !watching) this.controllerByPlacement.set(placementKey, connId)
 
       const requestedCompression = Array.isArray(payload.compression) ? payload.compression : []
       // Never compress for the loopback desktop, whatever it asks for: the bytes cross 127.0.0.1,
@@ -435,6 +491,7 @@ export class TerminalStreamManager {
         connId,
         ...(client ? { client } : {}),
         streamId,
+        watching,
         agentId: session.agentId,
         engineId: session.engine,
         placementKey,
@@ -475,7 +532,9 @@ export class TerminalStreamManager {
         agentId: session.agentId,
         engineId: session.engine,
         backend: 'tmux',
-        readOnly: this.deps.readOnly === true,
+        // True for a watcher too: the client draws output and withholds input, exactly as it does
+        // for an observer's stream. See the `takeover: false` branch above.
+        readOnly: this.deps.readOnly === true || watching,
       })) {
         await this.closeStream(state, 'backend disconnected', false)
         return
@@ -1122,15 +1181,21 @@ export class TerminalStreamManager {
     await Promise.all(own.map((state) => this.closeStream(state, 'replaced', false)))
   }
 
+  /// The live streams OTHER connections hold on this terminal — exactly the ones a takeover would
+  /// close, which is what makes it the right question for an open that must not take over.
+  private incumbentsFor(agentId: string, placementKey: string, nextConnId: string): ActiveStream[] {
+    return [...this.streams.values()].filter((state) =>
+      !state.closing && state.connId !== nextConnId
+        && (state.agentId === agentId || state.placementKey === placementKey))
+  }
+
   private async closeStreamsForTakeover(
     agentId: string,
     placementKey: string,
     nextConnId: string,
     takenBy?: TerminalClientDescriptor,
   ): Promise<void> {
-    const incumbents = [...this.streams.values()].filter((state) =>
-      !state.closing && state.connId !== nextConnId
-        && (state.agentId === agentId || state.placementKey === placementKey))
+    const incumbents = this.incumbentsFor(agentId, placementKey, nextConnId)
     await Promise.all(incumbents.map((state) => this.closeStream(
       state,
       'another client connected',

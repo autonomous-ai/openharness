@@ -2,7 +2,6 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 
@@ -235,7 +234,10 @@ class _MapPainter extends CustomPainter {
   /// The loop's phase, 0 → 1, wrapping.
   final double t;
   final _MapPalette palette;
-  final _textStyle = terminalTextStyle(height: 1.2);
+  // Machine names in the UI face; the line under each, a place and its agents,
+  // in the terminal's.
+  final _sansStyle = grid.AppType.caption(height: 1.2);
+  final _monoStyle = grid.AppType.monoMeta(height: 1.2);
   double _paintScale = 1;
 
   static const Size _design = Size(512, 190);
@@ -498,7 +500,7 @@ class _MapPainter extends CustomPainter {
       // Labels are laid out in unscaled space and only faded, so the text
       // never renders at a fractional scale mid-pop.
       final nameWidth = _measure(pin.name, weight: FontWeight.w500);
-      final subWidth = _measure(pin.sub);
+      final subWidth = _measure(pin.sub, mono: true);
       final width = math.max(nameWidth, subWidth);
       // Centred on the pin, but never off the field.
       final left = (pin.at.dx - width / 2).clamp(
@@ -519,9 +521,9 @@ class _MapPainter extends CustomPainter {
         pin.sub,
         Offset(
           left + (width - subWidth) / 2,
-          top + terminalFontStore.size * 1.2 / _paintScale,
+          top + grid.AppType.captionSize * 1.2 / _paintScale,
         ),
-
+        mono: true,
         color: _fade(palette.faint, alpha),
       );
     }
@@ -580,15 +582,19 @@ class _MapPainter extends CustomPainter {
   TextPainter _layout(
     String text, {
     FontWeight weight = FontWeight.w400,
+    bool mono = false,
     Color color = const Color(0xFFFFFFFF),
   }) {
     final painter = TextPainter(
       text: TextSpan(
         text: text,
-        style: _textStyle.copyWith(fontWeight: weight, color: color),
+        style: (mono ? _monoStyle : _sansStyle).copyWith(
+          fontWeight: weight,
+          color: color,
+        ),
       ),
       textDirection: TextDirection.ltr,
-      // Scale the drawing, but keep its labels at the selected point size.
+      // Scale the drawing, but keep its labels at their own point size.
       textScaler: TextScaler.linear(1 / _paintScale),
       maxLines: 1,
       ellipsis: '…',
@@ -596,8 +602,11 @@ class _MapPainter extends CustomPainter {
     return painter;
   }
 
-  double _measure(String text, {FontWeight weight = FontWeight.w400}) =>
-      _layout(text, weight: weight).width;
+  double _measure(
+    String text, {
+    FontWeight weight = FontWeight.w400,
+    bool mono = false,
+  }) => _layout(text, weight: weight, mono: mono).width;
 
   void _text(
     Canvas canvas,
@@ -605,8 +614,9 @@ class _MapPainter extends CustomPainter {
     Offset at, {
     required Color color,
     FontWeight weight = FontWeight.w400,
+    bool mono = false,
   }) {
-    _layout(text, weight: weight, color: color).paint(canvas, at);
+    _layout(text, weight: weight, mono: mono, color: color).paint(canvas, at);
   }
 
   @override
@@ -614,5 +624,6 @@ class _MapPainter extends CustomPainter {
       old.t != t ||
       old.entrance != entrance ||
       old.palette != palette ||
-      old._textStyle != _textStyle;
+      old._sansStyle != _sansStyle ||
+      old._monoStyle != _monoStyle;
 }

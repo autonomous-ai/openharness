@@ -69,8 +69,16 @@ icon size in thirty seconds instead of in an email twenty minutes later.
 | `1.0.0 (18)` | 2026-09-18 | TestFlight. Tab, clear and `/` on the terminal's key bar; account-wide agents list in the terminal sheet; the phone sheet no longer cuts off its last rows |
 | `1.0.0 (19)` | 2026-09-18 | TestFlight. The floating mic, Search and + sit on frosted glass, so they stand out from the output under them |
 | `1.0.0 (20)` | 2026-09-21 | TestFlight. The phone holds only the agent on screen: the two beside it are no longer opened in advance, and the one swiped away from is closed — each hands its terminal back to the desktop. Voice keeps the audio at both ends of a take |
+| `1.0.0 (21)` | 2026-09-21 | TestFlight. The account's tabs reach the phone: a swipe stays inside the tab you are in, the tabs themselves sit behind a mark beside `⋯`, and an agent started here joins that tab |
+| `1.0.0 (22)` | 2026-09-21 | TestFlight. Named **Harness** on the home screen and in the app, with a new icon; the terminal runs to the bottom edge of the screen; only an explicit Take control press claims a terminal from the desktop |
+| `1.0.0 (23)` | 2026-09-21 | TestFlight. The tabs mark unrolls the account's tabs as a rail of names under the header — the tab you are in wears a bar under its name — instead of opening a sheet; picking one switches and puts the rail away |
+| `1.0.0 (24)` | 2026-09-21 | TestFlight. The tabs mark brings a panel up from the bottom: the account's tabs as a row of names, and the agents of the one picked as cards beside each other. A name changes the cards alone — another tab can be read into without leaving the terminal you are in — and a card is what opens an agent |
+| `1.0.0 (25)` | 2026-09-22 | TestFlight. Opening an agent takes its terminal again: no read-only stream and no "Take control" band in front of an agent a desktop has open, including the one the app opens on. The band is left for the case it is about — a terminal taken back off this phone |
+| `1.0.0 (26)` | 2026-09-22 | TestFlight. The tabs panel lists a tab's agents DOWN the page, as the rows the Agents tab draws, instead of as cards read sideways through a letterbox |
+| `1.0.0 (27)` | 2026-09-22 | TestFlight. The tabs panel keeps one height — half the screen — whatever the tab holds, so reading a tab of one agent after a tab of six no longer moves the names along its top |
+| `1.0.0 (28)` | 2026-09-22 | TestFlight. Search rebuilt on the desktop's own box: `>` commands, `#` projects, `@` machines and `?` help, and the desktop's ranking behind them, so a query that finds an agent on the laptop finds the same agent here. A result draws its identity as marks — engine, machine, folder, branch — instead of one run of text, and drops the square glyph and the age the desktop never had. Stopped harnesses are listed again, with `Stopped` on the row and a tap that brings one back; the field sits on the keyboard rather than above a strip of terminal |
 
-`pubspec.yaml` is therefore at `1.0.0+21`: the repo always holds the NEXT build number, so a release
+`pubspec.yaml` is therefore at `1.0.0+29`: the repo always holds the NEXT build number, so a release
 runs clean without anyone having to remember the last one.
 
 ### Why the app is iPhone-only

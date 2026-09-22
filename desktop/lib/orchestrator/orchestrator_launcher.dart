@@ -5,7 +5,6 @@ import '../shared/widgets/labeled_field.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -198,7 +197,7 @@ class _OrchestratorLauncherState extends State<OrchestratorLauncher> {
                   minLines: 5,
                   maxLines: 9,
                   maxLength: 24000,
-                  style: Theme.of(context).textTheme.titleMedium,
+                  style: grid.AppType.mono(height: 1.45),
                   onChanged: (_) => setState(() {}),
                   decoration: const InputDecoration(
                     border: InputBorder.none,
@@ -289,7 +288,7 @@ class _OrchestratorLauncherState extends State<OrchestratorLauncher> {
                 const SizedBox(height: 18),
                 Text(
                   'Runs on this computer with installed harnesses. Each specialist gets its own folder; no automatic installs.',
-                  style: terminalTextStyle(
+                  style: grid.AppType.body(
                     color: grid.AppPalette.textSecondary,
                   ),
                 ),

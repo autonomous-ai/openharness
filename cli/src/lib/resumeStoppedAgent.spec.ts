@@ -203,9 +203,18 @@ describe('resume refusal and readiness edge cases', () => {
     }
     expect(await resumeStoppedAgent(deps)).toMatchObject({ error: 'AGENT_CHANGED' }); expect(deps.launch).not.toHaveBeenCalled()
   })
-  it('does not call an unconfirmed failed process ready', async () => {
-    const deps = fixture(); deps.live.mockReturnValue({ ...saved, resumeOnly: true, launch: { state: 'failed', error: 'RESUME_UNCONFIRMED' } })
+  it('asks a live but unconfirmed process for confirmation again instead of repeating the verdict', async () => {
+    const deps = fixture()
+    const existing: RegisteredSession = { ...saved, resumeOnly: true, launch: { state: 'failed', error: 'RESUME_UNCONFIRMED' } }
+    deps.live.mockReturnValue(existing)
+    expect(await resumeStoppedAgent(deps)).toMatchObject({ ok: true, resumed: true })
+    expect(deps.waitForReady).toHaveBeenCalledWith(existing)
+    expect(deps.launch).not.toHaveBeenCalled(); expect(deps.retain).not.toHaveBeenCalled()
+  })
+  it('does not call a live process that reported another conversation ready', async () => {
+    const deps = fixture(); deps.live.mockReturnValue({ ...saved, resumeOnly: true, launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH' } })
     expect(await resumeStoppedAgent(deps)).toMatchObject({ error: 'RESUME_UNCONFIRMED' })
+    expect(deps.waitForReady).not.toHaveBeenCalled(); expect(deps.launch).not.toHaveBeenCalled()
   })
   it.each(['cancelled', 'removed', 'failed', 'different engine', 'no process', 'different start', 'missing launch'] as const)('handles readiness: %s', async mode => {
     const process = { pid: 4, startMarker: 'now', executable: 'codex' }

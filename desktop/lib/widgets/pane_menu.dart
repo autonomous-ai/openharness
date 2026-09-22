@@ -3,12 +3,12 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import 'box_chrome.dart';
 
+import '../shared/theme/app_type.dart';
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
 import 'transient_menus.dart';
@@ -183,7 +183,6 @@ class _PaneMenuFocusState extends State<_PaneMenuFocus> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return KeymapRegion(
       contextKind: KeymapContext.picker,
       child: FocusScope(
@@ -232,7 +231,7 @@ Widget paneMenuEmpty(String text) => Padding(
     kPaneMenuInset + kPaneMenuRowPadding,
     6,
   ),
-  child: Text(text, style: terminalTextStyle(color: AppColors.textSoft)),
+  child: Text(text, style: AppType.body(color: AppColors.textSoft)),
 );
 
 /// A section label. Non-interactive and short, so the groups read as groups rather than as
@@ -257,7 +256,7 @@ Widget paneMenuHeader(String label, {String? caption}) => Padding(
     children: [
       Text(
         label,
-        style: terminalTextStyle(
+        style: AppType.caption(
           fontWeight: FontWeight.w600,
           letterSpacing: .3,
           color: AppColors.mutedStrong,
@@ -268,7 +267,7 @@ Widget paneMenuHeader(String label, {String? caption}) => Padding(
           padding: const EdgeInsets.only(top: 2),
           child: Text(
             caption,
-            style: terminalTextStyle(color: AppColors.textSoft),
+            style: AppType.caption(color: AppColors.textSoft),
           ),
         ),
     ],
@@ -302,7 +301,6 @@ class PaneMenuRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     final row = Row(
       children: [
         if (engine != null) ...[
@@ -313,17 +311,14 @@ class PaneMenuRow extends StatelessWidget {
           const SizedBox(width: 7),
         ],
         // The title gets spare width; trailing metadata may ellipsize when
-        // the selected terminal size makes the combined line too wide.
+        // the combined line is too wide.
         Expanded(
           child: Text(
             title,
             overflow: TextOverflow.ellipsis,
-            style: terminalTextStyle(
-              // Stated rather than inherited: a PopupMenuItem's default text style is heavier than
-              // this menu wants, which read as every row being emphasised.
-              fontWeight: FontWeight.w400,
-              color: AppColors.text,
-            ),
+            // Regular, stated by the style rather than inherited: a PopupMenuItem's default text
+            // style is heavier than this menu wants, which read as every row being emphasised.
+            style: AppType.mono(color: AppColors.text),
           ),
         ),
         if (detail.isNotEmpty) ...[
@@ -333,7 +328,7 @@ class PaneMenuRow extends StatelessWidget {
               detail,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: terminalTextStyle(color: AppColors.mutedStrong),
+              style: AppType.mono(color: AppColors.mutedStrong),
             ),
           ),
         ],
@@ -344,7 +339,7 @@ class PaneMenuRow extends StatelessWidget {
               status!,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: terminalTextStyle(color: AppColors.mutedStrong),
+              style: AppType.mono(color: AppColors.mutedStrong),
             ),
           ),
         ],
@@ -377,7 +372,7 @@ class PaneMenuRow extends StatelessWidget {
                   child: Text(
                     subtitle!,
                     overflow: TextOverflow.ellipsis,
-                    style: terminalTextStyle(color: AppColors.textSoft),
+                    style: AppType.body(color: AppColors.textSoft),
                   ),
                 ),
               ],

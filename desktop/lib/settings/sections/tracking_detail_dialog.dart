@@ -69,7 +69,10 @@ class _Body extends StatelessWidget {
               Expanded(
                 child: Text(
                   '${entry.name} · ${trackedOutcome(entry)}',
-                  style: terminalTextStyle(color: AppPalette.textSecondary),
+                  style: AppType.monoLabel(
+                    fontWeight: AppFont.regular,
+                    color: AppPalette.textSecondary,
+                  ),
                 ),
               ),
             ],
@@ -155,7 +158,7 @@ class _Caption extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 5),
       child: Text(
         text,
-        style: terminalTextStyle(
+        style: AppType.caption(
           fontWeight: AppFont.medium,
           color: AppPalette.textFaint,
         ),
@@ -184,7 +187,8 @@ class _Block extends StatelessWidget {
       ),
       child: SelectableText(
         text,
-        style: terminalTextStyle(
+        style: AppType.monoLabel(
+          fontWeight: AppFont.regular,
           height: 1.45,
           color: danger ? debugDangerInk(context) : AppPalette.textPrimary,
         ),

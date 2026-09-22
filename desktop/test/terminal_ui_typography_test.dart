@@ -52,24 +52,38 @@ void main() {
     );
   }
 
-  void checkText(WidgetTester tester) {
-    var count = 0;
+  final ramp = <double>{
+    grid.AppType.displaySize,
+    grid.AppType.titleSize,
+    grid.AppType.headingSize,
+    grid.AppType.bodySize,
+    grid.AppType.monoLabelSize,
+    grid.AppType.captionSize,
+  };
+
+  /// Every visible text is on the fixed scale, in the system face or the
+  /// terminal's — and never at the terminal's own size unless it is one of the
+  /// scale's steps. Returns each text's size so a caller can compare them
+  /// across a terminal zoom.
+  Map<String, double> checkText(WidgetTester tester, {int atLeast = 4}) {
+    final sizes = <String, double>{};
     void check(InlineSpan span, TextStyle inherited) {
       final style = inherited.merge(span.style);
       if (span is TextSpan) {
-        if (span.text?.trim().isNotEmpty == true &&
+        final text = span.text?.trim();
+        if (text?.isNotEmpty == true &&
             ![
               'MaterialIcons',
               'lucide',
               'LucideIcons',
             ].any((icon) => style.fontFamily?.contains(icon) == true)) {
-          expect(style.fontSize, terminalFontStore.size, reason: span.text);
+          expect(ramp, contains(style.fontSize), reason: text);
           expect(
-            style.fontFamily,
-            terminalFontStore.value.fontFamily,
-            reason: span.text,
+            [grid.AppType.sansFamily, grid.AppType.monoFamily],
+            contains(style.fontFamily),
+            reason: text,
           );
-          count++;
+          sizes[text!] = style.fontSize!;
         }
         for (final child in span.children ?? <InlineSpan>[]) {
           check(child, style);
@@ -77,17 +91,51 @@ void main() {
       }
     }
 
-    for (final widget in tester.widgetList<RichText>(find.byType(RichText))) {
-      check(widget.text, const TextStyle());
+    // The welcome page stands where a terminal will and is set like one, so
+    // it follows the terminal's size instead; see [checkWelcome].
+    final welcome = find.byType(WorkspaceWelcome);
+    for (final element in find.byType(RichText).evaluate()) {
+      if (find
+          .descendant(of: welcome, matching: find.byWidget(element.widget))
+          .evaluate()
+          .isNotEmpty) {
+        continue;
+      }
+      check((element.widget as RichText).text, const TextStyle());
     }
     for (final widget in tester.widgetList<EditableText>(
       find.byType(EditableText),
     )) {
-      expect(widget.style.fontSize, terminalFontStore.size);
-      expect(widget.style.fontFamily, terminalFontStore.value.fontFamily);
+      // A field is on the scale, or it types into the terminal and follows it.
+      expect({
+        ...ramp,
+        terminalFontStore.size,
+      }, contains(widget.style.fontSize));
     }
-    expect(count, greaterThan(3));
+    expect(sizes.length, greaterThanOrEqualTo(atLeast));
     expect(tester.takeException(), isNull);
+    return sizes;
+  }
+
+  /// The welcome page is terminal text: the terminal's face at its size.
+  void checkWelcome(WidgetTester tester) {
+    final line = tester.widget<Text>(
+      find.text('Open source software and hardware'),
+    );
+    final style = DefaultTextStyle.of(
+      tester.element(find.text('Open source software and hardware')),
+    ).style.merge(line.style);
+    expect(style.fontSize, terminalFontStore.size);
+    expect(style.fontFamily, terminalFontStore.value.fontFamily);
+  }
+
+  /// Zooming the terminal leaves every UI text where it was.
+  void expectSameSizes(Map<String, double> before, Map<String, double> after) {
+    for (final entry in after.entries) {
+      if (before.containsKey(entry.key)) {
+        expect(entry.value, before[entry.key], reason: entry.key);
+      }
+    }
   }
 
   Future<void> mount(
@@ -124,45 +172,57 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  test('all theme roles and control styles use the selected terminal font', () {
+  test('the theme keeps its scale whatever the terminal size', () {
     for (final size in [9.0, 13.0, 18.0, 22.0]) {
       selectFont(size);
       final theme = grid.buildAppTheme(brightness: Brightness.dark);
       final t = theme.textTheme;
-      for (final style in [
-        t.displayLarge,
-        t.displayMedium,
-        t.displaySmall,
-        t.headlineLarge,
-        t.headlineMedium,
-        t.headlineSmall,
-        t.titleLarge,
-        t.titleMedium,
-        t.titleSmall,
-        t.bodyLarge,
-        t.bodyMedium,
-        t.bodySmall,
-        t.labelLarge,
-        t.labelMedium,
-        t.labelSmall,
-        grid.kFieldTextStyle,
-        grid.AppFont.codeStyle(),
-      ]) {
-        expect(style!.fontSize, size);
-        expect(style.fontFamily, 'Menlo');
+      final mono = grid.AppType.monoFamily;
+      final sans = grid.AppType.sansFamily;
+      // Headings, labels and what the user types are mono; prose is sans.
+      final expected = {
+        t.displayLarge: (grid.AppType.displaySize, mono),
+        t.headlineSmall: (grid.AppType.titleSize, mono),
+        t.titleLarge: (grid.AppType.titleSize, mono),
+        t.titleMedium: (grid.AppType.headingSize, mono),
+        t.titleSmall: (grid.AppType.bodySize, mono),
+        t.labelLarge: (grid.AppType.bodySize, mono),
+        t.labelSmall: (grid.AppType.monoMetaSize, mono),
+        t.bodyLarge: (grid.AppType.bodySize, sans),
+        t.bodyMedium: (grid.AppType.bodySize, sans),
+        t.bodySmall: (grid.AppType.bodySize, sans),
+        grid.kFieldTextStyle: (grid.AppType.monoSize, mono),
+        theme.dialogTheme.titleTextStyle: (grid.AppType.headingSize, mono),
+        theme.dialogTheme.contentTextStyle: (grid.AppType.bodySize, sans),
+        theme.tooltipTheme.textStyle: (grid.AppType.captionSize, sans),
+      };
+      for (final entry in expected.entries) {
+        expect(entry.key!.fontSize, entry.value.$1);
+        expect(entry.key!.fontFamily, entry.value.$2);
       }
-      expect(
-        theme.inputDecorationTheme.contentPadding!
-            .resolve(TextDirection.ltr)
-            .vertical,
-        isNonNegative,
-      );
-      expect(grid.AppControl.heightFieldScaled, closeTo(36 * size / 13, .001));
+      expect(grid.AppControl.heightFieldScaled, 36);
+      expect(grid.AppControl.heightScaled, 32);
     }
   });
 
+  test('mono takes the terminal face but not its size', () {
+    selectFont(22);
+    for (final (style, size) in [
+      (grid.AppType.heading(), grid.AppType.headingSize),
+      (grid.AppType.label(), grid.AppType.bodySize),
+      (grid.AppType.mono(), grid.AppType.monoSize),
+      (grid.AppType.monoLabel(), grid.AppType.monoLabelSize),
+      (grid.AppType.monoMeta(), grid.AppType.monoMetaSize),
+      (grid.AppFont.codeStyle(), grid.AppType.monoSize),
+    ]) {
+      expect(style.fontFamily, 'Menlo');
+      expect(style.fontSize, size);
+    }
+    expect(terminalTextStyle().fontSize, 22);
+  });
+
   testWidgets(
-    'tabs, panes, welcome, Cmd-N, Cmd-O and Cmd-P update while open',
+    'tabs, panes, welcome, Cmd-N, Cmd-O and Cmd-P keep the scale while the terminal zooms',
     (tester) async {
       final app = createApp();
       final map = MemoryKeymap();
@@ -171,20 +231,27 @@ void main() {
       app.adoptSessionForTest(terminal('a0', []));
       selectFont(13);
       await mount(tester, app, map);
-      checkText(tester);
+      final before = checkText(tester);
       selectFont(18, TerminalFontChoice.monaco);
       await tester.pumpAndSettle();
-      checkText(tester);
+      expectSameSizes(before, checkText(tester));
 
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
       expect(find.byType(WorkspaceWelcome), findsOneWidget);
-      checkText(tester);
-      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
-      expect(find.byType(NewHarnessBox), findsOneWidget);
-      checkText(tester);
+      // Only the tab chrome is UI text here; the page itself is checked below.
+      checkText(tester, atLeast: 1);
+      checkWelcome(tester);
       selectFont(22);
       await tester.pumpAndSettle();
-      checkText(tester);
+      checkWelcome(tester);
+      selectFont(18, TerminalFontChoice.monaco);
+      await tester.pumpAndSettle();
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+      expect(find.byType(NewHarnessBox), findsOneWidget);
+      final box = checkText(tester);
+      selectFont(22);
+      await tester.pumpAndSettle();
+      expectSameSizes(box, checkText(tester));
       await key(tester, LogicalKeyboardKey.escape);
       for (final shortcut in [
         LogicalKeyboardKey.keyO,
@@ -196,7 +263,7 @@ void main() {
         await key(tester, LogicalKeyboardKey.arrowUp);
         await tester.pumpAndSettle();
         expect(find.byType(SwarmSearchPreview), findsOneWidget);
-        checkText(tester);
+        final search = checkText(tester);
         selectFont(
           shortcut == LogicalKeyboardKey.keyO ? 9 : 18,
           TerminalFontChoice.monaco,
@@ -204,60 +271,61 @@ void main() {
         await tester.pumpAndSettle();
         expect(tester.widget<TextField>(input).controller!.text, 'Agent');
         expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
-        checkText(tester);
+        expectSameSizes(search, checkText(tester));
         await key(tester, LogicalKeyboardKey.escape);
       }
       await tester.pumpWidget(const SizedBox());
     },
   );
 
-  testWidgets(
-    'rename and stop forms follow family and size without reopening',
-    (tester) async {
-      final app = createApp();
-      final map = MemoryKeymap();
-      addTearDown(app.dispose);
-      addTearDown(map.dispose);
-      app.adoptSessionForTest(terminal('a0', []));
-      selectFont(13);
-      await mount(tester, app, map);
-      final context = tester.element(find.byType(SwarmScreen));
-      unawaited(showSwarmRenameDialog(context, 'My project', keymap: map));
-      await tester.pumpAndSettle();
-      checkText(tester);
-      selectFont(22, TerminalFontChoice.monaco);
-      await tester.pumpAndSettle();
-      checkText(tester);
-      expect(
-        tester
-            .widget<TextField>(find.byKey(const Key('tab-rename-input')))
-            .controller!
-            .text,
+  testWidgets('rename and stop forms keep the scale while the terminal zooms', (
+    tester,
+  ) async {
+    final app = createApp();
+    final map = MemoryKeymap();
+    addTearDown(app.dispose);
+    addTearDown(map.dispose);
+    app.adoptSessionForTest(terminal('a0', []));
+    selectFont(13);
+    await mount(tester, app, map);
+    final context = tester.element(find.byType(SwarmScreen));
+    unawaited(showSwarmRenameDialog(context, 'My project', keymap: map));
+    await tester.pumpAndSettle();
+    final rename = checkText(tester);
+    selectFont(22, TerminalFontChoice.monaco);
+    await tester.pumpAndSettle();
+    expectSameSizes(rename, checkText(tester));
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('tab-rename-input')))
+          .controller!
+          .text,
+      'My project',
+    );
+    await key(tester, LogicalKeyboardKey.escape);
+    unawaited(
+      confirmDeleteAgent(
+        context,
+        app,
+        'm',
+        'a0',
         'My project',
-      );
-      await key(tester, LogicalKeyboardKey.escape);
-      unawaited(
-        confirmDeleteAgent(
-          context,
-          app,
-          'm',
-          'a0',
-          'My project',
-          engine: 'codex',
-          keymap: map,
-        ),
-      );
-      await tester.pumpAndSettle();
-      checkText(tester);
-      selectFont(9);
-      await tester.pumpAndSettle();
-      checkText(tester);
-      await key(tester, LogicalKeyboardKey.escape);
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
+        engine: 'codex',
+        keymap: map,
+      ),
+    );
+    await tester.pumpAndSettle();
+    final stop = checkText(tester);
+    selectFont(9);
+    await tester.pumpAndSettle();
+    expectSameSizes(stop, checkText(tester));
+    await key(tester, LogicalKeyboardKey.escape);
+    await tester.pumpWidget(const SizedBox());
+  });
 
-  testWidgets('native tab payload follows the same font live', (tester) async {
+  testWidgets('native tabs take the terminal face at the chrome size', (
+    tester,
+  ) async {
     final updates = <Map<dynamic, dynamic>>[];
     const channel = MethodChannel('harness/swarm_tabs');
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
@@ -281,7 +349,7 @@ void main() {
     selectFont(22, TerminalFontChoice.monaco);
     await tester.pumpAndSettle();
     expect(updates.last['fontFamily'], 'Monaco');
-    expect(updates.last['fontSize'], 22);
+    expect(updates.last['fontSize'], grid.AppType.chromeSize);
     await tester.pumpWidget(const SizedBox());
   });
 }

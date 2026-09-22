@@ -20,7 +20,7 @@ import '../../usage/ledger/usage_report.dart';
 /// How many days the bar chart shows. Ten, as Orca uses — enough to see a shape,
 /// few enough that each bar keeps a readable label under it.
 const _kChartDays = 10;
-TextStyle get _kChartLabelStyle => terminalTextStyle(height: 1.3);
+TextStyle get _kChartLabelStyle => AppType.caption(height: 1.3);
 const _kBarHeight = 118.0;
 
 /// The colours the four token buckets keep, everywhere they are drawn.
@@ -74,7 +74,7 @@ class UsageDailyChart extends StatelessWidget {
               child: Center(
                 child: Text(
                   'Nothing in this range.',
-                  style: terminalTextStyle(color: AppPalette.textFaint),
+                  style: AppType.body(color: AppPalette.textFaint),
                 ),
               ),
             )
@@ -148,7 +148,6 @@ class _Bar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     final total = day.totals.total;
     final segments = <({int tokens, Color colour})>[
       // Top-down, so the stack reads in the same order as the legend.
@@ -218,7 +217,6 @@ class _LegendDot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -231,7 +229,7 @@ class _LegendDot extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 6),
-        Text(label, style: terminalTextStyle(color: AppPalette.textSecondary)),
+        Text(label, style: AppType.caption(color: AppPalette.textSecondary)),
       ],
     );
   }
@@ -262,7 +260,7 @@ class UsageBreakdownCard extends StatelessWidget {
       child: shown.isEmpty
           ? Text(
               'Nothing in this range.',
-              style: terminalTextStyle(color: AppPalette.textFaint),
+              style: AppType.body(color: AppPalette.textFaint),
             )
           : Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -279,7 +277,7 @@ class UsageBreakdownCard extends StatelessWidget {
                               child: Text(
                                 row.label,
                                 overflow: TextOverflow.ellipsis,
-                                style: terminalTextStyle(
+                                style: AppType.body(
                                   color: AppPalette.textPrimary,
                                 ),
                               ),
@@ -287,7 +285,7 @@ class UsageBreakdownCard extends StatelessWidget {
                             const SizedBox(width: 10),
                             Text(
                               formatTokens(row.tokens),
-                              style: terminalTextStyle(
+                              style: AppType.body(
                                 color: AppPalette.textSecondary,
                                 fontFeatures: const [
                                   FontFeature.tabularFigures(),
@@ -299,7 +297,7 @@ class UsageBreakdownCard extends StatelessWidget {
                         const SizedBox(height: 2),
                         Text(
                           _rowDetail(row),
-                          style: terminalTextStyle(color: AppPalette.textFaint),
+                          style: AppType.caption(color: AppPalette.textFaint),
                         ),
                       ],
                     ),
@@ -335,7 +333,7 @@ class UsageSessionsTable extends StatelessWidget {
       child: rows.isEmpty
           ? Text(
               'Nothing in this range.',
-              style: terminalTextStyle(color: AppPalette.textFaint),
+              style: AppType.body(color: AppPalette.textFaint),
             )
           // A table is the one thing on this pane that can genuinely outgrow
           // its column, so it brings its own horizontal scroll rather than
@@ -380,7 +378,6 @@ const _kSessionColumns = <({String label, double width, bool numeric})>[
 class _SessionHeaderRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(
@@ -391,7 +388,10 @@ class _SessionHeaderRow extends StatelessWidget {
               child: Text(
                 column.label,
                 textAlign: column.numeric ? TextAlign.right : TextAlign.left,
-                style: terminalTextStyle(color: AppPalette.textFaint),
+                style: AppType.caption(
+                  color: AppPalette.textFaint,
+                  fontWeight: AppFont.medium,
+                ),
               ),
             ),
         ],
@@ -429,18 +429,28 @@ class _SessionRowTile extends StatelessWidget {
                 textAlign: _kSessionColumns[i].numeric
                     ? TextAlign.right
                     : TextAlign.left,
-                style: terminalTextStyle(
-                  color: i == 1
-                      ? AppPalette.textPrimary
-                      : AppPalette.textSecondary,
-                  fontFeatures: _kSessionColumns[i].numeric
-                      ? const [FontFeature.tabularFigures()]
-                      : null,
-                ),
+                style: _cellStyle(i),
               ),
             ),
         ],
       ),
+    );
+  }
+
+  /// The model column is an id, so it is set in the terminal's face; the rest
+  /// read as prose, with the numeric columns on fixed-width digits.
+  static TextStyle _cellStyle(int column) {
+    final color = column == 1
+        ? AppPalette.textPrimary
+        : AppPalette.textSecondary;
+    if (column == 2) {
+      return AppType.monoLabel(color: color, fontWeight: AppFont.regular);
+    }
+    return AppType.body(
+      color: color,
+      fontFeatures: _kSessionColumns[column].numeric
+          ? AppFont.tabularFigures
+          : null,
     );
   }
 }
@@ -459,7 +469,6 @@ class _Card extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
       decoration: BoxDecoration(
@@ -470,12 +479,9 @@ class _Card extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: Theme.of(context).textTheme.titleSmall),
+          Text(title, style: AppType.heading()),
           const SizedBox(height: 2),
-          Text(
-            subtitle,
-            style: terminalTextStyle(color: AppPalette.textSecondary),
-          ),
+          Text(subtitle, style: AppType.body(color: AppPalette.textSecondary)),
           const SizedBox(height: 12),
           child,
         ],

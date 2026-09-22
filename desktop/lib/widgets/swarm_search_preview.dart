@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart';
+import '../shared/theme/app_type.dart';
 import '../shared/theme/prompt_style.dart';
 import '../state/app_state.dart';
 import '../state/swarm_navigation.dart';
@@ -197,7 +198,7 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
                                 Text(
                                   row.title,
                                   // The list leads the eye; this confirms it.
-                                  style: terminalTextStyle(
+                                  style: AppType.monoLabel(
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
@@ -257,8 +258,12 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
   }
 }
 
-TextStyle get _muted => terminalTextStyle(height: 1.5, color: Colors.white54);
-TextStyle get _body => terminalTextStyle(height: 1.6, color: Color(0xffe1e1e4));
+TextStyle get _muted => AppType.monoMeta(height: 1.5, color: Colors.white54);
+TextStyle get _body => AppType.monoLabel(
+  fontWeight: FontWeight.w400,
+  height: 1.6,
+  color: Color(0xffe1e1e4),
+);
 
 class _AgentPreview extends StatelessWidget {
   const _AgentPreview({
@@ -361,7 +366,7 @@ class _AgentPreview extends StatelessWidget {
               Expanded(
                 child: Text(
                   agent.displayName,
-                  style: terminalTextStyle(
+                  style: AppType.monoLabel(
                     // The list leads the eye; the preview confirms it.
                     fontWeight: FontWeight.w600,
                     height: 1.25,
@@ -370,7 +375,7 @@ class _AgentPreview extends StatelessWidget {
               ),
               if (dense) ...[
                 const SizedBox(width: 10),
-                Text(state, style: terminalTextStyle(color: color)),
+                Text(state, style: AppType.monoMeta(color: color)),
               ],
             ],
           ),
@@ -398,7 +403,7 @@ class _AgentPreview extends StatelessWidget {
                       color: color,
                     ),
                     const SizedBox(width: 5),
-                    Text(state, style: terminalTextStyle(color: color)),
+                    Text(state, style: AppType.monoMeta(color: color)),
                   ],
                 ),
               ),
@@ -452,7 +457,7 @@ class _AgentPreview extends StatelessWidget {
                 children: [
                   Text(
                     'Needs your input',
-                    style: terminalTextStyle(
+                    style: AppType.monoLabel(
                       fontWeight: FontWeight.w600,
                       color: color,
                     ),

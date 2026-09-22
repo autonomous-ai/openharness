@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import 'app_shortcuts.dart';
@@ -63,7 +62,7 @@ class KeyCap extends StatelessWidget {
               )
             : Text(
                 label,
-                style: terminalTextStyle(
+                style: grid.AppType.monoMeta(
                   color: grid.AppPalette.textPrimary,
                   height: 1,
                   // Tabular so ⌘1 – ⌘9 and ⌘W keep the same cap width.
@@ -100,7 +99,7 @@ class KeyChordView extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 2),
               child: Text(
                 'or',
-                style: terminalTextStyle(color: grid.AppPalette.textFaint),
+                style: grid.AppType.caption(color: grid.AppPalette.textFaint),
               ),
             ),
           for (final key in chords[i]) KeyCap(key),

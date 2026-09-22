@@ -44,7 +44,10 @@ class PromptCustomize extends StatelessWidget {
             child: ExcludeSemantics(
               child: Text(
                 '${value ? '[x]' : '[ ]'} $label',
-                style: boxMonoStyle(color: grid.AppPalette.textPrimary),
+                style: grid.AppType.monoLabel(
+                  color: grid.AppPalette.textPrimary,
+                  fontWeight: FontWeight.w400,
+                ),
               ),
             ),
           ),
@@ -56,7 +59,9 @@ class PromptCustomize extends StatelessWidget {
             children: [
               Text(
                 'header style',
-                style: boxMonoStyle(color: grid.AppPalette.textSecondary),
+                style: grid.AppType.monoMeta(
+                  color: grid.AppPalette.textSecondary,
+                ),
               ),
               const SizedBox(height: 8),
               for (final style in PromptStyle.values)
@@ -85,15 +90,16 @@ class PromptCustomize extends StatelessWidget {
                       children: [
                         Text(
                           '${prefs.style == style ? '>' : ' '} ${style.label}',
-                          style: boxMonoStyle(
+                          style: grid.AppType.monoLabel(
                             color: grid.AppPalette.textPrimary,
+                            fontWeight: FontWeight.w400,
                           ),
                         ),
                         Padding(
                           padding: const EdgeInsets.only(left: 16, top: 3),
                           child: Text(
                             style.description,
-                            style: boxMonoStyle(
+                            style: grid.AppType.body(
                               color: grid.AppPalette.textSecondary,
                             ),
                           ),
@@ -105,7 +111,9 @@ class PromptCustomize extends StatelessWidget {
               const SizedBox(height: 16),
               Text(
                 'preview',
-                style: boxMonoStyle(color: grid.AppPalette.textSecondary),
+                style: grid.AppType.monoMeta(
+                  color: grid.AppPalette.textSecondary,
+                ),
               ),
               const SizedBox(height: 6),
               TerminalBox(
@@ -126,7 +134,9 @@ class PromptCustomize extends StatelessWidget {
               const SizedBox(height: 16),
               Text(
                 'context',
-                style: boxMonoStyle(color: grid.AppPalette.textSecondary),
+                style: grid.AppType.monoMeta(
+                  color: grid.AppPalette.textSecondary,
+                ),
               ),
               toggle(
                 'machine',
@@ -155,7 +165,7 @@ class PromptCustomize extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 'Applies to agent search and pane headers. Changes are saved as you choose.',
-                style: boxMonoStyle(color: grid.AppPalette.textSecondary),
+                style: grid.AppType.body(color: grid.AppPalette.textSecondary),
               ),
               const SizedBox(height: 12),
               TextButton(
@@ -163,7 +173,9 @@ class PromptCustomize extends StatelessWidget {
                 onPressed: () => choose(const PromptPrefs()),
                 child: Text(
                   'Reset header style',
-                  style: boxMonoStyle(color: grid.AppPalette.textSecondary),
+                  style: grid.AppType.label(
+                    color: grid.AppPalette.textSecondary,
+                  ),
                 ),
               ),
             ],

@@ -1,7 +1,7 @@
 import 'swarm_search_field.dart';
 
 import 'package:flutter/material.dart';
-import 'package:harness/terminal/terminal_text.dart';
+import 'package:harness/shared/theme/app_type.dart';
 
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
@@ -54,7 +54,6 @@ class _ProjectAgentsState extends State<_ProjectAgents> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Dialog(
       child: SizedBox(
         width: 620,
@@ -64,14 +63,11 @@ class _ProjectAgentsState extends State<_ProjectAgents> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                widget.group.name,
-                style: terminalTextStyle(fontWeight: FontWeight.w500),
-              ),
+              Text(widget.group.name, style: AppType.heading()),
               const SizedBox(height: 8),
               Text(
                 'Include agents from any machine. Matching repositories are included automatically.',
-                style: terminalTextStyle(),
+                style: AppType.body(),
               ),
               const SizedBox(height: 16),
               SwarmSearchField(
@@ -105,11 +101,11 @@ class _ProjectAgentsState extends State<_ProjectAgents> {
                             agent.agent.name,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: terminalTextStyle(),
+                            style: AppType.label(),
                           ),
                           subtitle: Text(
                             '${agent.machine.machine.displayName}${automatic ? ' · Repository match' : ''}',
-                            style: terminalTextStyle(),
+                            style: AppType.body(),
                           ),
                           onChanged: automatic
                               ? null

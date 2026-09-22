@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { basename, isAbsolute } from 'node:path'
+import { basename, dirname, isAbsolute, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
 const exec = promisify(execFile)
@@ -51,7 +51,10 @@ async function inspect(cwd: string): Promise<AgentProject> {
     if (!root) return { name: basename(cwd) || cwd, cwd, root: null, remote: null, branch: null }
     const remote = await git(cwd, ['config', '--get', 'remote.origin.url'])
     const branch = await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
-    return { name: basename(root), cwd, root, remote: canonicalRepository(remote), branch }
+    const common = await git(root, ['rev-parse', '--git-common-dir'])
+    // A linked worktree is named for its repository, not its folder.
+    const main = common && basename(common) === '.git' ? dirname(resolve(root, common)) : root
+    return { name: basename(main), cwd, root, remote: canonicalRepository(remote), branch }
   } finally {
     const next = waiting.shift()
     if (next) next()

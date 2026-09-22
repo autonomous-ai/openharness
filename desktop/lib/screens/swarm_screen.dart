@@ -117,6 +117,10 @@ typedef _NewHarnessContext = ({
   String? projectName,
 });
 
+/// The command box's title line, a step quieter than the rows under it.
+TextStyle get _boxCaption =>
+    grid.AppType.monoLabel(color: kBoxFaint, fontWeight: FontWeight.w400);
+
 class _SwarmScreenState extends State<SwarmScreen> {
   static const _channel = MethodChannel('harness/swarm_tabs');
   late final bool _native =
@@ -443,7 +447,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   padding: const EdgeInsets.fromLTRB(20, 8, 8, 0),
                   child: Row(
                     children: [
-                      Text('Quick Start', style: boxMonoStyle()),
+                      Text('Quick Start', style: grid.AppType.heading()),
                       const Spacer(),
                       TextButton(
                         onPressed: () => Navigator.pop(context, 'tour'),
@@ -548,9 +552,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
       'activeId': app.activeSwarmId,
       'palette': grid.AppTheme.palette.value.nativeColors,
-      'fontFamily': terminalFontStore.value.fontFamily,
-      'fontSize': terminalFontStore.size,
-      'fontFallbacks': terminalFontStore.value.fontFamilyFallback,
+      // The tabs wear the terminal's face at the chrome size, not its size:
+      // ⌘+ and ⌘− zoom the terminal alone.
+      'fontFamily': grid.AppType.monoFamily,
+      'fontSize': grid.AppType.chromeSize,
+      'fontFallbacks': grid.AppType.monoFallback,
       'canReopen': app.canReopenLastClosed,
       'canFind': _canFindTerminal,
       'canClosePane': app.focusedPane != null,
@@ -2083,7 +2089,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 padding: const EdgeInsets.fromLTRB(14, 9, 14, 2),
                 child: Row(
                   children: [
-                    Text(search.title, style: boxMonoStyle(color: kBoxFaint)),
+                    Text(search.title, style: _boxCaption),
                     if (search.placement == HarnessPlacement.currentTab ||
                         search.split != null)
                       Expanded(
@@ -2094,7 +2100,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             key: const ValueKey('swarm-search-target'),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: boxMonoStyle(color: kBoxFaint),
+                            style: _boxCaption,
                           ),
                         ),
                       )
@@ -2197,8 +2203,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           maxHeight:
                               (constraints.maxHeight -
                                   (_native ? 0 : _tabBarHeight)) *
-                              (.65 * terminalFontStore.size / terminalFontSize)
-                                  .clamp(.65, 1.0),
+                              (.65 * grid.appTextScaleOf(context)).clamp(
+                                .65,
+                                1.0,
+                              ),
                         ),
                         child: contents,
                       ),
@@ -2684,7 +2692,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       if (message.isNotEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(message, style: terminalTextStyle()),
+            content: Text(message),
             action: goBack == null
                 ? null
                 : SnackBarAction(
@@ -2802,7 +2810,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                               Expanded(
                                 child: Text(
                                   'Keyboard config has an error. Using the last working shortcuts.',
-                                  style: terminalTextStyle(),
+                                  style: grid.AppType.body(),
                                 ),
                               ),
                               TextButton(
@@ -2824,7 +2832,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           alignment: Alignment.centerLeft,
                           child: Text(
                             '$_pendingKeys …  Esc to cancel',
-                            style: terminalTextStyle(
+                            style: grid.AppType.monoMeta(
                               color: grid.AppPalette.textSecondary,
                             ),
                           ),
@@ -2848,7 +2856,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                   _projects.error ?? app.lastError!,
                                   maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
-                                  style: terminalTextStyle(),
+                                  style: grid.AppType.body(),
                                 ),
                               ),
                               if (_projects.error == null &&
@@ -3201,7 +3209,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                               swarm.name,
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
-                                              style: boxMonoStyle(),
+                                              // Like the native tabs.
+                                              style: grid.AppType.monoLabel(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.w400,
+                                              ),
                                             ),
                                           ),
                                         ],
@@ -3257,7 +3269,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     grid.AppPalette.swarmField,
                   ),
                   overlayColor: grid.AppPalette.swarmAccent,
-                  textStyle: boxMonoStyle(),
+                  textStyle: grid.AppType.monoLabel(),
                   minimumSize: const Size(0, 28),
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -3295,7 +3307,6 @@ class _TabActionsRevealState extends State<_TabActionsReveal> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),

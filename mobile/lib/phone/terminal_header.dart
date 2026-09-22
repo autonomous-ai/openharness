@@ -82,7 +82,11 @@ class TerminalHeader extends StatelessWidget {
         height: rowHeight,
         child: Row(
           children: [
-            _BadgedMark(agent: agent, status: status),
+            BadgedEngineMark(
+              agent: agent,
+              status: status,
+              ring: AppPalette.windowBg,
+            ),
             const SizedBox(width: 11),
             Expanded(
               child: _Identity(agent: agent),
@@ -96,32 +100,46 @@ class TerminalHeader extends StatelessWidget {
 }
 
 /// The engine mark with the session's state notched into its corner.
-class _BadgedMark extends StatelessWidget {
-  const _BadgedMark({required this.agent, required this.status});
+///
+/// The header draws it beside the agent's name, and the tabs popup on each of
+/// its cards — an agent reads the same wherever it is offered.
+class BadgedEngineMark extends StatelessWidget {
+  const BadgedEngineMark({
+    super.key,
+    required this.agent,
+    required this.status,
+    required this.ring,
+    this.size = TerminalHeader.markSize,
+  });
 
   final Agent? agent;
   final PhoneSummary status;
+
+  /// The colour BEHIND the mark, cut out around the dot so it reads as notched
+  /// into the mark rather than stuck on it — see [StatusDot.ring].
+  final Color ring;
+
+  final double size;
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     return SizedBox.square(
-      dimension: TerminalHeader.markSize,
+      dimension: size,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
           EngineMark(
             engine: agent?.engine,
             displayName: agent?.engineDisplayName,
-            size: TerminalHeader.markSize,
+            size: size,
           ),
           // Bottom-right, hanging a little past the mark — the corner a
-          // messenger puts presence on an avatar. The ring is the header's own
-          // colour, so the dot reads as cut into the mark rather than stuck on.
+          // messenger puts presence on an avatar.
           Positioned(
             right: -4,
             bottom: -4,
-            child: StatusDot(summary: status, ring: AppPalette.windowBg),
+            child: StatusDot(summary: status, ring: ring),
           ),
         ],
       ),

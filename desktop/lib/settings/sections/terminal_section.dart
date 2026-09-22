@@ -271,7 +271,7 @@ class _Screen extends StatelessWidget {
         scrollDirection: Axis.horizontal,
         child: Text.rich(
           // ⚠️ This previews the TERMINAL's font at the TERMINAL's size. Left to
-          // the ambient scaler it would grow with the app's UI size setting and
+          // the ambient scaler it would grow with the platform's text scale and
           // show the user a size the terminal will never render at.
           textScaler: TextScaler.noScaling,
           TextSpan(
@@ -316,8 +316,7 @@ class _ResetRow extends StatelessWidget {
       children: [
         Text(
           '⌘0',
-          style: Theme.of(context).textTheme.bodySmall
-              ?.copyWith(color: grid.AppPalette.textFaint),
+          style: grid.AppType.monoMeta(color: grid.AppPalette.textFaint),
         ),
         OutlinedButton(
           key: const Key('terminal-settings-reset-button'),

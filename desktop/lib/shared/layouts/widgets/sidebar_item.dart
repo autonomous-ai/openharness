@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../../theme/app_theme.dart';
 import '../../widgets/scroll_reveal_text.dart';
@@ -222,7 +221,7 @@ class _SidebarRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
+    AppTheme.watch(context);
     const radius = BorderRadius.all(Radius.circular(8));
     // Weight tracks the selection itself, not the transition: it changes the
     // label's metrics, so it wants to happen once, at the start, rather than
@@ -395,20 +394,20 @@ class _RowLabel extends StatelessWidget {
   /// fallback chain, and a travelling label that dropped it would jump a pixel
   /// as the pointer landed.
   static StrutStyle get _strut => StrutStyle(
-    fontSize: terminalFontStore.size,
-    fontFamily: terminalFontStore.value.fontFamily,
-    fontFamilyFallback: terminalFontStore.value.fontFamilyFallback,
+    fontSize: AppType.bodySize,
+    fontFamily: AppType.sansFamily,
+    fontFamilyFallback: AppType.sansFallback,
     height: 1.25,
     forceStrutHeight: true,
   );
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
-    final style = terminalTextStyle(
+    AppTheme.watch(context);
+    final style = AppType.label(
       color: ink,
       height: 1.25,
-      fontWeight: strong ? AppFont.medium : FontWeight.w400,
+      fontWeight: strong ? AppFont.medium : AppFont.regular,
     );
 
     if (!item.revealLabelOnHover || !hovered) {
@@ -458,7 +457,7 @@ class _RowIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
+    AppTheme.watch(context);
     // A row's icon carries the accent whenever the row stands out — the selected
     // nav item and the emphasized action (New chat) both — so the accent reads
     // as "this is the one", matching the selected row's rail. Everything else
@@ -501,7 +500,7 @@ class _SelectionRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
+    AppTheme.watch(context);
     return Positioned(
       left: 0,
       top: 1,
@@ -592,14 +591,11 @@ class _SidebarSectionLabelState extends State<SidebarSectionLabel> {
           children: [
             Expanded(
               child: Text(
-                widget.label,
+                widget.label.toUpperCase(),
+                semanticsLabel: widget.label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: terminalTextStyle(
-                  color: ink,
-                  fontWeight: AppFont.medium,
-                  letterSpacing: 0,
-                ),
+                style: AppType.monoMeta(color: ink, fontWeight: AppFont.medium),
               ),
             ),
             if (foldable)

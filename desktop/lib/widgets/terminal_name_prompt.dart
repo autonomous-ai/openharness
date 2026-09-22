@@ -179,7 +179,7 @@ class _TerminalNamePromptState extends State<TerminalNamePrompt> {
                                           widget.maxLength! - 10
                                   ? '${_text.text.characters.length}/${widget.maxLength}'
                                   : null,
-                              suffixStyle: boxMonoStyle(color: kBoxFaint),
+                              suffixStyle: kBoxFaintStyle,
                               isDense: true,
                               filled: false,
                               border: InputBorder.none,

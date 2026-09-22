@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -25,7 +24,6 @@ class StoreExploreHeading extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -35,10 +33,8 @@ class StoreExploreHeading extends StatelessWidget {
             children: [
               Text(
                 title,
-                style: terminalTextStyle(
+                style: grid.AppType.heading(
                   height: 1.15,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: -.4,
                   color: grid.AppPalette.textPrimary,
                 ),
               ),
@@ -46,7 +42,7 @@ class StoreExploreHeading extends StatelessWidget {
                 const SizedBox(height: 8),
                 Text(
                   subtitle!,
-                  style: terminalTextStyle(
+                  style: grid.AppType.body(
                     height: 1.5,
                     color: grid.AppPalette.textSecondary,
                   ),
@@ -79,7 +75,6 @@ class StoreProjectArt extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     final color = storeDiscipline(storeCategoryFor(entry)).color;
     final fallback = DecoratedBox(
       decoration: BoxDecoration(
@@ -185,7 +180,6 @@ class _CoverCredit extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Tooltip(
       message:
           '${cover.description}\n${cover.credit} · ${cover.license}\nView source',
@@ -252,7 +246,6 @@ class _StoreExploreCardState extends State<StoreExploreCard> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     final active = _hovered || _focused;
     final radius = BorderRadius.circular(16);
     return AnimatedContainer(
