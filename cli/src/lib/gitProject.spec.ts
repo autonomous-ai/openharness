@@ -11,7 +11,8 @@ import { prepareGitProject, readGitProject, validGitPath } from './gitProject.js
 import { parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
 
 const exec = promisify(execFile)
-describe('launch Git preparation', () => {
+// Real Git, several worktrees a test: slower than the default 5s under a full, parallel run.
+describe('launch Git preparation', { timeout: 30_000 }, () => {
   let root: string, repo: string
   const git = async (...args: string[]) => (await exec('git', ['-C', repo, ...args])).stdout.trim()
   beforeEach(async () => {

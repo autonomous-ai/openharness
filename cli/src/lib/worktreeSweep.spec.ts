@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { sweepWorktrees } from './worktreeSweep.js'
 
 const exec = promisify(execFile)
-describe('sweeping unused worktrees', () => {
+// Real Git, several worktrees a test: slower than the default 5s under a full, parallel run.
+describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
   let root: string, repo: string, home: string
   const git = async (cwd: string, ...args: string[]) => (await exec('git', ['-C', cwd,
     '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args])).stdout.trim()
