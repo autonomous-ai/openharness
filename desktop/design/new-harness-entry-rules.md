@@ -53,8 +53,10 @@ in the repository's main checkout, so Cmd-N from a worktree pane starts beside
 it rather than inside it. Worktrees Start made are never offered as recent
 projects.
 
-**Branch** starts on the branch of the pane New Harness was opened from, and
-otherwise on the default branch (Worktree on) or the folder's own branch (off).
+**Branch** starts on the default branch with Worktree on, and on the folder's
+own branch with it off. It does not follow the pane New Harness was opened from:
+New Harness is new work, and another agent's branch is one pick away, where it
+reads **Start in Worktree**.
 The picker names local branches; a remote branch is listed only when no local
 branch has its name.
 

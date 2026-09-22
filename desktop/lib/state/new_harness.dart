@@ -379,7 +379,6 @@ class NewHarnessController extends ChangeNotifier {
     required String machineId,
     String? engine,
     String? folder,
-    String? branch,
     String? projectName,
     bool autoProject = false,
     DateTime Function()? now,
@@ -392,7 +391,6 @@ class NewHarnessController extends ChangeNotifier {
     String? home,
     Random? random,
   }) : _random = random ?? Random(),
-       _paneBranch = branch,
        placement =
            placement ?? (split == null ? HarnessPlacement.currentTab : null),
        _targetId = swarmId ?? app.activeSwarmId,
@@ -496,9 +494,6 @@ class NewHarnessController extends ChangeNotifier {
   NewHarnessProject get project => _project;
   final Random _random;
 
-  /// The branch the pane New Harness was opened from is on: Branch starts
-  /// there, for that pane's project only.
-  String? _paneBranch;
   bool? _worktree;
   String? _branchRef, _branchName, _placeholder;
   GitProjectInfo _gitProject = const GitProjectInfo();
@@ -623,7 +618,6 @@ class NewHarnessController extends ChangeNotifier {
       _branchRef = null;
       _branchName = null;
       _placeholder = null;
-      _paneBranch = null;
       _gitProject = const GitProjectInfo();
     }
     _gitKey = key;
@@ -663,12 +657,6 @@ class NewHarnessController extends ChangeNotifier {
       );
     }
     _gitProject = info;
-    // Another one of the pane it came from: on that pane's branch, if it is
-    // still a local branch here.
-    if (_branchRef == null &&
-        info.branches.any((b) => !b.remote && b.name == _paneBranch)) {
-      _branchRef = 'refs/heads/$_paneBranch';
-    }
     // A name made up before the branches were known may already be taken.
     if (_placeholder != null &&
         info.branches.any((branch) => branch.name == _placeholder)) {
