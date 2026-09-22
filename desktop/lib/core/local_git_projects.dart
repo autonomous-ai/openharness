@@ -129,6 +129,7 @@ class LocalGitProjects {
         'root': root,
         'remote': _origin(config),
         'branch': branch,
+        'worktree': shared != null,
       });
       _publish(entry, project);
     } on FileSystemException {

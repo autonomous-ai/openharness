@@ -2,13 +2,13 @@ import { spawn } from 'node:child_process'
 import { lstat, mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { projectFolderName, projectFolderSlug } from './agentNames.js'
+import { plausibleBranchName, projectFolderName, projectFolderSlug } from './agentNames.js'
 import { GitProjectError, prepareGitProject, validGitPath } from './gitProject.js'
 
 /** `name` on a new project is what the person called it; without one the folder is named after the
  *  harness and the time. */
 export type ProjectFolder = { source: 'new'; name?: string } | { source: 'remote'; repositoryUrl: string; name: string }
-  | { source: 'worktree'; gitSource: string; branchRef?: string }
+  | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean }
   | { source: 'branch'; gitSource: string; branchRef?: string }
 
 export class ProjectFolderError extends Error {
@@ -25,6 +25,14 @@ export function parseProjectFolder(payload: Record<string, unknown>): ProjectFol
         (ref !== undefined && (typeof ref !== 'string' || ref.length > 1024 || !/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/.test(ref))) ||
         (payload.projectSource === 'branch' && (typeof ref !== 'string' || !ref.startsWith('refs/heads/')))) {
       throw new ProjectFolderError('INVALID_PROJECT_SOURCE', 'Choose a Git project and branch.')
+    }
+    const name = payload.branchName
+    if (payload.projectSource === 'worktree' && name !== undefined) {
+      if (!plausibleBranchName(name) || (payload.branchMode !== undefined && payload.branchMode !== 'existing')) {
+        throw new ProjectFolderError('INVALID_PROJECT_SOURCE', 'Choose a Git project and branch.')
+      }
+      return { source: 'worktree', gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}),
+        branchName: name, ...(payload.branchMode === 'existing' ? { existingBranch: true } : {}) }
     }
     return { source: payload.projectSource, gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}) }
   }
@@ -78,7 +86,8 @@ export async function prepareProjectFolder(
   try {
     if (project.source === 'worktree' || project.source === 'branch') {
       return await prepareGitProject(project.gitSource, {
-        root, worktree: project.source === 'worktree', ref: project.branchRef, label: options.label, now: options.now,
+        root, worktree: project.source === 'worktree', ref: project.branchRef,
+        ...(project.source === 'worktree' && project.branchName ? { branchName: project.branchName, existingBranch: project.existingBranch === true } : {}),
       })
     }
     await mkdir(root, { recursive: true })

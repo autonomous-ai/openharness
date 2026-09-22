@@ -86,12 +86,36 @@ void main() {
       expect(find.text('Renamed terminal'), findsOneWidget);
       expect(find.text('harness/codex-0922-1136'), findsOneWidget);
       expect(
+        find.text('desktop'),
+        findsOneWidget,
+        reason: 'A subfolder shows as itself, beside its repository branch.',
+      );
+      expect(find.text('codex-0922-1136'), findsNothing);
+      app.machineStates['m']!.agents = [
+        const Agent(
+          id: 'a0',
+          name: 'Renamed terminal',
+          engine: 'codex',
+          terminalAvailable: true,
+          project: AgentProject(
+            name: 'harness',
+            cwd: '/work/worktrees/harness/codex-0922-1136',
+            root: '/work/worktrees/harness/codex-0922-1136',
+            branch: 'harness/codex-0922-1136',
+            worktree: true,
+          ),
+        ),
+      ];
+      revision.value = 3;
+      await tester.pump();
+      expect(
         find.text('harness'),
         findsOneWidget,
-        reason: 'The header names the project, not the folder the agent is in.',
+        reason: 'A worktree root shows as its repository, never its folder.',
       );
-      expect(find.text('desktop'), findsNothing);
       expect(find.text('codex-0922-1136'), findsNothing);
+      revision.value = 2;
+      await tester.pump();
       expect(find.byTooltip('Zoom Pane'), findsOneWidget);
       session.status = TerminalSessionStatus.takenOver;
       revision.value = 3;

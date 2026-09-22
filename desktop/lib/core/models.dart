@@ -781,6 +781,7 @@ class AgentProject {
     this.root,
     this.remote,
     this.branch,
+    this.worktree = false,
   });
   final String name;
   final String cwd;
@@ -788,10 +789,24 @@ class AgentProject {
   final String? remote;
   final String? branch;
 
-  /// What a person calls the project: a Git checkout's remote repository,
-  /// else the name the daemon gave it (the repository folder, or the plain
-  /// folder outside Git). Which folder or worktree it runs in is [cwd].
-  String get label => remote?.split('/').last ?? name;
+  /// In a linked worktree rather than the repository's own checkout.
+  final bool worktree;
+
+  /// The folder as the person chose it: inside a Git checkout, a subfolder
+  /// shows as itself and the checkout's root as its repository ([name]), even
+  /// when the checkout is a temporary worktree. Outside Git it is [name], the
+  /// folder itself. The branch beside it is the repository's.
+  String get label {
+    final checkout = root;
+    if (checkout == null) return name;
+    String trimmed(String path) => path.replaceFirst(RegExp(r'[/\\]+$'), '');
+    if (trimmed(checkout) == trimmed(cwd)) return name;
+    return cwd
+            .split(RegExp(r'[/\\]'))
+            .where((part) => part.isNotEmpty)
+            .lastOrNull ??
+        name;
+  }
 
   String identity(String machineId) =>
       remote != null ? 'repo:$remote' : 'folder:$machineId:${root ?? cwd}';
@@ -803,9 +818,10 @@ class AgentProject {
       cwd == other.cwd &&
       root == other.root &&
       remote == other.remote &&
-      branch == other.branch;
+      branch == other.branch &&
+      worktree == other.worktree;
   @override
-  int get hashCode => Object.hash(name, cwd, root, remote, branch);
+  int get hashCode => Object.hash(name, cwd, root, remote, branch, worktree);
 
   static AgentProject? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -828,6 +844,7 @@ class AgentProject {
       root: field('root'),
       remote: field('remote'),
       branch: field('branch', 256),
+      worktree: raw['worktree'] == true,
     );
   }
 }

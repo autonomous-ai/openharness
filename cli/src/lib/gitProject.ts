@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process'
-import { mkdir, realpath, stat } from 'node:fs/promises'
-import { basename, isAbsolute, join, normalize } from 'node:path'
+import { cp, lstat, mkdir, realpath, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, normalize } from 'node:path'
 import { promisify } from 'node:util'
-import { worktreeName } from './agentNames.js'
+import { placeholderBranch, plausibleBranchName, worktreeFolderName } from './agentNames.js'
 
 const exec = promisify(execFile)
 
@@ -61,10 +61,11 @@ export async function readGitProject(path: string) {
     return !failure.killed && failure.code === 128 ? { isGit: false, branches: [] } : { error: 'GIT_UNAVAILABLE' }
   }
   try {
-    const [branch, refs, trees] = await Promise.all([
+    const [branch, refs, trees, originHead] = await Promise.all([
       git(path, ['symbolic-ref', '--quiet', 'HEAD']).then(ref => ref.replace(/^refs\/heads\//, '')).catch(() => null),
       git(path, ['for-each-ref', '--format=%(refname)%09%(refname:short)%09%(symref)', 'refs/heads', 'refs/remotes']),
       worktrees(path),
+      git(path, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']).catch(() => null),
     ])
     const checkedOut = new Map(trees.flatMap(tree => tree.usable && tree.ref ? [[tree.ref, tree.path] as const] : []))
     const branches = refs.split('\n').filter(Boolean).flatMap(line => {
@@ -73,25 +74,51 @@ export async function readGitProject(path: string) {
       const worktree = checkedOut.get(ref)
       return [{ ref, name, remote: ref.startsWith('refs/remotes/'), ...(worktree ? { worktree } : {}) }]
     })
+    // Where new work starts by default: the remote's default branch, as a clone names it, else its
+    // main or master.
+    const known = new Set(branches.map(row => row.ref))
+    const defaultRef = [originHead, 'refs/remotes/origin/main', 'refs/remotes/origin/master'].find(ref => ref && known.has(ref))
+    const found = { isGit: true, root, branch, branches, ...(defaultRef ? { defaultRef } : {}) }
     // A worktree is a temporary folder. The launcher shows its repository.
     const main = await mainCheckout(root, trees)
-    if (!main) return { isGit: true, root, branch, branches }
+    if (!main) return found
     const prefix = (await git(path, ['rev-parse', '--show-prefix']).catch(() => '')).replace(/\/$/, '')
     const mainFolder = prefix && await isDirectory(join(main, prefix)) ? join(main, prefix) : main
     const mainBranch = trees[0]!.ref?.replace(/^refs\/heads\//, '')
-    return { isGit: true, root, branch, branches, mainFolder, ...(mainBranch ? { mainBranch } : {}) }
+    return { ...found, mainFolder, ...(mainBranch ? { mainBranch } : {}) }
   } catch { return { error: 'GIT_UNAVAILABLE' } }
 }
 
-/** Start uses a fresh `harness/<name>` branch for worktrees, in a folder under
- * `<root>/worktrees/<repository>`. With Worktree off, a branch that already has a worktree opens
- * there; otherwise the shared folder is only switched when the user explicitly chooses a different
- * local branch. */
-export async function prepareGitProject(
-  source: string,
-  options: { root: string; worktree: boolean; ref?: string; label?: string | null; now?: () => Date },
-): Promise<string> {
-  if (!validGitPath(source)) throw new GitProjectError('INVALID_PROJECT_SOURCE', 'Choose a Git project folder.')
+/** `refs/remotes/origin/fix/typo` → origin, fix/typo, and a refspec updating exactly that ref. */
+function remoteBranch(ref: string | undefined): { remote: string; branch: string; refspec: string } | null {
+  const match = /^refs\/remotes\/([A-Za-z0-9._][A-Za-z0-9._-]*)\/([A-Za-z0-9._]\S*)$/.exec(ref ?? '')
+  if (!match || match[2] === 'HEAD') return null
+  return { remote: match[1]!, branch: match[2]!, refspec: `+refs/heads/${match[2]}:refs/remotes/${match[1]}/${match[2]}` }
+}
+
+export type GitProjectOptions = {
+  root: string
+  worktree: boolean
+  /** Worktree on: what a new branch starts from. Worktree off: the branch the folder is on. */
+  ref?: string
+  /** The worktree's branch: created from `ref`, or with `existingBranch` checked out as it is. */
+  branchName?: string
+  existingBranch?: boolean
+  pick?: (n: number) => number
+}
+
+/** Worktree on: a new worktree under `<root>/worktrees/<repository>`, on `branchName` — created from
+ * `ref`, or with `existingBranch` an existing local branch checked out as it is. Without a name one
+ * is made up (`harness/brave-otter`). A remote base is fetched first, briefly.
+ *
+ * Worktree off: the folder on the local `ref`. A branch that already has a worktree opens there; any
+ * other is switched to, only in a folder with nothing uncommitted. */
+export async function prepareGitProject(source: string, options: GitProjectOptions): Promise<string> {
+  if (!validGitPath(source) || (options.branchName !== undefined && !plausibleBranchName(options.branchName))
+      || (options.existingBranch && !options.branchName)) {
+    throw new GitProjectError('INVALID_PROJECT_SOURCE', 'Choose a Git project folder.')
+  }
+  const existing = options.existingBranch === true
   let root: string, head: string, prefix: string
   try {
     root = await git(source, ['rev-parse', '--show-toplevel'])
@@ -99,7 +126,12 @@ export async function prepareGitProject(
       if (!/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/.test(options.ref)) throw new Error('Invalid branch')
       await git(source, ['show-ref', '--verify', '--hash', '--', options.ref])
     }
-    head = await git(source, ['rev-parse', '--verify', '--end-of-options', `${options.ref ?? 'HEAD'}^{commit}`])
+    // New work from a remote branch starts from where it is now, not from the last fetch. Offline,
+    // slow or refused, it starts from what is here.
+    const remote = options.worktree && !existing ? remoteBranch(options.ref) : null
+    if (remote) await git(source, ['fetch', '--quiet', '--no-tags', remote.remote, remote.refspec], 10_000).catch(() => '')
+    head = await git(source, ['rev-parse', '--verify', '--end-of-options',
+      `${existing ? `refs/heads/${options.branchName}` : options.ref ?? 'HEAD'}^{commit}`])
     prefix = await git(source, ['rev-parse', '--show-prefix'])
     if (prefix && await git(source, ['cat-file', '-t', `${head}:${prefix.replace(/\/$/, '')}`]) !== 'tree') throw new Error('Missing folder')
   } catch {
@@ -109,42 +141,91 @@ export async function prepareGitProject(
   const trees = await worktrees(source)
   if (!options.worktree) {
     if (!options.ref?.startsWith('refs/heads/')) throw new GitProjectError('INVALID_BRANCH', 'Choose a local branch, or turn Worktree on.')
+    const current = await git(source, ['symbolic-ref', '--quiet', 'HEAD']).catch(() => null)
+    if (current === options.ref) return source
+    // A branch that already has a worktree is worked on there: Git would refuse to check it out
+    // twice, and the folder is not the person's concern.
+    for (const tree of trees) {
+      if (tree.usable && tree.ref === options.ref && await isDirectory(tree.path)) return inside(tree.path)
+    }
+    const status = await git(source, ['status', '--porcelain']).catch(() => null)
+    if (status !== '') {
+      throw new GitProjectError('BRANCH_SWITCH_FAILED', 'This folder has uncommitted changes. Commit or stash them before switching branches, or turn Worktree on.')
+    }
     try {
-      const current = await git(source, ['symbolic-ref', '--quiet', 'HEAD']).catch(() => null)
-      if (current === options.ref) return source
-      // A branch that already has a worktree is worked on there: Git would refuse to check it out
-      // twice, and the folder is not the person's concern.
-      for (const tree of trees) {
-        if (tree.usable && tree.ref === options.ref && await isDirectory(tree.path)) return inside(tree.path)
-      }
       await git(source, ['switch', '--', options.ref.slice('refs/heads/'.length)], 120_000)
       return source
     } catch {
       throw new GitProjectError('BRANCH_SWITCH_FAILED', 'Could not switch branches. Commit or stash conflicting changes, or turn Worktree on.')
     }
   }
-  // Grouped by repository, so the leaf only needs the harness and the time.
+  // Grouped by repository, so the leaf only needs the branch.
   const repository = trees[0]?.usable ? basename(trees[0].path) : basename(root)
-  const taken = new Set((await git(source, ['for-each-ref', '--format=%(refname)', 'refs/heads/harness/']).catch(() => '')).split('\n'))
-  const base = worktreeName(options.label?.trim() || 'harness', (options.now ?? (() => new Date()))())
-  let destination: string | undefined, branch = ''
+  const taken = new Set((await git(source, ['for-each-ref', '--format=%(refname)', 'refs/heads']).catch(() => '')).split('\n'))
+  const branch = options.branchName ?? placeholderBranch(taken, options.pick)
+  if (existing) {
+    if (!taken.has(`refs/heads/${branch}`)) throw new GitProjectError('GIT_PROJECT_UNAVAILABLE', 'That branch is no longer available. Choose another branch.')
+    if (trees.some(tree => tree.ref === `refs/heads/${branch}`)) {
+      throw new GitProjectError('BRANCH_IN_USE', `${branch} is checked out in another worktree. Turn Worktree off to open it there.`)
+    }
+  } else {
+    if (taken.has(`refs/heads/${branch}`)) throw new GitProjectError('BRANCH_EXISTS', `A branch named ${branch} already exists. Choose another name.`)
+    try { await git(source, ['check-ref-format', '--branch', branch]) }
+    catch { throw new GitProjectError('INVALID_BRANCH', `${branch} is not a valid branch name.`) }
+  }
+  let destination: string | undefined
   try {
-    const parent = join(options.root, 'worktrees', repository)
+    const home = join(options.root, 'worktrees')
+    const parent = join(home, repository)
     await mkdir(parent, { recursive: true })
+    // Spotlight would index every checkout again.
+    if (process.platform === 'darwin') await writeFile(join(home, '.metadata_never_index'), '').catch(() => {})
+    const leaf = worktreeFolderName(branch)
     // mkdir reserves the name atomically, so simultaneous starts never share a worktree.
     for (let attempt = 1; attempt <= 100 && !destination; attempt++) {
-      const name = attempt === 1 ? base : `${base}-${attempt}`
-      if (taken.has(`refs/heads/harness/${name}`)) continue
-      try { await mkdir(join(parent, name)); destination = join(parent, name); branch = `harness/${name}` }
+      const folder = join(parent, attempt === 1 ? leaf : `${leaf}-${attempt}`)
+      try { await mkdir(folder); destination = folder }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
     }
   } catch { destination = undefined }
   if (!destination) throw new GitProjectError('WORKTREE_FAILED', 'Could not create a worktree folder. Check folder permissions, then retry.')
+  const remote = remoteBranch(options.ref)
   try {
-    await git(source, ['worktree', 'add', '-b', branch, '--', destination, head], 120_000)
-    return inside(destination)
+    await git(source, existing
+      ? ['worktree', 'add', '--', destination, branch]
+      // A remote branch checked out under its own name tracks it; a new branch from one must not,
+      // or it would push onto the base.
+      : remote && remote.branch === branch
+        ? ['worktree', 'add', '--track', '-b', branch, '--', destination, options.ref!]
+        : ['worktree', 'add', '--no-track', '-b', branch, '--', destination, head], 120_000)
   } catch {
     // Keep any partial checkout and branch available for recovery.
     throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
+  }
+  await copyIncluded(root, destination)
+  return inside(destination)
+}
+
+/** `.worktreeinclude` (gitignore syntax) in the repository names ignored files a new worktree needs
+ * and Git will not bring: `.env`, local config. Only files both listed and ignored are copied, never
+ * over one the checkout has. A copy that fails leaves the worktree as Git made it. */
+async function copyIncluded(from: string, to: string): Promise<void> {
+  const include = join(from, '.worktreeinclude')
+  try {
+    if (!(await stat(include)).isFile()) return
+  } catch { return }
+  const list = (exclude: string) => git(from, ['ls-files', '-z', '--others', '--ignored', '--directory', exclude])
+    .then(out => out.split('\0').filter(Boolean), () => [] as string[])
+  const [listed, ignored] = await Promise.all([list(`--exclude-from=${include}`), list('--exclude-standard')])
+  const isIgnored = (entry: string) => ignored.some(path => path === entry || (path.endsWith('/') && entry.startsWith(path)))
+  for (const entry of listed.filter(isIgnored).slice(0, 200)) {
+    const relative = entry.replace(/\/$/, '')
+    if (relative.split('/').includes('..')) continue
+    const target = join(to, relative)
+    try { await lstat(target); continue } catch { /* free */ }
+    try {
+      await mkdir(dirname(target), { recursive: true })
+      await cp(join(from, relative), target, { recursive: true, errorOnExist: false, force: false, verbatimSymlinks: true, preserveTimestamps: true })
+    } catch { /* the worktree stays as Git made it */ }
   }
 }

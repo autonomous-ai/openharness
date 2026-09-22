@@ -111,7 +111,7 @@ void main() {
           return _GitProcess(output: '/repo with spaces\n');
         },
       );
-      expect(calls, hasLength(4));
+      expect(calls, hasLength(5));
       expect(
         calls.any((args) => args.contains('switch') || args.contains('fetch')),
         false,
@@ -148,7 +148,6 @@ void main() {
           '/repo',
           root.path,
           worktree: true,
-          label: 'Codex',
           startProcess: _commands(fail: 'worktree add'),
         ),
         throwsA(
@@ -182,7 +181,6 @@ void main() {
           '/unused',
           worktree: true,
           branchRef: ref,
-          label: 'Codex',
           startProcess: _commands(fail: failure),
         ),
         throwsA(isA<RepositoryCloneException>()),
@@ -193,7 +191,6 @@ void main() {
         '/repo/sub',
         '/unused',
         worktree: true,
-        label: 'Codex',
         startProcess: _commands(prefix: 'sub/'),
       ),
       throwsA(isA<RepositoryCloneException>()),
@@ -203,7 +200,6 @@ void main() {
         '/repo',
         '/unused',
         worktree: false,
-        label: 'Codex',
         startProcess: _commands(),
       ),
       throwsA(isA<RepositoryCloneException>()),

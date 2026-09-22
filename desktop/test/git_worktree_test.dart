@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/git_worktree.dart';
@@ -42,12 +43,16 @@ void main() {
   Future<String> worktree({
     String ref = 'refs/heads/feature',
     String? folder,
-  }) => ProjectFolderRequest.worktree(folder ?? repo, branchRef: ref)
-      .prepareLocal(
-        projectHome: p.join(root.path, 'harnesses'),
-        label: 'Codex',
-        now: () => DateTime(2026, 9, 21, 12),
-      );
+    String? name,
+    bool existing = false,
+  }) => ProjectFolderRequest.worktree(
+    folder ?? repo,
+    branchRef: ref,
+    branchName: name,
+    existingBranch: existing,
+  ).prepareLocal(projectHome: p.join(root.path, 'harnesses'));
+  String worktrees() =>
+      p.join(root.path, 'harnesses', 'worktrees', 'project with spaces');
 
   test(
     'local Git discovery is read only and excludes symbolic remote refs',
@@ -61,6 +66,7 @@ void main() {
         'origin/feature',
       ]);
       expect(info.branches.last.remote, isTrue);
+      expect(info.defaultRef, 'refs/remotes/origin/feature');
       expect(await git(['branch', '--show-current']), 'main');
       expect((await readLocalGitProject(root.path))['isGit'], false);
       expect((await readLocalGitProject('relative'))['error'], 'INVALID_PATH');
@@ -123,6 +129,13 @@ void main() {
     expect(await git(['branch', '--show-current']), 'feature');
     expect(await git(['stash', 'list']), isEmpty);
     expect(await switchTo('feature'), repo);
+    await git(['checkout', '--', '.']);
+    await File(p.join(repo, 'notes.txt')).writeAsString('untracked');
+    await expectLater(
+      switchTo('main'),
+      throwsA(isA<RepositoryCloneException>()),
+    );
+    expect(await git(['branch', '--show-current']), 'feature');
   });
 
   Future<String> real(String path) => Directory(path).resolveSymbolicLinks();
@@ -138,43 +151,152 @@ void main() {
     expect(await git(['branch', '--show-current']), 'main');
   });
 
-  test(
-    'worktrees are named for the harness and the time, grouped by repository',
-    () async {
-      await git(['branch', 'harness/codex-0921-1200-2', 'main']);
-      final paths = [await worktree(), await worktree()];
-      final folder = p.join(
-        root.path,
-        'harnesses',
-        'worktrees',
-        'project with spaces',
+  test('placeholder branches are two words no branch uses yet', () {
+    expect(
+      placeholderBranch(const [], random: _First()),
+      'harness/amber-badger',
+    );
+    expect(
+      placeholderBranch(const [
+        'refs/heads/harness/amber-badger',
+        'harness/amber-badger-2',
+      ], random: _First()),
+      'harness/amber-badger-3',
+    );
+    expect(worktreeFolderName('harness/brave-otter'), 'brave-otter');
+    expect(worktreeFolderName('fix/login page'), 'fix-loginpage');
+  });
+
+  test('new worktrees are on a new branch, in a folder named for it, grouped by repository', () async {
+    final made = [await worktree(), await worktree()];
+    expect(made.toSet(), hasLength(2));
+    for (final path in made) {
+      final branch = await git(['branch', '--show-current'], path);
+      expect(branch, matches(RegExp(r'^harness/[a-z]+-[a-z]+(-\d+)?$')));
+      expect(path, p.join(worktrees(), worktreeFolderName(branch)));
+      expect(
+        await git(['rev-parse', 'HEAD'], path),
+        await git(['rev-parse', 'feature']),
       );
-      expect(paths, [
-        p.join(folder, 'codex-0921-1200'),
-        p.join(folder, 'codex-0921-1200-3'),
-      ]);
-      for (final path in paths) {
-        expect(
-          await git(['branch', '--show-current'], path),
-          'harness/${p.basename(path)}',
-        );
-      }
+    }
+    final named = await worktree(name: 'fix/login');
+    expect(named, p.join(worktrees(), 'fix-login'));
+    expect(await git(['branch', '--show-current'], named), 'fix/login');
+    await expectLater(
+      worktree(name: 'fix/login'),
+      throwsA(isA<RepositoryCloneException>()),
+    );
+    await expectLater(
+      worktree(name: 'bad..name'),
+      throwsA(isA<RepositoryCloneException>()),
+    );
+  });
+
+  test(
+    'an existing branch is checked out as it is in a new worktree, once',
+    () async {
+      await git(['branch', 'topic', 'main']);
+      final path = await worktree(
+        ref: 'refs/heads/topic',
+        name: 'topic',
+        existing: true,
+      );
+      expect(path, p.join(worktrees(), 'topic'));
+      expect(await git(['branch', '--show-current'], path), 'topic');
+      expect(await File(p.join(path, 'src', 'value')).readAsString(), 'main');
+      await expectLater(
+        worktree(ref: 'refs/heads/topic', name: 'topic', existing: true),
+        throwsA(isA<RepositoryCloneException>()),
+      );
+    },
+  );
+
+  test('a remote base is fetched first; a remote branch is tracked under its own name', () async {
+    final origin = p.join(root.path, 'origin.git');
+    final upstream = p.join(root.path, 'upstream');
+    await git(['clone', '--quiet', '--bare', repo, origin], root.path);
+    await git(['remote', 'add', 'origin', origin]);
+    await git(['fetch', '--quiet', 'origin']);
+    await git(['clone', '--quiet', origin, upstream], root.path);
+    for (final args in [
+      ['config', 'user.name', 'Test'],
+      ['config', 'user.email', 'test@example.invalid'],
+      ['config', 'commit.gpgsign', 'false'],
+      ['config', 'core.hooksPath', '/dev/null'],
+    ]) {
+      await git(args, upstream);
+    }
+    await File(p.join(upstream, 'src', 'value')).writeAsString('pushed');
+    await git(['commit', '-qam', 'pushed'], upstream);
+    await git(['push', '--quiet', 'origin', 'main', 'main:fix/typo'], upstream);
+    await git([
+      'fetch',
+      '--quiet',
+      'origin',
+      'fix/typo:refs/remotes/origin/fix/typo',
+    ]);
+    final fresh = await worktree(
+      ref: 'refs/remotes/origin/main',
+      name: 'harness/fresh',
+    );
+    expect(
+      await File(p.join(fresh, 'src', 'value')).readAsString(),
+      'pushed',
+      reason: 'origin/main was fetched before the worktree started from it.',
+    );
+    final plain = await Process.run('git', [
+      '-C',
+      fresh,
+      'rev-parse',
+      '--abbrev-ref',
+      '@{upstream}',
+    ]);
+    expect(
+      plain.exitCode,
+      isNot(0),
+      reason: 'A new branch never pushes onto its base.',
+    );
+    final tracking = await worktree(
+      ref: 'refs/remotes/origin/fix/typo',
+      name: 'fix/typo',
+    );
+    expect(
+      await git(['rev-parse', '--abbrev-ref', '@{upstream}'], tracking),
+      'origin/fix/typo',
+    );
+  });
+
+  test(
+    'ignored files named in .worktreeinclude are copied into new worktrees',
+    () async {
+      await File(p.join(repo, '.gitignore'))
+          .writeAsString('.env\n*.log\nlocal/\n');
+      await File(p.join(repo, '.worktreeinclude'))
+          .writeAsString('.env\nlocal/\n');
+      await File(p.join(repo, '.env')).writeAsString('SECRET=1');
+      await File(p.join(repo, 'debug.log')).writeAsString('noise');
+      await Directory(p.join(repo, 'local')).create();
+      await File(p.join(repo, 'local', 'settings.json')).writeAsString('{}');
+      final path = await worktree();
+      expect(await File(p.join(path, '.env')).readAsString(), 'SECRET=1');
+      expect(
+        await File(p.join(path, 'local', 'settings.json')).readAsString(),
+        '{}',
+      );
+      expect(await File(p.join(path, 'debug.log')).exists(), false);
     },
   );
 
   test('a linked worktree reads as its repository, and new worktrees from it join that repository', () async {
-    final linked = await worktree();
+    final linked = await worktree(name: 'harness/linked');
     final info = GitProjectInfo.fromJson(
       await readLocalGitProject(p.join(linked, 'src')),
     );
-    expect(info.branch, 'harness/codex-0921-1200');
+    expect(info.branch, 'harness/linked');
     expect(info.mainBranch, 'main');
     expect(await real(info.mainFolder!), await real(p.join(repo, 'src')));
     final branches = {for (final b in info.branches) b.name: b.worktree};
-    expect(
-      await real(branches['harness/codex-0921-1200']!),
-      await real(linked),
-    );
+    expect(await real(branches['harness/linked']!), await real(linked));
     expect(await real(branches['main']!), await real(repo));
     expect(branches['origin/feature'], isNull);
     expect(
@@ -182,14 +304,8 @@ void main() {
       isNull,
     );
     expect(
-      await worktree(folder: linked),
-      p.join(
-        root.path,
-        'harnesses',
-        'worktrees',
-        'project with spaces',
-        'codex-0921-1200-2',
-      ),
+      await worktree(folder: linked, name: 'harness/second'),
+      p.join(worktrees(), 'second'),
     );
   });
 
@@ -213,4 +329,14 @@ void main() {
       throwsA(isA<RepositoryCloneException>()),
     );
   });
+}
+
+/// Always the first word of each list.
+class _First implements Random {
+  @override
+  int nextInt(int max) => 0;
+  @override
+  double nextDouble() => 0;
+  @override
+  bool nextBool() => false;
 }

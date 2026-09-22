@@ -2134,11 +2134,11 @@ class _TerminalHeader extends StatelessWidget {
                         child: PromptContextView(
                           contextData: PromptContext(
                             machine: machineName,
-                            // The project and its branch identify the pane. Where the
-                            // agent stands inside it (a subfolder, a temporary worktree)
-                            // is the working folder in the tooltip.
+                            // The folder as it was chosen and its repository's branch;
+                            // the full working folder is in the tooltip.
                             project: narrow ? null : project?.label,
                             branch: narrow ? null : project?.branch,
+                            worktree: project?.worktree == true,
                             leading: !narrow && forkedFrom != null
                                 ? 'forked from ${forkedFrom.name}'
                                 : null,

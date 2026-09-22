@@ -15,8 +15,9 @@ Future<void> openLaunchRow(WidgetTester tester, String name) async {
     'agent',
     'machine',
     'project',
-    if (box.isGitProject) 'branch',
     if (box.canUseWorktree || box.gitError != null) 'worktree',
+    if (box.isGitProject) 'branch',
+    if (box.worktree) 'branchName',
   ].indexOf(name);
   expect(index, greaterThanOrEqualTo(0));
   await tester.sendKeyEvent(LogicalKeyboardKey.pageUp);

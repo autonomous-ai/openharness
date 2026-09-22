@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/e2ee/envelope.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/widgets/new_harness_box.dart';
@@ -116,10 +118,12 @@ void main() {
     await settle();
     expect(box.worktree, true);
     expect(box.branchRef, 'refs/heads/main');
+    expect(box.placeholder, matches(RegExp(r'^harness/[a-z]+-[a-z]+$')));
     expect(box.draft.projectFolderRequest!.payload, {
       'projectSource': 'worktree',
       'gitSource': '/repo',
       'branchRef': 'refs/heads/main',
+      'branchName': box.placeholder,
     });
     box.toggleWorktree();
     expect(box.worktree, false);
@@ -250,6 +254,7 @@ void main() {
         'projectSource': 'worktree',
         'gitSource': '/repo',
         'branchRef': 'refs/heads/main',
+        'branchName': box.placeholder,
       });
       expect(connection.reads, [folder], reason: 'Branches are shared.');
       expect(await box.create(), NewHarnessOutcome.created);
@@ -301,6 +306,186 @@ void main() {
     );
   });
 
+  const rich = <String, dynamic>{
+    'isGit': true,
+    'root': '/repo',
+    'branch': 'main',
+    'defaultRef': 'refs/remotes/origin/main',
+    'branches': [
+      {'ref': 'refs/heads/main', 'name': 'main', 'worktree': '/repo'},
+      {'ref': 'refs/heads/feature', 'name': 'feature'},
+      {
+        'ref': 'refs/heads/feature/pay',
+        'name': 'feature/pay',
+        'worktree': '/wt/pay',
+      },
+      {'ref': 'refs/heads/harness/old', 'name': 'harness/old'},
+      {
+        'ref': 'refs/heads/harness/live',
+        'name': 'harness/live',
+        'worktree': '/wt/live',
+      },
+      {
+        'ref': 'refs/remotes/origin/main',
+        'name': 'origin/main',
+        'remote': true,
+      },
+      {
+        'ref': 'refs/remotes/origin/fix-typo',
+        'name': 'origin/fix-typo',
+        'remote': true,
+      },
+    ],
+  };
+
+  test(
+    'From is where new work starts; Branch is the branch it is on',
+    () async {
+      final connection = _Connection()..answers['/repo'] = rich;
+      final app = createApp(connectionForTest: (_) => connection);
+      final box = NewHarnessController(
+        app,
+        machineId: 'm',
+        engine: 'codex',
+        folder: '/repo',
+        random: Random(7),
+      );
+      addTearDown(app.dispose);
+      addTearDown(box.dispose);
+      await settle();
+      final placeholder = box.placeholder;
+      expect(placeholder, matches(RegExp(r'^harness/[a-z]+-[a-z]+$')));
+      expect(box.worktree, true);
+      expect(box.branchLabel, 'origin/main', reason: 'The remote default.');
+      expect(box.worktreeBranchLabel, placeholder);
+      expect(box.createLabel, 'Start Harness');
+      expect(box.projectFolderRequest!.payload, {
+        'projectSource': 'worktree',
+        'gitSource': '/repo',
+        'branchRef': 'refs/remotes/origin/main',
+        'branchName': placeholder,
+      });
+
+      box.focusField(NewHarnessField.branch);
+      final rows = {for (final row in box.options) row.title: row.detail};
+      expect(rows.keys.take(2), ['main', 'origin/main']);
+      expect(rows['main'], 'default · current');
+      expect(rows['origin/main'], 'default · remote');
+      expect(rows['feature/pay'], 'worktree');
+      expect(rows['harness/live'], 'worktree');
+      expect(
+        rows.containsKey('harness/old'),
+        false,
+        reason: 'Nobody chose it.',
+      );
+
+      void pick(String title) {
+        box.focusField(NewHarnessField.branch);
+        box.accept(box.options.firstWhere((row) => row.title == title));
+      }
+
+      pick('feature');
+      expect(box.worktreeBranchLabel, 'feature · existing');
+      expect(box.projectFolderRequest!.payload, {
+        'projectSource': 'worktree',
+        'gitSource': '/repo',
+        'branchRef': 'refs/heads/feature',
+        'branchName': 'feature',
+        'branchMode': 'existing',
+      });
+      pick('feature/pay');
+      expect(box.opensWorktree, true);
+      expect(box.createLabel, 'Start in Worktree');
+      expect(box.projectFolderRequest!.payload, {
+        'projectSource': 'branch',
+        'gitSource': '/repo',
+        'branchRef': 'refs/heads/feature/pay',
+      });
+      pick('origin/fix-typo');
+      expect(box.worktreeBranchLabel, 'fix-typo · tracks origin/fix-typo');
+      expect(box.projectFolderRequest!.payload['branchName'], 'fix-typo');
+      pick('main');
+      expect(box.worktreeBranchLabel, placeholder);
+      expect(box.projectFolderRequest!.payload['branchRef'], 'refs/heads/main');
+
+      box.focusField(NewHarnessField.branchName);
+      expect(box.query, placeholder);
+      box.setQuery('my/work');
+      expect(box.options.single.detail, 'New branch from main');
+      box.accept();
+      expect(box.field, NewHarnessField.launch);
+      expect(box.worktreeBranchLabel, 'my/work');
+      expect(box.projectFolderRequest!.payload['branchName'], 'my/work');
+      box.focusField(NewHarnessField.branchName);
+      box.setQuery('main');
+      expect(box.options.single.enabled, false);
+      box.accept();
+      expect(box.error, contains('Turn Worktree off'));
+      box.setQuery('');
+      box.accept();
+      expect(box.worktreeBranchLabel, placeholder);
+
+      box.toggleWorktree();
+      expect(box.worktree, false);
+      expect(box.branchLabel, 'main');
+      expect(box.projectFolderRequest!.payload, {
+        'projectSource': 'branch',
+        'gitSource': '/repo',
+        'branchRef': 'refs/heads/main',
+      });
+      pick('feature/pay');
+      expect(box.createLabel, 'Start in Worktree');
+    },
+  );
+
+  test(
+    'Worktree off never switches a folder a harness is working in',
+    () async {
+      final connection = _Connection()..answers['/repo'] = rich;
+      final app = createApp(connectionForTest: (_) => connection);
+      app.machineStates['m']!.agents = [
+        const Agent(
+          id: 'busy',
+          name: 'Busy',
+          engine: 'codex',
+          project: AgentProject(name: 'repo', cwd: '/repo/cli', root: '/repo'),
+        ),
+      ];
+      final box = NewHarnessController(
+        app,
+        machineId: 'm',
+        engine: 'codex',
+        folder: '/repo',
+      );
+      addTearDown(app.dispose);
+      addTearDown(box.dispose);
+      await settle();
+      box.toggleWorktree();
+      box.focusField(NewHarnessField.branch);
+      box.accept(box.options.firstWhere((row) => row.title == 'feature'));
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(box.error, contains('A harness is working in this folder'));
+      expect(connection.starts, isEmpty);
+    },
+  );
+
+  test('a repository with no commit starts without a worktree', () async {
+    final connection = _Connection()
+      ..answers['/empty'] = {'isGit': true, 'branch': 'main', 'branches': []};
+    final app = createApp(connectionForTest: (_) => connection);
+    final box = NewHarnessController(
+      app,
+      machineId: 'm',
+      engine: 'codex',
+      folder: '/empty',
+    );
+    addTearDown(app.dispose);
+    addTearDown(box.dispose);
+    await settle();
+    expect(box.isGitProject, true);
+    expect(box.worktree, false);
+  });
+
   testWidgets(
     'compact launch, checkbox controls, hover selection, branch search and Cmd-Enter start',
     (tester) async {
@@ -337,7 +522,10 @@ void main() {
         expect(find.byKey(ValueKey('new-harness-field-$name')), findsNothing);
       }
       expect(find.text('[x]'), findsOneWidget);
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      // Worktree, then From and Branch, sit above Start.
+      for (var row = 0; row < 3; row++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      }
       await tester.sendKeyEvent(LogicalKeyboardKey.space);
       await tester.pump();
       expect(box.worktree, false);

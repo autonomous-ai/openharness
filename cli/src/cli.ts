@@ -88,6 +88,7 @@ import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
+import { sweepWorktrees } from './lib/worktreeSweep.js'
 import { createStopAgentService } from './lib/stopAgentService.js'
 import { createResumeAgentService } from './lib/resumeAgentService.js'
 import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from './lib/launchOverrides.js'
@@ -5444,6 +5445,19 @@ async function runForeground(session: AuthSession): Promise<void> {
   }, env.ADAPTER_DATA_DIR)
   backend.onDirectDeviceRevoked = fp => autonomousDeviceDirect?.revoked(fp)
   autonomousDeviceDirect.start()
+
+  // Worktrees Harness made that no live or stopped harness uses and nothing would miss
+  // (lib/worktreeSweep.ts): a few minutes after start, once restored agents are back in the
+  // registry, then twice a day.
+  const sweepUnusedWorktrees = () => {
+    let inUse: Array<string | null>
+    try { inUse = [...registry.list().map(s => s.cwd), ...stoppedAgents.list().map(s => s.cwd)] } catch { return }
+    void sweepWorktrees({ root: join(homedir(), 'harnesses'), inUse })
+      .then(removed => { if (removed.length) console.log(`[worktrees] removed ${removed.length} unused worktree(s)`) })
+      .catch(() => {})
+  }
+  setTimeout(sweepUnusedWorktrees, 5 * 60_000).unref()
+  setInterval(sweepUnusedWorktrees, 12 * 3600_000).unref()
 
 
   // Every card bound for the WiFi device goes down the cable too, translated once. Teeing beats emitting

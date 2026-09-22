@@ -83,6 +83,10 @@ class PromptContext {
     this.project,
     this.branch,
     this.leading,
+    this.worktree = false,
   });
   final String? harness, machine, project, branch, leading;
+
+  /// The branch is checked out in a worktree of its own.
+  final bool worktree;
 }

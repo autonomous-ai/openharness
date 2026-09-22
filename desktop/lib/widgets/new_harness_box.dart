@@ -14,7 +14,15 @@ import 'box_chrome.dart';
 import 'pane_menu.dart';
 import 'terminal_prompt.dart';
 
-enum _LaunchChoice { agent, machine, project, branch, worktree, create }
+enum _LaunchChoice {
+  agent,
+  machine,
+  project,
+  worktree,
+  branch,
+  branchName,
+  create,
+}
 
 /// A launch menu and focused completion prompts with shared arrow navigation.
 /// Create is selected initially; arrows and Enter edit a displayed default.
@@ -71,8 +79,9 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     _LaunchChoice.agent,
     _LaunchChoice.machine,
     _LaunchChoice.project,
-    if (box.isGitProject) _LaunchChoice.branch,
     if (box.canUseWorktree || box.gitError != null) _LaunchChoice.worktree,
+    if (box.isGitProject) _LaunchChoice.branch,
+    if (box.worktree) _LaunchChoice.branchName,
     _LaunchChoice.create,
   ];
   String get _launchCreateLabel => box.checking
@@ -98,6 +107,8 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
         box.focusField(NewHarnessField.projectMenu);
       case _LaunchChoice.branch:
         box.focusField(NewHarnessField.branch);
+      case _LaunchChoice.branchName:
+        box.focusField(NewHarnessField.branchName);
       case _LaunchChoice.worktree:
         box.gitError != null ? box.retryGitProject() : box.toggleWorktree();
       case _LaunchChoice.create:
@@ -216,6 +227,8 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     box.checkingGit,
     box.gitError,
     box.branchLabel,
+    box.worktreeBranchLabel,
+    box.createLabel,
     box.placement,
     box.query.trim().isEmpty,
     box.matchCount,
@@ -287,7 +300,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                         ? _summaryText()
                         : _launchChoice == _LaunchChoice.worktree
                         ? 'Worktree ${box.worktree ? 'on' : 'off'}. Enter to toggle.'
-                        : '${_launchChoice.name}. Enter to edit.'
+                        : '${_choiceTitle(_launchChoice)}. Enter to edit.'
                   : box.field == NewHarnessField.task
                   // No row to read here: read what Return will do instead.
                   ? _summaryText()
@@ -345,7 +358,16 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     NewHarnessField.agent => 'Agent',
     NewHarnessField.machine => 'Machine',
     NewHarnessField.branch => 'Branch',
+    NewHarnessField.branchName => 'Branch name',
     NewHarnessField.project => 'Project',
+  };
+
+  /// What a launch row is called on screen: with Worktree on, the branch
+  /// picked is where the new one starts, and the new one gets its own row.
+  String _choiceTitle(_LaunchChoice choice) => switch (choice) {
+    _LaunchChoice.branch => box.worktree ? 'From' : 'Branch',
+    _LaunchChoice.branchName => 'Branch',
+    _ => '${choice.name[0].toUpperCase()}${choice.name.substring(1)}',
   };
 
   bool get _composing =>
@@ -876,7 +898,11 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                         : _machinePicker
                         ? 'Choose a machine'
                         : box.field == NewHarnessField.branch
-                        ? 'Choose a branch'
+                        ? box.worktree
+                              ? 'Start the new branch from'
+                              : 'Choose a branch'
+                        : box.field == NewHarnessField.branchName
+                        ? 'Name the branch'
                         : _profilePicker
                         ? 'Codex profile on ${box.machineLabel}'
                         : box.field == NewHarnessField.mode
@@ -887,7 +913,8 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                 ),
               if (!_agentPicker &&
                   !_machinePicker &&
-                  box.field != NewHarnessField.branch) ...[
+                  box.field != NewHarnessField.branch &&
+                  box.field != NewHarnessField.branchName) ...[
                 if (!_launching) const SizedBox(height: 8),
                 _segment(
                   NewHarnessField.agent,
@@ -906,8 +933,6 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                 }),
               ],
               if (_launching) ...[
-                if (box.isGitProject)
-                  _segment(NewHarnessField.branch, box.branchLabel),
                 if (box.isGitProject || box.checkingGit || box.gitError != null)
                   _default(
                     'worktree',
@@ -922,12 +947,30 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                     tooltip: box.gitError != null
                         ? 'Could not check Git on ${box.machineLabel}. Retry.'
                         : box.canUseWorktree
-                        ? 'Start in a new Git worktree and branch from the selected branch. Uncommitted changes stay in the original folder.'
+                        ? 'Start in a new Git worktree: a folder of its own, so harnesses never share files. Uncommitted changes stay in the project folder.'
                         : 'Choose an existing Git project to use a worktree.',
                     onTap: () {
                       _selectLaunchChoice(_LaunchChoice.worktree);
                       _activateLaunchChoice(_LaunchChoice.worktree);
                     },
+                  ),
+                if (box.isGitProject)
+                  _segment(
+                    NewHarnessField.branch,
+                    box.branchLabel,
+                    title: _choiceTitle(_LaunchChoice.branch),
+                    tooltip: box.worktree
+                        ? 'Where the new branch starts. A remote branch is fetched first.'
+                        : box.opensWorktree
+                        ? '${box.branchLabel} has a worktree of its own: the harness starts there.'
+                        : 'The branch the project folder is on.',
+                  ),
+                if (box.worktree)
+                  _segment(
+                    NewHarnessField.branchName,
+                    box.worktreeBranchLabel,
+                    title: 'Branch',
+                    tooltip: 'The branch the harness works on. Keep the name made up for it, type another, or pick one that exists.',
                   ),
                 const SizedBox(height: 8),
                 _default(
@@ -941,9 +984,16 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
           ),
         );
 
-  Widget _segment(NewHarnessField field, String label) => _default(
+  Widget _segment(
+    NewHarnessField field,
+    String label, {
+    String? title,
+    String? tooltip,
+  }) => _default(
     field.name,
     label,
+    title: title,
+    tooltip: tooltip,
     active:
         box.field == field ||
         (field == NewHarnessField.project &&
@@ -968,13 +1018,14 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     bool action = false,
     bool enabled = true,
     String? tooltip,
+    String? title,
   }) {
     final choice = _launching
         ? _LaunchChoice.values.where((item) => item.name == name).firstOrNull
         : null;
     final highlighted = choice != null && choice == _launchChoice;
     final disabled = !enabled || (name == 'create' ? box.busy : box.locked);
-    final fieldLabel = '${name[0].toUpperCase()}${name.substring(1)}';
+    final fieldLabel = title ?? '${name[0].toUpperCase()}${name.substring(1)}';
     final checkbox =
         name == 'worktree' && !box.checkingGit && box.gitError == null;
     return MouseRegion(
@@ -1051,8 +1102,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
       ? 'Choose a project before starting ${box.agentLabel}.'
       : 'Return starts ${box.agentLabel} on ${box.machineLabel} in '
             '${box.projectLabel}'
-            '${box.isGitProject ? ', from ${box.branchLabel}' : ''}'
-            '${box.worktree ? ', in a new Git worktree' : ''}'
+            '${box.gitSummary}'
             '${box.hasModes ? ', ${box.modeLabel.toLowerCase()}' : ''}'
             '${box.profileLabel == null ? '' : ', profile ${box.profileLabel}'}'
             '${box.task.trim().isEmpty ? '' : ', and sends what you typed as its first message'}.';
