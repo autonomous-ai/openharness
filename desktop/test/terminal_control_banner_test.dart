@@ -6,6 +6,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/widgets/terminal_panel.dart';
+import 'package:xterm/xterm.dart';
 
 import 'swarm_state_test.dart' show createApp;
 
@@ -16,6 +17,11 @@ void main() {
   late TerminalSession session;
   late List<String> sent;
   late List<TerminalBinaryFrame> input;
+
+  /// A second tile of the same app, adopted but (unless a test mounts it)
+  /// not on screen: what a gesture on `session`'s tile does to the REST.
+  late TerminalSession other;
+  late List<String> sentOther;
 
   setUp(() {
     app = createApp();
@@ -42,6 +48,24 @@ void main() {
           ..status = TerminalSessionStatus.controlling
           ..streamId = 'stream-a0';
     app.adoptSessionForTest(session);
+    sentOther = [];
+    other =
+        TerminalSession(
+            machineId: 'm',
+            agentId: 'a1',
+            agentName: 'Session a1',
+            engineId: 'codex',
+            send: (type, _) async {
+              sentOther.add(type);
+              return true;
+            },
+            sendBinary: (_) async => true,
+          )
+          ..status = TerminalSessionStatus.controlling
+          ..streamId = 'stream-a1';
+    app.adoptSessionForTest(other);
+    // The tile under test is the focused one; the other is just present.
+    app.focusPane(app.paneOfAgent('m', 'a0')!.id);
   });
 
   // The app owns the adopted session and disposes it with itself. Done inside
@@ -49,6 +73,9 @@ void main() {
   // binding checks for pending timers before tearDown runs.
   var finished = false;
   Future<void> finish(WidgetTester tester) async {
+    // A tap into a live terminal arms xterm's double-tap recognizer; let it
+    // lapse before the binding checks for stray timers.
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.pumpWidget(const SizedBox());
     app.dispose();
     finished = true;
@@ -65,6 +92,9 @@ void main() {
     TerminalNotice? notice,
     bool composerVisible = false,
     bool compactHeader = false,
+    bool focused = true,
+    bool visible = true,
+    int focusRequest = 0,
     double width = 900,
     Widget? beside,
   }) async {
@@ -81,7 +111,9 @@ void main() {
                   child: TerminalPanel(
                     notifier: app,
                     session: session,
-                    focused: true,
+                    focused: focused,
+                    visible: visible,
+                    focusRequest: focusRequest,
                     readOnly: readOnly,
                     notice: notice,
                     composerVisible: composerVisible,
@@ -101,6 +133,16 @@ void main() {
 
   /// Mounting measures the grid and sends a resize; only the opens matter here.
   List<String> opens() => sent.where((t) => t == 'terminal_open').toList();
+  List<String> opensOther() =>
+      sentOther.where((t) => t == 'terminal_open').toList();
+
+  void takeOverOther() {
+    other.handleFrame('terminal_closed', {
+      'streamId': 'stream-a1',
+      'code': 'TERMINAL_TAKEN_OVER',
+      'reason': 'Another client connected to this terminal.',
+    });
+  }
 
   void takeOver() {
     session.handleFrame('terminal_closed', {
@@ -136,7 +178,7 @@ void main() {
     });
   }
 
-  final hint = find.textContaining('Press ⏎');
+  final hint = find.textContaining('press ⏎');
 
   testWidgets('the banner names who took control when the daemon said', (
     tester,
@@ -365,26 +407,326 @@ void main() {
     await finish(tester);
   });
 
-  testWidgets('clicking the band\'s text focuses the terminal for ⏎', (
+  // ── Coming back to the pane takes the stream back ─────────────────────────
+  //
+  // A person returning to a taken-over tile — by mouse, by key, by switching to
+  // its tab, by bringing the window forward — gets it back without being asked.
+  // The one thing these must never do is fire on the takeover itself: both
+  // apps see that, and two panes retaking on each other's notifications would
+  // trade the stream forever. The first test below pins that.
+
+  testWidgets('losing the stream on its own never retakes it', (tester) async {
+    // The focused, visible tile has the keyboard pulled into it on takeover;
+    // that pull is the app's doing, not the person's, and must not retake —
+    // neither this tile nor any other the same client took.
+    await pump(tester);
+    takeOver();
+    takeOverOther();
+    for (var i = 0; i < 4; i++) {
+      await tester.pump();
+    }
+    expect(session.status, TerminalSessionStatus.takenOver);
+    expect(other.status, TerminalSessionStatus.takenOver);
+    expect(opens(), isEmpty);
+    expect(opensOther(), isEmpty);
+    await finish(tester);
+  });
+
+  // ── One gesture brings the whole app back ─────────────────────────────────
+
+  testWidgets('a click into a pane that is fine retakes the others', (
     tester,
   ) async {
+    await pump(tester);
+    takeOverOther();
+    await tester.pump();
+    expect(takenOverTitle, findsNothing, reason: 'this tile is not taken');
+
+    await tester.tapAt(tester.getCenter(find.byType(TerminalView)));
+    await tester.pump();
+    expect(opensOther(), ['terminal_open']);
+    expect(opens(), isEmpty, reason: 'nothing to reopen on the tile clicked');
+    await finish(tester);
+  });
+
+  testWidgets('⏎ on one taken tile retakes every taken tile', (tester) async {
+    await pump(tester);
+    takeOver();
+    takeOverOther();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(opens(), ['terminal_open']);
+    expect(opensOther(), ['terminal_open']);
+    expect(find.text('Taking control…'), findsOneWidget);
+    await finish(tester);
+  });
+
+  testWidgets('the window coming back retakes the others too', (tester) async {
+    await pump(tester);
+    takeOverOther();
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(opensOther(), ['terminal_open']);
+    await finish(tester);
+  });
+
+  testWidgets('a tile the daemon would refuse is left with its band', (
+    tester,
+  ) async {
+    // The other tile's machine is offline: nothing can be reopened there.
+    app.stateOf('m')!.nodeOnline = false;
+    await pump(tester);
+    takeOverOther();
+    await tester.pump();
+    await tester.tapAt(tester.getCenter(find.byType(TerminalView)));
+    await tester.pump();
+    expect(opensOther(), isEmpty);
+    expect(other.status, TerminalSessionStatus.takenOver);
+    await finish(tester);
+  });
+
+  testWidgets('a tile retaken by another tile\'s gesture keeps its band up', (
+    tester,
+  ) async {
+    // Both tiles on screen; the other's band should say "Taking control…"
+    // through the handshake, exactly as its own ⏎ would, not vanish early.
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Row(
+            children: [
+              Expanded(
+                child: TerminalPanel(
+                  notifier: app,
+                  session: session,
+                  focused: true,
+                ),
+              ),
+              Expanded(
+                child: TerminalPanel(
+                  notifier: app,
+                  session: other,
+                  focused: false,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    takeOverOther();
+    await tester.pump();
+    expect(takenOverTitle, findsOneWidget);
+
+    await tester.tapAt(tester.getCenter(find.byType(TerminalView).first));
+    await tester.pump();
+    expect(opensOther(), ['terminal_open']);
+    expect(find.text('Taking control…'), findsOneWidget);
+    expect(takenOverTitle, findsNothing);
+
+    other
+      ..status = TerminalSessionStatus.controlling
+      ..streamId = 'stream-a1-2'
+      ..notifyListeners();
+    await tester.pump();
+    expect(find.text('Taking control…'), findsNothing);
+    await finish(tester);
+  });
+
+  testWidgets('a click into the pane takes control back, once', (tester) async {
     final elsewhere = FocusNode();
     addTearDown(elsewhere.dispose);
     await pump(tester, beside: TextField(focusNode: elsewhere));
     takeOver();
     await tester.pump();
-    await tester.pump();
-    // Wander off again after the pull, then come back by mouse.
     elsewhere.requestFocus();
     await tester.pump();
-    expect(elsewhere.hasFocus, isTrue);
 
-    await tester.tap(takenOverTitle);
-    await tester.pump();
-    expect(elsewhere.hasFocus, isFalse);
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.tapAt(tester.getCenter(find.byType(TerminalView)));
     await tester.pump();
     expect(opens(), ['terminal_open']);
+    expect(session.status, TerminalSessionStatus.opening);
+    // A second press while the handshake is under way sends nothing more.
+    await tester.tapAt(tester.getCenter(find.byType(TerminalView)));
+    await tester.pump();
+    expect(opens(), ['terminal_open']);
+    await finish(tester);
+  });
+
+  testWidgets('a click on the band itself takes control back', (tester) async {
+    await pump(tester);
+    takeOver();
+    await tester.pump();
+    await tester.tap(takenOverTitle);
+    await tester.pump();
+    expect(opens(), ['terminal_open']);
+    await finish(tester);
+  });
+
+  testWidgets('a click into a shared read-only view takes nothing', (
+    tester,
+  ) async {
+    // A shared view's session is itself read only (`shared_harness_panel`):
+    // neither its own band path nor the app-wide retake has anything there.
+    final sentShared = <String>[];
+    final shared =
+        TerminalSession(
+            machineId: 'm',
+            agentId: 'a2',
+            agentName: 'Shared a2',
+            engineId: 'codex',
+            readOnly: true,
+            send: (type, _) async {
+              sentShared.add(type);
+              return true;
+            },
+            sendBinary: (_) async => true,
+          )
+          ..status = TerminalSessionStatus.controlling
+          ..streamId = 'stream-a2';
+    app.adoptSessionForTest(shared);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TerminalPanel(
+            notifier: app,
+            session: shared,
+            focused: true,
+            readOnly: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    shared.handleFrame('terminal_closed', {
+      'streamId': 'stream-a2',
+      'code': 'TERMINAL_TAKEN_OVER',
+    });
+    await tester.pump();
+    await tester.tapAt(tester.getCenter(find.byType(TerminalView)));
+    await tester.pump();
+    expect(sentShared.where((t) => t == 'terminal_open'), isEmpty);
+    expect(takenOverTitle, findsNothing);
+    await finish(tester);
+  });
+
+  testWidgets('a click into a noticed pane takes nothing', (tester) async {
+    // Offline: the pane carries a notice instead of the band, and the daemon
+    // would refuse an open, so the app-wide retake skips it as well.
+    app.stateOf('m')!.nodeOnline = false;
+    await pump(
+      tester,
+      notice: (
+        label: 'Offline',
+        icon: Icons.cloud_off,
+        detail: 'Test host is offline.',
+      ),
+    );
+    takeOver();
+    await tester.pump();
+    await tester.tapAt(tester.getCenter(find.byType(TerminalView)));
+    await tester.pump();
+    expect(opens(), isEmpty);
+    expect(takenOverTitle, findsNothing);
+    await finish(tester);
+  });
+
+  testWidgets('focusing the tile by key takes control back', (tester) async {
+    // ⌘1–9 / ⌘] / an attention jump: the grid flips `focused` on this tile.
+    await pump(tester, focused: false);
+    takeOver();
+    await tester.pump();
+    expect(opens(), isEmpty);
+    await pump(tester, focused: true);
+    expect(opens(), ['terminal_open']);
+    await finish(tester);
+  });
+
+  testWidgets('re-focusing an already focused tile takes control back', (
+    tester,
+  ) async {
+    // ⌘1 on the tile that is already focused bumps `focusRequest` instead.
+    await pump(tester);
+    takeOver();
+    await tester.pump();
+    expect(opens(), isEmpty);
+    await pump(tester, focusRequest: 1);
+    expect(opens(), ['terminal_open']);
+    await finish(tester);
+  });
+
+  testWidgets(
+    'a tile shown again takes control back only if it is the focused one',
+    (tester) async {
+      await pump(tester, visible: false);
+      takeOver();
+      await tester.pump();
+      expect(opens(), isEmpty);
+      await pump(tester, visible: true);
+      expect(opens(), ['terminal_open']);
+      await finish(tester);
+    },
+  );
+
+  testWidgets('a tile shown again unfocused stays as it is', (tester) async {
+    await pump(tester, visible: false, focused: false);
+    takeOver();
+    await tester.pump();
+    await pump(tester, visible: true, focused: false);
+    expect(opens(), isEmpty);
+    await finish(tester);
+  });
+
+  testWidgets('the window coming back to the front takes control back', (
+    tester,
+  ) async {
+    await pump(tester);
+    takeOver();
+    await tester.pump();
+    // The launch's own first `resumed` is nobody coming back.
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(opens(), isEmpty);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(opens(), ['terminal_open']);
+    await finish(tester);
+  });
+
+  testWidgets(
+    'a tile opened while the window was behind still sees it return',
+    (tester) async {
+      // Mounted with the window already inactive: the very next `resumed` IS
+      // the person coming back, not the launch's first one.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await pump(tester);
+      takeOver();
+      await tester.pump();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(opens(), ['terminal_open']);
+      await finish(tester);
+    },
+  );
+
+  testWidgets('the window coming back leaves an unfocused tile alone', (
+    tester,
+  ) async {
+    await pump(tester, focused: false);
+    takeOver();
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(opens(), isEmpty);
     await finish(tester);
   });
 

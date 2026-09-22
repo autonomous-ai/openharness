@@ -9366,6 +9366,30 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// A person acted on this app — clicked a tile, brought the window forward
+  /// — so every stream another client took from it comes back, not only the
+  /// tile they touched: being at this app is a fact about the app, not about
+  /// one pane. Every tab, since a tile parked behind another tab is this
+  /// app's too. Only ever from a user gesture — see
+  /// `_TerminalPanelState._autoTakeControl` for why a session or focus
+  /// callback must never call this.
+  ///
+  /// Reopens in place, as `selectAgent` does for a dead pane; `reopen` itself
+  /// skips a pane already `opening`. A pane the daemon would refuse
+  /// (`_canAttachPane`: machine offline, agent gone) keeps its band. Focus is
+  /// not moved — the tile the person is on stays the one they are on.
+  Future<void> retakeTakenOverPanes() async {
+    final reopening = <Future<void>>[];
+    for (final pane in allPanes) {
+      final session = pane.session;
+      if (session == null || session.readOnly) continue;
+      if (session.status != TerminalSessionStatus.takenOver) continue;
+      if (!_canAttachPane(pane)) continue;
+      reopening.add(session.reopen());
+    }
+    await Future.wait(reopening);
+  }
+
   bool _canAttachPane(TerminalPane pane) {
     if (_disposed || !allPanes.contains(pane)) return false;
     final machine = machineStates[pane.machineId];
