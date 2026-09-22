@@ -600,8 +600,8 @@ void main() {
     await tester.tap(find.text('box'));
     await tester.pump();
 
-    // Scoped: its own agents, and the bar says which machine they are in.
-    expect(find.text('Agents · box'), findsOneWidget);
+    // Scoped: its own harnesses, and the bar says which machine they are in.
+    expect(find.text('Harnesses · box'), findsOneWidget);
     expect(find.text('work · 3188'), findsOneWidget);
     expect(find.text('work · 7777'), findsNothing);
 
@@ -610,7 +610,7 @@ void main() {
     await tester.tap(find.bySemanticsLabel('Back'));
     await tester.pumpAndSettle();
     expect(find.byType(PhoneSearchPage), findsOneWidget);
-    expect(find.text('Agents · box'), findsNothing);
+    expect(find.text('Harnesses · box'), findsNothing);
   });
 
   testWidgets('# lists projects, and a machine row says what it holds', (

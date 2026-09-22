@@ -32,7 +32,7 @@ List<PhoneCommand> phoneSearchCommands(
     if (ready.isNotEmpty)
       PhoneCommand(
         id: 'agent.new',
-        title: 'New agent',
+        title: 'New Harness',
         detail: ready.length == 1
             ? 'On ${ready.first.machine.displayName}'
             : 'Choose a machine, then an engine',
@@ -41,8 +41,8 @@ List<PhoneCommand> phoneSearchCommands(
       ),
     PhoneCommand(
       id: 'navigation.agents',
-      title: 'All agents',
-      detail: 'Every agent on the account, by machine',
+      title: 'All harnesses',
+      detail: 'Every harness on the account, by machine',
       run: () => Navigator.of(
         context,
       ).push(phoneRoute((_) => AgentsListPage(notifier: notifier))),

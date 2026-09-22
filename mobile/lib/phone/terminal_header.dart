@@ -169,7 +169,7 @@ class _Identity extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          agent?.name ?? 'Agent',
+          agent?.name ?? 'Harness',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(

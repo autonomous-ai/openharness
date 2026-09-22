@@ -392,7 +392,7 @@ class _AddAgentRow extends StatelessWidget {
     AppTheme.watch(context);
     return Semantics(
       button: true,
-      label: 'Add agent to $tabName',
+      label: 'Add harness to $tabName',
       // ⚠️ The words on the row are "this tab", which is clear under a thumb
       // that has just read the tab's name and useless read aloud on its own.
       // Excluded, the row announces the tab it fills.
@@ -418,7 +418,7 @@ class _AddAgentRow extends StatelessWidget {
                 const SizedBox(width: 8),
                 Flexible(
                   child: Text(
-                    'Add agent to this tab',
+                    'Add harness to this tab',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -495,9 +495,9 @@ class _TabIsEmpty extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(_sideInset, 10, _sideInset, 18),
       child: Text(
         everHeldAgents
-            ? 'Nothing here this phone can open — the machine these agents run '
+            ? 'Nothing here this phone can open — the machine these harnesses run '
                   'on is asleep or wants its password.'
-            : 'This tab has no agents yet.',
+            : 'This tab has no harnesses yet.',
         style: TextStyle(color: AppPalette.textSecondary, fontSize: 13.5),
       ),
     );

@@ -655,7 +655,7 @@ class AppNotifier extends ChangeNotifier {
     // An unused starter has no work to recover. This also covers empty pages
     // restored from builds that did not mark them as drafts.
     if (entry is ClosedSwarm &&
-        entry.name == 'New Harness' &&
+        entry.name == Swarm.defaultName &&
         entry.panes.isEmpty &&
         entry.presets.isEmpty) {
       return;
@@ -674,7 +674,7 @@ class AppNotifier extends ChangeNotifier {
   bool get canOpenNewTab =>
       swarms.length < maxSwarms || swarms.any((swarm) => swarm.isEmptyStarter);
 
-  // A New Harness remains temporary until it has content or a custom name.
+  // An untitled tab remains temporary until it has content or a custom name.
   // The return destination is session-local; abandoned drafts are never saved.
   final _draftSwarmReturns = <String, String>{};
 
@@ -683,14 +683,14 @@ class AppNotifier extends ChangeNotifier {
     final swarm = swarms.where((swarm) => swarm.id == id).firstOrNull;
     return swarm != null &&
         swarm.panes.isEmpty &&
-        swarm.name == 'New Harness' &&
+        swarm.name == Swarm.defaultName &&
         swarm.presets.isEmpty;
   }
 
-  void newSwarm({String name = 'New Harness', bool draft = false}) {
+  void newSwarm({String name = Swarm.defaultName, bool draft = false}) {
     // Every New Tab entry point reuses the existing start page, including
     // when another tab is selected or the tab limit has been reached.
-    if (name == 'New Harness') {
+    if (name == Swarm.defaultName) {
       final starter = activeSwarm.isEmptyStarter
           ? activeSwarm
           : swarms.where((swarm) => swarm.isEmptyStarter).firstOrNull;
@@ -733,7 +733,7 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Cancel an untouched New Harness without closing a session or recording
+  /// Cancel an untouched new tab without closing a session or recording
   /// Recently Closed. A sole workspace remains the app's starting screen.
   bool cancelSwarmDraft(String id) {
     final returnId = _draftSwarmReturns[id];
@@ -741,7 +741,7 @@ class AppNotifier extends ChangeNotifier {
     if (returnId == null ||
         target == null ||
         target.panes.isNotEmpty ||
-        target.name != 'New Harness' ||
+        target.name != Swarm.defaultName ||
         target.presets.isNotEmpty ||
         swarms.length == 1) {
       return false;
@@ -840,7 +840,7 @@ class AppNotifier extends ChangeNotifier {
     // welcome tabs, evicting the real work from recently closed history.
     if (swarms.length == 1 &&
         swarms.single.panes.isEmpty &&
-        swarms.single.name == 'New Harness' &&
+        swarms.single.name == Swarm.defaultName &&
         swarms.single.presets.isEmpty) {
       return;
     }
@@ -5652,7 +5652,7 @@ class AppNotifier extends ChangeNotifier {
       target.arranged = split.after;
       target.arrangedKey = key;
     }
-    if (firstAgent && target.name == 'New Harness') {
+    if (firstAgent && target.name == Swarm.defaultName) {
       final name = agent.name.trim();
       if (name.isNotEmpty) {
         target.name = name.length > 80 ? name.substring(0, 80) : name;
@@ -6201,7 +6201,7 @@ class AppNotifier extends ChangeNotifier {
       final swarm = swarms.where((swarm) => swarm.id == id).firstOrNull;
       return swarm == null ||
           swarm.panes.isNotEmpty ||
-          swarm.name != 'New Harness' ||
+          swarm.name != Swarm.defaultName ||
           swarm.presets.isNotEmpty;
     });
     _layoutRevision++;
@@ -6255,7 +6255,7 @@ class AppNotifier extends ChangeNotifier {
                   0,
                   (raw['name'] as String).length.clamp(0, 80),
                 )
-              : 'New Harness',
+              : Swarm.defaultName,
         );
         for (final item in (raw['panes'] as List).take(maxPanes)) {
           final entry = PaneLayoutEntry.fromJson(item);

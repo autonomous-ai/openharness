@@ -136,7 +136,7 @@ class _AddAgentSheet extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(_sideInset, 0, _sideInset, 8),
               child: Text(
-                'Every agent this phone can open is already here.',
+                'Every harness this phone can open is already here.',
                 style: TextStyle(
                   color: AppPalette.textSecondary,
                   fontSize: 13.5,
@@ -174,7 +174,7 @@ class _NewAgentRow extends StatelessWidget {
           const SizedBox(width: 14),
           Expanded(
             child: Text(
-              'New agent',
+              'New Harness',
               style: TextStyle(
                 color: AppPalette.textPrimary,
                 fontSize: 15.5,

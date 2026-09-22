@@ -143,7 +143,7 @@ void main() {
 
     await openPanel(tester);
     await showTab(tester, 'Docker');
-    await tester.tap(find.bySemanticsLabel('Add agent to Docker'));
+    await tester.tap(find.bySemanticsLabel('Add harness to Docker'));
     await settleSheet(tester);
     await tester.tap(row('d'));
     await settleSheet(tester);
@@ -176,7 +176,7 @@ void main() {
     );
 
     await openPanel(tester);
-    await tester.tap(find.bySemanticsLabel('Add agent to Desktop'));
+    await tester.tap(find.bySemanticsLabel('Add harness to Desktop'));
     await settleSheet(tester);
 
     // `a` and `b` are in the tab, and the panel under the sheet still draws
@@ -197,13 +197,13 @@ void main() {
     // leftover one — every agent is outside this tab.
     await showTab(tester, 'Empty');
 
-    expect(find.text('This tab has no agents yet.'), findsOneWidget);
+    expect(find.text('This tab has no harnesses yet.'), findsOneWidget);
     expect(
       find.textContaining('asleep'),
       findsNothing,
       reason: 'a tab holding nothing is not a tab whose machine is away',
     );
-    expect(find.bySemanticsLabel('Add agent to Empty'), findsOneWidget);
+    expect(find.bySemanticsLabel('Add harness to Empty'), findsOneWidget);
   });
 
   testWidgets('a name double-tapped is the tab renamed, and kept custom', (
@@ -290,7 +290,7 @@ void main() {
     await showTab(tester, 'Other');
 
     // "Other" is not a tab — there is nothing on the desk to add an agent to.
-    expect(find.textContaining('Add agent to'), findsNothing);
+    expect(find.textContaining('Add harness to'), findsNothing);
     expect(
       find.bySemanticsLabel('New tab'),
       findsOneWidget,

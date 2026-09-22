@@ -51,7 +51,7 @@ class _AgentsListPageState extends State<AgentsListPage> {
   ]);
 
   final _controller = TextEditingController();
-  final _focus = FocusNode(debugLabel: 'Agents list search');
+  final _focus = FocusNode(debugLabel: 'Harnesses list search');
   String _query = '';
 
   /// This screen rebuilds on every turn event — it watches the notifier AND the
@@ -101,7 +101,7 @@ class _AgentsListPageState extends State<AgentsListPage> {
           bottom: false,
           child: Column(
             children: [
-              PhoneHeader(large: widget.large, title: 'Agents'),
+              PhoneHeader(large: widget.large, title: 'Harnesses'),
               // Under the header rather than a magnifier inside it. The field is this screen's
               // filter, not a door to another one: what it narrows is the list directly below it,
               // and a query typed here keeps the machine headings it is filtering in view. A
@@ -118,7 +118,7 @@ class _AgentsListPageState extends State<AgentsListPage> {
                   autofocus: false,
                   // This field filters the list below it; it is not the door to
                   // the modes, which [PhoneSearchPage] carries.
-                  hintText: 'Search agents',
+                  hintText: 'Search harnesses',
                   onChanged: (value) => setState(() => _query = value),
                   onClear: () {
                     _controller.clear();
@@ -234,10 +234,10 @@ class _BodyState extends State<_Body> {
     icon: notifier.machines.isEmpty
         ? LucideIcons.laptopMinimal300
         : LucideIcons.squareTerminal300,
-    title: notifier.machines.isEmpty ? 'No machines yet' : 'No agents to show',
+    title: notifier.machines.isEmpty ? 'No machines yet' : 'No harnesses to show',
     message: notifier.machines.isEmpty
-        ? 'Link a machine and its agents will be listed here.'
-        : 'Agents appear here once a machine is linked and answering. '
+        ? 'Link a machine and its harnesses will be listed here.'
+        : 'Harnesses appear here once a machine is linked and answering. '
               'Start one from a machine, or from Harness on it.',
   );
 

@@ -122,7 +122,7 @@ class TerminalActionColumn extends StatelessWidget {
           TerminalRoundAction(
             key: const ValueKey('terminal-search'),
             icon: LucideIcons.search300,
-            label: 'Search agents and machines',
+            label: 'Search harnesses and machines',
             onTap: onSearch,
           ),
         ),
@@ -131,7 +131,7 @@ class TerminalActionColumn extends StatelessWidget {
           TerminalRoundAction(
             key: const ValueKey('terminal-new-agent'),
             icon: LucideIcons.plus300,
-            label: 'New agent',
+            label: 'New Harness',
             onTap: onNewAgent,
           ),
         ),

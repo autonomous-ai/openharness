@@ -1338,7 +1338,7 @@ class _TerminalPageState extends State<TerminalPage>
                                   // as a menu rather than as a truncation.
                                   icon: LucideIcons.ellipsisVertical300,
                                   size: 21,
-                                  tooltip: 'Agent actions',
+                                  tooltip: 'Harness actions',
                                   // Last in the row, so its padding stops at
                                   // the header's own right inset.
                                   last: true,
@@ -1467,7 +1467,7 @@ class _TerminalPageState extends State<TerminalPage>
       // door rather than a list of its own — the lists belong on the pages behind them, where they
       // have room for every row and do not push the rest of this sheet down.
       sections: [
-        PhoneSheetSection(caption: 'Agent', actions: [..._agentActions(agent)]),
+        PhoneSheetSection(caption: 'Harness', actions: [..._agentActions(agent)]),
         PhoneSheetSection(
           caption: 'App',
           actions: [
@@ -1479,7 +1479,7 @@ class _TerminalPageState extends State<TerminalPage>
             // longer than a screenful.
             PhoneSheetAction(
               icon: LucideIcons.squareTerminal300,
-              label: 'Agents',
+              label: 'Harnesses',
               onTap: () => unawaited(_openAgentList()),
             ),
             PhoneSheetAction(
@@ -1537,7 +1537,7 @@ class _TerminalPageState extends State<TerminalPage>
       ),
     PhoneSheetAction(
       icon: LucideIcons.pencil300,
-      label: 'Rename agent…',
+      label: 'Rename Harness…',
       onTap: () => showAgentRenameDialog(
         context,
         widget.notifier,
@@ -1548,7 +1548,7 @@ class _TerminalPageState extends State<TerminalPage>
     ),
     PhoneSheetAction(
       icon: LucideIcons.refreshCw300,
-      label: 'Restart agent',
+      label: 'Restart Harness',
       onTap: () => unawaited(_restart()),
     ),
     // Last, and alone in red: the two above are recoverable and this one is
@@ -1561,7 +1561,7 @@ class _TerminalPageState extends State<TerminalPage>
     // the route.
     PhoneSheetAction(
       icon: LucideIcons.trash2300,
-      label: 'Delete agent…',
+      label: 'Stop Harness…',
       destructive: true,
       onTap: () => unawaited(
         confirmDeleteAgent(
@@ -1678,7 +1678,7 @@ class _AgentGone extends StatelessWidget {
           const SizedBox(height: 14),
           Text(
             name == null || name!.isEmpty
-                ? 'That agent is gone'
+                ? 'That harness is gone'
                 : '$name is gone',
             textAlign: TextAlign.center,
             style: TextStyle(
@@ -1704,7 +1704,7 @@ class _AgentGone extends StatelessWidget {
               foregroundColor: AppPalette.accent,
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
             ),
-            child: const Text('Open another agent'),
+            child: const Text('Open another harness'),
           ),
         ],
       ),
@@ -2052,7 +2052,7 @@ class _AttachingState extends State<_Attaching> with TickerProviderStateMixin {
     )!;
     final bar = (fontSize * 0.62).clamp(5.0, 12.0).toDouble();
     return SkeletonBlock(
-      semanticsLabel: 'Attaching to the agent',
+      semanticsLabel: 'Attaching to the harness',
       // ⚠️ **One painter, repainted, in a layer of its own** — where this was a
       // column of seventy-odd widgets rebuilt on every frame of the breath, under
       // a [ShaderMask] that pushed the whole pane through an offscreen buffer on
