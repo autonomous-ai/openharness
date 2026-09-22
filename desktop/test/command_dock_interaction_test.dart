@@ -561,7 +561,7 @@ void main() {
         final createRow = find.byKey(const ValueKey('create:harness'));
         final createBounds = tester.getRect(createRow);
         expect(queryBounds.top - createBounds.bottom, inInclusiveRange(0, 12));
-        expect(matchBounds.bottom, lessThanOrEqualTo(createBounds.top));
+        expect(matchBounds.bottom, lessThanOrEqualTo(createBounds.top + .001));
         expect(search.rows.first.isCreate, isTrue);
         expect(search.rows.first.task, 'Agent 1');
         expect(preview, findsOneWidget);

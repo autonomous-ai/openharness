@@ -39,6 +39,8 @@ Use case: stylized-concept. Asset type: minimal full-bleed 16:9 desktop wallpape
 
 ## Review
 
+Rendered app previews: [welcome with terminal wallpaper](review/welcome-terminal-wallpaper.png) and [keyboard shortcut popup](review/keyboard-shortcuts-browser.png).
+
 `test/welcome_wallpaper_shortcuts_test.dart` loads the actual bundled images and renders the welcome content with the terminal font. It checks selection persistence, the blank default, font changes and compact layouts. `test/workspace_start_guide_test.dart` checks that opening and closing both command panels preserves the welcome text and wallpaper bounds, and that Customize Harness opens the wallpaper picker.
 
 To capture review images outside the repository:
