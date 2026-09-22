@@ -116,3 +116,5 @@ mobile/docs/
 
 # Reproducible browser runs; reviewed Store screenshots live under store/showcase.
 work/experience-evidence/
+mobile/OTA.md
+mobile/scripts/ota-ios.sh
