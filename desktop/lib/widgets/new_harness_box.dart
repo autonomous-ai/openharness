@@ -915,10 +915,10 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                   _segment(
                     NewHarnessField.branch,
                     box.branchRowLabel,
-                    tooltip: box.worktree
+                    tooltip: box.opensWorktree
+                        ? '${box.branchLabel} is checked out in a worktree of its own: the harness starts there, beside what is working in it.'
+                        : box.worktree
                         ? 'What the worktree works from, brought up to date with its remote at Start. The default branch gets a new branch named after the session; another is checked out as it is. Type a name to create one.'
-                        : box.opensWorktree
-                        ? '${box.branchLabel} has a worktree of its own: the harness starts there.'
                         : 'The branch the project folder is on.',
                   ),
                 if (box.isGitProject || box.checkingGit || box.gitError != null)

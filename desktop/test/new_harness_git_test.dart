@@ -422,7 +422,8 @@ void main() {
       });
       pick('feature/pay');
       expect(box.opensWorktree, true);
-      expect(box.createLabel, 'Start in Worktree');
+      expect(box.opensWorktree, true);
+      expect(box.createLabel, 'Start Harness');
       expect(box.projectFolderRequest!.payload, {
         'projectSource': 'branch',
         'gitSource': '/repo',
@@ -466,7 +467,13 @@ void main() {
         'branchRef': 'refs/heads/main',
       });
       pick('feature/pay');
-      expect(box.createLabel, 'Start in Worktree');
+      expect(box.opensWorktree, true);
+      expect(
+        box.branchRowLabel,
+        'feature/pay · in its worktree',
+        reason: 'The row says where Start goes; the button never changes.',
+      );
+      expect(box.createLabel, 'Start Harness');
     },
   );
 

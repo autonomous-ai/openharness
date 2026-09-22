@@ -1056,7 +1056,8 @@ void main() {
       expect(box.createLabel, 'Start Harness');
       box.focusField(NewHarnessField.branch);
       box.accept(box.options.firstWhere((row) => row.title == 'feature/pay'));
-      expect(box.createLabel, 'Start in Worktree');
+      expect(box.opensWorktree, true);
+      expect(box.createLabel, 'Start Harness');
       await tester.pumpWidget(const SizedBox());
     },
   );

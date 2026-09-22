@@ -556,6 +556,8 @@ class NewHarnessController extends ChangeNotifier {
 
   /// The Branch row: what was picked, or the new branch typed there.
   String get branchRowLabel {
+    // Its worktree is where the harness starts, not the project folder.
+    if (opensWorktree) return '$branchLabel · in its worktree';
     final plan = worktreePlan;
     if (plan != null &&
         plan.kind == WorktreeStart.newBranch &&
@@ -858,8 +860,9 @@ class NewHarnessController extends ChangeNotifier {
 
   // ---- what the line says -------------------------------------------------
 
-  String get createLabel =>
-      opensWorktree ? 'Start in Worktree' : 'Start Harness';
+  /// The same on every New Harness: where Start goes is said by the Branch row,
+  /// not by a button that changes its name.
+  String get createLabel => 'Start Harness';
 
   String get agentLabel => labelOf(_engine);
   String labelOf(String id) => currentHarnessName(
