@@ -12,9 +12,10 @@ import 'store_explore_widgets.dart';
 import 'store_featured_art.dart';
 import 'store_listing.dart';
 import 'store_models.dart';
+import 'store_sessions.dart';
 
-/// Three editorial features invite exploration before the icon collections. The catalog itself
-/// uses the same recognizable icons and rows as categories and search.
+/// Recorded sessions lead discovery whenever the live catalog provides them.
+/// Older catalogs still have the editorial invitations and ordinary collections.
 class StoreDiscover extends StatelessWidget {
   const StoreDiscover({
     super.key,
@@ -25,6 +26,7 @@ class StoreDiscover extends StatelessWidget {
     required this.onCategory,
     required this.onAll,
     required this.onEngines,
+    required this.onSessions,
   });
 
   final List<DshEntry> entries;
@@ -34,11 +36,13 @@ class StoreDiscover extends StatelessWidget {
   final ValueChanged<String> onCategory;
   final VoidCallback onAll;
   final VoidCallback onEngines;
+  final VoidCallback onSessions;
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final byId = {for (final entry in entries) entry.id: entry};
+    final sessions = storeRecordedSessions(entries);
     // Editorial stories share an art direction and open actual catalog entries.
     final features = [
       ?(byId['codex'] ?? byId['claude']),
@@ -92,7 +96,35 @@ class StoreDiscover extends StatelessWidget {
                       color: grid.AppPalette.textPrimary,
                     ),
                   ),
-                  if (features.isNotEmpty) ...[
+                  if (sessions.isNotEmpty) ...[
+                    const SizedBox(height: 24),
+                    StoreExploreHeading(
+                      title: 'Featured harnesses',
+                      subtitle: 'Watch a real session. Find something you want to make.',
+                      action: 'See all ${sessions.length}',
+                      onAction: onSessions,
+                    ),
+                    const SizedBox(height: 20),
+                    StoreSessionGrid(
+                      sessions: sessions.take(6).toList(),
+                      onOpen: onOpen,
+                    ),
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        key: const ValueKey('store-all-sessions'),
+                        onPressed: onSessions,
+                        style: TextButton.styleFrom(
+                          foregroundColor: grid.AppPalette.accentOnSurface,
+                        ),
+                        icon: const Icon(LucideIcons.play300, size: 15),
+                        label: Text(
+                          'Explore all ${sessions.length} featured harnesses',
+                        ),
+                      ),
+                    ),
+                  ] else if (features.isNotEmpty) ...[
                     const SizedBox(height: 24),
                     LayoutBuilder(
                       builder: (context, constraints) {

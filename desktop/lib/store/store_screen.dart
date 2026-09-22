@@ -24,6 +24,7 @@ import '../widgets/engine_identity.dart';
 import '../widgets/new_agent_dialog.dart';
 import '../widgets/open_harness_intent.dart';
 import 'store_category.dart';
+import 'store_collections.dart';
 import 'store_controller.dart';
 import 'store_discover.dart';
 import 'store_editorial.dart';
@@ -31,6 +32,7 @@ import 'store_harness_actions.dart';
 import 'store_listing.dart';
 import 'store_models.dart';
 import 'store_search.dart';
+import 'store_sessions.dart';
 import 'store_showcase.dart';
 import 'store_viewers.dart';
 
@@ -77,6 +79,10 @@ sealed class _Shelf {
 
 class _Discover extends _Shelf {
   const _Discover();
+}
+
+class _Sessions extends _Shelf {
+  const _Sessions();
 }
 
 class _Viewers extends _Shelf {
@@ -294,7 +300,9 @@ class _StoreTabState extends State<StoreTab> {
     final all = _catalog.values.toList()
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return switch (shelf) {
-      _Discover() || _All() => all.where((e) => !e.isViewerPackage).toList(),
+      _Discover() ||
+      _Sessions() ||
+      _All() => all.where((e) => !e.isViewerPackage).toList(),
       _Search(:final query) => storeSearch(
         all.where((e) => !e.isViewerPackage),
         query,
@@ -311,6 +319,7 @@ class _StoreTabState extends State<StoreTab> {
 
   String _shelfKey(_Shelf shelf) => switch (shelf) {
     _Discover() => 'discover',
+    _Sessions() => 'sessions',
     _All() => 'all',
     _Search(:final query) => 'search:$query',
     _Category(:final name) => 'category:$name',
@@ -445,6 +454,7 @@ class _StoreTabState extends State<StoreTab> {
                     shelf: _shelf,
                     selectedCategory: category,
                     hasProduct: selected != null,
+                    sessionCount: storeRecordedSessions(catalog.values).length,
                     counts: {
                       for (final name in _categories)
                         name: catalog.values
@@ -514,6 +524,13 @@ class _StoreTabState extends State<StoreTab> {
                                               .loaded ??
                                           false,
                                     )
+                                  : _shelf is _Sessions
+                                  ? StoreSessions(
+                                      sessions: storeRecordedSessions(
+                                        _shelved(const _Sessions()),
+                                      ),
+                                      onOpen: _openPage,
+                                    )
                                   : _shelf is _Discover
                                   ? StoreDiscover(
                                       entries: _shelved(const _Discover()),
@@ -531,6 +548,8 @@ class _StoreTabState extends State<StoreTab> {
                                       onCategory: (name) =>
                                           _show(_Category(name)),
                                       onAll: () => _show(const _All()),
+                                      onSessions: () =>
+                                          _show(const _Sessions()),
                                       onEngines: () =>
                                           _show(const _Category('Coding')),
                                     )
@@ -575,6 +594,7 @@ class _StoreNav extends StatelessWidget {
     required this.categories,
     required this.selectedCategory,
     required this.hasProduct,
+    required this.sessionCount,
     required this.counts,
     required this.onSelect,
   });
@@ -583,6 +603,7 @@ class _StoreNav extends StatelessWidget {
   final List<String> categories;
   final String? selectedCategory;
   final bool hasProduct;
+  final int sessionCount;
   final Map<String, int> counts;
   final ValueChanged<_Shelf> onSelect;
 
@@ -616,6 +637,15 @@ class _StoreNav extends StatelessWidget {
                   selected: !hasProduct && shelf is _All,
                   onTap: () => onSelect(const _All()),
                 ),
+                if (sessionCount > 0 || shelf is _Sessions)
+                  SidebarItem(
+                    key: const ValueKey('store-shelf-sessions'),
+                    icon: LucideIcons.play300,
+                    label: 'Featured',
+                    tooltip: '$sessionCount recorded sessions',
+                    selected: !hasProduct && shelf is _Sessions,
+                    onTap: () => onSelect(const _Sessions()),
+                  ),
                 const SizedBox(height: 22),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),

@@ -1,15 +1,18 @@
 # Store previews
 
-All Store artwork is bundled, so browsing needs no external image service. Featured
-stories only appear when their tool is present in the live catalog.
+Editorial artwork is bundled. **Featured harnesses** uses the poster and recording from
+each harness's live catalog examples; posters load over HTTPS, with an app-icon fallback
+when unavailable. Videos load only after a click. Features only appear for tools present
+in the local machine's catalog.
 
 ## Editorial illustrations
 
 `editorial-*.png` are eleven original illustrations generated with the built-in
 imagegen tool. The exact prompts and file mapping are in
 [`editorial-prompts.json`](../../tool/store_artwork/editorial-prompts.json).
-Discover uses three features (coding, 3D design, circuits); each discipline uses
-one feature. All catalog rows use app icons. These illustrations depict a craft,
+Discover uses three illustrated features (coding, 3D design, circuits) when the catalog
+has no recorded examples; each discipline uses one feature. Catalog rows use app icons.
+These illustrations depict a craft,
 not an app screenshot or a claimed agent result.
 
 ## Original example outputs

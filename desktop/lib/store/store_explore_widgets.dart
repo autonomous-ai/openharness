@@ -53,7 +53,13 @@ class StoreExploreHeading extends StatelessWidget {
         ),
         if (onAction != null) ...[
           const SizedBox(width: 16),
-          TextButton(onPressed: onAction, child: Text(action!)),
+          TextButton(
+            onPressed: onAction,
+            style: TextButton.styleFrom(
+              foregroundColor: grid.AppPalette.accentOnSurface,
+            ),
+            child: Text(action!),
+          ),
         ],
       ],
     );

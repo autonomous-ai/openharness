@@ -154,6 +154,16 @@ whole native pane, and stops when the recording closes. Older clients keep showi
 and picture. The eight hands-on recordings reuse their original PNG/MP4 assets in `docs/images/`
 rather than the JPEG convention above.
 
+Recordings also lead the desktop Store's **Discover** page under **Featured harnesses**
+and appear on the **Featured** shelf.
+To join that collection, publish an example with both an HTTPS `image` poster and an HTTPS
+`video`. The first complete recording per harness is used; the card shows the harness's
+`tagline` and the recording's `caption`, with Watch session and Explore harness actions.
+Use the caption to identify the actual result and any demo limitations. The Discover preview
+mixes disciplines and links to the full collection; new catalog recordings join automatically
+on clients with this discovery UI. No per-harness desktop artwork or ID list is needed.
+Example prompts and captions are searchable too.
+
 The matching recorded prompts and captions live in `hands-on.json` under `demo`. Run
 `node store/tools/hands-on.mjs --sync-store` to place each recording first in its harness's
 examples, preserving the others. `--check` verifies the pairs and local assets. Suggested
