@@ -138,6 +138,7 @@ screenshots, with the corresponding software notices preserved.
 | `covers/foam-agent.png` | `store/agents/foam-agent/screenshots/studio.png` |
 | `covers/godogen.jpg` | `store/showcase/godogen/neon-drift.jpg` |
 | `covers/juce-agent-toolkit.png` | `store/agents/juce-agent-toolkit/screenshots/studio.png` |
+| `covers/harness-monitor.png` | `desktop/tool/store_artwork/capture-covers.mjs harness-monitor` |
 | `covers/machine-monitor.png` | `desktop/tool/store_artwork/capture-covers.mjs machine-monitor` |
 | `covers/marp.jpg` | `store/showcase/marp/deep-sea-keynote.jpg` |
 | `covers/mlx-lm.png` | `desktop/tool/store_artwork/capture-covers.mjs mlx-lm` |
@@ -153,8 +154,10 @@ card; the library includes our playable Neon Drift game. The local AI runtimes a
 tools, so their covers show the original Harness model-control interfaces. Selection
 notes for these cases are in `sources.json`.
 
-Machine Monitor and the three local-model covers use synthetic inventories in their real
-viewers. No user machines, account data, model downloads, or benchmark results were used.
+Machine Monitor, Harness Monitor and the three local-model covers use synthetic inventories in
+their real viewers. No user machines, account data, model downloads, or benchmark results were
+used; Harness Monitor also runs against an empty home directory, so no local policy or pause log
+is read. `COVER_DUMP_TEXT=1` prints its capture's visible text, to check it before committing.
 Their original interface captures can be reproduced with an existing Playwright installation:
 
 ```sh
