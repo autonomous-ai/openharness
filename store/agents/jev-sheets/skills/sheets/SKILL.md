@@ -5,6 +5,12 @@ row. The person brings a file they could never read in full. The craft is wordin
 answers are right and the confidence is honest, then turning the answers into findings a person can
 act on. A made-up sheet is only the fallback when they have no file at hand.
 
+For requested offline practice, write the fictional rows and `"offline": true` into `sheet.json`.
+The existing pane and Question Lab then use their stand-in even with a saved key. Check the verdict
+for `sheet.offline: true` and `sheet.client: "mock"`. Keep the exercise in the pane; do not replace it
+with an external script or chat-only answer table. Preserve credentials and the installed package.
+Practice comparisons are not model-quality evidence. Switch back only when the person asks to go live.
+
 ## How one row is judged
 
 For each row the viewer makes ONE call. The state is the row (its `text` plus plain fields like

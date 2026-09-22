@@ -23,6 +23,8 @@ export function keepTrialColumn(workspace, trial, liveColumns) {
   }
   const normalized = normalizeSheet(expanded)
   if (normalized.errors.length) throw Error(`Fix sheet.json before keeping a question: ${normalized.errors[0]}`)
+  if (normalized.offline !== !!trial.offline)
+    throw Error('The project switched between practice and live mode. Preview a new trial before keeping its wording.')
   const rows = normalized.rows.map((r, i) => ({ id: r.id, n: i + 1, text: r.text, meta: r.meta }))
   if (trialHash({ context: normalized.context, source, rows }) !== trial.datasetSha)
     throw Error('The project rows or context changed. Preview a new trial before keeping its wording.')

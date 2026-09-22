@@ -23,6 +23,8 @@ try {
 if (!sheet || typeof sheet !== 'object' || Array.isArray(sheet)) { console.log('error  sheet.json must be a JSON object'); process.exit(1) }
 
 if (!sheet.title || typeof sheet.title !== 'string') warn('no title')
+if (sheet.offline !== undefined && typeof sheet.offline !== 'boolean') error('offline must be true or false')
+if (sheet.offline === true) console.log('info   offline practice: sheet and Question Lab use the stand-in, even with a saved key')
 // Rows the agent wrote are made up and must say so. Rows from the person's own file are what they are.
 if (sheet.source === undefined && (!sheet.description || !/made.?up|synthetic|fictional|not real/i.test(String(sheet.description)))) warn('say in "description" that the data is made up')
 

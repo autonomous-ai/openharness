@@ -33,6 +33,12 @@ in your project folder. Its rows go to the Jev API to be answered, and nowhere e
 The pane opens on a small made-up sample so there is something to try in the first ten seconds. It
 is labelled as made up, and one click takes you back to it.
 
+For an offline workshop, ask the agent to create an **offline practice** sheet. It saves
+`"offline": true` in `sheet.json`; cells and Question Lab use the word-matching stand-in even if
+a provider key is saved. The pane labels the practice mode, and it survives reopening the project.
+Ask the agent to go live when ready. Changing modes recomputes answers; practice answers and kept
+trials are never evidence of live model quality. Provider failures show **Answers unavailable**.
+
 ## Ask
 
 | You type | It becomes |

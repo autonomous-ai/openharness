@@ -234,12 +234,26 @@ a full pass takes most of a minute.
 - Their data stays in the workspace. The rows go to the Jev API to be answered and nowhere
   else. Never send it anywhere else, and never copy more of it into the chat than you need.
 
+## Offline practice and missing credit
+
+If the person requests offline practice, set `"offline": true` in **sheet.json** alongside the
+fictional rows and questions. The existing pane reloads it and uses the word-matching stand-in for
+both sheet cells and Question Lab, even when a live key is saved. Verify `sheet.offline: true` and
+`sheet.client: "mock"` in the verdict. Create the requested sheet in the pane; do not substitute a
+scratch script or a table in chat for the interactive workflow. Do not change credentials, edit the
+installed package, or start a second server. Practice results are not live model evidence.
+
+A provider error is a failed fill, not a completed sheet. Read the error and explain it. Offer
+offline practice when credit is unavailable; never silently switch real analysis to a stand-in.
+Only set `"offline": false` when the person asks to resume live use. Existing cells are recomputed
+on a mode change. Requests already in flight can finish, but their answers do not enter the new sheet.
+
 ## Without a key
 
-`"client": "mock"` in the verdict means there is no Jev key, and an offline stand-in that only
-matches words is answering. On a person's own data its answers are not good enough to act on, and
-the pane says so in a yellow bar. Do not write findings from them. Tell the person to paste a key
-into the **Jev · live mind** panel in the pane (an OpenRouter key from `openrouter.ai/keys` takes
+`"client": "mock"` in the verdict means offline practice is active or there is no Jev key. A
+word-matching stand-in is answering. Its answers are not good enough to act on, and the pane labels
+them as practice. Do not write findings from them. For requested real analysis without a key, tell
+the person to paste a key into the **Jev · live mind** panel in the pane (an OpenRouter key from `openrouter.ai/keys` takes
 about a minute). The key is saved on their machine in `~/.config/typesafe/credentials`, and every
 cell is then asked again. Never ask them to paste a key into the chat.
 
@@ -256,7 +270,8 @@ cell is then asked again. Never ask them to paste a key into the chat.
 
 - The person's own data is in the sheet (or they chose the sample, knowing it is made up).
 - `sheet.json` passes `toolchain/check.mjs`. Every choice option has a meaning. `context` is set.
-- The verdict shows your save was loaded, a live `client`, and every cell filled.
+- The verdict shows your save was loaded and every cell filled, with a live `client` for real analysis
+  or explicit offline practice when requested. A practice run does not meet the live-analysis checks.
 - You read `answers.csv`, opened the rows behind the main numbers, and wrote `findings.md`.
 - You told the person, in plain words: the three findings that matter, how sure Jev was, and the
   next question worth asking.

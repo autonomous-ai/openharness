@@ -210,6 +210,7 @@ function filesFor(trial) {
     description,
     context: trial.context,
     demo: false,
+    offline: !!trial.offline || trial.summary.providers.includes('mock'),
     columns: [
       { id: 'original', header: trial.original.header },
       { id: 'candidate', header: trial.candidate.header }
@@ -325,6 +326,7 @@ export function createQuestionLab({
       column = now.columns.find((c) => c.id === trial.original.id)
     return (
       !!now.invalid ||
+      !!now.offline !== !!trial.offline ||
       now.dataSha !== trial.datasetSha ||
       !column ||
       columnKey(column) !== columnKey(trial.original)
@@ -410,6 +412,7 @@ export function createQuestionLab({
         try {
           const result = await evaluatePair({
             state: rowState(row),
+            key: trial.offline ? '' : undefined,
             questions,
             mock,
             salt: 1,
@@ -543,6 +546,7 @@ export function createQuestionLab({
           title: now.title,
           source: now.source,
           context: now.context,
+          offline: !!now.offline,
           original: clone(column),
           rows,
           datasetSha: now.dataSha,
