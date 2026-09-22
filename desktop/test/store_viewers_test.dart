@@ -173,7 +173,6 @@ void main() {
       await _show(
         tester,
         StoreDiscover(
-          onSessions: () {},
           entries: const [
             DshEntry(
               id: 'autonomous/strudel',

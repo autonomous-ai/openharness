@@ -557,66 +557,84 @@ void main() {
     (1440.0, 1.0, Brightness.light),
     (760.0, 1.5, Brightness.dark),
   ]) {
-    testWidgets('recorded discovery fits $width at $scale in ${brightness.name}', (
-      tester,
-    ) async {
-      final entries = _recordedCatalog();
-      await _cacheRecordingPosters(tester, entries);
-      final (_, key) = await _open(
-        tester,
-        entries: entries,
-        width: width,
-        height: 1080,
-        scale: scale,
-        brightness: brightness,
-      );
-      expect(find.text('Featured harnesses'), findsOneWidget);
-      expect(find.text('See all 8'), findsOneWidget);
-      expect(find.byType(StoreFeaturedArt), findsNothing);
-      expect(find.byType(WebViewWidget), findsNothing);
-      for (final entry in entries) {
-        final card = find.byKey(ValueKey('store-session:${entry.id}'));
-        if (card.evaluate().isEmpty) continue;
-        final poster = tester.widget<Image>(
-          find.descendant(
-            of: card,
-            matching: find.byWidgetPredicate(
-              (widget) => widget is Image && widget.image is NetworkImage,
+    testWidgets(
+      'illustrated Discover and Featured fit $width at $scale in ${brightness.name}',
+      (tester) async {
+        final entries = _recordedCatalog();
+        await _cacheRecordingPosters(tester, entries);
+        final (_, key) = await _open(
+          tester,
+          entries: [
+            ..._catalog.where(
+              (entry) => !entries.any((recorded) => recorded.id == entry.id),
             ),
-          ),
+            ...entries,
+          ],
+          width: width,
+          height: 1080,
+          scale: scale,
+          brightness: brightness,
         );
-        expect((poster.image as NetworkImage).url, entry.examples.first.image);
-        expect(poster.fit, BoxFit.contain);
-      }
-      await _capture(
-        tester,
-        key,
-        'featured-${width.toInt()}-${brightness.name}-${scale.toStringAsFixed(1)}',
-      );
-      await tester.tap(find.text('See all 8'));
-      await tester.pumpAndSettle();
-      for (final entry in entries) {
+        expect(find.text('Featured harnesses'), findsNothing);
+        expect(find.text('See all 8'), findsNothing);
+        expect(find.byType(StoreFeaturedArt), findsNWidgets(3));
         expect(
-          find.byKey(ValueKey('store-session:${entry.id}')),
-          findsOneWidget,
+          find.byKey(const ValueKey('store-session:autonomous/blender')),
+          findsNothing,
         );
-        expect(find.text(entry.examples.first.caption!), findsOneWidget);
-      }
-      expect(
-        tester
-            .widget<SidebarItem>(
-              find.byKey(const ValueKey('store-shelf-sessions')),
-            )
-            .selected,
-        isTrue,
-      );
-      await _capture(
-        tester,
-        key,
-        'featured-all-${width.toInt()}-${brightness.name}-${scale.toStringAsFixed(1)}',
-      );
-      expect(tester.takeException(), isNull);
-    });
+        expect(find.byType(WebViewWidget), findsNothing);
+        await _capture(
+          tester,
+          key,
+          'restored-discover-${width.toInt()}-${brightness.name}-${scale.toStringAsFixed(1)}',
+        );
+        // Discover's illustrations may evict posters that are not visible yet.
+        await _cacheRecordingPosters(tester, entries);
+        await tester.tap(find.byKey(const ValueKey('store-shelf-sessions')));
+        await tester.pumpAndSettle();
+        expect(find.text('Featured harnesses'), findsOneWidget);
+        expect(find.text('Preview unavailable'), findsNothing);
+        expect(find.byType(StoreFeaturedArt), findsNothing);
+        for (final entry in entries) {
+          final card = find.byKey(ValueKey('store-session:${entry.id}'));
+          if (card.evaluate().isEmpty) continue;
+          final poster = tester.widget<Image>(
+            find.descendant(
+              of: card,
+              matching: find.byWidgetPredicate(
+                (widget) => widget is Image && widget.image is NetworkImage,
+              ),
+            ),
+          );
+          expect(
+            (poster.image as NetworkImage).url,
+            entry.examples.first.image,
+          );
+          expect(poster.fit, BoxFit.contain);
+        }
+        for (final entry in entries) {
+          expect(
+            find.byKey(ValueKey('store-session:${entry.id}')),
+            findsOneWidget,
+          );
+          expect(find.text(entry.examples.first.caption!), findsOneWidget);
+        }
+        expect(
+          tester
+              .widget<SidebarItem>(
+                find.byKey(const ValueKey('store-shelf-sessions')),
+              )
+              .selected,
+          isTrue,
+        );
+        await _capture(
+          tester,
+          key,
+          'featured-all-${width.toInt()}-${brightness.name}-${scale.toStringAsFixed(1)}',
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
   }
 
   testWidgets('featured recordings play on demand and open the right harness', (
@@ -625,6 +643,8 @@ void main() {
     final entries = _recordedCatalog();
     final (app, _) = await _open(tester, entries: entries);
     final initialSwarms = app.swarms.length;
+    await tester.tap(find.byKey(const ValueKey('store-shelf-sessions')));
+    await tester.pumpAndSettle();
     expect(find.byType(StoreDemoDialog), findsNothing);
     await tester.tap(
       find.byKey(const ValueKey('store-session-watch:autonomous/blender')),
@@ -653,8 +673,6 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('store-back')));
     await tester.pumpAndSettle();
     expect(find.text('Featured harnesses'), findsOneWidget);
-    await tester.tap(find.text('See all 8'));
-    await tester.pumpAndSettle();
     await tester.ensureVisible(
       find.byKey(const ValueKey('store-session-open:autonomous/rdkit')),
     );
@@ -687,7 +705,7 @@ void main() {
     'featured shelf follows catalog publications and removals while open',
     (tester) async {
       final (app, _) = await _open(tester, entries: _recordedCatalog());
-      await tester.tap(find.text('See all 8'));
+      await tester.tap(find.byKey(const ValueKey('store-shelf-sessions')));
       await tester.pumpAndSettle();
       const newcomer = DshEntry(
         id: 'community/after-release',
