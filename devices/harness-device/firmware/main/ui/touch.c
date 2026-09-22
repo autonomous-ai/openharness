@@ -39,6 +39,7 @@ static uint32_t s_read_fail_run;      // consecutive; reset by any good read
 static uint32_t s_noack_run;
 static uint32_t s_inferred_releases;  // lifetime, for the heartbeat: how often the fix above fired
 #define NOACK_RELEASE_READS 3
+#define LIFT_RELEASE_READS  3          // CoreS3: reads of no finger before a lift is believed; see touch_read
 #define READ_FAIL_REINIT   50         // ~1s of nothing but errors → tear the controller down and bring it back
 #define READ_FAIL_LOG_EVERY 100
 #define REINIT_RETRY_MS    5000       // a reinit that failed is tried again this often
@@ -393,6 +394,27 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
             touch_reinit();
         }
     }
+#if defined(DEVICE_BOARD_M5CORES3)
+    // The FT6336U drops a sample early in a quick drag: one read says no finger, the next has it again
+    // 50px on. Taken at its word that is a 34ms tap where the stroke began and a second stroke after it,
+    // and the tap lands on whatever was under the thumb (a tab row, a card). Measured on the tab picker,
+    // 2026-09-22: every unwanted pick was `held=34ms acked=1` with the rest of the swipe 50ms behind it.
+    // So a lift counts only once it has lasted LIFT_RELEASE_READS reads; until then the finger is held
+    // where it was last seen, and when it reappears the jump is a move, which LVGL scrolls.
+    static uint8_t lift_run;
+    static uint16_t held_x, held_y;
+    if (pressed) {
+        lift_run = 0;
+        held_x = x;
+        held_y = y;
+    } else if (activity_prev && ++lift_run < LIFT_RELEASE_READS) {
+        pressed = true;
+        x = held_x;
+        y = held_y;
+    } else {
+        lift_run = 0;
+    }
+#endif
     if (pressed && !activity_prev) {
         s_activity_gen++;
         s_presses++;
