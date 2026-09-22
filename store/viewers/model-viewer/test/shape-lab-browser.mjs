@@ -95,7 +95,7 @@ try {
   assert.deepEqual(await page.evaluate(() => window.__viewer.app.report.objects), ['Mug'])
   assert.doesNotMatch(await page.locator('#status').innerText(), /NaN/)
   await page.locator('#design-name').fill('Sea glass tumbler')
-  await page.locator('#design-keep').click()
+  await page.locator('#design-keep').press('Space')
   await page.locator('.design-variant').waitFor()
   let kept = (await state()).variants[0]
   assert.equal(hash(join(ws.dir, 'out/model.glb')), original)
