@@ -256,14 +256,24 @@ Press **⌘N → Hello World** and say hello. The [authoring guide](store/README
 
 ## Harness device
 
-A round screen beside your keyboard. See who's working, who's done and who needs you.
-Tap to answer. Tap and speak a new task.
-
 <p align="center"><img src=".github/assets/readme/device.gif" width="960" alt="A finger taps the round Harness device, speaks a task to fix the login flow, and the device shows the agent deploying, then a summary of the shipped fix."></p>
 
-Open hardware: [firmware](devices/harness-device/firmware/), [PCB](devices/harness-device/hardware/pcb/)
-and [enclosure](devices/harness-device/hardware/3d/). [Get one](https://www.autonomous.ai/harness-device)
-or build your own.
+The optional **Harness device** is a round, always-on display that sits beside
+your keyboard and shows your agents at a glance: what each one is doing, which one has finished, and
+which one is waiting on you. Read a question and answer it on the screen, or tap and speak a new task,
+without switching windows.
+
+It is open hardware, all the way down. This repository has everything it takes to build one:
+
+| Layer | What's here |
+|---|---|
+| [Firmware](devices/harness-device/firmware/) | ESP32-S3, ESP-IDF, a 466 × 466 round AMOLED with touch, microphones and audio. Connects to the host's daemon over USB — no Wi-Fi setup, no account on the device. |
+| [PCB](devices/harness-device/hardware/pcb/) | The EasyEDA Pro project, the schematic, Gerbers, the bill of materials, and pick-and-place data for assembly. |
+| [Enclosure](devices/harness-device/hardware/3d/) | STEP for editing and STL for printing: the housing, an iron counterweight base, the USB clamp, and the button. |
+
+[**Get a Harness device**](https://www.autonomous.ai/harness), or build your own from these files. The
+[firmware guide](devices/harness-device/firmware/README.md) lists the supported boards and build
+commands, and the [hardware guide](devices/harness-device/hardware/README.md) covers the design files.
 
 ## Contribute
 
