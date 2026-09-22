@@ -7947,7 +7947,7 @@ class AppNotifier extends ChangeNotifier {
   /// take over the whole content area would blank three working terminals
   /// belonging to two other machines. The one exception is a machine that
   /// already needs linking: that state now surfaces as a blocking popup
-  /// (HomeScreen._maybeShowLinkDialog / showLinkMachineScreenDialog) rather
+  /// (showLinkMachineScreenDialog, from SwarmScreen) rather
   /// than a tile, so opening one here too would just be a redundant "not
   /// linked" pane sitting behind it. Selecting is still worth doing — it's
   /// what makes the popup's gate notice this machine — the tile is not.

@@ -669,12 +669,13 @@ abstract final class AppGlass {
 ///   menuTheme / popupMenuTheme   #1E1E1E         8          6      no
 ///   appMenuStyle()               #2A2A2A        12         10      yes
 ///   tooltipTheme                 #1E1E1E         —         10      yes
-///   AccountFooter, inline        cardBg         18          8      yes
+///   the account footer, inline   cardBg         18          8      yes
 /// ```
 ///
 /// The cost was exactly what a second recipe always costs: the account footer's
-/// `MenuAnchor` passed no style at all, so it opened the rimless themed default
-/// — the surface `appMenuStyle` had been written to replace.
+/// `MenuAnchor` (since removed with the machine rail) passed no style at all, so
+/// it opened the rimless themed default — the surface `appMenuStyle` had been
+/// written to replace.
 ///
 /// ⚠️ The fill is deliberately **not** the themed default. `#1E1E1E` sits within
 /// 1.02:1 of a raised block ([AppGlass.surfaceFill], `#202020`), and in light
