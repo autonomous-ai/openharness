@@ -4,25 +4,41 @@ interface LogContext {
   [key: string]: unknown
 }
 
-class Logger {
+/**
+ * One line per log, in one of two formats.
+ *
+ * In production: one JSON object, with the context fields beside `message`, `status` and
+ * `timestamp` rather than appended to the text.
+ *
+ * Anywhere else (a terminal, the tests): the readable `[ts] [LEVEL] message {context}` line, so
+ * `npm run dev` output is unchanged.
+ */
+export class Logger {
   private isDevelopment = process.env.NODE_ENV === 'development'
 
-  private formatMessage(level: LogLevel, message: string, context?: LogContext): string {
+  constructor(private readonly asJson: boolean = process.env.NODE_ENV === 'production') {}
+
+  private write(level: LogLevel, to: (line: string) => void, message: string, context?: LogContext): void {
     const timestamp = new Date().toISOString()
-    const contextStr = context ? ` ${JSON.stringify(context)}` : ''
-    return `[${timestamp}] [${level.toUpperCase()}] ${message}${contextStr}`
+    if (this.asJson) {
+      // Context first: a field called `message` or `status` is data about the event, and must not
+      // take the place of the event's own message or level.
+      to(JSON.stringify({ ...context, timestamp, status: level, message }))
+      return
+    }
+    to(`[${timestamp}] [${level.toUpperCase()}] ${message}${context ? ` ${JSON.stringify(context)}` : ''}`)
   }
 
   debug(message: string, context?: LogContext): void {
-    if (this.isDevelopment) console.debug(this.formatMessage('debug', message, context))
+    if (this.isDevelopment) this.write('debug', (line) => console.debug(line), message, context)
   }
 
   info(message: string, context?: LogContext): void {
-    console.log(this.formatMessage('info', message, context))
+    this.write('info', (line) => console.log(line), message, context)
   }
 
   warn(message: string, context?: LogContext): void {
-    console.warn(this.formatMessage('warn', message, context))
+    this.write('warn', (line) => console.warn(line), message, context)
   }
 
   error(message: string, error?: Error | unknown, context?: LogContext): void {
@@ -37,7 +53,7 @@ class Logger {
     } else {
       errorContext = { ...context }
     }
-    console.error(this.formatMessage('error', message, errorContext))
+    this.write('error', (line) => console.error(line), message, errorContext)
   }
 }
 
