@@ -44,12 +44,17 @@ class PaneGrid extends StatelessWidget {
     required this.notifier,
     this.swarmMode = false,
     this.empty,
+    this.retainEmpty = false,
     this.onSplit,
   });
 
   final AppNotifier notifier;
   final bool swarmMode;
   final Widget? empty;
+
+  /// Retain an already visited welcome page while its terminals are visible.
+  /// The first visit still builds on demand; hidden content cannot take focus.
+  final bool retainEmpty;
   final void Function(int paneId, PaneResizeAxis axis)? onSplit;
 
   @override
@@ -63,6 +68,7 @@ class PaneGrid extends StatelessWidget {
             notifier: notifier,
             dragging: dragging,
             empty: empty,
+            retainEmpty: retainEmpty,
             onSplit: onSplit,
           );
         }
@@ -224,17 +230,20 @@ class _SwarmCanvas extends StatefulWidget {
     required this.notifier,
     required this.dragging,
     this.empty,
+    this.retainEmpty = false,
     this.onSplit,
   });
   final AppNotifier notifier;
   final AgentDragRef? dragging;
   final Widget? empty;
+  final bool retainEmpty;
   final void Function(int paneId, PaneResizeAxis axis)? onSplit;
   @override
   State<_SwarmCanvas> createState() => _SwarmCanvasState();
 }
 
 class _SwarmCanvasState extends State<_SwarmCanvas> {
+  Widget? _retainedEmpty;
   final _scroll = ScrollController(keepScrollOffset: false);
   final _horizontalScroll = ScrollController(keepScrollOffset: false);
   final _offsets = <String, Offset>{};
@@ -481,6 +490,11 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
           for (final pane in app.panes)
             if (app.zoomedPaneId == null || pane.id == app.zoomedPaneId) pane,
         ];
+        if (visible.isEmpty) {
+          _retainedEmpty = widget.empty ?? _EmptyGrid(notifier: app);
+        } else if (!widget.retainEmpty) {
+          _retainedEmpty = null;
+        }
         final layout = _SwarmGeometry(
           count: visible.length,
           viewport: constraints.biggest,
@@ -534,9 +548,18 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                       height: layout.height,
                       child: Stack(
                         children: [
-                          if (visible.isEmpty)
+                          if (_retainedEmpty != null)
                             Positioned.fill(
-                              child: widget.empty ?? _EmptyGrid(notifier: app),
+                              child: Offstage(
+                                offstage: visible.isNotEmpty,
+                                child: TickerMode(
+                                  enabled: visible.isEmpty,
+                                  child: ExcludeFocus(
+                                    excluding: visible.isNotEmpty,
+                                    child: _retainedEmpty!,
+                                  ),
+                                ),
+                              ),
                             ),
                           for (final pane in app.allPanes)
                             if (rectangles.containsKey(pane.id) ||

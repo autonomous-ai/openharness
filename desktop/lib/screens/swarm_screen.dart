@@ -200,7 +200,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
   String? _commandCatalogMachine;
   final _newTabSources = <String, TerminalPane>{};
 
-  Widget _startGuide() => WorkspaceWelcome(onCommand: _runShortcut);
+  // The same welcome serves every blank tab. Keep its element tree after its
+  // first visit so Cmd+T does not recreate all text, buttons and image layers.
+  late final _welcome = WorkspaceWelcome(onCommand: _runShortcut);
+  Widget _startGuide() => _welcome;
 
   void _showKeyboardShortcuts() {
     if (_newHarness?.requestDismiss() == false) return;
@@ -2724,6 +2727,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
     ),
   );
 
+  // Stable actions do not invalidate every retained button and text field
+  // when a tab or asynchronous machine probe notifies the workspace.
+  late final _openHarnessActions = <Type, Action<Intent>>{
+    OpenHarnessIntent: CallbackAction<OpenHarnessIntent>(
+      onInvoke: (intent) =>
+          _openProduct(intent.engine, intent.machineId, task: intent.task),
+    ),
+  };
+  late final _keymapActions = <String, VoidCallback>{
+    for (final id in _commands.keys) id: () => _runShortcut(id),
+  };
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: Listenable.merge([app, _projects, _learning]),
@@ -2736,25 +2751,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
         );
       }
       return Actions(
-        actions: {
-          if (newHarnessOpensInBox)
-            OpenHarnessIntent: CallbackAction<OpenHarnessIntent>(
-              onInvoke: (intent) => _openProduct(
-                intent.engine,
-                intent.machineId,
-                task: intent.task,
-              ),
-            ),
-        },
+        actions: newHarnessOpensInBox ? _openHarnessActions : const {},
         child: KeymapProvider(
           keymap: _keymap,
           child: KeymapHost(
             keymap: _keymap,
             enabled: () => _shortcutsEnabled,
             canExecute: _canExecuteCommand,
-            actions: {
-              for (final id in _commands.keys) id: () => _runShortcut(id),
-            },
+            actions: _keymapActions,
             onPending: (keys) => setState(() => _pendingKeys = keys),
             child: Focus(
               focusNode: _shellFocus,
@@ -2881,6 +2885,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                         child: PaneGrid(
                                           notifier: app,
                                           swarmMode: true,
+                                          retainEmpty: newHarnessOpensInBox,
                                           onSplit: (paneId, axis) =>
                                               _splitAgent(axis, paneId: paneId),
                                           empty:
