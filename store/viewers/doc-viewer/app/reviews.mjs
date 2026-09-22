@@ -6,6 +6,7 @@ const node = (tag, text, className) => {
   return n
 }
 const normalize = (text) => text.normalize('NFKC').replace(/\s+/g, ' ').trim()
+const noteCount = (count) => `${count} note${count === 1 ? '' : 's'}`
 const digest = async (bytes) =>
   [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
     .map((v) => v.toString(16).padStart(2, '0'))
@@ -606,9 +607,7 @@ export function installReviews(reader) {
       discardArmed = false
       keptLink(result.id, result.path)
       await refresh()
-      status(
-        `Kept “${title}” with ${draft.notes.length} note${draft.notes.length === 1 ? '' : 's'}.`
-      )
+      status(`Kept “${title}” with ${noteCount(draft.notes.length)}.`)
     } catch (error) {
       status(error.message + ' Your review is still in this tab.', true)
     } finally {
@@ -672,7 +671,7 @@ export function installReviews(reader) {
       renderNotes()
       draw()
       status(
-        `Kept review · ${value.notes.length} notes on the exact PDF draft.`
+        `Kept review · ${noteCount(value.notes.length)} on the exact PDF draft.`
       )
     } catch (error) {
       status(error.message, true)
@@ -693,7 +692,10 @@ export function installReviews(reader) {
           const card = node('article', '', 'review-saved'),
             button = node('button', item.title, 'review-jump')
           button.onclick = () => open(item.id)
-          card.append(button, node('p', `${item.notes} notes · ${item.path}`))
+          card.append(
+            button,
+            node('p', `${noteCount(item.notes)} · ${item.path}`)
+          )
           const link = node('a', 'PDF + notes')
           link.href = `/api/reviews/${item.id}/review.zip?download=1`
           link.download = 'review.zip'
