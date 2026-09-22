@@ -1,0 +1,439 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>README scenes</title>
+<!--
+  Deterministic scenes for the README GIFs, drawn in the Harness desktop design language:
+  the tab bar, pane headers with machine, project and branch, and the fzf-style command box.
+  render.mjs calls draw(scene, seconds) for every frame and screenshots the page.
+  Open this file in a browser and add #agents, #machines, #keyboard or #e2ee to preview a scene.
+-->
+<style>
+:root {
+  --bg: #181818; --panel: #141414; --line: #2b2b2b; --tab: #1c1c1c; --box: #101113; --row: #232428;
+  --fg: #e8e8e8; --dim: #8b8b8b; --dim2: #5d5d5d; --accent: #bdcbdc;
+  --green: #7ee787; --orange: #e8845c; --blue: #79c0ff; --yellow: #e3b341; --violet: #d2a8ff; --red: #ff7b72;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 960px; height: 600px; overflow: hidden; background: var(--bg); color: var(--fg);
+  font: 12.5px/1.55 ui-monospace, "SF Mono", Menlo, monospace; -webkit-font-smoothing: antialiased; }
+#app { position: absolute; inset: 0; }
+.dim { color: var(--dim); } .dim2 { color: var(--dim2); } .g { color: var(--green); } .o { color: var(--orange); }
+.b { color: var(--blue); } .y { color: var(--yellow); } .v { color: var(--violet); } .r { color: var(--red); }
+.w { color: #fff; font-weight: 600; }
+
+/* tab bar */
+.tabbar { position: absolute; left: 0; top: 0; right: 0; height: 34px; background: var(--tab);
+  border-bottom: 1px solid #0e0e0e; display: flex; align-items: center; gap: 12px; padding: 0 12px; }
+.lights { display: flex; gap: 8px; margin-right: 4px; }
+.lights i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+.lights i:nth-child(1) { background: #ff5f57; } .lights i:nth-child(2) { background: #febc2e; } .lights i:nth-child(3) { background: #28c840; }
+.bell { position: relative; color: var(--dim); display: flex; }
+.bell .badge { position: absolute; right: -7px; top: -5px; min-width: 14px; height: 14px; border-radius: 7px;
+  background: var(--orange); color: #111; font-size: 9.5px; font-weight: 700; line-height: 14px; text-align: center; }
+.tab { display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 12px; border-radius: 6px;
+  background: #282828; color: var(--fg); }
+.plus { color: var(--dim); font-size: 15px; }
+.store { margin-left: auto; display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 11px;
+  border-radius: 11px; background: #262626; color: var(--fg); font-size: 11.5px; }
+
+/* panes */
+.pane { position: absolute; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.pane.focus { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(189, 203, 220, .25); }
+.pane.new { animation: none; }
+.ph { height: 27px; display: flex; align-items: center; gap: 7px; padding: 0 10px; border-bottom: 1px solid #1e1e1e;
+  white-space: nowrap; overflow: hidden; }
+.ph img { width: 14px; height: 14px; border-radius: 3px; }
+.ph b { font-weight: 650; color: #fff; }
+.ph .meta { margin-left: auto; display: flex; gap: 11px; color: var(--dim); font-size: 11.5px; }
+.ph .meta span { display: flex; align-items: center; gap: 4px; }
+.ph .meta .pj, .ph .meta .br { color: var(--green); }
+.pt { padding: 8px 11px; white-space: pre; overflow: hidden; }
+.cur { display: inline-block; width: 7.5px; height: 15px; background: #e8e8e8; vertical-align: -3px; }
+.cur.off { opacity: 0; }
+.ask { margin-top: 6px; border: 1px solid #3a3a3a; border-radius: 5px; padding: 6px 9px; }
+
+/* command box */
+.box { position: absolute; left: 0; right: 0; bottom: 0; background: var(--box); border-top: 1px solid #2a2a2a; }
+.box .head { display: flex; justify-content: space-between; padding: 8px 14px 4px; color: var(--dim); font-size: 11.5px; }
+.box .field { display: flex; padding: 1px 14px; }
+.box .field .k { width: 78px; color: var(--dim); }
+.box .field.task { margin-top: 5px; padding-top: 5px; padding-bottom: 5px; }
+.box .field.task .v { color: #fff; }
+.box .foot { display: flex; gap: 16px; padding: 7px 14px 8px; margin-top: 6px; border-top: 1px solid #1d1e21;
+  color: var(--dim2); font-size: 11px; }
+.box .foot b { color: var(--dim); font-weight: 600; margin-right: 5px; }
+.box .list { display: flex; }
+.box .rows { flex: 1; padding: 0 6px; display: flex; flex-direction: column; justify-content: flex-end; }
+.box .row { display: flex; gap: 12px; align-items: center; height: 23px; padding: 0 8px; border-radius: 4px; white-space: nowrap; }
+.box .row.sel { background: var(--row); }
+.box .row .t { color: #fff; font-weight: 600; }
+.box .row .e { color: var(--dim); }
+.box .row .m { color: var(--dim); }
+.box .row .pj { color: var(--green); }
+.box .row .ret { margin-left: auto; color: var(--dim); }
+.box .preview { width: 300px; border-left: 1px solid #1d1e21; padding: 2px 12px; white-space: pre; color: var(--dim); font-size: 11.5px; }
+.box .preview .t { color: #fff; font-weight: 600; }
+.box .query { padding: 7px 14px 0; color: #fff; }
+
+/* keystroke overlay */
+.hud { position: absolute; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; padding: 8px; border-radius: 12px;
+  background: rgba(30, 32, 36, .92); border: 1px solid #3a3d44; box-shadow: 0 8px 30px rgba(0, 0, 0, .5); }
+.hud kbd { min-width: 38px; height: 38px; padding: 0 10px; border-radius: 8px; background: #2d3036; border: 1px solid #4a4e57;
+  border-bottom-width: 3px; color: #fff; font: 600 19px/34px -apple-system, "SF Pro Text", system-ui; text-align: center; }
+.hud .label { font: 500 13px/38px -apple-system, "SF Pro Text", system-ui; color: #c9d1d9; padding: 0 6px 0 4px; }
+
+/* other machine's terminal */
+.dimmer { position: absolute; inset: 0; background: rgba(0, 0, 0, .55); }
+.term { position: absolute; left: 150px; top: 120px; width: 660px; height: 300px; border-radius: 10px; overflow: hidden;
+  background: #0b0c0e; border: 1px solid #3a3a3a; box-shadow: 0 30px 80px rgba(0, 0, 0, .7); }
+.term .bar { height: 30px; background: #1f2023; display: flex; align-items: center; padding: 0 12px; gap: 8px; color: var(--dim); font-size: 11.5px; }
+.term .bar .lights { margin-right: 0; }
+.term .bar .ttl { position: absolute; left: 0; right: 0; text-align: center; pointer-events: none; }
+.term .body { padding: 12px 16px; white-space: pre; font-size: 13px; line-height: 1.7; }
+
+/* e2ee */
+.relay { position: absolute; background: #0d0f12; border: 1px solid #25303d; border-radius: 6px; overflow: hidden; }
+.relay .ph { border-bottom-color: #1a2330; }
+.relay .pt { color: #5b6b7e; font-size: 11.5px; line-height: 1.62; }
+.relay .pt .hot { color: #9fb4cc; }
+.strip { position: absolute; left: 0; right: 0; bottom: 0; height: 34px; display: flex; align-items: center; justify-content: center;
+  gap: 18px; background: var(--tab); border-top: 1px solid #0e0e0e; color: var(--dim); font-size: 11.5px; }
+.strip .lk { color: var(--blue); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const W = 960, H = 600, TOP = 34, GAP = 5, PAD = 5;
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const typed = (s, t, t0, cps = 24) => esc(s.slice(0, clamp(Math.floor((t - t0) * cps), 0, s.length)));
+const blink = t => Math.floor(t * 2.4) % 2 === 0;
+const cur = (t, on = true) => on ? `<span class="cur${blink(t) ? '' : ' off'}"></span>` : '';
+const stream = (lines, t) => lines.filter(l => t >= l[0]).map(l => l[1]).join('\n');
+const ICON = { claude: '../../engines/claude.png', codex: '../../engines/codex.png', cursor: '../../engines/cursor.png',
+  opencode: '../../engines/opencode.png', terminal: null };
+const svg = {
+  mon: '<svg width="11" height="11" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 14.2h6" stroke="currentColor" stroke-width="1.6"/></svg>',
+  dir: '<svg width="11" height="11" viewBox="0 0 16 16"><path d="M1.5 4.5v8h13v-7H8L6.5 3.5h-5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+  br: '<svg width="11" height="11" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.8" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="4.5" cy="12.5" r="1.8" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="11.5" cy="5.5" r="1.8" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4.5 5.3v5.4M11.5 7.3c0 3-7 2-7 3.4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
+  bell: '<svg width="14" height="14" viewBox="0 0 16 16"><path d="M8 1.8a4.2 4.2 0 0 0-4.2 4.2v3L2.5 11.3h11L12.2 9V6A4.2 4.2 0 0 0 8 1.8zM6.3 13.2a1.8 1.8 0 0 0 3.4 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  lock: '<svg width="11" height="11" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7.5" rx="1.5" fill="currentColor"/><path d="M5.2 7V5.2a2.8 2.8 0 0 1 5.6 0V7" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+  store: '<svg width="11" height="11" viewBox="0 0 16 16"><path d="M2.5 6h11l-1 8h-9zM5.5 6V4.5a2.5 2.5 0 0 1 5 0V6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+};
+
+function tabbar({ tab = 'work', badge = 0 } = {}) {
+  return `<div class="tabbar"><div class="lights"><i></i><i></i><i></i></div>
+    <span class="bell">${svg.bell}${badge ? `<span class="badge">${badge}</span>` : ''}</span>
+    <div class="tab">▢ ${tab}</div><span class="plus">+</span>
+    <div class="store">${svg.store} Harness Store</div></div>`;
+}
+
+function pane(p) {
+  const icon = ICON[p.engine] ? `<img src="${ICON[p.engine]}">` : '<span class="dim">&gt;_</span>';
+  const wide = p.w > 420;
+  const meta = `<span>${svg.mon} ${p.machine}</span>` + (wide && p.project ? `<span class="pj">${svg.dir} ${p.project}</span>` : '') +
+    (wide && p.branch ? `<span class="br">${svg.br} ${p.branch}</span>` : '');
+  const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;${p.opacity != null ? `opacity:${p.opacity};` : ''}`;
+  return `<div class="pane${p.focus ? ' focus' : ''}" style="${style}"><div class="ph">${icon}<b>${p.name}</b>
+    <span class="dim">${p.title}</span><div class="meta">${meta}</div></div><div class="pt">${p.body}</div></div>`;
+}
+
+// Tile rectangles inside the workspace, which ends where the command box starts.
+function area(boxH = 0) { return { x: PAD, y: TOP + PAD, w: W - 2 * PAD, h: H - TOP - 2 * PAD - boxH }; }
+function grid2x2(a) {
+  const w = (a.w - GAP) / 2, h = (a.h - GAP) / 2;
+  return [{ x: a.x, y: a.y, w, h }, { x: a.x + w + GAP, y: a.y, w, h },
+          { x: a.x, y: a.y + h + GAP, w, h }, { x: a.x + w + GAP, y: a.y + h + GAP, w, h }];
+}
+const lerp = (a, b, k) => a + (b - a) * k;
+const ease = k => { k = clamp(k, 0, 1); return k * k * (3 - 2 * k); };
+const mixRect = (r1, r2, k) => ({ x: lerp(r1.x, r2.x, k), y: lerp(r1.y, r2.y, k), w: lerp(r1.w, r2.w, k), h: lerp(r1.h, r2.h, k) });
+
+function hud(t, presses, bottom = 0) {
+  // presses: [time, keys[], label]; each shows for 1.1 s.
+  const p = presses.filter(x => t >= x[0] && t < x[0] + 1.1).pop();
+  if (!p) return '';
+  const k = (t - p[0]);
+  const op = k < 0.08 ? k / 0.08 : k > 0.9 ? (1.1 - k) / 0.2 : 1;
+  return `<div class="hud" style="opacity:${op};bottom:${bottom + 22}px">${p[1].map(x => `<kbd>${x}</kbd>`).join('')}${p[2] ? `<span class="label">${p[2]}</span>` : ''}</div>`;
+}
+
+function boxHeight(kind, rows = 0) {
+  if (kind === 'form') return 186;
+  if (kind === 'picker') return 64 + rows * 23 + 34;
+  return 0;
+}
+function formBox({ title, agent, machine, project, task, t, focusTask = true }) {
+  return `<div class="box" style="height:${boxHeight('form')}px"><div class="head"><span>${title}</span><span></span></div>
+    <div class="field"><span class="k">Agent</span><span>${agent}</span></div>
+    <div class="field"><span class="k">Machine</span><span>${machine}</span></div>
+    <div class="field"><span class="k">Project</span><span>${project}</span></div>
+    <div class="field task"><span class="k">task &gt;</span><span class="v">${task}${cur(t, focusTask)}</span></div>
+    <div class="foot"><span><b>enter</b>start</span><span><b>tab</b>agent · machine · project</span><span><b>⌘.</b>full form</span><span><b>esc</b>close</span></div></div>`;
+}
+function pickerBox({ title, count, rows, query, t, preview, hints }) {
+  const h = boxHeight('picker', Math.max(rows.length, preview ? 5 : 0));
+  return `<div class="box" style="height:${h}px"><div class="head"><span>${title}</span><span>${count || ''}</span></div>
+    <div class="list"><div class="rows">${rows.join('')}</div>${preview ? `<div class="preview">${preview}</div>` : ''}</div>
+    <div class="query">${query}${cur(t)}</div>
+    <div class="foot">${hints}</div></div>`;
+}
+const hint = (k, v) => `<span><b>${k}</b>${v}</span>`;
+
+// ------------------------------------------------------------------ transcripts
+const claudeAuth = t => stream([
+  [0.0, '<span class="dim">&gt;</span> refactor auth to use the session cache'],
+  [0.5, ''],
+  [0.6, '<span class="o">⏺</span> Read(src/auth/middleware.ts)'],
+  [1.4, '<span class="o">⏺</span> Update(src/auth/middleware.ts)'],
+  [1.6, '<span class="dim">  ⎿  +18 −31</span>'],
+  [2.6, '<span class="o">⏺</span> Bash(npm test -- auth)'],
+  [3.7, '<span class="dim">  ⎿  </span><span class="g">42 passed</span>'],
+  [4.5, '<span class="o">⏺</span> Update(src/auth/session.ts)'],
+  [5.0, '<span class="dim">  ⎿  +6 −2</span>'],
+], t) + `\n\n<span class="o">✻ Cooking… (${72 + Math.floor(t)}s · esc to interrupt)</span>`;
+
+const codexSearch = t => stream([
+  [0.0, '<span class="dim">›</span> add full-text search to /products'],
+  [0.4, ''],
+  [0.9, '<span class="dim">•</span> Read prisma/schema.prisma'],
+  [1.7, '<span class="dim">•</span> Planned 3 steps'],
+  [2.4, '<span class="dim">•</span> Wrote migrations/0043_search.sql'],
+  [3.3, '<span class="dim">•</span> Ran npx prisma migrate dev'],
+  [3.6, '<span class="dim">  └ </span><span class="g">✓ migration applied</span>'],
+  [4.7, '<span class="dim">•</span> Edited app/products/page.tsx <span class="g">+64</span> <span class="r">−3</span>'],
+], t) + `\n\n<span class="dim">◦ Working (${31 + Math.floor(t)}s • esc to interrupt)</span>`;
+
+const cursorNav = t => stream([
+  [0.0, 'rebuild the nav for the new sidebar'],
+  [0.4, ''],
+  [0.7, '<span class="g">●</span> Thought 3s'],
+  [1.8, '<span class="g">●</span> Read 3 files, 1 search'],
+  [3.0, '<span class="g">●</span> Edited src/Nav.tsx <span class="g">+41</span> <span class="r">−9</span>'],
+  [4.1, '<span class="g">●</span> Edited src/Sidebar.tsx <span class="g">+12</span> <span class="r">−30</span>'],
+], t) + `\n\n<span class="g">● Working 2m ${String(8 + Math.floor(t)).padStart(2, '0')}s</span>`;
+
+const openEval = t => stream([
+  [0.0, '<span class="y">┃</span> run the eval suite on step-4200'],
+  [0.4, ''],
+  [0.9, '<span class="dim">+ Thought: 117ms</span>'],
+  [1.4, '<span class="dim">→</span> bash python eval.py --ckpt step-4200'],
+  [2.5, '<span class="dim">    mmlu       </span>71.8 <span class="g">+1.2</span>'],
+  [3.2, '<span class="dim">    gsm8k      </span>84.2 <span class="g">+3.0</span>'],
+  [3.9, '<span class="dim">    humaneval  </span>67.1 <span class="g">+2.4</span>'],
+  [4.8, '<span class="dim">→</span> write results/step-4200.json'],
+], t);
+
+// ------------------------------------------------------------------ scenes
+const SCENES = {};
+
+// Every agent: four agents on three machines, all working at once.
+SCENES.agents = { dur: 7.5, draw(t) {
+  const r = grid2x2(area());
+  return tabbar({ tab: 'work' }) +
+    pane({ ...r[0], engine: 'claude', name: 'Claude Code', title: 'auth', machine: 'macbook-pro', project: 'api', branch: 'main', body: claudeAuth(t) }) +
+    pane({ ...r[1], engine: 'codex', name: 'Codex', title: 'search', machine: 'macbook-pro', project: 'shop', branch: 'feat/search', body: codexSearch(t) }) +
+    pane({ ...r[2], engine: 'cursor', name: 'Cursor', title: 'nav', machine: 'office-desktop', project: 'mobile', branch: 'main', body: cursorNav(t) }) +
+    pane({ ...r[3], engine: 'opencode', name: 'OpenCode', title: 'eval', machine: 'gpu-box', project: 'llm', branch: 'main', body: openEval(t) });
+} };
+
+// Every machine: set up a new box in four commands, link it, start an agent there.
+SCENES.machines = { dur: 12.5, draw(t) {
+  let html = tabbar({ tab: 'work' });
+  const base = [
+    { engine: 'claude', name: 'Claude Code', title: 'auth', machine: 'macbook-pro', project: 'api', branch: 'main', body: claudeAuth(t + 6) },
+    { engine: 'codex', name: 'Codex', title: 'search', machine: 'macbook-pro', project: 'shop', branch: 'feat/search', body: codexSearch(t + 6) },
+  ];
+  // Box states over time.
+  let box = '', boxH = 0;
+  if (t >= 4.6 && t < 7.4) {
+    boxH = boxHeight('picker', 4);
+    const linking = t >= 5.6, linked = t >= 6.7;
+    const rows = [
+      `<div class="row"><span class="t">macbook-pro</span><span class="m">this Mac</span><span class="g">● online</span></div>`,
+      `<div class="row"><span class="t">home-server</span><span class="m">linked</span><span class="g">● online</span></div>`,
+      `<div class="row"><span class="t">office-desktop</span><span class="m">linked</span><span class="g">● online</span></div>`,
+      `<div class="row sel"><span class="t">gpu-box</span>${linked ? '<span class="g">✓ linked · AA24·B561·0B81·EF21</span>' : '<span class="m">Link this machine · Enter its remote password</span>'}<span class="ret">↵</span></div>`,
+    ];
+    const query = linking && !linked ? `<span class="dim">password </span>${'•'.repeat(clamp(Math.floor((t - 5.7) * 14), 0, 12))}` : linked ? '' : 'gpu';
+    box = pickerBox({ title: 'Machines', count: '4 machines', rows, query, t,
+      hints: hint('↑↓', 'select') + hint('enter', 'link') + hint('esc', 'close') });
+  } else if (t >= 7.6 && t < 10.0) {
+    boxH = boxHeight('form');
+    box = formBox({ title: 'New Harness · work', agent: '<img src="../../engines/claude.png" style="width:12px;height:12px;vertical-align:-1px;border-radius:2px"> Claude Code',
+      machine: '<span class="w">gpu-box</span>', project: '~/tokenizer', task: typed('train the tokenizer on the new corpus', t, 7.9, 26), t });
+  }
+  const a = area(boxH);
+  const split = t >= 10.0;
+  const k = ease((t - 10.0) / 0.35);
+  const w3 = (a.w - 2 * GAP) / 3;
+  const two = [{ x: a.x, y: a.y, w: (a.w - GAP) / 2, h: a.h }, { x: a.x + (a.w + GAP) / 2, y: a.y, w: (a.w - GAP) / 2, h: a.h }];
+  const three = [{ x: a.x, y: a.y, w: w3, h: a.h }, { x: a.x + w3 + GAP, y: a.y, w: w3, h: a.h }, { x: a.x + 2 * (w3 + GAP), y: a.y, w: w3, h: a.h }];
+  base.forEach((p, i) => { html += pane({ ...p, ...(split ? mixRect(two[i], three[i], k) : two[i]) }); });
+  if (split) {
+    const s = t - 10.1;
+    const enter = { x: a.x + a.w + GAP, y: a.y, w: w3, h: a.h };
+    html += pane({ ...mixRect(enter, three[2], k), focus: true, engine: 'claude', name: 'Claude Code', title: 'tokenizer', machine: 'gpu-box', project: 'tokenizer', branch: 'main',
+      body: stream([
+        [0.0, '<span class="dim">&gt;</span> train the tokenizer on the new corpus'],
+        [0.1, ''],
+        [0.4, '<span class="o">⏺</span> Bash(nvidia-smi -L)'],
+        [0.9, '<span class="dim">  ⎿  </span>8 × NVIDIA H100 80GB'],
+        [1.3, '<span class="o">⏺</span> Bash(python train.py --vocab 64k)'],
+      ], s) + (s > 1.6 ? `\n\n<span class="o">✻ Training… epoch 1/3</span>` : '') });
+  }
+  html += box;
+  // The new machine's own terminal, shown first.
+  if (t < 4.4) {
+    const op = t > 4.0 ? 1 - (t - 4.0) / 0.4 : 1;
+    const cmd = (s, t0) => typed(s, t, t0, 34);
+    const lines = [];
+    const steps = [
+      [0.2, 'curl -fsSL harness.autonomous.ai/cli/install.sh | bash', 1.8, '<span class="g">✓</span> harness installed'],
+      [2.0, 'harness login', 2.5, '<span class="g">✓</span> signed in'],
+      [2.7, 'harness remote-password set', 3.3, '<span class="g">✓</span> password saved'],
+      [3.4, 'harness start', 3.8, '<span class="g">✓</span> gpu-box is online'],
+    ];
+    for (const [t0, c, t1, out] of steps) {
+      if (t < t0) break;
+      lines.push(`<span class="g">ubuntu@gpu-box</span><span class="dim">:~$</span> ${cmd(c, t0)}${t < t1 && (steps.find(s => s[0] > t0)?.[0] ?? 9) > t ? cur(t) : ''}`);
+      if (t >= t1) lines.push(out);
+    }
+    html += `<div class="dimmer" style="opacity:${op}"></div><div class="term" style="opacity:${op}"><div class="bar"><div class="lights"><i></i><i></i><i></i></div><span class="ttl">ubuntu@gpu-box: ~</span></div><div class="body">${lines.join('\n')}</div></div>`;
+  }
+  html += hud(t, [[6.6, ['⏎'], 'link'], [7.6, ['⌘', 'N'], 'new harness'], [9.8, ['⏎'], 'start']], boxH);
+  return html;
+} };
+
+// Keyboard first: open any session, zoom, answer the agent waiting on you, split.
+SCENES.keyboard = { dur: 13, draw(t) {
+  const sessions = {
+    auth: { engine: 'claude', name: 'Claude Code', title: 'auth', machine: 'macbook-pro', project: 'api', branch: 'main' },
+    search: { engine: 'codex', name: 'Codex', title: 'search', machine: 'macbook-pro', project: 'shop', branch: 'feat/search' },
+    tok: { engine: 'claude', name: 'Claude Code', title: 'tokenizer', machine: 'gpu-box', project: 'tokenizer', branch: 'main' },
+    bill: { engine: 'codex', name: 'Codex', title: 'billing', machine: 'home-server', project: 'billing', branch: 'stripe-v2' },
+  };
+  const asking = t >= 5.2 && t < 7.4;
+  const answered = t >= 7.4;
+  const authBody = stream([
+    [0, '<span class="dim">&gt;</span> refactor auth to use the session cache'], [0, ''],
+    [0, '<span class="o">⏺</span> Update(src/auth/middleware.ts)'], [0, '<span class="dim">  ⎿  +18 −31</span>'],
+    [0, '<span class="o">⏺</span> Bash(npm test -- auth)'], [0, '<span class="dim">  ⎿  </span><span class="g">42 passed</span>'],
+  ], t) + (asking ? '\n\n<div class="ask"><span class="w">Edit src/auth/session.ts?</span>\n<span class="b">❯ 1. Yes</span>\n  2. Yes, and don\'t ask again\n  3. No</div>' :
+    answered ? '\n<span class="o">⏺</span> Update(src/auth/session.ts)\n<span class="dim">  ⎿  +6 −2</span>\n\n<span class="o">✻ Cooking… (1m 31s)</span>' : '\n\n<span class="dim">✻ Thinking…</span>');
+  const bodies = {
+    auth: authBody,
+    search: codexSearch(t + 6),
+    tok: stream([[0, '<span class="dim">&gt;</span> train the tokenizer on the new corpus'], [0, ''], [0, '<span class="o">⏺</span> Bash(python train.py --vocab 64k)'], [0, '<span class="dim">  ⎿  epoch 2/3 · loss 1.84</span>']], t) + '\n\n<span class="o">✻ Training…</span>',
+    bill: stream([[0, '<span class="dim">›</span> migrate billing to stripe v2'], [0, ''], [0, '<span class="dim">•</span> Read billing/charge.ts'], [0, '<span class="dim">•</span> Planned 4 steps'], [0, '<span class="dim">•</span> Edited billing/charge.ts <span class="g">+88</span> <span class="r">−52</span>'], [0, '<span class="dim">•</span> Ran npm test billing'], [0, '<span class="dim">  └ </span><span class="g">✓ 31 passed</span>']], t) + '\n\n<span class="dim">◦ Working (2m 04s)</span>',
+    roll: '',
+  };
+  // Picker (⌘O) 0.4 – 2.6
+  let box = '', boxH = 0;
+  if (t >= 0.4 && t < 2.6) {
+    const q = typed('bill', t, 1.0, 9);
+    const all = [
+      ['auth', 'refactor auth', 'Claude', 'macbook-pro', 'api'],
+      ['search', 'full-text search', 'Codex', 'macbook-pro', 'shop'],
+      ['tok', 'train tokenizer', 'Claude', 'gpu-box', 'tokenizer'],
+      ['bill', 'migrate billing', 'Codex', 'home-server', 'billing'],
+      ['nav', 'rebuild the nav', 'Cursor', 'office-desktop', 'mobile'],
+    ];
+    const shown = q ? all.filter(r => (r[1] + r[4]).includes(q.replace(/&[a-z]+;/g, ''))) : all;
+    const sel = shown.length - 1;
+    const rows = shown.map((r, i) => `<div class="row${i === sel ? ' sel' : ''}"><span class="t">${r[1]}</span><span class="e">&gt;_ ${r[2]}</span><span class="m">${svg.mon} ${r[3]}</span><span class="pj">${svg.dir} ${r[4]}</span>${i === sel ? '<span class="ret">↵</span>' : ''}</div>`);
+    const s = shown[sel];
+    const preview = s ? `<span class="t">${s[1]}</span>\n<span class="g">Working</span> · &gt;_ ${s[2]} · ${s[3]}\n\n${s[0] === 'bill' ? '• Edited billing/charge.ts +88 −52\n• Ran npm test billing\n  └ ✓ 31 passed' : '• …'}` : '';
+    boxH = boxHeight('picker', 5);
+    box = pickerBox({ title: 'Open Harness · work', count: `${shown.length}/5`, rows, query: q, t, preview,
+      hints: hint('↑↓', 'select') + hint('enter', 'focus pane') + hint('@', 'machines') + hint('#', 'projects') + hint('esc', 'close') });
+  }
+  // Split below (⌘D) 9.0 – 11.2
+  if (t >= 9.0 && t < 11.2) {
+    boxH = boxHeight('form');
+    box = formBox({ title: 'New Pane Below · work', agent: '<img src="../../engines/codex.png" style="width:12px;height:12px;vertical-align:-1px;border-radius:2px"> Codex', machine: 'home-server', project: 'billing', task: typed('write the rollback for the migration', t, 9.4, 24), t });
+  }
+  const a = area(boxH);
+  const g = grid2x2(a);
+  let focus = 'search';
+  if (t >= 2.6) focus = 'bill';
+  if (t >= 5.9) focus = 'auth';
+  if (t >= 11.2) focus = 'roll';
+  // Zoom the billing pane 3.4 – 4.6
+  const zoomIn = ease((t - 3.4) / 0.3), zoomOut = ease((t - 4.6) / 0.3);
+  const zk = t < 4.6 ? zoomIn : 1 - zoomOut;
+  const order = ['auth', 'search', 'tok', 'bill'];
+  let rects = order.map((id, i) => g[i]);
+  // After the split, the billing column shares its height with the rollback pane.
+  const splitK = ease((t - 11.2) / 0.35);
+  if (t >= 11.2) {
+    const b = g[3], h2 = (b.h - GAP) / 2;
+    rects[3] = mixRect(b, { x: b.x, y: b.y, w: b.w, h: h2 }, splitK);
+  }
+  let html = tabbar({ tab: 'work', badge: asking ? 1 : 0 });
+  order.forEach((id, i) => {
+    if (id === 'bill') return;
+    html += pane({ ...sessions[id], ...rects[i], focus: focus === id, body: bodies[id], opacity: zk > 0 ? 1 - zk : 1 });
+  });
+  html += pane({ ...sessions.bill, ...mixRect(rects[3], a, zk), focus: focus === 'bill', body: bodies.bill });
+  if (t >= 11.2) {
+    const b = g[3], h2 = (b.h - GAP) / 2;
+    html += pane({ ...mixRect({ x: b.x, y: b.y + b.h, w: b.w, h: 0 }, { x: b.x, y: b.y + h2 + GAP, w: b.w, h: h2 }, splitK), focus: true, engine: 'codex', name: 'Codex', title: 'rollback', machine: 'home-server', project: 'billing', branch: 'stripe-v2',
+      body: stream([[0, '<span class="dim">›</span> write the rollback for the migration'], [0.3, ''], [0.5, '<span class="dim">•</span> Read migrations/0012_stripe_v2.sql'], [1.1, '<span class="dim">•</span> Planned 2 steps']], t - 11.3) });
+  }
+  html += box;
+  html += hud(t, [[0.3, ['⌘', 'O'], 'open anything'], [2.5, ['⏎'], ''], [3.3, ['⌘', '⏎'], 'zoom'], [4.5, ['⌘', '⏎'], ''],
+    [5.8, ['⇧', '⌘', 'I'], 'agent needs you'], [7.3, ['1'], 'yes'], [8.9, ['⌘', 'D'], 'split down'], [11.1, ['⏎'], '']], boxH);
+  return html;
+} };
+
+// End-to-end encrypted: what you see, and what the relay carries.
+function hex(seed, n) {
+  let x = seed * 2654435761 >>> 0, s = '';
+  for (let i = 0; i < n; i++) { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; x >>>= 0; s += (x & 0xffff).toString(16).padStart(4, '0') + ' '; }
+  return s.trim();
+}
+SCENES.e2ee = { dur: 8, draw(t) {
+  const a = { x: PAD, y: TOP + PAD, w: W - 2 * PAD, h: H - TOP - 2 * PAD - 34 };
+  const w = (a.w - GAP) / 2;
+  const src = [
+    [0.0, '<span class="dim">&gt;</span> rotate the stripe key in .env and redeploy'], [0.3, ''],
+    [0.8, '<span class="o">⏺</span> Read(.env.production)'],
+    [1.6, '<span class="o">⏺</span> Update(.env.production)'],
+    [2.0, '<span class="dim">  ⎿  STRIPE_KEY=sk_live_••••••••4f2a</span>'],
+    [3.0, '<span class="o">⏺</span> Bash(fly deploy --app shop)'],
+    [4.2, '<span class="dim">  ⎿  </span><span class="g">✓ v142 deployed</span>'],
+    [5.2, '<span class="o">⏺</span> Bash(curl -s shop.dev/health)'],
+    [5.9, '<span class="dim">  ⎿  </span><span class="g">ok</span>'],
+  ];
+  const left = stream(src, t) + (t < 6.3 ? `\n\n<span class="o">✻ Working… (${12 + Math.floor(t)}s)</span>` : '');
+  // Every screen update becomes one sealed frame on the wire.
+  const frames = [];
+  let n = 0;
+  for (let k = 0; k * 0.18 <= t; k++) {
+    const tt = k * 0.18;
+    const busy = src.some(l => l[0] <= tt && tt - l[0] < 0.5) || k % 3 === 0;
+    if (!busy) continue;
+    n++;
+    frames.push(`<span class="dim2">${String(1840 + n).padStart(5, ' ')}</span>  ${hex(k + 7, 7)}`);
+  }
+  const shown = frames.slice(-26).map((l, i, arr) => i === arr.length - 1 ? `<span class="hot">${l}</span>` : l).join('\n');
+  return tabbar({ tab: 'deploy' }) +
+    pane({ x: a.x, y: a.y, w, h: a.h, focus: true, engine: 'claude', name: 'Claude Code', title: 'deploy', machine: 'macbook-pro', project: 'shop', branch: 'main', body: left }) +
+    `<div class="relay" style="left:${a.x + w + GAP}px;top:${a.y}px;width:${w}px;height:${a.h}px"><div class="ph"><span class="b">${svg.lock}</span><b>What the relay sees</b><span class="dim">harness relay</span><div class="meta"><span>ciphertext only</span></div></div><div class="pt">${shown}</div></div>` +
+    `<div class="strip"><span class="lk">${svg.lock}</span><span>ChaCha20-Poly1305</span><span>X25519</span><span>pinned Ed25519 keys</span><span>always on, no switch</span></div>`;
+} };
+
+function draw(scene, t) { document.getElementById('app').innerHTML = SCENES[scene].draw(t); }
+window.SCENES = SCENES; window.draw = draw;
+if (location.hash) {
+  const name = location.hash.slice(1), t0 = performance.now();
+  const tick = () => { draw(name, ((performance.now() - t0) / 1000) % SCENES[name].dur); requestAnimationFrame(tick); };
+  tick();
+}
+</script>
+</body>
+</html>

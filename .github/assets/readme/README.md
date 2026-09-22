@@ -1,23 +1,30 @@
 # README animations
 
-Two full-width GIFs lead the root README. Both share one look: a caption band with the slide title,
-a short tag, slide dots and a progress rule.
-
-| File | Slides | Source |
+| File | What it shows | Made by |
 |---|---|---|
-| `coding-tour.gif` | Every coding agent, Every machine, Keyboard first, End-to-end encrypted | The [original coding video](https://cdn.autonomous.ai/development/ecm/260910/Thumb-harness-app.mp4) for the first two. The keyboard and encryption slides are drawn by the script from `docs/keyboard.md` and `docs/architecture.md`. |
-| `beyond-code.gif` | Eight hands-on sessions | The recordings in `docs/images/*-demo.mp4`, with titles matching `store/hands-on.json` |
+| `agents.gif` | Four agents on three machines, working at once | `render.mjs` |
+| `machines.gif` | A new box set up in four commands, linked, and running an agent | `render.mjs` |
+| `keyboard.gif` | Open, zoom, answer a waiting agent and split, keyboard only | `render.mjs` |
+| `e2ee.gif` | A session beside the ciphertext the relay carries | `render.mjs` |
+| `beyond-code.gif` | Eight recorded hands-on sessions, cross-faded | `build.py` |
+
+The first four are scripted scenes in `scenes/index.html`, drawn in the desktop app's design:
+the tab bar, pane headers with machine, project and branch, and the fzf-style command box.
+Open the file with `#agents`, `#machines`, `#keyboard` or `#e2ee` to watch a scene live.
+Shortcuts, commands and dialog text follow `docs/keyboard.md`, `docs/cli.md` and the app's strings;
+encryption facts follow `docs/architecture.md`. Keep them that way when editing a scene.
+
+`beyond-code.gif` uses the unedited recordings in `docs/images/*-demo.mp4`.
 
 Regenerate from the repository root:
 
 ```sh
-python3 .github/assets/readme/build.py            # both
-python3 .github/assets/readme/build.py coding     # one
+(cd store/tools/experience-tests && npm ci)   # once, for playwright-core
+node .github/assets/readme/render.mjs            # all four scenes, or name one
+node .github/assets/readme/render.mjs --stills 2,6 keyboard   # review stills in .cache/
+python3 .github/assets/readme/build.py           # beyond-code.gif
 ```
 
-It needs Python 3 with Pillow and NumPy, FFmpeg, and the macOS system fonts SF Pro and SF Mono.
-The coding video downloads once into `.cache/`, which git ignores.
-
-Keep the slides honest. Video slides are unedited clips of real sessions. The drawn slides may
-state only shortcuts that ship by default and encryption facts from the architecture guide.
-Keep `beyond-code.gif` under about 9 MiB so the README stays quick to load.
+`render.mjs` needs Google Chrome and FFmpeg. It renders at twice the scene size and scales down,
+so text stays sharp at README width. `build.py` needs Pillow, FFmpeg and SF Pro, and keeps its
+output under 9 MiB.

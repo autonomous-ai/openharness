@@ -1,36 +1,60 @@
-# All your coding agents. All your machines. One window.
+<p align="center">
+  <img src="desktop/assets/app_icon.png" width="88" alt="">
+</p>
 
-**OpenHarness** runs Claude Code, Codex, Cursor and every agent you use, side by side, on every
-machine you own. Open source, top to bottom.
-
-- **Every agent.** Claude Code, Codex, Cursor, OpenCode, Devin, Amp, Copilot and seven more. Your subscriptions, your keys.
-- **Every machine.** Laptop, home server, work desktop, GPU box. No SSH. No Tailscale. It just works.
-- **End-to-end encrypted.** Always on. The relay only ever sees ciphertext.
-- **Keyboard first.** Every action has a key. Vim-style moves. Remap anything.
-- **Fast and light.** A native app with real terminals. Agents live in tmux and keep working when the app is closed.
-
-**[Download for macOS and Linux](https://harness.autonomous.ai/desktop)** · [Get started](#run-it) · [Keybindings](docs/keyboard.md) · [Beyond code](#beyond-code)
+<h1 align="center">OpenHarness</h1>
 
 <p align="center">
-  <a href="https://cdn.autonomous.ai/development/ecm/260910/Thumb-harness-app.mp4"><img src=".github/assets/readme/coding-tour.gif" width="1280" alt="A tour of the Harness coding workspace. Claude Code, Codex, Cursor and OpenCode run side by side. The sidebar switches between a laptop, a home server, an office desktop and a GPU box. Keyboard shortcuts light up one by one. Encrypted messages travel through a relay that holds no keys."></a>
+  <b>The terminal for coding agents.</b><br>
+  Every agent. Every machine. One fast, keyboard-first window.
 </p>
+
+<p align="center">
+  <a href="https://harness.autonomous.ai/desktop"><b>Download</b></a> ·
+  <a href="#get-started">Get started</a> ·
+  <a href="docs/keyboard.md">Keybindings</a> ·
+  <a href="docs/architecture.md">How it works</a> ·
+  <a href="#beyond-code">Beyond code</a>
+</p>
+
+### Every agent, side by side
+
+Claude Code, Codex, Cursor, OpenCode, Devin, Amp, Copilot and seven more. Your subscriptions, your keys.
+
+<p align="center"><img src=".github/assets/readme/agents.gif" width="960" alt="Four agents working at once in one window: Claude Code and Codex on a MacBook, Cursor on an office desktop, OpenCode on a GPU box. Each pane shows its machine, project and branch."></p>
+
+### Every machine, no SSH
+
+Laptop, home server, GPU box. Four commands on the new machine, one Enter in the app.
+No SSH. No Tailscale. No open ports.
+
+<p align="center"><img src=".github/assets/readme/machines.gif" width="960" alt="A new GPU box runs four setup commands and comes online. The app links it with its password, then starts Claude Code there with one Enter."></p>
+
+### Keyboard first
+
+⌘O finds any session on any machine. ⇧⌘I jumps to the agent waiting on you. ⌘D splits. Every key remaps.
+
+<p align="center"><img src=".github/assets/readme/keyboard.gif" width="960" alt="Keyboard only: open a session by typing a few letters, zoom it, jump to the agent asking a question and answer it, then split a new pane below."></p>
+
+### End-to-end encrypted
+
+Code, keys and keystrokes are sealed on your machine. The relay forwards bytes it can't read.
+
+<p align="center"><img src=".github/assets/readme/e2ee.gif" width="960" alt="On the left, an agent rotates a secret and redeploys. On the right, the same session as the relay sees it: numbered frames of ciphertext."></p>
+
+### Fast and light
+
+A native app, not Electron. Real terminals on tmux. Close the app and your agents keep working.
 
 ## Beyond code
 
-**Coding agents can build far more than software.** Give one a harness for a craft and it shapes a
-lamp in Blender, shoves a robot in MuJoCo or performs a track in Strudel. You steer in a live viewer.
+**Coding agents can build far more than software.** Give one a harness and it models in Blender,
+simulates robots in MuJoCo and performs music in Strudel. You steer in a live viewer.
 
-<p align="center">
-  <a href="docs/hands-on.md"><img src=".github/assets/readme/beyond-code.gif" width="1280" alt="Eight real recorded sessions, one after another: shaping a lamp in Blender, shoving a robot in MuJoCo, rewinding a jump in Godogen, comparing a signal in CircuitJS, turning a molecule in RDKit, performing a track in Strudel, reviewing a draft in Typst and asking a better question in Jev Sheets."></a>
-</p>
+<p align="center"><a href="docs/hands-on.md"><img src=".github/assets/readme/beyond-code.gif" width="960" alt="Eight real sessions, one after another: Blender, MuJoCo, Godogen, CircuitJS, RDKit, Strudel, Typst and Jev Sheets."></a></p>
 
-Every clip is a real session with the real tool. [Watch them all and try one](docs/hands-on.md).
-
-> “World-class entrepreneurs are polymaths.” — [Peter Thiel](https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s)
-
-Monday, a feature. Tuesday, the customer data. Wednesday, an enclosure. Thursday, the launch video.
-You bring the idea and the taste. Your agents bring the craft. Built for the curious engineer who
-wants to build beyond software.
+Monday, a feature. Tuesday, an enclosure. Wednesday, the launch video.
+For the curious engineer who wants to build beyond software. [Try one in ten minutes](docs/hands-on.md).
 
 <details>
 <summary><b>More things made with Harness</b></summary>
@@ -75,14 +99,81 @@ Six real outputs, one at a time. Each slide includes the harness and the origina
 
 </details>
 
-## Domain-specific harnesses (DSH)
+<a id="run-it"></a>
+## Get started
 
-A harness turns a coding agent into a specialist. It is a folder with a `harness.json`:
-instructions, a pinned toolchain, a project template and a live viewer. Adding a craft never
-touches the app or the daemon.
+1. [Download the app](https://harness.autonomous.ai/desktop) for macOS or Linux.
+2. Sign in to an agent you already use.
+3. Press **⌘N**, type a task, press **Return**.
+
+Add a machine. Run this on it, then **Machines → Link Machine** in the app:
+
+```bash
+curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
+harness login
+harness remote-password set
+harness start
+```
+
+macOS is the primary platform. Linux builds work with parity in progress; Windows is in progress. Live viewers need macOS.
+The app needs a Harness account for now; [account-free local use is tracked](docs/development.md#account-free-local-use).
 
 <details>
-<summary><b>Browse all harnesses in the Store</b></summary>
+<summary><b>Build from source</b></summary>
+
+Needs Node.js 20+, tmux, Xcode and Flutter 3.47+ / Dart 3.13+:
+
+```bash
+git clone https://github.com/autonomous-ai/openharness.git
+cd openharness
+(cd cli && npm ci)
+make install-cli
+cd desktop
+flutter config --enable-swift-package-manager
+flutter pub get
+flutter run -d macos
+```
+
+`make install-cli` installs this checkout's CLI and restarts the local daemon. See the
+[development guide](docs/development.md).
+
+</details>
+
+<details>
+<summary><b>How it fits together</b></summary>
+
+```mermaid
+flowchart LR
+  app["Harness app<br/>(Flutter)"] -- loopback --> daemon["harness daemon<br/>(TypeScript)"]
+  daemon --> tmux["tmux"] --> agents["Claude Code · Codex · OpenCode · …"]
+  daemon --> dsh["harness toolchain<br/>+ live viewer"]
+  daemon <-- "E2EE · WebRTC" --> relay["Harness relay"]
+  relay <--> remote["daemons on your<br/>other machines"]
+```
+
+Each daemon dials out to the relay, so no machine opens a port. Frames are sealed with
+ChaCha20-Poly1305 under X25519 session keys and pinned Ed25519 identities. Terminal traffic goes
+peer to peer over WebRTC when the network allows. Details in the [architecture guide](docs/architecture.md).
+
+</details>
+
+<a id="domain-specific-harnesses-dsh"></a>
+## Build a harness
+
+A harness turns a coding agent into a specialist: instructions, a pinned toolchain, a project
+template and a live viewer, in one folder. Adding a craft never touches the app.
+
+```bash
+harness dsh install "$PWD/store/viewers/web-viewer" --link
+cp -R store/examples/hello-world ../my-harness
+harness dsh check ../my-harness
+harness dsh install ../my-harness --link
+```
+
+Press **⌘N → Hello World** and say hello. The [authoring guide](store/README.md) covers the rest.
+
+<details>
+<summary><b>Browse every harness in the Store</b></summary>
 
 <!-- store-catalog:start -->
 ### Coding and beyond
@@ -114,121 +205,19 @@ harnesses that need them. Experimental packages marked unlisted are not included
 
 </details>
 
-**Build the harness for your craft.** Wrap a tool you love or your company's toolchain. It can live
-here or in your own repo.
-
-```json
-{
-  "spec": 1,
-  "id": "examples/hello-world",
-  "name": "Hello World",
-  "engine": "codex",
-  "workspace": { "template": "template", "marker": "index.html" },
-  "agent": { "instructions": "AGENTS.md" },
-  "viewer": { "use": "autonomous/web-viewer" }
-}
-```
-
-```bash
-harness dsh install "$PWD/store/viewers/web-viewer" --link
-cp -R store/examples/hello-world ../my-first-harness
-harness dsh check ../my-first-harness
-harness dsh install ../my-first-harness --link
-```
-
-Press **⌘N → Hello World** and ask it to “Say hello to Ada.” The agent edits the page and the viewer
-reloads. The [authoring guide](store/README.md) and [package spec](store/spec/README.md) cover the rest.
-
-## Run it
-
-1. [Download the app](https://harness.autonomous.ai/desktop).
-2. Sign in to an agent you already use: subscription, API key or local model.
-3. Press **⌘N**. Pick an agent, a machine and a project. Go.
-
-Add another machine in three commands, then **Machines → Link Machine**:
-
-```bash
-curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
-harness login
-harness start
-```
-
-macOS is the primary platform. Linux builds work with parity in progress; Windows is in progress.
-Live viewers need macOS. The app needs a Harness account for now;
-[account-free local use is tracked](docs/development.md#account-free-local-use).
-
-<details>
-<summary><b>Build from source</b></summary>
-
-Needs Node.js 20+, tmux, Xcode and Flutter 3.47+ / Dart 3.13+:
-
-```bash
-git clone https://github.com/autonomous-ai/openharness.git
-cd openharness
-(cd cli && npm ci)
-make install-cli
-cd desktop
-flutter config --enable-swift-package-manager
-flutter pub get
-flutter run -d macos
-```
-
-`make install-cli` installs this checkout's CLI and restarts the local daemon. See the
-[development guide](docs/development.md).
-
-</details>
-
-<details>
-<summary><b>How it fits together</b></summary>
-
-```mermaid
-flowchart LR
-  device["Harness device"] -- USB --> daemon
-  app["Harness app<br/>(Flutter)"] -- loopback --> daemon["harness daemon<br/>(TypeScript)"]
-  daemon --> tmux["tmux"] --> agents["Claude Code · Codex · OpenCode · …"]
-  daemon --> dsh["DSH toolchain<br/>+ live viewer"]
-  daemon <-- "E2EE · WebRTC" --> relay["Harness relay"]
-  relay <--> remote["daemons on your<br/>other machines"]
-```
-
-Each daemon dials out to the relay, so no machine opens a port. Frames are sealed with
-ChaCha20-Poly1305 over X25519 session keys and pinned Ed25519 identities. Terminal traffic goes
-peer to peer over WebRTC when the network allows. The [architecture guide](docs/architecture.md)
-has the details.
-
-</details>
-
 ## Harness device
 
-<p align="center">
-  <img src=".github/assets/hardware/answer.jpg" width="960" alt="A finger taps the round Harness device to answer an agent that redesigned the billing controls">
-</p>
+<p align="center"><img src=".github/assets/hardware/answer.jpg" width="720" alt="A finger taps the round Harness device to answer an agent"></p>
 
-A round, always-on screen beside your keyboard. See which agent is working, which is done and which
-is waiting on you. Answer with a tap or your voice, without switching windows.
+A round screen beside your keyboard. See who's working, who's done and who needs you. Answer with a tap
+or your voice. Open hardware: [firmware](devices/harness-device/firmware/),
+[PCB](devices/harness-device/hardware/pcb/), [enclosure](devices/harness-device/hardware/3d/).
+[Get one](https://www.autonomous.ai/harness) or build your own.
 
-Open hardware, all the way down: [firmware](devices/harness-device/firmware/),
-[PCB](devices/harness-device/hardware/pcb/) and [enclosure](devices/harness-device/hardware/3d/).
-[**Get one**](https://www.autonomous.ai/harness) or build your own.
+## Contribute
 
-https://github.com/user-attachments/assets/97848065-61c6-40df-be66-a8247f69aa4c
-
-## Contributing
-
-- **Make a harness** for a tool you use. Start from Hello World.
-- **Improve the workspace.** Terminals, engines, the daemon, the relay, Linux and Windows.
-- **Hack the hardware.** Port the firmware, remix the enclosure.
-
-Small fixes and “this didn't work” notes are welcome. Start with the [contribution guide](CONTRIBUTING.md).
-
-```text
-desktop/    Flutter app and terminal workspace
-cli/        TypeScript CLI, daemon, engine adapters and package runtime
-backend/    Relay and control plane
-store/      Harnesses, shared viewers, registry, examples and package spec
-provider/   Provider API contract, implementations and conformance tests
-devices/    Harness device firmware, PCB and enclosure
-```
+Make a harness for a tool you love. Improve terminals, engines, the daemon or the relay. Port the
+firmware. Start with the [contribution guide](CONTRIBUTING.md).
 
 [Development](docs/development.md) · [Extending](docs/extending.md) · [CLI](docs/cli.md) ·
-[Security](SECURITY.md) · MIT [license](LICENSE); upstream tools keep their own licenses.
+[Security](SECURITY.md) · [MIT license](LICENSE); upstream tools keep their own.
