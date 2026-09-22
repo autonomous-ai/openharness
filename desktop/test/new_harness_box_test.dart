@@ -63,6 +63,7 @@ class _Connection extends WsConn {
     if (type == 'engines_probe') return {'engines': []};
     if (type == 'dsh_list') return {'dsh': []};
     if (type == 'fs_list_dir') return {};
+    if (type == 'git_project_info') return {'isGit': false};
     calls.add(_Request(type, Map.of(payload)));
     if (type == 'agent_create' && createFailure != null) {
       return {
@@ -211,8 +212,8 @@ void main() {
     box.setQuery('fix the flaky login test');
     expect(box.task, 'fix the flaky login test');
     expect(box.returnCreates, isTrue);
-    // Tab steps out to who; the task is kept, and is back on the way round.
-    box.nextField();
+    // Carried tasks survive navigation without appearing in the launch loop.
+    box.focusField(NewHarnessField.agent);
     expect(box.field, NewHarnessField.agent);
     expect(box.query, isEmpty);
     // The highlight opens on the line's own answer, which wears the ✓. In a
@@ -221,11 +222,11 @@ void main() {
     expect(box.isCurrent(box.selected!), isTrue);
     expect(box.returnCreates, isFalse);
     box.nextField(-1);
-    expect(box.field, NewHarnessField.task);
-    expect(box.query, 'fix the flaky login test');
+    expect(box.field, NewHarnessField.projectMenu);
+    expect(box.task, 'fix the flaky login test');
   });
 
-  test('the main loop follows Agent, Project, Task and modes remain available to advanced drafts', () {
+  test('the main loop follows Agent, Machine, Project and modes remain available to advanced drafts', () {
     final app = createApp();
     final box = NewHarnessController(app, machineId: 'm', engine: 'claude');
     addTearDown(box.dispose);
@@ -233,7 +234,6 @@ void main() {
       NewHarnessField.agent,
       NewHarnessField.machine,
       NewHarnessField.projectMenu,
-      NewHarnessField.task,
     ]);
     box.focusField(NewHarnessField.mode);
     expect(box.options.where(box.isCurrent).single.id, 'auto');
@@ -820,7 +820,7 @@ void main() {
     await tester.pump();
     expect(box.engine, 'claude');
     expect(box.field, NewHarnessField.launch);
-    await openLaunchRow(tester, 'task');
+    await openLegacyTaskEditor(tester);
     await tester.pump();
     await tester.enterText(input, 'a project to test');
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);

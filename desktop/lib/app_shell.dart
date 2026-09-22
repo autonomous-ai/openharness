@@ -81,40 +81,17 @@ class HarnessApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Rebuilds MaterialApp on a font/size change, which is what re-resolves
-    // every Grid token with it.
-    //
-    // `buildAppTheme` bakes `AppControl.*Scaled` into plain numbers at the
-    // moment it runs, so a UI size that changed without rebuilding this would
-    // repaint nothing at all.
-    return ValueListenableBuilder<AppearancePrefs>(
-      valueListenable: appearancePrefsStore,
-      builder: (context, prefs, _) => _app(prefs),
+    return ListenableBuilder(
+      listenable: Listenable.merge([appearancePrefsStore, terminalFontStore]),
+      builder: (context, _) => _app(appearancePrefsStore.value),
     );
   }
 
   Widget _app(AppearancePrefs prefs) {
     grid.AppTheme.palette.value = prefs.palette;
-    // ⚠️ ORDER MATTERS, and it is why this is a statement rather than something
-    // tucked into the tree below: `buildAppTheme` reads `AppFont.sans` and
-    // `AppControl.*Scaled`, so the settings have to be on `AppFont` BEFORE the
-    // theme is built, in this same frame.
-    //
-    // Pushed through the notifier rather than calling `AppFont.apply` directly,
-    // so widgets past a `const` boundary — which a top-down rebuild never
-    // reaches — are marked dirty too.
-    //
-    // `codeSize` is passed through unchanged: code type is not on this screen
-    // yet, and `apply` takes the whole set, so reading the current value back is
-    // how "leave it alone" is spelled.
-    final scale = prefs.uiSize / grid.AppFont.uiSizeDefault;
-    grid.AppTheme.fonts.apply(
-      uiFamily: prefs.uiFamily,
-      uiScale: scale,
-      codeSize: grid.AppFont.codeSize,
-    );
     return MaterialApp(
       title: 'Harness',
+      themeAnimationDuration: Duration.zero,
       // Flutter's DEBUG ribbon stays on a debug build: it is how a locally built
       // app is told apart from the installed release at a glance (owner,
       // 2026-09-16). It never appears in a release build whatever this says.
@@ -129,29 +106,9 @@ class HarnessApp extends StatelessWidget {
       // Harness Desktop is dark-only: one theme, no `darkTheme`/`themeMode` to
       // resolve between.
       theme: grid.buildAppTheme(brightness: Brightness.dark),
-      // The UI size reaches every `Text` as a text SCALE rather than as hundreds
-      // of edited call sites. `withClampedTextScaling` with both bounds equal IS
-      // the way to force a factor — MediaQuery has no "set the scale"
-      // constructor that still inherits the platform's other metrics.
-      //
-      // ⚠️ It is a matched pair with the `AppControl.*Scaled` reads above, not a
-      // separate nicety: those grow the BOXES and this grows the TYPE, and
-      // `AppControl.fontSize` deliberately has no scaled twin so that the factor
-      // is applied exactly once. Ship one without the other and a 19px setting
-      // gives 19px-tall buttons wrapped around 13pt labels.
-      //
-      // ⚠️ The terminal is fenced out of this at five seams — see
-      // `terminal_panel.dart`, `terminal_composer.dart`, `engine_identity.dart`
-      // and `terminal_section.dart`, and the regression test in
-      // `test/terminal_ui_scale_isolation_test.dart`. The terminal keeps its own
-      // font settings because its type is a grid a remote program draws into.
-      //
-      // Outermost inside `builder`, with `_GridTokenScope` inside it: the clamp
-      // has to be an ancestor of everything that lays out text, while the scope
-      // only reads `Theme.of`, which comes from above the builder either way.
-      builder: (context, child) => MediaQuery.withClampedTextScaling(
-        minScaleFactor: scale,
-        maxScaleFactor: scale,
+      // The chosen point size is already applied to every style and terminal
+      // cell. A second UI scale would make the chrome disagree with the grid.
+      builder: (context, child) => MediaQuery.withNoTextScaling(
         child: _GridTokenScope(
           child: keymap == null
               ? child ?? const SizedBox.shrink()

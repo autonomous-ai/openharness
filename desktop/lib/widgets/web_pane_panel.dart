@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart' show AgentVerdict;
 import '../core/test_run.dart';
@@ -95,41 +96,42 @@ class _WebPanePanelState extends State<WebPanePanel> {
     // WebKit's default media policy wants a click before any playback, which
     // leaves a viewer's muted video sitting at 00:00 with a play button; a
     // pane whose whole point is the render the harness just made autoplays it.
-    final controller = WebViewController.fromPlatformCreationParams(
-      WebViewPlatform.instance is WebKitWebViewPlatform
-          ? WebKitWebViewControllerCreationParams(
-              allowsInlineMediaPlayback: true,
-              mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
-            )
-          : const PlatformWebViewControllerCreationParams(),
-    )
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onPageStarted: (_) => _set(() {
-            _loading = true;
-            _failure = null;
-          }),
-          onPageFinished: (_) {
-            _set(() => _loading = false);
-            // A fresh document has no stamp; give it the app's appearance before it is looked at.
-            _stampedBrightness = null;
-            _stampTheme();
-          },
-          onWebResourceError: (error) {
-            // Only the page itself: a harness's viewer pulls fonts, models
-            // and images of its own, and one of those failing is its business
-            // to show, not ours to call a dead viewer.
-            if (error.isForMainFrame == false) return;
-            _set(() {
-              _loading = false;
-              _failure = error.description.isNotEmpty
-                  ? error.description
-                  : 'The viewer did not answer.';
-            });
-          },
-        ),
-      );
+    final controller =
+        WebViewController.fromPlatformCreationParams(
+            WebViewPlatform.instance is WebKitWebViewPlatform
+                ? WebKitWebViewControllerCreationParams(
+                    allowsInlineMediaPlayback: true,
+                    mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
+                  )
+                : const PlatformWebViewControllerCreationParams(),
+          )
+          ..setJavaScriptMode(JavaScriptMode.unrestricted)
+          ..setNavigationDelegate(
+            NavigationDelegate(
+              onPageStarted: (_) => _set(() {
+                _loading = true;
+                _failure = null;
+              }),
+              onPageFinished: (_) {
+                _set(() => _loading = false);
+                // A fresh document has no stamp; give it the app's appearance before it is looked at.
+                _stampedBrightness = null;
+                _stampTheme();
+              },
+              onWebResourceError: (error) {
+                // Only the page itself: a harness's viewer pulls fonts, models
+                // and images of its own, and one of those failing is its business
+                // to show, not ours to call a dead viewer.
+                if (error.isForMainFrame == false) return;
+                _set(() {
+                  _loading = false;
+                  _failure = error.description.isNotEmpty
+                      ? error.description
+                      : 'The viewer did not answer.';
+                });
+              },
+            ),
+          );
     _controller = controller;
     _load();
   }
@@ -171,7 +173,9 @@ class _WebPanePanelState extends State<WebPanePanel> {
     _stampedBrightness = brightness;
     final theme = brightness == Brightness.dark ? 'dark' : 'light';
     controller
-        .runJavaScript("document.documentElement.setAttribute('data-theme','$theme')")
+        .runJavaScript(
+          "document.documentElement.setAttribute('data-theme','$theme')",
+        )
         .catchError((_) {});
   }
 
@@ -231,10 +235,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
               // would only repeat what the pane shows. A status, not a history.
               Expanded(
                 child: Tooltip(
-                  message: [
-                    widget.ownerName,
-                    ?widget.pane.url,
-                  ].join('\n'),
+                  message: [widget.ownerName, ?widget.pane.url].join('\n'),
                   waitDuration: const Duration(milliseconds: 700),
                   child: Row(
                     children: [
@@ -243,10 +244,8 @@ class _WebPanePanelState extends State<WebPanePanel> {
                           widget.title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
+                          style: terminalTextStyle(
                             color: AppColors.text,
-                            fontFamily: AppFonts.sans,
-                            fontSize: 13,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -254,9 +253,8 @@ class _WebPanePanelState extends State<WebPanePanel> {
                       if (widget.verdict case final verdict?) ...[
                         Text(
                           '  ·  ',
-                          style: TextStyle(
+                          style: terminalTextStyle(
                             color: AppColors.mutedStrong,
-                            fontSize: 13,
                             fontWeight: FontWeight.w500,
                           ),
                         ),
@@ -354,6 +352,7 @@ class _ViewerActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     Widget action(String tooltip, IconData icon, VoidCallback? callback) =>
         IconButton(
           tooltip: tooltip,
@@ -413,39 +412,35 @@ class _Notice extends StatelessWidget {
   final Widget? action;
 
   @override
-  Widget build(BuildContext context) => Center(
-    child: Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 26, color: AppColors.mutedStrong),
-          const SizedBox(height: 10),
-          Text(
-            title,
-            style: TextStyle(
-              color: AppColors.text,
-              fontFamily: AppFonts.sans,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 26, color: AppColors.mutedStrong),
+            const SizedBox(height: 10),
+            Text(
+              title,
+              style: terminalTextStyle(
+                color: AppColors.text,
+                fontWeight: FontWeight.w600,
+              ),
             ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            detail,
-            textAlign: TextAlign.center,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: AppColors.mutedStrong,
-              fontFamily: AppFonts.mono,
-              fontFamilyFallback: AppFonts.monoFallback,
-              fontSize: 11,
+            const SizedBox(height: 4),
+            Text(
+              detail,
+              textAlign: TextAlign.center,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: terminalTextStyle(color: AppColors.mutedStrong),
             ),
-          ),
-          if (action != null) ...[const SizedBox(height: 8), action!],
-        ],
+            if (action != null) ...[const SizedBox(height: 8), action!],
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }

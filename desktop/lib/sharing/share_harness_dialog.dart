@@ -1,6 +1,9 @@
 import 'dart:async';
 
+import '../shared/widgets/labeled_field.dart';
+
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -205,6 +208,7 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
                   style: TextStyle(color: grid.AppPalette.textSecondary),
                 ),
                 const SizedBox(height: 22),
+                const FieldLabel('Add people by email'),
                 TextField(
                   controller: _emails,
                   autofocus: true,
@@ -213,7 +217,6 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
                   maxLines: 2,
                   minLines: 1,
                   decoration: const InputDecoration(
-                    labelText: 'Add people by email',
                     hintText: 'ken@example.com, diego@example.com',
                   ),
                   onSubmitted: (_) => _invite(),
@@ -292,10 +295,10 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
                     color: grid.AppSurface.recess,
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: const Text(
+                  child: Text(
                     'They’ll find this harness in Machines → Shared with you using the invited email. '
                     'Keep your machine online while they watch. You can remove access at any time.',
-                    style: TextStyle(fontSize: 12, height: 1.5),
+                    style: terminalTextStyle(height: 1.5),
                   ),
                 ),
               ],
@@ -335,15 +338,15 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
         backgroundColor: grid.AppSurface.recess,
         child: Text(
           email.substring(0, 1).toUpperCase(),
-          style: const TextStyle(fontSize: 13),
+          style: terminalTextStyle(),
         ),
       ),
       title: Text(
         email,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontSize: 13),
+        style: terminalTextStyle(),
       ),
-      subtitle: Text(subtitle, style: const TextStyle(fontSize: 11)),
+      subtitle: Text(subtitle, style: terminalTextStyle()),
       trailing: TextButton(
         onPressed: _busy ? null : () => _remove(share['id'] as String),
         child: const Text('Remove'),

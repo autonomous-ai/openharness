@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
 import '../core/test_run.dart';
@@ -106,8 +107,7 @@ class _DshInstallPanelState extends State<DshInstallPanel> {
                   run.done
                       ? '${widget.harnessName} installed on ${widget.machineName}'
                       : 'Installing ${widget.harnessName} on ${widget.machineName}',
-                  style: TextStyle(
-                    fontSize: 13.5,
+                  style: terminalTextStyle(
                     fontWeight: grid.AppFont.semibold,
                     color: grid.AppPalette.textPrimary,
                   ),
@@ -115,8 +115,7 @@ class _DshInstallPanelState extends State<DshInstallPanel> {
               ),
               Text(
                 _clock(elapsed),
-                style: TextStyle(
-                  fontSize: 12,
+                style: terminalTextStyle(
                   color: grid.AppPalette.textFaint,
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),
@@ -163,10 +162,7 @@ class _DshInstallPanelState extends State<DshInstallPanel> {
                       : run.done
                       ? 'Starting the harness…'
                       : 'The first install takes a few minutes. You can keep using Harness.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: grid.AppPalette.textFaint,
-                  ),
+                  style: terminalTextStyle(color: grid.AppPalette.textFaint),
                 ),
               ),
             ],
@@ -413,6 +409,7 @@ class _StepRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final muted = state == _StepState.pending;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -464,8 +461,7 @@ class _StepRow extends StatelessWidget {
             children: [
               Text(
                 step.name,
-                style: TextStyle(
-                  fontSize: 13,
+                style: terminalTextStyle(
                   fontWeight: grid.AppFont.medium,
                   color: muted
                       ? grid.AppPalette.textFaint
@@ -479,8 +475,7 @@ class _StepRow extends StatelessWidget {
                     sub!,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
+                    style: terminalTextStyle(
                       color: state == _StepState.active
                           ? grid.AppPalette.textSecondary
                           : grid.AppPalette.textFaint,
@@ -494,8 +489,7 @@ class _StepRow extends StatelessWidget {
           const SizedBox(width: 10),
           Text(
             _DshInstallPanelState._short(took!),
-            style: TextStyle(
-              fontSize: 12,
+            style: terminalTextStyle(
               color: grid.AppPalette.textFaint,
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
@@ -512,6 +506,7 @@ class _LogTail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final tail = lines.length > 6 ? lines.sublist(lines.length - 6) : lines;
     return Container(
       width: double.infinity,
@@ -532,10 +527,7 @@ class _LogTail extends StatelessWidget {
               tail[i],
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontFamily: grid.AppFont.mono,
-                fontFamilyFallback: grid.AppFont.monoFallback,
-                fontSize: 11.5,
+              style: terminalTextStyle(
                 height: 1.5,
                 color: i == tail.length - 1
                     ? grid.AppPalette.textSecondary
@@ -554,6 +546,7 @@ class _FailureCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final danger = grid.AppPalette.dangerFill;
     return Container(
       key: const Key('dsh-install-failure'),
@@ -569,8 +562,7 @@ class _FailureCard extends StatelessWidget {
         children: [
           Text(
             failure.title,
-            style: TextStyle(
-              fontSize: 12.5,
+            style: terminalTextStyle(
               fontWeight: grid.AppFont.semibold,
               color: grid.AppPalette.textPrimary,
             ),
@@ -581,8 +573,7 @@ class _FailureCard extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 2),
                 child: Text(
                   line,
-                  style: TextStyle(
-                    fontSize: 12,
+                  style: terminalTextStyle(
                     color: grid.AppPalette.textSecondary,
                   ),
                 ),
@@ -592,12 +583,7 @@ class _FailureCard extends StatelessWidget {
               padding: const EdgeInsets.only(top: 6),
               child: SelectableText(
                 failure.command!,
-                style: TextStyle(
-                  fontFamily: grid.AppFont.mono,
-                  fontFamilyFallback: grid.AppFont.monoFallback,
-                  fontSize: 11.5,
-                  color: grid.AppPalette.textPrimary,
-                ),
+                style: terminalTextStyle(color: grid.AppPalette.textPrimary),
               ),
             ),
         ],

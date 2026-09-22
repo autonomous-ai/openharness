@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
-import '../terminal/terminal_font_store.dart';
+import '../terminal/terminal_text.dart';
 import 'box_chrome.dart';
 import 'terminal_prompt.dart';
 
@@ -95,86 +95,89 @@ class _DeleteMachinePromptState extends State<_DeleteMachinePrompt> {
   }
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: terminalFontStore,
-    builder: (context, _) => TerminalPromptKeys(
-      cancel: _close,
-      child: TerminalPrompt(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      'Delete machine',
-                      style: boxMonoStyle(size: 12, color: kBoxFaint),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      widget.displayName,
-                      style: boxMonoStyle(weight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Delete this machine from your account and close its panes in this window?',
-                      style: boxMonoStyle(size: 12, color: Colors.white70),
-                    ),
-                    const SizedBox(height: 12),
-                    if (!_deleting)
-                      Wrap(
-                        spacing: 12,
-                        children: [
-                          terminalPromptButton(
-                            'Cancel',
-                            _close,
-                            focusNode: _cancel,
-                          ),
-                          terminalPromptButton(
-                            'Delete',
-                            _delete,
-                            danger: true,
-                            key: const Key('machine-delete-confirm'),
-                          ),
-                        ],
-                      )
-                    else
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return ListenableBuilder(
+      listenable: terminalFontStore,
+      builder: (context, _) => TerminalPromptKeys(
+        cancel: _close,
+        child: TerminalPrompt(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
                       Text(
-                        'Deletion continues if you close this prompt.',
-                        style: boxMonoStyle(size: 11, color: kBoxFaint),
+                        'Delete machine',
+                        style: boxMonoStyle(color: kBoxFaint),
                       ),
-                  ],
+                      const SizedBox(height: 12),
+                      Text(
+                        widget.displayName,
+                        style: boxMonoStyle(weight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Delete this machine from your account and close its panes in this window?',
+                        style: boxMonoStyle(color: Colors.white70),
+                      ),
+                      const SizedBox(height: 12),
+                      if (!_deleting)
+                        Wrap(
+                          spacing: 12,
+                          children: [
+                            terminalPromptButton(
+                              'Cancel',
+                              _close,
+                              focusNode: _cancel,
+                            ),
+                            terminalPromptButton(
+                              'Delete',
+                              _delete,
+                              danger: true,
+                              key: const Key('machine-delete-confirm'),
+                            ),
+                          ],
+                        )
+                      else
+                        Text(
+                          'Deletion continues if you close this prompt.',
+                          style: boxMonoStyle(color: kBoxFaint),
+                        ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            BoxHintStrip(
-              message: _error ?? (_deleting ? 'Deleting machine…' : null),
-              isError: _error != null,
-              hints: [
-                if (!_deleting)
+              BoxHintStrip(
+                message: _error ?? (_deleting ? 'Deleting machine…' : null),
+                isError: _error != null,
+                hints: [
+                  if (!_deleting)
+                    BoxHint(
+                      terminalPromptHint(context, 'picker.accept', 'enter'),
+                      'select',
+                    ),
+                  if (!_deleting)
+                    BoxHint(
+                      terminalPromptHint(context, 'picker.complete', 'tab'),
+                      'controls',
+                    ),
                   BoxHint(
-                    terminalPromptHint(context, 'picker.accept', 'enter'),
-                    'select',
+                    terminalPromptHint(context, 'picker.cancel', 'esc'),
+                    'close',
+                    onTap: _close,
                   ),
-                if (!_deleting)
-                  BoxHint(
-                    terminalPromptHint(context, 'picker.complete', 'tab'),
-                    'controls',
-                  ),
-                BoxHint(
-                  terminalPromptHint(context, 'picker.cancel', 'esc'),
-                  'close',
-                  onTap: _close,
-                ),
-              ],
-            ),
-          ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

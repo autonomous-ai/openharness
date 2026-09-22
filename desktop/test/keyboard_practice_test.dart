@@ -268,6 +268,8 @@ void main() {
         findsOneWidget,
       );
       await command(tester, 'Quick start');
+      await tester.tap(find.text('Try the keyboard tour'));
+      await tester.pumpAndSettle();
       expect(find.byType(WorkspaceQuickStart), findsOneWidget);
       expect(learning.next, WorkspaceLesson.agent);
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);

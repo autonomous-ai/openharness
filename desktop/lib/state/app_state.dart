@@ -31,6 +31,7 @@ import '../core/local_git_projects.dart';
 import '../core/test_run.dart';
 import '../core/models.dart';
 import '../core/project_folder.dart';
+import '../core/git_worktree.dart';
 import '../core/project_history.dart';
 import '../core/project_preview.dart';
 import '../core/repository_clone.dart';
@@ -684,6 +685,8 @@ class AppNotifier extends ChangeNotifier {
   Future<void> deskFetchForTest() => _deskFetch();
   @visibleForTesting
   Future<void> deskFlushForTest() => _deskFlush();
+  @visibleForTesting
+  void persistLayoutForTest() => _persistLayout();
   String _activeSwarmId = 'swarm-1';
   int _nextSwarmId = 2;
   // No tab cap, as in Chrome: only the visible tab's panes are built, so a background tab costs its
@@ -823,7 +826,7 @@ class AppNotifier extends ChangeNotifier {
     await addAgentToSwarm(machineId, agentId, swarmId: activeSwarmId);
   }
 
-  // A New Tab remains temporary until it has content or a custom name.
+  // Tabs created for a pending action stay temporary until they have content.
   // The return destination is session-local; abandoned drafts are never saved.
   final _draftSwarmReturns = <String, String>{};
 
@@ -845,8 +848,8 @@ class AppNotifier extends ChangeNotifier {
     bool newTabPage = false,
   }) {
     name = Swarm.normalizeName(name);
-    // Reuse onboarding for ordinary destinations. Explicit Cmd-T opens a
-    // temporary minimal page, removed when the user cancels or leaves it.
+    // Ordinary destinations can reuse an empty tab. Explicit New Tab always
+    // creates its own tab with the same welcome content.
     if (name == Swarm.defaultName && !newTabPage) {
       final starter = activeSwarm.isEmptyStarter
           ? activeSwarm
@@ -3065,8 +3068,7 @@ class AppNotifier extends ChangeNotifier {
       final updater = _updater;
       final staged = await updater.downloadAndStage(info);
       if (staged == null) {
-        updateError =
-            'Could not download and verify Harness ${info.version}.';
+        updateError = 'Could not download and verify Harness ${info.version}.';
         return false;
       }
       final applied = await updater.applyStaged(staged, selfPid: pid);
@@ -6034,6 +6036,37 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  @visibleForTesting
+  Future<Map<String, dynamic>> Function(String machineId, String path)?
+  gitProjectReaderForTest;
+
+  /// Git choices are read on the machine that owns this project.
+  Future<Map<String, dynamic>> readGitProject(
+    String machineId,
+    String path,
+  ) async {
+    final machine = machineStates[machineId];
+    if (machine == null) return {'error': 'UNAVAILABLE'};
+    final reader = gitProjectReaderForTest;
+    if (reader != null) return reader(machineId, path);
+    if (machine.isLocalMachine) return readLocalGitProject(path);
+    if (connectionForTest == null &&
+        (machine.nodeOnline == false ||
+            machine.needsLink ||
+            machine.connectionStatus != ConnectionStatus.connected)) {
+      return {'error': 'UNAVAILABLE'};
+    }
+    try {
+      return await _conn(machineId).request(
+        'git_project_info',
+        payload: {'path': path},
+        timeout: const Duration(seconds: 6),
+      );
+    } catch (_) {
+      return {'error': 'UNAVAILABLE'};
+    }
+  }
+
   /// Reads source material only on the machine that owns the selected path.
   Future<Map<String, dynamic>> readProjectPreview(
     String machineId,
@@ -6239,6 +6272,10 @@ class AppNotifier extends ChangeNotifier {
     'PROJECT_EXISTS' ||
     'CLONE_FAILED' ||
     'CLONE_TIMEOUT' ||
+    'GIT_PROJECT_UNAVAILABLE' ||
+    'INVALID_BRANCH' ||
+    'BRANCH_SWITCH_FAILED' ||
+    'WORKTREE_FAILED' ||
     'GIT_UNAVAILABLE' =>
       detail ?? 'Could not prepare the project folder on $machine.',
     'CWD_NOT_FOUND' || 'INVALID_CWD' =>
@@ -6376,6 +6413,8 @@ class AppNotifier extends ChangeNotifier {
         ..remove('projectSource')
         ..remove('repositoryUrl')
         ..remove('projectName')
+        ..remove('gitSource')
+        ..remove('branchRef')
         ..['cwd'] = creation._preparedFolder;
     }
     if (!machine.isLocalMachine && creation._remoteProjectName != null) {
@@ -8624,8 +8663,51 @@ class AppNotifier extends ChangeNotifier {
               if (pane.agentId != null)
                 DeskPaneRef(machineId: pane.machineId, agentId: pane.agentId!),
           ],
+          layout: _deskLayoutOf(swarm),
         ),
   ];
+
+  /// The tab's layout as the desk holds it: the chosen presets and the
+  /// arrangements the window keeps (`paneSizes`), tiles as fractions. The
+  /// desk carries at most 16 arrangements; the newest are the ones a hand
+  /// just made, so those are what travel.
+  static DeskLayout _deskLayoutOf(Swarm swarm) {
+    final sizes = swarm.paneSizes.entries.toList();
+    return DeskLayout(
+      presets: {for (final e in swarm.presets.entries) '${e.key}': e.value.id},
+      sizes: {
+        for (final e in sizes.skip((sizes.length - 16).clamp(0, sizes.length)))
+          e.key: e.value.toJson(),
+      },
+    );
+  }
+
+  /// The desk's layout for a tab, made this window's: presets the shape
+  /// supports, arrangements whose tile count matches their key. Replaces
+  /// what was there — a layout is one thing, not a merge of two.
+  static void _applyDeskLayout(Swarm swarm, DeskLayout? layout) {
+    swarm.presets.clear();
+    swarm.paneSizes.clear();
+    if (layout == null) return;
+    for (final e in layout.presets.entries) {
+      final count = int.tryParse(e.key);
+      final preset = PanePreset.byId(e.value);
+      if (count != null &&
+          count >= 2 &&
+          count <= maxPanes &&
+          preset != null &&
+          preset.supportsCount(count)) {
+        swarm.presets[count] = preset;
+      }
+    }
+    swarm.paneSizes.addAll(
+      PaneArrangement.readSaved({
+        for (final e in layout.sizes.entries) e.key: e.value,
+      }),
+    );
+    swarm.arranged = null;
+    swarm.arrangedKey = null;
+  }
 
   /// First contact with the desk after sign-in. A daemon that predates the
   /// desk, or a signed-out one, answers null and this window keeps its tabs to
@@ -8700,9 +8782,12 @@ class AppNotifier extends ChangeNotifier {
       'desk',
       'joined at rev ${doc.revision} · ${doc.tabs.length} on the desk · ${unknown.length} of ours to seed',
     );
-    _deskApply(doc);
+    _deskApply(doc, joining: true);
     await _deskFlush();
   }
+
+  static String _layoutFingerprintOf(DeskLayout? layout) =>
+      layout == null || layout.isEmpty ? '' : layout.fingerprint;
 
   static bool _sameKeys(List<String> a, List<String> b) {
     if (a.length != b.length) return false;
@@ -8797,13 +8882,13 @@ class AppNotifier extends ChangeNotifier {
 
   /// Reconcile `swarms` to [doc], with this window's unacknowledged ops laid
   /// over it. Ignores a document older than one already applied.
-  void _deskApply(DeskDoc doc) {
+  void _deskApply(DeskDoc doc, {bool joining = false}) {
     if (doc.revision < _desk.revision) return;
     _desk.revision = doc.revision;
     final target = applyDeskOps(doc.tabs, _desk.pending);
     final believed = _desk.synced;
     _desk.synced = target;
-    _deskReconcile(target, believed: believed);
+    _deskReconcile(target, believed: believed, joining: joining);
   }
 
   /// Make `swarms` say what [target] says, and no more: tabs the desk closed go
@@ -8821,6 +8906,7 @@ class AppNotifier extends ChangeNotifier {
   void _deskReconcile(
     List<DeskTab> target, {
     List<DeskTab> believed = const [],
+    bool joining = false,
   }) {
     final targetById = {for (final t in target) t.id: t};
     final believedById = {for (final t in believed) t.id: t};
@@ -8938,6 +9024,26 @@ class AppNotifier extends ChangeNotifier {
             if (hasNavigationRail) entry.key.pinnedSlot = entry.value;
           }
         }
+      }
+      // The layout: the desk's, but — like the order — only where the desk's
+      // own layout moved since this window last agreed with it, so a drag in
+      // progress here is not undone by a document that merely arrived. A tab
+      // this window has never known takes the desk's layout as it is.
+      final knownLayout = believedById.containsKey(tab.id)
+          ? believedById[tab.id]!.layout
+          : null;
+      final layoutMoved =
+          !believedById.containsKey(tab.id) ||
+          _layoutFingerprintOf(knownLayout) != _layoutFingerprintOf(tab.layout);
+      // At the join a desk that holds no layout for a tab this window has one
+      // for learns this window's (the diff sends it up); it does not wipe it.
+      final deskHasOne = tab.layout != null && !tab.layout!.isEmpty;
+      if (layoutMoved &&
+          (deskHasOne || !joining) &&
+          _layoutFingerprintOf(tab.layout) !=
+              _layoutFingerprintOf(_deskLayoutOf(swarm))) {
+        _applyDeskLayout(swarm, tab.layout);
+        _paneLayoutRequest++;
       }
       if (!swarm.nameIsCustom &&
           swarm.titleAgentId == null &&

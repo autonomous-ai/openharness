@@ -286,6 +286,13 @@ final harnessCommands = <HarnessCommand>[
     repeatable: true,
   ),
   const HarnessCommand(
+    'agent.open',
+    'Open Harness',
+    ShortcutGroup.actions,
+    extraKeys: ['cmd+o'],
+    keywords: ['resume', 'existing', 'pane'],
+  ),
+  const HarnessCommand(
     'agent.add',
     'New Pane',
     ShortcutGroup.actions,

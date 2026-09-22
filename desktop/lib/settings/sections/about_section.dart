@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../../core/app_version.dart';
 import '../../core/build_identity.dart';
@@ -75,9 +76,8 @@ class _AboutSectionState extends State<AboutSection> {
                     ? 'Harness checks for a newer build when it starts, '
                           'and every six hours after that.'
                     : 'Updates are disabled in this build.',
-                style: TextStyle(
+                style: terminalTextStyle(
                   color: grid.AppPalette.textFaint,
-                  fontSize: 11.5,
                   height: 1.45,
                 ),
               ),
@@ -162,9 +162,8 @@ class _Identity extends StatelessWidget {
             children: [
               Text(
                 desktopAppName,
-                style: TextStyle(
+                style: terminalTextStyle(
                   color: grid.AppPalette.textPrimary,
-                  fontSize: 16,
                   fontWeight: grid.AppFont.semibold,
                   letterSpacing: -0.1,
                 ),
@@ -205,12 +204,7 @@ class _VersionLineState extends State<_VersionLine> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final style = TextStyle(
-      color: grid.AppPalette.textSecondary,
-      fontSize: 12.5,
-      fontFamily: grid.AppFont.mono,
-      fontFamilyFallback: grid.AppFont.monoFallback,
-    );
+    final style = terminalTextStyle(color: grid.AppPalette.textSecondary);
     return Wrap(
       spacing: 9,
       runSpacing: 6,
@@ -277,9 +271,8 @@ class _StatusPill extends StatelessWidget {
           Flexible(
             child: Text(
               state.label,
-              style: TextStyle(
+              style: terminalTextStyle(
                 color: state.color,
-                fontSize: 11,
                 fontWeight: grid.AppFont.medium,
               ),
             ),
@@ -402,30 +395,32 @@ class _AboutAction extends StatelessWidget {
   final Widget action;
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      final text = Text(
-        description,
-        style: TextStyle(
-          color: grid.AppPalette.textSecondary,
-          fontSize: 12,
-          height: 1.45,
-        ),
-      );
-      final scale = MediaQuery.textScalerOf(context).scale(12) / 12;
-      if (constraints.maxWidth < 420 * scale) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [text, const SizedBox(height: 10), action],
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final text = Text(
+          description,
+          style: terminalTextStyle(
+            color: grid.AppPalette.textSecondary,
+            height: 1.45,
+          ),
         );
-      }
-      return Row(
-        children: [
-          Expanded(child: text),
-          const SizedBox(width: 18),
-          action,
-        ],
-      );
-    },
-  );
+        final scale = terminalTextScaleOf(context);
+        if (constraints.maxWidth < 420 * scale) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [text, const SizedBox(height: 10), action],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(child: text),
+            const SizedBox(width: 18),
+            action,
+          ],
+        );
+      },
+    );
+  }
 }

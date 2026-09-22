@@ -3,6 +3,7 @@
 // replacing the last — a status, not a history.
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart';
 import '../theme/app_theme.dart';
@@ -25,6 +26,7 @@ class VerdictStatus extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final active = verdict.activePhase;
     final last = verdict.currentPhase;
     final (icon, color, label, weight) = working
@@ -87,12 +89,7 @@ class VerdictStatus extends StatelessWidget {
                 label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: color,
-                  fontFamily: AppFonts.sans,
-                  fontSize: 12,
-                  fontWeight: weight,
-                ),
+                style: terminalTextStyle(color: color, fontWeight: weight),
               ),
             ),
           ],

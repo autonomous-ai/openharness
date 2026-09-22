@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../theme/app_theme.dart';
 
@@ -33,11 +34,8 @@ class SectionHeading extends StatelessWidget {
       children: [
         Text(
           title,
-          style: TextStyle(
-            fontFamily: AppFont.sans,
-            fontFamilyFallback: AppFont.sansFallback,
+          style: terminalTextStyle(
             color: AppPalette.textPrimary,
-            fontSize: 19,
             fontWeight: AppFont.semibold,
             letterSpacing: -0.2,
             height: 1.2,

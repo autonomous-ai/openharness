@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart';
 import '../core/test_run.dart';
@@ -303,8 +304,9 @@ class _GridModelPickerState extends State<GridModelPicker> {
       if (widget.currentModel != null) widget.onUseOwnLogin?.call();
       return;
     }
-    if (chosen.model!.id != widget.currentModel)
+    if (chosen.model!.id != widget.currentModel) {
       widget.onSelected?.call(chosen.model!);
+    }
   }
 
   /// What the Local section says when it lists nothing.
@@ -402,6 +404,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final sentence = _webSearchSentence;
     if (widget.compact) {
       return IconButton(
@@ -466,7 +469,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
                   ],
                   Text(
                     'Model',
-                    style: TextStyle(fontSize: 11, color: AppColors.textSoft),
+                    style: terminalTextStyle(color: AppColors.textSoft),
                   ),
                   Icon(
                     Icons.arrow_drop_down,
@@ -507,6 +510,7 @@ class _ManagerInvitationState extends State<_ManagerInvitation> {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return Padding(
       // Wider than a row's inset on purpose: this block is not one of them.
       padding: const EdgeInsets.fromLTRB(
@@ -527,10 +531,7 @@ class _ManagerInvitationState extends State<_ManagerInvitation> {
                 child: Text(
                   'Manage the models on your machines',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 10.5,
-                    color: AppColors.mutedStrong,
-                  ),
+                  style: terminalTextStyle(color: AppColors.mutedStrong),
                 ),
               ),
               const SizedBox(width: 8),
@@ -556,8 +557,7 @@ class _ManagerInvitationState extends State<_ManagerInvitation> {
                 ),
                 child: Text(
                   'Open Grid',
-                  style: TextStyle(
-                    fontSize: 12,
+                  style: terminalTextStyle(
                     fontWeight: FontWeight.w500,
                     color: _hovered ? AppColors.text : AppColors.textSoft,
                   ),

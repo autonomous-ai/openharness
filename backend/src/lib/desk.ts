@@ -19,11 +19,24 @@ const agentId = z.string().min(1).max(160)
 const name = z.string().trim().min(1).max(DESK_NAME_MAX)
 
 export const deskPaneSchema = z.object({ machineId, agentId }).strict()
+/**
+ * How the tab's tiles are laid out — the same on every computer since 2026-09-22 (owner: "máy kia không
+ * có layout"). `presets` is pane-count → the named shape chosen; `sizes` is the window's arrangement
+ * keys → tiles as fractions of the canvas (`[left, top, right, bottom]`, 0..1), which is why they travel:
+ * a window of any size draws them. Focus, zoom and pins stay each window's own.
+ */
+const tile = z.tuple([z.number().min(0).max(1), z.number().min(0).max(1), z.number().min(0).max(1), z.number().min(0).max(1)])
+export const deskLayoutSchema = z.object({
+  presets: z.record(z.string().regex(/^[2-9]$/), z.string().min(1).max(32)).optional(),
+  sizes: z.record(z.string().min(1).max(80), z.array(tile).min(2).max(DESK_MAX_PANES)).optional(),
+}).strict()
+export type DeskLayout = z.infer<typeof deskLayoutSchema>
 export const deskTabSchema = z.object({
   id,
   name,
   nameIsCustom: z.boolean().optional(),
   panes: z.array(deskPaneSchema).max(DESK_MAX_PANES),
+  layout: deskLayoutSchema.optional(),
 }).strict()
 
 export type DeskPane = z.infer<typeof deskPaneSchema>
@@ -38,6 +51,8 @@ export const deskOpSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('pane.add'), tabId: id, machineId, agentId, index: z.number().int().min(0).optional() }).strict(),
   z.object({ op: z.literal('pane.remove'), tabId: id, machineId, agentId }).strict(),
   z.object({ op: z.literal('pane.move'), tabId: id, machineId, agentId, index: z.number().int().min(0) }).strict(),
+  // The whole layout at once, replacing what was there: a drag on one computer is the layout everywhere.
+  z.object({ op: z.literal('tab.layout'), id, layout: deskLayoutSchema }).strict(),
   // First sync from a computer that already had tabs of its own: every tab whose id the desk does
   // not know is appended, as it was. The person closes the extras; nothing of theirs is dropped.
   z.object({ op: z.literal('seed'), tabs: z.array(deskTabSchema).max(DESK_MAX_TABS) }).strict(),
@@ -59,6 +74,18 @@ export function parseTabs(raw: unknown): DeskTab[] {
     seen.add(parsed.data.id)
     out.push(parsed.data)
     if (out.length >= DESK_MAX_TABS) break
+  }
+  return out
+}
+
+/** At most 16 arrangements per tab — a window keeps 64 of its own, but the desk carries what matters. */
+const DESK_MAX_SIZES = 16
+function sizesCapped(layout: DeskLayout): DeskLayout {
+  const out: DeskLayout = {}
+  if (layout.presets && Object.keys(layout.presets).length) out.presets = layout.presets
+  if (layout.sizes) {
+    const entries = Object.entries(layout.sizes).slice(-DESK_MAX_SIZES)
+    if (entries.length) out.sizes = Object.fromEntries(entries)
   }
   return out
 }
@@ -135,6 +162,14 @@ export function applyDeskOp(tabs: DeskTab[], op: DeskOp): { tabs: DeskTab[]; cha
       const dest = clampIndex(op.index, panes.length)
       panes.splice(dest, 0, pane)
       return { tabs: next, changed: dest !== j }
+    }
+    case 'tab.layout': {
+      const i = at(op.id)
+      if (i < 0) return { tabs: next, changed: false }
+      const layout = sizesCapped(op.layout)
+      if (JSON.stringify(next[i].layout ?? null) === JSON.stringify(layout)) return { tabs: next, changed: false }
+      next[i] = { ...next[i], layout }
+      return { tabs: next, changed: true }
     }
     case 'seed': {
       let changed = false

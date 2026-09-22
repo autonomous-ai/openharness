@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart';
 import '../shared/theme/prompt_style.dart';
@@ -160,102 +161,104 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
   }
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: Listenable.merge([app, app.sessionPreviews]),
-    builder: (context, _) {
-      final row = widget.search.selected;
-      if (row == null) return const SizedBox.shrink();
-      _renderedId = row.id;
-      final agents = _agents(app, row);
-      return Semantics(
-        container: true,
-        label: 'Agent preview',
-        child: Scrollbar(
-          controller: _scroll,
-          child: agents.length != 1
-              ? ListView.builder(
-                  key: ValueKey('preview-content:${row.id}'),
-                  controller: _scroll,
-                  padding: EdgeInsets.all(
-                    widget.terminal
-                        ? 12
-                        : widget.compactHeader
-                        ? 16
-                        : 24,
-                  ),
-                  scrollCacheExtent: const ScrollCacheExtent.pixels(120),
-                  itemCount: agents.length + 1,
-                  itemBuilder: (context, index) => index == 0
-                      ? Padding(
-                          padding: const EdgeInsets.only(bottom: 24),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                row.title,
-                                // The list leads the eye; this confirms it.
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              Text(row.detail, style: _muted),
-                              // Nothing exists yet behind the create row, so
-                              // there is no session to be missing text from.
-                              if (agents.isEmpty && !row.isCreate)
-                                const Padding(
-                                  padding: EdgeInsets.only(top: 24),
-                                  child: Text(
-                                    'No recent session text available.',
-                                    style: _muted,
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return AnimatedBuilder(
+      animation: Listenable.merge([app, app.sessionPreviews]),
+      builder: (context, _) {
+        final row = widget.search.selected;
+        if (row == null) return const SizedBox.shrink();
+        _renderedId = row.id;
+        final agents = _agents(app, row);
+        return Semantics(
+          container: true,
+          label: 'Agent preview',
+          child: Scrollbar(
+            controller: _scroll,
+            child: agents.length != 1
+                ? ListView.builder(
+                    key: ValueKey('preview-content:${row.id}'),
+                    controller: _scroll,
+                    padding: EdgeInsets.all(
+                      widget.terminal
+                          ? 12
+                          : widget.compactHeader
+                          ? 16
+                          : 24,
+                    ),
+                    scrollCacheExtent: const ScrollCacheExtent.pixels(120),
+                    itemCount: agents.length + 1,
+                    itemBuilder: (context, index) => index == 0
+                        ? Padding(
+                            padding: const EdgeInsets.only(bottom: 24),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  row.title,
+                                  // The list leads the eye; this confirms it.
+                                  style: terminalTextStyle(
+                                    fontWeight: FontWeight.w600,
                                   ),
                                 ),
-                            ],
+                                const SizedBox(height: 6),
+                                Text(row.detail, style: _muted),
+                                // Nothing exists yet behind the create row, so
+                                // there is no session to be missing text from.
+                                if (agents.isEmpty && !row.isCreate)
+                                  Padding(
+                                    padding: EdgeInsets.only(top: 24),
+                                    child: Text(
+                                      'No recent session text available.',
+                                      style: _muted,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          )
+                        : Padding(
+                            padding: EdgeInsets.only(top: index > 1 ? 20 : 0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _AgentPreview(
+                                  app: app,
+                                  item: agents[index - 1],
+                                  compact: true,
+                                  terminal: widget.terminal,
+                                ),
+                                if (index < agents.length)
+                                  const SizedBox(height: 20),
+                              ],
+                            ),
                           ),
-                        )
-                      : Padding(
-                          padding: EdgeInsets.only(top: index > 1 ? 20 : 0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _AgentPreview(
-                                app: app,
-                                item: agents[index - 1],
-                                compact: true,
-                                terminal: widget.terminal,
-                              ),
-                              if (index < agents.length)
-                                const SizedBox(height: 20),
-                            ],
-                          ),
-                        ),
-                )
-              : SingleChildScrollView(
-                  key: ValueKey('preview-content:${row.id}'),
-                  controller: _scroll,
-                  padding: EdgeInsets.all(
-                    widget.terminal
-                        ? 12
-                        : widget.compactHeader
-                        ? 16
-                        : 24,
+                  )
+                : SingleChildScrollView(
+                    key: ValueKey('preview-content:${row.id}'),
+                    controller: _scroll,
+                    padding: EdgeInsets.all(
+                      widget.terminal
+                          ? 12
+                          : widget.compactHeader
+                          ? 16
+                          : 24,
+                    ),
+                    child: _AgentPreview(
+                      app: app,
+                      item: agents.single,
+                      dense: widget.compactHeader,
+                      terminal: widget.terminal,
+                    ),
                   ),
-                  child: _AgentPreview(
-                    app: app,
-                    item: agents.single,
-                    dense: widget.compactHeader,
-                    terminal: widget.terminal,
-                  ),
-                ),
-        ),
-      );
-    },
-  );
+          ),
+        );
+      },
+    );
+  }
 }
 
-const _muted = TextStyle(fontSize: 12, height: 1.5, color: Colors.white54);
-const _body = TextStyle(fontSize: 14, height: 1.6, color: Color(0xffe1e1e4));
+TextStyle get _muted => terminalTextStyle(height: 1.5, color: Colors.white54);
+TextStyle get _body => terminalTextStyle(height: 1.6, color: Color(0xffe1e1e4));
 
 class _AgentPreview extends StatelessWidget {
   const _AgentPreview({
@@ -273,9 +276,10 @@ class _AgentPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final muted = terminal ? boxMonoStyle(size: 11, color: kBoxFaint) : _muted;
+    TerminalFontScope.watch(context);
+    final muted = terminal ? boxMonoStyle(color: kBoxFaint) : _muted;
     final body = terminal
-        ? boxMonoStyle(size: 12, color: const Color(0xffe1e1e4))
+        ? boxMonoStyle(color: const Color(0xffe1e1e4))
         : _body;
     Widget section(String label, String text, {int? maxLines}) =>
         _Section(label, text, maxLines: maxLines, terminal: terminal);
@@ -357,9 +361,8 @@ class _AgentPreview extends StatelessWidget {
               Expanded(
                 child: Text(
                   agent.displayName,
-                  style: TextStyle(
+                  style: terminalTextStyle(
                     // The list leads the eye; the preview confirms it.
-                    fontSize: 15,
                     fontWeight: FontWeight.w600,
                     height: 1.25,
                   ),
@@ -367,7 +370,7 @@ class _AgentPreview extends StatelessWidget {
               ),
               if (dense) ...[
                 const SizedBox(width: 10),
-                Text(state, style: TextStyle(fontSize: 11, color: color)),
+                Text(state, style: terminalTextStyle(color: color)),
               ],
             ],
           ),
@@ -395,7 +398,7 @@ class _AgentPreview extends StatelessWidget {
                       color: color,
                     ),
                     const SizedBox(width: 5),
-                    Text(state, style: TextStyle(fontSize: 11, color: color)),
+                    Text(state, style: terminalTextStyle(color: color)),
                   ],
                 ),
               ),
@@ -449,8 +452,7 @@ class _AgentPreview extends StatelessWidget {
                 children: [
                   Text(
                     'Needs your input',
-                    style: TextStyle(
-                      fontSize: 12,
+                    style: terminalTextStyle(
                       fontWeight: FontWeight.w600,
                       color: color,
                     ),
@@ -554,27 +556,30 @@ class _Section extends StatelessWidget {
   final int? maxLines;
   final bool terminal;
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: EdgeInsets.only(bottom: terminal ? 8 : 24),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: terminal
-              ? boxMonoStyle(size: 11, color: kBoxFaint)
-              : _muted.copyWith(fontWeight: FontWeight.w500),
-        ),
-        SizedBox(height: terminal ? 4 : 7),
-        Text(
-          _displayText(text),
-          style: terminal ? boxMonoStyle(size: 12) : _body,
-          maxLines: maxLines,
-          overflow: maxLines == null ? null : TextOverflow.ellipsis,
-        ),
-      ],
-    ),
-  );
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Padding(
+      padding: EdgeInsets.only(bottom: terminal ? 8 : 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: terminal
+                ? boxMonoStyle(color: kBoxFaint)
+                : _muted.copyWith(fontWeight: FontWeight.w500),
+          ),
+          SizedBox(height: terminal ? 4 : 7),
+          Text(
+            _displayText(text),
+            style: terminal ? boxMonoStyle() : _body,
+            maxLines: maxLines,
+            overflow: maxLines == null ? null : TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // Plain readable excerpts, not a second transcript renderer. Preserve the words

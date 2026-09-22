@@ -169,7 +169,7 @@ void main() {
     connection.create.complete({'error': 'FIXTURE_FAILURE'});
     await creation;
   });
-  testWidgets('Escape restores onboarding if the draft return tab stopped', (
+  testWidgets('a quiet New Tab stays open when the previous tab stops', (
     tester,
   ) async {
     app.status = AppStatus.authenticated;
@@ -186,13 +186,13 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
     expect(app.swarms, hasLength(1));
-    expect(app.activeSwarmId, isNot(draft));
-    expect(app.activeSwarm.isNewTabPage, isFalse);
+    expect(app.activeSwarmId, draft);
+    expect(app.activeSwarm.isNewTabPage, isTrue);
     expect(app.activeSwarm.isEmptyStarter, isTrue);
-    expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
+    expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
     await tester.pumpWidget(const SizedBox());
   });
-  testWidgets('last stopped tab becomes one welcome page with its dock open', (
+  testWidgets('last stopped tab becomes one quiet welcome page', (
     tester,
   ) async {
     // The same entry condition as an authenticated, connected workspace.
@@ -207,7 +207,7 @@ void main() {
     expect(app.swarms, hasLength(1));
     expect(app.activeSwarmId, isNot(oldId));
     expect(app.activeSwarm.isEmptyStarter, isTrue);
-    expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
+    expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
     await stopped();
     expect(app.swarms, hasLength(1));
     await tester.pumpWidget(const SizedBox());

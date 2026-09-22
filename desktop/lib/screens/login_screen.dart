@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
@@ -50,7 +51,8 @@ class LoginScreen extends StatelessWidget {
     // Preserve room for the primary action and its explanation at the minimum
     // window size with enlarged text. The illustration is supplementary.
     final showFleet =
-        !compact || MediaQuery.textScalerOf(context).scale(16) <= 20;
+        !compact ||
+        MediaQuery.textScalerOf(context).scale(terminalFontStore.size) <= 20;
 
     return CallbackShortcuts(
       bindings: {

@@ -64,6 +64,8 @@ void main() {
         expect(original.panes, [pane]);
         expect(find.byType(AlertDialog), findsNothing);
         final field = find.byKey(const ValueKey('swarm-search-input'));
+        expect(field, findsNothing);
+        await chord(tester, LogicalKeyboardKey.keyO);
         expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
         await tester.enterText(field, 'Agent 0');
         await tester.pump();
@@ -129,6 +131,8 @@ void main() {
     expect(app.panes, isEmpty);
     expect(app.swarms, hasLength(2));
     expect(app.allPanes, contains(pane));
+    expect(jumpField, findsNothing);
+    await chord(tester, LogicalKeyboardKey.keyO);
     expect(jumpField, findsOneWidget);
     final search = tester
         .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../../analytics/analytics_log.dart';
 import '../../analytics/analytics_sink.dart';
@@ -168,7 +169,7 @@ class _Toolbar extends StatelessWidget {
         Expanded(
           child: Text(
             '$total ${total == 1 ? 'event' : 'events'}',
-            style: TextStyle(fontSize: 12.5, color: AppPalette.textSecondary),
+            style: terminalTextStyle(color: AppPalette.textSecondary),
           ),
         ),
         ToolbarPill(

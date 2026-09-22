@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
@@ -316,7 +317,12 @@ class _AgentPickerState extends State<AgentPicker> {
   }
 
   double _rowHeight(TextScaler scaler) => widget.terminalStyle
-      ? math.max(46, scaler.scale(13) * 1.35 + scaler.scale(12) * 1.35 + 12)
+      ? math.max(
+          46,
+          scaler.scale(terminalFontStore.size) * 1.35 +
+              scaler.scale(terminalFontStore.size) * 1.35 +
+              12,
+        )
       : swarmSearchRowHeight(scaler, commands: false);
 
   /// The closed bar opens on the keys that start a search: Return, Space,
@@ -360,8 +366,7 @@ class _AgentPickerState extends State<AgentPicker> {
       overflow: TextOverflow.ellipsis,
       style: widget.terminalStyle
           ? boxMonoStyle()
-          : TextStyle(
-              fontSize: _fontSize,
+          : terminalTextStyle(
               fontWeight: FontWeight.w500,
               color: choice == null ? Colors.white60 : Colors.white,
             ),
@@ -604,7 +609,7 @@ class _AgentPickerState extends State<AgentPicker> {
                     'No agents match “${_query.text.trim()}”.',
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 14, color: Colors.white60),
+                    style: terminalTextStyle(color: Colors.white60),
                   ),
                 ),
               )
@@ -655,7 +660,6 @@ class _AgentPickerState extends State<AgentPicker> {
                         prominent: !widget.terminalStyle,
                         prompt: widget.terminalStyle ? '>' : null,
                         height: widget.height,
-                        fontSize: _fontSize,
                       ),
                     ),
                   ),
@@ -751,7 +755,7 @@ class _AgentPickerState extends State<AgentPicker> {
 
     final compactAction =
         (panelWidth >= 760 ? panelWidth / 2 : panelWidth) <
-        380 * scaler.scale(14) / 14;
+        380 * scaler.scale(terminalFontStore.size) / terminalFontSize;
     return MouseRegion(
       onHover: (event) {
         if (_pointer.moved(event) && _cursor != index) {
@@ -794,8 +798,7 @@ class _AgentPickerState extends State<AgentPicker> {
                 matches: matches(choice.label, title: true),
                 style: widget.terminalStyle
                     ? boxMonoStyle()
-                    : const TextStyle(
-                        fontSize: 14,
+                    : terminalTextStyle(
                         fontWeight: FontWeight.w600,
                         color: Colors.white,
                       ),
@@ -810,8 +813,8 @@ class _AgentPickerState extends State<AgentPicker> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: widget.terminalStyle
-                      ? boxMonoStyle(size: 12, color: kBoxFaint)
-                      : const TextStyle(fontSize: 13, color: Colors.white54),
+                      ? boxMonoStyle(color: kBoxFaint)
+                      : terminalTextStyle(color: Colors.white54),
                 ),
               ),
             ],
@@ -823,15 +826,18 @@ class _AgentPickerState extends State<AgentPicker> {
                 choice.detail!,
                 matches: matches(choice.detail, title: false),
                 style: widget.terminalStyle
-                    ? boxMonoStyle(size: 12, color: Colors.white60)
-                    : const TextStyle(fontSize: 12, color: Colors.white60),
+                    ? boxMonoStyle(color: Colors.white60)
+                    : terminalTextStyle(color: Colors.white60),
               ),
         trailing: widget.terminalStyle && highlighted
             ? Text('↵', style: boxMonoStyle(color: kBoxFaint))
             : highlighted
             ? ConstrainedBox(
                 constraints: BoxConstraints(
-                  maxWidth: 170 * scaler.scale(11) / 11,
+                  maxWidth:
+                      170 *
+                      scaler.scale(terminalFontStore.size) /
+                      terminalFontSize,
                 ),
                 child: TextButton(
                   key: const ValueKey('new-agent-agent-row-action'),
@@ -923,19 +929,14 @@ class _AgentPreview extends StatelessWidget {
   final ScrollController? controller;
   final bool terminalStyle;
 
-  static const _muted = TextStyle(
-    fontSize: 12,
-    height: 1.5,
-    color: Colors.white54,
-  );
-  static const _body = TextStyle(
-    fontSize: 14,
-    height: 1.6,
-    color: Color(0xffe1e1e4),
-  );
+  static TextStyle get _muted =>
+      terminalTextStyle(height: 1.5, color: Colors.white54);
+  static TextStyle get _body =>
+      terminalTextStyle(height: 1.6, color: Color(0xffe1e1e4));
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final description = choice.description;
     final chips = [if (current) 'Chosen', ?status];
     return Semantics(
@@ -963,8 +964,7 @@ class _AgentPreview extends StatelessWidget {
                           text: choice.label,
                           style: terminalStyle
                               ? boxMonoStyle()
-                              : const TextStyle(
-                                  fontSize: 20,
+                              : terminalTextStyle(
                                   fontWeight: FontWeight.w600,
                                   color: Colors.white,
                                 ),
@@ -973,11 +973,8 @@ class _AgentPreview extends StatelessWidget {
                           TextSpan(
                             text: '  by $creator',
                             style: terminalStyle
-                                ? boxMonoStyle(size: 12, color: kBoxFaint)
-                                : const TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.white54,
-                                  ),
+                                ? boxMonoStyle(color: kBoxFaint)
+                                : terminalTextStyle(color: Colors.white54),
                           ),
                       ],
                     ),
@@ -992,21 +989,14 @@ class _AgentPreview extends StatelessWidget {
               Text(
                 detail,
                 style: terminalStyle
-                    ? boxMonoStyle(size: 12, color: Colors.white70)
-                    : const TextStyle(
-                        fontSize: 14,
-                        height: 1.4,
-                        color: Colors.white70,
-                      ),
+                    ? boxMonoStyle(color: Colors.white70)
+                    : terminalTextStyle(height: 1.4, color: Colors.white70),
               ),
             ],
             if (chips.isNotEmpty) ...[
               const SizedBox(height: 12),
               if (terminalStyle)
-                Text(
-                  chips.join(' · '),
-                  style: boxMonoStyle(size: 12, color: kBoxFaint),
-                )
+                Text(chips.join(' · '), style: boxMonoStyle(color: kBoxFaint))
               else
                 Wrap(
                   spacing: 8,
@@ -1025,10 +1015,7 @@ class _AgentPreview extends StatelessWidget {
                           ),
                           child: Text(
                             chip,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.white70,
-                            ),
+                            style: terminalTextStyle(color: Colors.white70),
                           ),
                         ),
                       ),
@@ -1039,9 +1026,7 @@ class _AgentPreview extends StatelessWidget {
               SizedBox(height: terminalStyle ? 16 : 24),
               Text(
                 'About',
-                style: terminalStyle
-                    ? boxMonoStyle(size: 12, color: kBoxFaint)
-                    : _muted,
+                style: terminalStyle ? boxMonoStyle(color: kBoxFaint) : _muted,
               ),
               const SizedBox(height: 6),
               Text(

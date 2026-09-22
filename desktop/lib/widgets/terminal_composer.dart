@@ -174,7 +174,7 @@ class _TerminalComposerState extends State<TerminalComposer> {
       child: MediaQuery.withNoTextScaling(
         child: AnimatedContainer(
           key: const ValueKey('terminal-composer-surface'),
-          duration: const Duration(milliseconds: 140),
+          duration: Duration.zero,
           curve: Curves.easeOut,
           constraints: const BoxConstraints(minHeight: 48),
           decoration: BoxDecoration(
@@ -200,7 +200,7 @@ class _TerminalComposerState extends State<TerminalComposer> {
                   padding: const EdgeInsets.only(left: 14, right: 10),
                   child: AnimatedDefaultTextStyle(
                     key: const ValueKey('terminal-composer-prompt-style'),
-                    duration: const Duration(milliseconds: 140),
+                    duration: Duration.zero,
                     curve: Curves.easeOut,
                     style: terminalStyle
                         .toTextStyle(

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/harness_file_store.dart';
 import '../core/local_key_value_store.dart';
@@ -327,7 +328,7 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
     if (rows.isEmpty) return;
     setState(() => _cursor = (_cursor + delta).clamp(0, rows.length - 1));
     if (_scroll.hasClients) {
-      final height = 54.0 * MediaQuery.textScalerOf(context).scale(13) / 13;
+      final height = 54.0 * terminalTextScaleOf(context);
       final top = _cursor * height, bottom = top + height;
       final at = _scroll.offset, view = _scroll.position.viewportDimension;
       if (top < at || bottom > at + view) {
@@ -481,6 +482,7 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final lesson = _lesson;
     final rows = filtered;
     final body = TerminalBox(
@@ -495,17 +497,17 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
               spacing: 16,
               runSpacing: 6,
               children: [
-                Text('keyboard practice', style: boxMonoStyle(size: 16)),
+                Text('keyboard practice', style: boxMonoStyle()),
                 Text(
                   '${lessons.where((l) => _done.contains(l.id)).length}/${lessons.length} practiced',
-                  style: boxMonoStyle(size: 12, color: kBoxFaint),
+                  style: boxMonoStyle(color: kBoxFaint),
                 ),
               ],
             ),
             const SizedBox(height: 8),
             Text(
               'Practice only · your running agents stay untouched',
-              style: boxMonoStyle(size: 12, color: kBoxFaint),
+              style: boxMonoStyle(color: kBoxFaint),
             ),
             const SizedBox(height: 18),
             if (lesson == null) ...[
@@ -536,10 +538,7 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
                     : ListView.builder(
                         controller: _scroll,
                         shrinkWrap: true,
-                        itemExtent:
-                            54.0 *
-                            MediaQuery.textScalerOf(context).scale(13) /
-                            13,
+                        itemExtent: 54.0 * terminalTextScaleOf(context),
                         itemCount: rows.length,
                         itemBuilder: (context, i) {
                           final row = rows[i];
@@ -581,7 +580,6 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                             style: boxMonoStyle(
-                                              size: 11,
                                               color: kBoxFaint,
                                             ),
                                           ),
@@ -613,7 +611,7 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
                       children: [
                         Text(
                           '${lesson.group} / ${lesson.label}',
-                          style: boxMonoStyle(size: 14),
+                          style: boxMonoStyle(),
                         ),
                         const SizedBox(height: 16),
                         Text(
@@ -622,14 +620,14 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
                               : lesson.bindings.isEmpty
                               ? 'No shortcut assigned. Find it by name in command search.'
                               : 'Press ${lesson.keys}',
-                          style: boxMonoStyle(size: 16),
+                          style: boxMonoStyle(),
                         ),
                         if (!_matched && lesson.bindings.length > 1)
                           Padding(
                             padding: const EdgeInsets.only(top: 6),
                             child: Text(
                               'Try any of these bindings.',
-                              style: boxMonoStyle(size: 12, color: kBoxFaint),
+                              style: boxMonoStyle(color: kBoxFaint),
                             ),
                           ),
                         if (!_matched && lesson.bindings.isEmpty)
@@ -651,7 +649,7 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
                           child: Text(
                             _matched ? lesson.result : 'scratch workspace\n\n[agent 1] │ [agent 2]\n\n> ready',
                             key: const ValueKey('practice-preview'),
-                            style: boxMonoStyle(size: 13),
+                            style: boxMonoStyle(),
                           ),
                         ),
                         if (_feedback != null)
@@ -659,7 +657,7 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
                             padding: const EdgeInsets.only(top: 12),
                             child: Text(
                               _feedback!,
-                              style: boxMonoStyle(size: 12, color: kBoxFaint),
+                              style: boxMonoStyle(color: kBoxFaint),
                             ),
                           ),
                         if (_matched)
@@ -667,7 +665,7 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
                             liveRegion: true,
                             child: Text(
                               'Shortcut practiced. Enter continues.',
-                              style: boxMonoStyle(size: 12, color: kBoxFaint),
+                              style: boxMonoStyle(color: kBoxFaint),
                             ),
                           ),
                       ],
@@ -684,20 +682,20 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
                 if (lesson == null)
                   Text(
                     '${_hint('picker.accept')}  practice    ${_hint('picker.previous')}/${_hint('picker.next')}  choose',
-                    style: boxMonoStyle(size: 12, color: kBoxFaint),
+                    style: boxMonoStyle(color: kBoxFaint),
                   ),
                 if (lesson != null)
                   TextButton(
                     onPressed: _next,
                     child: Text(
                       _matched ? 'Enter  Next' : 'Skip',
-                      style: boxMonoStyle(size: 12),
+                      style: boxMonoStyle(),
                     ),
                   ),
                 if (lesson != null)
                   Text(
                     'pgup/pgdn  read',
-                    style: boxMonoStyle(size: 12, color: kBoxFaint),
+                    style: boxMonoStyle(color: kBoxFaint),
                   ),
                 TextButton(
                   key: const ValueKey('practice-back'),
@@ -706,7 +704,7 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
                     lesson == null
                         ? '${_hint('picker.cancel')}  Close'
                         : 'esc  All shortcuts',
-                    style: boxMonoStyle(size: 12),
+                    style: boxMonoStyle(),
                   ),
                 ),
               ],

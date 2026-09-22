@@ -4,7 +4,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/prompt_style.dart';
-import '../terminal/terminal_font_store.dart';
+import '../terminal/terminal_text.dart';
 import 'box_chrome.dart';
 import 'search_result_text.dart';
 
@@ -17,14 +17,13 @@ class PromptContextView extends StatelessWidget {
     required this.contextData,
     this.prefs,
     this.store,
-    this.size = 12,
     this.matches = const [],
   });
 
   final PromptContext contextData;
   final PromptPrefs? prefs;
   final AppearancePrefsStore? store;
-  final double size;
+  double get size => terminalFontStore.size;
   final Iterable<SearchFieldMatch> matches;
 
   @override
@@ -119,10 +118,7 @@ class PromptContextView extends StatelessWidget {
                         if (part.ascii.isNotEmpty) ...[
                           if (prefs.style == PromptStyle.plain ||
                               part.icon == null)
-                            Text(
-                              part.ascii,
-                              style: boxMonoStyle(size: size, color: tone),
-                            )
+                            Text(part.ascii, style: boxMonoStyle(color: tone))
                           else
                             Icon(part.icon, size: size, color: tone),
                           const SizedBox(width: 4),
@@ -131,7 +127,7 @@ class PromptContextView extends StatelessWidget {
                           child: SearchResultText(
                             part.value,
                             matches: matches,
-                            style: boxMonoStyle(size: size, color: tone),
+                            style: boxMonoStyle(color: tone),
                           ),
                         ),
                       ],

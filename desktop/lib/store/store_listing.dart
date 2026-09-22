@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -14,21 +15,24 @@ class StoreAppIcon extends StatelessWidget {
   final double size;
 
   @override
-  Widget build(BuildContext context) => Container(
-    width: size,
-    height: size,
-    padding: EdgeInsets.all(size * .12),
-    decoration: BoxDecoration(
-      color: grid.AppSurface.recess,
-      borderRadius: BorderRadius.circular(size * .23),
-      border: Border.all(color: grid.AppPalette.divider),
-    ),
-    child: EngineMark(
-      engine: entry.id,
-      displayName: entry.name,
-      size: size * .76,
-    ),
-  );
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Container(
+      width: size,
+      height: size,
+      padding: EdgeInsets.all(size * .12),
+      decoration: BoxDecoration(
+        color: grid.AppSurface.recess,
+        borderRadius: BorderRadius.circular(size * .23),
+        border: Border.all(color: grid.AppPalette.divider),
+      ),
+      child: EngineMark(
+        engine: entry.id,
+        displayName: entry.name,
+        size: size * .76,
+      ),
+    );
+  }
 }
 
 /// Icon rows are the default catalog presentation. Reserve large imagery for
@@ -49,33 +53,36 @@ class StoreListing extends StatelessWidget {
   final bool showRanks;
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, box) {
-      final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
-      final columns = (box.maxWidth / (340 * scale)).floor().clamp(1, 3);
-      final width = (box.maxWidth - (columns - 1) * 28) / columns;
-      final reserveRating = entries.any((entry) => !ratingFor(entry).isEmpty);
-      final reserveUpdate = entries.any((entry) => entry.hasUpdate);
-      return Wrap(
-        spacing: 28,
-        children: [
-          for (final entry in entries)
-            SizedBox(
-              width: width,
-              child: _ProductRow(
-                key: ValueKey('$rowKeyPrefix:${entry.id}'),
-                rank: showRanks ? entries.indexOf(entry) + 1 : null,
-                entry: entry,
-                rating: ratingFor(entry),
-                reserveRating: reserveRating,
-                reserveUpdate: reserveUpdate,
-                onOpen: () => onOpen(entry.id),
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return LayoutBuilder(
+      builder: (context, box) {
+        final scale = terminalTextScaleOf(context);
+        final columns = (box.maxWidth / (340 * scale)).floor().clamp(1, 3);
+        final width = (box.maxWidth - (columns - 1) * 28) / columns;
+        final reserveRating = entries.any((entry) => !ratingFor(entry).isEmpty);
+        final reserveUpdate = entries.any((entry) => entry.hasUpdate);
+        return Wrap(
+          spacing: 28,
+          children: [
+            for (final entry in entries)
+              SizedBox(
+                width: width,
+                child: _ProductRow(
+                  key: ValueKey('$rowKeyPrefix:${entry.id}'),
+                  rank: showRanks ? entries.indexOf(entry) + 1 : null,
+                  entry: entry,
+                  rating: ratingFor(entry),
+                  reserveRating: reserveRating,
+                  reserveUpdate: reserveUpdate,
+                  onOpen: () => onOpen(entry.id),
+                ),
               ),
-            ),
-        ],
-      );
-    },
-  );
+          ],
+        );
+      },
+    );
+  }
 }
 
 class _ProductRow extends StatelessWidget {
@@ -97,7 +104,8 @@ class _ProductRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scale = MediaQuery.textScalerOf(context).scale(12) / 12;
+    TerminalFontScope.watch(context);
+    final scale = terminalTextScaleOf(context);
     final benefit = entry.isEngine
         ? entry.tagline ??
               engineIdentity(entry.id).tagline ??
@@ -121,8 +129,7 @@ class _ProductRow extends StatelessWidget {
                   width: 18,
                   child: Text(
                     '$rank',
-                    style: TextStyle(
-                      fontSize: 16,
+                    style: terminalTextStyle(
                       fontWeight: FontWeight.w600,
                       color: grid.AppPalette.textSecondary,
                     ),
@@ -142,8 +149,7 @@ class _ProductRow extends StatelessWidget {
                         entry.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14,
+                        style: terminalTextStyle(
                           fontWeight: FontWeight.w600,
                           color: grid.AppPalette.textPrimary,
                         ),
@@ -156,8 +162,7 @@ class _ProductRow extends StatelessWidget {
                         benefit,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
+                        style: terminalTextStyle(
                           height: 1.3,
                           color: grid.AppPalette.textSecondary,
                         ),
@@ -167,8 +172,7 @@ class _ProductRow extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         entry.hasUpdate ? 'Update available' : ' ',
-                        style: TextStyle(
-                          fontSize: 11,
+                        style: terminalTextStyle(
                           color: grid.AppPalette.accentOnSurface,
                         ),
                       ),
@@ -189,8 +193,7 @@ class _ProductRow extends StatelessWidget {
                                   const SizedBox(width: 3),
                                   Text(
                                     '${rating.average.toStringAsFixed(1)} · ${rating.count}',
-                                    style: TextStyle(
-                                      fontSize: 11,
+                                    style: terminalTextStyle(
                                       color: grid.AppPalette.textSecondary,
                                     ),
                                   ),

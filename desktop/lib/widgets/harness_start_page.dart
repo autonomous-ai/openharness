@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
@@ -255,8 +256,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
                           padding: const EdgeInsets.only(left: 18, right: 8),
                           child: Text(
                             'Browse the\nHarness Store',
-                            style: TextStyle(
-                              fontSize: 16,
+                            style: terminalTextStyle(
                               height: 1.3,
                               fontWeight: FontWeight.w500,
                               color: Colors.white.withValues(alpha: .94),
@@ -310,8 +310,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
                           padding: const EdgeInsets.only(left: 18, right: 8),
                           child: Text(
                             'Meet the\nHarness device',
-                            style: TextStyle(
-                              fontSize: 16,
+                            style: terminalTextStyle(
                               height: 1.3,
                               fontWeight: FontWeight.w500,
                               color: Colors.white.withValues(alpha: .94),
@@ -484,7 +483,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
                                         onPressed: widget.onQuickStart,
                                         child: Text(
                                           'Quick start · 4 steps',
-                                          style: boxMonoStyle(size: 12),
+                                          style: boxMonoStyle(),
                                         ),
                                       ),
                                     if (widget.onPractice != null)
@@ -495,7 +494,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
                                         onPressed: widget.onPractice,
                                         child: Text(
                                           'Keyboard practice',
-                                          style: boxMonoStyle(size: 12),
+                                          style: boxMonoStyle(),
                                         ),
                                       ),
                                   ],
