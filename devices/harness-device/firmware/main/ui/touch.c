@@ -39,7 +39,13 @@ static uint32_t s_read_fail_run;      // consecutive; reset by any good read
 static uint32_t s_noack_run;
 static uint32_t s_inferred_releases;  // lifetime, for the heartbeat: how often the fix above fired
 #define NOACK_RELEASE_READS 3
-#define LIFT_RELEASE_READS  3          // CoreS3: reads of no finger before a lift is believed; see touch_read
+#define LIFT_RELEASE_MS     60         // CoreS3: how long no finger must last before a lift is believed; see touch_read
+#if defined(DEVICE_BOARD_M5CORES3)
+static bool s_bezel_entry;            // this press came on from the bottom edge, moving (decided in touch_read)
+#define HOME_START(sy, edge)  ((void)(sy), (void)(edge), s_bezel_entry)
+#else
+#define HOME_START(sy, edge)  ((sy) >= (edge))
+#endif
 #define READ_FAIL_REINIT   50         // ~1s of nothing but errors → tear the controller down and bring it back
 #define READ_FAIL_LOG_EVERY 100
 #define REINIT_RETRY_MS    5000       // a reinit that failed is tried again this often
@@ -131,8 +137,14 @@ static bool double_tap(bool pressed, uint16_t x, uint16_t y)
 #define LONG_MOVE_PX          15
 #define SCROLL_MIN_PX         4
 #define SWIPE_MIN_PX          28
-#define BOTTOM_EDGE_PX        (BSP_LCD_V_RES - (466 - 400) / 2)
-#define READER_HOME_EDGE_PX   (BSP_LCD_V_RES - (466 - 446) / 2)
+// The CoreS3's touch stops at the glass (y never passes 239), so there is no bezel to start on. A swipe
+// from off the glass is told apart by how it arrives: first seen in the last 16px, already moving up (see
+// s_bezel_entry). One band for every screen; a scroll that happens to start low is not a way home.
+#define BOTTOM_EDGE_PX        (BSP_LCD_V_RES - 16)
+#define READER_HOME_EDGE_PX   BOTTOM_EDGE_PX
+#define BEZEL_ENTRY_MS        20      // look this long after the first contact...
+#define BEZEL_ENTRY_PX        6       // ...for this much upward travel (300 px/s): a finger coming on from the edge
+#define TOUCH_READ_MS         10      // FT6336U polled at 100 Hz, so an entry is caught within a few px of the edge
 #define SCROLL_OUT(v)         ((v) * 2)
 #else
 #define SCROLL_OUT(v)         (v)
@@ -281,7 +293,7 @@ static void swipe_track(bool pressed, uint16_t x, uint16_t y)
         int home_edge = reader ? READER_HOME_EDGE_PX : BOTTOM_EDGE_PX;
         // HOME gesture: an upward swipe that STARTED at the bottom edge → jump to Overview. (y grows downward;
         // the driver already applies the panel mirror, so sy near y_max = the physical bottom.)
-        if (!voice && sy >= home_edge && dy < -SWIPE_MIN_PX && abs(dy) > abs(dx)) {
+        if (!voice && HOME_START(sy, home_edge) && dy < -SWIPE_MIN_PX && abs(dy) > abs(dx)) {
             ESP_LOGI(TAG, "gesture: home (dy=%d)", dy);
             ui_home_overview();
         } else if (!voice && (dx > SWIPE_MIN_PX || dx < -SWIPE_MIN_PX) && abs(dx) > abs(dy)) {
@@ -399,20 +411,38 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
     // 50px on. Taken at its word that is a 34ms tap where the stroke began and a second stroke after it,
     // and the tap lands on whatever was under the thumb (a tab row, a card). Measured on the tab picker,
     // 2026-09-22: every unwanted pick was `held=34ms acked=1` with the rest of the swipe 50ms behind it.
-    // So a lift counts only once it has lasted LIFT_RELEASE_READS reads; until then the finger is held
-    // where it was last seen, and when it reappears the jump is a move, which LVGL scrolls.
-    static uint8_t lift_run;
-    static uint16_t held_x, held_y;
+    // So a lift counts only once it has lasted LIFT_RELEASE_MS; until then the finger is held where it
+    // was last seen, and when it reappears the jump is a move, which LVGL scrolls.
+    static bool lifting;
+    static uint32_t lift_t0, entry_t0;
+    static uint16_t held_x, held_y, entry_y;
+    static bool entry_open;
     if (pressed) {
-        lift_run = 0;
+        lifting = false;
         held_x = x;
         held_y = y;
-    } else if (activity_prev && ++lift_run < LIFT_RELEASE_READS) {
-        pressed = true;
-        x = held_x;
-        y = held_y;
-    } else {
-        lift_run = 0;
+    } else if (activity_prev) {
+        if (!lifting) { lifting = true; lift_t0 = lv_tick_get(); }
+        if (lv_tick_elaps(lift_t0) < LIFT_RELEASE_MS) {
+            pressed = true;
+            x = held_x;
+            y = held_y;
+        } else {
+            lifting = false;
+        }
+    }
+    // Home is a swipe from off the glass, and a finger coming on from the edge is already moving when
+    // the panel first sees it; a scroll starts from a finger at rest. Decided once, BEZEL_ENTRY_MS in.
+    if (pressed && !activity_prev) {
+        s_bezel_entry = false;
+        entry_open = y >= BOTTOM_EDGE_PX;
+        entry_y = y;
+        entry_t0 = lv_tick_get();
+    } else if (pressed && entry_open && lv_tick_elaps(entry_t0) >= BEZEL_ENTRY_MS) {
+        entry_open = false;
+        s_bezel_entry = (int)entry_y - (int)y >= BEZEL_ENTRY_PX;
+        ESP_LOGI(TAG, "edge press: %s (moved %d px in %u ms)", s_bezel_entry ? "bezel entry" : "resting, not home",
+                 (int)entry_y - (int)y, (unsigned)lv_tick_elaps(entry_t0));
     }
 #endif
     if (pressed && !activity_prev) {
@@ -463,7 +493,7 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
         // and leaves as a swipe up is the home gesture, not a tap: the button lost it the moment the finger
         // slid off (no PRESS_LOCK, ui_screens.c), and the recognisers never saw it, so it is decided here.
         int dx = axl - ax0, dy = ayl - ay0;
-        if (!ui_voice_is_active() && ay0 >= BOTTOM_EDGE_PX && dy < -SWIPE_MIN_PX && abs(dy) > abs(dx)) {
+        if (!ui_voice_is_active() && HOME_START(ay0, BOTTOM_EDGE_PX) && dy < -SWIPE_MIN_PX && abs(dy) > abs(dx)) {
             ESP_LOGI(TAG, "gesture: home (from a round action, dy=%d)", dy);
             ui_home_overview();
         }
@@ -695,5 +725,8 @@ void touch_init(void)
     s_indev = indev;
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(indev, touch_read);
+#if defined(DEVICE_BOARD_M5CORES3)
+    lv_timer_set_period(lv_indev_get_read_timer(indev), TOUCH_READ_MS);
+#endif
     ESP_LOGI(TAG, "%s touch ready", touch_chip_name());
 }
