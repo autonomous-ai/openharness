@@ -60,6 +60,9 @@ instrumentation pass precede 40 timed samples per action. Optional
 records profiles; `HARNESS_PRIMARY_OPERATION=cmd_t` restricts the action.
 See the [primary-workflow results](../../../docs/performance/2026-09-22-primary-workflows.md)
 for the isolated Cmd+O comparison, unchanged controls and rejected new-tab experiment.
+The [pane-caching experiment](../../../docs/performance/2026-09-22-pane-workflows.md)
+reports both input cadences and frame-phase diagnostics; less build work did not
+translate into faster tab switching, so that production change was rejected.
 
 ## Original AppKit event-queue runner
 
