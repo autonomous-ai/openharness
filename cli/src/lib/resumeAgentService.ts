@@ -45,8 +45,8 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
     // readiness probe would return it straight back. The desk sees the tile leave "Start failed".
     const unconfirmed = ownsRoute() ? registry.byAgent(saved.agentId) : undefined
     if (unconfirmed?.launch?.state === 'failed' && unconfirmed.launch.error === 'RESUME_UNCONFIRMED') {
-      const starting = registry.setLaunch(saved.agentId, { state: 'starting' })
-      if (starting) announceSession(starting)
+      // No await separates the verified row above from this synchronous update.
+      announceSession(registry.setLaunch(saved.agentId, { state: 'starting' })!)
     }
     const result = await waitForResumedAgent(saved, {
       current: ownsRoute,

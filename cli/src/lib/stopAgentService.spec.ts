@@ -16,7 +16,7 @@ beforeEach(() => {
   Object.assign(row, { sessionId: 'saved', processIdentity: { pid: 77, executable: 'codex', startMarker: 'fixture' } })
   deps = { registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     tmuxBackend: { kill: vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })) },
-    agentReconciler: { suppress: vi.fn(), trigger: vi.fn(async () => {}) },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
     forgetSession: vi.fn(id => registry.removeAgent(id)), markDeleted: vi.fn(), clearDeleted: vi.fn(),
   }
   vi.mocked(terminateDeletedAgent).mockResolvedValue('gone')
@@ -46,9 +46,82 @@ it.each(['terminal', 'without tmux', 'failed process', 'failed tmux'] as const)(
   if (mode === 'without tmux') { deps.tmuxBackend = null; row.runtimes = [{ backend: 'herdr', endpointId: 'fixture', paneId: '1' } as any] }
   if (mode === 'failed process') vi.mocked(terminateDeletedAgent).mockResolvedValue('failed')
   if (mode === 'failed tmux') vi.mocked(deps.tmuxBackend!.kill).mockResolvedValue({ state: 'unknown', dispatch: 'possibly_executed', reason: 'fixture' })
-  await createStopAgentService(deps)(row.agentId)
+  const stopping = createStopAgentService(deps)(row.agentId)
+  if (mode === 'failed process' || mode === 'failed tmux') {
+    await expect(stopping).rejects.toThrow('Could not confirm')
+    expect(registry.byAgent(row.agentId)).toBe(row)
+    expect(deps.forgetSession).not.toHaveBeenCalled()
+    expect(deps.agentReconciler.suppress).not.toHaveBeenCalled()
+  } else await stopping
   expect(stoppedAgents.get(row.agentId)).not.toBeNull(); expect(deps.agentReconciler.trigger).toHaveBeenCalledOnce()
   expect(stoppedAgents.beginResume(row.agentId) === null).toBe(mode === 'failed process' || mode === 'failed tmux')
+})
+
+it('does not publish a stopped row until the exact process and terminal have both stopped', async () => {
+  let finishProcess!: () => void
+  let finishPane!: () => void
+  vi.mocked(terminateDeletedAgent).mockImplementation(() => new Promise(resolve => { finishProcess = () => resolve('terminated') }))
+  vi.mocked(deps.tmuxBackend!.kill).mockImplementation(() => new Promise(resolve => { finishPane = () => resolve({ state: 'succeeded', dispatch: 'executed' }) }))
+  const stop = createStopAgentService(deps)
+  const stopping = stop(row.agentId)
+  await vi.waitFor(() => expect(finishProcess).toBeTypeOf('function'))
+  expect(registry.byAgent(row.agentId)).toBe(row)
+  expect(deps.forgetSession).not.toHaveBeenCalled()
+  finishPane()
+  await Promise.resolve()
+  expect(deps.forgetSession).not.toHaveBeenCalled()
+  expect(stop(row.agentId)).toBe(stopping)
+  finishProcess()
+  await stopping
+  expect(deps.forgetSession).toHaveBeenCalledOnce()
+  expect(deps.agentReconciler.holdRoute).toHaveBeenCalledOnce()
+  expect(deps.agentReconciler.releaseRoute).toHaveBeenCalledOnce()
+})
+
+it.each(['process', 'pane'] as const)('a rejected %s check retains history, releases its route and permits a safe retry', async side => {
+  if (side === 'process') vi.mocked(terminateDeletedAgent).mockRejectedValueOnce(new Error('probe failed'))
+  else vi.mocked(deps.tmuxBackend!.kill).mockRejectedValueOnce(new Error('transport failed'))
+  const stop = createStopAgentService(deps)
+  await expect(stop(row.agentId)).rejects.toThrow('Could not confirm')
+  expect(deps.stopJobs.size).toBe(0)
+  expect(registry.byAgent(row.agentId)).toBe(row)
+  expect(deps.agentReconciler.releaseRoute).toHaveBeenCalledOnce()
+  expect(deps.clearDeleted).toHaveBeenCalledWith(row.agentId)
+  await stop(row.agentId)
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
+})
+
+it.each(['no backend', 'no tmux route'] as const)('cannot confirm stopping a shell with %s', async mode => {
+  row.engine = 'terminal'
+  if (mode === 'no backend') deps.tmuxBackend = null
+  else row.runtimes = [{ backend: 'herdr', endpointId: 'fixture', paneId: '1' } as any]
+  await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('Could not confirm')
+  expect(deps.forgetSession).not.toHaveBeenCalled()
+})
+
+it.each(['removed', 'replaced', 'conversation', 'route'] as const)('does not remove a target %s during termination', async mode => {
+  vi.mocked(terminateDeletedAgent).mockImplementation(async () => {
+    if (mode === 'removed') registry.removeAgent(row.agentId)
+    else if (mode === 'conversation') row.sessionId = 'different-conversation'
+    else if (mode === 'route') row.runtimes = [{ backend: 'tmux', paneId: '%88' }]
+    else row.processIdentity = { ...row.processIdentity!, pid: 88 }
+    return 'terminated'
+  })
+  await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('changed while pausing')
+  expect(deps.forgetSession).not.toHaveBeenCalled()
+})
+it.each(['capture', 'termination'] as const)('accepts a hook rebuilding the same process during %s', async stage => {
+  const replacement = { ...row, title: 'Updated title',
+    processIdentity: { startMarker: 'fixture', executable: 'codex', pid: 77 },
+    runtimes: row.runtimes.map(runtime => ({ ...runtime })),
+  }
+  const rebuild = () => { vi.spyOn(registry, 'resolve').mockReturnValue(replacement) }
+  if (stage === 'capture') vi.mocked(captureResumeIdentity).mockImplementation(async session => { rebuild(); return session })
+  else vi.mocked(terminateDeletedAgent).mockImplementation(async () => { rebuild(); return 'terminated' })
+  await createStopAgentService(deps)(row.agentId)
+  expect(deps.forgetSession).toHaveBeenCalledExactlyOnceWith(row.agentId, { force: true })
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
+  expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
 })
 it('only signals through the validated process deleter and does not erase a newer stop job', async () => {
   const signal = vi.spyOn(process, 'kill').mockReturnValue(true)

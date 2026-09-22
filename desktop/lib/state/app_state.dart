@@ -441,6 +441,7 @@ class AppNotifier extends ChangeNotifier {
   final _machineEdits = <String, _MachineEdit>{};
   final _agentRenames = <(String, String), _AgentRename>{};
   final _agentStops = <(String, String), _AgentStop>{};
+  final _agentPauses = <(String, String), Future<String?>>{};
   final _agentForks = <(String, String), AgentForkAttempt>{};
   final _agentRestarts = <(String, String), AgentRestartAttempt>{};
   int _machineEditRevision = 0;
@@ -608,6 +609,7 @@ class AppNotifier extends ChangeNotifier {
     _machineEdits.clear();
     _agentRenames.clear();
     _agentStops.clear();
+    _agentPauses.clear();
     _agentForks.clear();
     _agentRestarts.clear();
     _confirmedMachineEdits.clear();
@@ -4071,6 +4073,7 @@ class AppNotifier extends ChangeNotifier {
           prev.codexHome != agent.codexHome ||
           prev.parentAgentId != agent.parentAgentId ||
           prev.project != agent.project ||
+          prev.lastActivityAt != agent.lastActivityAt ||
           prev.launchState != agent.launchState ||
           prev.launchError != agent.launchError ||
           prev.launchDetail != agent.launchDetail ||
@@ -6891,6 +6894,51 @@ class AppNotifier extends ChangeNotifier {
         : null;
   }
 
+  Future<String?>? pendingAgentPause(String machineId, String agentId) =>
+      _agentPauses[(machineId, agentId)];
+
+  /// Keep confirmed paused work visible even if its subsequent inventory refresh
+  /// fails or the manager is dismissed. The daemon remains the durable authority.
+  Future<String?> pauseAgent(String machineId, String agentId) {
+    final key = (machineId, agentId);
+    if (_agentPauses[key] case final pending?) return pending;
+    final machine = stateOf(machineId);
+    final agent = machine?.agents.where((a) => a.id == agentId).firstOrNull;
+    if (machine == null || agent == null || !agent.canResumeConversation) {
+      return Future.value(
+        'This harness has no supported saved conversation to resume.',
+      );
+    }
+    if (agent.isStopped) return Future.value(null);
+    final revision = _authRevision;
+    late final Future<String?> pause;
+    pause = (() async {
+      final error = await deleteAgent(machineId, agentId);
+      if (!_machineWorkCurrent(machine, revision)) return error;
+      final current = machine.agents.where((a) => a.id == agentId).firstOrNull;
+      if (error == null && current == null) {
+        _upsertAgent(
+          machine,
+          agent.copyWith(status: 'stopped', terminalAvailable: false),
+        );
+        notifyListeners();
+      }
+      await reloadMachineData(machineId);
+      if (!_machineWorkCurrent(machine, revision)) return error;
+      final observed = machine.agents.where((a) => a.id == agentId).firstOrNull;
+      // A lost reply is resolved by authoritative inventory, never by resending Stop.
+      if (observed?.isStopped == true && observed?.sessionId == agent.sessionId) {
+        return null;
+      }
+      return error;
+    })().whenComplete(() {
+      if (identical(_agentPauses[key], pause)) _agentPauses.remove(key);
+      if (_authWorkCurrent(revision)) notifyListeners();
+    });
+    _agentPauses[key] = pause;
+    return pause;
+  }
+
   /// Stops the process through the CLI, retaining project files and history.
   /// The request outlives its confirmation and is shared by every view.
   ///
@@ -6972,12 +7020,20 @@ class AppNotifier extends ChangeNotifier {
             'Stop failed: ${detail is String && detail.isNotEmpty ? detail : code}';
         return;
       }
+      if (result['deleted'] != true) {
+        error = 'Could not confirm the pause. Refresh to check its status.';
+        return;
+      }
       await _removeAgent(request.machine, agentId);
     } catch (failure) {
       if (!request.confirmed) {
-        error = failure is WsRequestTimeout
-            ? 'Could not confirm the stop. Refresh agents to check its status.'
-            : 'Could not stop the agent. Try again.';
+        error = switch (failure) {
+          WsRequestFailure(:final code, :final detail) =>
+            'Stop failed: ${detail != null && detail.isNotEmpty ? detail : code}',
+          WsRequestTimeout() =>
+            'Could not confirm the stop. Refresh agents to check its status.',
+          _ => 'Could not stop the agent. Try again.',
+        };
       }
     } finally {
       if (identical(_agentStops[(machineId, agentId)], request)) {
@@ -7037,6 +7093,11 @@ class AppNotifier extends ChangeNotifier {
 
   /// Attach to a running harness or resume its saved conversation immediately.
   Future<RestartAgentResult> resumeAgent(String machineId, String agentId) {
+    if (pendingAgentPause(machineId, agentId) != null) {
+      return Future.value(const RestartAgentResult(
+        error: 'The harness is still pausing. Try again in a moment.',
+      ));
+    }
     final agent = stateOf(machineId)?.agents
         .where((agent) => agent.id == agentId)
         .firstOrNull;

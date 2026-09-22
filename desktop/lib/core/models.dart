@@ -238,6 +238,9 @@ class Agent {
   final GridWebSearch? gridWebSearch;
   final String? parentAgentId;
   final AgentProject? project;
+
+  /// The CLI's transcript/hook activity time, not its registry refresh time.
+  final DateTime? lastActivityAt;
   final String status;
   final String launchState;
   final String? launchError;
@@ -307,6 +310,7 @@ class Agent {
     this.gridWebSearch,
     this.parentAgentId,
     this.project,
+    this.lastActivityAt,
     this.status = 'active',
     this.launchState = 'ready',
     this.launchError,
@@ -327,6 +331,11 @@ class Agent {
   });
 
   bool get isStopped => status == 'stopped';
+
+  /// Exact saved-conversation resume is currently implemented for these engines.
+  bool get canResumeConversation =>
+      (engine == 'claude' || engine == 'codex') &&
+      sessionId?.isNotEmpty == true;
 
   /// Explicit names win. An automatic CLI label gives way to its session title.
   String get displayName => _automaticHarnessName.hasMatch(name)
@@ -393,6 +402,9 @@ class Agent {
       gridWebSearch: GridWebSearch.fromWire(grid?['webSearch']),
       parentAgentId: _safeLabel(j['parentAgentId'] ?? j['parentId']),
       project: AgentProject.fromJson(j['project']),
+      lastActivityAt: j['updatedAt'] is String
+          ? DateTime.tryParse(j['updatedAt'] as String)
+          : null,
       status: (j['status'] as String?) ?? 'active',
       launchState: launchState,
       launchError: launchState == 'failed' ? _safeLabel(launch['error']) : null,
@@ -420,37 +432,39 @@ class Agent {
     );
   }
 
-  Agent copyWith({String? name}) => Agent(
-    id: id,
-    sessionId: sessionId,
-    name: name ?? this.name,
-    title: title,
-    engine: engine,
-    engineDisplayName: engineDisplayName,
-    engineIconHint: engineIconHint,
-    codexHome: codexHome,
-    gridModel: gridModel,
-    gridWebSearch: gridWebSearch,
-    parentAgentId: parentAgentId,
-    project: project,
-    status: status,
-    launchState: launchState,
-    launchError: launchError,
-    launchDetail: launchDetail,
-    terminalAvailable: terminalAvailable,
-    terminalUnavailableReason: terminalUnavailableReason,
-    dsh: dsh,
-    dshName: dshName,
-    viewerUrl: viewerUrl,
-    viewerError: viewerError,
-    viewerName: viewerName,
-    verdict: verdict,
-    forkedFrom: forkedFrom,
-    forkable: forkable,
-    permissionMode: permissionMode,
-    bypassPermission: bypassPermission,
-    namedAgent: namedAgent,
-  );
+  Agent copyWith({String? name, String? status, bool? terminalAvailable}) =>
+      Agent(
+        id: id,
+        sessionId: sessionId,
+        name: name ?? this.name,
+        title: title,
+        engine: engine,
+        engineDisplayName: engineDisplayName,
+        engineIconHint: engineIconHint,
+        codexHome: codexHome,
+        gridModel: gridModel,
+        gridWebSearch: gridWebSearch,
+        parentAgentId: parentAgentId,
+        project: project,
+        lastActivityAt: lastActivityAt,
+        status: status ?? this.status,
+        launchState: launchState,
+        launchError: launchError,
+        launchDetail: launchDetail,
+        terminalAvailable: terminalAvailable ?? this.terminalAvailable,
+        terminalUnavailableReason: terminalUnavailableReason,
+        dsh: dsh,
+        dshName: dshName,
+        viewerUrl: viewerUrl,
+        viewerError: viewerError,
+        viewerName: viewerName,
+        verdict: verdict,
+        forkedFrom: forkedFrom,
+        forkable: forkable,
+        permissionMode: permissionMode,
+        bypassPermission: bypassPermission,
+        namedAgent: namedAgent,
+      );
 
   /// A mode id as `PERMISSION_MODES` spells them (`acceptEdits`, `readOnly`):
   /// one word. Not checked against this build's own list — the daemon that

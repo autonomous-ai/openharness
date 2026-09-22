@@ -760,7 +760,7 @@ void main() {
   );
 
   testWidgets(
-    'notifications show only current questions and navigate to their originating swarm',
+    'attention shortcut opens current questions in Harnesses and their originating swarm',
     (tester) async {
       final app = createApp();
       await app.addAgentToSwarm('m', 'a0');
@@ -793,7 +793,7 @@ void main() {
       });
       await chord(tester, LogicalKeyboardKey.keyI, shift: true);
       await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('No agents need your input'), findsOneWidget);
+      expect(find.text('No harnesses need your input'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
       app.dispose();
     },

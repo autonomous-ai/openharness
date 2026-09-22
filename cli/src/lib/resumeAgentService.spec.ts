@@ -229,6 +229,12 @@ describe('existing runtime and readiness verification', () => {
     const result = start(); await vi.advanceTimersByTimeAsync(500)
     expect(await result).toMatchObject({ ok: true }); expect(resolvePaneEngineProcess).toHaveBeenCalledTimes(2)
   })
+  it('honors a stop requested as the newly allocated runtime is announced', async () => {
+    vi.mocked(deps.announceSession).mockImplementation(() => deps.restartJobs.cancel(saved.agentId))
+    expect(await start()).toMatchObject({ error: 'AGENT_CHANGED' })
+    expect(deps.stoppedAgents.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
+    expect(deps.stoppedAgents.beginResume(saved.agentId)).toBeNull()
+  })
   it.each([true, false])('cancels while clearing remain-on-exit, terminal=%s', async terminal => {
     if (terminal) rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' })
     vi.mocked(clearPaneRemainOnExit).mockImplementation(async () => { deps.restartJobs.cancel(saved.agentId) })

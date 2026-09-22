@@ -14,7 +14,7 @@ afterEach(() => {
 })
 
 describe('TmuxBackend lifecycle', () => {
-  it('creates a detached session and kills the session resolved from its root pane', async () => {
+  it('creates a detached session and closes only its exact pane', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-lifecycle-'))
     dirs.push(dir)
     const calls = join(dir, 'calls')
@@ -45,9 +45,29 @@ esac
       // terminal for its colours (OSC 10/11) once, at startup, and never again.
       'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-test ; set-option -w remain-on-exit on ; set-option -w window-style bg=#181818,fg=#f5f5f5',
       'set-option -t %42 mouse on',
-      'display-message -p -t %42 #{session_id}',
-      'kill-session -t $7',
+      'kill-pane -t %42',
     ])
+  })
+
+  it.each(['gone', 'present', 'unknown', 'malformed', 'no server'] as const)('verifies %s inventory after a failed pane-close reply', async mode => {
+    const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-close-'))
+    dirs.push(dir)
+    const inventory = mode === 'gone' ? "printf '%%43\\n'" : mode === 'present' ? "printf '%%42\\n'"
+      : mode === 'malformed' ? "printf 'not a pane\\n'" : mode === 'no server'
+        ? "printf 'no server running on /tmp/fixture\\n' >&2; exit 1" : 'exit 1'
+    writeFileSync(join(dir, 'tmux'), `#!/bin/sh\nif [ "$1" = list-panes ]; then\n${inventory}\nelse\nexit 1\nfi\n`, { mode: 0o700 })
+    process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
+    const backend = new TmuxBackend()
+    // Even if discovery hides this pane (e.g. its session was renamed), the
+    // exact-pane check must see it and refuse a false successful pause.
+    const discovery = vi.spyOn(backend, 'inventory').mockResolvedValue({ state: 'available', roots: [] })
+    expect((await backend.kill({ backend: 'tmux', paneId: '%42' })).state).toBe(mode === 'gone' || mode === 'no server' ? 'succeeded' : 'unknown')
+    expect(discovery).not.toHaveBeenCalled()
+  })
+
+  it('rejects broad tmux targets before executing a command', async () => {
+    const backend = new TmuxBackend()
+    expect(await backend.kill({ backend: 'tmux', paneId: '*' })).toMatchObject({ state: 'failed', dispatch: 'not_started' })
   })
 
   it('styles panes with the theme the app last sent, and re-styles existing ones on a scan', async () => {

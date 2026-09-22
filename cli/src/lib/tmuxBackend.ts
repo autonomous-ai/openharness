@@ -33,7 +33,7 @@ import {
   setPaneWindowStyle,
 } from './tmux.js'
 import { DEFAULT_HOST_THEME, windowStyleOf, type HostTheme } from './hostTheme.js'
-import { listTmuxPanes } from './tmuxAgentDiscovery.js'
+import { isNoTmuxServerError, listTmuxPanes } from './tmuxAgentDiscovery.js'
 import { terminalRouteKey } from './terminalRuntime.js'
 
 const TMUX_KEYS: Record<TerminalLogicalKey, string> = {
@@ -190,12 +190,26 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
   }
 
   async kill(runtime: TmuxRuntimeRef): Promise<TerminalActionResult> {
-    const sessionId = await this.resolveSessionId(runtime.paneId)
-    if (!sessionId) return terminalActionNotStarted('tmux session could not be resolved from pane')
+    if (!/^%\d+$/.test(runtime.paneId)) return terminalActionNotStarted('invalid tmux pane identity')
+    // Discovered harnesses can share a tmux session with unrelated work. The
+    // canonical pane id is the entire target; never widen this to kill-session.
     const ok = await new Promise<boolean>((resolve) => {
-      execFile('tmux', ['kill-session', '-t', sessionId], { timeout: 5_000 }, (error) => resolve(!error))
+      execFile('tmux', ['kill-pane', '-t', runtime.paneId], { timeout: 5_000 }, (error) => resolve(!error))
     })
-    return legacyActionResult(ok, 'tmux session close')
+    if (ok) return TERMINAL_ACTION_SUCCEEDED
+    // The engine may have exited and removed its pane before the parallel PID
+    // check completed. Only authoritative inventory makes that an idempotent success.
+    // Use all panes here: discovery deliberately hides sessions that were renamed
+    // or created elsewhere, and their absence from discovery is not proof of exit.
+    const absent = await new Promise<boolean>(resolve => {
+      execFile('tmux', ['list-panes', '-a', '-F', '#{pane_id}'], { timeout: 2_000 }, (error, stdout) => {
+        if (error) { resolve(isNoTmuxServerError(error.message)); return }
+        const ids = stdout.trim().split('\n').filter(Boolean)
+        resolve(ids.every(id => /^%\d+$/.test(id)) && !ids.includes(runtime.paneId))
+      })
+    })
+    if (absent) return TERMINAL_ACTION_SUCCEEDED
+    return legacyActionResult(false, 'tmux pane close')
   }
 
   /**

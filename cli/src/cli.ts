@@ -4943,7 +4943,7 @@ async function runForeground(session: AuthSession): Promise<void> {
 
   /**
    * Stop Harness (`agent_delete`) archives its conversation and launch settings, removes the live
-   * registry entry, and kills its containing tmux session. Exact PID/start-marker validation guards the engine's
+   * registry entry, and closes only its exact tmux pane. Exact PID/start-marker validation guards the engine's
    * SIGTERM/SIGKILL fallback. Engine conversation files, recaps and the Harness name remain on disk.
    */
   const stopJobs = new Map<string, Promise<void>>()
