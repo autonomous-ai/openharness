@@ -15,6 +15,8 @@ import 'package:harness/core/test_run.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/store/store_demo_dialog.dart';
 import 'package:harness/store/store_showcase.dart';
+import 'package:harness/store/store_collections.dart';
+import 'package:harness/store/store_sessions.dart';
 
 // FLUTTER_TEST=1 flutter test -d macos --no-pub \
 //   --dart-define=STORE_DEMO_CHECKOUT=/absolute/path/to/openharness \
@@ -33,6 +35,74 @@ void main() {
     await windowManager.show();
     await windowManager.focus();
   });
+
+  testWidgets(
+    'featured recording plays from its card before opening the harness',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      expect(checkout, isNotEmpty, reason: 'Pass STORE_DEMO_CHECKOUT');
+      final entry = DshEntry.fromJson({
+        ...jsonDecode(
+          await File('$checkout/store/agents/blender/harness.json')
+              .readAsString(),
+        ) as Map<String, dynamic>,
+        ...jsonDecode(
+          await File('$checkout/store/agents/blender/store.json')
+              .readAsString(),
+        ) as Map<String, dynamic>,
+      })!;
+      final opened = <String>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: StoreSessions(
+              sessions: storeRecordedSessions([entry]),
+              onOpen: opened.add,
+            ),
+          ),
+        ),
+      );
+      expect(find.byType(WebViewWidget), findsNothing);
+      await tester.tap(
+        find.byKey(const ValueKey('store-session-watch:autonomous/blender')),
+      );
+      await tester.pump();
+      await _wait(
+        tester,
+        () async => find.byType(WebViewWidget).evaluate().isNotEmpty,
+      );
+      final controller = tester
+          .widget<WebViewWidget>(find.byType(WebViewWidget))
+          .platform
+          .params
+          .controller;
+      await _wait(tester, () async {
+        final state = await _video(controller);
+        return state['ready'] >= 2 && state['width'] > 0 && state['time'] > 0;
+      });
+      final playing = await _video(controller);
+      expect(playing['source'], entry.examples.first.video);
+      expect(playing['paused'], false);
+      expect(playing['error'], isNull);
+      debugPrint('Featured Blender recording decoded: $playing');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      await _wait(
+        tester,
+        () async => (await _video(controller))['present'] == false,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('store-session-open:autonomous/blender')),
+      );
+      await tester.pumpAndSettle();
+      expect(opened, ['autonomous/blender']);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
 
   testWidgets('every published recording decodes, plays and releases its media', (
     tester,
