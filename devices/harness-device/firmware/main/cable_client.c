@@ -803,6 +803,12 @@ static void handle_message(const cJSON *root)
     }
     if (strcmp(t, "toast") == 0) { ui_cable_toast(str_of(p, "text")); return; }
     if (strcmp(t, "fw.offer") == 0) {
+#if defined(DEVICE_BOARD_M5CORES3)
+        // The daemon's images are the round dial's, and this board would install one: flashed directly it
+        // has two OTA slots. Declined, silently as every refusal here is — a CoreS3 is updated over USB.
+        ESP_LOGW(TAG, "fw.offer %s declined: dial images are not for a CoreS3", str_of(p, "version") ? str_of(p, "version") : "?");
+        return;
+#endif
         const cJSON *size = cJSON_GetObjectItemCaseSensitive(p, "size");
         // Declining is silence: fw_update_offer() answers with `fw.accept` only when it is willing, and
         // the daemon offers again on the next hello.

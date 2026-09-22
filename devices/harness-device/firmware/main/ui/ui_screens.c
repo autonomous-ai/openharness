@@ -1087,7 +1087,9 @@ static void statusbar_tick(lv_timer_t *t)
 
     refresh_conn_ui();   // project dot colors + the "Reconnecting…" badge
 #if defined(DEVICE_BOARD_M5CORES3)
-    display_cores3_set_battery(power_battery_pct(), power_is_charging());
+    // Plugged in, not charging: the charger stops when the cell is full, and a bolt that came and went at
+    // 100% read as a fault.
+    display_cores3_set_battery(power_battery_pct(), power_is_charging() || power_is_on_external());
     display_cores3_set_wifi(wifi_sta_state() == WIFI_STA_CONNECTED, wifi_sta_rssi());
 #endif
 }
