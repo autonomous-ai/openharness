@@ -152,7 +152,7 @@ void main() {
       await tester.tap(find.byTooltip('Inspect director'));
       await tester.pump();
       expect(app.activeSwarm.panes.any((p) => p.agentId == 'a0'), isTrue);
-      await tester.tap(find.byTooltip('New project (⌘P)'));
+      await tester.tap(find.byTooltip('New project'));
       await tester.pumpAndSettle();
       expect(find.byType(OrchestratorLauncher), findsOneWidget);
       await tester.tap(find.byTooltip('Close'));
@@ -329,7 +329,7 @@ void main() {
       final folder = find.byWidgetPredicate(
         (w) =>
             w is TextField &&
-            w.decoration?.labelText == 'Project folder (optional)',
+            w.decoration?.hintText == 'Absolute path to an existing folder',
       );
       await tester.ensureVisible(folder);
       await tester.enterText(folder, ' /tmp/fixture-project ');

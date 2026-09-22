@@ -2,6 +2,38 @@ import Cocoa
 import FlutterMacOS
 import ImageIO
 
+/// The title bar's tabs and Store action wear the terminal's face at the chrome size Flutter
+/// sends (`AppType.chromeSize`), never the terminal's own size: ⌘+ and ⌘− zoom the terminal alone.
+/// Menus are not chrome — they use the system menu font, like every other Mac app's.
+enum HarnessTypography {
+  private static var families = [".AppleSystemUIFontMonospaced"]
+  private(set) static var size: CGFloat = 12
+
+  @discardableResult
+  static func update(_ state: [String: Any]) -> Bool {
+    let previousFamilies = families
+    let previousSize = size
+    if let family = state["fontFamily"] as? String {
+      families = [family] + (state["fontFallbacks"] as? [String] ?? [])
+    }
+    if let value = state["fontSize"] as? NSNumber, value.doubleValue.isFinite, value.doubleValue >= 9, value.doubleValue <= 22 {
+      size = CGFloat(value.doubleValue)
+    }
+    return families != previousFamilies || size != previousSize
+  }
+
+  /// The tab label's face. [size] defaults to the chrome size; the ⌘1 badge asks one point less.
+  static func font(weight: NSFont.Weight = .regular, size: CGFloat? = nil) -> NSFont {
+    let size = size ?? self.size
+    let base = families.first == ".AppleSystemUIFontMonospaced"
+      ? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+      : families.compactMap { NSFont(name: $0, size: size) }.first
+        ?? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+    return weight == .bold || weight == .semibold
+      ? NSFontManager.shared.convert(base, toHaveTrait: .boldFontMask) : base
+  }
+}
+
 /// Real AppKit controls in the title bar, beside the system traffic lights.
 /// https://developer.apple.com/documentation/appkit/nstitlebaraccessoryviewcontroller/layoutattribute
 final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
@@ -42,7 +74,9 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       switch call.method {
       case "configure":
         let state = call.arguments as? [String: Any] ?? [:]
+        HarnessTypography.update(state)
         self.configure(palette: state["palette"] as? [String: Any])
+        self.strip.updateTypography()
         result(true)
       case "update":
         let state = call.arguments as? [String: Any] ?? [:]
@@ -256,13 +290,13 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     if let file = main.item(withTitle: "File") { main.removeItem(file) }
     let file = NSMenu(title: "File")
     add(file, "New Tab", "t", "new")
-    add(file, "New Pane…", "p", "addAgent")
+    add(file, "Open Harness…", "o", "addAgent")
     // ⌘⇧T, as in a terminal app. It used to be Reopen Last Closed (History menu), which keeps its
     // row and loses its default chord — the Dart keymap (`swarm.reopen`) is where both are decided,
     // and applyMenuKeys rewrites every equivalent here from it.
     add(file, "New Terminal", "t", "newTerminal", [.command, .shift])
     // ⌘⇧N: another agent like the focused pane's, fresh conversation (Dart: `agent.clone`).
-    add(file, "Clone Agent", "n", "cloneAgent", [.command, .shift])
+    add(file, "Clone Harness", "n", "cloneAgent", [.command, .shift])
     add(file, "Rename Tab…", "r", "renameActive", [.command, .shift])
     add(file, "Close Tab", "w", "closeActive")
     file.addItem(.separator())
@@ -279,7 +313,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // Native menu hints mirror Flutter; the shared picker owns all editing.
     if let edit = main.item(withTitle: "Edit")?.submenu {
       edit.addItem(.separator())
-      add(edit, "Search Commands…", "p", "commands", [.command, .shift])
+      add(edit, "Search Commands…", "p", "commands")
     }
     if let view = main.item(withTitle: "View")?.submenu {
       view.addItem(.separator())
@@ -384,6 +418,14 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       let submenu = NSMenu(title: machine.name)
       for agent in machine.agents {
         let child = NSMenuItem(title: agent.title + (machine.shared ? " · View only" : ""), action: #selector(machineAgentAction(_:)), keyEquivalent: "")
+        if agent.stopped && !machine.shared {
+          // Still a choice — it resumes — but not an attach, so the row says so in the quieter colour,
+          // the way a machine row carries its status after the name.
+          let label = NSMutableAttributedString(string: agent.title, attributes: [.font: NSFont.menuFont(ofSize: 0)])
+          label.append(NSAttributedString(string: " · stopped",
+            attributes: [.font: NSFont.menuFont(ofSize: 0), .foregroundColor: NSColor.secondaryLabelColor]))
+          child.attributedTitle = label
+        }
         child.target = self
         child.representedObject = ["machineId": machine.id, "agentId": agent.id]
         child.image = historyIcons.image(engine: agent.engine, asset: agent.iconAsset)
@@ -813,6 +855,8 @@ private struct SwarmMachineAgent: Equatable {
   let engine: String?
   let iconAsset: String?
   let canOpen: Bool
+  /// Its conversation is saved but nothing is running: choosing it resumes rather than attaches.
+  let stopped: Bool
   init?(_ row: [String: Any]) {
     guard let id = row["id"] as? String, !id.isEmpty,
           let title = row["title"] as? String, !title.isEmpty else { return nil }
@@ -821,6 +865,7 @@ private struct SwarmMachineAgent: Equatable {
     engine = row["engine"] as? String
     iconAsset = row["iconAsset"] as? String
     canOpen = row["canOpen"] as? Bool == true
+    stopped = row["stopped"] as? Bool == true
   }
 }
 
@@ -1056,7 +1101,9 @@ private final class SwarmHistoryMenuRow: NSView {
   var highlighted = false { didSet { needsDisplay = true } }
   var machineFrame: NSRect {
     let width = ceil(SwarmMenuText.width(entry.menuMachine))
-    return NSRect(x: bounds.width - 18 - width, y: 4, width: width, height: 18)
+    let font = NSFont.menuFont(ofSize: 0)
+    let height = ceil(font.ascender - font.descender + font.leading)
+    return NSRect(x: bounds.width - 18 - width, y: (bounds.height - height) / 2, width: width, height: height)
   }
 
   init(item: NSMenuItem, entry: SwarmHistoryEntry, width: CGFloat) {
@@ -1107,7 +1154,7 @@ private final class SwarmHistoryMenuRow: NSView {
     }
     let right = entry.menuMachine.isEmpty ? bounds.width - 18 : machineFrame.minX - 20
     let name = SwarmMenuText.fitted(entry.title, width: max(0, right - 48))
-    (name as NSString).draw(at: NSPoint(x: 48, y: 4), withAttributes: attributes)
+    (name as NSString).draw(at: NSPoint(x: 48, y: machineFrame.minY), withAttributes: attributes)
     (entry.menuMachine as NSString).draw(at: machineFrame.origin, withAttributes: attributes)
   }
   override func mouseUp(with event: NSEvent) {
@@ -1161,7 +1208,7 @@ private struct SwarmHistoryEntry: Equatable {
   let iconAsset: String?
   let canReopen: Bool
   var menuName: String { SwarmMenuText.fitted(title, width: machineName.isEmpty ? 330 : 250) }
-  var menuMachine: String { SwarmMenuText.fitted(machineName, width: 110) }
+  var menuMachine: String { SwarmMenuText.fitted(machineName, width: 140) }
 
   func menuTitle(trailingEdge: CGFloat? = nil) -> NSAttributedString {
     let font = NSFont.menuFont(ofSize: 0)
@@ -1270,6 +1317,7 @@ private final class SwarmHistoryIcons {
         let name = id.split(separator: "/").last.map(String.init) ?? id
         let initial = String(name.first ?? "A").uppercased() as NSString
         let attributes: [NSAttributedString.Key: Any] = [
+          // Raster artwork for a fixed 16px fallback icon, not a UI text label.
           .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold),
           .foregroundColor: NSColor.black,
         ]
@@ -1361,7 +1409,7 @@ private final class SwarmStoreButton: SwarmIconButton {
   var palette = SwarmNativePalette() { didSet { needsDisplay = true } }
   var preferredWidth: CGFloat {
     ceil((title as NSString).size(withAttributes: [
-      .font: font ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .medium),
+      .font: font ?? HarnessTypography.font(weight: .medium),
     ]).width) + 48
   }
 
@@ -1380,7 +1428,7 @@ private final class SwarmStoreButton: SwarmIconButton {
       from: .zero, operation: .sourceOver, fraction: isEnabled ? 1 : 0.45,
       respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
     let attributes: [NSAttributedString.Key: Any] = [
-      .font: font ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .medium),
+      .font: font ?? HarnessTypography.font(weight: .medium),
       .foregroundColor: palette.accent.withAlphaComponent(isEnabled ? 1 : 0.45),
     ]
     let text = title as NSString
@@ -1477,7 +1525,7 @@ private final class SwarmTabStrip: NSView {
     storeButton.isBordered = false
     storeButton.palette = palette
     storeButton.image = icons.image(engine: "store", asset: "assets/store/polymath.png")
-    storeButton.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
+    storeButton.font = HarnessTypography.font(weight: .medium)
     storeButton.target = self
     storeButton.action = #selector(openStore)
     storeButton.isEnabled = false
@@ -1518,16 +1566,20 @@ private final class SwarmTabStrip: NSView {
     }
   }
 
+  func updateTypography() {
+    storeButton.font = HarnessTypography.font(weight: .medium)
+    for tab in tabs {
+      tab.labelFont = HarnessTypography.font()
+    }
+    needsLayout = true
+  }
+
   func update(_ state: [String: Any]) {
     // Workspace teardown clears its controls without changing appearance.
     if let palette = state["palette"] as? [String: Any] { updatePalette(palette) }
     actionsEnabled = state["enabled"] as? Bool == true
-    let families = [state["fontFamily"] as? String].compactMap { $0 }
-      + (state["fontFallbacks"] as? [String] ?? [])
-    storeButton.font = families.first == ".AppleSystemUIFontMonospaced"
-      ? NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
-      : families.compactMap { NSFont(name: $0, size: 12) }.first
-        ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
+    HarnessTypography.update(state)
+    storeButton.font = HarnessTypography.font(weight: .medium)
     let rows = state["tabs"] as? [[String: Any]] ?? []
     let nextActiveId = state["activeId"] as? String ?? ""
     revealActiveAfterLayout = revealActiveAfterLayout || nextActiveId != activeId
@@ -1541,12 +1593,7 @@ private final class SwarmTabStrip: NSView {
       guard let id = row["id"] as? String else { return nil }
       let tab = previous[id] ?? SwarmTabButton(id: id)
       tab.palette = palette
-      let families = [state["fontFamily"] as? String].compactMap { $0 }
-        + (state["fontFallbacks"] as? [String] ?? [])
-      tab.labelFont = families.first == ".AppleSystemUIFontMonospaced"
-        ? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        : families.compactMap { NSFont(name: $0, size: 13) }.first
-          ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+      tab.labelFont = HarnessTypography.font()
       tab.name = row["name"] as? String ?? "New Tab"
       let count = row["agentCount"] as? Int ?? 0
       // The Harness Store tab holds no agents; without its own mark it would wear New Tab's plus.
@@ -1714,9 +1761,12 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     get { iconView.image }
     set { iconView.image = newValue }
   }
-  // 14.3: a tenth up from the 13 the rest of the chrome uses (owner, 2026-09-21).
-  var labelFont = NSFont.monospacedSystemFont(ofSize: 14.3, weight: .regular) {
+  var labelFont = HarnessTypography.font() {
     didSet { if oldValue != labelFont { invalidateLabel() } }
+  }
+  /// The ⌘1 badge: the tab's face one point under its label, so the name leads.
+  private var badgeFont: NSFont {
+    HarnessTypography.font(size: max(9, labelFont.pointSize - 1))
   }
   private var cachedLabel: NSAttributedString?
   var actionsEnabled = true {
@@ -1858,8 +1908,11 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     if !compact {
       let label = self.label
       let labelHeight = label.size().height
+      let trailing = shortcut.map { value in
+        max(42, ceil(("⌘\(value)" as NSString).size(withAttributes: [.font: badgeFont]).width) + 22)
+      } ?? 42
       label.draw(in: NSRect(x: 46, y: contentCenterY - labelHeight / 2,
-        width: bounds.width - 88, height: labelHeight))
+        width: max(0, bounds.width - 46 - trailing), height: labelHeight))
     }
     if attention {
       NSColor.systemOrange.setFill()
@@ -1872,10 +1925,11 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       let paragraph = NSMutableParagraphStyle()
       paragraph.alignment = .right
       let badge = NSAttributedString(string: "⌘\(shortcut)",
-        attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium),
+        attributes: [.font: badgeFont,
           .foregroundColor: NSColor(white: 1, alpha: selected ? 0.7 : 0.5), .paragraphStyle: paragraph])
       let badgeHeight = badge.size().height
-      badge.draw(in: NSRect(x: bounds.width - 46, y: contentCenterY - badgeHeight / 2, width: 32, height: badgeHeight))
+      let badgeWidth = max(32, ceil(badge.size().width))
+      badge.draw(in: NSRect(x: bounds.width - 14 - badgeWidth, y: contentCenterY - badgeHeight / 2, width: badgeWidth, height: badgeHeight))
     }
   }
   // Overflowed tabs might not be drawn. Their names and selection still need

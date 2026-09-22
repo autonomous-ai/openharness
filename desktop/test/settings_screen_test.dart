@@ -19,9 +19,8 @@ import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/settings/settings_nav.dart';
 import 'package:harness/settings/settings_section.dart';
 import 'package:harness/settings/sections/shortcuts_section.dart';
-import 'package:harness/shared/widgets/app_select_field.dart';
 import 'package:harness/shared/theme/app_theme.dart';
-import 'package:harness/shortcuts/keymap.dart';
+import 'package:harness/shortcuts/keyboard_practice.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/harness_customize_pane.dart';
 
@@ -74,8 +73,8 @@ void main() {
 
   testWidgets('Settings lists customization under Preferences', (tester) async {
     await openSettings(tester);
-    expect(find.text('Preferences'), findsOneWidget);
-    expect(find.text('Help'), findsOneWidget);
+    expect(find.text('PREFERENCES'), findsOneWidget);
+    expect(find.text('HELP'), findsOneWidget);
     expect(find.text('Usage'), findsNWidgets(2));
     expect(find.text('Customize'), findsOneWidget);
     expect(find.text('Keyboard shortcuts'), findsOneWidget);
@@ -98,8 +97,11 @@ void main() {
     }
     await tester.tap(find.byKey(const ValueKey('customize-appearance')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('appearance-ui-size-field')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('customize-terminal')));
+    expect(find.byKey(const Key('appearance-ui-size-field')), findsNothing);
+    // Four tabs scroll at this window width; bring Terminal into view first.
+    final terminalTab = find.byKey(const ValueKey('customize-terminal'));
+    await tester.ensureVisible(terminalTab);
+    await tester.tap(terminalTab);
     await tester.pumpAndSettle();
     expect(
       find.byKey(const Key('terminal-font-family-dropdown')),
@@ -144,7 +146,7 @@ void main() {
     // Filtering the rail preserves the open pane.
     expect(find.text('Usage'), findsOneWidget);
     expect(find.text('Terminal'), findsNothing);
-    expect(find.text('Preferences'), findsNothing);
+    expect(find.text('PREFERENCES'), findsNothing);
 
     await tester.enterText(
       find.byKey(const Key('settings-search-field')),
@@ -249,7 +251,7 @@ void main() {
   });
 
   testWidgets(
-    'shortcut help can be paged and its context changed by keyboard',
+    'shortcut help can be searched, paged and practiced by keyboard',
     (tester) async {
       await openSettings(tester);
       await tester.enterText(
@@ -258,49 +260,42 @@ void main() {
       );
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
-      // Search -> matching section -> shortcut context. No pointer is needed
-      // to leave the search and reach the section's first control.
-      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-      await tester.pump();
-      expect(
-        FocusManager.instance.primaryFocus?.context
-            ?.findAncestorWidgetOfExactType<AppSelectField<KeymapContext>>(),
-        isNotNull,
-      );
+      final search = find.byKey(const ValueKey('shortcuts-search'));
+      for (
+        var i = 0;
+        i < 4 && !tester.widget<TextField>(search).focusNode!.hasFocus;
+        i++
+      ) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+      }
+      expect(tester.widget<TextField>(search).focusNode!.hasFocus, isTrue);
       final scroll = tester.state<ScrollableState>(
         find
             .descendant(
               of: find.byType(ShortcutsSection),
               matching: find.byType(Scrollable),
             )
-            .first,
+            .last,
       );
       await tester.sendKeyEvent(LogicalKeyboardKey.pageDown);
       await tester.pumpAndSettle();
       expect(scroll.position.pixels, greaterThan(0));
       await tester.sendKeyEvent(LogicalKeyboardKey.pageUp);
       await tester.pumpAndSettle();
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-      await tester.pumpAndSettle();
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pumpAndSettle();
-      expect(find.byType(SettingsScreen), findsOneWidget);
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-      await tester.pumpAndSettle();
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.enterText(search, 'Clone');
+      await tester.pump();
+      expect(find.text('Clone Harness'), findsOneWidget);
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
-      expect(
-        tester
-            .widget<AppSelectField<KeymapContext>>(
-              find.byType(AppSelectField<KeymapContext>),
-            )
-            .value,
-        KeymapContext.picker,
-      );
+      expect(find.byType(KeyboardPractice), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byType(SettingsScreen), findsOneWidget);
+      expect(tester.widget<TextField>(search).focusNode!.hasFocus, isTrue);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(find.byType(SettingsScreen), findsNothing);

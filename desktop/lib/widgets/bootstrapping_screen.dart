@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-
 import '../shared/theme/app_theme.dart' as grid;
 import 'login_relay_diagram.dart';
 
@@ -50,7 +49,7 @@ class BootstrappingScreen extends StatelessWidget {
                       Text(
                         'Getting Harness ready',
                         textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.titleLarge,
+                        style: grid.AppType.display(),
                       ),
                       const SizedBox(height: 8),
                       Text(

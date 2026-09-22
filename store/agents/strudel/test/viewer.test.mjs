@@ -6,13 +6,14 @@
 // @strudel/repl's dist. No npm install, no network, and this checkout is never written to.
 import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { wave, packTake } from '../pane/recording.mjs'
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PRELOAD = join(PKG, 'test', 'preload.mjs')
@@ -26,6 +27,7 @@ function tempDir(prefix) {
 function packageRoot() {
   const root = tempDir('strudel-viewer-')
   symlinkSync(join(PKG, 'viewer.mjs'), join(root, 'viewer.mjs'))
+  symlinkSync(join(PKG, 'takes.mjs'), join(root, 'takes.mjs'))
   symlinkSync(join(PKG, 'pane'), join(root, 'pane'))
   const dist = join(root, 'node_modules', '@strudel', 'repl', 'dist')
   mkdirSync(join(dist, 'assets'), { recursive: true })
@@ -69,15 +71,15 @@ async function startViewer(workspace, { fastTimers = false } = {}) {
   }
 }
 
-function get(port, path, { method = 'GET' } = {}) {
+function get(port, path, { method = 'GET', headers = {}, body } = {}) {
   return new Promise((ok, fail) => {
-    const req = httpRequest({ host: '127.0.0.1', port, path, method }, (res) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path, method, headers, agent: false }, (res) => {
       const chunks = []
       res.on('data', (c) => chunks.push(c))
-      res.on('end', () => ok({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }))
+      res.on('end', () => ok({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8'), bytes: Buffer.concat(chunks) }))
     })
     req.on('error', fail)
-    req.end()
+    req.end(body)
   })
 }
 
@@ -275,5 +277,70 @@ describe('the pane server, at the edges', () => {
       await viewer.stop()
       rmSync(ws, { recursive: true, force: true })
     }
+  })
+})
+
+describe('performance take storage', () => {
+  let ws, viewer, token, body
+  before(async () => {
+    ws = tempDir('strudel-takes-')
+    writeFileSync(join(ws, 'track.strudel'), '// original stays untouched\n')
+    viewer = await startViewer(ws)
+    token = /name="take-token" content="([a-f0-9]+)"/.exec((await get(viewer.port, '/')).body)[1]
+    const manifest = { schema: 'strudel-take/1', title: 'A live idea', track: 'track.strudel', recordedAt: '2026-09-21T12:00:00.000Z', reason: 'finished',
+      sources: [{ code: 'note("a3").s("sine")' }], events: [{ type: 'source', at: 0, cycle: 2.5, cps: .5, source: 0, muted: ['Bass'], soloed: [] }, { type: 'marker', at: .05, cycle: 2.525, cps: .5, note: 'Keep this' }] }
+    body = Buffer.from(await packTake(manifest, wave([new Float32Array(1600).fill(.125)], 800, 8000)).arrayBuffer())
+  })
+  after(async () => { await viewer.stop(); rmSync(ws, { recursive: true, force: true }) })
+  const post = (headers = {}, value = body) => get(viewer.port, '/_takes', { method: 'POST', headers: { 'x-take-token': token, ...headers }, body: value })
+
+  test('only the pane can write, and invalid or oversized bodies leave no takes', async () => {
+    assert.equal((await post({ 'x-take-token': 'wrong' })).status, 403)
+    assert.equal((await post({ origin: 'https://example.com' })).status, 403)
+    assert.equal((await post({ host: 'example.com' })).status, 403)
+    assert.equal((await post({}, Buffer.from('bad'))).status, 400)
+    assert.equal((await post({ 'content-length': 60 * 1024 * 1024 }, Buffer.alloc(0))).status, 413)
+    assert.deepEqual(JSON.parse((await get(viewer.port, '/_takes')).body), [])
+  })
+
+  test('keep is atomic, portable ZIP verifies independently, archives never become live tracks', async () => {
+    const stream = await events(viewer.port)
+    await stream.until(/: hello/); await sleep(300)
+    const response = await post()
+    assert.equal(response.status, 201, response.body)
+    const result = JSON.parse(response.body)
+    assert.equal(result.take.audio.peak, .125)
+    assert.equal(result.take.audio.duration, .1)
+    assert.equal((await get(viewer.port, '/track.strudel')).body, '// original stays untouched\n')
+    await stream.until(/event: takes/); await sleep(400)
+    assert.doesNotMatch(stream.text(), /event: change/)
+    stream.close()
+    const files = JSON.parse((await get(viewer.port, '/_files')).body)
+    assert.deepEqual(files.map((f) => f.path), ['track.strudel'])
+    assert.equal(JSON.parse((await get(viewer.port, '/_takes')).body)[0].id, result.id)
+    const output = execFileSync('python3', ['-c', 'import sys,zipfile,json,hashlib\nz=zipfile.ZipFile(sys.argv[1])\nassert z.testzip() is None\nm=json.loads(z.read("take.json"))\nassert hashlib.sha256(z.read("performance.wav")).hexdigest()==m["audio"]["sha256"]\nassert z.read(m["sources"][0]["file"]).decode()==m["sources"][0]["code"]\nprint(len(z.namelist()))', join(ws, result.path, 'take.zip')], { encoding: 'utf8' })
+    assert.equal(output.trim(), '4')
+    const audioPath = '/' + result.path + '/performance.wav'
+    const full = await get(viewer.port, audioPath)
+    assert.equal(full.headers['content-type'], 'audio/wav')
+    const range = await get(viewer.port, audioPath, { headers: { range: 'bytes=56-71' } })
+    assert.equal(range.status, 206); assert.deepEqual(range.bytes, full.bytes.subarray(56, 72))
+    assert.equal((await get(viewer.port, audioPath, { headers: { range: 'bytes=999999-' } })).status, 416)
+    assert.equal((await get(viewer.port, audioPath, { headers: { range: 'bytes=0-1,4-8' } })).status, 416)
+    await viewer.stop(); viewer = await startViewer(ws)
+    assert.equal(JSON.parse((await get(viewer.port, '/_takes')).body)[0].id, result.id)
+    assert.equal((await post()).status, 403, 'tokens rotate after restarting the viewer')
+    token = /name="take-token" content="([a-f0-9]+)"/.exec((await get(viewer.port, '/')).body)[1]
+  })
+
+  test('escaping symlinks cannot be served or used as a take destination', async () => {
+    const outside = tempDir('strudel-outside-')
+    writeFileSync(join(outside, 'private.txt'), 'private')
+    symlinkSync(outside, join(ws, 'escape'))
+    assert.equal((await get(viewer.port, '/escape/private.txt')).status, 404)
+    rmSync(join(ws, 'out'), { recursive: true, force: true }); symlinkSync(outside, join(ws, 'out'))
+    assert.equal((await post()).status, 500)
+    assert.deepEqual(JSON.parse((await get(viewer.port, '/_takes')).body), [])
+    rmSync(outside, { recursive: true, force: true })
   })
 })

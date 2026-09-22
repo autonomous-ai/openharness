@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math';
 
 import 'package:collection/collection.dart' show compareNatural;
 import 'package:flutter/foundation.dart';
@@ -12,6 +13,7 @@ import '../core/dsh_catalog.dart';
 import '../core/harness_catalog.dart';
 import '../core/first_task.dart';
 import '../core/fuzzy_match.dart';
+import '../core/git_worktree.dart';
 import '../core/permission_modes.dart';
 import '../core/project_folder.dart';
 import '../core/repository_clone.dart';
@@ -36,6 +38,7 @@ enum NewHarnessField {
   task,
   agent,
   machine,
+  branch,
   projectMenu,
   project,
   projectName,
@@ -90,6 +93,173 @@ class NewHarnessProject {
   );
 }
 
+/// What Start does with a Git project in a new worktree.
+enum WorktreeStart {
+  /// A new branch from the chosen base.
+  newBranch,
+
+  /// An existing local branch, checked out as it is.
+  existingBranch,
+
+  /// The branch already has a worktree: the harness starts in it.
+  openWorktree,
+
+  /// The branch is the project folder's own and cannot be checked out twice.
+  unavailable,
+}
+
+@immutable
+class WorktreePlan {
+  const WorktreePlan(this.kind, this.branch, {this.base, this.worktree});
+  final WorktreeStart kind;
+  final String branch;
+
+  /// What a new branch starts from; a remote branch of the same name is tracked.
+  final String? base;
+
+  /// Where an existing worktree is.
+  final String? worktree;
+  bool get tracks =>
+      kind == WorktreeStart.newBranch &&
+      base != null &&
+      base!.startsWith('refs/remotes/') &&
+      base!.split('/').skip(3).join('/') == branch;
+}
+
+/// The project folder's own branch, if it is on one.
+String? currentBranchRef(GitProjectInfo info) =>
+    info.branch != null &&
+        info.branches.any((b) => b.ref == 'refs/heads/${info.branch}')
+    ? 'refs/heads/${info.branch}'
+    : null;
+
+/// Worktree starts on for a Git project with a commit to start from.
+bool worktreeByDefault(GitProjectInfo info) =>
+    info.isGit && info.branches.any((branch) => !branch.remote);
+
+/// Where Start begins when no branch was chosen: new work from the default
+/// branch (the local one, which Start brings up to its remote), work in the
+/// folder on the branch it is on.
+String? defaultBranchRef(GitProjectInfo info, {required bool worktree}) {
+  if (!worktree) return currentBranchRef(info);
+  final remote = info.defaultRef;
+  final local = remote == null
+      ? null
+      : 'refs/heads/${remote.split('/').skip(3).join('/')}';
+  return info.branches.any((b) => b.ref == local)
+      ? local
+      : remote ?? currentBranchRef(info);
+}
+
+/// The branch a worktree started from [base] is on, unless [name] was typed:
+/// the default or current branch gets a new [placeholder] branch; another
+/// local branch is checked out as it is, or opened in its worktree; a remote
+/// branch nobody has locally becomes a local branch tracking it.
+WorktreePlan planWorktree(
+  GitProjectInfo info, {
+  required String? base,
+  required String? name,
+  required String placeholder,
+}) {
+  GitBranch? local(String branch) =>
+      info.branches.where((b) => !b.remote && b.name == branch).firstOrNull;
+  // The folder's own branch cannot be checked out again: typed, it is refused;
+  // picked (itself or its remote), a new branch starts from what was picked.
+  WorktreePlan onLocal(GitBranch branch, {required bool chosen}) =>
+      branch.name == info.branch
+      ? chosen
+            ? WorktreePlan(WorktreeStart.unavailable, branch.name)
+            : WorktreePlan(WorktreeStart.newBranch, placeholder, base: base)
+      : branch.worktree != null
+      ? WorktreePlan(
+          WorktreeStart.openWorktree,
+          branch.name,
+          worktree: branch.worktree,
+        )
+      : WorktreePlan(WorktreeStart.existingBranch, branch.name);
+  final typed = name?.trim();
+  if (typed != null && typed.isNotEmpty) {
+    final existing = local(typed);
+    return existing == null
+        ? WorktreePlan(WorktreeStart.newBranch, typed, base: base)
+        : onLocal(existing, chosen: true);
+  }
+  final fresh = WorktreePlan(WorktreeStart.newBranch, placeholder, base: base);
+  final defaultName = info.defaultRef?.split('/').skip(3).join('/');
+  if (base == null ||
+      base == info.defaultRef ||
+      base == 'refs/heads/$defaultName') {
+    return fresh;
+  }
+  if (base.startsWith('refs/heads/')) {
+    final branch = local(base.substring('refs/heads/'.length));
+    return branch == null ? fresh : onLocal(branch, chosen: false);
+  }
+  final short = base.split('/').skip(3).join('/');
+  final branch = local(short);
+  return branch != null
+      ? onLocal(branch, chosen: false)
+      : WorktreePlan(WorktreeStart.newBranch, short, base: base);
+}
+
+/// With Worktree off, the new branch the folder moves to: a typed name no
+/// local branch has.
+String? newBranchHere(GitProjectInfo info, String? name) {
+  final typed = name?.trim();
+  return typed == null ||
+          typed.isEmpty ||
+          info.branches.any((b) => !b.remote && b.name == typed)
+      ? null
+      : typed;
+}
+
+/// The preparation a Git project's folder gets at Start.
+ProjectFolderRequest? gitFolderRequest(
+  String folder,
+  GitProjectInfo info, {
+  required bool worktree,
+  required String? branchRef,
+  required String? branchName,
+  required String placeholder,
+}) {
+  final ref = branchRef ?? defaultBranchRef(info, worktree: worktree);
+  if (!worktree) {
+    if (newBranchHere(info, branchName) case final name?) {
+      return ProjectFolderRequest.branch(
+        folder,
+        'refs/heads/$name',
+        newBranch: name,
+      );
+    }
+    return ref == null ? null : ProjectFolderRequest.branch(folder, ref);
+  }
+  final plan = planWorktree(
+    info,
+    base: ref,
+    name: branchName,
+    placeholder: placeholder,
+  );
+  return switch (plan.kind) {
+    WorktreeStart.openWorktree => ProjectFolderRequest.branch(
+      folder,
+      'refs/heads/${plan.branch}',
+    ),
+    WorktreeStart.existingBranch => ProjectFolderRequest.worktree(
+      folder,
+      branchRef: 'refs/heads/${plan.branch}',
+      branchName: plan.branch,
+      existingBranch: true,
+    ),
+    WorktreeStart.newBranch ||
+    WorktreeStart.unavailable => ProjectFolderRequest.worktree(
+      folder,
+      branchRef: plan.base,
+      branchName: plan.branch,
+      placeholder: plan.branch == placeholder,
+    ),
+  };
+}
+
 /// A creation buffer shared by the prompt and advanced options. It includes
 /// the receipt of an unresolved request, so going back cannot start a duplicate.
 @immutable
@@ -100,6 +270,11 @@ class NewHarnessDraft {
     required this.project,
     required this.task,
     required this.permissionMode,
+    this.worktree,
+    this.branchRef,
+    this.branchName,
+    this.placeholder,
+    this.gitProject,
     this.profile,
     this.profileChosen = false,
     this.attempt,
@@ -109,6 +284,12 @@ class NewHarnessDraft {
   });
 
   final String machineId, engine, task, permissionMode;
+  final bool? worktree;
+
+  /// The branch chosen in the launcher, and the name typed for a worktree's
+  /// branch; null leaves either to [defaultBranchRef] and [placeholder].
+  final String? branchRef, branchName, placeholder;
+  final GitProjectInfo? gitProject;
   final NewHarnessProject project;
   final LocalCodexProfile? profile;
   final bool profileChosen;
@@ -119,13 +300,31 @@ class NewHarnessDraft {
   final bool dismissalWarningShown;
   final Map<String, NewHarnessProject> projectsByMachine;
 
-  ProjectFolderRequest? get projectFolderRequest =>
-      project.folder != null || isTerminalEngine(engine)
-      ? null
-      : project.repository != null
-      ? ProjectFolderRequest.remote(project.repository!)
-      : project.generated ??
-            ProjectFolderRequest.newProject(name: project.name);
+  ProjectFolderRequest? get projectFolderRequest {
+    final folder = project.folder;
+    final terminal = isTerminalEngine(engine);
+    final info = gitProject;
+    if (folder != null && !terminal && info != null && info.isGit) {
+      return gitFolderRequest(
+        folder,
+        info,
+        worktree: worktree ?? worktreeByDefault(info),
+        branchRef: branchRef,
+        branchName: branchName,
+        placeholder: placeholder ?? placeholderBranch(const []),
+      );
+    }
+    return worktree == true && folder != null && !terminal
+        ? ProjectFolderRequest.worktree(folder, branchRef: branchRef)
+        : branchRef != null && folder != null && !terminal
+        ? ProjectFolderRequest.branch(folder, branchRef!)
+        : folder != null || terminal
+        ? null
+        : project.repository != null
+        ? ProjectFolderRequest.remote(project.repository!)
+        : project.generated ??
+              ProjectFolderRequest.newProject(name: project.name);
+  }
 }
 
 @immutable
@@ -180,6 +379,7 @@ class NewHarnessController extends ChangeNotifier {
     required String machineId,
     String? engine,
     String? folder,
+    String? branch,
     String? projectName,
     bool autoProject = false,
     DateTime Function()? now,
@@ -189,9 +389,11 @@ class NewHarnessController extends ChangeNotifier {
     this.split,
     HarnessPlacement? placement,
     this.offersStore = false,
-    this.firstRun = false,
     String? home,
-  }) : placement =
+    Random? random,
+  }) : _random = random ?? Random(),
+       _paneBranch = branch,
+       placement =
            placement ?? (split == null ? HarnessPlacement.currentTab : null),
        _targetId = swarmId ?? app.activeSwarmId,
        _usesNewTabPage = app.swarms.any(
@@ -216,6 +418,11 @@ class NewHarnessController extends ChangeNotifier {
         ? _generatedProject()
         : const NewHarnessProject.fresh();
     if (task != null) this.task = task;
+    _worktree = draft?.worktree;
+    _branchRef = draft?.branchRef;
+    _branchName = draft?.branchName;
+    _placeholder = draft?.placeholder;
+    _gitProject = draft?.gitProject ?? const GitProjectInfo();
     if (draft != null) {
       _projectsByMachine.addAll(draft.projectsByMachine);
       _project = draft.project;
@@ -236,8 +443,8 @@ class NewHarnessController extends ChangeNotifier {
           ? NewHarnessProject.fresh(projectName)
           : _generatedProject();
     }
-    // A missing destination is the only required question. A carried task is
-    // shown in the launch summary and remains editable, including after Escape.
+    // A missing project is the only required question. Carried tasks remain
+    // part of the draft for Store examples and advanced options.
     field = needsProject && !checking
         ? NewHarnessField.projectMenu
         : NewHarnessField.launch;
@@ -256,11 +463,7 @@ class NewHarnessController extends ChangeNotifier {
     );
     // What the machine has is asked when the box opens, as the form does: an
     // engine installed in a terminal a minute ago is otherwise still "missing".
-    if (firstRun) {
-      unawaited(_detectInitialAgent(allowSelection: engine == null));
-    } else {
-      unawaited(app.probeEngines(_machineId, force: true));
-    }
+    unawaited(app.probeEngines(_machineId, force: true));
     unawaited(app.probeDsh(_machineId, force: true));
     unawaited(_ensureHome(_machineId));
     unawaited(_refreshGeneratedProject());
@@ -269,7 +472,7 @@ class NewHarnessController extends ChangeNotifier {
   final AppNotifier app;
   final String? swarmId;
   final PaneSplitRequest? split;
-  HarnessPlacement? placement;
+  final HarnessPlacement? placement;
   final String _targetId;
   final bool _usesNewTabPage;
   HarnessPlacement? get effectivePlacement =>
@@ -277,17 +480,8 @@ class NewHarnessController extends ChangeNotifier {
       ? HarnessPlacement.currentTab
       : placement;
 
-  void changePlacement(HarnessPlacement value) {
-    if (locked || split != null || placement == value) return;
-    placement = value;
-    notifyListeners();
-  }
-
-  final bool firstRun;
   final bool _autoProject;
   final DateTime Function() _now;
-  bool detectingAgent = false;
-  bool _agentEdited = false;
   final String? _home;
 
   late String _engine;
@@ -300,6 +494,189 @@ class NewHarnessController extends ChangeNotifier {
   String get engine => _engine;
   String get machineId => _machineId;
   NewHarnessProject get project => _project;
+  final Random _random;
+
+  /// The branch the pane New Harness was opened from is on: Branch starts
+  /// there, for that pane's project only.
+  String? _paneBranch;
+  bool? _worktree;
+  String? _branchRef, _branchName, _placeholder;
+  GitProjectInfo _gitProject = const GitProjectInfo();
+  (String, String?, bool)? _gitKey;
+  Future<void>? _gitFuture;
+  int _gitRevision = 0;
+  bool checkingGit = false;
+  Future<void> waitForGitProject() async {
+    while (checkingGit && !_disposed) {
+      await _gitFuture;
+    }
+  }
+
+  bool get isGitProject => _gitProject.isGit && !isTerminal;
+  bool get canUseWorktree => isGitProject && !checkingGit;
+  bool get worktree =>
+      isGitProject && (_worktree ?? worktreeByDefault(_gitProject));
+
+  /// With Worktree on, what a new branch starts from; off, the branch the
+  /// folder is on. Unchosen, the default for the mode.
+  String? get branchRef =>
+      _branchRef ?? defaultBranchRef(_gitProject, worktree: worktree);
+  String? get gitError => _gitProject.error;
+  String get branchLabel => _refName(branchRef) ?? 'Detached HEAD';
+  String? _refName(String? ref) =>
+      _gitProject.branches
+          .where((branch) => branch.ref == ref)
+          .firstOrNull
+          ?.name ??
+      ref?.replaceFirst(RegExp(r'^refs/(heads|remotes)/'), '');
+
+  /// The branch a new worktree is on until its session names it: two words
+  /// the daemon replaces with the session's name.
+  String get placeholder => _placeholder ??= placeholderBranch([
+    for (final branch in _gitProject.branches) branch.name,
+  ], random: _random);
+  WorktreePlan? get worktreePlan => worktree
+      ? planWorktree(
+          _gitProject,
+          base: branchRef,
+          name: _branchName,
+          placeholder: placeholder,
+        )
+      : null;
+
+  /// A branch with a worktree of its own, other than the project folder's.
+  String? _worktreeOf(String? ref) => _gitProject.branches
+      .where(
+        (branch) =>
+            branch.ref == ref &&
+            branch.worktree != null &&
+            branch.name != _gitProject.branch,
+      )
+      .firstOrNull
+      ?.worktree;
+
+  /// With Worktree off, the new branch Start makes for the folder.
+  String? get _branchHere =>
+      worktree ? null : newBranchHere(_gitProject, _branchName);
+
+  /// The Branch row: what was picked, or the new branch typed there.
+  String get branchRowLabel {
+    final plan = worktreePlan;
+    if (plan != null &&
+        plan.kind == WorktreeStart.newBranch &&
+        _branchName != null &&
+        plan.branch == _branchName) {
+      return '${plan.branch} · new from ${_refName(plan.base) ?? 'HEAD'}';
+    }
+    final name = _branchHere;
+    return name == null
+        ? branchLabel
+        : '$name · new from ${_refName(currentBranchRef(_gitProject)) ?? 'HEAD'}';
+  }
+
+  /// Start goes into a worktree that already exists.
+  bool get opensWorktree => worktree
+      ? worktreePlan?.kind == WorktreeStart.openWorktree
+      : _branchHere == null && _worktreeOf(branchRef) != null;
+
+  /// What Start does with Git, in words for the summary and screen readers.
+  String get gitSummary {
+    if (!isGitProject) return '';
+    final plan = worktreePlan;
+    if (plan == null) {
+      final here = _branchHere;
+      return here != null
+          ? ', on a new branch $here'
+          : opensWorktree
+          ? ', in the worktree of $branchLabel'
+          : ', on $branchLabel';
+    }
+    return switch (plan.kind) {
+      WorktreeStart.newBranch =>
+        ', in a new worktree on ${plan.branch == placeholder ? 'a branch named after the session' : plan.branch} from ${_refName(plan.base) ?? 'HEAD'}',
+      WorktreeStart.existingBranch => ', in a new worktree on ${plan.branch}',
+      WorktreeStart.openWorktree => ', in the worktree of ${plan.branch}',
+      WorktreeStart.unavailable =>
+        ', but ${plan.branch} is the project folder’s branch',
+    };
+  }
+
+  void toggleWorktree() {
+    if (locked || !canUseWorktree) return;
+    _worktree = !worktree;
+    error = null;
+    _refresh();
+  }
+
+  void retryGitProject() {
+    if (locked || checkingGit || _project.folder == null || isTerminal) return;
+    error = null;
+    _gitFuture = _readGitProject(_gitKey!);
+    notifyListeners();
+  }
+
+  void _syncGitProject() {
+    final key = (_machineId, _project.folder, isTerminal);
+    if (_gitKey == key) return;
+    if (_gitKey != null) {
+      _worktree = null;
+      _branchRef = null;
+      _branchName = null;
+      _placeholder = null;
+      _paneBranch = null;
+      _gitProject = const GitProjectInfo();
+    }
+    _gitKey = key;
+    _gitRevision++;
+    checkingGit = false;
+    _gitFuture = null;
+    if (key.$2 != null && !key.$3 && !checking) {
+      _gitFuture = _readGitProject(key);
+    }
+  }
+
+  Future<void> _readGitProject((String, String?, bool) key) async {
+    checkingGit = true;
+    final revision = ++_gitRevision;
+    GitProjectInfo info;
+    try {
+      info = GitProjectInfo.fromJson(await app.readGitProject(key.$1, key.$2!));
+    } catch (_) {
+      info = const GitProjectInfo(error: 'UNAVAILABLE');
+    }
+    if (_disposed || _gitKey != key || revision != _gitRevision) return;
+    checkingGit = false;
+    // A worktree is a temporary folder, so the launcher shows its repository.
+    // With Worktree off its branch stays chosen and Start reopens that
+    // worktree; otherwise new work starts from the repository's own branch.
+    if (info.mainFolder case final main? when _project.folder == key.$2) {
+      if (_worktree == false && _branchRef == null && info.branch != null) {
+        _branchRef = 'refs/heads/${info.branch}';
+      }
+      _project = NewHarnessProject.folder(main);
+      _gitKey = (key.$1, main, key.$3);
+      info = GitProjectInfo(
+        isGit: true,
+        branch: info.mainBranch,
+        branches: info.branches,
+        defaultRef: info.defaultRef,
+      );
+    }
+    _gitProject = info;
+    // Another one of the pane it came from: on that pane's branch, if it is
+    // still a local branch here.
+    if (_branchRef == null &&
+        info.branches.any((b) => !b.remote && b.name == _paneBranch)) {
+      _branchRef = 'refs/heads/$_paneBranch';
+    }
+    // A name made up before the branches were known may already be taken.
+    if (_placeholder != null &&
+        info.branches.any((branch) => branch.name == _placeholder)) {
+      _placeholder = null;
+    }
+    _refresh();
+  }
+
   LocalCodexProfile? _profile;
   bool _profileChosen = false;
   String? get profileLabel =>
@@ -313,6 +690,11 @@ class NewHarnessController extends ChangeNotifier {
     project: _project,
     task: task,
     permissionMode: _mode,
+    worktree: _worktree,
+    branchRef: _branchRef,
+    branchName: _branchName,
+    placeholder: isGitProject ? placeholder : _placeholder,
+    gitProject: _gitProject,
     profile: _profile,
     profileChosen: _profileChosen,
     attempt: _attempt,
@@ -326,7 +708,16 @@ class NewHarnessController extends ChangeNotifier {
 
   /// The same preparation intent is used by the prompt and advanced options.
   ProjectFolderRequest? get projectFolderRequest =>
-      _project.folder != null || isTerminal
+      isGitProject && _project.folder != null
+      ? gitFolderRequest(
+          _project.folder!,
+          _gitProject,
+          worktree: worktree,
+          branchRef: _branchRef,
+          branchName: _branchName,
+          placeholder: placeholder,
+        )
+      : _project.folder != null || isTerminal
       ? null
       : _project.repository != null
       ? ProjectFolderRequest.remote(_project.repository!)
@@ -365,9 +756,6 @@ class NewHarnessController extends ChangeNotifier {
       ? _mode
       : kDefaultPermissionMode;
   bool get takesTask => takesFirstTask(_base);
-  String get taskAvailability => takesTask
-      ? 'Add a task (optional)'
-      : 'Enter a task in $agentLabel after launch';
   bool get taskTooLong => task.trim().length > kFirstTaskMaxLength;
   List<PermissionMode> get _modes =>
       isTerminal ? const [] : permissionModesOf(_base);
@@ -429,11 +817,12 @@ class NewHarnessController extends ChangeNotifier {
     NewHarnessField.agent,
     NewHarnessField.machine,
     NewHarnessField.projectMenu,
-    if (takesTask) NewHarnessField.task,
+    if (isGitProject) NewHarnessField.branch,
   ];
   bool _supportsField(NewHarnessField value) =>
       fields.contains(value) ||
       value == NewHarnessField.launch ||
+      (value == NewHarnessField.task && takesTask) ||
       value == NewHarnessField.project ||
       value == NewHarnessField.projectName ||
       value == NewHarnessField.projectRepository ||
@@ -481,30 +870,8 @@ class NewHarnessController extends ChangeNotifier {
 
   // ---- what the line says -------------------------------------------------
 
-  String get createLabel => 'Start';
-
-  Future<void> _detectInitialAgent({required bool allowSelection}) async {
-    detectingAgent = true;
-    final machineId = _machineId;
-    await Future.wait([
-      app.agentPreference.load(),
-      app.probeEngines(machineId, force: true),
-    ]);
-    if (_disposed) return;
-    detectingAgent = false;
-    if (allowSelection && !_agentEdited && machineId == _machineId) {
-      final installed = [
-        for (final identity in allEngines)
-          if (_machine?.engines[identity.id]?.installed == true) identity.id,
-      ];
-      final preferred = app.agentPreference.value;
-      final chosen = installed.contains(preferred)
-          ? preferred
-          : installed.firstOrNull ?? (_known(preferred) ? preferred : null);
-      if (chosen != null) _selectEngine(chosen);
-    }
-    _refresh();
-  }
+  String get createLabel =>
+      opensWorktree ? 'Start in Worktree' : 'Start Harness';
 
   String get agentLabel => labelOf(_engine);
   String labelOf(String id) => currentHarnessName(
@@ -554,6 +921,7 @@ class NewHarnessController extends ChangeNotifier {
     NewHarnessField.task => 'What should this agent work on? (optional)',
     NewHarnessField.agent => 'Choose an agent',
     NewHarnessField.machine => 'Choose a machine',
+    NewHarnessField.branch => 'Search branches',
     NewHarnessField.project => 'Enter a folder path, or press Enter to browse',
     NewHarnessField.projectName => 'Type a project name',
     NewHarnessField.projectRepository => 'Paste a GitHub repository URL',
@@ -568,11 +936,6 @@ class NewHarnessController extends ChangeNotifier {
 
   void focusField(NewHarnessField next) {
     if (locked || field == next || !_supportsField(next)) return;
-    // Discovery may finish while somebody edits. Never change their choice
-    // or the rows they are navigating underneath their fingers.
-    if (next == NewHarnessField.agent || next == NewHarnessField.machine) {
-      _agentEdited = true;
-    }
     if (next == NewHarnessField.machine) {
       _machineOrigin = (
         field: field,
@@ -714,6 +1077,7 @@ class NewHarnessController extends ChangeNotifier {
     NewHarnessField.launch || NewHarnessField.task => false,
     NewHarnessField.agent => option.id == _engine,
     NewHarnessField.machine => option.id == _machineId,
+    NewHarnessField.branch => option.id == branchRef,
     NewHarnessField.project ||
     NewHarnessField.projectMenu ||
     NewHarnessField.projectName ||
@@ -735,6 +1099,7 @@ class NewHarnessController extends ChangeNotifier {
   static const browseId = 'project:browse';
   static const changeMachineId = 'project:machine';
   static const newProjectId = 'project:name';
+  static const createBranchId = 'branch:create:';
   static const existingProjectId = 'project:existing';
   static const repositoryId = 'project:repository';
   static const storeId = 'agent:store';
@@ -933,6 +1298,15 @@ class NewHarnessController extends ChangeNotifier {
         _selectEngine(option.id);
       case NewHarnessField.machine:
         _selectMachine(option.id);
+      case NewHarnessField.branch:
+        if (option.id.startsWith(createBranchId)) {
+          _branchName = option.id.substring(createBranchId.length);
+          _branchRef = null;
+        } else {
+          // A picked branch replaces a new one.
+          _branchRef = option.id;
+          _branchName = null;
+        }
       case NewHarnessField.project:
       case NewHarnessField.projectMenu:
       case NewHarnessField.projectName:
@@ -1402,6 +1776,7 @@ class NewHarnessController extends ChangeNotifier {
 
   void _refresh({bool resetCursor = false, String? agentSelection}) {
     if (_disposed) return;
+    _syncGitProject();
     _seen = _signature();
     final current = resetCursor ? null : selected?.id;
     // An agent picked from another field may have no task or no modes.
@@ -1418,6 +1793,10 @@ class NewHarnessController extends ChangeNotifier {
       NewHarnessField.task ||
       NewHarnessField.agent => const [],
       NewHarnessField.machine => _machineOptions(),
+      NewHarnessField.branch => [
+        ..._ranked(_branchOptions()),
+        ?_createBranchRow(),
+      ],
       NewHarnessField.projectMenu => _projectMenu(),
       NewHarnessField.project ||
       NewHarnessField.projectName => _projectOptions(),
@@ -1509,6 +1888,81 @@ class NewHarnessController extends ChangeNotifier {
           );
     if (resetCursor || kept < 0) _steered = false;
     notifyListeners();
+  }
+
+  /// Branches to start from (Worktree on) or to work on (off), tagged the way
+  /// editors tag them. Branches Harness named for worktrees that are gone are
+  /// left out: nobody chose them.
+  List<NewHarnessOption> _branchOptions() {
+    final info = _gitProject;
+    final defaultName = info.defaultRef?.split('/').skip(3).join('/');
+    bool isDefault(GitBranch b) =>
+        b.ref == info.defaultRef || !b.remote && b.name == defaultName;
+    bool isCurrent(GitBranch b) => !b.remote && b.name == info.branch;
+    // A remote branch with a local one of its name is that branch: Start
+    // brings the local one up to it.
+    final locals = {
+      for (final branch in info.branches)
+        if (!branch.remote) branch.name,
+    };
+    bool hasLocal(GitBranch b) =>
+        b.remote && locals.contains(b.name.split('/').skip(1).join('/'));
+    final shown = [
+      for (final branch in info.branches)
+        if (!((branch.harness || branch.name.startsWith('harness/')) &&
+                branch.worktree == null &&
+                branch.ref != branchRef) &&
+            !(hasLocal(branch) && branch.ref != branchRef))
+          branch,
+    ];
+    int rank(GitBranch b) => isDefault(b)
+        ? 0
+        : isCurrent(b)
+        ? 1
+        : 2;
+    final ordered = [
+      for (final group in [0, 1, 2])
+        for (final branch in shown)
+          if (rank(branch) == group) branch,
+    ];
+    return [
+      for (final branch in ordered)
+        NewHarnessOption(
+          id: branch.ref,
+          title: branch.name,
+          detail: [
+            if (isDefault(branch)) 'default',
+            if (isCurrent(branch)) 'current',
+            if (_worktreeOf(branch.ref) != null) 'worktree',
+            if (branch.remote) 'remote',
+          ].join(' · '),
+          enabled: worktree || !branch.remote,
+          why: branch.remote
+              ? 'Turn Worktree on to start from a remote branch.'
+              : null,
+        ),
+    ];
+  }
+
+  /// A typed name no branch has can be made — the way an editor's branch
+  /// picker offers "Create branch": with Worktree on in a new worktree from
+  /// the default branch, off in the folder from the branch it is on. Spaces
+  /// become `-`, and what Git refuses in a name is dropped.
+  NewHarnessOption? _createBranchRow() {
+    final name = branchNameFrom(query);
+    if (!plausibleBranchName(name) ||
+        newBranchHere(_gitProject, name) == null) {
+      return null;
+    }
+    final base = worktree
+        ? defaultBranchRef(_gitProject, worktree: true)
+        : currentBranchRef(_gitProject);
+    return NewHarnessOption(
+      id: '$createBranchId$name',
+      synthetic: true,
+      title: 'Create branch $name',
+      detail: 'New branch from ${_refName(base) ?? 'HEAD'}',
+    );
   }
 
   List<NewHarnessOption> _ranked(List<NewHarnessOption> all) {
@@ -1669,6 +2123,8 @@ class NewHarnessController extends ChangeNotifier {
   Iterable<String> _recentProjectFolders() sync* {
     final machine = _machine;
     final seen = <String>{};
+    // Worktrees Start made are temporary: their repository is the project.
+    final worktrees = _expand('~/harnesses/worktrees');
     for (final folder in [
       ?_project.folder,
       ...app.projectHistory.recent(_machineId),
@@ -1680,7 +2136,8 @@ class NewHarnessController extends ChangeNotifier {
     ]) {
       if (!p.isAbsolute(folder) ||
           folder.length > 4096 ||
-          RegExp(r'[\x00-\x1f\x7f]').hasMatch(folder)) {
+          RegExp(r'[\x00-\x1f\x7f]').hasMatch(folder) ||
+          folder != _project.folder && p.isWithin(worktrees, folder)) {
         continue;
       }
       if (seen.add(p.normalize(folder))) yield folder;
@@ -1974,12 +2431,58 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   Future<NewHarnessOutcome> create() async {
-    if (busy || linkingProfile || detectingAgent) {
+    if (busy || linkingProfile) {
       return NewHarnessOutcome.failed;
     }
     if (needsProject && !checking) {
       focusField(NewHarnessField.projectMenu);
       return _fail('Choose a project, or create a new one.');
+    }
+    if (!checking) {
+      _syncGitProject();
+      if (gitError != null) retryGitProject();
+      if (checkingGit) {
+        busy = true;
+        status = 'Checking project…';
+        notifyListeners();
+        await _gitFuture;
+        if (_disposed) return NewHarnessOutcome.failed;
+        busy = false;
+        status = null;
+      }
+      if (gitError != null) {
+        return _fail(
+          'Could not check Git on $machineLabel. Check the connection and Harness CLI, then retry.',
+        );
+      }
+      if (!worktree && _branchRef?.startsWith('refs/remotes/') == true) {
+        return _fail('Choose a local branch, or turn Worktree on.');
+      }
+      if (worktreePlan case final plan?
+          when plan.kind == WorktreeStart.unavailable) {
+        return _fail(
+          '${plan.branch} is the project folder’s branch. Turn Worktree off to work on it there, or name a new branch.',
+        );
+      }
+      // Switching the folder's branch would move it under a harness at work.
+      final folder = _project.folder;
+      final ref = branchRef;
+      if (!worktree &&
+          folder != null &&
+          (_branchHere != null ||
+              ref != null &&
+                  ref != currentBranchRef(_gitProject) &&
+                  _worktreeOf(ref) == null) &&
+          (_machine?.agents ?? const []).any((agent) {
+            final cwd = _machine?.projectOf(agent)?.cwd;
+            final root = _gitProject.root ?? folder;
+            return cwd != null &&
+                (p.equals(cwd, root) || p.isWithin(root, cwd));
+          })) {
+        return _fail(
+          'A harness is working in this folder, so its branch can’t be switched. Turn Worktree on, or stay on $branchLabel.',
+        );
+      }
     }
     // Shortened by the person, never cut by us: a machine refuses one longer.
     if (takesTask && taskTooLong && !checking) {
@@ -2070,6 +2573,11 @@ class NewHarnessController extends ChangeNotifier {
       // goes into it rather than making a second one beside it.
       if (!checking && attempt.preparedFolder != null) {
         _project = NewHarnessProject.folder(attempt.preparedFolder!);
+        _gitKey = (_machineId, _project.folder, isTerminal);
+        _worktree = false;
+        _branchRef = null;
+        _gitProject = const GitProjectInfo();
+        _gitFuture = _readGitProject(_gitKey!);
       }
       return _fail(failure);
     }

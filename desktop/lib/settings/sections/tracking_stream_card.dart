@@ -57,10 +57,7 @@ class _TrackingStreamCardState extends State<TrackingStreamCard> {
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  'Analytics stream',
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
+                child: Text('Analytics stream', style: AppType.heading()),
               ),
               _StatePill(enabled: status.enabled),
             ],
@@ -69,11 +66,7 @@ class _TrackingStreamCardState extends State<TrackingStreamCard> {
             const SizedBox(height: 6),
             Text(
               reason,
-              style: TextStyle(
-                fontSize: 12,
-                height: 1.4,
-                color: AppPalette.textSecondary,
-              ),
+              style: AppType.body(height: 1.4, color: AppPalette.textSecondary),
             ),
           ],
           const SizedBox(height: 6),
@@ -113,11 +106,7 @@ class _StatePill extends StatelessWidget {
       ),
       child: Text(
         enabled ? 'Reporting' : 'Off',
-        style: TextStyle(
-          fontSize: 11.5,
-          fontWeight: AppFont.medium,
-          color: ink,
-        ),
+        style: AppType.caption(fontWeight: AppFont.medium, color: ink),
       ),
     );
   }
@@ -144,17 +133,15 @@ class _Row extends StatelessWidget {
             width: 72,
             child: Text(
               label,
-              style: TextStyle(fontSize: 12, color: AppPalette.textFaint),
+              style: AppType.body(color: AppPalette.textFaint),
             ),
           ),
           Expanded(
             child: SelectableText(
               value,
-              style: TextStyle(
-                fontSize: 12,
+              style: AppType.monoLabel(
+                fontWeight: AppFont.regular,
                 height: 1.4,
-                fontFamily: AppFont.mono,
-                fontFamilyFallback: AppFont.monoFallback,
                 color: muted
                     ? AppPalette.textSecondary
                     : AppPalette.textPrimary,

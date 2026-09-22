@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../shared/theme/app_type.dart';
 import '../shared/widgets/command_row.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
@@ -61,11 +62,7 @@ class _HarnessJoinGuideScreenState extends State<HarnessJoinGuideScreen> {
               const SizedBox(height: 14),
               Text(
                 'Harness is offline',
-                style: TextStyle(
-                  color: AppColors.text,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                ),
+                style: AppType.heading(color: AppColors.text),
               ),
               const SizedBox(height: 8),
               Text(

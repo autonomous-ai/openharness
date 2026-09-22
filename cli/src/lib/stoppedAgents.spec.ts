@@ -40,6 +40,18 @@ describe('stopped harness persistence', () => {
     expect(statSync(join(directory, 'stopped-agents', `${saved.agentId}.json`)).mode & 0o777).toBe(0o600)
   })
 
+  it('patches one field of an archive without touching its name or activity time', async () => {
+    const { saved, store } = await fixture()
+    store.save({ ...saved, defaultName: 'harness Desktop' })
+    const before = store.get(saved.agentId)!
+    expect(store.patch(saved.agentId, { cwd: '/tmp/work-repaired' })).toBe(true)
+    const after = store.get(saved.agentId)!
+    expect(after).toEqual({ ...before, cwd: '/tmp/work-repaired' })
+    expect(after.updatedAt).toBe(before.updatedAt)
+    expect(after.defaultName).toBe('harness Desktop')
+    expect(store.patch('never-saved', { cwd: '/tmp' })).toBe(false)
+  })
+
   it('hides a running identity or conversation, without discarding its archive', async () => {
     const { saved, store } = await fixture()
     store.save(saved)

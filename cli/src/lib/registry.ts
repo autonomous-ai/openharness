@@ -16,6 +16,7 @@
 import { DSH_ID_RE } from '../dsh/manifest.js'
 import { AGENT_NAME_RE } from './engineLaunch.js'
 import { namingTitle } from './sessionTitle.js'
+import { claudeProjectMatches, claudeTranscriptCwd, isClaudeProjectTranscript } from './claudeProject.js'
 import { automaticAgentName, engineLabel, isAutomaticName } from './agentNames.js'
 import {
   closeSync,
@@ -143,6 +144,20 @@ export interface RegisteredSession {
    */
   codexHome?: string | null
   /**
+   * The Hermes home this session's history lives in — `~/.hermes/profiles/<name>` for an agent started
+   * with `hermes -p <name>`, null for this machine's default home.
+   *
+   * Unlike `codexHome` this is not a launch choice the daemon makes: `hermes -p` is how a person starts
+   * one, and the daemon meets the pane afterwards. So it is FOUND rather than recorded — by the session
+   * id, in whichever store holds its row (`engines/hermes/home.ts`) — and then kept here so the lookup
+   * happens once per agent instead of once per poll. Fill-only, like `codexHome`.
+   *
+   * Everything Hermes-shaped reads it: the live mirror, `agent_recent`, the recap fallback, the hook's
+   * source check and the model/effort poll. Reading one fixed home instead is what left a profile
+   * fleet's activity cards empty forever while their terminals streamed perfectly (openharness#191).
+   */
+  hermesHome?: string | null
+  /**
    * The domain-specific harness this agent was created as (`autonomous/copper`), or null for a plain
    * engine. NOT a second engine: `engine` stays the base (`claude`, `codex`, …) and every normalizer,
    * probe and install path keys on that. Chosen at creation, carried forward, and re-read off the
@@ -230,6 +245,10 @@ export interface RegisterInput {
   runtimeHints?: HookTerminalHint[]
   callerPid?: number
   hookEvent?: string
+  /** Hermes only: the home whose store holds this session, when it is not the machine's default one.
+   *  Found by the hook gate (`awaitHermesKind`), which has to look the session up anyway, and by the
+   *  hook script itself when the daemon was down. Fill-only — see RegisteredSession.hermesHome. */
+  hermesHome?: string
 }
 
 /** Display name for a session's "project" tab/tile. A user rename (persisted override) is
@@ -869,6 +888,7 @@ class Registry {
           gateway: raw.gateway === 'ori' ? 'ori' : null,
           grid: normalizedGridAssignment(raw.grid),
           codexHome: typeof rawCodexHome === 'string' && rawCodexHome ? rawCodexHome : null,
+          hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
           agent: normalizedAgentName((raw as { agent?: unknown }).agent),
           ...(rawGridLaunch !== undefined ? { gridLaunch: rawGridLaunch } : {}),
@@ -974,6 +994,8 @@ class Registry {
     /** Codex only: the CODEX_HOME the process was launched under, read off its environment. Fills a
      *  row that does not know its profile yet; never overwrites one that does (see `codexHome`). */
     codexHome?: string | null
+    /** The Hermes home this session's store lives in, if it is not the default. Fill-only. */
+    hermesHome?: string | null
     /** The DSH read off the process's `HARNESS_DSH`, if any. Fill-only, like `codexHome`. */
     dsh?: string | null
   }):
@@ -1018,7 +1040,10 @@ class Registry {
       existing.runtimes = mergeTerminalRuntimes(existing.runtimes, runtimes)
       existing.tmuxPane = tmuxProjection(existing.runtimes)
       existing.primaryRuntimeKey = selectedRuntimeKey(existing.runtimes, input.primaryRuntimeKey || existing.primaryRuntimeKey)
-      existing.cwd = input.cwd ?? existing.cwd
+      // The pane's current path follows a terminal tile around until an engine session is bound to
+      // it; from then on the bind owns the folder (see `register`), and a pane re-observed in the
+      // subfolder its engine `cd`'d into must not move the row there.
+      if (!existing.sessionId || !existing.cwd) existing.cwd = input.cwd ?? existing.cwd
       existing.processIdentity = processIdentity
       existing.active = true
       if (existing.launch && !existing.resumeOnly) existing.launch = { state: 'ready' }
@@ -1027,6 +1052,7 @@ class Registry {
       if (input.gateway !== undefined) existing.gateway = input.gateway
       if (input.grid !== undefined) existing.grid = input.grid
       if (input.codexHome && !existing.codexHome) existing.codexHome = input.codexHome
+      if (input.hermesHome && !existing.hermesHome) existing.hermesHome = input.hermesHome
       if (input.dsh && !existing.dsh) existing.dsh = input.dsh
       existing.updatedAt = Date.now()
       this.index(existing)
@@ -1070,6 +1096,7 @@ class Registry {
       gridLaunch: null,
       gridWebSearch: null,
       codexHome: input.codexHome ?? null,
+      hermesHome: input.hermesHome ?? null,
       dsh: input.dsh ?? null,
       // A discovered pane's named agent is only visible in its argv; nothing here reads it, so the
       // row cannot relaunch it as one. Fill-only, like `dsh`.
@@ -1138,6 +1165,9 @@ class Registry {
       gridLaunch: input.gridLaunchRecord?.override ?? null,
       gridWebSearch: input.gridLaunchRecord?.webSearch ?? null,
       codexHome: input.codexHome ?? null,
+      // A pane Harness opens starts in the default home; `hermes -p` is the person's own doing, and
+      // the row learns it from the session that lands in it. See RegisteredSession.hermesHome.
+      hermesHome: null,
       dsh: input.dsh ?? null,
       agent: normalizedAgentName(input.agent),
       ...(input.bypassPermission ? { bypassPermission: true } : {}),
@@ -1318,10 +1348,18 @@ class Registry {
     // "the agent did not accept this message" and produced no recap. Its layout is deterministic, so derive
     // the path rather than wait to be told. A file that does not exist yet is fine — the watcher starts at
     // offset 0 and chokidar fires when it appears.
+    // WHOSE cwd this bind takes. A re-register of the session the row already holds (every
+    // UserPromptSubmit; the SessionStart a resume gets for the row it was opened into) keeps the row's:
+    // Claude reports its tracked SHELL directory, which follows every Bash `cd`, and a row that took
+    // it each time drifted into subfolders, sibling repos and temp dirs — then the next resume,
+    // restore or restart `cd`'d there and ran the engine in the wrong project. A first bind or a
+    // rotation takes the hook's — that is what gives a terminal-turned-claude row its folder at all.
+    const sameSession = !!existing && existing.sessionId === sessionId
+    const baseCwd = sameSession ? existing.cwd ?? input.cwd ?? null : input.cwd ?? existing?.cwd ?? null
     const derived = !transcriptPath && engine === 'commandcode'
-      ? commandcodeTranscriptPath(input.cwd ?? existing?.cwd, sessionId)
-      : !transcriptPath && engine === 'grok' && (input.cwd ?? existing?.cwd)
-        ? join(env.GROK_HOME, 'sessions', encodeURIComponent((input.cwd ?? existing?.cwd)!), sessionId, 'updates.jsonl')
+      ? commandcodeTranscriptPath(baseCwd ?? undefined, sessionId)
+      : !transcriptPath && engine === 'grok' && baseCwd
+        ? join(env.GROK_HOME, 'sessions', encodeURIComponent(baseCwd), sessionId, 'updates.jsonl')
         // agy's layout is deterministic from the conversation id alone, and its `PreInvocation` hook can
         // land before the first line is flushed — derive rather than wait a turn for the path.
         : !transcriptPath && engine === 'agy'
@@ -1332,6 +1370,15 @@ class Registry {
             ? copilotTranscriptPath(env.COPILOT_HOME, sessionId)
             : null
     const effectiveTranscriptPath = transcriptPath ?? existing?.transcriptPath ?? derived ?? null
+    // Even a first bind can carry a drifted cwd (a fork inherits its source's; `claude --resume` typed
+    // from a subfolder). Claude's transcript never moves from the project dir it was started in, so a
+    // cwd that does not round-trip to that directory name is not this session's folder — the row's own
+    // is kept when it does, else the transcript names the folder itself (claudeProject.ts).
+    const cwd = !sameSession && engine === 'claude' && effectiveTranscriptPath && input.cwd
+        && isClaudeProjectTranscript(effectiveTranscriptPath) && !claudeProjectMatches(input.cwd, effectiveTranscriptPath)
+      ? (existing?.cwd && claudeProjectMatches(existing.cwd, effectiveTranscriptPath) ? existing.cwd
+        : claudeTranscriptCwd(effectiveTranscriptPath) ?? input.cwd)
+      : baseCwd
     const entry: RegisteredSession = {
       schemaVersion: 2,
       active: existing?.active ?? true,
@@ -1358,11 +1405,11 @@ class Registry {
       defaultName: existing?.defaultName,
       transcriptPath: effectiveTranscriptPath,
       projectDir: engine === 'grok' || engine === 'agy' || engine === 'copilot'
-        ? basename(input.cwd ?? existing?.cwd ?? '') || sessionId
+        ? basename(cwd ?? '') || sessionId
         : effectiveTranscriptPath
         ? basename(dirname(effectiveTranscriptPath))
-        : basename(input.cwd ?? existing?.cwd ?? '') || sessionId,
-      cwd: input.cwd ?? existing?.cwd ?? null,
+        : basename(cwd ?? '') || sessionId,
+      cwd,
       runtimes: mergeTerminalRuntimes(existing?.runtimes ?? [], inputRuntimes),
       primaryRuntimeKey: '',
       tmuxPane: '',
@@ -1374,6 +1421,10 @@ class Registry {
       // re-reads off the live process on every discovery) — a hook-triggered bind must carry it
       // forward or the very first SessionStart hook would silently wipe the agent's chosen profile.
       codexHome: existing?.codexHome ?? null,
+      // The home the gate looked this session up in, or whatever the row already knew. Carried
+      // forward like every field here: a bind REBUILDS the row, and a home dropped at the first hook
+      // would send the mirror back to the default store (openharness#191).
+      hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
       dsh: existing?.dsh ?? null,
       agent: existing?.agent ?? null,
       ...(existing?.bypassPermission ? { bypassPermission: true } : {}),
@@ -1645,10 +1696,33 @@ class Registry {
 
   /** Fill in the Codex profile a row did not know (discovery read it off the live process). Never
    *  replaces one it already has — the profile is chosen once, see `codexHome`. */
+  /** Put a row back in the folder its transcript belongs to (cwdRepair.ts). Any engine, any value:
+   *  the caller has already proved the new folder from the transcript. */
+  setCwd(agentId: string, cwd: string): boolean {
+    const session = this.agents.get(agentId)
+    if (!session || session.cwd === cwd) return false
+    session.cwd = cwd
+    session.updatedAt = Date.now()
+    this.save()
+    return true
+  }
+
   setCodexHome(agentId: string, codexHome: string): boolean {
     const session = this.agents.get(agentId)
     if (!session || session.engine !== 'codex' || session.codexHome) return false
     session.codexHome = codexHome
+    session.updatedAt = Date.now()
+    this.save()
+    return true
+  }
+
+  /** Fill in the Hermes home a row did not know — found by looking for its session in each store, or
+   *  read off the live process. Never overwrites: like `setCodexHome`, a session does not move between
+   *  homes, and a later probe that could not read the process must not take the answer away. */
+  setHermesHome(agentId: string, hermesHome: string): boolean {
+    const session = this.agents.get(agentId)
+    if (!session || session.engine !== 'hermes' || session.hermesHome) return false
+    session.hermesHome = hermesHome
     session.updatedAt = Date.now()
     this.save()
     return true

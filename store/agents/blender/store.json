@@ -2,8 +2,14 @@
   "homepage": "https://www.blender.org",
   "upstream": "https://projects.blender.org/blender/blender",
   "license": "MIT",
-  "tagline": "Free and open source 3D creation software",
+  "tagline": "Build in 3D, shape your own variations, and keep the designs you love",
   "examples": [
+    {
+      "prompt": "Design a sculptural desk lamp from twisting ribbons. Give me Shape Lab controls for height, twist, ribbon count and finish, with sensible ranges. I want to explore the proportions myself and keep a few directions before the final render.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/blender-shape-lab.png",
+      "video": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/blender-shape-lab-demo.mp4",
+      "caption": "Real Blender session · shape a ribbon lamp and keep named design variants"
+    },
     {
       "prompt": "Make a cozy isometric reading nook: a cut-away corner of a room with an armchair, a floor lamp glowing warm, a bookshelf full of colourful books, a round rug and a monstera, with evening sun through the window and a cat asleep on the rug.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/blender/cozy-reading-nook.jpg",

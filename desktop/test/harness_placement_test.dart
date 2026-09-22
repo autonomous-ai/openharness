@@ -178,6 +178,7 @@ void main() {
         final original = app.activeSwarm;
         await mount(tester, app);
         await chord(tester, LogicalKeyboardKey.keyT);
+        await chord(tester, LogicalKeyboardKey.keyO);
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
         await chord(tester, LogicalKeyboardKey.period);
@@ -270,21 +271,20 @@ void main() {
         // honoring the newly requested destination.
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pump();
+        await chord(tester, LogicalKeyboardKey.keyW);
         final inPane = dismiss == 'outside';
         await chord(
           tester,
-          inPane ? LogicalKeyboardKey.keyP : LogicalKeyboardKey.keyT,
+          inPane ? LogicalKeyboardKey.keyO : LogicalKeyboardKey.keyT,
         );
+        if (!inPane) await chord(tester, LogicalKeyboardKey.keyO);
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
         box = tester
             .widget<NewHarnessBox>(find.byType(NewHarnessBox))
             .controller;
         expect(box.profileLabel, profile);
-        expect(
-          box.placement,
-          inPane ? HarnessPlacement.currentTab : HarnessPlacement.newTab,
-        );
+        expect(box.placement, HarnessPlacement.currentTab);
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
         final request = connection.requests.single;
@@ -341,6 +341,7 @@ void main() {
       final original = app.activeSwarm;
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyT);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       final input = find.byKey(const ValueKey('new-harness-input'));
@@ -423,6 +424,7 @@ void main() {
         final original = app.activeSwarm;
         await mount(tester, app);
         await chord(tester, LogicalKeyboardKey.keyT);
+        await chord(tester, LogicalKeyboardKey.keyO);
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
         final input = find.byKey(const ValueKey('new-harness-input'));
@@ -766,6 +768,7 @@ void main() {
       final original = app.activeSwarm;
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyT);
+      await chord(tester, LogicalKeyboardKey.keyO);
       final search = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(search, 'fix the login regression');
       await tester.pump();
@@ -775,7 +778,7 @@ void main() {
           .widget<NewHarnessBox>(find.byType(NewHarnessBox))
           .controller;
       expect(box.task, 'fix the login regression');
-      expect(box.placement, HarnessPlacement.newTab);
+      expect(box.placement, HarnessPlacement.currentTab);
       box.setFolder('/work/project');
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -797,7 +800,7 @@ void main() {
         await tester.pump();
         expect(box.task, task);
         for (final key in [
-          LogicalKeyboardKey.keyP,
+          LogicalKeyboardKey.keyO,
           LogicalKeyboardKey.keyT,
           LogicalKeyboardKey.period,
         ]) {
@@ -860,6 +863,7 @@ void main() {
       final original = app.activeSwarm;
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyT);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       tester
@@ -879,7 +883,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(find.byType(NewHarnessBox), findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       final box = tester
@@ -887,7 +891,7 @@ void main() {
           .controller;
       expect(box.task, isEmpty);
       expect(box.checking, isTrue);
-      expect(find.text('pending harness'), findsOneWidget);
+      expect(find.text('pending harness'), findsNothing);
       expect(
         find.textContaining('check status', findRichText: true),
         findsOneWidget,
@@ -897,7 +901,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(find.byType(NewHarnessBox), findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -921,7 +925,7 @@ void main() {
 
   for (final placement in HarnessPlacement.values) {
     testWidgets(
-      '${placement.title} cancels without altering layout and carries inherited creation context',
+      '${placement.title} keeps its tab on Escape and carries inherited creation context',
       (tester) async {
         newHarnessOpensInBox = true;
         addTearDown(() => newHarnessOpensInBox = false);
@@ -940,23 +944,33 @@ void main() {
         await mount(tester, app);
         final key = placement == HarnessPlacement.newTab
             ? LogicalKeyboardKey.keyT
-            : LogicalKeyboardKey.keyP;
+            : LogicalKeyboardKey.keyO;
         await chord(tester, key);
+        if (placement == HarnessPlacement.newTab) {
+          await chord(tester, LogicalKeyboardKey.keyO);
+        }
         await tester.pump();
         expect(app.swarms, contains(original));
         expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);
-        expect(find.text(placement.title), findsWidgets);
+        expect(find.text(placement.title), findsNothing);
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pump();
+        expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);
+        if (placement == HarnessPlacement.newTab) {
+          await chord(tester, LogicalKeyboardKey.keyW);
+        }
         expect(app.swarms, [original]);
         await chord(tester, key);
+        if (placement == HarnessPlacement.newTab) {
+          await chord(tester, LogicalKeyboardKey.keyO);
+        }
         await tester.pump();
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
         final box = tester
             .widget<NewHarnessBox>(find.byType(NewHarnessBox))
             .controller;
-        expect(box.placement, placement);
+        expect(box.placement, HarnessPlacement.currentTab);
         expect(box.engine, 'codex');
         expect(box.machineId, 'm');
         expect(box.project.folder, '/work/project');
@@ -964,11 +978,11 @@ void main() {
         expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pump();
-        expect(app.activeSwarm, same(original));
-        expect(app.closedHistory, isEmpty);
+        expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);
+        expect(app.swarms, contains(original));
         // The creation box was opened from a search editor that is now gone.
         // Returning focus to that detached editor would disable shortcuts.
-        await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+        await chord(tester, LogicalKeyboardKey.keyP);
         expect(
           find.byKey(const ValueKey('swarm-search-input')),
           findsOneWidget,

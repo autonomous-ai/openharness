@@ -164,7 +164,7 @@ void main() {
       app.adoptSessionForTest(terminal('a69', []));
       app.newSwarm();
       await mount(tester, app);
-      if (!inline) await chord(tester, LogicalKeyboardKey.keyP);
+      if (!inline) await chord(tester, LogicalKeyboardKey.keyO);
       final field = find.byKey(
         ValueKey(inline ? 'harness-start-search' : 'swarm-search-input'),
       );

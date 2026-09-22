@@ -2,8 +2,14 @@
   "homepage": "https://strudel.cc",
   "upstream": "https://github.com/tidalcycles/strudel",
   "license": "MIT",
-  "tagline": "Music live coding environment for the browser",
+  "tagline": "Write music, perform it live, and keep the sound with its source",
   "examples": [
+    {
+      "prompt": "Write a warm 112 bpm synth groove with five named voices: Pulse drums, Sand noise, Low tide bass, Glass melody and Lantern chords. Let me bring voices in and out, mark a moment and keep a recording of my live performance.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/strudel-live-take.png",
+      "video": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/strudel-live-take-demo.mp4",
+      "caption": "Lantern room · real 112 bpm performance with audio · keep the WAV, source and markers"
+    },
     {
       "prompt": "Make an 80s synthwave track at 100 bpm: gated drums, a driving octave bassline, a pulsing 16th-note arpeggio, a wide supersaw pad, and a soaring lead that takes over after 8 bars.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/strudel/synthwave-night-drive.jpg",
@@ -13,6 +19,10 @@
       "prompt": "Write a 90 bpm lo-fi house groove: a kick and hats from bar 1, a bassline, warm chords, a hook that enters at bar 9, and a break at bar 17.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/strudel/lofi-house-groove.jpg",
       "caption": "Lo-fi house groove · 90 bpm, 9 voices, 32 bars · playing live in the pane"
+    },
+    {
+      "prompt": "Write a warm 96 bpm evening groove with drums, a rounded bass, soft chords and a small bell melody. Use synths so it works offline, name the voices, and leave space for me to mute, solo and record a live take.",
+      "caption": "A stereo WAV, played code versions and a timed performance journal in a ZIP."
     }
   ]
 }

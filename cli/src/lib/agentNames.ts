@@ -63,6 +63,55 @@ export function projectFolderName(label: string, at: Date, withSeconds = false):
   return `${slug}-${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}-${time}`
 }
 
+/** Two plain words for a branch nothing has named yet — plumbing, like the worktree's folder: the
+ *  agent or the person names the real branch when there is something to push. Mirrors
+ *  desktop/lib/core/git_worktree.dart. */
+export const PLACEHOLDER_ADJECTIVES = [
+  'amber', 'bold', 'brave', 'brisk', 'calm', 'clever', 'cosmic', 'crisp', 'dapper', 'eager', 'fancy', 'gentle',
+  'glad', 'golden', 'happy', 'hidden', 'jolly', 'keen', 'kind', 'lively', 'lucky', 'merry', 'misty', 'noble',
+  'polite', 'proud', 'quick', 'quiet', 'rapid', 'rosy', 'royal', 'rustic', 'shiny', 'silent', 'silver', 'sleek',
+  'smart', 'snowy', 'solar', 'spry', 'steady', 'sunny', 'swift', 'tidy', 'vivid', 'warm', 'witty', 'zesty',
+] as const
+export const PLACEHOLDER_NOUNS = [
+  'badger', 'beacon', 'birch', 'bison', 'canyon', 'cedar', 'comet', 'coral', 'crane', 'delta', 'falcon', 'fern',
+  'finch', 'fjord', 'fox', 'gecko', 'glacier', 'harbor', 'hawk', 'heron', 'ibis', 'island', 'koala', 'lagoon',
+  'lark', 'lynx', 'maple', 'meadow', 'meteor', 'moose', 'nebula', 'otter', 'owl', 'panda', 'pebble', 'pine',
+  'puffin', 'quartz', 'raven', 'reef', 'river', 'robin', 'sparrow', 'spruce', 'tiger', 'walrus', 'willow', 'zebra',
+] as const
+
+/** `brave-otter`: the branch a new worktree starts on until its session has a name, one none of
+ *  `taken` (branch names, with or without `refs/heads/`) already uses. */
+export function placeholderBranch(taken: Iterable<string>, pick = (n: number) => Math.floor(Math.random() * n)): string {
+  const names = new Set([...taken].map(name => name.replace(/^refs\/heads\//, '')))
+  const draw = () => `${PLACEHOLDER_ADJECTIVES[pick(PLACEHOLDER_ADJECTIVES.length)]}-${PLACEHOLDER_NOUNS[pick(PLACEHOLDER_NOUNS.length)]}`
+  let name = draw()
+  for (let tries = 0; tries < 16 && names.has(name); tries++) name = draw()
+  const base = name
+  for (let suffix = 2; names.has(name); suffix++) name = `${base}-${suffix}`
+  return name
+}
+
+/** The folder a worktree on `branch` is checked out in, under its repository: the branch's last part.
+ *  Nobody needs to see it, and it keeps its name when the branch is renamed. */
+export function worktreeFolderName(branch: string): string {
+  const name = (branch.split('/').pop() ?? '').replace(/[^A-Za-z0-9._-]+/g, '').replace(/^[.-]+/, '')
+  return name ? name.slice(0, 64) : 'worktree'
+}
+
+/** A session's name as a branch's last part: `Worktree and branches organization` →
+ *  `worktree-and-branches-organization`, cut at a word to 48 characters. Null when nothing is left. */
+export function sessionBranchSlug(title: string | null | undefined): string | null {
+  let slug = (title ?? '').normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  if (slug.length > 48) slug = slug.slice(0, 48).replace(/-[^-]*$/, '') || slug.slice(0, 48)
+  return slug || null
+}
+
+/** A name Git might accept for a new branch, checked before Git is asked. */
+export function plausibleBranchName(name: unknown): name is string {
+  return typeof name === 'string' && name.length > 0 && name.length <= 255 && !name.startsWith('-')
+    && !/[\x00-\x20\x7f~^:?*[\\]/.test(name)
+}
+
 /** The folder for a project somebody named: their words with spaces as dashes and nothing a path or
  *  a shell reads specially. Null when nothing usable is left. Mirrors `projectFolderSlug` in
  *  desktop/lib/core/project_folder.dart. */

@@ -100,11 +100,11 @@ void main() {
 
     await tester.longPress(find.byType(AgentTile).first);
     await tester.pumpAndSettle();
-    expect(find.text('Delete agent…'), findsOneWidget);
+    expect(find.text('Stop Harness…'), findsOneWidget);
 
-    await tester.tap(find.text('Delete agent…'));
+    await tester.tap(find.text('Stop Harness…'));
     await tester.pumpAndSettle();
-    expect(find.text('Delete Live one?'), findsOneWidget);
+    expect(find.text('Stop Live one?'), findsOneWidget);
 
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
@@ -121,9 +121,9 @@ void main() {
 
     await tester.longPress(find.byType(AgentTile).first);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Delete agent…'));
+    await tester.tap(find.text('Stop Harness…'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Stop'));
     await tester.pumpAndSettle();
 
     expect(conn.deleted, ['a0']);
@@ -145,13 +145,13 @@ void main() {
     // A tap is the gesture this row refuses; nothing should open.
     await tester.tap(gone);
     await tester.pumpAndSettle();
-    expect(find.text('Delete agent…'), findsNothing);
+    expect(find.text('Stop Harness…'), findsNothing);
 
     await tester.longPress(gone);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Delete agent…'));
+    await tester.tap(find.text('Stop Harness…'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Stop'));
     await tester.pumpAndSettle();
 
     expect(conn.deleted, ['a1']);

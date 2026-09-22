@@ -146,7 +146,7 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
                 ),
               AppIconButton(
                 icon: LucideIcons.plus,
-                tooltip: 'New project (⌘P)',
+                tooltip: 'New project',
                 onPressed: () =>
                     showOrchestratorLauncher(context, widget.notifier),
               ),
@@ -368,11 +368,10 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
                         '${task.harness} · ${question != null ? 'needs input' : task.state}${task.attempt > 1 ? ' · attempt ${task.attempt}' : ''}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
+                        style: grid.AppType.body(
                           color: task.error == null && question == null
                               ? grid.AppPalette.textSecondary
                               : grid.AppPalette.warn,
-                          fontSize: 12,
                         ),
                       ),
                     ],
@@ -475,9 +474,8 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
                             : role == 'assistant'
                             ? 'Director'
                             : 'Project update',
-                        style: TextStyle(
+                        style: grid.AppType.label(
                           color: grid.AppPalette.textSecondary,
-                          fontSize: 12,
                         ),
                       ),
                       const SizedBox(height: 6),
@@ -497,9 +495,8 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
                       ].contains(message['delivery']))
                         Text(
                           'Queued for the agent',
-                          style: TextStyle(
+                          style: grid.AppType.caption(
                             color: grid.AppPalette.textSecondary,
-                            fontSize: 12,
                           ),
                         ),
                     ],
@@ -516,10 +513,7 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
               alignment: Alignment.centerLeft,
               child: Text(
                 'Director is working…',
-                style: TextStyle(
-                  color: grid.AppPalette.textSecondary,
-                  fontSize: 12,
-                ),
+                style: grid.AppType.body(color: grid.AppPalette.textSecondary),
               ),
             ),
           ),
@@ -568,9 +562,8 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
                     children: [
                       Text(
                         'Shift ↵ for a new line',
-                        style: TextStyle(
+                        style: grid.AppType.monoMeta(
                           color: grid.AppPalette.textSecondary,
-                          fontSize: 11,
                         ),
                       ),
                       const SizedBox(width: 10),

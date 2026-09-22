@@ -6,11 +6,12 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from 'fs'
-import { join, dirname } from 'path'
+import { basename, join, dirname } from 'path'
 import { homedir } from 'os'
 import { fileURLToPath } from 'url'
 import { env } from '../config/env.js'
 import { VERSION } from '../version.js'
+import { hermesConfigHomes } from '../engines/hermes/home.js'
 import { managedNodePath } from './nodeRuntime.js'
 
 const SETTINGS_PATH = join(homedir(), '.claude', 'settings.json')
@@ -62,6 +63,10 @@ function command(
   // Only ever non-default for 'codex': a per-agent CODEX_HOME profile gets its OWN hooks.json, and
   // that file's baked --codex-home must match where it actually lives (see installCodexHooks).
   codexHome: string = env.CODEX_HOME,
+  // Same rule for Hermes, and it was broken the same way: a `hermes -p <name>` profile has its own
+  // config.yaml, and the block in it carried the DEFAULT home — so the hook looked the session up in
+  // a store it was not in (openharness#191). See installHermesHooks.
+  hermesHome: string = env.HERMES_HOME,
 ): string {
   return [
     // Absolute, never the bare word `node`. This string is executed later by the ENGINE, in a shell
@@ -76,7 +81,7 @@ function command(
     '--codex-home', shellQuote(codexHome),
     '--grok-home', shellQuote(env.GROK_HOME),
     '--cursor-home', shellQuote(env.CURSOR_HOME),
-    '--hermes-home', shellQuote(env.HERMES_HOME),
+    '--hermes-home', shellQuote(hermesHome),
     '--commandcode-home', shellQuote(env.COMMANDCODE_HOME),
     '--devin-home', shellQuote(env.DEVIN_HOME),
     '--agy-home', shellQuote(env.AGY_HOME),
@@ -553,7 +558,6 @@ export function installDevinHooks(port: number): void {
 }
 
 const HERMES_CONFIG_PATH = join(env.HERMES_HOME, 'config.yaml')
-const HERMES_ALLOWLIST_PATH = join(env.HERMES_HOME, 'shell-hooks-allowlist.json')
 // The managed block is delimited by BEGIN/END so it can be replaced unambiguously. (An earlier version
 // used a single marker line and a lookahead regex, which only replaced the comment and orphaned the old
 // `hooks:` mapping — YAML then took the LAST duplicate key, so a stale block silently won.)
@@ -565,10 +569,11 @@ const HERMES_HOOK_EVENTS = ['on_session_start', 'pre_llm_call'] as const
 
 /** Hermes gates every (event, command) pair behind ~/.hermes/shell-hooks-allowlist.json; an unapproved
  * hook is SILENTLY skipped in non-TTY runs. Record ours so it fires without an interactive prompt. */
-function allowlistHermesHook(cmd: string): void {
+function allowlistHermesHook(cmd: string, home: string): void {
+  const allowlistPath = join(home, 'shell-hooks-allowlist.json')
   let data: { approvals?: Array<{ event?: string; command?: string }> } = { approvals: [] }
   try {
-    const parsed = JSON.parse(readFileSync(HERMES_ALLOWLIST_PATH, 'utf-8')) as typeof data
+    const parsed = JSON.parse(readFileSync(allowlistPath, 'utf-8')) as typeof data
     if (parsed && Array.isArray(parsed.approvals)) data = parsed
   } catch { /* absent or unreadable → start from an empty skeleton */ }
   const previous = data.approvals ?? []
@@ -590,7 +595,7 @@ function allowlistHermesHook(cmd: string): void {
     changed = true
   }
   if (!changed) return
-  writeJsonAtomic(HERMES_ALLOWLIST_PATH, { ...data, approvals })
+  writeJsonAtomic(allowlistPath, { ...data, approvals })
 }
 
 function hermesHooksBlock(cmd: string): string {
@@ -650,18 +655,31 @@ function stripMachineHermesBlocks(config: string): { cleaned: string; foreignHoo
  * leave the file untouched and print what to add.
  */
 export function installHermesHooks(port: number): void {
-  const cmd = command(port, 'hermes')
+  // EVERY home, each with its OWN path baked into its block.
+  //
+  // ⚠️ A PROFILE'S CONFIG IS A COPY, AND NOTHING WAS MAINTAINING IT. `hermes profile create` copies
+  // `~/.hermes/config.yaml`, managed block and all — so a profile made after an install carried a
+  // frozen command (an older node path, an older port) that no installer ever revisited, and the
+  // `--hermes-home` in it named the DEFAULT home rather than the profile's own. The hook then looked
+  // its session up in a store the session was not in (openharness#191). Walking the profiles fixes
+  // both: the drift, and the home.
+  for (const home of hermesConfigHomes()) installHermesHooksIn(port, home)
+}
+
+function installHermesHooksIn(port: number, home: string): void {
+  const configPath = join(home, 'config.yaml')
+  const cmd = command(port, 'hermes', env.CODEX_HOME, home)
   let config = ''
   try {
-    config = readFileSync(HERMES_CONFIG_PATH, 'utf-8')
+    config = readFileSync(configPath, 'utf-8')
   } catch {
-    console.log(`[hooks] no Hermes config at ${HERMES_CONFIG_PATH} — skipping (run hermes once first)`)
+    if (home === env.HERMES_HOME) console.log(`[hooks] no Hermes config at ${configPath} — skipping (run hermes once first)`)
     return
   }
 
   const { cleaned, foreignHooks, removed } = stripMachineHermesBlocks(config)
   if (foreignHooks) {
-    console.error(`[hooks] ${HERMES_CONFIG_PATH} has its own \`hooks:\` block — leaving it untouched.`)
+    console.error(`[hooks] ${configPath} has its own \`hooks:\` block — leaving it untouched.`)
     console.error('[hooks] add these entries under it manually to mirror Hermes sessions:')
     for (const event of HERMES_HOOK_EVENTS) console.error(`[hooks]   ${event}: [{ command: ${JSON.stringify(cmd)}, timeout: 10 }]`)
     return
@@ -669,18 +687,18 @@ export function installHermesHooks(port: number): void {
 
   const next = `${cleaned.replace(/\s*$/, '')}\n${hermesHooksBlock(cmd)}`
   if (next === config) {
-    allowlistHermesHook(cmd) // keep the allowlist in sync even when the block is current
-    console.log('[hooks] Hermes session hooks already installed')
+    allowlistHermesHook(cmd, home) // keep the allowlist in sync even when the block is current
+    console.log(`[hooks] Hermes session hooks already installed${home === env.HERMES_HOME ? '' : ` (${basename(home)})`}`)
     return
   }
 
   try {
-    writeFileSync(HERMES_CONFIG_PATH, next)
-    allowlistHermesHook(cmd)
+    writeFileSync(configPath, next)
+    allowlistHermesHook(cmd, home)
     console.log(
       removed > 1
-        ? `[hooks] installed Hermes session hooks (collapsed ${removed} stale blocks) → ${HERMES_CONFIG_PATH}`
-        : `[hooks] installed Hermes session hooks → ${HERMES_CONFIG_PATH}`,
+        ? `[hooks] installed Hermes session hooks (collapsed ${removed} stale blocks) → ${configPath}`
+        : `[hooks] installed Hermes session hooks → ${configPath}`,
     )
     console.log('[hooks] (takes effect on the next hermes session start)')
   } catch (err) {

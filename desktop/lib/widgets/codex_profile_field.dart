@@ -4,6 +4,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/codex_profiles.dart';
 import '../state/app_state.dart';
@@ -184,15 +185,23 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     // Default is launch behavior, not another discovered account folder.
     final choices = {
       for (final profile in _profiles) profile.path: profile,
       if (widget.value != null) widget.value!.path: widget.value!,
     };
     const refreshValue = '__refresh_profiles__';
+    // A profile names a folder on disk, so the field is set in mono.
+    final textStyle =
+        widget.textStyle ??
+        grid.AppType.mono(color: grid.AppPalette.textPrimary);
     final height = math.max(
       34.0,
-      MediaQuery.textScalerOf(context).scale(13) * 1.35 + 14,
+      MediaQuery.textScalerOf(context)
+                  .scale(textStyle.fontSize ?? grid.AppType.monoSize) *
+              1.35 +
+          14,
     );
     return Wrap(
       spacing: 8,
@@ -200,9 +209,7 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         SizedBox(
-          width:
-              252 *
-              math.min(1.4, MediaQuery.textScalerOf(context).scale(13) / 13),
+          width: 252 * math.min(1.4, grid.appTextScaleOf(context)),
           height: height,
           child: AppSelectField<String>(
             key: const Key('new-agent-codex-profile-field'),
@@ -238,12 +245,7 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
                     'Codex profile: ${widget.value?.label ?? (_loading ? 'Loading…' : 'Default')}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style:
-                        widget.textStyle ??
-                        TextStyle(
-                          fontSize: 13,
-                          color: grid.AppPalette.textPrimary,
-                        ),
+                    style: textStyle,
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -262,22 +264,15 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
             foregroundColor: grid.AppPalette.textSecondary,
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
             minimumSize: const Size(0, 32),
-            textStyle:
-                widget.textStyle ??
-                TextStyle(
-                  fontFamily: grid.AppFont.sans,
-                  fontFamilyFallback: grid.AppFont.sansFallback,
-                  fontSize: 13,
-                ),
+            textStyle: textStyle,
           ),
           child: Text(_linking ? 'Adding…' : 'Add'),
         ),
         if (_error != null)
           Text(
             _error!,
-            style: TextStyle(
+            style: grid.AppType.body(
               color: Theme.of(context).colorScheme.error,
-              fontSize: 12,
             ),
           ),
       ],

@@ -42,6 +42,7 @@ import { engineInstallRecipe } from './lib/engineInstall.js'
 import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from './lib/projectFolder.js'
 import { preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.js'
 import { projectPreview } from './lib/projectPreview.js'
+import { readGitProject } from './lib/gitProject.js'
 import { agentFrame, lastActivityAt, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import { installedDsh, listInstalledDsh } from './dsh/installed.js'
 import { OrchestratorService } from './orchestrator/service.js'
@@ -81,6 +82,7 @@ import { commandcodeMessagesToEvents, windowCommandCodeLines } from './engines/c
 import { hermesMessagesToEvents, windowHermesMessages } from './engines/hermes/normalizer.js'
 import { devinMessagesToEvents, windowDevinMessages } from './engines/devin/normalizer.js'
 import { readHermesMessages } from './engines/hermes/reader.js'
+import { hermesDbForSession } from './lib/hermesHome.js'
 import { readDevinMessages } from './engines/devin/reader.js'
 import { readOpencodeMessages } from './engines/opencode/reader.js'
 import { readKiloMessages } from './engines/kilo/reader.js'
@@ -113,8 +115,8 @@ const OPENCODE_DB = join(env.OPENCODE_DATA_DIR, 'opencode.db')
 // Kilo keeps history the same way opencode does, in its own store.
 const KILO_DB = join(env.KILO_DATA_DIR, 'kilo.db')
 const DEVIN_DB = join(env.DEVIN_HOME, 'sessions.db')
-// Hermes history likewise comes from a SQLite store, not a per-session file.
-const HERMES_DB = join(env.HERMES_HOME, 'state.db')
+// Hermes history likewise comes from a SQLite store, not a per-session file — one per HOME, so the
+// path is the session's own (`hermesDbForSession`) rather than this machine's default.
 
 /** Answers the device `project_recent` RPC — set by cli.ts to the CommanderMirror's `recent`. */
 export type RecentProvider = (sessionId: string, n: number) => Array<{ kind: string; text: string; recap?: string }>
@@ -1280,7 +1282,7 @@ export class BackendSocket {
   private emitReply(connId: string, type: string, requestId: unknown, payload: Record<string, unknown>): void {
     const resultType = `${type}_result`
     // Before the E2EE wrap: an RPC reply is only readable here.
-    if (env.LOG_FRAMES && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && !SHARE_REQUEST_TYPES.has(type)) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
+    if (env.LOG_FRAMES && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && !SHARE_REQUEST_TYPES.has(type)) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
     if (this.localClients.has(connId)) {
       this.sendTo(connId, { type: resultType, payload: { requestId, ...payload } })
       return
@@ -1383,7 +1385,7 @@ export class BackendSocket {
     // than as an opaque __e2e envelope.
     // Terminal frames contain raw keystrokes, paste text and screen bytes after
     // unwrap. Never pass them to the frame logger, even in diagnostic mode.
-    if (env.LOG_FRAMES && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'orchestrator' && !SHARE_REQUEST_TYPES.has(type)) {
+    if (env.LOG_FRAMES && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'orchestrator' && !SHARE_REQUEST_TYPES.has(type)) {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => this.emitReply(connId, t, rid, p)
@@ -1631,7 +1633,7 @@ export class BackendSocket {
             const rawLimit = payload.limit
             const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
             const before = typeof payload.before === 'string' ? payload.before : undefined
-            const messages = await readHermesMessages(HERMES_DB, sessionId)
+            const messages = await readHermesMessages(await hermesDbForSession(s), sessionId)
             const timestamp = new Date(s.updatedAt).toISOString()
             if (!limit) {
               reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: hermesMessagesToEvents(messages), timestamp, engine: s.engine })
@@ -2386,6 +2388,14 @@ export class BackendSocket {
           if (!s?.cwd) { reply(type, requestId, { error: 'AGENT_NOT_FOUND' }); return }
           try { reply(type, requestId, { files: listFileTree(s.cwd) }) }
           catch (e) { reply(type, requestId, { error: e instanceof Error ? e.message : 'FILE_TREE_ERROR' }) }
+          return
+        }
+
+        case 'git_project_info': {
+          const path = typeof payload.path === 'string' ? payload.path : ''
+          void readGitProject(path)
+            .then(result => reply(type, requestId, result))
+            .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
           return
         }
 

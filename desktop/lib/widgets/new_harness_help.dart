@@ -53,15 +53,7 @@ class _HarnessHelpLinkState extends State<HarnessHelpLink> {
             foregroundColor: AppPalette.textSecondary,
             minimumSize: const Size(0, 32),
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            textStyle:
-                widget.textStyle ??
-                TextStyle(
-                  fontFamily: AppFont.sans,
-                  fontFamilyFallback: AppFont.sansFallback,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w400,
-                  height: 1.4,
-                ),
+            textStyle: widget.textStyle ?? AppType.body(height: 1.4),
             side: BorderSide.none,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(6),
@@ -170,10 +162,8 @@ class _HarnessHelpDialogState extends State<_HarnessHelpDialog> {
                       header: true,
                       child: Text(
                         title,
-                        style: TextStyle(
-                          fontSize: compact ? 28 : 32,
+                        style: AppType.title(
                           height: 1.2,
-                          fontWeight: AppFont.semibold,
                           color: AppPalette.textPrimary,
                         ),
                       ),
@@ -181,8 +171,7 @@ class _HarnessHelpDialogState extends State<_HarnessHelpDialog> {
                     const SizedBox(height: 20),
                     Text(
                       intro,
-                      style: TextStyle(
-                        fontSize: 16,
+                      style: AppType.body(
                         height: 1.5,
                         color: AppPalette.textSecondary,
                       ),
@@ -317,18 +306,15 @@ class _HelpOption extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: TextStyle(
-                        fontSize: 18,
+                      style: AppType.heading(
                         height: 1.4,
-                        fontWeight: AppFont.semibold,
                         color: AppPalette.textPrimary,
                       ),
                     ),
                     const SizedBox(height: 8),
                     Text(
                       description,
-                      style: TextStyle(
-                        fontSize: 16,
+                      style: AppType.body(
                         height: 1.5,
                         color: AppPalette.textSecondary,
                       ),

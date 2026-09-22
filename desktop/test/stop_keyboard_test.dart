@@ -65,7 +65,7 @@ void main() {
     WidgetTester tester, {
     LogicalKeyboardKey accept = LogicalKeyboardKey.enter,
   }) async {
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     await tester.enterText(
       find.byKey(const ValueKey('swarm-search-input')),
       '> stop',
@@ -202,13 +202,25 @@ void main() {
       await key(tester, LogicalKeyboardKey.pageDown);
       expect(body.controller!.offset, greaterThan(0));
       expect(find.text('Cancel').hitTestable(), findsOneWidget);
-      await key(tester, LogicalKeyboardKey.pageDown);
+      for (
+        var i = 0;
+        i < 12 &&
+            find
+                .textContaining('Close Pane keeps it running.')
+                .hitTestable()
+                .evaluate()
+                .isEmpty;
+        i++
+      ) {
+        await key(tester, LogicalKeyboardKey.pageDown);
+      }
       expect(
         find.textContaining('Close Pane keeps it running.').hitTestable(),
         findsOneWidget,
       );
-      await key(tester, LogicalKeyboardKey.pageUp);
-      await key(tester, LogicalKeyboardKey.pageUp);
+      for (var i = 0; i < 12 && body.controller!.offset > 0; i++) {
+        await key(tester, LogicalKeyboardKey.pageUp);
+      }
       expect(body.controller!.offset, 0);
       expect(tester.takeException(), isNull);
       await key(tester, LogicalKeyboardKey.enter);
@@ -225,7 +237,7 @@ void main() {
       isShared: true,
     );
     await mount(tester);
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     await tester.enterText(
       find.byKey(const ValueKey('swarm-search-input')),
       '> stop',

@@ -27,7 +27,7 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('swarm-new-pane-button')), findsNothing);
     expect(find.byType(FloatingActionButton), findsNothing);
-    await chord(tester, LogicalKeyboardKey.keyP);
+    await chord(tester, LogicalKeyboardKey.keyO);
     await tester.enterText(
       find.byKey(const ValueKey('swarm-search-input')),
       'Agent 0',
@@ -70,7 +70,7 @@ void main() {
         await tester.pump();
         final neighborRect = tester.getRect(find.byKey(neighbor.cellKey));
         final expected = app.preparePaneSplit(axis)!;
-        await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+        await chord(tester, LogicalKeyboardKey.keyP);
         final inputField = find.byKey(const ValueKey('swarm-search-input'));
         await tester.enterText(
           inputField,

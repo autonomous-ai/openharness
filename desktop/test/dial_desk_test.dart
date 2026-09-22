@@ -15,6 +15,7 @@ import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/terminal_pane.dart';
+import 'package:harness/terminal/terminal_session.dart';
 
 AppNotifier _notifier() => AppNotifier(
   config: AppConfig.dev,
@@ -338,4 +339,113 @@ void main() {
       app.dispose();
     },
   );
+
+  // ── the device focuses, a person takes ────────────────────────────────────
+  //
+  // A dial turned onto a pane another client holds, or a question shown there
+  // for one, moves the focus and nothing else: the band stays up with its
+  // button. It used to reopen — a takeover — and since the reopen redrew the
+  // dialog the daemon was watching, the question came back as a new one and the
+  // dial asked again, 1.5s round, until the cable came out (owner, 2026-09-22).
+  group('a focus from the device never takes a terminal back', () {
+    late AppNotifier app;
+    final sent = <String, List<String>>{};
+
+    TerminalSession taken(String id) {
+      sent[id] = [];
+      return TerminalSession(
+        machineId: 'm1',
+        agentId: id,
+        agentName: id,
+        engineId: 'claude',
+        send: (type, _) async {
+          sent[id]!.add(type);
+          return true;
+        },
+        sendBinary: (_) async => true,
+      )..status = TerminalSessionStatus.takenOver;
+    }
+
+    List<String> opens(String id) =>
+        sent[id]!.where((t) => t == 'terminal_open').toList();
+
+    setUp(() {
+      sent.clear();
+      app = _notifier();
+      // Online and able, so a click WOULD reopen — that is the contrast.
+      _machine(app, 'm1', ['a1', 'a2', 'a3'])
+        ..nodeOnline = true
+        ..terminalCapabilityAvailable = true;
+      app.adoptSessionForTest(taken('a1'));
+      app.adoptSessionForTest(taken('a2'));
+      expect(app.focusedPane?.agentId, 'a2');
+    });
+
+    tearDown(() => app.dispose());
+
+    test('the dial turning onto a taken pane only focuses it', () async {
+      await dialFocus(app, 'a1');
+      expect(app.focusedPane?.agentId, 'a1');
+      expect(app.paneFocusByUser, isFalse);
+      expect(opens('a1'), isEmpty);
+      expect(opens('a2'), isEmpty);
+      expect(
+        app.paneOfAgent('m1', 'a1')!.session!.status,
+        TerminalSessionStatus.takenOver,
+        reason: 'the band stays; only a hand on this app presses its button',
+      );
+    });
+
+    test('a question shown on the dial only brings the pane forward', () async {
+      await app.handleEventForTest('m1', {
+        'type': 'dial_open',
+        'payload': {'machineId': 'm1', 'agentId': 'a1', 'reason': 'question'},
+      });
+      expect(app.focusedPane?.agentId, 'a1');
+      expect(app.paneFocusByUser, isFalse);
+      expect(opens('a1'), isEmpty);
+      expect(opens('a2'), isEmpty);
+    });
+
+    test(
+      'a question for a pane on another tab switches to it, takes nothing',
+      () async {
+        final first = app.activeSwarmId;
+        app.newSwarm();
+        app.adoptSessionForTest(taken('a3'));
+        app.selectSwarm(first);
+        expect(app.paneFocusByUser, isTrue, reason: 'selectSwarm by hand');
+
+        await app.handleEventForTest('m1', {
+          'type': 'dial_open',
+          'payload': {'machineId': 'm1', 'agentId': 'a3', 'reason': 'question'},
+        });
+        expect(app.activeSwarmId, isNot(first));
+        expect(app.focusedPane?.agentId, 'a3');
+        expect(app.paneFocusByUser, isFalse);
+        for (final id in ['a1', 'a2', 'a3']) {
+          expect(opens(id), isEmpty, reason: '$id stays with its holder');
+        }
+      },
+    );
+
+    test('the dial picking a tab is not a person arriving on it', () async {
+      final first = app.activeSwarmId;
+      app.newSwarm();
+      await app.handleEventForTest('m1', {
+        'type': 'dial_swarm',
+        'payload': {'swarmId': first},
+      });
+      expect(app.activeSwarmId, first);
+      expect(app.paneFocusByUser, isFalse);
+    });
+
+    test('a click on the same pane still takes it back', () async {
+      // The contrast: the ordinary selection reopens a dead pane, and a taken
+      // pane is dead by its measure. That is the person's path and stays.
+      await app.selectAgent('m1', 'a1');
+      expect(app.paneFocusByUser, isTrue);
+      expect(opens('a1'), ['terminal_open']);
+    });
+  });
 }

@@ -79,6 +79,42 @@
           <span id="controls">Drag to explore the world</span
           ><span id="stats"></span>
         </div>
+        <div class="playtest-bar" aria-label="Playtest tools">
+          <button id="rewind" disabled>
+            <span aria-hidden="true">↶</span> Rewind
+          </button>
+          <button id="pin-moment" disabled>Pin moment</button>
+          <span id="rewind-status">Play to record your last 36 seconds</span>
+          <button id="show-moments">
+            Saved moments <span aria-hidden="true">↗</span>
+          </button>
+        </div>
+        <section
+          id="timeline"
+          class="timeline"
+          aria-label="Rewind timeline"
+          hidden
+        >
+          <div class="timeline-heading">
+            <strong id="timeline-title">Rewind your run</strong
+            ><output id="timeline-position" for="timeline-range"></output>
+          </div>
+          <input
+            id="timeline-range"
+            type="range"
+            min="0"
+            max="0"
+            step="1"
+            value="0"
+            aria-label="Recorded game moment"
+          />
+          <div class="timeline-actions">
+            <button id="back-live">Back to live</button
+            ><button id="try-here" class="primary">
+              Try from here <span aria-hidden="true">→</span>
+            </button>
+          </div>
+        </section>
       </section>
       <section class="progress" aria-label="Build progress">
         <div class="progress-heading">
@@ -104,6 +140,8 @@
             Versions</button
           ><button role="tab" id="tab-assets" aria-selected="false">
             Assets</button
+          ><button role="tab" id="tab-moments" aria-selected="false">
+            Moments</button
           ><button id="export" class="export" disabled>
             Export game <span>↗</span>
           </button>
@@ -111,7 +149,39 @@
         <div id="activity" class="activity" role="tabpanel"></div>
         <div id="versions" class="versions" role="tabpanel" hidden></div>
         <div id="assets" class="assets" role="tabpanel" hidden></div>
+        <div id="moments" class="moments" role="tabpanel" hidden></div>
       </section>
+      <dialog id="moment-dialog" aria-labelledby="moment-title">
+        <form id="moment-form">
+          <div class="eyebrow">PLAYTEST MOMENT</div>
+          <h2 id="moment-title">Remember this part.</h2>
+          <img id="moment-image" alt="The game frame being saved" hidden />
+          <p id="moment-position"></p>
+          <label for="moment-kind">What do you want to do?</label>
+          <select id="moment-kind">
+            <option value="change">Change something</option>
+            <option value="keep">Keep this feeling</option>
+            <option value="explore">Explore an idea</option>
+          </select>
+          <label for="moment-note">Note for your agent</label>
+          <textarea
+            id="moment-note"
+            rows="3"
+            maxlength="2000"
+            placeholder="The jump feels great here. Could I stay in the air longer?"
+          ></textarea>
+          <p class="moment-help">
+            Saves the playable version, game state, and note in your project.
+            The image captures the game canvas.
+          </p>
+          <div class="timeline-actions">
+            <button type="button" id="moment-cancel">Cancel</button
+            ><button id="moment-save" type="submit" class="primary">
+              Save moment
+            </button>
+          </div>
+        </form>
+      </dialog>
       <div id="toast" class="toast" role="status" hidden></div>
     </main>
     <script src="/studio.js" type="module"></script>

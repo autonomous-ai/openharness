@@ -9,9 +9,12 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/state/desk_sync.dart';
 import 'package:harness/state/pane_arrangement.dart';
+import 'package:harness/state/pane_layout_store.dart';
+import 'package:harness/state/pane_preset.dart';
+import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
 
-import 'swarm_state_test.dart' show createApp;
+import 'swarm_state_test.dart' show MemoryStore, createApp;
 
 DeskTab tab(
   String id, {
@@ -373,11 +376,12 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       api.batches.clear();
 
-      // The 15 s poll, and a push about another tab: the same order for this one.
+      // The 15 s poll, and a push about another tab: the same order for this one
+      // (and, as the server would, the layout this window already sent up).
       api.doc = DeskDoc(
         revision: 5,
         tabs: [
-          tab('d1', name: 'One', custom: true, agents: ['a1', 'a2']),
+          api.doc!.tabs.firstWhere((t) => t.id == 'd1'),
           tab('d2', name: 'Two', custom: true, agents: ['a3']),
         ],
       );
@@ -431,11 +435,18 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       api.batches.clear();
 
-      // The other Mac dragged a3 to the front.
+      // The other Mac dragged a3 to the front (the layout as the server holds it rides along).
       api.doc = DeskDoc(
         revision: 7,
         tabs: [
-          tab('d1', name: 'One', custom: true, agents: ['a3', 'a1', 'a2']),
+          api.doc!.tabs
+              .firstWhere((t) => t.id == 'd1')
+              .copyWith(
+                panes: [
+                  for (final a in ['a3', 'a1', 'a2'])
+                    DeskPaneRef(machineId: 'm', agentId: a),
+                ],
+              ),
         ],
       );
       await app.handleEventForTest('m', {
@@ -493,6 +504,185 @@ void main() {
         );
       },
     );
+
+    test('a restart keeps the window\'s layout: preset, sizes, pins, focus and zoom survive the join', () async {
+      // The desk holds membership, order and names; everything else is this
+      // window's and lives in its saved layout. Restoring that layout and then
+      // joining a desk that already has the tab must change none of it.
+      final id = newDeskId();
+      final storage = MemoryStore();
+      final store = PaneLayoutStore(storage: storage);
+      final sizes = PaneArrangement([
+        Rect.fromLTWH(0, 0, 0.3, 1),
+        Rect.fromLTWH(0.3, 0, 0.7, 1),
+      ]);
+      final saved = Swarm(id: id, name: 'Work', nameIsCustom: true)
+        ..panes.addAll([
+          TerminalPane(id: 1, machineId: 'm', agentId: 'a1'),
+          TerminalPane(id: 2, machineId: 'm', agentId: 'a2'),
+        ])
+        ..presets[2] = PanePreset.rows
+        ..savePaneSizes('2:manual', sizes)
+        ..focusedPaneId = 2
+        ..zoomedPaneId = 2;
+      saved.pinnedSlots[2] = 1;
+      await store.saveSwarms([saved], id);
+
+      final api = _DeskApi()
+        ..doc = DeskDoc(
+          revision: 20,
+          tabs: [
+            tab(id, name: 'Work', custom: true, agents: ['a1', 'a2']),
+          ],
+        );
+      final app = createApp(store: storage)..api = api;
+      addTearDown(app.dispose);
+      await app.restorePaneLayoutForTest();
+      final work = app.swarms.singleWhere((s) => s.id == id);
+      expect(work.presets[2], PanePreset.rows);
+      final focused = work.focusedPaneId, zoomed = work.zoomedPaneId;
+      expect(focused, isNotNull);
+      expect(zoomed, isNotNull);
+
+      await app.deskStartForTest();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(app.swarms.map((s) => s.id), [id]);
+      expect(work.panes.map((p) => p.agentId), ['a1', 'a2']);
+      expect(
+        work.presets[2],
+        PanePreset.rows,
+        reason: 'the preset is the window\'s',
+      );
+      expect(work.paneSizes['2:manual']?.tiles, sizes.tiles);
+      expect(work.focusedPaneId, focused);
+      expect(work.zoomedPaneId, zoomed);
+      expect(work.pinnedSlots.values, [1]);
+      // The desk held no layout for the tab: it learns this window's, once.
+      final sent = api.batches.expand((b) => b).toList();
+      expect(sent.map((o) => o['op']), ['tab.layout']);
+      expect(api.doc!.tabs.single.layout?.presets, {'2': 'rows'});
+    });
+
+    test('a preset chosen or a split dragged here is the layout on the other Mac too', () async {
+      // The desk carries presets and arrangements since 2026-09-22 ("máy kia
+      // không có layout"). Focus, zoom and pins stay this window's.
+      final api = _DeskApi();
+      final app = createApp()..api = api;
+      addTearDown(app.dispose);
+      await app.deskStartForTest();
+      app.newSwarm(name: 'Work');
+      final work = app.activeSwarm;
+      await app.addAgentToSwarm('m', 'a1', swarmId: work.id);
+      await app.addAgentToSwarm('m', 'a2', swarmId: work.id);
+      await Future<void>.delayed(Duration.zero);
+      api.batches.clear();
+
+      app.setPreset(2, PanePreset.rows);
+      await Future<void>.delayed(Duration.zero);
+      final onDesk = () =>
+          api.doc!.tabs.singleWhere((t) => t.id == work.id).layout;
+      expect(onDesk()?.presets, {'2': 'rows'});
+      expect(
+        api.batches.expand((b) => b).where((o) => o['op'] == 'tab.layout'),
+        hasLength(1),
+      );
+
+      // A drag: the arrangement travels as fractions of the canvas.
+      final sizes = PaneArrangement([
+        Rect.fromLTWH(0, 0, 0.3, 1),
+        Rect.fromLTWH(0.3, 0, 0.7, 1),
+      ]);
+      work.savePaneSizes('2:manual', sizes);
+      app.persistLayoutForTest();
+      await Future<void>.delayed(Duration.zero);
+      expect(onDesk()?.sizes['2:manual'], sizes.toJson());
+
+      // The other Mac, joining: the same tab with the same preset and split.
+      final other = createApp()..api = api;
+      addTearDown(other.dispose);
+      await other.deskStartForTest();
+      final theirs = other.swarms.singleWhere((s) => s.id == work.id);
+      expect(theirs.presets[2], PanePreset.rows);
+      expect(theirs.paneSizes['2:manual']?.tiles, sizes.tiles);
+      expect(
+        theirs.focusedPaneId,
+        isNot(work.focusedPaneId),
+        reason: 'focus is each window\'s own',
+      );
+    });
+
+    test('a document that did not move the layout leaves a drag in progress alone; one that did applies it', () async {
+      final id = newDeskId();
+      final api = _DeskApi()
+        ..doc = DeskDoc(
+          revision: 1,
+          tabs: [
+            tab(id, name: 'Work', custom: true, agents: ['a1', 'a2']),
+          ],
+        );
+      final app = createApp()..api = api;
+      addTearDown(app.dispose);
+      await app.deskStartForTest();
+      app.selectSwarm(id);
+      final work = app.activeSwarm;
+      // This window drags while the backend is unreachable: the op waits, the
+      // arrangement stands.
+      api.failWith = StateError('offline');
+      final mine = PaneArrangement([
+        Rect.fromLTWH(0, 0, 0.6, 1),
+        Rect.fromLTWH(0.6, 0, 0.4, 1),
+      ]);
+      work.savePaneSizes('2:manual', mine);
+      app.persistLayoutForTest();
+      await Future<void>.delayed(Duration.zero);
+      api.failWith = null;
+      // A push about something else (a new tab) — the layout on the desk for this tab did not move.
+      api.doc = DeskDoc(
+        revision: 3,
+        tabs: [
+          tab(id, name: 'Work', custom: true, agents: ['a1', 'a2']),
+          tab('other', name: 'Other', custom: true),
+        ],
+      );
+      await app.handleEventForTest('m', {
+        'type': 'desk_changed',
+        'payload': {'revision': 3},
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(work.paneSizes['2:manual']?.tiles, mine.tiles);
+      await app.deskFlushForTest();
+      expect(api.doc!.tabs.first.layout?.sizes['2:manual'], mine.toJson());
+
+      // The other Mac chose a preset for this tab: it applies here.
+      api.doc = DeskDoc(
+        revision: 9,
+        tabs: [
+          DeskTab(
+            id: id,
+            name: 'Work',
+            nameIsCustom: true,
+            panes: [
+              const DeskPaneRef(machineId: 'm', agentId: 'a1'),
+              const DeskPaneRef(machineId: 'm', agentId: 'a2'),
+            ],
+            layout: const DeskLayout(presets: {'2': 'rows'}),
+          ),
+          tab('other', name: 'Other', custom: true),
+        ],
+      );
+      await app.handleEventForTest('m', {
+        'type': 'desk_changed',
+        'payload': {'revision': 9},
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(work.presets[2], PanePreset.rows);
+      expect(
+        work.paneSizes,
+        isEmpty,
+        reason: 'the preset replaced the split, as choosing it here would',
+      );
+    });
 
     test('keeps its ops while the backend is unreachable and sends them once it is back', () async {
       final api = _DeskApi();

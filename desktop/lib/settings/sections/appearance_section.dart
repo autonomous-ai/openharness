@@ -1,15 +1,16 @@
 import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_theme.dart' as grid;
-import '../appearance/typography_section.dart';
 import '../appearance/palette_section.dart';
+import '../../shared/theme/appearance_prefs_store.dart';
 
 /// Customize Harness ▸ Appearance: how the app looks on this Mac.
 ///
-/// Palettes coordinate the workspace and terminal defaults. UI typography stays
-/// separate from the agent terminal's font and size in Customize Harness ▸ Terminal.
+/// Palettes coordinate the workspace and terminal defaults. The shared font
+/// and size are configured once in Customize Harness ▸ Terminal.
 class AppearanceSection extends StatelessWidget {
-  const AppearanceSection({super.key});
+  const AppearanceSection({super.key, this.store});
+  final AppearancePrefsStore? store;
 
   @override
   Widget build(BuildContext context) {
@@ -18,12 +19,11 @@ class AppearanceSection extends StatelessWidget {
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: const [
-          PaletteSection(),
-          TypographySection(),
+        children: [
+          PaletteSection(store: store),
           // Room under the last card so a scrolled-to-bottom pane does not end
           // flush against the window edge.
-          SizedBox(height: 8),
+          const SizedBox(height: 8),
         ],
       ),
     );

@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../settings/appearance/wallpaper_section.dart';
 import '../settings/sections/appearance_section.dart';
 import '../settings/sections/terminal_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/widgets/app_dialog.dart';
-import 'box_chrome.dart';
 import 'prompt_customize.dart';
 
 /// Opens customization over the workspace so appearance changes remain visible
@@ -20,7 +20,7 @@ Future<void> showHarnessCustomizePane(BuildContext context) =>
       builder: (context) => Align(
         alignment: Alignment.centerRight,
         child: SizedBox(
-          width: (440 * MediaQuery.textScalerOf(context).scale(13) / 13).clamp(
+          width: (440 * grid.appTextScaleOf(context)).clamp(
             0,
             MediaQuery.sizeOf(context).width,
           ),
@@ -30,7 +30,7 @@ Future<void> showHarnessCustomizePane(BuildContext context) =>
       ),
     );
 
-/// Appearance and Terminal share the app's existing preference stores.
+/// Customization tabs share the app's existing preference stores.
 class HarnessCustomizePane extends StatelessWidget {
   const HarnessCustomizePane({super.key, required this.onClose, this.store});
   final VoidCallback onClose;
@@ -47,7 +47,7 @@ class HarnessCustomizePane extends StatelessWidget {
         child: CallbackShortcuts(
           bindings: {const SingleActivator(LogicalKeyboardKey.escape): onClose},
           child: DefaultTabController(
-            length: 3,
+            length: 4,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -58,10 +58,8 @@ class HarnessCustomizePane extends StatelessWidget {
                       Expanded(
                         child: Text(
                           'Customize Harness',
-                          style: boxMonoStyle(
-                            size: 14,
+                          style: grid.AppType.heading(
                             color: grid.AppPalette.textPrimary,
-                            weight: FontWeight.w600,
                           ),
                         ),
                       ),
@@ -82,12 +80,16 @@ class HarnessCustomizePane extends StatelessWidget {
                   unselectedLabelColor: grid.AppPalette.textSecondary,
                   indicatorColor: grid.AppPalette.swarmAccent,
                   dividerColor: grid.AppPalette.divider,
-                  labelStyle: boxMonoStyle(size: 12),
+                  labelStyle: grid.AppType.label(),
                   tabs: const [
                     Tab(key: ValueKey('customize-prompt'), text: 'Pane'),
                     Tab(
                       key: ValueKey('customize-appearance'),
                       text: 'Appearance',
+                    ),
+                    Tab(
+                      key: ValueKey('customize-wallpaper'),
+                      text: 'Wallpaper',
                     ),
                     Tab(key: ValueKey('customize-terminal'), text: 'Terminal'),
                   ],
@@ -96,7 +98,11 @@ class HarnessCustomizePane extends StatelessWidget {
                   child: TabBarView(
                     children: [
                       PromptCustomize(store: store ?? appearancePrefsStore),
-                      const AppearanceSection(),
+                      AppearanceSection(store: store),
+                      SingleChildScrollView(
+                        padding: const EdgeInsets.all(20),
+                        child: WallpaperSection(store: store),
+                      ),
                       const TerminalSection(),
                     ],
                   ),

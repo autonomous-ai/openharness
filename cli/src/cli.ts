@@ -44,7 +44,7 @@ import { DaemonCableHost, cableEventFor, cableQuestionFor, cableQuestionCloseFor
 import { MachineListCache, machineListCachePath, withStaleMarker } from './device/machineList.js'
 import { DeviceLink } from './device/deviceLink.js'
 import { DeviceFleet } from './device/deviceFleet.js'
-import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
+import { registry, projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './lib/registry.js'
 import { engineSessionTitle } from './lib/sessionTitle.js'
 import { installAmpPlugin, installCodexHooks, installCommandCodeHooks, installCursorHooks, installDevinHooks, installGrokHooks, installAgyHooks, installCopilotHooks, installHermesHooks, installKiloPlugin, installOpencodePlugin, installPiExtension, installSessionHooks } from './lib/hooks.js'
 import { PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
@@ -72,6 +72,7 @@ import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, engineBin, enginePathOve
 import { isTerminalEngine, type AgentEngine } from './engines/types.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, commandSupportsFlagInInteractiveShell, namedAgentArgs, permissionModeFlags } from './lib/engineLaunch.js'
+import { workspaceMissing } from './lib/workspaceCheck.js'
 import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, gridEnvVarNames, type GridLaunchMachine, type GridWebSearchStatus } from './lib/gridLaunch.js'
 import { HERMES_SYSTEM_MANAGED_DIR } from './lib/gridWebMcp.js'
 import { writeGridConfigDir } from './lib/gridConfigDir.js'
@@ -85,7 +86,11 @@ import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from
 import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
+import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
+import { sweepWorktrees } from './lib/worktreeSweep.js'
+import { nameBranchAfterSession } from './lib/branchNaming.js'
+import { forgetAgentProject } from './lib/agentProject.js'
 import { createStopAgentService } from './lib/stopAgentService.js'
 import { createResumeAgentService } from './lib/resumeAgentService.js'
 import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from './lib/launchOverrides.js'
@@ -100,6 +105,7 @@ import { preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.j
 import { materializeWorkspace } from './dsh/materialize.js'
 import { dshLaunch } from './dsh/launch.js'
 import { DshViewerManager } from './dsh/viewer.js'
+import { ViewerLedger } from './dsh/viewerLedger.js'
 import { DshVerdictWatcher, type DshVerdict } from './dsh/verdict.js'
 import { dshCommand, dshUsage } from './dsh/command.js'
 import type { AgentDshContext } from './lib/agentFrame.js'
@@ -196,6 +202,7 @@ import { CopilotNormalizer, copilotHistoryTurnOpen, lastCopilotTurnText } from '
 import { copilotSessionForPid, findCopilotTranscript } from './engines/copilot/session.js'
 import { PiNormalizer, lastPiTurnText } from './engines/pi/normalizer.js'
 import { HermesReader, readHermesMessages } from './engines/hermes/reader.js'
+import { hermesDbForSession } from './lib/hermesHome.js'
 import { DevinReader, readDevinMessages } from './engines/devin/reader.js'
 import { lastHermesTurnText } from './engines/hermes/normalizer.js'
 import { lastDevinTurnText } from './engines/devin/normalizer.js'
@@ -285,8 +292,9 @@ let deviceLinkRef: DeviceLink | null = null
 const OPENCODE_DB = join(env.OPENCODE_DATA_DIR, 'opencode.db')
 // Kilo's SQLite store — same shape, its own file and its own reader (see engines/kilo/).
 const KILO_DB = join(env.KILO_DATA_DIR, 'kilo.db')
-// Hermes keeps every surface's history in one SQLite store — polled per session by HermesReader.
-const HERMES_DB = join(env.HERMES_HOME, 'state.db')
+// Hermes keeps every surface's history in one SQLite store PER HOME — polled per session by
+// HermesReader, against the home that session lives in (`hermesDbForSession`; `hermes -p <name>` has
+// its own). Reading one fixed store is what left profile agents' activity empty (openharness#191).
 // Devin likewise keeps all history in one SQLite store (WAL) — polled per session by DevinReader.
 const DEVIN_DB = join(env.DEVIN_HOME, 'sessions.db')
 /** How many agents' histories are read at once — the first reconcile pass after a boot asks for every
@@ -336,6 +344,7 @@ Machine:
   harness login                sign in with SSO and save this computer's session
   harness login --force        stop the daemon and sign in with a different SSO account
   harness login --json         emit machine-readable NDJSON instead of opening a browser (for GUI clients)
+  harness login --entry-point=desktop   record which surface started the sign-in (GUI clients; default cli)
   harness auth status --json   print {loggedIn,...} for this computer's saved session
   harness start                start the adapter using the saved SSO session
   harness start -f             run the adapter in the FOREGROUND (for a supervisor; logs to stdout)
@@ -642,9 +651,12 @@ async function loginCommand(
   foreground: boolean,
   force: boolean,
   json: boolean,
-  opts: { chained?: boolean } = {},
+  opts: { chained?: boolean; entryPoint?: string } = {},
 ): Promise<SignInOutcome> {
   if (foreground) throw new Error('`harness login` does not run the adapter. Use `harness start -f`.')
+  // Which surface asked to sign in. A person in a terminal is `cli`; the desktop app runs this same
+  // command and says so with `--entry-point=desktop`. Analytics only — it names no privilege.
+  const entryPoint = opts.entryPoint ?? 'cli'
   const emit = (line: Record<string, unknown>): void => { if (json) console.log(JSON.stringify(line)) }
   const succeed = async (alreadySignedIn: boolean, installing?: Promise<GridInstallResult>): Promise<SignInOutcome> => {
     // `chained` is `harness grid login`, which runs the hand-off itself and reports it as its own
@@ -685,7 +697,7 @@ async function loginCommand(
     }
     return await succeed(true)
   }
-  if (!force) return await browserSignIn(json, emit, () => succeed(false))
+  if (!force) return await browserSignIn(json, emit, () => succeed(false), entryPoint)
   // A forced login may intentionally switch SSO accounts. The old daemon must not keep streaming
   // under its existing socket while this process replaces the durable session — and no NEW daemon
   // may come up on the old session in the meantime. The desktop app re-runs `harness start` whenever
@@ -705,7 +717,7 @@ async function loginCommand(
   try {
     return await withSpawnLock('login', async () => {
       await stopDaemonProcess()
-      return await browserSignIn(json, emit, () => succeed(false, installing))
+      return await browserSignIn(json, emit, () => succeed(false, installing), entryPoint)
     }, {
       onWaiting: (owner) => console.error(`  the daemon is ${describeSpawnLockOwner(owner)} — waiting for it to finish…`),
     })
@@ -738,6 +750,7 @@ async function browserSignIn(
   json: boolean,
   emit: (line: Record<string, unknown>) => void,
   succeed: () => Promise<SignInOutcome>,
+  entryPoint: string,
 ): Promise<SignInOutcome> {
   const callback = createServer()
   await new Promise<void>((resolve, reject) => {
@@ -755,6 +768,7 @@ async function browserSignIn(
       start = await postJson<{ authorizeUrl?: string; tx?: string }>('/api/auth/authorize-native', {
         redirectUri,
         autonomousEnv: env.AUTONOMOUS_ENV,
+        entryPoint,
       })
       if (!start.authorizeUrl || !start.tx) throw new Error('Backend did not return an SSO authorize URL')
     } catch (err) {
@@ -1601,6 +1615,11 @@ async function runForeground(session: AuthSession): Promise<void> {
     const session = registry.byAgent(agentId)
     if (session && registry.terminalAvailable(agentId)) syncSession(session)
   }
+  // Viewers an earlier daemon started and never stopped (crash, force quit, SIGKILL) are still running
+  // and still polling; stop them BEFORE this daemon starts its own, or they accumulate a generation per
+  // restart. Only pids whose live start time matches what that daemon recorded are touched.
+  const viewerLedger = new ViewerLedger({ log: (line) => console.log(line) })
+  viewerLedger.reapOrphans()
   const dshViewers = new DshViewerManager({
     onUrl: (agentId, url) => {
       dshFrameFor(agentId).viewerUrl = url
@@ -1608,6 +1627,7 @@ async function runForeground(session: AuthSession): Promise<void> {
       syncCompanion(agentId)
     },
     log: (line) => console.log(line),
+    ledger: viewerLedger,
   })
   const dshVerdicts = new DshVerdictWatcher({
     onChange: (agentId, verdict) => {
@@ -1643,7 +1663,26 @@ async function runForeground(session: AuthSession): Promise<void> {
     dshFrames.delete(agentId)
   }
 
+  // A worktree branch Harness made up at Start takes its session's name once it has one
+  // (lib/branchNaming.ts). Each agent is looked at once per daemon; the git reads are the cost.
+  const branchNamed = new Set<string>()
+  const nameSessionBranches = (): void => {
+    for (const session of registry.list()) {
+      const title = sessionDisplayTitle(session)
+      if (!title || !session.cwd || branchNamed.has(session.agentId)) continue
+      branchNamed.add(session.agentId)
+      const cwd = session.cwd
+      void nameBranchAfterSession(cwd, title).then((renamed) => {
+        if (!renamed) return
+        console.log(`[worktrees] agent ${sid(session.agentId)} branch named ${renamed}`)
+        forgetAgentProject(cwd)
+        const current = registry.byAgent(session.agentId)
+        if (current) syncSession(current)
+      }).catch(() => {})
+    }
+  }
   const syncTerminalTitles = async (): Promise<void> => {
+    nameSessionBranches()
     const titles = await terminals.titles()
     if (titles.size === 0) return
     for (const session of registry.list()) {
@@ -2074,7 +2113,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     } else if (session.engine === 'hermes') {
       // Hermes has no transcript file — poll its SQLite store, like opencode.
       const reader = new HermesReader({
-        dbPath: HERMES_DB,
+        dbPath: await hermesDbForSession(session),
         sessionId: session.sessionId,
         onEvents: (events) => emitSessionEvents(session.sessionId, events),
         onFatal: (err) => console.warn(`[hermes] ${sid(session.sessionId)} ${err.message}`),
@@ -2399,7 +2438,7 @@ async function runForeground(session: AuthSession): Promise<void> {
       if (!s) return null
       if (s.engine === 'opencode') return lastOpencodeTurnText(await readOpencodeMessages(OPENCODE_DB, sessionId))
       if (s.engine === 'kilo') return lastKiloTurnText(await readKiloMessages(KILO_DB, sessionId))
-      if (s.engine === 'hermes') return lastHermesTurnText(await readHermesMessages(HERMES_DB, sessionId))
+      if (s.engine === 'hermes') return lastHermesTurnText(await readHermesMessages(await hermesDbForSession(s), sessionId))
       if (s.engine === 'devin') return lastDevinTurnText(await readDevinMessages(DEVIN_DB, sessionId))
       if (!s.transcriptPath) return null
       const lines = await tailFile(s.transcriptPath, Infinity)
@@ -2826,6 +2865,7 @@ async function runForeground(session: AuthSession): Promise<void> {
 
     let sessionId = observed.resumeSessionId
     let transcriptPath: string | undefined
+    let hermesHome: string | undefined
     let source = 'terminal-resume'
     if (sessionId) {
       if (isRecentlyDeleted(sessionId)) return
@@ -2868,6 +2908,9 @@ async function runForeground(session: AuthSession): Promise<void> {
       if (!found || registry.has(found.sessionId) || isRecentlyDeleted(found.sessionId)) return
       sessionId = found.sessionId
       transcriptPath = found.transcriptPath
+      // Which Hermes home the repair found it in, so the row starts life reading the right store
+      // rather than looking it up again on its first poll.
+      hermesHome = found.hermesHome
       source = 'process-repair'
     }
 
@@ -2876,6 +2919,7 @@ async function runForeground(session: AuthSession): Promise<void> {
       engine: observed.engine,
       sessionId,
       transcriptPath,
+      ...(hermesHome ? { hermesHome } : {}),
       cwd: observed.cwd,
       source,
       runtimes: observed.runtimes,
@@ -2974,6 +3018,9 @@ async function runForeground(session: AuthSession): Promise<void> {
       // under learns it from the process, before the hook path validates a transcript against it.
       // Fill-only — a profile the row already knows is never re-derived.
       if (observed.codexHome && !current.codexHome) registry.setCodexHome(current.agentId, observed.codexHome)
+      // …and a Hermes home the same way, when the process names one. A row that learns it here never
+      // has to look its session up store by store (openharness#191).
+      if (observed.hermesHome && !current.hermesHome) registry.setHermesHome(current.agentId, observed.hermesHome)
       // And the DSH: a row minted by discovery (or written before the field existed) learns it from
       // the process's own `HARNESS_DSH`, and gets its viewer and verdict watch from here on.
       if (observed.dsh && !current.dsh) registry.setDsh(current.agentId, observed.dsh)
@@ -4010,6 +4057,17 @@ async function runForeground(session: AuthSession): Promise<void> {
     }
   }
 
+  // Rows that drifted out of their project folder while `register` still took the hook's cwd on
+  // every prompt are put back BEFORE anything relaunches them: restore below `cd`s into `entry.cwd`,
+  // and what it archives on the way is copied from the row. See cwdRepair.ts.
+  // Best effort: an archive directory that cannot be listed, or a row that cannot be rewritten, is a
+  // line in the log, never a daemon that does not come up.
+  try {
+    const repaired = await repairClaudeCwd({ registry, stoppedAgents, log: (message) => console.log(message) })
+    if (repaired.registry || repaired.archived) console.log(`[repair] cwd · ${repaired.registry} live · ${repaired.archived} saved`)
+  } catch (error) {
+    console.warn(`[repair] cwd repair skipped · ${error instanceof Error ? error.message : error}`)
+  }
   watcher.start()
   await cursorDiscovery.start()
   // Panes that died while the daemon was down (a reboot takes the whole tmux server with it) are
@@ -4042,6 +4100,10 @@ async function runForeground(session: AuthSession): Promise<void> {
         return inventory.ok && inventory.panes.some((pane) => pane.tmuxPane === runtime.paneId)
       },
       buildLaunch: async (entry, opts) => {
+        // A folder that went away with the reboot (an unmounted volume, a workspace deleted while the
+        // daemon was down) is a named failure on the tile, not a pane that prints an error and exits.
+        const missing = workspaceMissing(entry.cwd)
+        if (missing) return { error: missing.error, detail: missing.detail }
         // Mirrors `agent_create`: the same grid env/argv (and the same vendor variables cleared), or
         // the same Codex profile with its hooks installed; the install check runs inside the pane's
         // own shell.
@@ -4759,6 +4821,10 @@ async function runForeground(session: AuthSession): Promise<void> {
         detail: 'the sqlite3 CLI is not on PATH, and a resumed opencode session keeps its model unless its store is rewritten — install sqlite3 and retry',
       }
     }
+    // The replacement enters the row's folder before it execs: a folder that is gone is refused here,
+    // with the other refusals, before the pane is touched or its control taken.
+    const missing = workspaceMissing(session.cwd)
+    if (missing) return missing
     // Mid-turn is the one state where restarting costs real work: the conversation comes back but
     // whatever the engine was doing does not. The app is told which agents these are so the user can
     // move them once they are done, rather than being asked to choose between losing a turn and losing
@@ -4920,6 +4986,10 @@ async function runForeground(session: AuthSession): Promise<void> {
     const current = () => operationCurrent() && sameRestartTarget(target)
     const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The agent changed or stopped during restart.' } as const
     if (!current()) return changed
+    // Both branches below `cd` into the row's folder before they exec, and both have already killed
+    // (or respawned over) the old process by the time that `cd` fails. Ask first, over a live agent.
+    const missing = workspaceMissing(session.cwd)
+    if (missing) return missing
     const pane = session.tmuxPane
     const engine = session.engine
     const runtime: TmuxRuntimeRef = { backend: 'tmux', paneId: pane }
@@ -5406,6 +5476,19 @@ async function runForeground(session: AuthSession): Promise<void> {
   }, env.ADAPTER_DATA_DIR)
   backend.onDirectDeviceRevoked = fp => autonomousDeviceDirect?.revoked(fp)
   autonomousDeviceDirect.start()
+
+  // Worktrees Harness made that no live or stopped harness uses and nothing would miss
+  // (lib/worktreeSweep.ts): a few minutes after start, once restored agents are back in the
+  // registry, then twice a day.
+  const sweepUnusedWorktrees = () => {
+    let inUse: Array<string | null>
+    try { inUse = [...registry.list().map(s => s.cwd), ...stoppedAgents.list().map(s => s.cwd)] } catch { return }
+    void sweepWorktrees({ root: join(homedir(), 'harnesses'), inUse })
+      .then(removed => { if (removed.length) console.log(`[worktrees] removed ${removed.length} unused worktree(s)`) })
+      .catch(() => {})
+  }
+  setTimeout(sweepUnusedWorktrees, 5 * 60_000).unref()
+  setInterval(sweepUnusedWorktrees, 12 * 3600_000).unref()
 
 
   // Every card bound for the WiFi device goes down the cable too, translated once. Teeing beats emitting
@@ -6355,6 +6438,10 @@ const [, , cmd, ...rest] = process.argv
 const flags = rest.filter((a) => a.startsWith('-'))
 const args = rest.filter((a) => !a.startsWith('-'))
 const foreground = flags.includes('--foreground') || flags.includes('-f')
+/** `--entry-point=<key>`: one token, so a build of this CLI that predates the flag drops it with
+ *  every other unknown flag instead of mistaking `<key>` for a subcommand word. */
+const entryPointFlag = (): string | undefined =>
+  flags.find((f) => f.startsWith('--entry-point='))?.slice('--entry-point='.length) || undefined
 const repair = flags.includes('--repair')
 
 /** `argv` with the first occurrence of `token` removed, order otherwise untouched — how a subcommand
@@ -6381,7 +6468,7 @@ switch (cmd) {
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login':
-    loginCommand(foreground, flags.includes('--force'), flags.includes('--json')).catch(onError)
+    loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), { entryPoint: entryPointFlag() }).catch(onError)
     break
   case 'auth':
     if (args[0] !== 'status') { console.error('Unknown command: auth ' + (args[0] ?? '')); usage(1) }

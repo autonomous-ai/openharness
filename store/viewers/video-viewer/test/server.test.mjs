@@ -109,11 +109,20 @@ describe('a viewer on a workspace with renders', () => {
     const saved = await still('?name=Intro%20%2F..%2F..%2Fframe%2012', png())
     assert.equal(saved.status, 200)
     const answer = JSON.parse(saved.body)
-    assert.equal(answer.path, '.harness/stills/Intro-..-..-frame-12.png')
+    assert.match(answer.path, /^\.harness\/stills\/Intro-\.\.-\.\.-frame-12-[a-f0-9]{16}\.png$/)
+    assert.match(answer.sha256, /^[a-f0-9]{64}$/)
     assert.equal(answer.abs, join(ws.dir, answer.path))
     assert.deepEqual(readFileSync(answer.abs), png())
-    assert.equal(JSON.parse((await still('', png())).body).path, '.harness/stills/frame.png', 'no name')
-    assert.equal(JSON.parse((await still('?name=...', png())).body).path, '.harness/stills/frame.png', 'a name that is only dots')
+    const unnamed = JSON.parse((await still('', png())).body).path
+    assert.match(unnamed, /^\.harness\/stills\/frame-[a-f0-9]{16}\.png$/, 'no name')
+    assert.equal(JSON.parse((await still('?name=...', png())).body).path, unnamed, 'a name that is only dots')
+  })
+
+  test('workspace endpoints reject foreign origins and rebinding hosts', async () => {
+    assert.equal((await viewer.get('/api/library', { headers: { host: `elsewhere.invalid:${viewer.port}` } })).status, 403)
+    assert.equal((await viewer.get('/api/library', { headers: { origin: 'https://elsewhere.invalid' } })).status, 403)
+    const rejected = await viewer.get('/api/still?name=foreign', { method: 'POST', headers: { 'x-video-viewer': 'still', origin: 'https://elsewhere.invalid' }, body: png() })
+    assert.equal(rejected.status, 403)
   })
 
   test('a still larger than 64 MiB is cut off', async () => {
@@ -163,12 +172,18 @@ describe('a viewer on a workspace with renders', () => {
     rmSync(join(ws.dir, '.harness/render.json'))
   })
 
-  test('a still that cannot be written is a 500', async () => {
+  test('a conflicting still directory is a 409; filesystem write failures remain a 500', async () => {
     rmSync(join(ws.dir, '.harness'), { recursive: true, force: true })
     writeFileSync(join(ws.dir, '.harness'), 'a file where the folder should be')
     const r = await viewer.get('/api/still?name=x', { method: 'POST', headers: { 'x-video-viewer': 'still' }, body: png() })
-    assert.equal(r.status, 500)
+    assert.equal(r.status, 409)
     rmSync(join(ws.dir, '.harness'))
+    mkdirSync(join(ws.dir, '.harness'))
+    chmodSync(join(ws.dir, '.harness'), 0o500)
+    try {
+      const denied = await viewer.get('/api/still?name=x', { method: 'POST', headers: { 'x-video-viewer': 'still' }, body: png() })
+      assert.equal(denied.status, 500)
+    } finally { chmodSync(join(ws.dir, '.harness'), 0o755) }
   })
 
   test('SIGTERM ends the event streams and exits cleanly', async () => {

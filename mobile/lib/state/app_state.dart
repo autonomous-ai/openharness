@@ -25,22 +25,27 @@ import '../core/device_name.dart';
 import '../core/local_hostname.dart';
 import '../core/local_git_projects.dart';
 import '../core/last_opened_agent.dart';
+import '../core/phone_search_history.dart';
 import '../core/machine_cache.dart';
 import '../core/test_run.dart';
 import '../core/models.dart';
 import '../core/project_folder.dart';
 import '../core/project_history.dart';
 import '../core/retry.dart';
+import '../logging/app_log.dart';
 import '../logging/startup_trace.dart';
 import '../settings/config_store.dart';
 import '../stats/harness_stats.dart';
 import '../terminal/terminal_session.dart';
 import '../terminal/remote_media_download.dart';
-import '../widgets/engine_identity.dart' show allEngines;
+import '../widgets/engine_identity.dart' show allEngines, engineIdentity;
 import 'dial_status.dart';
+import 'retarget_refusal.dart';
 import 'pane_layout_store.dart';
 import 'session_preview.dart';
 import 'terminal_pane.dart';
+import 'desk_sync.dart';
+import 'phone_desk.dart';
 import 'swarm.dart';
 import '../terminal/terminal_binary.dart';
 import '../update/desktop_updater.dart';
@@ -209,6 +214,14 @@ class MachineState {
   // person as "the project folder is unavailable, choose another folder", advice about a folder
   // they never chose and that has nothing to do with what went wrong.
   bool projectFolderAvailable = false;
+  // Whether this machine's CLI honours `takeover: false` on `terminal_open` — open only a terminal
+  // no other app is driving, refused with CONTROL_LEASE_HELD otherwise. See
+  // [TerminalSession.takeover].
+  //
+  // ⚠️ False is not "opens are polite anyway", it is the opposite: an older CLI ignores the key and
+  // takes the terminal over like any other open. So nothing may be opened AHEAD of a person on a
+  // machine that does not say this — see [AppNotifier.warmAgentPane].
+  bool terminalNoTakeoverAvailable = false;
   // Which engines this machine actually has, as this machine answered it. Kept
   // on MachineState rather than globally because that is the whole point: two
   // machines on one account hold different engines, and the Docker rig holds
@@ -311,6 +324,20 @@ class RailRow {
   @override
   int get hashCode => Object.hash(machineId, agentId);
 }
+
+/// What every `agents_list` asks for.
+///
+/// ⚠️ **`includeStopped` is not optional polish — without it the fleet is
+/// silently incomplete.** The daemon answers a plain `agents_list` with
+/// `registry.advertised()`, which is live agents only, and adds saved-but-
+/// stopped work only when asked (`cli/src/backendSocket.ts`, `agents_list`).
+/// This app did not ask, so a machine with nine stopped harnesses reported
+/// none of them and the phone showed a different fleet than the desktop on the
+/// same account — for the search, the Agents tab and every count drawn off them.
+///
+/// The daemon ignores the flag for the hardware dial (`sessionRole == 'device'`);
+/// this app pairs as `'web'`, so it is honoured here.
+const kAgentsListPayload = {'includeStopped': true};
 
 class AppNotifier extends ChangeNotifier {
   final AuthSession session;
@@ -510,6 +537,67 @@ class AppNotifier extends ChangeNotifier {
   final Set<String> expandedMachines = {};
   String? selectedMachineId;
 
+  // ── the desk: the account's tabs, the same on every computer ─────────────
+  //
+  // `phone_desk.dart` holds the whole of it, including why a phone follows the
+  // desk instead of projecting itself onto it the way a window does. Everything
+  // here is a hand-off: the closures read `api` LAZILY, because signing in
+  // replaces that client and a tear-off taken now would go on talking to the
+  // old one.
+  late final PhoneDesk _desk = PhoneDesk(
+    read: () => api.desk(),
+    write: (ops) => api.deskOps(ops),
+    onChanged: notifyListeners,
+  );
+
+  /// The account's tabs, in the desk's order. Empty where the desk has nothing
+  /// or has not answered — the phone then swipes the whole account, as it did
+  /// before the desk existed.
+  List<DeskTab> get deskTabs => _desk.tabs;
+
+  /// The tab the phone is in, or null for the agents no tab holds.
+  String? get activeDeskTabId => _desk.activeTabId;
+
+  /// A tab picked by hand, in the tabs panel — set as the agent chosen there
+  /// is opened, so the swipe walks that tab from then on.
+  void selectDeskTab(String? tabId) => _desk.select(tabId);
+
+  /// The tab the screen has worked out it is showing — see [PhoneDesk.note].
+  void noteDeskTab(String? tabId) => _desk.note(tabId);
+
+  /// Whether the desk can be WRITTEN to — what the two `+`s on the tabs panel
+  /// are drawn on. False before the first read answers, and on a backend with
+  /// no desk at all: a `+` there would queue ops nothing will ever take.
+  bool get deskWritable => _desk.enabled;
+
+  /// An agent that already exists joins the tab the person picked — the `+` at
+  /// the foot of a tab's list. See [PhoneDesk.addToTab].
+  void addAgentToDeskTab(String tabId, AgentRef agent) =>
+      _desk.addToTab(tabId, agent);
+
+  /// A tab renamed by hand, from a double tap on its name in the tabs panel.
+  /// See [PhoneDesk.renameTab].
+  void renameDeskTab(String tabId, String name) =>
+      _desk.renameTab(tabId, name);
+
+  /// An agent that already exists opens a tab of its own — the `+` on the tab
+  /// row. See [PhoneDesk.createTabFor].
+  String? createDeskTabFor(AgentRef agent, {String? name}) =>
+      _desk.createTabFor(agent, name: name);
+
+  /// The next agent made on this phone gets a tab of its own — armed by the `+`
+  /// on the tab row before the new-agent form opens, and spent (or forgotten)
+  /// by the time that form closes. See [PhoneDesk.openNextAgentInNewTab].
+  void openNextAgentInNewDeskTab() => _desk.openNextAgentInNewTab();
+
+  /// That form closed without making anything.
+  void forgetNewDeskTabIntent() => _desk.forgetNewTabIntent();
+
+  /// Read the desk now, and wait for it — what a sign-in and the app coming
+  /// back to the foreground both start without waiting.
+  @visibleForTesting
+  Future<void> deskSyncForTest() => _desk.refresh();
+
   /// Swarms own arrangements; a shared pane owns one live terminal controller.
   final List<Swarm> swarms = [Swarm(id: 'swarm-1')];
   String _activeSwarmId = 'swarm-1';
@@ -568,7 +656,7 @@ class AppNotifier extends ChangeNotifier {
     // An unused starter has no work to recover. This also covers empty pages
     // restored from builds that did not mark them as drafts.
     if (entry is ClosedSwarm &&
-        entry.name == 'New Harness' &&
+        entry.name == Swarm.defaultName &&
         entry.panes.isEmpty &&
         entry.presets.isEmpty) {
       return;
@@ -587,7 +675,7 @@ class AppNotifier extends ChangeNotifier {
   bool get canOpenNewTab =>
       swarms.length < maxSwarms || swarms.any((swarm) => swarm.isEmptyStarter);
 
-  // A New Harness remains temporary until it has content or a custom name.
+  // An untitled tab remains temporary until it has content or a custom name.
   // The return destination is session-local; abandoned drafts are never saved.
   final _draftSwarmReturns = <String, String>{};
 
@@ -596,14 +684,14 @@ class AppNotifier extends ChangeNotifier {
     final swarm = swarms.where((swarm) => swarm.id == id).firstOrNull;
     return swarm != null &&
         swarm.panes.isEmpty &&
-        swarm.name == 'New Harness' &&
+        swarm.name == Swarm.defaultName &&
         swarm.presets.isEmpty;
   }
 
-  void newSwarm({String name = 'New Harness', bool draft = false}) {
+  void newSwarm({String name = Swarm.defaultName, bool draft = false}) {
     // Every New Tab entry point reuses the existing start page, including
     // when another tab is selected or the tab limit has been reached.
-    if (name == 'New Harness') {
+    if (name == Swarm.defaultName) {
       final starter = activeSwarm.isEmptyStarter
           ? activeSwarm
           : swarms.where((swarm) => swarm.isEmptyStarter).firstOrNull;
@@ -646,7 +734,7 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Cancel an untouched New Harness without closing a session or recording
+  /// Cancel an untouched new tab without closing a session or recording
   /// Recently Closed. A sole workspace remains the app's starting screen.
   bool cancelSwarmDraft(String id) {
     final returnId = _draftSwarmReturns[id];
@@ -654,7 +742,7 @@ class AppNotifier extends ChangeNotifier {
     if (returnId == null ||
         target == null ||
         target.panes.isNotEmpty ||
-        target.name != 'New Harness' ||
+        target.name != Swarm.defaultName ||
         target.presets.isNotEmpty ||
         swarms.length == 1) {
       return false;
@@ -753,7 +841,7 @@ class AppNotifier extends ChangeNotifier {
     // welcome tabs, evicting the real work from recently closed history.
     if (swarms.length == 1 &&
         swarms.single.panes.isEmpty &&
-        swarms.single.name == 'New Harness' &&
+        swarms.single.name == Swarm.defaultName &&
         swarms.single.presets.isEmpty) {
       return;
     }
@@ -956,7 +1044,14 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String agentId, {
     String? swarmId,
-  }) => assignAgentToPane(null, machineId, agentId, swarmId: swarmId);
+    bool takeControl = false,
+  }) => assignAgentToPane(
+    null,
+    machineId,
+    agentId,
+    swarmId: swarmId,
+    takeControl: takeControl,
+  );
 
   Future<void> seedSwarm(
     String name,
@@ -1153,6 +1248,7 @@ class AppNotifier extends ChangeNotifier {
        agentPreference = AgentPreference(paneLayoutStore?.storage),
        projectHistory = ProjectHistory(paneLayoutStore?.storage),
        lastOpenedAgent = LastOpenedAgent(paneLayoutStore?.storage),
+       searchHistory = PhoneSearchHistory(paneLayoutStore?.storage),
        // On the same terms as the stores above: a layout store means this is a
        // real app with a real Harness home to cache into, and its absence means
        // a test, which must not read or write one.
@@ -1224,6 +1320,15 @@ class AppNotifier extends ChangeNotifier {
 
   /// The agent the phone's terminal had open, kept across launches — see [LastOpenedAgent].
   final LastOpenedAgent lastOpenedAgent;
+
+  /// The agents and commands reached from the search, most recent first — what
+  /// ranks the box before a word is typed. See [PhoneSearchHistory].
+  ///
+  /// ⚠️ **On the app, not on the search screen.** It has to outlive one opening
+  /// of the box: a history built per page would load the last run's visits and
+  /// then forget every visit made since, which is exactly the half that matters
+  /// while somebody is switching between two agents.
+  final PhoneSearchHistory searchHistory;
 
   /// Last run's machine list, used to start dialling before this run's
   /// `/api/machines` answers — see [MachineCache] and [_warmStartMachines].
@@ -2226,6 +2331,10 @@ class AppNotifier extends ChangeNotifier {
     // The CLI has confirmed sign-in and daemon readiness. Display-name/avatar
     // metadata is independent of machine discovery and must not delay work.
     unawaited(_loadProfile());
+    // The desk too: its tabs are what a swipe stays inside, and they are read
+    // over REST rather than from any machine — so they can land before the
+    // first machine has finished dialling.
+    _desk.ensure();
     try {
       // The request a viewer already has in flight (above), or a fresh one where
       // there is none — a desktop, whose machine list is served by a daemon that
@@ -2414,6 +2523,7 @@ class AppNotifier extends ChangeNotifier {
     signingIn = false;
     pendingAuthorizeUrl = null;
     _awaitingFirstMessage = null;
+    _desk.reset();
     analyticsAccount.clear();
     _daemonSupervisionTimer?.cancel();
     _daemonSupervisionTimer = null;
@@ -2495,19 +2605,18 @@ class AppNotifier extends ChangeNotifier {
       final updater = desktopUpdater ?? DesktopUpdater();
       final staged = await updater.downloadAndStage(info);
       if (staged == null) {
-        updateError =
-            'Could not download and verify OpenHarness ${info.version}.';
+        updateError = 'Could not download and verify Harness ${info.version}.';
         return false;
       }
       final applied = await updater.applyStaged(staged, selfPid: pid);
       if (!applied) {
         updateError =
-            'This copy of OpenHarness cannot install updates automatically.';
+            'This copy of Harness cannot install updates automatically.';
         return false;
       }
       exit(0);
     } catch (error) {
-      updateError = 'Could not install OpenHarness ${info.version}: $error';
+      updateError = 'Could not install Harness ${info.version}: $error';
       return false;
     } finally {
       isInstallingUpdate = false;
@@ -2674,6 +2783,9 @@ class AppNotifier extends ChangeNotifier {
     _daemonSupervisionTimer = null;
     _daemonGateFailed = false;
     _clearAllTurnActivity();
+    // The desk belongs to the account, not to the phone: its tabs go with the
+    // session, writes this phone never managed to send included.
+    _desk.reset();
     currentUser = null;
     machines = [];
     machineStates.clear();
@@ -2827,6 +2939,15 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     notifyListeners();
+  }
+
+  /// One tick of the agent-list safety net ([_syncAgentsIfChanged]), which the
+  /// app itself only reaches through a 60-second timer.
+  @visibleForTesting
+  Future<void> syncAgentsForTest(String machineId) async {
+    final machine = machineStates[machineId];
+    if (machine == null) return;
+    await _syncAgentsIfChanged(machine);
   }
 
   @visibleForTesting
@@ -3032,6 +3153,7 @@ class AppNotifier extends ChangeNotifier {
 
   void _stopAgentSyncTimer(String machineId) {
     _agentSyncTimers.remove(machineId)?.cancel();
+    _agentSyncTimeouts.remove(machineId);
   }
 
   void _stopAllAgentSyncTimers() {
@@ -3039,33 +3161,77 @@ class AppNotifier extends ChangeNotifier {
       timer.cancel();
     }
     _agentSyncTimers.clear();
+    _agentSyncTimeouts.clear();
   }
+
+  /// How many [agentSyncInterval] ticks in a row may time out before the machine
+  /// is treated as gone and redialled ([_recoverStaleSession]).
+  ///
+  /// Two, not one: a single missed tick is a busy machine or a slow relay, and a
+  /// forced redial costs every terminal on it a resync. Two in a row is a minute
+  /// of a machine not answering the cheapest request there is, which nothing
+  /// healthy does.
+  @visibleForTesting
+  static const agentSyncStaleTicks = 2;
+
+  /// Consecutive timed-out [_syncAgentsIfChanged] ticks, per machine. Cleared by
+  /// any answer, by any other failure, and by the timer stopping.
+  final Map<String, int> _agentSyncTimeouts = {};
 
   /// Silent safety-net reconciliation, ticked every [agentSyncInterval] while a machine is connected.
   /// Only writes/notifies if the fetched list actually differs from what's already shown — a steady
   /// state where push events (agent_synced et al.) have kept everything in sync produces zero visible
   /// effect. Deliberately does not touch agentLoadStatus/agentsLoadError/notifyListeners on failure:
-  /// a real connectivity problem is already surfaced by the push path and the existing offline
-  /// detection in _performMachineDataLoad, and a quiet background tick should not fight either.
+  /// a real connectivity problem is already surfaced by the push path, and a quiet background tick
+  /// should not fight it.
+  ///
+  /// ⚠️ **Except a timeout, which this is the only thing left watching for.** A
+  /// stale relay session (see [_recoverStaleSession]) leaves the transport
+  /// "connected", the machine `nodeOnline`, its list `loaded` — so no screen is
+  /// wrong, no push arrives to correct it, and nothing calls
+  /// [_performMachineDataLoad], which is where the offline detection this used
+  /// to defer to actually lives. Swallowed here, that state was permanent:
+  /// measured at 16 minutes and still going, a phone showing a machine's agent
+  /// list from before its Harness restarted, with every agent made since
+  /// invisible — and, with the list feeding `deskGroups`, a desk tab whose
+  /// harnesses had all silently vanished off the phone.
   Future<void> _syncAgentsIfChanged(MachineState machine) async {
     if (machine.connectionStatus != ConnectionStatus.connected) return;
     if (machine.agentsLoadInFlight != null) {
       return; // a real (foreground) load already owns this tick
     }
-    final connection = _conn(machine.machine.machineId);
+    final machineId = machine.machine.machineId;
+    final revision = _authRevision;
+    final connection = _conn(machineId);
     try {
       final response = await connection.request(
         'agents_list',
+        payload: kAgentsListPayload,
         timeout: const Duration(seconds: 10),
       );
+      _agentSyncTimeouts.remove(machineId);
+      if (!_machineWorkCurrent(machine, revision)) return;
       final agents = (response['agents'] as List<dynamic>? ?? [])
           .map((item) => Agent.fromJson(item as Map<String, dynamic>))
           .toList();
       if (agentsEqual(machine.agents, agents)) return;
       _replaceAgents(machine, agents);
       notifyListeners();
+    } on WsRequestTimeout {
+      if (!_machineWorkCurrent(machine, revision)) return;
+      final missed = (_agentSyncTimeouts[machineId] ?? 0) + 1;
+      _agentSyncTimeouts[machineId] = missed;
+      if (missed < agentSyncStaleTicks) return;
+      _agentSyncTimeouts.remove(machineId);
+      appLog.warn(
+        'ws',
+        'agents_list timed out $missed× on $machineId — redialling',
+      );
+      _recoverStaleSession(machine, connection);
     } catch (_) {
-      // Silent by design — see doc comment above.
+      // Silent by design — see doc comment above. A socket that dropped
+      // mid-request is already redialling, so the count starts over.
+      _agentSyncTimeouts.remove(machineId);
     }
   }
 
@@ -3388,6 +3554,9 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     if (currentUser == null) unawaited(_loadProfile());
+    // A boot that found the daemon still connecting finishes THROUGH here, so
+    // the desk is joined here as well — [PhoneDesk.ensure] makes that once.
+    _desk.ensure();
     try {
       await refreshMachines();
       if (!_authWorkCurrent(revision)) return;
@@ -3759,7 +3928,11 @@ class AppNotifier extends ChangeNotifier {
       );
       final response = await StartupTrace.time(
         'agents.list',
-        () => connection.request('agents_list', timeout: remaining),
+        () => connection.request(
+          'agents_list',
+          payload: kAgentsListPayload,
+          timeout: remaining,
+        ),
       );
       if (!_machineWorkCurrent(machine, revision)) return;
       final rawAgents = response['agents'] as List<dynamic>? ?? [];
@@ -3807,25 +3980,11 @@ class AppNotifier extends ChangeNotifier {
     } catch (error) {
       if (!_machineWorkCurrent(machine, revision)) return;
       machine.agentsRefreshing = false;
-      // A request timing out while the local relay session still nominally reports "connected" means
-      // the remote node itself has stopped answering — exactly what a REST-status flip to offline
-      // means elsewhere, so route it through _applyNodeStatus (not just `nodeOnline = false`) so the
-      // pending agent gets captured for auto-reattach, same as any other offline detection path.
       if (error is WsRequestTimeout) {
         machine.agentsLoadError = machine.isLocalMachine
             ? 'Harness is offline — run harness login'
             : 'Harness is offline — run harness start on that machine';
-        if (machine.nodeOnline != false) {
-          unawaited(_applyNodeStatus(machine, false));
-        }
-        if (!machine.isLocalMachine) {
-          // The relay's cached upstream session can go stale at the E2EE-session layer without the
-          // underlying transport ever closing — most commonly the relayed machine's own Harness
-          // process restarting, which drops its in-memory session state but doesn't touch the socket.
-          // Nothing else would ever notice, so force a fresh dial rather than let every future retry
-          // keep timing out against the same dead session.
-          unawaited(connection.forceReconnect());
-        }
+        _recoverStaleSession(machine, connection);
       } else if (connection.isClosed || machine.nodeOnline == false) {
         machine.agentsLoadError = 'Could not load harnesses: $error';
       } else {
@@ -3861,6 +4020,30 @@ class AppNotifier extends ChangeNotifier {
     _attachPendingPanes(machine);
     _autoPickFirstAgent();
     notifyListeners();
+  }
+
+  /// An RPC timed out on a machine whose transport still calls itself connected:
+  /// take the machine down and dial it again.
+  ///
+  /// A request timing out while the local relay session still nominally reports
+  /// "connected" means the node itself has stopped answering — exactly what a
+  /// REST-status flip to offline means elsewhere, so it is routed through
+  /// [_applyNodeStatus] (not just `nodeOnline = false`) so the pending agent gets
+  /// captured for auto-reattach, same as any other offline detection path.
+  ///
+  /// ⚠️ **And then a fresh dial, for a remote machine.** The relay's cached
+  /// upstream session can go stale at the E2EE-session layer without the
+  /// underlying transport ever closing — most commonly the relayed machine's own
+  /// Harness process restarting, which drops its in-memory session state but
+  /// doesn't touch the socket. No close event ever fires, so nothing else would
+  /// ever notice; without this every future request keeps timing out against the
+  /// same dead session, for as long as the app runs.
+  void _recoverStaleSession(MachineState machine, WsConn connection) {
+    if (machine.nodeOnline != false) {
+      unawaited(_applyNodeStatus(machine, false));
+    }
+    if (machine.isLocalMachine) return;
+    unawaited(connection.forceReconnect());
   }
 
   bool _machineWorkCurrent(MachineState machine, int revision) =>
@@ -4000,6 +4183,8 @@ class AppNotifier extends ChangeNotifier {
         features is Map && features['mediaPreview'] == true;
     machine.projectFolderAvailable =
         features is Map && features['projectFolder'] == true;
+    machine.terminalNoTakeoverAvailable =
+        features is Map && features['noTakeover'] == true;
   }
 
   Future<void> _readTerminalCapabilities(
@@ -4031,6 +4216,7 @@ class AppNotifier extends ChangeNotifier {
       machine.terminalPasteFileAvailable = false;
       machine.mediaPreviewAvailable = false;
       machine.projectFolderAvailable = false;
+      machine.terminalNoTakeoverAvailable = false;
     }
     if (!_machineWorkCurrent(machine, revision)) return;
     if (machine.agentLoadStatus != AgentLoadStatus.loading &&
@@ -4361,7 +4547,9 @@ class AppNotifier extends ChangeNotifier {
   /// Machines tab's pull-to-refresh, the screen whose job is listing them.
   ///
   /// Nothing on screen waits for this: each machine publishes as it answers,
-  /// and the rows already drawn keep their places (`PhoneSearchOrder`).
+  /// and the rows already drawn keep their places — the search ranks on the
+  /// visit history and the name, neither of which a late-answering machine
+  /// moves. See [PhoneSearchHistory] and `rankPhoneDestinations`.
   Future<void> reachAllMachines() async {
     // No transport yet — before sign-in, or in a test with no fake connection.
     // The same guard [_canFetchPreview] uses, and for the same reason: `_conn`
@@ -4778,6 +4966,10 @@ class AppNotifier extends ChangeNotifier {
       notifyListeners();
       return null;
     }
+    // Created HERE, so it joins the tab this phone is in — the way an agent
+    // created in a window joins that window's tab. See [PhoneDesk.adopt] for
+    // what happens when the phone is in no tab.
+    _desk.adopt((machineId: machineId, agentId: agent.id), name: agent.name);
     await assignAgentToPane(
       null,
       machineId,
@@ -4877,6 +5069,9 @@ class AppNotifier extends ChangeNotifier {
     final error = result['error'];
     if (error is String) return 'Delete failed: $error';
     await _removeAgent(machine, agentId);
+    // Gone from the machine, so gone from the desk: a tab left holding it would
+    // keep a pane no computer can ever attach. See [PhoneDesk.drop].
+    _desk.drop((machineId: machineId, agentId: agentId));
     notifyListeners();
     return null;
   }
@@ -4888,6 +5083,32 @@ class AppNotifier extends ChangeNotifier {
   /// confirmed, so this upserts from the reply directly — idempotent on `agent.id`, same as
   /// [createAgent], and safe even if the CLI's own `agent_synced` push for the restart arrives
   /// separately (fire-and-forget on the CLI side, unordered relative to this reply).
+  /// Bring a stopped agent back, so something can be opened on it.
+  ///
+  /// The desktop's `resumeAgent`: a thin guard over [restartAgent], which is the
+  /// same `agent_restart` RPC. Split out because the two have different
+  /// preconditions — restart is "this agent is misbehaving, relaunch it", resume
+  /// is "this agent is not running, it should be".
+  ///
+  /// An agent that already has a terminal succeeds without touching the machine:
+  /// the caller's job is "make it openable", and it is.
+  Future<RestartAgentResult> resumeAgent(String machineId, String agentId) {
+    final agent = stateOf(
+      machineId,
+    )?.agents.where((agent) => agent.id == agentId).firstOrNull;
+    if (agent?.terminalAvailable == true) {
+      return Future.value(const RestartAgentResult());
+    }
+    if (agent?.isStopped != true) {
+      return Future.value(
+        const RestartAgentResult(
+          error: 'That harness is no longer available. Search again.',
+        ),
+      );
+    }
+    return restartAgent(machineId, agentId);
+  }
+
   Future<RestartAgentResult> restartAgent(
     String machineId,
     String agentId,
@@ -4925,13 +5146,145 @@ class AppNotifier extends ChangeNotifier {
     return RestartAgentResult(resumed: resumed is bool ? resumed : true);
   }
 
+  /// Live models on every harness grid this machine is signed into, for the
+  /// model sheet.
+  ///
+  /// Asked of the machine the agent runs on rather than kept in app state: the
+  /// answer is whatever that machine's `grid` reports at this moment (an engine
+  /// can join or leave between two opens), and a cached list would offer a
+  /// model nobody is serving any more.
+  ///
+  /// Never throws — a machine whose daemon is too old to know the RPC, one with
+  /// no grid, and one that timed out are all "nothing to offer", which is what
+  /// the sheet shows.
+  Future<GridModels> gridModels(String machineId) async {
+    try {
+      final response = await _conn(machineId)
+          .request('grid_models_list', timeout: const Duration(seconds: 12));
+      List<GridModel> parseModels(Object? raw, {String? grid}) =>
+          (raw as List<dynamic>? ?? [])
+              .whereType<Map<String, dynamic>>()
+              .map(
+                (m) => GridModel(
+                  id: (m['id'] as String?) ?? '',
+                  node: (m['node'] as String?) ?? '',
+                  grid: grid,
+                ),
+              )
+              .where((m) => m.id.isNotEmpty)
+              .toList();
+      final capable = response['localModelEngines'];
+      return GridModels(
+        gridName: response['gridName'] as String?,
+        // The own grid's list, which an older daemon sends on its own.
+        models: parseModels(response['models']),
+        grids: (response['grids'] as List<dynamic>? ?? [])
+            .whereType<Map<String, dynamic>>()
+            .where((g) => (g['name'] as String?)?.isNotEmpty == true)
+            .map(
+              (g) => GridSection(
+                name: g['name'] as String,
+                own: g['own'] == true,
+                models: parseModels(g['models'], grid: g['name'] as String),
+              ),
+            )
+            .toList(),
+        localModelEngines: capable is List
+            ? capable.whereType<String>().map((e) => e.toLowerCase()).toSet()
+            : null,
+        gridCli: GridCli.parse(response['gridCli']),
+      );
+    } catch (_) {
+      // NOT `gridName: null` with an empty list — that is the shape of "this
+      // account has no grid", and a caller cannot tell it from "the machine did
+      // not answer". A signed-in user whose daemon was offline would be told to
+      // sign in again, which is both wrong and unactionable.
+      return const GridModels.unreachable();
+    }
+  }
+
+  /// Point one agent at a model on a harness grid. Returns null on success, or
+  /// the one sentence to show — the phone has no error rail, so the caller
+  /// snackbars it (see [retargetRefusalMessage]).
+  ///
+  /// Sends the model id and nothing else: the daemon on that machine resolves
+  /// the endpoint and the credential from its own signed-in `grid`, so neither
+  /// travels over the relay and the phone never holds a grid key. Moving an
+  /// agent re-execs its pane, which is why this is an explicit choice in a
+  /// sheet rather than something a swipe can do.
+  ///
+  /// [gridName] is the grid the model was picked from — a shared grid's section
+  /// in the sheet. Absent, the daemon uses the account's own grid.
+  Future<String?> retargetAgentToGridModel(
+    String machineId,
+    String agentId,
+    String modelId, {
+    String? gridName,
+  }) => _retarget(machineId, agentId, {
+    'agentId': agentId,
+    'gridModel': modelId,
+    'gridName': ?gridName,
+  });
+
+  /// Put the agent back on its engine's own vendor login.
+  Future<String?> clearAgentGrid(String machineId, String agentId) =>
+      _retarget(machineId, agentId, {'agentId': agentId, 'clearGrid': true});
+
+  /// The one `agent_retarget` call both doors take.
+  ///
+  /// A refusal happens BEFORE the daemon touches the pane — an engine with no
+  /// way onto a Local model, a busy agent, a machine that cannot resolve its
+  /// models — so nothing in the terminal ever says why, and without this the
+  /// tap simply does nothing. One sentence, in the app's own words; the
+  /// daemon's own `detail` is written for its log and names the grid.
+  ///
+  /// A transport failure is NOT a refusal: the daemon may well have done the
+  /// move, and the agent frame that follows is the truth. Nothing is said
+  /// rather than a story the terminal is about to contradict.
+  Future<String?> _retarget(
+    String machineId,
+    String agentId,
+    Map<String, dynamic> payload,
+  ) async {
+    try {
+      await _conn(machineId).request(
+        'agent_retarget',
+        payload: payload,
+        timeout: const Duration(seconds: 30),
+      );
+      return null;
+    } on WsRequestFailure catch (failure) {
+      return _retargetRefusal(machineId, agentId, failure.code);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _retargetRefusal(String machineId, String agentId, String code) {
+    final agent = machineStates[machineId]?.agents
+        .where((a) => a.id == agentId)
+        .firstOrNull;
+    return retargetRefusalMessage(
+      code,
+      engineLabel: engineIdentity(agent?.engine).label,
+    );
+  }
+
   /// Every tile on the machine, not just the focused one: the machine is what
   /// went away, so a tile of the same machine sitting in another corner of the
   /// grid is just as dead and must say so rather than keep showing a terminal
   /// that can no longer receive anything. Records what was open so the next
   /// `connected` can put it back (`_recoverPendingAgent`).
   void _markSessionsUnreachable(MachineState machine, String message) {
-    for (final pane in panesFor(machine.machine.machineId)) {
+    // The tile being looked at first. `pendingOfflineAgentId` is ONE slot, filled by the first tile
+    // that qualifies, and `_recoverPendingAgent` SELECTS what is in it — focus, `activeAgentId`
+    // and the right to take the terminal back all go with that. A phone holds several tiles per
+    // machine now (the pager's neighbours, see [warmAgentPane]), and list order says nothing
+    // about which of them a person is reading.
+    final focused = focusedPane;
+    final tiles = panesFor(machine.machine.machineId).toList();
+    if (focused != null && tiles.remove(focused)) tiles.insert(0, focused);
+    for (final pane in tiles) {
       final session = pane.session;
       if (session == null) continue;
       machine.activeAgentId ??= session.agentId;
@@ -4939,7 +5292,11 @@ class AppNotifier extends ChangeNotifier {
       // themselves (see `_paneNeedsAttach`) — recording it here would have `_recoverPendingAgent`
       // call `selectAgent` on reconnect and silently win it back the moment the connection
       // returns, fighting whichever machine holds it now.
-      if (session.status != TerminalSessionStatus.takenOver) {
+      //
+      // Nor a warm tile, for the same reason one step removed: nobody ever looked at it, and
+      // selecting it is what would let it take a terminal another app picked up meanwhile. It
+      // comes back with the rest, through `_attachPendingPanes`, as politely as it first opened.
+      if (session.status != TerminalSessionStatus.takenOver && !pane.warm) {
         machine.pendingOfflineAgentId ??= session.agentId;
       }
       // Do not send terminal_close: the adapter is already gone and the
@@ -4974,13 +5331,24 @@ class AppNotifier extends ChangeNotifier {
       final pending = machine.pendingOfflineAgentId;
       if (pending != null) {
         unawaited(_recoverPendingAgent(machine, pending));
-      } else if (panesFor(machineId).any(_paneNeedsAttach) &&
-          _pool?[machineId]?.isReady == true) {
-        // A tile restored from the saved layout has no pendingOfflineAgentId —
-        // nothing of its was interrupted, it simply arrived before its machine
-        // did. Without this it would sit on "Attaching…" forever on a machine
-        // that has since come back, because every other route to _attachSession
-        // runs off a load that nothing here would trigger.
+      } else if (_pool?[machineId]?.isReady == true &&
+          (wasOnline == false || panesFor(machineId).any(_paneNeedsAttach))) {
+        // ⚠️ **A machine that was OFF and is back owes a fresh list, whether or
+        // not anything here was waiting on it.** This arrives as a `node_status`
+        // push over a socket that never closed, so `_onConnectionStatus` — which
+        // is what reloads after every real reconnect — does not run, and the
+        // list this app holds is from before that machine's Harness restarted.
+        // Nothing corrects it: the pushes that would have go to a session the
+        // restart dropped. A phone therefore kept showing a machine's agents
+        // from minutes earlier, every agent made since invisible, and a desk tab
+        // holding those agents (`deskGroups`) read as an empty tab.
+        //
+        // A tile restored from the saved layout is the other half, and has no
+        // pendingOfflineAgentId — nothing of its was interrupted, it simply
+        // arrived before its machine did. Without this it would sit on
+        // "Attaching…" forever on a machine that has since come back, because
+        // every other route to _attachSession runs off a load that nothing here
+        // would trigger.
         //
         // ⚠️ **Only once the socket is actually up.** `/api/machines` reports a
         // machine as running well before this app has finished dialling it, and
@@ -5115,6 +5483,19 @@ class AppNotifier extends ChangeNotifier {
     await selectAgent(machineId, agentId);
   }
 
+  /// Open [agentId] on this phone, taking its terminal.
+  ///
+  /// ⚠️ **Arriving IS the claim.** The daemon keeps ONE controller per agent, so every
+  /// `terminal_open` this sends takes the terminal from whoever held it — the desktop included.
+  /// That is the point: a phone is picked up to type at an agent, and asking politely first put a
+  /// read-only stream and a "Take control" band in front of every agent a desktop had open,
+  /// including the one the app opens on.
+  ///
+  /// The displaced app is told who took it and has the same one press back; the phone's own band
+  /// is for exactly that case, a terminal taken back off this device — see `phoneReclaimAction`.
+  ///
+  /// The one open that stays polite is [warmAgentPane]'s guess about the next swipe, which is
+  /// nobody arriving anywhere. See [_attachSession].
   Future<void> selectAgent(String machineId, String agentId) async {
     final existing = paneOfAgent(machineId, agentId);
     if (existing != null) {
@@ -5130,11 +5511,31 @@ class AppNotifier extends ChangeNotifier {
         _persistLayout();
       }
       final terminal = existing.session;
+      if (terminal != null) {
+        // Arming the NEXT open, and only that one: the flag is lowered again the moment an open it
+        // armed is answered (see the `terminal_ready` branch of `TerminalSession`), so a claim
+        // cannot outlive the arrival that made it and come back as a reconnect hours later. Coming
+        // back to the agent raises it again, because that is another arrival.
+        terminal.takeover = true;
+      }
       if (terminal == null) {
         // The pane wanted this agent before `_attachSession` could actually attach it (the agent's
         // terminal wasn't verified yet, the machine was briefly offline, ...). Nothing else retries a
         // null session on its own — see `_attachPendingPanes` — so a click here has to.
         await _attachSession(existing);
+      } else if (terminal.watching) {
+        // ⚠️ **The one reopen that replaces a perfectly live stream.** A watcher renders the
+        // terminal without holding it (see [TerminalSession.watching]), so by every other measure
+        // here it is healthy — `controlling`, with a stream id — and the branches below would
+        // leave it alone. What this page wants is the KEYBOARD, and the only way to ask for it is
+        // a fresh open that takes the lease. Its retained output stays on screen meanwhile.
+        if (!_canAttachPane(existing)) return;
+        await terminal.reopen(force: true);
+      } else if (terminal.status == TerminalSessionStatus.takenOver) {
+        // Somebody else took it while this page held it. Arriving back on the page asks for it
+        // again — the same open the band's button makes.
+        if (!_canAttachPane(existing)) return;
+        await terminal.reopen();
       } else if (terminal.status != TerminalSessionStatus.opening &&
           terminal.status != TerminalSessionStatus.controlling &&
           terminal.status != TerminalSessionStatus.resyncing) {
@@ -5145,7 +5546,7 @@ class AppNotifier extends ChangeNotifier {
       }
       return;
     }
-    await addAgentToSwarm(machineId, agentId);
+    await addAgentToSwarm(machineId, agentId, takeControl: true);
   }
 
   /// Opens [agentId]'s stream for a tile nobody is looking at yet — the phone's
@@ -5159,16 +5560,36 @@ class AppNotifier extends ChangeNotifier {
   /// is the one thing that marks it, and [selectAgent] is what happens when the
   /// guess comes true.
   ///
-  /// A tile already there is left alone — except one holding a dead stream,
-  /// which is reopened the way `_attachPendingPanes` would. A stream someone
-  /// else took over is NOT reopened from here: that is the tug-of-war
+  /// A tile already there is left alone — except a warm one holding a dead
+  /// stream, which is reopened the way `_attachPendingPanes` would. A stream
+  /// someone else took over is NOT reopened from here: that is the tug-of-war
   /// `_paneNeedsAttach` exists to avoid, and a page nobody is looking at has no
   /// business starting it.
+  ///
+  /// ⚠️ **The one open that never takes a terminal another app is driving.**
+  /// Landing on an agent claims it (see [_attachSession]); this is a guess
+  /// about the next swipe, and a guess must cost the desktop nothing. The
+  /// machine answers only if the terminal is free; otherwise the tile sits as
+  /// `takenOver` until a person actually arrives on it, and arriving is what
+  /// claims it.
+  ///
+  /// ⚠️ **Nothing is opened at all on an OLDER machine.** A CLI that predates
+  /// the key ignores it and takes the terminal over like any other open — so on
+  /// such a machine the politeness above is not available, and a guess there
+  /// would cost the desktop its terminal with nobody having arrived anywhere.
+  /// See [MachineState.terminalNoTakeoverAvailable].
   Future<void> warmAgentPane(String machineId, String agentId) async {
     if (_disposed) return;
+    if (machineStates[machineId]?.terminalNoTakeoverAvailable != true) return;
     final existing = paneOfAgent(machineId, agentId);
     if (existing != null) {
-      if (_paneNeedsAttach(existing)) await _reattachPane(existing);
+      // Only a tile that is still warm, whose session asks politely. One a
+      // person has looked at reopens WITH a takeover, and that is for the
+      // recovery every tile shares (`_attachPendingPanes`) to decide, never
+      // for a guess about the next swipe.
+      if (existing.warm && _paneNeedsAttach(existing)) {
+        await _reattachPane(existing);
+      }
       return;
     }
     if (!canAddPane || !_canAttachAgent(machineId, agentId)) return;
@@ -5181,7 +5602,7 @@ class AppNotifier extends ChangeNotifier {
     // Told, so the parked page for this agent builds its panel — which is what
     // measures the viewport `_attachSession` is about to wait for.
     notifyListeners();
-    await _attachSession(pane);
+    await _attachSession(pane, takeControl: false);
   }
 
   /// Show a MACHINE in the grid, for the states that belong to the machine
@@ -5236,6 +5657,7 @@ class AppNotifier extends ChangeNotifier {
     String agentId, {
     String? swarmId,
     PaneSplitRequest? split,
+    bool takeControl = false,
   }) async {
     final target = swarms
         .where((s) => s.id == (swarmId ?? activeSwarmId))
@@ -5305,7 +5727,7 @@ class AppNotifier extends ChangeNotifier {
       target.arranged = split.after;
       target.arrangedKey = key;
     }
-    if (firstAgent && target.name == 'New Harness') {
+    if (firstAgent && target.name == Swarm.defaultName) {
       final name = agent.name.trim();
       if (name.isNotEmpty) {
         target.name = name.length > 80 ? name.substring(0, 80) : name;
@@ -5351,7 +5773,7 @@ class AppNotifier extends ChangeNotifier {
     _stopOfflineRetry(machineId);
     notifyListeners();
     if (target == activeSwarm || pane.session != null) {
-      await _attachSession(pane);
+      await _attachSession(pane, takeControl: takeControl);
     }
   }
 
@@ -5376,7 +5798,20 @@ class AppNotifier extends ChangeNotifier {
   /// Separate from [assignAgentToPane] because a restored tile takes this path
   /// on its own, later, when its machine finally answers — the intent was
   /// settled at launch, and nothing about the selection should move again then.
-  Future<void> _attachSession(TerminalPane pane) async {
+  /// ⚠️ **Every session built here CLAIMS the terminal** — [takeControl] is
+  /// true unless the caller is a guess about where the thumb goes next
+  /// ([warmAgentPane]), and nothing else opens a stream.
+  ///
+  /// The phone used to ask politely and land on a read-only stream with a "Take
+  /// control" band over it, which is what opening the app looked like whenever
+  /// a desktop had the agent — a band, an empty terminal, and a press before a
+  /// single key could be typed. A phone is picked up to type at an agent, so
+  /// arriving IS the claim now; the desktop it displaces says who took it and
+  /// has the same button back.
+  Future<void> _attachSession(
+    TerminalPane pane, {
+    bool takeControl = true,
+  }) async {
     if (_disposed || !allPanes.contains(pane) || pane.session != null) return;
     final wantedAgentId = pane.agentId;
     if (wantedAgentId == null) return;
@@ -5384,7 +5819,6 @@ class AppNotifier extends ChangeNotifier {
     if (machine == null) return;
     if (machine.nodeOnline == false) return;
     if (!machine.terminalCapabilityAvailable) return;
-
     Agent? agent;
     for (final candidate in machine.agents) {
       if (candidate.id == wantedAgentId) {
@@ -5424,6 +5858,11 @@ class AppNotifier extends ChangeNotifier {
         await connection.forceReconnect();
         return true;
       },
+      // ⚠️ **Opening IS taking, for everything a person does.** A page opened, swiped onto or
+      // restored at launch claims the terminal; the one open that still asks politely is the warm
+      // tile the pager builds ahead of the thumb, which is a guess and must not cost the desktop
+      // anything. See [TerminalSession.takeover] and [warmAgentPane].
+      takeover: takeControl,
     );
     pane.session = terminal;
     terminal.addListener(notifyListeners);
@@ -5837,7 +6276,7 @@ class AppNotifier extends ChangeNotifier {
       final swarm = swarms.where((swarm) => swarm.id == id).firstOrNull;
       return swarm == null ||
           swarm.panes.isNotEmpty ||
-          swarm.name != 'New Harness' ||
+          swarm.name != Swarm.defaultName ||
           swarm.presets.isNotEmpty;
     });
     _layoutRevision++;
@@ -5891,7 +6330,7 @@ class AppNotifier extends ChangeNotifier {
                   0,
                   (raw['name'] as String).length.clamp(0, 80),
                 )
-              : 'New Harness',
+              : Swarm.defaultName,
         );
         for (final item in (raw['panes'] as List).take(maxPanes)) {
           final entry = PaneLayoutEntry.fromJson(item);
@@ -6216,6 +6655,17 @@ class AppNotifier extends ChangeNotifier {
           }
         }
         break;
+      case 'desk_changed':
+        // The account's tabs changed — in a window on some computer, or on
+        // another phone. The frame carries only the revision; the document
+        // itself is fetched, so a burst of edits collapses into one read.
+        //
+        // ⚠️ It arrives once per MACHINE this phone is connected to (the backend
+        // has no per-phone socket to send it on, so it rides each machine's —
+        // `lib/webWs.ts`). [PhoneDesk.noticeRevision] is what makes four
+        // machines mean one GET.
+        _desk.noticeRevision(payload['revision']);
+        return;
       case 'node_status':
         final online = payload['online'] == true;
         await _applyNodeStatus(machine, online);
@@ -6428,7 +6878,20 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// Safe to call on every resume. [WsPool.reconnectAll] skips connections that are already open
   /// and connections somebody closed on purpose, so a tab switch that cost nothing costs nothing.
-  void handleAppResumed() => _pool?.reconnectAll();
+  void handleAppResumed() {
+    _pool?.reconnectAll();
+    // ⚠️ **The desk is re-read here and not only on a push.** A backgrounded
+    // phone runs no code, so every `desk_changed` sent while it was away
+    // reached a socket nobody was listening on: without this the tabs would be
+    // whatever they were when the phone went into a pocket, until something
+    // else happened to change them.
+    unawaited(_desk.refresh());
+  }
+
+  /// The app went into a pocket: stop the reads that only make sense in front
+  /// of somebody. The sockets are left to the OS, which suspends them anyway —
+  /// [handleAppResumed] is what puts both back.
+  void handleAppPaused() => _desk.pause();
 
   /// What the local CLI closing this machine's socket with [code] does to the
   /// model — the `WsPool.onLocalFailure` path, without a socket.
@@ -6458,6 +6921,7 @@ class AppNotifier extends ChangeNotifier {
     }
     unawaited(_spokenTasks.close());
     sessionPreviews.dispose();
+    _desk.dispose();
     super.dispose();
   }
 }

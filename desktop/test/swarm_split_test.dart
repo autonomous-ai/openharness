@@ -239,7 +239,7 @@ void main() {
                   : LogicalKeyboardKey.keyD,
             );
           case 'palette':
-            await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+            await chord(tester, LogicalKeyboardKey.keyP);
             await tester.enterText(
               find.byKey(const ValueKey('swarm-search-input')),
               '> split $direction',
@@ -383,6 +383,7 @@ void main() {
       addTearDown(() => newHarnessOpensInBox = false);
       final connection = _Creation();
       final app = createApp(connectionForTest: (_) => connection);
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
       final machine = app.machineStates['m']!;
       machine.nodeOnline = true;
       machine.localOnly = true;
@@ -473,7 +474,9 @@ void main() {
       app.focusPane(first.id);
       await mountWide(tester, app);
       expect(app.preparePaneSplit(PaneResizeAxis.x), isNotNull);
-      tester.view.physicalSize = const Size(3000, 1800);
+      // Halving one of three columns needs room for six minimum-width panes.
+      // This case checks fixed neighbors; the cases above cover scroll growth.
+      tester.view.physicalSize = const Size(4000, 1800);
       await tester.pump();
       final unchanged = [second, third];
       final rects = [
@@ -632,7 +635,7 @@ void main() {
     await mountWide(tester, app);
     tester.view.physicalSize = const Size(3000, 1800);
     await tester.pump();
-    await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+    await chord(tester, LogicalKeyboardKey.keyP);
     await tester.enterText(
       find.byKey(const ValueKey('swarm-search-input')),
       '> split right',

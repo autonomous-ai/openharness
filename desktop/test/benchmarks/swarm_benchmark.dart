@@ -119,7 +119,7 @@ void main() {
 
       final reopen = await timed(
         () async {
-          await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+          await key(tester, LogicalKeyboardKey.keyO, cmd: true);
           await tester.pump();
           expect(field, findsOneWidget);
         },
@@ -145,16 +145,16 @@ void main() {
         await tester.pump();
       });
       final retarget = await timed(() async {
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyO, cmd: true);
         await tester.pump();
-        await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyO, cmd: true);
         await tester.pump();
       });
       expect(tester.widget<TextField>(field).controller!.text, 'harness');
       expect(usedTransport, isFalse);
       expect(tester.takeException(), isNull);
       debugPrint(
-        'SWARM_BENCH ${jsonEncode({'kind': 'headless_debug_widget_elapsed', 'operation': 'command_dock', 'agents': agentCount, 'reopen': reopen, 'broadQuery': query, 'queryGrowth': queryGrowth, 'narrowQuery': narrow, 'arrow': move, 'cmdPThenCmdT': retarget})}',
+        'SWARM_BENCH ${jsonEncode({'kind': 'headless_debug_widget_elapsed', 'operation': 'command_dock', 'agents': agentCount, 'reopen': reopen, 'broadQuery': query, 'queryGrowth': queryGrowth, 'narrowQuery': narrow, 'arrow': move, 'cmdPThenCmdO': retarget})}',
       );
       if (profile != null) {
         await tester.runAsync(

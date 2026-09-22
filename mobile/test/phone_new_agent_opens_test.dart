@@ -102,7 +102,7 @@ void main() {
       await tester.pump();
       await tester.tap(find.text('Claude'));
       await tester.pump();
-      await tester.tap(find.text('Create agent'));
+      await tester.tap(find.text('Create Harness'));
       // The create resolves on a microtask, then the route it pushes has to slide in — and only once
       // that transition ends does the form's own route come off the stack.
       await tester.pump();

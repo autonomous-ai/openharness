@@ -35,7 +35,7 @@ void main() {
   }
 
   Future<void> command(WidgetTester tester, String query) async {
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     await tester.enterText(
       find.byKey(const ValueKey('swarm-search-input')),
       '> $query',
@@ -268,6 +268,8 @@ void main() {
         findsOneWidget,
       );
       await command(tester, 'Quick start');
+      await tester.tap(find.text('Try the keyboard tour'));
+      await tester.pumpAndSettle();
       expect(find.byType(WorkspaceQuickStart), findsOneWidget);
       expect(learning.next, WorkspaceLesson.agent);
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
@@ -288,7 +290,7 @@ void main() {
       expect(learning.next, WorkspaceLesson.zoom);
       await key(tester, LogicalKeyboardKey.enter, cmd: true);
       expect(learning.next, WorkspaceLesson.commands);
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       expect(learning.finished, isTrue);
       expect(
         tester

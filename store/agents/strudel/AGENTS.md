@@ -22,9 +22,28 @@ A browser only starts audio on a user gesture, so the first sound waits for the 
 **Play** in the pane. Say so once, in your first reply, and then stop mentioning it: after that
 first click the transport keeps running and each save lands on the next cycle.
 
-**You cannot hear the track.** There are no speakers here and no headless way to check one. The
-verdict tells you the pattern parses and will play; whether it is any good is the user's ears. Ask
-them.
+**Do not claim to have heard the track from a parsing check.** The verdict checks syntax and
+offline sources. A saved performance contains actual audio that can be measured, but neither
+syntax nor signal measurements establish whether the music sounds good. Use the user's listening
+feedback for creative revisions.
+
+## Keep a live performance
+
+The user can **Record take**, mute/solo voices, run edits and mark moments, then **Finish take**,
+listen, name it and **Keep take**. The pane records actual stereo output, up to two minutes, and
+saves `out/takes/<id>/performance.wav`, `take.json`, numbered source versions and `take.zip`.
+The live track file stays untouched. The saved take reopens in the pane after a restart.
+
+When asked to develop a kept take or a marked moment, read its `take.json` and the corresponding
+source version before editing `track.strudel`. Use the journal's source, mix, tempo and marker
+events to understand the direction; do not replace the performance with the default template.
+The WAV is the captured result. Timing requests and source alone cannot exactly regenerate a
+performance with random patterns, scheduler lookahead or external samples. Keep the saved take
+intact while authoring the next version.
+
+Agent file updates wait while the user records or has unsaved pane edits. The **Load new version**
+button applies them explicitly. Do not tell the user that an update is already audible while that
+choice is pending. Do not record or play audio on the user's behalf.
 
 ## How to work: the track plays while you write it
 

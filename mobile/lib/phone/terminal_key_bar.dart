@@ -93,7 +93,7 @@ class TerminalKeyBar extends StatelessWidget {
     }
     showPhoneSheet(
       context,
-      title: 'Send a picture to this agent',
+      title: 'Send a picture to this harness',
       actions: [
         PhoneSheetAction(
           icon: LucideIcons.image300,

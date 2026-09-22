@@ -1,8 +1,9 @@
 // The RDKit pane: a read-only molecular viewer that follows the workspace. 3Dmol.js draws the 3D model;
 // everything chemical (charges, groups, depiction, conformer energies, the parent and what changed)
 // comes from the toolchain's <name>.molecule.json or, for SDFs it did not write, from the server's
-// RDKit worker. Editing happens by prompting the agent; this page only looks, measures and compares.
+// RDKit worker. Bond scans run a native calculation and keep its source without changing the molecule.
 /* global $3Dmol */
+import { installTorsionPane } from './torsion-pane.mjs'
 const Mol3D = window.$3Dmol
 
 // ---------------------------------------------------------------------------------------------------
@@ -223,6 +224,7 @@ const state = {
   familyRoot: null,
   live: true,
 }
+let torsion = null
 
 // ---------------------------------------------------------------------------------------------------
 // the 3D stage
@@ -765,6 +767,7 @@ function clearMeasures() { state.measures = []; state.picks = []; drawMeasures()
 // conformers: list, player, ensemble overlay, parent overlay
 // ---------------------------------------------------------------------------------------------------
 function setConformer(i, { fromPlayer = false } = {}) {
+  if (state.mol?.torsionPreview) return
   if (!state.mol || !models.length) return
   const n = models.length
   const next = ((i % n) + n) % n
@@ -811,6 +814,7 @@ function renderConformers(soft) {
   const mol = state.mol
   $('confCount').textContent = mol && models.length > 1 ? String(models.length) : ''
   if (!mol) { panel.innerHTML = ''; return }
+  if (mol.torsionPreview) { panel.innerHTML = '<p class="scan-method">The Bond scan tab controls this sampled pose. Back to molecule restores the original conformer ensemble.</p>'; return }
   const rec = mol.record
   const n = models.length
   const delta = rec?.conformers?.delta || []
@@ -845,6 +849,7 @@ function renderConformers(soft) {
   if ($('cGhost')) $('cGhost').onchange = (e) => setGhost(e.target.checked)
 }
 function setGhost(on) {
+  if (state.mol?.torsionPreview) { $('scanGhost').checked = !!on; $('scanGhost').dispatchEvent(new Event('change')); return }
   prefs.ghost = !!on; savePrefs()
   if (ghostModel) { viewer.removeModel(ghostModel); ghostModel = null }
   if (prefs.ghost && state.mol?.parentFrame) ghostModel = viewer.addModel(state.mol.parentFrame.block, 'sdf', { keepH: true })
@@ -1079,6 +1084,7 @@ async function refreshSeries() {
 }
 
 async function selectMolecule(name, { user = false, keepView = null } = {}) {
+  if (torsion?.active() && !torsion.close({ refreshSource: false })) return
   const entry = state.series.find((e) => e.name === name)
   if (!entry) return
   if (user) state.follow = name === state.newest
@@ -1168,6 +1174,7 @@ async function loadMolecule(entry, { keepView }) {
     renderHeader(); renderDepiction(); renderProperties(); renderConformers(); renderPlayer(); renderGhostChip(); renderLegend(); renderStrip(); renderSeries(); renderToolbar()
     $('empty').hidden = true
     $('side').hidden = false
+    torsion?.loaded()
     if (recordError && !record) toast(recordError)
   } catch (error) {
     if (token !== state.loading) return
@@ -1249,11 +1256,13 @@ function showEmpty(kind, path, detail) {
 
 let pendingChange = null
 function onChange(files) {
+  if (torsion?.changed()) return
   const dir = state.dir || 'out'
   const relevant = files.filter((f) => f.startsWith(`${dir}/`) || !f.includes('/'))
   if (!relevant.length) return
   clearTimeout(pendingChange)
   pendingChange = setTimeout(async () => {
+    if (torsion?.changed()) return
     const before = state.series.find((e) => e.name === state.current)
     const res = await refreshSeries()
     if (!res) return
@@ -1273,12 +1282,19 @@ function onChange(files) {
 }
 function connect() {
   const events = new EventSource('/events')
-  events.addEventListener('open', () => { state.live = true; setProgress(state.progress) })
+  let opened = false
+  events.addEventListener('open', () => {
+    state.live = true
+    if (!torsion?.active()) setProgress(state.progress)
+    if (opened) onChange([`${state.dir || 'out'}/reconnected`])
+    opened = true
+  })
   events.addEventListener('error', () => { state.live = false; setProgress(state.progress) })
   events.addEventListener('change', (e) => { try { onChange(JSON.parse(e.data).files || []) } catch { onChange([]) } })
   events.addEventListener('progress', (e) => {
     try {
       const data = JSON.parse(e.data)
+      if (torsion?.changed()) return
       if (!state.dir || data.dir === state.dir) setProgress(data.progress)
     } catch { /* ignore */ }
   })
@@ -1441,10 +1457,10 @@ function openExportMenu() {
     { label: 'Save PNG of the view', icon: ICON.image, disabled: !mol, run: exportPng },
     { label: 'Copy image', icon: ICON.copy, disabled: !mol, run: copyPng },
     { label: 'Save 2D depiction (SVG)', icon: ICON.image, disabled: !rec?.svgText, run: () => { const url = URL.createObjectURL(new Blob([rec.svgText], { type: 'image/svg+xml' })); download(url, `${e.name}.svg`); setTimeout(() => URL.revokeObjectURL(url), 4000) } },
-    { header: 'Structure' },
-    { label: 'SDF — lowest conformer', icon: ICON.file, disabled: !e, run: () => download(`/${e.sdf}?download=1`, basename(e.sdf)) },
-    { label: `SDF — all ${rec?.conformers?.count || ''} conformers`, icon: ICON.file, disabled: !confFile, run: () => download(`/${confFile}?download=1`, basename(confFile)) },
-    { label: 'MOL file', icon: ICON.file, disabled: !e, run: () => download(`/api/mol?path=${encodeURIComponent(e.sdf)}`, `${e.name}.mol`) },
+    { header: mol?.torsionPreview ? 'Use Keep study for scan structures' : 'Structure' },
+    { label: 'SDF — lowest conformer', icon: ICON.file, disabled: !e || mol?.torsionPreview, run: () => download(`/${e.sdf}?download=1`, basename(e.sdf)) },
+    { label: `SDF — all ${rec?.conformers?.count || ''} conformers`, icon: ICON.file, disabled: !confFile || mol?.torsionPreview, run: () => download(`/${confFile}?download=1`, basename(confFile)) },
+    { label: 'MOL file', icon: ICON.file, disabled: !e || mol?.torsionPreview, run: () => download(`/api/mol?path=${encodeURIComponent(e.sdf)}`, `${e.name}.mol`) },
     '-',
     { label: 'Copy SMILES', icon: ICON.copy, disabled: !rec?.smiles, run: () => copyText(rec.smiles) },
   ], { above: false })
@@ -1500,7 +1516,7 @@ document.addEventListener('keydown', (e) => {
     h: cycleHydrogens, c: cycleColor, s: cycleSurface, ' ': toggleSpin, r: () => orient(), b: toggleBackground,
     d: () => setMeasureMode('distance'), a: () => setMeasureMode('angle'), t: () => setMeasureMode('dihedral'),
     Backspace: clearMeasures, Delete: clearMeasures, '[': () => setConformer(state.conf - 1), ']': () => setConformer(state.conf + 1),
-    p: togglePlay, o: () => { prefs.ensemble = !prefs.ensemble; savePrefs(); applyStyles(); renderConformers() }, g: () => setGhost(!prefs.ghost),
+    p: togglePlay, o: () => { prefs.ensemble = !prefs.ensemble; savePrefs(); applyStyles(); renderConformers() }, g: () => setGhost(state.mol?.torsionPreview ? !$('scanGhost').checked : !prefs.ghost),
     e: openExportMenu, j: () => stepSeries(-1), k: () => stepSeries(1), ArrowUp: () => stepSeries(-1), ArrowDown: () => stepSeries(1),
   }
   const run = actions[k] || actions[k.toLowerCase?.()]
@@ -1515,8 +1531,44 @@ document.querySelectorAll('.tabbar button').forEach((b) => { b.onclick = () => s
 function setTab(tab) {
   prefs.tab = tab; savePrefs()
   document.querySelectorAll('.tabbar button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)))
-  for (const t of ['props', 'confs', 'series']) $(`panel-${t}`).hidden = t !== tab
+  for (const t of ['props', 'confs', 'series', 'scan']) $(`panel-${t}`).hidden = t !== tab
+  document.body.classList.toggle('scan-tab', tab === 'scan')
+  if (tab === 'scan') { torsion?.loaded(); torsion?.draw() }
 }
+
+torsion = installTorsionPane({
+  source: () => state.mol && !state.mol.torsionPreview && state.mol.format === 'sdf' ? { molblock: state.mol.blocks[state.conf], name: state.mol.record?.name || state.mol.entry.name } : null,
+  measured: () => [...state.measures].reverse().find((m) => m.kind === 'dihedral')?.atoms,
+  capture() {
+    stopPlaying(); clearTimeout(pendingChange); ++state.loading; busy(null, 'load'); busy(null, 'progress')
+    return { mol: state.mol, conf: state.conf, measures: state.measures, picks: state.picks, current: state.current, view: viewer.getView() }
+  },
+  present(study, index, { ghost, fit }) {
+    const record = study.record, pose = study.frames[index]
+    const block = withCoords(study.source.displayBlock || study.source.molblock, pose.coords)
+    state.mol = { entry: { name: record.name, sdf: '' }, record: { ...record, conformers: { count: 1, forcefield: 'MMFF94 rigid scan', energies: [pose.energy], delta: [pose.relativeEnergy] } }, blocks: [block], elements: study.elements,
+      format: 'sdf', parentFrame: null, changed: new Set(), chargeRange: .4, lipoRange: .6, torsionPreview: true }
+    state.conf = 0; state.hover = null; state.pinned = null; state.group = null; state.picks = []
+    state.measures = [{ kind: 'dihedral', atoms: study.atoms }]
+    buildScene({ keepView: true })
+    if (ghost) { ghostModel = viewer.addModel(study.source.displayBlock || study.source.molblock, 'sdf', { keepH: true }); applyStyles() }
+    if (fit) frame()
+    renderHeader(); renderDepiction(); renderProperties(); renderConformers(); renderPlayer(); renderLegend(); renderGhostChip(); renderToolbar()
+    $('scanPose').textContent = `Bond scan · ${pose.angle}° · ΔE ${pose.relativeEnergy.toFixed(2)} kcal/mol`
+    $('scanPose').hidden = false; $('empty').hidden = true; $('side').hidden = false
+    document.body.classList.add('scan-preview')
+  },
+  restore(snapshot) {
+    state.mol = snapshot.mol; state.conf = snapshot.conf; state.measures = snapshot.measures; state.picks = snapshot.picks; state.current = snapshot.current
+    $('scanPose').hidden = true; document.body.classList.remove('scan-preview')
+    if (state.mol) {
+      buildScene({ keepView: true }); viewer.setView(snapshot.view); viewer.render()
+      renderHeader(); renderDepiction(); renderProperties(); renderConformers(); renderPlayer(); renderLegend(); renderGhostChip(); renderToolbar()
+    } else { viewer.removeAllModels(); viewer.render(); renderHeader(); showEmpty('none') }
+  },
+  refresh: () => onChange([`${state.dir || 'out'}/source-update`])
+})
+$('bondScanBtn').onclick = () => { $('side').hidden = false; setTab('scan') }
 
 // ---------------------------------------------------------------------------------------------------
 // boot
@@ -1543,6 +1595,6 @@ async function boot() {
   // a handle for headless checks (screenshots, the live test); nothing in the pane depends on it
   window.__pane = {
     atomScreen: (i) => { const a = atomAt(i); const p = viewer.modelToScreen({ x: a.x, y: a.y, z: a.z }); return { x: p.x, y: p.y } },
-    atom2D: (i) => { const svg = $('depict').querySelector('svg'); const [x, y] = state.mol.pos2d.get(i); const pt = new DOMPoint(x, y).matrixTransform(svg.getScreenCTM()); return { x: pt.x, y: pt.y } }, state, prefs, viewer, setConformer, setRep, setSurface, setColor, setHydrogens, pick, setHover, selectMolecule, setTab, setGhost, orient, toggleSpin, clearMeasures, setMeasureMode }
+    atom2D: (i) => { const svg = $('depict').querySelector('svg'); const [x, y] = state.mol.pos2d.get(i); const pt = new DOMPoint(x, y).matrixTransform(svg.getScreenCTM()); return { x: pt.x, y: pt.y } }, state, prefs, viewer, setConformer, setRep, setSurface, setColor, setHydrogens, pick, setHover, selectMolecule, setTab, setGhost, orient, toggleSpin, clearMeasures, setMeasureMode, torsion }
 }
 boot()

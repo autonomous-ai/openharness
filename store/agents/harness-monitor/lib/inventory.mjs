@@ -16,7 +16,7 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname } from 'node:path'
 import { lastTurns } from './activity.mjs'
-import { listAgents, machines } from './bridge.mjs'
+import { listAgents, machinesReport } from './bridge.mjs'
 import { engineProcess, panes, processTable } from './panes.mjs'
 import { humanIdle } from './policy.mjs'
 import { readRegistry, registryAsFrames } from './registry.mjs'
@@ -157,32 +157,56 @@ export function mergeRows(agents, { paneRows = new Map(), table = { byPid: new M
  * Failures are per machine and reported, never fatal: a fleet view that refuses to draw because one
  * linked laptop is asleep is worse than one that says which machine it could not reach.
  */
-export async function collect({ state = {}, now = Date.now(), includeRemote = true, timeoutMs = 8000, home = homedir(), cache = new Map() } = {}) {
-  const [paneRows, table, machineList, registry] = await Promise.all([panes(), processTable(), machines(), readRegistry()])
+export async function collect({
+  state = {}, now = Date.now(), includeRemote = true, timeoutMs = 8000, home = homedir(), cache = new Map(),
+  // Remote machines are asked at most this often; between asks their last answer is re-merged against
+  // the current clock. A pane ticks every few seconds for the machine it is on — that is local reads —
+  // but every remote ask crosses the relay to another computer, so it gets its own, slower clock.
+  // `remote` is the holder for that answer, owned by the caller so it survives across ticks.
+  remoteIntervalMs = 60_000, remote = null,
+} = {}) {
+  const [paneRows, table, report, registry] = await Promise.all([panes(), processTable(), machinesReport(), readRegistry()])
+  const machineList = report.machines
   const turns = await lastTurns(registry.rows.map((row) => ({ id: row.agentId, transcriptPath: row.transcriptPath })), { cache })
   const current = machineList.find((m) => m.current) ?? null
-  const targets = [current, ...(includeRemote ? machineList.filter((m) => !m.current && m.online) : [])].filter(Boolean)
+  const remoteMachines = includeRemote ? machineList.filter((m) => !m.current && m.online) : []
+  const remoteDue = !remote || remoteIntervalMs <= 0 || now - (remote.at ?? 0) >= remoteIntervalMs
+  const targets = [current, ...(remoteDue ? remoteMachines : [])].filter(Boolean)
   const problems = []
   let rows = []
 
   // No daemon, no `harness` on PATH: fall back to the registry file this machine already has. Seeing
-  // the fleet must not depend on the app running, and pausing is pure tmux either way.
+  // the fleet must not depend on the app running, and pausing is pure tmux either way. Say which of
+  // the two it was: a CLI that failed to run is a different repair from a daemon that is not there.
   if (!targets.length) {
-    if (!registry.rows.length) problems.push({ machine: 'this machine', error: 'No Harness daemon on the local bridge and no registry to read.' })
+    if (report.error) problems.push({ machine: 'this machine', error: `Read from the registry file — ${report.error}, so models, branches and remote machines are missing.` })
+    else if (!registry.rows.length) problems.push({ machine: 'this machine', error: 'No Harness daemon on the local bridge and no registry to read.' })
     else problems.push({ machine: 'this machine', error: 'Read from the registry file — the Harness daemon is not answering, so models, branches and remote machines are missing.' })
     const rowsOffline = mergeRows(registryAsFrames(registry.rows), { paneRows, table, state, machine: null, local: true, now, home, turns, registry: registry.byId })
     rowsOffline.sort((a, b) => a.idleMs - b.idleMs || a.name.localeCompare(b.name))
     return { rows: rowsOffline, machines: machineList, problems, observedAt: now, degraded: true }
   }
 
+  // What each remote machine last answered, raw, so an off-tick merge still gets a fresh clock.
+  const answers = remoteDue ? new Map() : new Map(remote?.answers ?? [])
+  const remoteProblems = remoteDue ? [] : [...(remote?.problems ?? [])]
   await Promise.all(targets.map(async (machine) => {
     try {
       const agents = await listAgents(machine.machineId, { timeoutMs })
-      rows = rows.concat(mergeRows(agents, { paneRows, table, state, machine, local: machine.current === true, now, home, turns, registry: registry.byId }))
+      if (machine.current) rows = rows.concat(mergeRows(agents, { paneRows, table, state, machine, local: true, now, home, turns, registry: registry.byId }))
+      else answers.set(machine.machineId, agents)
     } catch (error) {
-      problems.push({ machine: machine.name, error: error instanceof Error ? error.message : String(error) })
+      const problem = { machine: machine.name, error: error instanceof Error ? error.message : String(error) }
+      if (machine.current) problems.push(problem)
+      else remoteProblems.push(problem)
     }
   }))
+  for (const machine of remoteMachines) {
+    const agents = answers.get(machine.machineId)
+    if (agents) rows = rows.concat(mergeRows(agents, { paneRows, table, state, machine, local: false, now, home, turns, registry: registry.byId }))
+  }
+  problems.push(...remoteProblems)
+  if (remote && remoteDue) { remote.at = now; remote.answers = answers; remote.problems = remoteProblems }
 
   rows.sort((a, b) => a.idleMs - b.idleMs || a.name.localeCompare(b.name))
   return { rows, machines: machineList, problems, observedAt: now }

@@ -120,18 +120,13 @@ class _ExportLogsDialogState extends State<_ExportLogsDialog> {
               const SizedBox(height: 12),
               Text(
                 title,
-                style: TextStyle(
-                  color: grid.AppPalette.textPrimary,
-                  fontSize: 15,
-                  fontWeight: grid.AppFont.semibold,
-                ),
+                style: grid.AppType.heading(color: grid.AppPalette.textPrimary),
               ),
               const SizedBox(height: 5),
               SelectableText(
                 body,
-                style: TextStyle(
+                style: grid.AppType.body(
                   color: grid.AppPalette.textSecondary,
-                  fontSize: 12.5,
                   height: 1.5,
                 ),
               ),
@@ -174,9 +169,7 @@ class _Label extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       text,
-      style: TextStyle(
-        fontSize: 13,
-        fontWeight: grid.AppFont.medium,
+      style: grid.AppType.label(
         color: ToolbarPill.tint(tinted: tinted, enabled: true),
       ),
     );

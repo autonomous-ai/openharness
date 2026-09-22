@@ -61,7 +61,7 @@ describe('Store publication', () => {
 
   it('publishes a package\'s examples as written, and refuses one without a prompt, with an http picture, an overlong caption or an unknown field', () => {
     const root = fixture()
-    const examples = [{ prompt: 'A brick breaker.', image: 'https://example.com/game.jpg', caption: 'Brick breaker · playable' }]
+    const examples = [{ prompt: 'A brick breaker.', image: 'https://example.com/game.jpg', video: 'https://example.com/game.mp4', caption: 'Brick breaker · playable' }]
     writeFileSync(join(root, 'agents', 'game', 'store.json'), JSON.stringify({ examples }))
     const [entry] = createStoreCatalog(root, ref).entries
     expect(entry.examples).toEqual(examples)
@@ -70,7 +70,9 @@ describe('Store publication', () => {
       [[{ image: 'https://example.com/a.jpg' }], /needs a prompt/],
       [[{ prompt: 'x', image: 'http://example.com/a.jpg' }], /https URL/],
       [[{ prompt: 'x', caption: 'c'.repeat(121) }], /invalid example caption/],
-      [[{ prompt: 'x', video: 'https://example.com/a.mp4' }], /unknown example field video/],
+      [[{ prompt: 'x', video: 'http://example.com/a.mp4' }], /https URL/],
+      [[{ prompt: 'x', video: 'https://' + 'x'.repeat(2048) }], /https URL/],
+      [[{ prompt: 'x', unknown: true }], /unknown example field unknown/],
       [Array.from({ length: 9 }, () => ({ prompt: 'x' })), /invalid examples/],
     ] as const) {
       writeFileSync(join(root, 'agents', 'game', 'store.json'), JSON.stringify({ examples: bad }))

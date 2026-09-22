@@ -29,7 +29,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 body {
   background: var(--h-bg); color: var(--h-ink);
   font: 13px/1.35 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-  display: grid; grid-template-rows: auto auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr);
+  display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr);
   -webkit-font-smoothing: antialiased;
 }
 button { font: inherit; color: inherit; cursor: pointer; }
@@ -123,7 +123,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .lanes-body { position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; display: grid; grid-template-columns: 184px minmax(0, 1fr); }
 @media (min-width: 1100px) { .lanes-body { grid-template-columns: 200px minmax(0, 1fr); } }
-@media (max-width: 560px) { .lanes-body { grid-template-columns: 124px minmax(0, 1fr); } }
+@media (max-width: 560px) { .lanes-body { grid-template-columns: 148px minmax(0, 1fr); } }
 #mixer { display: flex; flex-direction: column; padding-top: var(--head, 20px); border-right: 1px solid var(--h-line); }
 .voice { height: var(--row, 30px); display: flex; align-items: center; gap: 7px; padding: 0 8px 0 12px; position: relative; }
 .voice:nth-child(even) { background: var(--h-lane-alt); }
@@ -153,6 +153,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #gate .disc svg { width: 12px; height: 12px; }
 #gate small { display: block; font-weight: 400; color: var(--h-ink2); font-size: 11.5px; }
 #gate:hover .disc { filter: brightness(1.1); }
+@media (max-width: 560px) { #gate { max-width: calc(100% - 16px); padding: 8px 12px; } #gate small { white-space: normal; } #gate .disc { flex-shrink: 0; } }
 
 /* ---------- code ---------- */
 .code-head { display: flex; align-items: center; gap: 8px; padding: 7px 14px 6px; font-size: 11.5px; color: var(--h-ink2); border-bottom: 1px solid var(--h-line); }
@@ -197,3 +198,52 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .credit { font-size: 10.5px; color: var(--h-faint); padding: 0 14px 6px; }
 .credit a { color: inherit; }
+
+/* The recorder stays close to the transport; opening a take leaves the instrument usable. */
+#performance { border-bottom: 1px solid var(--h-line); background: var(--h-panel); min-width: 0; max-height: 47vh; overflow: auto; }
+#performance button, #performance a { border: 1px solid var(--h-guide); background: var(--h-bg); border-radius: 6px; padding: 5px 10px; font: inherit; text-decoration: none; color: var(--h-ink); }
+#performance button:hover, #performance a:hover { background: var(--h-hover); }
+#performance button:disabled { opacity: .45; cursor: default; }
+#performance input { min-width: 0; color: var(--h-ink); background: var(--h-bg); border: 1px solid var(--h-guide); border-radius: 6px; padding: 6px 9px; font: inherit; }
+.take-toolbar { display: flex; align-items: center; gap: 12px; padding: 8px 14px; }
+#record { display: flex; align-items: center; gap: 7px; white-space: nowrap; font-weight: 600 !important; }
+.record-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--h-err); }
+#record.recording { color: var(--h-err); border-color: var(--h-err); background: var(--h-err-bg); }
+#record.recording .record-dot { border-radius: 2px; }
+#take-clock { font: 12px var(--h-mono); font-variant-numeric: tabular-nums; }
+#take-hint { flex: 1; color: var(--h-ink2); font-size: 12px; }
+#open-takes { margin-left: auto; white-space: nowrap; }
+#take-count { color: var(--h-faint); margin-left: 4px; }
+#take-live { display: flex; gap: 8px; align-items: center; padding: 0 14px 10px; }
+#take-live-note { flex: 1; color: var(--h-ink2); font-size: 12px; }
+#marker-note { width: 200px; }
+#take-draft { border-top: 1px solid var(--h-line); padding: 10px 14px 14px; }
+.draft-head, .keep-row { display: flex; gap: 10px; align-items: center; }
+.draft-head { margin-bottom: 6px; }
+#draft-details { color: var(--h-ink2); font-size: 11px; }
+.grow { flex: 1; }
+#take-wave { display: block; width: 100%; height: 52px; border-radius: 5px; background: var(--h-card); cursor: pointer; }
+#take-audio { display: block; width: 100%; height: 34px; margin: 6px 0; }
+#take-markers { display: flex; gap: 6px; overflow-x: auto; padding: 0 0 8px; }
+#take-markers:empty { display: none; }
+#take-markers button { white-space: nowrap; font-size: 11px; color: var(--h-accent); }
+#take-name { flex: 1; max-width: 480px; }
+#performance #keep-take { background: var(--h-accent); color: white; border-color: var(--h-accent); white-space: nowrap; }
+#take-message { padding: 0 14px 10px; color: var(--h-ink2); font-size: 12px; }
+#take-message.error { color: var(--h-err); }
+#take-shelf { border-top: 1px solid var(--h-line); padding: 10px 14px; }
+#take-list { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.take-card { min-width: 0; border: 1px solid var(--h-line); border-radius: 8px; padding: 10px; background: var(--h-bg); }
+.take-card strong { display: block; overflow-wrap: anywhere; }
+.take-card p, #take-empty { color: var(--h-ink2); font-size: 12px; margin: 4px 0 10px; }
+.take-card .actions { display: flex; gap: 6px; }
+#performance .take-card button, #performance .take-card a { font-size: 11px; padding: 4px 8px; }
+@media (max-width: 700px) {
+  #take-hint, #take-live-note { display: none; }
+  .take-toolbar { gap: 8px; padding: 8px 10px; }
+  #performance button { padding: 5px 8px; font-size: 12px; }
+  #take-live { padding: 0 10px 8px; } #marker-note { flex: 1; width: auto; }
+  #take-draft { padding: 8px 10px 10px; } #draft-details { max-width: 46%; }
+  #take-list { grid-template-columns: 1fr; }
+  #performance { max-height: 45vh; }
+}

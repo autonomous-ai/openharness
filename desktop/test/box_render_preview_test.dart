@@ -118,7 +118,7 @@ class _PreviewConnection extends WsConn {
 ///
 ///     BOX_RENDER_DIR=/tmp/box flutter test --update-goldens \\
 ///         test/box_render_preview_test.dart
-Future<void> _loadFonts() async {
+Future<void> loadPreviewFonts() async {
   Future<void> load(String family, List<String> files) async {
     final loader = FontLoader(family);
     var any = false;
@@ -178,7 +178,7 @@ void main() {
     skip: dir == null,
     variant: TargetPlatformVariant.only(TargetPlatform.macOS),
     (tester) async {
-      await tester.runAsync(_loadFonts);
+      await tester.runAsync(loadPreviewFonts);
       // Tests draw shadows as solid black slabs; a picture wants the real thing.
       debugDisableShadows = false;
       newHarnessOpensInBox = true;
@@ -206,12 +206,13 @@ void main() {
       }
 
       final search = find.byKey(const ValueKey('swarm-search-input'));
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await shot('01-new-pane-empty');
       await type(search, 'age');
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await shot('02-new-pane-typed');
       await chord(tester, LogicalKeyboardKey.keyT);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await shot('03-new-tab-empty');
       await type(search, 'Agent 12');
       await shot('04-new-tab-typed');
@@ -246,7 +247,7 @@ void main() {
       await shot('06-launch-large-text');
       tester.view.physicalSize = const Size(1280, 800);
       tester.platformDispatcher.clearTextScaleFactorTestValue();
-      await openLaunchRow(tester, 'task');
+      await openLegacyTaskEditor(tester);
       await tester.pump();
       await type(line, '');
       await shot('07-new-tab-task-empty');
@@ -370,7 +371,7 @@ void main() {
       await tester.pump();
       expect(find.byKey(const ValueKey('new-harness-box')), findsNothing);
 
-      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await shot('13-command-open');
       await type(search, '> spl');
       await shot('13-command-palette');
@@ -380,7 +381,7 @@ void main() {
       await seedPreviews(app);
       final previousAppearance = appearancePrefsStore.value;
       addTearDown(() => appearancePrefsStore.value = previousAppearance);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       for (final style in PromptStyle.values) {
         appearancePrefsStore.value = previousAppearance.copyWith(
           prompt: PromptPrefs(style: style),
@@ -395,7 +396,7 @@ void main() {
       appearancePrefsStore.value = previousAppearance;
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await type(search, 'Checkout');
       await shot('14-search-preview');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
@@ -404,6 +405,7 @@ void main() {
       tester.platformDispatcher.textScaleFactorTestValue = 1.7;
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       await chord(tester, LogicalKeyboardKey.keyT);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       final largeBox = tester
@@ -411,7 +413,7 @@ void main() {
           .controller;
       largeBox.setFolder('/work/payments');
       await shot('15-create-large-text');
-      await openLaunchRow(tester, 'task');
+      await openLegacyTaskEditor(tester);
       await tester.pump();
       await shot('15-task-large-text');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
@@ -490,7 +492,7 @@ void main() {
       seedMixedAgents(catalogApp);
       catalogApp.adoptSessionForTest(terminal('a0', []));
       await mount(tester, catalogApp);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await key(tester, LogicalKeyboardKey.slash, ctrl: true);
       await shot('25-mixed-catalog');
       await type(search, '?');
@@ -530,6 +532,7 @@ void main() {
       pendingApp.adoptSessionForTest(terminal('a0', []));
       await mount(tester, pendingApp);
       await chord(tester, LogicalKeyboardKey.keyT);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -539,7 +542,7 @@ void main() {
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       tester.view.physicalSize = const Size(600, 800);
@@ -566,7 +569,7 @@ void main() {
         session.terminal.write('\x1b[36m❯\x1b[0m ');
       }
 
-      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await type(search, '> resize panes');
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
@@ -694,7 +697,7 @@ void main() {
       tester.view.physicalSize = const Size(1280, 800);
       tester.platformDispatcher.clearTextScaleFactorTestValue();
       linkApp.machineStates['m']!.localOnly = true;
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> link machine',
@@ -728,7 +731,7 @@ void main() {
       await tester.pumpAndSettle();
       tester.view.physicalSize = const Size(1280, 800);
       tester.platformDispatcher.clearTextScaleFactorTestValue();
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> link machine',
@@ -802,7 +805,7 @@ void main() {
         ..nodeOnline = true;
       managerApp.machines.add(shared);
       await mount(tester, managerApp);
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> machines manager',
@@ -881,7 +884,7 @@ void main() {
       renameApp.adoptSessionForTest(terminal('a0', []));
       await mount(tester, renameApp);
       Future<void> renameCommand(String query) async {
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
           '> $query',

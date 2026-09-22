@@ -616,7 +616,9 @@ export class RuntimeProfileManager {
   private commandcodeCatalogCache: { key: string; expiresAt: number; entries: CommandcodeModelTarget[] } | null = null
   /** profile id → the full `/model` argument (the profile carries the SHORT name the device labels by). */
   private readonly commandcodeTargets = new Map<string, Map<string, CommandcodeModelTarget>>()
-  private hermesCatalogCache: { key: string; expiresAt: number; entries: HermesModelTarget[] } | null = null
+  /** Per HOME, not one slot: a desk with a default-home agent and a profile agent would otherwise
+   *  evict each other's catalog on every menu open (`hermes -p <name>` has its own providers). */
+  private hermesCatalogCache = new Map<string, { expiresAt: number; entries: HermesModelTarget[] }>()
   /** profile id → the picker page + row a hermes model sits on. */
   private readonly hermesTargets = new Map<string, Map<string, HermesModelTarget>>()
   private cursorCatalogCache: { key: string; expiresAt: number; entries: CursorCatalogEntry[] } | null = null
@@ -666,7 +668,9 @@ export class RuntimeProfileManager {
       // Both axes are scalars in config.yaml and neither is announced, so this poll is the only reader.
       const before = this.selectedModel(session)
       const state = this.state(session.sessionId)
-      const parsed = parseHermesConfig(await readText(join(env.HERMES_HOME, 'config.yaml')))
+      // This agent's OWN home: `hermes -p <name>` keeps its model and effort in the profile's
+      // config.yaml, and reading the default one reported the wrong model on every profile agent.
+      const parsed = parseHermesConfig(await readText(join(session.hermesHome || env.HERMES_HOME, 'config.yaml')))
       if (parsed.model) state.model = parsed.model.slice(parsed.model.lastIndexOf('/') + 1)
       state.effort = parsed.effort ?? 'auto'
       state.observedAt = Date.now()
@@ -1432,7 +1436,7 @@ export class RuntimeProfileManager {
    * the chip names it truthfully; it just cannot be picked.
    */
   private async hermesModels(session: RegisteredSession): Promise<RuntimeModelOption[]> {
-    const entries = await this.hermesCatalog()
+    const entries = await this.hermesCatalog(session.hermesHome || env.HERMES_HOME)
     const state = this.states.get(session.sessionId)
     const targets = new Map<string, HermesModelTarget>()
     const output: RuntimeModelOption[] = []
@@ -1460,14 +1464,14 @@ export class RuntimeProfileManager {
     return output
   }
 
-  private async hermesCatalog(): Promise<HermesModelTarget[]> {
-    const key = env.HERMES_HOME
-    if (this.hermesCatalogCache?.key === key && this.hermesCatalogCache.expiresAt > Date.now()) {
-      return this.hermesCatalogCache.entries
-    }
-    const cache = await readJson(join(env.HERMES_HOME, 'provider_models_cache.json'))
+  private async hermesCatalog(home = env.HERMES_HOME): Promise<HermesModelTarget[]> {
+    // Keyed by home, and now actually asked per home: a profile has its own providers, so the cache
+    // key was already right and only the path it read was not.
+    const cached = this.hermesCatalogCache.get(home)
+    if (cached && cached.expiresAt > Date.now()) return cached.entries
+    const cache = await readJson(join(home, 'provider_models_cache.json'))
     const entries = parseHermesModelsCache(cache)
-    this.hermesCatalogCache = { key, entries, expiresAt: Date.now() + CATALOG_TTL_MS }
+    this.hermesCatalogCache.set(home, { entries, expiresAt: Date.now() + CATALOG_TTL_MS })
     return entries
   }
 

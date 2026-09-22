@@ -138,8 +138,8 @@ void main() {
           return verified;
         }
 
-        var previous = await open(LogicalKeyboardKey.keyP);
-        for (final key in [LogicalKeyboardKey.keyP, LogicalKeyboardKey.keyT]) {
+        var previous = await open(LogicalKeyboardKey.keyO);
+        for (final key in [LogicalKeyboardKey.keyO, LogicalKeyboardKey.keyT]) {
           expect(await app.deleteAgent('m', id), isNull);
           await until(
             () =>
@@ -153,7 +153,7 @@ void main() {
           previous = resumed;
         }
         // Opening an already-running harness must preserve its native process.
-        final attached = await open(LogicalKeyboardKey.keyP);
+        final attached = await open(LogicalKeyboardKey.keyO);
         expect(attached['pid'], previous['pid']);
         expect(attached['pane'], previous['pane']);
         expect(await app.deleteAgent('m', id), isNull);

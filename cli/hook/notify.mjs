@@ -780,23 +780,50 @@ async function herdrFallbackRuntime(engine) {
  */
 async function hermesTopLevelSession(dbPath, sessionId) {
   if (!/^[0-9]{8}_[0-9]{6}_[0-9a-fA-F]{4,16}$/.test(String(sessionId || ''))) return false
+  // EVERY home on this machine, this one first. `hermes -p <name>` keeps its sessions in
+  // `~/.hermes/profiles/<name>/state.db`, and the block in a profile's config.yaml may still name the
+  // DEFAULT home (Hermes copies the config when it creates a profile, and older installs baked the
+  // default path into it) — so a profile session looked unknown here and was dropped, silently, on
+  // every registration the daemon was not up for (openharness#191). The extra stores are asked only
+  // when this one has no row, which on a single-home machine is never.
+  const homes = hermesHomes(dbPath)
   for (let attempt = 0; attempt < 4; attempt++) {
     if (attempt > 0) await sleep(75)
-    const raw = await execFileText('sqlite3', [
-      '-json', '-cmd', '.timeout 500', '-cmd', 'PRAGMA query_only=1', `file:${dbPath}?mode=ro`,
-      `SELECT source FROM sessions WHERE id = '${sessionId}';`,
-    ], 1000)
-    if (raw === null) return false
-    try {
-      const rows = JSON.parse(raw.trim() || '[]')
-      if (!Array.isArray(rows) || rows.length === 0) continue
-      const source = typeof rows[0]?.source === 'string' ? rows[0].source : ''
-      return source === '' || source === 'cli'
-    } catch {
-      return false
+    let sawStore = false
+    for (const db of homes) {
+      const raw = await execFileText('sqlite3', [
+        '-json', '-cmd', '.timeout 500', '-cmd', 'PRAGMA query_only=1', `file:${db}?mode=ro`,
+        `SELECT source FROM sessions WHERE id = '${sessionId}';`,
+      ], 1000)
+      if (raw === null) continue     // unreadable store — another home may still hold the row
+      sawStore = true
+      try {
+        const rows = JSON.parse(raw.trim() || '[]')
+        if (!Array.isArray(rows) || rows.length === 0) continue
+        const source = typeof rows[0]?.source === 'string' ? rows[0].source : ''
+        return (source === '' || source === 'cli') ? db : false
+      } catch {
+        return false
+      }
     }
+    if (!sawStore) return false
   }
   return false
+}
+
+/** `dbPath` and every sibling profile store, deduped, the given one first. */
+function hermesHomes(dbPath) {
+  const home = dirname(dbPath)
+  const roots = [home]
+  // A profile store sits at <default home>/profiles/<name>/state.db, so the default home is two
+  // levels up from one and the profiles folder is beside the other. Both spellings are cheap to try.
+  const base = basename(dirname(home)) === 'profiles' ? dirname(dirname(home)) : home
+  if (base !== home) roots.push(base)
+  const out = roots.map((root) => join(root, 'state.db'))
+  let names = []
+  try { names = readdirSync(join(base, 'profiles')) } catch { return [...new Set(out)] }
+  for (const name of names.slice(0, 64)) out.push(join(base, 'profiles', name, 'state.db'))
+  return [...new Set(out)]
 }
 
 function bootTimeSec() {
@@ -1238,7 +1265,14 @@ async function fallbackRegister(input, engine, tmuxPane) {
   if (observations.some((observation) => observation.identity.pid !== process.identity.pid
     || observation.identity.startMarker !== process.identity.startMarker)) return
   const observedRuntimes = observations.map((observation) => observation.runtime)
-  if (engine === 'hermes' && !await hermesTopLevelSession(p.hermesDb, sessionId)) return
+  // The store that turned out to hold it — recorded below, so the daemon's mirror reads this agent's
+  // OWN history when it comes back up rather than the default home's.
+  let hermesHome = null
+  if (engine === 'hermes') {
+    const db = await hermesTopLevelSession(p.hermesDb, sessionId)
+    if (!db) return
+    hermesHome = dirname(db)
+  }
 
   await withRegistryLock(p.registryFile, () => {
     if (remainingBudget(600) < 50) return
@@ -1274,6 +1308,9 @@ async function fallbackRegister(input, engine, tmuxPane) {
       grid: existing?.grid ?? null,
       ...(existing && Object.hasOwn(existing, 'gridLaunch') ? { gridLaunch: existing.gridLaunch ?? null } : {}),
       codexHome: typeof existing?.codexHome === 'string' && existing.codexHome ? existing.codexHome : null,
+      // …and the Hermes home this session's store turned out to be in — see hermesTopLevelSession.
+      // Fill-only, exactly as the daemon's own registry treats it.
+      hermesHome: hermesHome || (typeof existing?.hermesHome === 'string' && existing.hermesHome ? existing.hermesHome : null),
       ...(existing?.bypassPermission === true ? { bypassPermission: true } : {}),
     }
     const entry = {
@@ -1290,7 +1327,12 @@ async function fallbackRegister(input, engine, tmuxPane) {
         : transcriptPath
         ? basename(dirname(transcriptPath))
         : basename(typeof input.cwd === 'string' ? input.cwd : '') || sessionId,
-      cwd: typeof input.cwd === 'string' ? input.cwd : (existing?.cwd ?? null),
+      // The row's folder outranks the hook's for the session the row already holds: Claude reports
+      // its tracked shell directory, which follows every Bash `cd`, and a resume or restore `cd`s
+      // wherever this says. Same rule as `registry.register()`.
+      cwd: existing && existing.sessionId === sessionId && typeof existing.cwd === 'string' && existing.cwd
+        ? existing.cwd
+        : typeof input.cwd === 'string' ? input.cwd : (existing?.cwd ?? null),
       runtimes,
       primaryRuntimeKey: existing?.primaryRuntimeKey && runtimes.some((runtime) => runtimeRouteKey(runtime) === existing.primaryRuntimeKey)
         ? existing.primaryRuntimeKey

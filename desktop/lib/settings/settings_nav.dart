@@ -226,7 +226,7 @@ class _NoMatches extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(10, 16, 10, 0),
       child: Text(
         'No settings match',
-        style: TextStyle(color: grid.AppPalette.textFaint, fontSize: 12.5),
+        style: grid.AppType.body(color: grid.AppPalette.textFaint),
       ),
     );
   }

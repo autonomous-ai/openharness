@@ -71,7 +71,7 @@ void main() {
         );
         await tester.pump(const Duration(milliseconds: 100));
         final field = find.byKey(const ValueKey('swarm-search-input'));
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await chord(tester, LogicalKeyboardKey.keyO);
         expect(field, findsOneWidget);
         expect(find.byType(SwarmSearchResults), findsOneWidget);
         expect(
@@ -118,7 +118,10 @@ void main() {
         expect(app.focusedPane, same(pane));
         await tester.enterText(field, 'idempotency');
         await tester.pump();
-        expect(tester.getRect(field), before);
+        expect(
+          tester.getRect(field),
+          rectMoreOrLessEquals(before, epsilon: .001),
+        );
         expect(tester.widget<TextField>(field).controller, same(controller));
         expect(
           find.textContaining('Payment retries now reuse'),

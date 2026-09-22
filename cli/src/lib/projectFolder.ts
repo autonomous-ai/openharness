@@ -2,11 +2,14 @@ import { spawn } from 'node:child_process'
 import { lstat, mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { projectFolderName, projectFolderSlug } from './agentNames.js'
+import { plausibleBranchName, projectFolderName, projectFolderSlug } from './agentNames.js'
+import { GitProjectError, prepareGitProject, validGitPath } from './gitProject.js'
 
 /** `name` on a new project is what the person called it; without one the folder is named after the
  *  harness and the time. */
 export type ProjectFolder = { source: 'new'; name?: string } | { source: 'remote'; repositoryUrl: string; name: string }
+  | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean; placeholder?: boolean }
+  | { source: 'branch'; gitSource: string; branchRef?: string; branchName?: string }
 
 export class ProjectFolderError extends Error {
   constructor(readonly code: string, message: string) { super(message) }
@@ -16,6 +19,31 @@ export class ProjectFolderError extends Error {
 // credentials nor arbitrary local paths/remote helpers are repository URLs.
 export function parseProjectFolder(payload: Record<string, unknown>): ProjectFolder | null {
   if (payload.projectSource === undefined) return null
+  if (payload.projectSource === 'worktree' || payload.projectSource === 'branch') {
+    const ref = payload.branchRef
+    if (!validGitPath(payload.gitSource) || payload.repositoryUrl !== undefined ||
+        (ref !== undefined && (typeof ref !== 'string' || ref.length > 1024 || !/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/.test(ref))) ||
+        (payload.projectSource === 'branch' && (typeof ref !== 'string' || !ref.startsWith('refs/heads/')))) {
+      throw new ProjectFolderError('INVALID_PROJECT_SOURCE', 'Choose a Git project and branch.')
+    }
+    const name = payload.branchName
+    if (payload.projectSource === 'worktree' && name !== undefined) {
+      if (!plausibleBranchName(name) || (payload.branchMode !== undefined && payload.branchMode !== 'existing' && payload.branchMode !== 'placeholder')) {
+        throw new ProjectFolderError('INVALID_PROJECT_SOURCE', 'Choose a Git project and branch.')
+      }
+      return { source: 'worktree', gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}),
+        branchName: name, ...(payload.branchMode === 'existing' ? { existingBranch: true } : {}),
+        ...(payload.branchMode === 'placeholder' ? { placeholder: true } : {}) }
+    }
+    // A new branch for the folder itself, named by `branchRef` too.
+    if (payload.projectSource === 'branch' && name !== undefined) {
+      if (!plausibleBranchName(name) || ref !== `refs/heads/${name}`) {
+        throw new ProjectFolderError('INVALID_PROJECT_SOURCE', 'Choose a Git project and branch.')
+      }
+      return { source: 'branch', gitSource: payload.gitSource, branchRef: ref, branchName: name }
+    }
+    return { source: payload.projectSource, gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}) }
+  }
   if (payload.projectSource === 'new' && payload.repositoryUrl === undefined) {
     // Slugged again here: the name becomes a path segment, so it is never taken on trust.
     const name = typeof payload.projectName === 'string' ? projectFolderSlug(payload.projectName) : null
@@ -64,6 +92,15 @@ export async function prepareProjectFolder(
   const root = options.root ?? join(homedir(), 'harnesses')
   let staging: string | undefined
   try {
+    if (project.source === 'worktree' || project.source === 'branch') {
+      return await prepareGitProject(project.gitSource, {
+        root, worktree: project.source === 'worktree', ref: project.branchRef,
+        ...(project.source === 'worktree' && project.branchName ? {
+          branchName: project.branchName, existingBranch: project.existingBranch === true, placeholder: project.placeholder === true,
+        } : {}),
+        ...(project.source === 'branch' && project.branchName ? { branchName: project.branchName } : {}),
+      })
+    }
     await mkdir(root, { recursive: true })
     if (project.source === 'new' && project.name) {
       // A name somebody chose is never quietly changed: an existing folder is theirs to pick as an
@@ -100,6 +137,7 @@ export async function prepareProjectFolder(
     await rename(checkout, destination)
     return destination
   } catch (error) {
+    if (error instanceof GitProjectError) throw new ProjectFolderError(error.code, error.message)
     if (error instanceof ProjectFolderError) throw error
     throw new ProjectFolderError('PROJECT_PREPARATION_FAILED', 'Could not create a project folder on this machine. Browse for a folder you can edit.')
   } finally {

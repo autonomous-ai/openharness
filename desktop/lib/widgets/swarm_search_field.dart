@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:harness/terminal/terminal_text.dart';
+
+import '../shared/theme/app_type.dart';
 
 class SwarmSearchField extends StatefulWidget {
   const SwarmSearchField({
@@ -50,6 +53,7 @@ class _SwarmSearchFieldState extends State<SwarmSearchField> {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final onMove = widget.onMove;
     final onSubmitted = widget.onSubmitted;
     return CallbackShortcuts(
@@ -83,9 +87,10 @@ class _SwarmSearchFieldState extends State<SwarmSearchField> {
         autofocus: widget.autofocus,
         onChanged: widget.onChanged,
         onSubmitted: (_) => onSubmitted?.call(),
-        style: const TextStyle(fontSize: 13),
+        style: AppType.mono(),
         decoration: InputDecoration(
           hintText: widget.hintText,
+          hintStyle: AppType.mono(color: Colors.white60),
           prefixIcon: const Icon(Icons.search, size: 18),
           filled: true,
           fillColor: const Color(0xa6111521),

@@ -14,6 +14,90 @@ StoreRating _rating(String id, double average, int count) => StoreRating(
 );
 
 void main() {
+  test(
+    'recordings come from live examples, including new community harnesses',
+    () {
+      const recording = StoreExample(
+        prompt: 'Make a playable scene.',
+        image: 'https://example.com/scene.png',
+        video: 'https://example.com/scene.mp4',
+      );
+      final entries = [
+        for (final (id, kind, category, examples) in [
+          (
+            'community/new-game',
+            'agent',
+            'Games',
+            [
+              const StoreExample(prompt: 'An older example.'),
+              recording,
+              recording,
+            ],
+          ),
+          ('community/another-game', 'agent', 'Games', [recording]),
+          ('community/z-music', 'agent', 'Music', [recording]),
+          (
+            'community/still',
+            'agent',
+            '3D',
+            [
+              const StoreExample(
+                prompt: 'A picture.',
+                image: 'https://example.com/still.png',
+              ),
+            ],
+          ),
+          (
+            'community/no-poster',
+            'agent',
+            '3D',
+            [
+              const StoreExample(
+                prompt: 'A movie.',
+                video: 'https://example.com/movie.mp4',
+              ),
+            ],
+          ),
+          (
+            'community/insecure',
+            'agent',
+            '3D',
+            [
+              const StoreExample(
+                prompt: 'A movie.',
+                image: 'https://example.com/still.png',
+                video: 'http://example.com/movie.mp4',
+              ),
+            ],
+          ),
+          ('community/viewer', 'viewer', 'Games', [recording]),
+          ('engine', 'engine', 'Code', [recording]),
+        ])
+          DshEntry(
+            id: id,
+            name: id,
+            engine: 'codex',
+            kind: kind,
+            category: category,
+            examples: examples,
+          ),
+      ];
+      final sessions = storeRecordedSessions(entries);
+      expect(sessions.map((session) => session.entry.id), [
+        'community/another-game',
+        'community/z-music',
+        'community/new-game',
+      ]);
+      expect(sessions.last.example, same(recording));
+      expect(storeRecordedSessions(entries.reversed), sessions);
+      expect(
+        storeRecordedSessions([entries.first]).single.entry,
+        entries.first,
+      );
+      expect(storeRecordedSessions([]), isEmpty);
+    },
+  );
+
   test('recent collection uses publication history and live membership', () {
     final entries = [
       _entry('autonomous/blender'),
@@ -22,8 +106,8 @@ void main() {
       _entry('autonomous/cad-viewer', kind: 'viewer'),
     ];
     expect(storeRecentlyUpdated(entries).map((e) => e.id), [
-      'autonomous/machine-monitor',
       'autonomous/blender',
+      'autonomous/machine-monitor',
     ]);
     // A known package must not leak into another machine's smaller catalog.
     expect(storeRecentlyUpdated([entries.first]).map((e) => e.id), [

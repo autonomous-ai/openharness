@@ -2,6 +2,7 @@
 // fed by the viewer server over SSE: `state` (the whole sheet), `cells` (answers as they land),
 // `view` (sort, filter, review line, numbers) and `ghost` (the demo typist).
 import { parseHeader, describeColumn } from '/grammar.mjs'
+import { initQuestionLab } from '/question-lab-ui.mjs'
 
 const $ = (id) => document.getElementById(id)
 const h = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n }
@@ -34,6 +35,9 @@ async function post(cmd, body = {}) {
     return await r.json()
   } catch { return { ok: false, error: 'the viewer is restarting' } }
 }
+
+const questionLab = initQuestionLab({ post, getState: () => S, getSelected: () => selected })
+$('questionLabBtn').addEventListener('click', () => { userTouch(); questionLab.show() })
 
 // ---- colours ----------------------------------------------------------------------------------
 // One stable colour per option: its place in the column's option list picks it.
@@ -255,6 +259,7 @@ function applyState(s) {
   const first = !S
   const hadCols = new Set(S ? S.columns.map((c) => c.id) : [])
   S = s
+  $('questionLabBtn').disabled = false
   rowIndex = new Map(s.rows.map((r) => [r.id, r]))
   colIndex = new Map(s.columns.map((c) => [c.id, c]))
   const now = performance.now()

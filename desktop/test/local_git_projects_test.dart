@@ -390,9 +390,10 @@ void main() {
     final root = fixture.path;
     final main = Directory('$root/repo/.git');
     await main.create(recursive: true);
-    await File(
-      '${main.path}/config',
-    ).writeAsString('[remote "origin"]\n url = git@github.com:Team/Repo.git\n');
+    await File('${main.path}/config').writeAsString(
+      '[remote "origin"]\n url = git@github.com:Team/Repo.git\n'
+      '[branch "feature/login"]\n\tharness = placeholder\n',
+    );
     await File('${main.path}/HEAD').writeAsString('ref: refs/heads/main\n');
     await Directory('$root/repo/src').create();
     final tree = Directory('$root/feature');
@@ -424,6 +425,18 @@ void main() {
     expect(project.remote, 'github.com/team/repo');
     expect(reader.cached(tree.path)!.remote, project.remote);
     expect(reader.cached(tree.path)!.branch, 'feature/login');
+    expect(project.name, 'repo');
+    expect(project.branchPending, false);
+    expect(
+      reader.cached(tree.path)!.branchPending,
+      true,
+      reason: 'Harness made the name up; the session has not named it yet.',
+    );
+    expect(
+      reader.cached(tree.path)!.name,
+      'repo',
+      reason: 'A linked worktree is named for its repository.',
+    );
     await reader.read(tree.path);
     expect(reader.cached('$root/repo/src'), same(project));
     await File('${meta.path}/HEAD')

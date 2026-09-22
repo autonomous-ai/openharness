@@ -43,6 +43,7 @@ export async function startArenaViewer({ workspace, port = 0 } = {}) {
   let seen = null // what observe() last returned, for the pane
   let last = null // the last decision, with its full probability spread
   let stopped = false, running = false, busy = false
+  let resetRevision = 0
   let timer = null, watchTimer = null, salt = 1, episode = 0, lastVerdictAt = 0
   let error = null
   const clients = new Set()
@@ -57,7 +58,7 @@ export async function startArenaViewer({ workspace, port = 0 } = {}) {
 
   function newEpisode(from = null, forceFresh = false) {
     world = createWorld(cfg(), episode, from, forceFresh)
-    last = null
+    last = null; error = null
     seen = observe(world, cfg())
   }
 
@@ -141,6 +142,7 @@ export async function startArenaViewer({ workspace, port = 0 } = {}) {
   async function decide() {
     if (busy || stopped) return
     busy = true
+    const askedWorld = world
     try {
       const c = cfg()
       if (world.status !== 'play') {
@@ -163,6 +165,8 @@ export async function startArenaViewer({ workspace, port = 0 } = {}) {
         },
         salt: salt++, model: process.env.JEV_MODEL || 'jev-latest', mock: arenaMock,
       })
+      // A reset or file edit may have replaced the world while the provider was answering.
+      if (stopped || world !== askedWorld) return
       const a = res.answers.move ?? {}
       const move = ACTIONS.includes(a.choice) ? a.choice : 'wait'
       const ev = act(world, move)
@@ -179,6 +183,7 @@ export async function startArenaViewer({ workspace, port = 0 } = {}) {
       if (world.status !== 'play') settle()
       error = null
     } catch (e) {
+      if (stopped || world !== askedWorld) return
       error = clean(e?.message ?? String(e))
     } finally {
       busy = false
@@ -201,10 +206,11 @@ export async function startArenaViewer({ workspace, port = 0 } = {}) {
     if (cmd === 'pause') { running = false; clearTimeout(timer) }
     else if (cmd === 'start') { if (!running) { running = true; schedule() } }
     else if (cmd === 'reset') {
+      resetRevision++
       Object.assign(totals, { decisions: 0, episodes: 0, goals: 0, coins: 0, bumps: 0, wonMoves: 0, wonPar: 0, results: [] })
       overrides = {}; episode = 0; salt = 1; newEpisode()
     }
-    else if (cmd === 'tick' || cmd === 'step') { const n = Math.round(num(body.n, 1, 20000, 1)); for (let i = 0; i < n; i++) await decide() }
+    else if (cmd === 'tick' || cmd === 'step') { const n = Math.round(num(body.n, 1, 20000, 1)); for (let i = 0, revision = resetRevision; i < n && !stopped && revision === resetRevision; i++) await decide() }
     else if (cmd === 'wall') ok = edited(toggleWall(world, x, y))
     else if (cmd === 'coin') ok = edited(toggleCoin(world, x, y))
     else if (cmd === 'goal') ok = edited(moveGoal(world, x, y))
@@ -233,7 +239,7 @@ export async function startArenaViewer({ workspace, port = 0 } = {}) {
       if (stopped) return
       const before = JSON.stringify(raw)
       load()
-      if (JSON.stringify(raw) !== before) { overrides = {}; episode = 0; newEpisode() }
+      if (JSON.stringify(raw) !== before) { resetRevision++; overrides = {}; episode = 0; newEpisode() }
       push(true)
     }, 40)
   })

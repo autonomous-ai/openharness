@@ -70,7 +70,7 @@ Future<void> chord(
 void main() {
   for (final native in [false, true]) {
     testWidgets(
-      'New Tab opens a minimal draft and Escape removes only that draft (native: $native)',
+      'every New Tab entry opens a quiet welcome and preserves work (native: $native)',
       (tester) async {
         const channel = MethodChannel('harness/swarm_tabs');
         const codec = StandardMethodCodec();
@@ -118,7 +118,7 @@ void main() {
           () => chord(tester, LogicalKeyboardKey.keyT),
           newFromChrome,
           () async {
-            await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+            await chord(tester, LogicalKeyboardKey.keyP);
             await tester.enterText(
               find.byKey(const ValueKey('swarm-search-input')),
               '> New Tab',
@@ -134,26 +134,27 @@ void main() {
           expect(app.activeSwarmId, isNot(work));
           expect(app.activeSwarm.isNewTabPage, isTrue);
           expect(app.swarms, hasLength(3));
-          expect(find.text('Follow your curiosity.'), findsWidgets);
           expect(
-            find.text('Follow your curiosity. Build across disciplines.'),
-            findsNothing,
+            find.byKey(const ValueKey('workspace-welcome')),
+            findsOneWidget,
           );
           final input = find.byKey(const ValueKey('swarm-search-input'));
+          expect(input, findsNothing);
+          final created = app.activeSwarmId;
+          await chord(tester, LogicalKeyboardKey.keyO);
           expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
           await tester.enterText(input, 'Agent 1');
           await tester.pump();
-          await chord(tester, LogicalKeyboardKey.keyT);
-          expect(app.swarms, hasLength(3));
-          expect(tester.widget<TextField>(input).controller!.text, 'Agent 1');
           await tester.sendKeyEvent(LogicalKeyboardKey.escape);
           await tester.pump();
           expect(input, findsNothing);
-          expect(app.activeSwarmId, work);
+          expect(app.activeSwarmId, created);
+          await chord(tester, LogicalKeyboardKey.keyW);
           expect(app.swarms, hasLength(2));
         }
         await newFromChrome();
         await tester.pump();
+        await chord(tester, LogicalKeyboardKey.keyO);
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
           'Agent 0',
@@ -180,7 +181,7 @@ void main() {
     (tester) async {
       final app = createApp();
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await tester.pump();
       expect(app.panes, isEmpty);
       await tester.enterText(
@@ -415,8 +416,9 @@ void main() {
       expect(app.activeSwarmId, isNot(starter));
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
-      expect(app.swarms, hasLength(1));
-      expect(app.activeSwarmId, starter);
+      expect(app.swarms, hasLength(2));
+      expect(app.activeSwarmId, isNot(starter));
+      expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
       expect(input, hasLength(2));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());

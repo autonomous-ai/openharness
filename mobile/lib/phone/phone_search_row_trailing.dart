@@ -2,83 +2,91 @@ import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
-import 'compact_age.dart';
-import 'phone_search_index.dart';
+import 'phone_destination.dart';
 import 'phone_status.dart';
-import 'status_pill.dart';
 
-/// A search row's trailing edge: why it cannot be opened, or else how fresh it
-/// is.
+/// A search row's trailing edge: why it cannot be opened, and nothing else.
 ///
-/// An agent that opens says when its conversation last moved — `4m` — or that
-/// it is `working` right now, which is what explains a row sorted above a
-/// fresher one. Unboxed and faint: it is read after the name, never instead.
+/// ⚠️ **The age is gone, on purpose.** The row used to end in `19h` or
+/// `working`, and the desktop's picker ends in nothing — it puts recency in the
+/// ordering instead, which the phone now does too. Two lists that hold the same
+/// rows should not end differently.
 ///
-/// A boxed word is kept for what a tap would NOT make obvious: a machine's
+/// What survives is the one thing a tap would NOT make obvious: a machine's
 /// Unlock or Offline, and an agent whose terminal has gone. Dimming alone leaves
-/// the person tapping a row that cannot answer and reading nothing about why.
+/// somebody tapping a row that cannot answer and reading nothing about why. The
+/// desktop says the same thing in the line under its box, which a phone has no
+/// room for.
 class PhoneSearchTrailing extends StatelessWidget {
   const PhoneSearchTrailing({
     super.key,
     required this.row,
     required this.openable,
     required this.now,
+    this.resuming = false,
   });
 
-  final PhoneSearchResult row;
+  final PhoneDestination row;
   final bool openable;
+
+  /// Whether the agent is being restarted right now — see
+  /// `PhoneSearchResults._resumeThenOpen`.
+  final bool resuming;
+
   final DateTime now;
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
+    if (resuming) return const _Spinner();
     final badge = _badge;
-    if (badge != null) return _Badge(badge);
-    final entry = row.entry;
-    if (entry == null) return const SizedBox.shrink();
-    if (entry.isWorking) {
-      return _Recency('working', color: phoneToneColor(PhoneTone.busy));
-    }
-    final at = entry.lastActiveAt;
-    if (at == null) return const SizedBox.shrink();
-    return _Recency(compactAge(at, now), color: AppPalette.textFaint);
+    return badge == null ? const SizedBox.shrink() : _Badge(badge);
   }
 
   String? get _badge {
     final machine = row.machine;
     return switch (row.kind) {
-      PhoneSearchKind.agent => openable ? null : 'No terminal',
-      PhoneSearchKind.machine => switch (machine == null
+      PhoneDestinationKind.agent => !openable
+          ? 'No terminal'
+          // Saved work, not a dead row: the tap restarts it and opens it. Said
+          // plainly because the wait that follows is a second or two of nothing.
+          : row.entry?.agent.isStopped == true
+          ? 'Stopped'
+          : null,
+      PhoneDestinationKind.machine => switch (machine == null
           ? null
           : phoneMachineStatusOf(machine)) {
         PhoneMachineStatus.offline => 'Offline',
         PhoneMachineStatus.needsPassword => 'Unlock',
-        // Its state, not a verb: the tap brings a sheet of actions, and "View"
-        // promised a screen that is no longer there.
-        _ => 'Connected',
+        _ => null,
       },
+      // A group says its size in its own detail line ("Project · 3 harnesses"),
+      // and a command has nothing to be fresh about.
+      _ => null,
     };
   }
 }
 
-class _Recency extends StatelessWidget {
-  const _Recency(this.text, {required this.color});
-
-  final String text;
-  final Color color;
+/// The wait between tapping stopped work and its terminal arriving. Sized to
+/// the badge it replaces, so the row does not reflow when it appears.
+class _Spinner extends StatelessWidget {
+  const _Spinner();
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(left: 8),
-    child: Text(
-      text,
-      style: TextStyle(
-        color: color,
-        fontSize: 12,
-        fontFeatures: AppFont.tabularFigures,
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return Padding(
+      padding: const EdgeInsets.only(left: 8),
+      child: SizedBox(
+        width: 13,
+        height: 13,
+        child: CircularProgressIndicator(
+          strokeWidth: 1.6,
+          color: AppPalette.textFaint,
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _Badge extends StatelessWidget {

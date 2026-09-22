@@ -14,7 +14,7 @@ class WelcomeWorkspacePreview extends StatelessWidget {
     final palette = grid.AppTheme.palette.value;
     return Semantics(
       image: true,
-      label: 'Example agent group: Claude Code and Codex working side by side.',
+      label: 'Example harness group: Claude Code and Codex working side by side.',
       child: ExcludeSemantics(
         child: Container(
           decoration: BoxDecoration(
@@ -42,7 +42,7 @@ class WelcomeWorkspacePreview extends StatelessWidget {
                     ),
                     Spacer(),
                     Text(
-                      '2 agents',
+                      '2 harnesses',
                       style: TextStyle(fontSize: 11, color: Colors.white70),
                     ),
                   ],

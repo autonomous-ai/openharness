@@ -148,6 +148,13 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// who was looking straight at it, with a network that would have answered at once.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      // The other half of the resume below: work that only makes sense in
+      // front of somebody stops here. The sockets are not touched — the OS
+      // suspends them, and the redial on the way back is what recovers them.
+      widget.notifier.handleAppPaused();
+      return;
+    }
     if (state != AppLifecycleState.resumed) return;
     phoneTerminalP2p.kickRetry();
     widget.notifier.handleAppResumed();

@@ -20,6 +20,7 @@ import { installedDsh, type InstalledDsh } from './installed.js'
 import { isViewerPackage } from './manifest.js'
 import { resolveDshCommand } from './materialize.js'
 import { isShellNoise, killProcessGroup, spawnDshCommand } from './shell.js'
+import type { ViewerLedger } from './viewerLedger.js'
 import { viewerTarget } from '../lib/viewerWire.js'
 
 /** The viewer that will actually run for a harness: its own, or the package it points at. */
@@ -75,6 +76,8 @@ export interface DshViewerDeps {
   now?: () => number
   /** How `viewer.use` finds its package; the installed index by default. */
   lookup?: (id: string) => InstalledDsh | undefined
+  /** Where each spawned viewer's pid is recorded so the next daemon can reap it (viewerLedger.ts). */
+  ledger?: ViewerLedger
 }
 
 interface ViewerState {
@@ -266,6 +269,7 @@ export class DshViewerManager {
       },
     })
     state.child = child
+    if (child.pid) this.deps.ledger?.add({ pid: child.pid, agentId: state.agentId, dshId: state.dsh.id, viewerDir: viewer.dir })
     let logged = 0
     const onData = (chunk: Buffer): void => {
       for (const line of chunk.toString('utf8').split('\n')) {
@@ -277,6 +281,7 @@ export class DshViewerManager {
     child.stderr?.on('data', onData)
     child.on('error', (error) => this.log(`[dsh] ${state.dsh.id} viewer could not start · ${error.message}`))
     child.on('exit', (code, signal) => {
+      if (child.pid) this.deps.ledger?.remove(child.pid)
       if (state.child !== child) return
       state.child = null
       state.port = null

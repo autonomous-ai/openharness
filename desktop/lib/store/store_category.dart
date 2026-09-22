@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -137,9 +138,7 @@ class _StoreCategoryState extends State<StoreCategory> {
                         children: [
                           Text(
                             'Your next tool is waiting.',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w600,
+                            style: grid.AppType.heading(
                               color: grid.AppPalette.textPrimary,
                             ),
                           ),
@@ -147,8 +146,7 @@ class _StoreCategoryState extends State<StoreCategory> {
                           Text(
                             'Explore the harnesses in $name and choose one to try.',
                             textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 14,
+                            style: grid.AppType.body(
                               color: grid.AppPalette.textSecondary,
                             ),
                           ),
@@ -242,115 +240,108 @@ class _DisciplineHero extends StatelessWidget {
   final VoidCallback? onOpen;
 
   @override
-  Widget build(BuildContext context) => Column(
-    key: const ValueKey('store-category-hero'),
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      Text(
-        name,
-        style: TextStyle(
-          fontSize: 34,
-          height: 1.15,
-          letterSpacing: -1,
-          fontWeight: FontWeight.w700,
-          color: grid.AppPalette.textPrimary,
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Column(
+      key: const ValueKey('store-category-hero'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          name,
+          style: grid.AppType.display(
+            height: 1.15,
+            color: grid.AppPalette.textPrimary,
+          ),
         ),
-      ),
-      const SizedBox(height: 20),
-      LayoutBuilder(
-        builder: (context, box) {
-          final compact =
-              box.maxWidth < 740 ||
-              MediaQuery.textScalerOf(context).scale(14) > 20;
-          final copy = Padding(
-            padding: const EdgeInsets.all(26),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'GET STARTED',
-                  style: TextStyle(
-                    fontSize: 10,
-                    letterSpacing: 1.2,
-                    fontWeight: FontWeight.w700,
-                    color: grid.AppPalette.accentOnSurface,
+        const SizedBox(height: 20),
+        LayoutBuilder(
+          builder: (context, box) {
+            final compact =
+                box.maxWidth < 740 ||
+                MediaQuery.textScalerOf(context).scale(14) > 20;
+            final copy = Padding(
+              padding: const EdgeInsets.all(26),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'GET STARTED',
+                    style: grid.AppType.monoMeta(
+                      letterSpacing: 1.2,
+                      fontWeight: grid.AppFont.medium,
+                      color: grid.AppPalette.accentOnSurface,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  headline.replaceAll('\n', ' '),
-                  style: TextStyle(
-                    fontSize: 27,
-                    height: 1.15,
-                    letterSpacing: -.5,
-                    fontWeight: FontWeight.w700,
-                    color: grid.AppPalette.textPrimary,
+                  const SizedBox(height: 12),
+                  Text(
+                    headline.replaceAll('\n', ' '),
+                    style: grid.AppType.title(
+                      height: 1.15,
+                      color: grid.AppPalette.textPrimary,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  description,
-                  style: TextStyle(
-                    fontSize: 14,
-                    height: 1.5,
-                    color: grid.AppPalette.textSecondary,
+                  const SizedBox(height: 12),
+                  Text(
+                    description,
+                    style: grid.AppType.body(
+                      height: 1.5,
+                      color: grid.AppPalette.textSecondary,
+                    ),
                   ),
-                ),
-                if (entry != null) ...[
-                  const SizedBox(height: 20),
-                  Row(
-                    children: [
-                      StoreAppIcon(entry: entry!, size: 30),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Explore ${entry!.name}',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: grid.AppPalette.textPrimary,
+                  if (entry != null) ...[
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        StoreAppIcon(entry: entry!, size: 30),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Explore ${entry!.name}',
+                            style: grid.AppType.label(
+                              color: grid.AppPalette.textPrimary,
+                            ),
                           ),
                         ),
-                      ),
-                      Icon(
-                        LucideIcons.arrowRight300,
-                        size: 16,
-                        color: grid.AppPalette.textSecondary,
-                      ),
-                    ],
-                  ),
-                ],
-              ],
-            ),
-          );
-          final art = entry == null
-              ? null
-              : AspectRatio(
-                  aspectRatio: 2,
-                  child: StoreFeaturedArt(category: name, entry: entry!),
-                );
-          final body = compact || art == null
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [copy, ?art],
-                )
-              : Row(
-                  children: [
-                    Expanded(child: copy),
-                    Expanded(child: art),
+                        Icon(
+                          LucideIcons.arrowRight300,
+                          size: 16,
+                          color: grid.AppPalette.textSecondary,
+                        ),
+                      ],
+                    ),
                   ],
-                );
-          return entry == null
-              ? body
-              : StoreExploreCard(
-                  key: const ValueKey('store-category-feature'),
-                  color: storeDiscipline(name).color,
-                  onTap: onOpen!,
-                  semanticLabel: 'Explore ${entry!.name}',
-                  child: body,
-                );
-        },
-      ),
-    ],
-  );
+                ],
+              ),
+            );
+            final art = entry == null
+                ? null
+                : AspectRatio(
+                    aspectRatio: 2,
+                    child: StoreFeaturedArt(category: name, entry: entry!),
+                  );
+            final body = compact || art == null
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [copy, ?art],
+                  )
+                : Row(
+                    children: [
+                      Expanded(child: copy),
+                      Expanded(child: art),
+                    ],
+                  );
+            return entry == null
+                ? body
+                : StoreExploreCard(
+                    key: const ValueKey('store-category-feature'),
+                    color: storeDiscipline(name).color,
+                    onTap: onOpen!,
+                    semanticLabel: 'Explore ${entry!.name}',
+                    child: body,
+                  );
+          },
+        ),
+      ],
+    );
+  }
 }

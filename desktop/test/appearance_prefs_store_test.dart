@@ -1,7 +1,5 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/local_key_value_store.dart';
-import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
 
 /// An in-memory store that can be told to fail, so the recovery paths are
@@ -36,9 +34,7 @@ void main() {
       const prefs = AppearancePrefs();
       expect(prefs.uiFamily, isNull);
       expect(prefs.uiSize, 14);
-      // The whole point of the default: scale is exactly 1, so every control
-      // keeps the geometry the design system specifies.
-      expect(prefs.uiSize / grid.AppFont.uiSizeDefault, 1.0);
+      // Legacy fields remain readable, but no longer control app typography.
     });
 
     test('an empty store loads the defaults', () async {
@@ -141,41 +137,6 @@ void main() {
       // Without the flag, passing null is indistinguishable from passing
       // nothing — which is the bug the flag exists to prevent.
       expect(chosen.copyWith(uiFamily: null).uiFamily, 'Menlo');
-    });
-  });
-
-  group('the size reaches the theme', () {
-    tearDown(grid.AppFont.reset);
-
-    test('a chosen size resizes every control box in the app', () {
-      double controlHeight() => grid
-          .buildAppTheme(brightness: Brightness.dark)
-          .inputDecorationTheme
-          .constraints!
-          .minHeight;
-
-      expect(controlHeight(), 36);
-
-      grid.AppTheme.fonts.apply(
-        uiScale: 19 / grid.AppFont.uiSizeDefault,
-        codeSize: grid.AppFont.codeSize,
-      );
-      // Proof the wiring in `main.dart` has something to act on: `buildAppTheme`
-      // bakes `AppControl.heightFieldScaled` into a plain number, so this is
-      // what a UI-size change actually moves.
-      expect(controlHeight(), closeTo(36 * 19 / 14, 0.001));
-    });
-
-    test('apply reports whether anything actually moved', () {
-      expect(
-        grid.AppFont.apply(uiScale: 1.2, codeSize: grid.AppFont.codeSize),
-        isTrue,
-      );
-      expect(
-        grid.AppFont.apply(uiScale: 1.2, codeSize: grid.AppFont.codeSize),
-        isFalse,
-        reason: 'setting the same value twice must not dirty the tree',
-      );
     });
   });
 }

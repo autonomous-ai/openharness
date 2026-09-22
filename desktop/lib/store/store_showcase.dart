@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
 import '../core/test_run.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/engine_identity.dart';
+import 'store_demo_dialog.dart';
 
 /// The body of a store page: what you ask, and what comes out — one after another, down the page.
 ///
@@ -87,6 +89,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    TerminalFontScope.watch(context);
     final example = widget.example;
     final i = widget.index;
     return LayoutBuilder(
@@ -97,9 +100,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
           children: [
             Text(
               '${(i + 1).toString().padLeft(2, '0')} / ${widget.count.toString().padLeft(2, '0')}',
-              style: TextStyle(
-                fontFamily: grid.AppFont.mono,
-                fontSize: 12,
+              style: grid.AppType.monoMeta(
                 letterSpacing: 2,
                 color: grid.AppPalette.accentOnSurface,
               ),
@@ -111,18 +112,17 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                 '“${example.prompt}”',
                 key: ValueKey('store-example-prompt:$i'),
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: wide ? 34 : 24,
+                style: grid.AppType.title(
                   height: 1.24,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: wide ? -0.8 : -0.4,
                   color: grid.AppPalette.textPrimary,
                 ),
               ),
             ),
             const SizedBox(height: 28),
-            Row(
-              mainAxisSize: MainAxisSize.min,
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 10,
               children: [
                 FilledButton.icon(
                   key: ValueKey('store-try-prompt:$i'),
@@ -136,14 +136,28 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                     foregroundColor: Colors.white,
                     minimumSize: const Size(0, 46),
                     padding: const EdgeInsets.symmetric(horizontal: 22),
-                    textStyle: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
+                    textStyle: grid.AppType.label(
+                      fontWeight: grid.AppFont.semibold,
                     ),
                     shape: const StadiumBorder(),
                   ),
                 ),
-                const SizedBox(width: 8),
+                if (example.video != null)
+                  OutlinedButton.icon(
+                    key: ValueKey('store-watch-demo:$i'),
+                    onPressed: () => showStoreDemo(
+                      context,
+                      entry: widget.entry,
+                      example: example,
+                    ),
+                    icon: const Icon(LucideIcons.play300, size: 17),
+                    label: const Text('Watch real session'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 46),
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      shape: const StadiumBorder(),
+                    ),
+                  ),
                 AppIconButton(
                   key: ValueKey('store-copy-prompt:$i'),
                   icon: LucideIcons.copy300,
@@ -225,8 +239,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                 Text(
                   example.caption!,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 13,
+                  style: grid.AppType.body(
                     height: 1.4,
                     color: grid.AppPalette.textSecondary,
                   ),
@@ -255,7 +268,7 @@ class _Output extends StatelessWidget {
     );
     return Image.network(
       example.image!,
-      fit: BoxFit.cover,
+      fit: example.video != null ? BoxFit.contain : BoxFit.cover,
       filterQuality: FilterQuality.medium,
       semanticLabel: example.caption ?? 'What ${entry.name} made',
       frameBuilder: (context, child, frame, synchronous) => synchronous
@@ -331,18 +344,20 @@ class _RevealState extends State<_Reveal> with SingleTickerProviderStateMixin {
   }
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _controller,
-    builder: (context, child) {
-      final t = Curves.easeOutCubic.transform(_controller.value);
-      return Opacity(
-        opacity: t,
-        child: Transform.translate(
-          offset: Offset(0, 36 * (1 - t)),
-          child: child,
-        ),
-      );
-    },
-    child: widget.child,
-  );
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        final t = Curves.easeOutCubic.transform(_controller.value);
+        return Opacity(
+          opacity: t,
+          child: Transform.translate(
+            offset: Offset(0, 36 * (1 - t)),
+            child: child,
+          ),
+        );
+      },
+      child: widget.child,
+    );
+  }
 }

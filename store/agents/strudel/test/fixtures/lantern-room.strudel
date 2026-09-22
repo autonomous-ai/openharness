@@ -1,0 +1,26 @@
+// Lantern room — an original synth-only piece for the performance capture walkthrough.
+// Begin with Pulse and Low tide muted. Let them enter together, then give Glass room to answer.
+setcpm(112 / 4)
+
+stack(
+  // Pulse — a soft four-beat floor
+  s("sbd*4").decay(.18).lpf(180).gain(.65),
+
+  // Sand — a quiet, moving eighth-note texture
+  s("white*8").decay(.035).sustain(0).hpf(6200)
+    .gain("[.13 .055]*4").pan("<.25 .75>"),
+
+  // Low tide — three notes finding their way through eight steps
+  note("<f2 f2 ab2 eb2>(3,8)").s("triangle")
+    .attack(.008).decay(.18).sustain(.18).release(.05).lpf(700).gain(.55),
+
+  // Glass — a little answer that crosses the room
+  n("0 [~ 4] 7 [4 2]").scale("f4:minor").s("sine")
+    .decay(.12).sustain(.05).release(.15).gain(.38)
+    .delay(.25).delaytime(.1875).delayfeedback(.3).pan(sine.range(.2, .8).slow(3)),
+
+  // Lantern — four harmonies, each held for two bars
+  note("<[f3,ab3,c4] [eb3,g3,bb3] [db3,f3,ab3] [c3,eb3,g3]>/2")
+    .s("triangle").attack(.2).decay(.4).sustain(.3).release(.7)
+    .lpf(1200).gain(.25).room(.3).roomsize(2)
+)

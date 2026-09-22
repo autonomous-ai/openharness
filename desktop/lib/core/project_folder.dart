@@ -3,27 +3,85 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import 'repository_clone.dart';
+import 'git_worktree.dart';
 
 /// Folder preparation is explicit and runs only when New Agent is submitted.
 /// Existing folders continue to use the ordinary agent_create cwd payload.
 class ProjectFolderRequest {
   const ProjectFolderRequest.newProject({this.name})
-    : repository = null,
+    : gitSource = null,
+      branchRef = null,
+      branchName = null,
+      existingBranch = false,
+      placeholder = false,
+      createsWorktree = false,
+      repository = null,
       generatedLabel = null,
       generatedAt = null;
   ProjectFolderRequest.generated({
     required String label,
     required DateTime at,
     String? name,
-  }) : repository = null,
+  }) : gitSource = null,
+       branchRef = null,
+       branchName = null,
+       existingBranch = false,
+       placeholder = false,
+       createsWorktree = false,
+       repository = null,
        generatedLabel = label,
        generatedAt = at,
        name = name ?? _suggestedFolderName(label, at);
   const ProjectFolderRequest.remote(GitHubRepository value)
-    : repository = value,
+    : gitSource = null,
+      branchRef = null,
+      branchName = null,
+      existingBranch = false,
+      placeholder = false,
+      createsWorktree = false,
+      repository = value,
       name = null,
       generatedLabel = null,
       generatedAt = null;
+
+  /// A new worktree on [branchName]: created from [branchRef], or with
+  /// [existingBranch] that local branch checked out as it is. Without a name
+  /// the machine makes one up.
+  const ProjectFolderRequest.worktree(
+    String source, {
+    this.branchRef,
+    this.branchName,
+    this.existingBranch = false,
+    this.placeholder = false,
+  }) : gitSource = source,
+       createsWorktree = true,
+       repository = null,
+       name = null,
+       generatedLabel = null,
+       generatedAt = null;
+
+  /// The folder itself on [ref], or with [newBranch] on that new branch, made
+  /// where the folder is now. [ref] then names the new branch, so a daemon that
+  /// cannot make one refuses it rather than starting on the old one.
+  const ProjectFolderRequest.branch(
+    String source,
+    String ref, {
+    String? newBranch,
+  }) : gitSource = source,
+       branchRef = ref,
+       branchName = newBranch,
+       existingBranch = false,
+       placeholder = false,
+       createsWorktree = false,
+       repository = null,
+       name = null,
+       generatedLabel = null,
+       generatedAt = null;
+
+  final String? gitSource, branchRef, branchName;
+
+  /// [branchName] was made up: the session's name replaces it once it has one.
+  final bool createsWorktree, existingBranch, placeholder;
 
   final GitHubRepository? repository;
 
@@ -76,7 +134,17 @@ class ProjectFolderRequest {
   String? get folderName => name == null ? null : projectFolderSlug(name!);
 
   Map<String, String> get payload => {
-    'projectSource': repository == null ? 'new' : 'remote',
+    'projectSource': gitSource != null
+        ? (createsWorktree ? 'worktree' : 'branch')
+        : repository == null
+        ? 'new'
+        : 'remote',
+    'gitSource': ?gitSource,
+    'branchRef': ?branchRef,
+    // A daemon that predates these names the worktree's branch itself.
+    'branchName': ?branchName,
+    if (existingBranch) 'branchMode': 'existing',
+    if (placeholder) 'branchMode': 'placeholder',
     if (repository != null) 'repositoryUrl': repository!.url,
     // A daemon that predates the field ignores it and names the folder itself.
     if (repository == null && folderName != null) 'projectName': folderName!,
@@ -102,6 +170,17 @@ class ProjectFolderRequest {
     }
     final root = Directory(projectHome ?? p.join(home!, 'harnesses'));
     try {
+      if (gitSource case final source?) {
+        return await prepareGitProject(
+          source,
+          root.path,
+          worktree: createsWorktree,
+          branchRef: branchRef,
+          branchName: branchName,
+          existingBranch: existingBranch,
+          placeholder: placeholder,
+        );
+      }
       await root.create(recursive: true);
       if (repository case final repo?) {
         return await (createClone?.call() ?? RepositoryClone()).run(

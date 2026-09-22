@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/app_version.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -127,9 +128,8 @@ class UpdateNotice extends StatelessWidget {
                               message,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
+                              style: grid.AppType.body(
                                 color: grid.AppPalette.textPrimary,
-                                fontSize: 12.5,
                               ),
                             ),
                           ),
@@ -137,9 +137,8 @@ class UpdateNotice extends StatelessWidget {
                             const SizedBox(width: 8),
                             Text(
                               '· ${formatDownloadSize(update.size)}',
-                              style: TextStyle(
+                              style: grid.AppType.monoMeta(
                                 color: grid.AppPalette.textFaint,
-                                fontSize: 11.5,
                               ),
                             ),
                           ],
@@ -244,10 +243,7 @@ class _NoticeAction extends StatelessWidget {
               ? BorderSide(color: grid.AppGlass.hair)
               : BorderSide.none,
         ),
-        textStyle: TextStyle(
-          fontFamily: grid.AppFont.sans,
-          fontFamilyFallback: grid.AppFont.sansFallback,
-          fontSize: 12,
+        textStyle: grid.AppType.label(
           fontWeight: primary ? grid.AppFont.semibold : grid.AppFont.regular,
         ),
       ),
@@ -456,7 +452,7 @@ class _UpdateDialog extends StatelessWidget {
       // it belongs to the menu panel, not to a dialog.
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxWidth: 372 * MediaQuery.textScalerOf(context).scale(12.5) / 12.5,
+          maxWidth: 372 * grid.appTextScaleOf(context),
         ),
         child: SingleChildScrollView(
           child: Padding(
@@ -489,18 +485,15 @@ class _UpdateDialog extends StatelessWidget {
                 const SizedBox(height: 12),
                 Text(
                   title,
-                  style: TextStyle(
+                  style: grid.AppType.heading(
                     color: grid.AppPalette.textPrimary,
-                    fontSize: 15,
-                    fontWeight: grid.AppFont.semibold,
                   ),
                 ),
                 const SizedBox(height: 5),
                 Text(
                   body,
-                  style: TextStyle(
+                  style: grid.AppType.body(
                     color: grid.AppPalette.textSecondary,
-                    fontSize: 12.5,
                     height: 1.5,
                   ),
                 ),
@@ -578,19 +571,18 @@ class _Fact extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          width: 96 * MediaQuery.textScalerOf(context).scale(11.5) / 11.5,
+          width: 96 * grid.appTextScaleOf(context),
           child: Text(
             label,
-            style: TextStyle(color: grid.AppPalette.textFaint, fontSize: 11.5),
+            style: grid.AppType.body(color: grid.AppPalette.textFaint),
           ),
         ),
         Expanded(
+          // Versions and sizes: copied into a report, so set in mono.
           child: DefaultTextStyle(
-            style: TextStyle(
+            style: grid.AppType.monoLabel(
+              fontWeight: FontWeight.w400,
               color: grid.AppPalette.textSecondary,
-              fontSize: 11.5,
-              fontFamily: grid.AppFont.mono,
-              fontFamilyFallback: grid.AppFont.monoFallback,
             ),
             child: value,
           ),
@@ -611,22 +603,25 @@ class _InstalledVersionState extends State<_InstalledVersion> {
   late final Future<String> _info = runningAppVersion();
 
   @override
-  Widget build(BuildContext context) => FutureBuilder<String>(
-    future: _info,
-    builder: (context, snapshot) {
-      final version = snapshot.data;
-      if (version == null) {
-        // Still reading: a blank measured against the ambient mono style the
-        // row sets, so it and the version it becomes are the same line.
-        // Answered with nothing: the dash, which is a value.
-        return snapshot.connectionState == ConnectionState.done
-            ? const Text('—')
-            : SkeletonText(
-                style: DefaultTextStyle.of(context).style,
-                width: 44,
-              );
-      }
-      return Text(version);
-    },
-  );
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return FutureBuilder<String>(
+      future: _info,
+      builder: (context, snapshot) {
+        final version = snapshot.data;
+        if (version == null) {
+          // Still reading: a blank measured against the ambient mono style the
+          // row sets, so it and the version it becomes are the same line.
+          // Answered with nothing: the dash, which is a value.
+          return snapshot.connectionState == ConnectionState.done
+              ? const Text('—')
+              : SkeletonText(
+                  style: DefaultTextStyle.of(context).style,
+                  width: 44,
+                );
+        }
+        return Text(version);
+      },
+    );
+  }
 }

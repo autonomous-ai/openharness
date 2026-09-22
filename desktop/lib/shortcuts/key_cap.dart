@@ -16,9 +16,10 @@ import 'app_shortcuts.dart';
 /// [grid.AppSurface.wellFill] is an overlay, so a cap keeps its edge on a
 /// raised card and on a recessed one without being picked for either.
 class KeyCap extends StatelessWidget {
-  const KeyCap(this.label, {super.key});
+  const KeyCap(this.label, {super.key, this.textStyle});
 
   final String label;
+  final TextStyle? textStyle;
 
   /// Square at a single glyph, so ⌘ and W sit in caps of the same size and the
   /// column stays a column. A longer label ("esc", "1 – 9") grows past it.
@@ -28,7 +29,8 @@ class KeyCap extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final iconSize = MediaQuery.textScalerOf(context).scale(14);
+    final style = textStyle ?? grid.AppType.monoMeta();
+    final iconSize = MediaQuery.textScalerOf(context).scale(style.fontSize!);
     final minEdge = math.max(height, iconSize + 8);
     return Container(
       // A minimum, not a fixed height: large text and a multi-stroke custom
@@ -62,9 +64,8 @@ class KeyCap extends StatelessWidget {
               )
             : Text(
                 label,
-                style: TextStyle(
+                style: style.copyWith(
                   color: grid.AppPalette.textPrimary,
-                  fontSize: 11.5,
                   height: 1,
                   // Tabular so ⌘1 – ⌘9 and ⌘W keep the same cap width.
                   fontFeatures: const [FontFeature.tabularFigures()],
@@ -82,9 +83,12 @@ class KeyCap extends StatelessWidget {
 /// arrive already knowing, and a screen that only lists `⌘]` teaches them the
 /// app doesn't have the key they are about to press.
 class KeyChordView extends StatelessWidget {
-  const KeyChordView({super.key, required this.chords});
+  const KeyChordView({super.key, required this.chords, this.textStyle});
 
   final List<KeyChord> chords;
+
+  /// Shortcut help can follow the terminal while other app hints keep their scale.
+  final TextStyle? textStyle;
 
   @override
   Widget build(BuildContext context) {
@@ -100,13 +104,12 @@ class KeyChordView extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 2),
               child: Text(
                 'or',
-                style: TextStyle(
+                style: (textStyle ?? grid.AppType.caption()).copyWith(
                   color: grid.AppPalette.textFaint,
-                  fontSize: 10.5,
                 ),
               ),
             ),
-          for (final key in chords[i]) KeyCap(key),
+          for (final key in chords[i]) KeyCap(key, textStyle: textStyle),
         ],
       ],
     );

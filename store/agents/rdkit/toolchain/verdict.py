@@ -91,7 +91,8 @@ def judge(has_design: bool, report: dict | None, sdf: dict | None) -> dict:
 
 def newest_sdf(ws: Path) -> Path | None:
     files = sorted((p for p in ws.glob("out/**/*.sdf")
-                    if p.is_file() and not p.name.startswith(".") and not p.name.endswith(".conformers.sdf")),
+                    if p.is_file() and p.relative_to(ws).parts[:2] != ("out", "torsions")
+                    and not p.name.startswith(".") and not p.name.endswith(".conformers.sdf")),
                    key=lambda p: p.stat().st_mtime)
     return files[-1] if files else None
 

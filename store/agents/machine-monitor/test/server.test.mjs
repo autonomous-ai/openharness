@@ -137,3 +137,34 @@ test('the event stream opens with the current observation', async () => {
   assert.match(text, /"status":"live"/);
   await reader.cancel();
 });
+
+test('the fleet is read on a tick only while a pane is connected; an unattended viewer reads once', async () => {
+  let reads = 0;
+  const workspace = await mkdtemp(join(tmpdir(), 'machines-server-'));
+  const viewer = createViewer({ workspace, port: 0, intervalMs: 40, collect: async () => { reads += 1; return SNAPSHOT; } });
+  const port = await viewer.start();
+  test.after(async () => { await viewer.close(); await rm(workspace, { recursive: true, force: true }); });
+  const sleep = ms => new Promise(done => setTimeout(done, ms));
+
+  await sleep(200);
+  assert.equal(reads, 1, 'the start-up read, and nothing more without a pane');
+
+  const response = await fetch(`http://127.0.0.1:${port}/events`);
+  const reader = response.body.getReader();
+  await reader.read();
+  await sleep(220);
+  const withPane = reads;
+  assert.ok(withPane >= 3, `a pane keeps the fleet read on a tick (${withPane} reads)`);
+
+  await reader.cancel();
+  await sleep(60);
+  const atLeave = reads;
+  await sleep(200);
+  assert.ok(reads - atLeave <= 1, `reads stop once the last pane leaves (${reads - atLeave} more)`);
+
+  // A one-off request for the observation wakes exactly one read when it has gone stale.
+  const before = reads;
+  await fetch(`http://127.0.0.1:${port}/api/snapshot`);
+  await sleep(60);
+  assert.equal(reads, before + 1);
+});

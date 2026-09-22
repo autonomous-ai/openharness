@@ -168,7 +168,7 @@ class _Toolbar extends StatelessWidget {
         Expanded(
           child: Text(
             '$total ${total == 1 ? 'event' : 'events'}',
-            style: TextStyle(fontSize: 12.5, color: AppPalette.textSecondary),
+            style: AppType.body(color: AppPalette.textSecondary),
           ),
         ),
         ToolbarPill(

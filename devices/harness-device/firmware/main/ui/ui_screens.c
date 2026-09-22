@@ -3262,6 +3262,21 @@ static __attribute__((unused)) void agent_loop_tap (lv_event_t *e) { (void)e; if
 
 // Visible only on an AGENT tile — not the Overview (which has its own labelled row), not Settings or
 // Machines, and not while a secondary screen is up.
+static void pending_focus_clear(void);   // a hand outranks a held focus — defined with the focus machinery
+static lv_obj_t *s_agent_prev_btn, *s_agent_next_btn;   // ‹ › — the swipe, as two buttons (owner, 2026-09-22)
+static lv_obj_t *s_agent_prev_glyph, *s_agent_next_glyph;
+static bool agent_step_enabled(void) { return s_ring == RING_AGENTS && ring_len() > 1; }
+/// Where the ‹ › press now sliding is headed, so the next press adds to it rather than to the column the
+/// strip has not left yet. INT32_MIN = nothing in flight; cleared on every settle (tile_changed).
+static int32_t s_step_to_x = INT32_MIN;
+static void agent_step_paint(void)
+{
+    if (!s_agent_prev_glyph || !s_agent_next_glyph) return;
+    // The muted ink is the pair's resting colour; agent_step_press brightens it under the finger. There is
+    // no disabled ink any more — with one agent the pair is GONE, not greyed (owner, 2026-09-22).
+    lv_obj_set_style_line_color(s_agent_prev_glyph, COL_MUTED, 0);
+    lv_obj_set_style_line_color(s_agent_next_glyph, COL_MUTED, 0);
+}
 static void agent_actions_apply(void)
 {
     if (!s_agent_acts) return;
@@ -3272,11 +3287,83 @@ static void agent_actions_apply(void)
     bool on = lv_screen_active() == scr_projects && !s_overview_active && !s_settings_active
               && !s_machines_active && !s_notif_open && !display_is_asleep()
               && s_active_idx >= 0 && s_active_idx < s_proj_count;
-    // …and never on a SHELL. Voice sends words to whatever is in the pane, and in a terminal that is
-    // a command line: a misheard word would not be a bad prompt, it would be a command that already
-    // ran. A shell tile is reachable and scrollable, and that is deliberately all it is.
-    if (on && is_terminal_tile(&s_proj[s_active_idx])) on = false;
+    // …and Voice never on a SHELL. Voice sends words to whatever is in the pane, and in a terminal that
+    // is a command line: a misheard word would not be a bad prompt, it would be a command that already
+    // ran. The ‹ › pair stays on a shell — moving on is always safe — so the arc is hidden as a whole
+    // only when the tile is not an agent's at all, and Voice alone goes on a shell.
     set_hidden(s_agent_acts, !on);
+    if (s_agent_voice_btn) set_hidden(s_agent_voice_btn, !on || is_terminal_tile(&s_proj[s_active_idx]));
+    // …and ‹ › only where there is somewhere to go. A tab with ONE agent has no next and no previous, so
+    // the pair leaves the arc entirely rather than sitting there greyed (owner, 2026-09-22: "khi tab chỉ
+    // có 1 agent thì bỏ luôn 2 nút"). A button that cannot do anything is furniture, and the arc reads
+    // better with Voice alone than with two dead circles beside it.
+    const bool step = on && agent_step_enabled();
+    if (s_agent_prev_btn) set_hidden(s_agent_prev_btn, !step);
+    if (s_agent_next_btn) set_hidden(s_agent_next_btn, !step);
+    agent_step_paint();
+}
+
+// ‹ › — one step along the ring, with the carousel's own slide, settling through the same
+// tile_changed → apply_active_from_col path a finger's stroke ends in, so the window follows exactly as
+// it would for a swipe. A person did this, so the focus report is live (carousel_goto mutes it, which is
+// right for code moving the strip and wrong here).
+//
+// ⚠️ **THE ARROW HAS ONE RULE AND THE SWIPE SETTING IS NOT PART OF IT** (owner, 2026-09-22: "mũi tên thì
+// chỉ có 1 rule, là đi theo hướng mũi tên và xoay vòng"). `dir` is a step through the PANES — › is the
+// next one, ‹ the one before, wrapping at either end — and ring_dir() is only what that step costs in
+// columns. It used to move the strip one COLUMN, which reads as "the tile to the right" and is a
+// different question: on a dial set to Reversed the columns run backwards, so › walked the panes
+// BACKWARDS (measured on this desk: ring 0 → 2 → 1 → 0 from a right-pointing arrow). Swipe direction is
+// a preference about STROKES; a labelled button is not a stroke.
+//
+// Wrapping needs nothing here: the strip is CAROUSEL_M copies of the ring, so one step past the last
+// pane is an ordinary adjacent slide that lands on the first (carousel_ring_of_col's modulo), and the
+// pair is disabled outright while the ring is one long (agent_step_enabled).
+static void agent_step(int dir)
+{
+    if (!tileview || !agent_step_enabled()) return;
+    pending_focus_clear();
+    s_focus_report_muted = false;
+    const int32_t w = carousel_w();
+    // A second press while the first is still sliding counts. `carousel_col()` reads where the strip IS,
+    // which mid-animation is still the column it started from, so two quick taps used to move one pane.
+    const int base = (s_step_to_x != INT32_MIN && lv_anim_get(tileview, NULL))
+                         ? (int)((s_step_to_x + w / 2) / w)
+                         : carousel_col();
+    s_step_to_x = (base + dir * ring_dir()) * w;
+    lv_obj_scroll_to_x(tileview, s_step_to_x, LV_ANIM_ON);
+}
+static void agent_prev_tap(lv_event_t *e) { (void)e; agent_step(-1); }
+static void agent_next_tap(lv_event_t *e) { (void)e; agent_step(+1); }
+// The glyph brightens under the finger with the button's own 10% fill; back to the muted ink on release.
+static void agent_step_press(lv_event_t *e)
+{
+    lv_obj_t *glyph = lv_event_get_user_data(e);
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_PRESSED) lv_obj_set_style_line_color(glyph, COL_FG, 0);
+    else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) agent_step_paint();
+}
+// A 30px chevron drawn as one polyline: three points, a 3px rounded stroke, in the ink agent_step_paint
+// chooses. An lv_line, not an image: nothing to bake, nothing to recolor on the LVGL task.
+static lv_obj_t *agent_step_glyph(lv_obj_t *parent, int dir)
+{
+#if defined(DEVICE_BOARD_M5CORES3)
+    // The dial's 30px chevron at 0.6x: 18px, a 2px stroke.
+    static const lv_point_precise_t left[]  = { { 11, 3 }, { 6, 9 }, { 11, 15 } };
+    static const lv_point_precise_t right[] = { { 7, 3 }, { 12, 9 }, { 7, 15 } };
+#else
+    static const lv_point_precise_t left[]  = { { 19, 5 }, { 11, 15 }, { 19, 25 } };
+    static const lv_point_precise_t right[] = { { 11, 5 }, { 19, 15 }, { 11, 25 } };
+#endif
+    lv_obj_t *l = lv_line_create(parent);
+    lv_line_set_points(l, dir < 0 ? left : right, 3);
+    lv_obj_set_size(l, PX(30), PX(30));
+    lv_obj_set_style_line_width(l, PX(3), 0);
+    lv_obj_set_style_line_rounded(l, true, 0);
+    lv_obj_set_style_line_color(l, COL_MUTED, 0);
+    lv_obj_clear_flag(l, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_center(l);
+    return l;
 }
 
 static lv_obj_t *agent_act_btn(int32_t x, int32_t y, lv_event_cb_t cb)
@@ -3368,6 +3455,32 @@ static void build_agent_actions(void)
       lv_obj_t *ic = lv_image_create(b);
       lv_image_set_src(ic, &icon_act_voice);      // 44px native, colour baked — see the note on the asset
       lv_obj_center(ic); }
+    // ‹ › — the previous/next pair, on the two arc spots Goal and Loop measured against the bezel
+    // (owner, 2026-09-22, mockup option A: "vừa swipe được vừa bấm nút được"). Same 80px circles, same
+    // pressed fill; the glyph is a 30px chevron in the muted ink.
+    // On the CoreS3 the arc spots fall off the glass's bottom edge and onto the WiFi and battery corners,
+    // so the pair flanks Voice on its own row, between the corners.
+#if defined(DEVICE_BOARD_M5CORES3)
+    { lv_obj_t *b = agent_act_btn(107, 310, agent_prev_tap);
+#else
+    { lv_obj_t *b = agent_act_btn(79, 322, agent_prev_tap);
+#endif
+      s_agent_prev_btn = b;
+      s_agent_prev_glyph = agent_step_glyph(b, -1);
+      lv_obj_add_event_cb(b, agent_step_press, LV_EVENT_PRESSED, s_agent_prev_glyph);
+      lv_obj_add_event_cb(b, agent_step_press, LV_EVENT_RELEASED, s_agent_prev_glyph);
+      lv_obj_add_event_cb(b, agent_step_press, LV_EVENT_PRESS_LOST, s_agent_prev_glyph); }
+#if defined(DEVICE_BOARD_M5CORES3)
+    { lv_obj_t *b = agent_act_btn(347, 310, agent_next_tap);
+#else
+    { lv_obj_t *b = agent_act_btn(307, 322, agent_next_tap);
+#endif
+      s_agent_next_btn = b;
+      s_agent_next_glyph = agent_step_glyph(b, +1);
+      lv_obj_add_event_cb(b, agent_step_press, LV_EVENT_PRESSED, s_agent_next_glyph);
+      lv_obj_add_event_cb(b, agent_step_press, LV_EVENT_RELEASED, s_agent_next_glyph);
+      lv_obj_add_event_cb(b, agent_step_press, LV_EVENT_PRESS_LOST, s_agent_next_glyph); }
+    agent_step_paint();
 #if AGENT_TILE_GOAL_LOOP
     // Loop — the exported Figma repeat arrows, the same mark the Overview carries, and the mirror of Goal's
     // 20px push: 287 → 307.
@@ -3430,8 +3543,10 @@ bool ui_action_hit(uint16_t x, uint16_t y)
     // The agent tile's three marks, live only while the cluster is actually shown (see agent_actions_apply:
     // never on Overview/Settings/Machines, never while the agent is working).
     if (s_agent_acts && !lv_obj_has_flag(s_agent_acts, LV_OBJ_FLAG_HIDDEN)) {
-        if ((s_agent_goal_btn  && lv_obj_hit_test(s_agent_goal_btn,  &pt)) ||
-            (s_agent_voice_btn && lv_obj_hit_test(s_agent_voice_btn, &pt)) ||
+        if ((s_agent_prev_btn  && !lv_obj_has_flag(s_agent_prev_btn, LV_OBJ_FLAG_HIDDEN) && lv_obj_hit_test(s_agent_prev_btn, &pt)) ||
+            (s_agent_next_btn  && !lv_obj_has_flag(s_agent_next_btn, LV_OBJ_FLAG_HIDDEN) && lv_obj_hit_test(s_agent_next_btn, &pt)) ||
+            (s_agent_goal_btn  && lv_obj_hit_test(s_agent_goal_btn,  &pt)) ||
+            (s_agent_voice_btn && !lv_obj_has_flag(s_agent_voice_btn, LV_OBJ_FLAG_HIDDEN) && lv_obj_hit_test(s_agent_voice_btn, &pt)) ||
             (s_agent_loop_btn  && lv_obj_hit_test(s_agent_loop_btn,  &pt))) return true;
     }
 
@@ -5171,33 +5286,19 @@ static void render_busy_row(proj_t *p)
 // 11 → 21 as what sits under the name changed shape and then asked for more air around it.
 #define TILE_NAME_GAP   21
 
-// THE TILE HAS TWO LAYOUTS, and the state picks one — nobody sets the alignment by hand.
-//
-// CENTRED when the tile is a name with one line under it: a turn in flight ("Working… 5s") or nothing
-// yet ("No activity yet"). Both are the same shape and belong on the same line of the glass; the second
-// used to keep the recap layout and sat a band too high, which read as a different screen from the
-// first. TOP-ANCHORED when there is a recap card, which needs the room below the name.
-//
-// The tab pill floats above the name, so flex does NOT count it when centring: at a 0 top pad the
-// visible block ([tab][name][status]) would sit half a band low, and a tall turn (tool line + todo)
-// could push the pill clean off the top edge. Padding by exactly the band makes flex centre the
-// remainder, which lands the block — pill included — on the centre line.
+// THE TILE HAS ONE LAYOUT. It used to have two — top-anchored under a recap card, centred on the glass
+// for "Working…" and "No activity yet" — and the name jumped a band between them at every turn start
+// and end. With the previous/next pair on the bottom arc that jump became a thing the thumb had to
+// chase (owner, 2026-09-22: "cùng chung bố cục, không có dịch chuyển"), so every state now sits where
+// the recap layout put it: the pill at y=69, the name at y=119, and whatever the state has to say —
+// the card, the working line, the placeholder — at TILE_NAME_GAP under the name.
 static void tile_layout_apply(proj_t *p)
 {
     if (!p->tile) return;
-    const bool centred = p->busy_model || !p->m_preview;
-    if (centred) {
-        lv_obj_set_flex_align(p->tile, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_top(p->tile, ctl_row_shown(p) ? ctl_band_h() : 0, 0);
-        // Working: the status hugs the name (the old 8px gap is already inside the busy group).
-        // Nothing yet: the same gap the recap layout uses, so the placeholder sits where a status would.
-        lv_obj_set_style_pad_row(p->tile, p->busy_model ? 0 : PX(TILE_NAME_GAP), 0);
-    } else {
-        lv_obj_set_flex_align(p->tile, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_top(p->tile, PX(TILE_PAD_TOP), 0);
-        lv_obj_set_style_pad_row(p->tile, PX(TILE_NAME_GAP), 0);
-    }
-    shell_name_fit(p);   // the name's line budget follows the same state
+    lv_obj_set_flex_align(p->tile, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_top(p->tile, PX(TILE_PAD_TOP), 0);
+    lv_obj_set_style_pad_row(p->tile, PX(TILE_NAME_GAP), 0);
+    shell_name_fit(p);   // the name's line budget follows the state
 }
 
 
@@ -8683,6 +8784,7 @@ bool ui_peek_agent_reload_req(void)     { return s_req_reload_agents; }   // non
 static void tile_changed(lv_event_t *e)
 {
     (void)e;
+    s_step_to_x = INT32_MIN;   // the ‹ › slide (if that is what this was) has arrived
     apply_active_from_col();   // active/settings from the centered ring position
     update_content_window();   // materialize the newly-active tile ± window, free the rest
     rebuild_page_dots();       // move the green sparkle to the newly-centered page

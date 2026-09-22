@@ -197,7 +197,7 @@ void main() {
           }
         }
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await chord(tester, LogicalKeyboardKey.keyO);
         await tester.pumpAndSettle();
         await capture('open');
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);

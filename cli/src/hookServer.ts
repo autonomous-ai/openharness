@@ -5,11 +5,12 @@
  */
 
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { readCodexRolloutMeta } from './engines/codex/rollout.js'
 import { hermesSessionSource } from './engines/hermes/reader.js'
+import { hermesDbPath, listHermesHomes } from './engines/hermes/home.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
 import { LOCAL_WEB_HTML } from './webui.js'
@@ -289,6 +290,23 @@ function registeredHookProcess(body: RegisterInput, engine: AgentEngine): Regist
 }
 
 /**
+ * `claude --resume` from a folder other than the conversation's own: Claude Code announces a transcript
+ * under the CURRENT cwd's project dir, then keeps writing the original file (measured: a resume of
+ * 73f090ca from `cli/` announced `…-openharness-cli/73f090ca.jsonl`, and every later turn still landed
+ * in `…-openharness/73f090ca.jsonl`). The announced file never appears, the hook is dropped, and the
+ * resume is never confirmed — "Start failed" over a pane that is working. The row being resumed already
+ * knows the real file; take it when it names this very conversation.
+ */
+export function knownTranscriptFor(body: RegisterInput, agent: RegisteredSession | undefined): string | undefined {
+  const announced = body.transcriptPath
+  if (!announced || existsSync(announced) || (body.engine ?? 'claude') !== 'claude') return announced
+  const known = agent?.transcriptPath
+  if (!known || !body.sessionId || agent.sessionId !== body.sessionId) return announced
+  if (basename(known) !== `${body.sessionId}.jsonl` || !existsSync(known)) return announced
+  return known
+}
+
+/**
  * Register once the announced transcript exists.
  *
  * Runs detached from the HTTP reply on purpose: this is a SessionStart hook, and the engine is blocked
@@ -299,8 +317,10 @@ async function awaitTranscript(body: RegisterInput, handlers: HookServerHandlers
   for (let i = 0; i < TRANSCRIPT_WAIT_TRIES; i++) {
     await new Promise((resolve) => { const t = setTimeout(resolve, TRANSCRIPT_WAIT_MS); t.unref?.() })
     const engine = body.engine ?? 'claude'
-    if (!registeredHookProcess(body, engine)) return
+    const processAgent = registeredHookProcess(body, engine)
+    if (!processAgent) return
     if (isRecentlyDeleted(body.sessionId)) return
+    body.transcriptPath = knownTranscriptFor(body, processAgent)
     if (!body.transcriptPath || !existsSync(body.transcriptPath)) continue
     const result = registry.register(body)
     if (!result) return
@@ -318,12 +338,23 @@ async function awaitTranscript(body: RegisterInput, handlers: HookServerHandlers
  * exactly the behaviour before this guard existed.
  */
 async function awaitHermesKind(body: RegisterInput, handlers: HookServerHandlers): Promise<void> {
-  const dbPath = join(env.HERMES_HOME, 'state.db')
+  // EVERY home, not just the default. A `hermes -p <name>` session's row lives in that profile's own
+  // store, so asking the default one answered `null` (unknown) six times and fell through — and, worse,
+  // the home found here is the one the whole row then reads its history from (openharness#191).
+  const homes = await listHermesHomes()
+  let hermesHome: string | undefined
   for (let i = 0; i < HERMES_KIND_TRIES; i++) {
     if (i > 0) await new Promise((resolve) => { const t = setTimeout(resolve, HERMES_KIND_WAIT_MS); t.unref?.() })
     if (!registeredHookProcess(body, 'hermes')) return
     if (isRecentlyDeleted(body.sessionId)) return
-    const source = await hermesSessionSource(dbPath, body.sessionId ?? '')
+    let source: string | null = null
+    for (const home of homes) {
+      const answer = await hermesSessionSource(hermesDbPath(home), body.sessionId ?? '')
+      if (answer === null) continue          // not in this store — try the next home
+      source = answer
+      if (home !== env.HERMES_HOME) hermesHome = home
+      break
+    }
     if (source === null) continue
     if (source !== '' && source !== 'cli') {
       console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · hermes_subagent`)
@@ -331,9 +362,9 @@ async function awaitHermesKind(body: RegisterInput, handlers: HookServerHandlers
     }
     break
   }
-  const result = registry.register(body)
+  const result = registry.register(hermesHome ? { ...body, hermesHome } : body)
   if (!result) return
-  console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=hermes · isNew=${result.isNew} · after a source check`)
+  console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=hermes · isNew=${result.isNew} · after a source check${hermesHome ? ` · home=${hermesHome}` : ''}`)
   handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound, orphaned: result.orphaned, hookEvent: body.hookEvent })
 }
 
@@ -446,6 +477,7 @@ export function startHookServer(
         body.processIdentity = processAgent.processIdentity ?? undefined
         body.runtimes = processAgent.runtimes
         body.primaryRuntimeKey = processAgent.primaryRuntimeKey
+        body.transcriptPath = knownTranscriptFor(body, processAgent)
         // Deleting an agent no longer kills its pane, so the engine lives on for a moment and its catch
         // hook still fires — and the exact process may remain alive during SIGTERM grace. Without
         // this the tile the user just deleted re-registers itself and comes back.

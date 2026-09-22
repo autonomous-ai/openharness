@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart';
 import '../logging/app_log.dart';
@@ -205,6 +206,7 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    TerminalFontScope.watch(context);
     final live = !_ended && _status == ConnectionStatus.connected;
     return Column(
       children: [
@@ -220,14 +222,16 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
                 child: Text(
                   widget.grant.name,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
+                  style: grid.AppType.monoLabel(
+                    fontWeight: grid.AppFont.semibold,
                   ),
                 ),
               ),
               const SizedBox(width: 8),
-              const Text('View only', style: TextStyle(fontSize: 11)),
+              Text(
+                'View only',
+                style: grid.AppType.monoLabel(fontWeight: grid.AppFont.regular),
+              ),
               const SizedBox(width: 12),
               Tooltip(
                 message:
@@ -241,8 +245,8 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
                       : live
                       ? 'Live'
                       : 'Reconnecting',
-                  style: TextStyle(
-                    fontSize: 11,
+                  style: grid.AppType.monoLabel(
+                    fontWeight: grid.AppFont.regular,
                     color: grid.AppPalette.textSecondary,
                   ),
                 ),
@@ -260,7 +264,7 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
             width: double.infinity,
             padding: const EdgeInsets.all(12),
             color: grid.AppSurface.recess,
-            child: Text(_failure!, style: const TextStyle(fontSize: 12)),
+            child: Text(_failure!, style: grid.AppType.body()),
           ),
         Expanded(
           child: LayoutBuilder(
@@ -289,8 +293,7 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
                               Text(
                                 _viewerMessage,
                                 textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: 12,
+                                style: grid.AppType.body(
                                   color: grid.AppPalette.textSecondary,
                                 ),
                               ),
@@ -354,7 +357,9 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
                         child: Text(
                           widget.pane.sharedOwnerName ?? 'Shared harness',
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 11),
+                          style: grid.AppType.monoLabel(
+                            fontWeight: grid.AppFont.regular,
+                          ),
                         ),
                       ),
                       const SizedBox(width: 12),

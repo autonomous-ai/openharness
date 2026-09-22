@@ -202,7 +202,7 @@ void main() {
           expect(find.byType(SettingsScreen), findsOneWidget);
           await tester.tap(find.text('Customize'));
         } else {
-          await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+          await chord(tester, LogicalKeyboardKey.keyP);
           await tester.enterText(
             find.byKey(const ValueKey('swarm-search-input')),
             '> customize',
@@ -289,7 +289,7 @@ void main() {
       final lineHeights = [
         for (final state in states) state.renderTerminal.lineHeight,
       ];
-      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> customize',
@@ -458,11 +458,34 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Color palette'), findsOneWidget);
       expect(find.byKey(const ValueKey('palette-graphite')), findsOneWidget);
-      expect(find.byKey(const Key('appearance-ui-size-field')), findsOneWidget);
+      expect(find.byKey(const Key('appearance-ui-size-field')), findsNothing);
       expect(tester.takeException(), isNull);
       await _capture(tester, boundary, '${width.toInt()}-appearance');
 
-      await tester.tap(find.byKey(const ValueKey('customize-terminal')));
+      final wallpaperTab = find.byKey(const ValueKey('customize-wallpaper'));
+      await tester.ensureVisible(wallpaperTab);
+      await tester.tap(wallpaperTab);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('wallpaper-plain')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      if (Platform.environment['HARNESS_CUSTOMIZE_CAPTURE_DIR'] != null) {
+        await tester.runAsync(() async {
+          for (final choice in HarnessBackground.gallery) {
+            if (choice.asset case final asset?) {
+              await precacheImage(
+                ResizeImage(AssetImage(asset), width: 360),
+                tester.element(wallpaperTab),
+              );
+            }
+          }
+        });
+        await tester.pumpAndSettle();
+      }
+      await _capture(tester, boundary, '${width.toInt()}-wallpaper');
+
+      final terminalTab = find.byKey(const ValueKey('customize-terminal'));
+      await tester.ensureVisible(terminalTab);
+      await tester.tap(terminalTab);
       await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('terminal-font-family-dropdown')),

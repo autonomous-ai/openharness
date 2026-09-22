@@ -660,15 +660,8 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                                     overflow: TextOverflow.ellipsis,
                                     style:
                                         widget.textStyle ??
-                                        TextStyle(
-                                          fontFamily: AppFont.sans,
-                                          fontFamilyFallback:
-                                              AppFont.sansFallback,
-                                          fontSize: AppControl.fontSize,
+                                        AppType.label(
                                           fontWeight: AppControl.fontWeight,
-                                          letterSpacing: AppFont.trackingFor(
-                                            AppControl.fontSize,
-                                          ),
                                           color: AppPalette.textPrimary,
                                         ),
                                   ),
@@ -680,11 +673,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                                       current!.note!,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontFamily: AppFont.sans,
-                                        fontFamilyFallback:
-                                            AppFont.sansFallback,
-                                        fontSize: 11.5,
+                                      style: AppType.mono(
                                         color: AppPalette.textFaint,
                                       ),
                                     ),

@@ -64,7 +64,7 @@ class AgentsPage extends StatelessWidget {
             ? null
             : PhoneFab(
                 icon: LucideIcons.plus300,
-                tooltip: 'New agent',
+                tooltip: 'New Harness',
                 onPressed: () => openNewAgent(context, notifier, machineId),
               ),
         body: SafeArea(
@@ -116,7 +116,7 @@ class AgentsPage extends StatelessWidget {
       actions: [
         PhoneSheetAction(
           icon: LucideIcons.refreshCw300,
-          label: 'Reload agents',
+          label: 'Reload harnesses',
           onTap: () => unawaited(notifier.reloadMachineData(machineId)),
         ),
         // Only where there is a link to replace. A machine that never had one reaches its form by
@@ -155,8 +155,8 @@ class AgentsPage extends StatelessWidget {
       context,
       title: 'Unlink $name?',
       message:
-          'This phone will need $name\'s password again to open its agents. '
-          'The machine itself is not changed, and its agents keep running.',
+          'This phone will need $name\'s password again to open its harnesses. '
+          'The machine itself is not changed, and its harnesses keep running.',
       confirmLabel: 'Unlink',
     );
     if (!confirmed || !context.mounted) return;
@@ -220,9 +220,9 @@ class _AgentsBody extends StatelessWidget {
     if (status == PhoneMachineStatus.offline) {
       return EmptyState(
         icon: LucideIcons.cloudOff300,
-        title: "OpenHarness isn't running there",
+        title: "Harness isn't running there",
         message:
-            'Start OpenHarness on ${machine.machine.displayName} and its agents '
+            'Start Harness on ${machine.machine.displayName} and its harnesses '
             'will show up here.',
       );
     }
@@ -233,7 +233,7 @@ class _AgentsBody extends StatelessWidget {
     if (agents.isEmpty && loadError != null) {
       return EmptyState(
         icon: LucideIcons.circleAlert300,
-        title: "Couldn't load its agents",
+        title: "Couldn't load its harnesses",
         message: loadError,
         action: FilledButton(
           onPressed: () => notifier.reloadMachineData(_machineId),
@@ -244,11 +244,11 @@ class _AgentsBody extends StatelessWidget {
     if (agents.isEmpty) {
       return EmptyState(
         icon: LucideIcons.squareTerminal300,
-        title: 'No agents yet',
-        message: 'Start one here, or from OpenHarness on that machine.',
+        title: 'No harnesses yet',
+        message: 'Start one here, or from Harness on that machine.',
         action: FilledButton(
           onPressed: () => openNewAgent(context, notifier, _machineId),
-          child: const Text('New agent'),
+          child: const Text('New Harness'),
         ),
       );
     }
@@ -282,7 +282,7 @@ Future<void> showAgentActions(
   actions: [
     PhoneSheetAction(
       icon: LucideIcons.trash2300,
-      label: 'Delete agent…',
+      label: 'Stop Harness…',
       destructive: true,
       onTap: () => unawaited(
         confirmDeleteAgent(context, notifier, machineId, agent.id, agent.name),

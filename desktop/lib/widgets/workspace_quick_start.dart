@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shortcuts/app_keymap.dart';
 import '../state/workspace_learning.dart';
@@ -18,10 +19,11 @@ class WorkspaceQuickStart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final next = learning.next;
     final (command, label) = switch (next) {
       WorkspaceLesson.agent => ('swarm.new', 'Open your first agent'),
-      WorkspaceLesson.pane => ('agent.add', 'Add a second agent to this tab'),
+      WorkspaceLesson.pane => ('agent.open', 'Add a second agent to this tab'),
       WorkspaceLesson.zoom => ('pane.zoom', 'Zoom the focused pane'),
       WorkspaceLesson.commands => (
         'navigation.commands',
@@ -47,11 +49,11 @@ class WorkspaceQuickStart extends StatelessWidget {
               next == null
                   ? 'quick start  [done]'
                   : 'quick start  ${next.index + 1}/4',
-              style: boxMonoStyle(size: 12, color: kBoxFaint),
+              style: boxMonoStyle(color: kBoxFaint),
             ),
             Semantics(
               liveRegion: true,
-              child: Text(label, style: boxMonoStyle(size: 12)),
+              child: Text(label, style: boxMonoStyle()),
             ),
             TextButton(
               key: const ValueKey('quick-start-action'),
@@ -60,7 +62,7 @@ class WorkspaceQuickStart extends StatelessWidget {
                 next == null
                     ? 'Keyboard practice'
                     : '${hint == null ? '' : '$hint  '}${next == WorkspaceLesson.commands ? 'Search commands' : 'Try it'}',
-                style: boxMonoStyle(size: 12),
+                style: boxMonoStyle(),
               ),
             ),
             TextButton(
@@ -68,7 +70,7 @@ class WorkspaceQuickStart extends StatelessWidget {
               onPressed: learning.pause,
               child: Text(
                 next == null ? 'Done' : 'Pause guide',
-                style: boxMonoStyle(size: 12, color: kBoxFaint),
+                style: boxMonoStyle(color: kBoxFaint),
               ),
             ),
           ],
