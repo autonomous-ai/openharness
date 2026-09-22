@@ -4,6 +4,7 @@
 // RDKit worker. Bond scans run a native calculation and keep its source without changing the molecule.
 /* global $3Dmol */
 import { installTorsionPane } from './torsion-pane.mjs'
+import { workspaceFileUrl } from './files.mjs'
 const Mol3D = window.$3Dmol
 
 // ---------------------------------------------------------------------------------------------------
@@ -938,7 +939,7 @@ function entryParent(entry) {
 }
 function thumbSrc(entry) {
   const rec = state.records.get(recordKey(entry))?.value
-  if (entry.svg && !entry.legacy && !entry.stale) return `/${state.dir}/${entry.svg}?v=${Math.round(entry.mtime)}`
+  if (entry.svg && !entry.legacy && !entry.stale) return workspaceFileUrl(`${state.dir}/${entry.svg}`, { v: Math.round(entry.mtime) })
   if (rec?.svgText) return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(rec.svgText)
   return null
 }
@@ -1023,7 +1024,7 @@ async function getJson(url) {
 async function getText(path, version) {
   const key = `${path}@${version}`
   if (!state.texts.has(key)) {
-    state.texts.set(key, fetch(`/${path}?v=${version}`, { cache: 'no-store' }).then((r) => { if (!r.ok) throw new Error(`${path}: ${r.status}`); return r.text() }))
+    state.texts.set(key, fetch(workspaceFileUrl(path, { v: version }), { cache: 'no-store' }).then((r) => { if (!r.ok) throw new Error(`${path}: ${r.status}`); return r.text() }))
     state.texts.get(key).catch(() => state.texts.delete(key))
   }
   return state.texts.get(key)
@@ -1458,8 +1459,8 @@ function openExportMenu() {
     { label: 'Copy image', icon: ICON.copy, disabled: !mol, run: copyPng },
     { label: 'Save 2D depiction (SVG)', icon: ICON.image, disabled: !rec?.svgText, run: () => { const url = URL.createObjectURL(new Blob([rec.svgText], { type: 'image/svg+xml' })); download(url, `${e.name}.svg`); setTimeout(() => URL.revokeObjectURL(url), 4000) } },
     { header: mol?.torsionPreview ? 'Use Keep study for scan structures' : 'Structure' },
-    { label: 'SDF — lowest conformer', icon: ICON.file, disabled: !e || mol?.torsionPreview, run: () => download(`/${e.sdf}?download=1`, basename(e.sdf)) },
-    { label: `SDF — all ${rec?.conformers?.count || ''} conformers`, icon: ICON.file, disabled: !confFile || mol?.torsionPreview, run: () => download(`/${confFile}?download=1`, basename(confFile)) },
+    { label: 'SDF — lowest conformer', icon: ICON.file, disabled: !e || mol?.torsionPreview, run: () => download(workspaceFileUrl(e.sdf, { download: 1 }), basename(e.sdf)) },
+    { label: `SDF — all ${rec?.conformers?.count || ''} conformers`, icon: ICON.file, disabled: !confFile || mol?.torsionPreview, run: () => download(workspaceFileUrl(confFile, { download: 1 }), basename(confFile)) },
     { label: 'MOL file', icon: ICON.file, disabled: !e || mol?.torsionPreview, run: () => download(`/api/mol?path=${encodeURIComponent(e.sdf)}`, `${e.name}.mol`) },
     '-',
     { label: 'Copy SMILES', icon: ICON.copy, disabled: !rec?.smiles, run: () => copyText(rec.smiles) },
