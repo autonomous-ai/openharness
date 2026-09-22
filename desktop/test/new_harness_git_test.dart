@@ -364,8 +364,8 @@ void main() {
         reason: 'Made up under the GitHub login the machine reported.',
       );
       expect(box.worktree, true);
-      expect(box.branchLabel, 'origin/main', reason: 'The remote default.');
-      expect(box.worktreeBranchLabel, 'deehw/<session name>');
+      expect(box.branchRowLabel, 'origin/main', reason: 'The remote default.');
+      expect(box.worktreePlan!.branch, placeholder);
       expect(box.createLabel, 'Start Harness');
       expect(box.projectFolderRequest!.payload, {
         'projectSource': 'worktree',
@@ -394,7 +394,8 @@ void main() {
       }
 
       pick('feature');
-      expect(box.worktreeBranchLabel, 'feature · existing');
+      expect(box.branchRowLabel, 'feature');
+      expect(box.worktreePlan!.kind, WorktreeStart.existingBranch);
       expect(box.projectFolderRequest!.payload, {
         'projectSource': 'worktree',
         'gitSource': '/repo',
@@ -411,33 +412,32 @@ void main() {
         'branchRef': 'refs/heads/feature/pay',
       });
       pick('origin/fix-typo');
-      expect(box.worktreeBranchLabel, 'fix-typo · tracks origin/fix-typo');
+      expect(box.worktreePlan!.tracks, true);
       expect(box.projectFolderRequest!.payload['branchName'], 'fix-typo');
       pick('main');
-      expect(box.worktreeBranchLabel, 'deehw/<session name>');
+      expect(box.worktreePlan!.branch, placeholder);
       expect(box.projectFolderRequest!.payload['branchRef'], 'refs/heads/main');
 
-      box.focusField(NewHarnessField.branchName);
-      expect(
-        box.query,
-        '',
-        reason: 'Nothing typed means the session names it.',
-      );
-      expect(box.options.single.title, 'deehw/<session name>');
-      box.setQuery('my/work');
-      expect(box.options.single.detail, 'New branch from main');
-      box.accept();
-      expect(box.field, NewHarnessField.launch);
-      expect(box.worktreeBranchLabel, 'my/work');
-      expect(box.projectFolderRequest!.payload['branchName'], 'my/work');
-      box.focusField(NewHarnessField.branchName);
+      // A name no branch has: a new branch in a new worktree, from the default.
+      box.focusField(NewHarnessField.branch);
+      box.setQuery('my work');
+      expect(box.options.last.title, 'Create branch my-work');
+      expect(box.options.last.detail, 'New branch from origin/main');
+      box.accept(box.options.last);
+      expect(box.branchRowLabel, 'my-work · new from origin/main');
+      expect(box.projectFolderRequest!.payload, {
+        'projectSource': 'worktree',
+        'gitSource': '/repo',
+        'branchRef': 'refs/remotes/origin/main',
+        'branchName': 'my-work',
+      });
+      box.focusField(NewHarnessField.branch);
       box.setQuery('main');
-      expect(box.options.single.enabled, false);
-      box.accept();
-      expect(box.error, contains('Turn Worktree off'));
-      box.setQuery('');
-      box.accept();
-      expect(box.worktreeBranchLabel, 'deehw/<session name>');
+      expect(
+        box.options.map((row) => row.title),
+        isNot(contains('Create branch main')),
+      );
+      pick('main');
       expect(box.projectFolderRequest!.payload['branchMode'], 'placeholder');
 
       box.toggleWorktree();
@@ -501,29 +501,25 @@ void main() {
     expect(branchNameFrom('~^:'), '');
   });
 
-  test(
-    'the branch name field joins words and previews the valid name',
-    () async {
-      final connection = _Connection()..answers['/repo'] = rich;
-      final app = createApp(connectionForTest: (_) => connection);
-      final box = NewHarnessController(
-        app,
-        machineId: 'm',
-        engine: 'codex',
-        folder: '/repo',
-      );
-      addTearDown(app.dispose);
-      addTearDown(box.dispose);
-      await settle();
-      box.focusField(NewHarnessField.branchName);
-      box.setQuery('john smith');
-      expect(box.query, 'john-smith');
-      box.setQuery('fix: it');
-      expect(box.options.single.title, 'fix-it');
-      box.accept();
-      expect(box.projectFolderRequest!.payload['branchName'], 'fix-it');
-    },
-  );
+  test('Create branch cleans up a typed name', () async {
+    final connection = _Connection()..answers['/repo'] = rich;
+    final app = createApp(connectionForTest: (_) => connection);
+    final box = NewHarnessController(
+      app,
+      machineId: 'm',
+      engine: 'codex',
+      folder: '/repo',
+    );
+    addTearDown(app.dispose);
+    addTearDown(box.dispose);
+    await settle();
+    box.focusField(NewHarnessField.branch);
+    box.setQuery('john smith');
+    expect(box.options.last.title, 'Create branch john-smith');
+    box.setQuery('fix: it');
+    box.accept(box.options.last);
+    expect(box.projectFolderRequest!.payload['branchName'], 'fix-it');
+  });
 
   test(
     'Worktree off never switches a folder a harness is working in',
@@ -609,10 +605,8 @@ void main() {
         expect(find.byKey(ValueKey('new-harness-field-$name')), findsNothing);
       }
       expect(find.text('[x]'), findsOneWidget);
-      // Worktree, then From and Branch, sit above Start.
-      for (var row = 0; row < 3; row++) {
-        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-      }
+      // Worktree sits just above Start.
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.sendKeyEvent(LogicalKeyboardKey.space);
       await tester.pump();
       expect(box.worktree, false);

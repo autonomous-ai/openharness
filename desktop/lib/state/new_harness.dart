@@ -39,7 +39,6 @@ enum NewHarnessField {
   agent,
   machine,
   branch,
-  branchName,
   projectMenu,
   project,
   projectName,
@@ -531,9 +530,6 @@ class NewHarnessController extends ChangeNotifier {
   /// Whose branches the machine makes; a daemon that does not say keeps the
   /// prefix older builds used.
   String get _owner => _gitProject.owner ?? 'harness';
-
-  /// How a branch still waiting for its session's name is shown.
-  String get _sessionBranch => '$_owner/<session name>';
   WorktreePlan? get worktreePlan => worktree
       ? planWorktree(
           _gitProject,
@@ -558,8 +554,15 @@ class NewHarnessController extends ChangeNotifier {
   String? get _branchHere =>
       worktree ? null : newBranchHere(_gitProject, _branchName);
 
-  /// The From or Branch row.
+  /// The Branch row: what was picked, or the new branch typed there.
   String get branchRowLabel {
+    final plan = worktreePlan;
+    if (plan != null &&
+        plan.kind == WorktreeStart.newBranch &&
+        _branchName != null &&
+        plan.branch == _branchName) {
+      return '${plan.branch} · new from ${_refName(plan.base) ?? 'HEAD'}';
+    }
     final name = _branchHere;
     return name == null
         ? branchLabel
@@ -570,23 +573,6 @@ class NewHarnessController extends ChangeNotifier {
   bool get opensWorktree => worktree
       ? worktreePlan?.kind == WorktreeStart.openWorktree
       : _branchHere == null && _worktreeOf(branchRef) != null;
-
-  /// The Branch row with Worktree on: the branch the harness will be on.
-  String get worktreeBranchLabel {
-    final plan = worktreePlan;
-    if (plan == null) return '';
-    return switch (plan.kind) {
-      WorktreeStart.newBranch =>
-        plan.branch == placeholder
-            ? _sessionBranch
-            : plan.tracks
-            ? '${plan.branch} · tracks ${_refName(plan.base)}'
-            : plan.branch,
-      WorktreeStart.existingBranch => '${plan.branch} · existing',
-      WorktreeStart.openWorktree => '${plan.branch} · has a worktree',
-      WorktreeStart.unavailable => '${plan.branch} · in the project folder',
-    };
-  }
 
   /// What Start does with Git, in words for the summary and screen readers.
   String get gitSummary {
@@ -820,7 +806,6 @@ class NewHarnessController extends ChangeNotifier {
     NewHarnessField.machine,
     NewHarnessField.projectMenu,
     if (isGitProject) NewHarnessField.branch,
-    if (worktree) NewHarnessField.branchName,
   ];
   bool _supportsField(NewHarnessField value) =>
       fields.contains(value) ||
@@ -925,7 +910,6 @@ class NewHarnessController extends ChangeNotifier {
     NewHarnessField.agent => 'Choose an agent',
     NewHarnessField.machine => 'Choose a machine',
     NewHarnessField.branch => 'Search branches',
-    NewHarnessField.branchName => 'Name the branch, or type one that exists',
     NewHarnessField.project => 'Enter a folder path, or press Enter to browse',
     NewHarnessField.projectName => 'Type a project name',
     NewHarnessField.projectRepository => 'Paste a GitHub repository URL',
@@ -971,10 +955,6 @@ class NewHarnessController extends ChangeNotifier {
     // A fresh visit from the launch menu starts with all recent projects.
     query = next == NewHarnessField.task
         ? task
-        : next == NewHarnessField.branchName
-        ? worktreePlan?.branch == placeholder
-              ? ''
-              : worktreePlan?.branch ?? ''
         : next == NewHarnessField.projectName
         ? _project.name ?? ''
         : next == NewHarnessField.projectMenu
@@ -999,11 +979,6 @@ class NewHarnessController extends ChangeNotifier {
       return;
     }
     if (field == NewHarnessField.projectName) _editingSuggestedProject = false;
-    // A branch has no spaces: words are joined as they are typed.
-    if (field == NewHarnessField.branchName) {
-      value = value.replaceAll(RegExp(r'\s'), '-');
-      if (value == query) return;
-    }
     if (field == NewHarnessField.task) {
       task = query = value;
       error = taskTooLong
@@ -1091,7 +1066,6 @@ class NewHarnessController extends ChangeNotifier {
     NewHarnessField.agent => option.id == _engine,
     NewHarnessField.machine => option.id == _machineId,
     NewHarnessField.branch => option.id == branchRef,
-    NewHarnessField.branchName => false,
     NewHarnessField.project ||
     NewHarnessField.projectMenu ||
     NewHarnessField.projectName ||
@@ -1317,14 +1291,10 @@ class NewHarnessController extends ChangeNotifier {
           _branchName = option.id.substring(createBranchId.length);
           _branchRef = null;
         } else {
+          // A picked branch replaces a new one.
           _branchRef = option.id;
-          // With Worktree off a picked branch replaces a new one.
-          if (!worktree) _branchName = null;
+          _branchName = null;
         }
-      case NewHarnessField.branchName:
-        _branchName = option.id.isEmpty || option.id == placeholder
-            ? null
-            : option.id;
       case NewHarnessField.project:
       case NewHarnessField.projectMenu:
       case NewHarnessField.projectName:
@@ -1815,7 +1785,6 @@ class NewHarnessController extends ChangeNotifier {
         ..._ranked(_branchOptions()),
         ?_createBranchRow(),
       ],
-      NewHarnessField.branchName => _branchNameOptions(),
       NewHarnessField.projectMenu => _projectMenu(),
       NewHarnessField.project ||
       NewHarnessField.projectName => _projectOptions(),
@@ -1954,78 +1923,25 @@ class NewHarnessController extends ChangeNotifier {
     ];
   }
 
-  /// With Worktree off, a typed name no branch has can be made here — the
-  /// way an editor's branch picker offers "Create branch".
+  /// A typed name no branch has can be made — the way an editor's branch
+  /// picker offers "Create branch": with Worktree on in a new worktree from
+  /// the default branch, off in the folder from the branch it is on. Spaces
+  /// become `-`, and what Git refuses in a name is dropped.
   NewHarnessOption? _createBranchRow() {
     final name = branchNameFrom(query);
-    if (worktree ||
-        !plausibleBranchName(name) ||
+    if (!plausibleBranchName(name) ||
         newBranchHere(_gitProject, name) == null) {
       return null;
     }
+    final base = worktree
+        ? defaultBranchRef(_gitProject, worktree: true)
+        : currentBranchRef(_gitProject);
     return NewHarnessOption(
       id: '$createBranchId$name',
       synthetic: true,
       title: 'Create branch $name',
-      detail:
-          'New branch from ${_refName(currentBranchRef(_gitProject)) ?? 'HEAD'}',
+      detail: 'New branch from ${_refName(base) ?? 'HEAD'}',
     );
-  }
-
-  /// What Return does with the typed branch name: one row, never a match.
-  List<NewHarnessOption> _branchNameOptions() {
-    total = 0;
-    matchCount = 0;
-    final raw = query.trim();
-    final typed = branchNameFrom(raw);
-    if (raw.isEmpty || typed == placeholder) {
-      return [
-        NewHarnessOption(
-          id: '',
-          synthetic: true,
-          title: _sessionBranch,
-          detail:
-              'Named after the session, from ${_refName(branchRef) ?? 'HEAD'}',
-        ),
-      ];
-    }
-    if (!plausibleBranchName(typed)) {
-      return [
-        NewHarnessOption(
-          id: raw,
-          synthetic: true,
-          title: raw,
-          detail: 'Not a valid branch name',
-          enabled: false,
-          why: '“$raw” is not a valid branch name.',
-        ),
-      ];
-    }
-    final plan = planWorktree(
-      _gitProject,
-      base: branchRef,
-      name: typed,
-      placeholder: placeholder,
-    );
-    return [
-      NewHarnessOption(
-        id: typed,
-        synthetic: true,
-        title: typed,
-        detail: switch (plan.kind) {
-          WorktreeStart.newBranch =>
-            'New branch from ${_refName(plan.base) ?? 'HEAD'}',
-          WorktreeStart.existingBranch => 'Existing branch, in a new worktree',
-          WorktreeStart.openWorktree =>
-            'Has a worktree: the harness starts there',
-          WorktreeStart.unavailable => 'The project folder is on this branch',
-        },
-        enabled: plan.kind != WorktreeStart.unavailable,
-        why: plan.kind == WorktreeStart.unavailable
-            ? 'Turn Worktree off to work on $typed in the project folder, or name a new branch.'
-            : null,
-      ),
-    ];
   }
 
   List<NewHarnessOption> _ranked(List<NewHarnessOption> all) {

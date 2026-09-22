@@ -14,15 +14,7 @@ import 'box_chrome.dart';
 import 'pane_menu.dart';
 import 'terminal_prompt.dart';
 
-enum _LaunchChoice {
-  agent,
-  machine,
-  project,
-  worktree,
-  branch,
-  branchName,
-  create,
-}
+enum _LaunchChoice { agent, machine, project, branch, worktree, create }
 
 /// A launch menu and focused completion prompts with shared arrow navigation.
 /// Create is selected initially; arrows and Enter edit a displayed default.
@@ -79,9 +71,8 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     _LaunchChoice.agent,
     _LaunchChoice.machine,
     _LaunchChoice.project,
-    if (box.canUseWorktree || box.gitError != null) _LaunchChoice.worktree,
     if (box.isGitProject) _LaunchChoice.branch,
-    if (box.worktree) _LaunchChoice.branchName,
+    if (box.canUseWorktree || box.gitError != null) _LaunchChoice.worktree,
     _LaunchChoice.create,
   ];
   String get _launchCreateLabel => box.checking
@@ -107,8 +98,6 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
         box.focusField(NewHarnessField.projectMenu);
       case _LaunchChoice.branch:
         box.focusField(NewHarnessField.branch);
-      case _LaunchChoice.branchName:
-        box.focusField(NewHarnessField.branchName);
       case _LaunchChoice.worktree:
         box.gitError != null ? box.retryGitProject() : box.toggleWorktree();
       case _LaunchChoice.create:
@@ -227,7 +216,6 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     box.checkingGit,
     box.gitError,
     box.branchRowLabel,
-    box.worktreeBranchLabel,
     box.createLabel,
     box.placement,
     box.query.trim().isEmpty,
@@ -358,17 +346,12 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     NewHarnessField.agent => 'Agent',
     NewHarnessField.machine => 'Machine',
     NewHarnessField.branch => 'Branch',
-    NewHarnessField.branchName => 'Branch name',
     NewHarnessField.project => 'Project',
   };
 
-  /// What a launch row is called on screen: with Worktree on, the branch
-  /// picked is where the new one starts, and the new one gets its own row.
-  String _choiceTitle(_LaunchChoice choice) => switch (choice) {
-    _LaunchChoice.branch => box.worktree ? 'From' : 'Branch',
-    _LaunchChoice.branchName => 'Branch',
-    _ => '${choice.name[0].toUpperCase()}${choice.name.substring(1)}',
-  };
+  /// What a launch row is called on screen.
+  static String _choiceTitle(_LaunchChoice choice) =>
+      '${choice.name[0].toUpperCase()}${choice.name.substring(1)}';
 
   bool get _composing =>
       _hasInput &&
@@ -898,11 +881,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                         : _machinePicker
                         ? 'Choose a machine'
                         : box.field == NewHarnessField.branch
-                        ? box.worktree
-                              ? 'Start the new branch from'
-                              : 'Choose a branch'
-                        : box.field == NewHarnessField.branchName
-                        ? 'Name the branch'
+                        ? 'Choose a branch'
                         : _profilePicker
                         ? 'Codex profile on ${box.machineLabel}'
                         : box.field == NewHarnessField.mode
@@ -913,8 +892,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                 ),
               if (!_agentPicker &&
                   !_machinePicker &&
-                  box.field != NewHarnessField.branch &&
-                  box.field != NewHarnessField.branchName) ...[
+                  box.field != NewHarnessField.branch) ...[
                 if (!_launching) const SizedBox(height: 8),
                 _segment(
                   NewHarnessField.agent,
@@ -933,6 +911,16 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                 }),
               ],
               if (_launching) ...[
+                if (box.isGitProject)
+                  _segment(
+                    NewHarnessField.branch,
+                    box.branchRowLabel,
+                    tooltip: box.worktree
+                        ? 'What the worktree works from. The default branch gets a new branch named after the session; another is checked out as it is. Type a name to create one.'
+                        : box.opensWorktree
+                        ? '${box.branchLabel} has a worktree of its own: the harness starts there.'
+                        : 'The branch the project folder is on.',
+                  ),
                 if (box.isGitProject || box.checkingGit || box.gitError != null)
                   _default(
                     'worktree',
@@ -953,24 +941,6 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                       _selectLaunchChoice(_LaunchChoice.worktree);
                       _activateLaunchChoice(_LaunchChoice.worktree);
                     },
-                  ),
-                if (box.isGitProject)
-                  _segment(
-                    NewHarnessField.branch,
-                    box.branchRowLabel,
-                    title: _choiceTitle(_LaunchChoice.branch),
-                    tooltip: box.worktree
-                        ? 'Where the new branch starts. A remote branch is fetched first.'
-                        : box.opensWorktree
-                        ? '${box.branchLabel} has a worktree of its own: the harness starts there.'
-                        : 'The branch the project folder is on.',
-                  ),
-                if (box.worktree)
-                  _segment(
-                    NewHarnessField.branchName,
-                    box.worktreeBranchLabel,
-                    title: 'Branch',
-                    tooltip: 'The branch the harness works on. Keep the name made up for it, type another, or pick one that exists.',
                   ),
                 const SizedBox(height: 8),
                 _default(

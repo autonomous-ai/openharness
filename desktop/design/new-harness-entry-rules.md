@@ -32,11 +32,11 @@ while a pending start needs confirmation.
 
 ## Git projects
 
-Git projects show Worktree, then the branch rows. Worktree defaults to `[x]`
-for a repository with a commit; Enter, Space, or a click toggles `[x]` and
-`[ ]`. Folders without Git show none of these rows. Discovery runs on the
-selected machine without fetching, switching branches, or creating a worktree.
-A failed discovery offers Retry and blocks starting until the result is known.
+Git projects show Branch, then Worktree. Worktree defaults to `[x]` for a
+repository with a commit; Enter, Space, or a click toggles `[x]` and `[ ]`.
+Folders without Git show neither row. Discovery runs on the selected machine
+without fetching, switching branches, or creating a worktree. A failed
+discovery offers Retry and blocks starting until the result is known.
 
 A worktree is a temporary folder, never a project: a harness is known by the
 folder it was started in and its repository's branch. Pane headers read
@@ -51,28 +51,26 @@ in the repository's main checkout, so Cmd-N from a worktree pane starts beside
 it rather than inside it. Worktrees Start made are never offered as recent
 projects.
 
-With `[x]` there are two rows, as in JetBrains and GitHub Desktop:
-
-- **From** is where the new work starts: the remote's default branch
-  (`origin/HEAD`) unless another is picked. A remote base is fetched at Start,
-  for at most ten seconds; offline, it starts from the last fetch.
-- **Branch** is the branch the harness works on. It fills itself in from From:
-  the default or current branch gets a new branch named after the session,
-  shown as `<login>/<session name>` (the machine's GitHub login, else Git's
-  `user.name`); another local branch is checked out as it is; a remote branch nobody
-  has locally becomes a local branch of the same name tracking it; a branch
-  that already has a worktree opens there, and Start reads **Start in
-  Worktree**. Typing a name makes a new branch from From, or uses the existing
-  branch of that name; spaces become `-` as they are typed and anything else Git
-  refuses in a branch name is dropped. The project folder's own branch cannot
-  be checked out twice and is refused.
+With `[x]`, **Branch** is what the new worktree works from: the remote's
+default branch (`origin/HEAD`) unless another is picked. A remote base is
+fetched at Start, for at most ten seconds; offline, it starts from the last
+fetch. The branch the harness works on follows from it, with no row of its
+own: the default or current branch gets a new branch named after the session,
+`<login>/<session name>` (the machine's GitHub login, else Git's `user.name`);
+another local branch is checked out as it is; a remote branch nobody has
+locally becomes a local branch of the same name tracking it; a branch that
+already has a worktree opens there, and Start reads **Start in Worktree**. The
+project folder's own branch cannot be checked out twice. Typing a name no
+branch has offers **Create branch**: a new branch in a new worktree, from the
+default branch. Spaces become `-` and anything Git refuses in a name is
+dropped.
 
 A session has no name at Start, so that branch starts as a made-up
 `<login>/<word>-<word>`, marked `branch.<name>.harness = placeholder` in the
 repository's config and left out of the pane header. The daemon renames it once,
 to `<login>/<session name>`, when the session first has a name, and never again:
 not after a later session name, a push, or a rename by the person or the agent.
-A typed, picked or created branch keeps its name. The worktree is checked out in
+A picked or created branch keeps its name. The worktree is checked out in
 `~/harnesses/worktrees/<repository>/<branch>`, and ignored files listed in the
 repository's `.worktreeinclude` (gitignore syntax, e.g. `.env`) are copied in.
 
@@ -131,7 +129,7 @@ never silently renamed, and existing files are never overwritten.
 
 - `test/new_harness_git_test.dart`, `test/git_worktree_test.dart`, and
   `test/git_worktree_failures_test.dart`: Git defaults, hidden non-Git rows,
-  keyboard/click toggles, branch search, From/Branch resolution, stale
+  keyboard/click toggles, branch search, branch resolution, stale
   replies, retries, actual Git worktrees and branch safety, fetching,
   tracking, `.worktreeinclude`, process deadlines, and bounded output.
   `cli/src/lib/gitProject.spec.ts` and `worktreeSweep.spec.ts` cover the same
