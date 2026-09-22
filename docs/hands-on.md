@@ -219,4 +219,4 @@ Each capture starts a separate native simulation from the current circuit export
 
 ---
 
-[Browse all harnesses](../README.md#domain-specific-harnesses-dsh). To update this guide, edit [store/hands-on.json](../store/hands-on.json), keep each starting prompt in its harness's store.json, and run `node store/tools/hands-on.mjs`. `--check` verifies generated files and all referenced local assets without installing or running a harness.
+[Browse all harnesses](../README.md#domain-specific-harnesses-dsh). To update this guide, edit [store/hands-on.json](../store/hands-on.json), keep each starting prompt in its harness's store.json, and run `node store/tools/hands-on.mjs --sync-store`. This places the matching recorded example first on each Store detail page while retaining the other examples. Suggested starting prompts stay separate from the projects shown in the recordings. `--check` verifies generated files, matching Store demo pairs and all referenced local assets without installing or running a harness.

@@ -12,12 +12,20 @@ library;
 /// One example on a product page: the prompt, a picture of what the harness made from it, and a line
 /// naming the result. Read defensively — it arrives from any machine's catalog.
 class StoreExample {
-  const StoreExample({required this.prompt, this.image, this.caption});
+  const StoreExample({
+    required this.prompt,
+    this.image,
+    this.video,
+    this.caption,
+  });
 
   final String prompt;
 
   /// An https picture of the output, or null when the package has none for this prompt.
   final String? image;
+
+  /// An HTTPS recording, loaded only when the person chooses to watch.
+  final String? video;
   final String? caption;
 
   static StoreExample? fromJson(Object? raw) {
@@ -28,6 +36,8 @@ class StoreExample {
     }
     final image = raw['image'];
     final uri = image is String ? Uri.tryParse(image.trim()) : null;
+    final video = raw['video'];
+    final videoUri = video is String ? Uri.tryParse(video.trim()) : null;
     final caption = raw['caption'];
     return StoreExample(
       prompt: prompt.trim(),
@@ -37,6 +47,13 @@ class StoreExample {
               uri.hasAuthority &&
               (image as String).length <= 2048
           ? image.trim()
+          : null,
+      video:
+          videoUri != null &&
+              videoUri.scheme == 'https' &&
+              videoUri.hasAuthority &&
+              (video as String).length <= 2048
+          ? video.trim()
           : null,
       caption: caption is String && caption.trim().isNotEmpty
           ? caption.trim().substring(0, caption.trim().length.clamp(0, 120))

@@ -27,7 +27,11 @@
     "followup": "Read my saved physics-experiment.json and reproduce it with the MuJoCo experiment tool. Explain when the robot first loses height, then help me change the controller and record another run.",
     "note": "Both futures use the same recorded controls. This compares open-loop physics; it does not rerun the Python controller.",
     "guide": "../store/viewers/mujoco-viewer/README.md",
-    "video": "images/mujoco-what-if-demo.mp4"
+    "video": "images/mujoco-what-if-demo.mp4",
+    "demo": {
+      "prompt": "Load the Unitree Go2 in MuJoCo. Let me pin a moment, apply a 100 N sideways shove for 0.15 seconds and compare the next three seconds with the original world. I want to inspect the greatest measured difference and keep a reproducible experiment.",
+      "caption": "Real Go2 session · 100 N shove · compare two futures and keep the experiment"
+    }
   },
   {
     "id": "blender",
@@ -57,7 +61,11 @@
     "keeps": "Source, chosen values, model, measurements and a standalone rebuild script.",
     "followup": "Use my chosen Shape Lab values for the next build. Refine the base and cable opening without losing these proportions, then export the model and render a turntable.",
     "note": "Each preview builds real Blender geometry. Build time depends on the scene; previews stay separate from the main export until the next full build.",
-    "guide": "../store/agents/blender/README.md"
+    "guide": "../store/agents/blender/README.md",
+    "demo": {
+      "prompt": "Design a sculptural desk lamp from twisting ribbons. Give me Shape Lab controls for height, twist, ribbon count and finish, with sensible ranges. I want to explore the proportions myself and keep a few directions before the final render.",
+      "caption": "Real Blender session · shape a ribbon lamp and keep named design variants"
+    }
   },
   {
     "id": "godogen",
@@ -87,7 +95,11 @@
     "keeps": "A screenshot, complete game state, feedback and that version's compiled game.",
     "followup": "Read the saved playtest moments in out/playtests. Make the jump in my Change note easier to read, preserve the movement I marked Keep, then let me play the revised version.",
     "note": "Rewind needs snapshot support in the authored game. Saved moments preserve compiled output; editable source stays in the project, and external assets still need their original service.",
-    "guide": "../store/viewers/game-viewer/README.md"
+    "guide": "../store/viewers/game-viewer/README.md",
+    "demo": {
+      "prompt": "Make a low-poly snowboarding game with pine trees, six golden gates, carving and jumping. Support Rewind and Try from here for the complete game state so I can retry a jump and pin precise playtest feedback.",
+      "caption": "Alpine Drift · a real playable run, rewind, retry and saved feedback"
+    }
   },
   {
     "id": "strudel",
@@ -118,7 +130,11 @@
     "keeps": "A stereo WAV, played code versions and a timed performance journal in a ZIP.",
     "followup": "Listen to the take I kept and read its journal in out/takes. Build the next arrangement around the quiet section I marked, using the source version that was playing there.",
     "note": "Takes capture up to two minutes of the instrument's output. The WAV preserves what you heard from it; external samples and custom imports are not bundled.",
-    "guide": "../store/agents/strudel/README.md"
+    "guide": "../store/agents/strudel/README.md",
+    "demo": {
+      "prompt": "Write a warm 112 bpm synth groove with five named voices: Pulse drums, Sand noise, Low tide bass, Glass melody and Lantern chords. Let me bring voices in and out, mark a moment and keep a recording of my live performance.",
+      "caption": "Lantern room · real 112 bpm performance with audio · keep the WAV, source and markers"
+    }
   },
   {
     "id": "rdkit",
@@ -148,7 +164,11 @@
     "keeps": "Input and sampled conformers, selected SDF, energy CSV and reproducible calculation source.",
     "followup": "Read the note and selected.sdf from my kept study in out/torsions. Reproduce its energy curve, explain the crowded poses and suggest another bond to explore.",
     "note": "This is a rigid MMFF94 scan, with the other internal coordinates fixed. It does not establish a relaxed barrier, equilibrium population or biological activity.",
-    "guide": "../store/agents/rdkit/README.md"
+    "guide": "../store/agents/rdkit/README.md",
+    "demo": {
+      "prompt": "Build 3D conformers of butane and phenethyl acetate with explicit hydrogens. Let me rotate a flexible bond in the acetate, compare the sampled shapes and rigid MMFF94 energy, then keep a pose and a reproducible study.",
+      "caption": "Phenethyl acetate · real rigid MMFF94 bond scan · 25 poses and a kept study"
+    }
   },
   {
     "id": "typst",
@@ -178,7 +198,11 @@
     "keeps": "The reviewed PDF, anchored notes, readable feedback and a portable review ZIP.",
     "followup": "Read the kept review in .harness/doc-reviews, including review.md and reference.pdf. Revise the editable Typst source around my Change notes and preserve the details marked Keep.",
     "note": "Changed or repeated quotations need human inspection. Area and page notes stay with the reviewed PDF. The packet includes the PDF and feedback; editable source stays in the workspace.",
-    "guide": "../store/viewers/doc-viewer/README.md"
+    "guide": "../store/viewers/doc-viewer/README.md",
+    "demo": {
+      "prompt": "Make a three-page Typst design brief for a portable reading light, with a proportion sketch, provisional targets and open questions. I want to hold the PDF, annotate text and areas, then compare a revision without losing the draft I reviewed.",
+      "caption": "Portable light · real Typst PDF · anchored notes carried into a later revision"
+    }
   },
   {
     "id": "jev-sheets",
@@ -209,7 +233,11 @@
     "keeps": "Frozen rows, exact questions, answers, probabilities, provider details, your notes and CSV/ZIP exports.",
     "followup": "Read my kept trial in .harness/question-trials, including the rows and review.md. Help me choose clearer wording and retain that header in sheet.json before running the whole file.",
     "note": "Real answers send sampled rows to your connected Jev provider and require a key. Offline mode is practice only. Confidence and reviewer preferences are not measures of accuracy.",
-    "guide": "../store/agents/jev-sheets/README.md"
+    "guide": "../store/agents/jev-sheets/README.md",
+    "demo": {
+      "prompt": "Create an offline practice sheet of fictional support tickets. Help me compare two urgency questions on the same frozen rows in Question Lab, inspect changed answers and unsure rows, and keep the trial with my notes.",
+      "caption": "Offline practice recording · fictional support tickets · paired questions and a kept review"
+    }
   },
   {
     "id": "circuitjs",
@@ -239,6 +267,10 @@
     "keeps": "Native circuit exports, timestamped measurements, an SVG plot, notes and a checksummed ZIP.",
     "followup": "Read both kept captures in .harness/circuit-captures. Compare their CSV measurements and my notes, explain what changing the resistance did, then help me choose the next circuit value to try.",
     "note": "Each capture starts a separate native simulation from the current circuit export. It uses a fresh time origin; initial transients can differ. Keep both captures to preserve a comparison.",
-    "guide": "../store/agents/circuitjs/README.md"
+    "guide": "../store/agents/circuitjs/README.md",
+    "demo": {
+      "prompt": "Build a 100 Hz RC low-pass filter with a 1 kΩ resistor and 1 µF capacitor. Label the input and output nodes. I want to capture both in Scope Lab, double the resistance and compare the amplitude and timing.",
+      "caption": "Real CircuitJS solver · compare RC filter traces at 1 kΩ and 2 kΩ, measure and keep both"
+    }
   }
 ]

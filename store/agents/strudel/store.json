@@ -5,6 +5,12 @@
   "tagline": "Write music, perform it live, and keep the sound with its source",
   "examples": [
     {
+      "prompt": "Write a warm 112 bpm synth groove with five named voices: Pulse drums, Sand noise, Low tide bass, Glass melody and Lantern chords. Let me bring voices in and out, mark a moment and keep a recording of my live performance.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/strudel-live-take.png",
+      "video": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/strudel-live-take-demo.mp4",
+      "caption": "Lantern room · real 112 bpm performance with audio · keep the WAV, source and markers"
+    },
+    {
       "prompt": "Make an 80s synthwave track at 100 bpm: gated drums, a driving octave bassline, a pulsing 16th-note arpeggio, a wide supersaw pad, and a soaring lead that takes over after 8 bars.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/strudel/synthwave-night-drive.jpg",
       "caption": "Synthwave \"Night drive\" · 100 bpm, 8 voices, 16 bars · playing live in the pane"

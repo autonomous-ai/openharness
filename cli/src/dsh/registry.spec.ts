@@ -24,6 +24,15 @@ const write = (path: string, body: string): void => {
 }
 
 describe('StoreExampleSchema: what a product page example may hold', () => {
+  it('carries HTTPS demo recordings through Store facts and catalog parsing', () => {
+    const example = { prompt: 'Shape this lamp.', image: 'https://example.com/lamp.png', video: 'https://example.com/lamp.mp4', caption: 'A real recorded session' }
+    expect(StoreFactsSchema.parse({ examples: [example] }).examples).toEqual([example])
+    expect(StoreExampleSchema.parse(example)).toEqual(example)
+    for (const video of ['http://example.com/a.mp4', 'file:///tmp/a.mp4', 'javascript:alert(1)', 'https://' + 'x'.repeat(2048)]) {
+      expect(StoreExampleSchema.safeParse({ ...example, video }).success).toBe(false)
+    }
+  })
+
   it('takes a prompt, an https picture and a caption; a catalog entry drops unknown fields, store.json refuses them', () => {
     expect(StoreExampleSchema.parse({ prompt: '  A desk lamp.  ', image: 'https://example.com/a.jpg', caption: 'Lamp', later: 1 }))
       .toEqual({ prompt: 'A desk lamp.', image: 'https://example.com/a.jpg', caption: 'Lamp' })

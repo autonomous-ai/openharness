@@ -8,6 +8,7 @@ import '../core/test_run.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/engine_identity.dart';
+import 'store_demo_dialog.dart';
 
 /// The body of a store page: what you ask, and what comes out — one after another, down the page.
 ///
@@ -119,8 +120,10 @@ class _ExampleBlockState extends State<_ExampleBlock> {
               ),
             ),
             const SizedBox(height: 28),
-            Row(
-              mainAxisSize: MainAxisSize.min,
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 10,
               children: [
                 FilledButton.icon(
                   key: ValueKey('store-try-prompt:$i'),
@@ -138,7 +141,22 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                     shape: const StadiumBorder(),
                   ),
                 ),
-                const SizedBox(width: 8),
+                if (example.video != null)
+                  OutlinedButton.icon(
+                    key: ValueKey('store-watch-demo:$i'),
+                    onPressed: () => showStoreDemo(
+                      context,
+                      entry: widget.entry,
+                      example: example,
+                    ),
+                    icon: const Icon(LucideIcons.play300, size: 17),
+                    label: const Text('Watch real session'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 46),
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      shape: const StadiumBorder(),
+                    ),
+                  ),
                 AppIconButton(
                   key: ValueKey('store-copy-prompt:$i'),
                   icon: LucideIcons.copy300,
@@ -250,7 +268,7 @@ class _Output extends StatelessWidget {
     );
     return Image.network(
       example.image!,
-      fit: BoxFit.cover,
+      fit: example.video != null ? BoxFit.contain : BoxFit.cover,
       filterQuality: FilterQuality.medium,
       semanticLabel: example.caption ?? 'What ${entry.name} made',
       frameBuilder: (context, child, frame, synchronous) => synchronous

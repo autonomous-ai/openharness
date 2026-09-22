@@ -5,6 +5,12 @@
   "tagline": "Explore molecules in 3D, turn a bond, and keep a reproducible study",
   "examples": [
     {
+      "prompt": "Build 3D conformers of butane and phenethyl acetate with explicit hydrogens. Let me rotate a flexible bond in the acetate, compare the sampled shapes and rigid MMFF94 energy, then keep a pose and a reproducible study.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/rdkit-bond-scan.png",
+      "video": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/rdkit-bond-scan-demo.mp4",
+      "caption": "Phenethyl acetate · real rigid MMFF94 bond scan · 25 poses and a kept study"
+    },
+    {
       "prompt": "Take capsaicin, the molecule behind chili heat, and design three analogues: a saturated tail (nonivamide), a shorter tail, and the ester capsiate. Give each a 3D conformer and compare their properties side by side.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/rdkit/capsaicin-analogues.jpg",
       "caption": "Capsaicin + 3 analogues · 30-conformer ensembles · ESP surface + series table"

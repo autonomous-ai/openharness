@@ -33,6 +33,7 @@ export const HARNESS_MONOREPO = 'https://github.com/autonomous-ai/openharness'
 export const StoreExampleSchema = z.object({
   prompt: z.string().trim().min(1).max(600),
   image: z.string().url().max(2048).refine((url) => url.startsWith('https://'), 'an example image is an https URL').optional(),
+  video: z.string().url().max(2048).refine((url) => url.startsWith('https://'), 'an example video is an https URL').optional(),
   caption: z.string().trim().min(1).max(120).optional(),
 })
 

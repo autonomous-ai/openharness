@@ -9,6 +9,12 @@
   ],
   "examples": [
     {
+      "prompt": "Make a low-poly snowboarding game with pine trees, six golden gates, carving and jumping. Support Rewind and Try from here for the complete game state so I can retry a jump and pin precise playtest feedback.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/godogen-rewind.png",
+      "video": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/godogen-rewind-demo.mp4",
+      "caption": "Alpine Drift · a real playable run, rewind, retry and saved feedback"
+    },
+    {
       "prompt": "Make a synthwave hoverbike racer: ride down a neon grid canyon toward a striped setting sun, weave between glowing pylons, hop barriers and collect energy cores, with a boost and three shields.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/godogen/neon-drift.jpg",
       "caption": "Neon Drift · 3D synthwave hoverbike racer · playable in Game Studio"

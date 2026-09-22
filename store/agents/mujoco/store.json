@@ -5,6 +5,12 @@
   "tagline": "Run real physics, change the world, and compare what happens next",
   "examples": [
     {
+      "prompt": "Load the Unitree Go2 in MuJoCo. Let me pin a moment, apply a 100 N sideways shove for 0.15 seconds and compare the next three seconds with the original world. I want to inspect the greatest measured difference and keep a reproducible experiment.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/mujoco-what-if-shove.png",
+      "video": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/mujoco-what-if-demo.mp4",
+      "caption": "Real Go2 session · 100 N shove · compare two futures and keep the experiment"
+    },
+    {
       "prompt": "Make the Unitree G1 humanoid say hello: stand, raise its right hand and wave three times, then lower it and take a small bow. Record it.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/mujoco/g1-humanoid-hello.jpg",
       "caption": "Unitree G1 humanoid · wave hello + bow · 29 servos, 11 s rollout, live in the MuJoCo Viewer"

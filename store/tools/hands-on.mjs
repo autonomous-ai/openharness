@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const docs = resolve(root, 'docs')
 const check = process.argv.includes('--check')
+const syncStore = process.argv.includes('--sync-store')
+if (check && syncStore) throw Error('Choose --check or --sync-store')
 const experiences = JSON.parse(
   readFileSync(resolve(root, 'store/hands-on.json'), 'utf8')
 )
@@ -55,9 +57,20 @@ for (const item of experiences) {
     )
       throw Error(`${item.id}: missing or invalid local asset ${path}`)
   }
-  const facts = JSON.parse(
-    readFileSync(resolve(root, `store/agents/${item.id}/store.json`), 'utf8')
-  )
+  const factsPath = resolve(root, `store/agents/${item.id}/store.json`)
+  const facts = JSON.parse(readFileSync(factsPath, 'utf8'))
+  if (typeof item.demo?.prompt !== 'string' || !item.demo.prompt.trim() || item.demo.prompt.length > 600 ||
+      typeof item.demo?.caption !== 'string' || !item.demo.caption.trim() || item.demo.caption.length > 120 || !item.video)
+    throw Error(`${item.id}: expected a recorded example prompt, caption and video`)
+  const mediaRoot = 'https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/'
+  const demo = { prompt: item.demo.prompt, image: mediaRoot + item.poster, video: mediaRoot + item.video, caption: item.demo.caption }
+  if (syncStore) {
+    facts.examples = [demo, ...facts.examples.filter((example) => example.prompt !== demo.prompt && example.video !== demo.video)]
+    if (facts.examples.length > 8) throw Error(`${item.id}: at most eight Store examples`)
+    writeFileSync(factsPath, JSON.stringify(facts, null, 2) + '\n')
+  }
+  if (JSON.stringify(facts.examples[0]) !== JSON.stringify(demo))
+    throw Error(`${item.id}: sync the recorded example with node store/tools/hands-on.mjs --sync-store`)
   if (!facts.examples.some((example) => example.prompt === item.prompt))
     throw Error(`${item.id}: add the guide's starting prompt to store.json too`)
 }
@@ -148,7 +161,7 @@ ${item.note}
   .join('\n')}
 ---
 
-[Browse all harnesses](../README.md#domain-specific-harnesses-dsh). To update this guide, edit [store/hands-on.json](../store/hands-on.json), keep each starting prompt in its harness's store.json, and run \`node store/tools/hands-on.mjs\`. \`--check\` verifies generated files and all referenced local assets without installing or running a harness.
+[Browse all harnesses](../README.md#domain-specific-harnesses-dsh). To update this guide, edit [store/hands-on.json](../store/hands-on.json), keep each starting prompt in its harness's store.json, and run \`node store/tools/hands-on.mjs --sync-store\`. This places the matching recorded example first on each Store detail page while retaining the other examples. Suggested starting prompts stay separate from the projects shown in the recordings. \`--check\` verifies generated files, matching Store demo pairs and all referenced local assets without installing or running a harness.
 `
 
 for (const [path, content] of [

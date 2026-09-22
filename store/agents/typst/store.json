@@ -5,6 +5,12 @@
   "tagline": "Make beautiful documents and carry precise feedback into the next draft",
   "examples": [
     {
+      "prompt": "Make a three-page Typst design brief for a portable reading light, with a proportion sketch, provisional targets and open questions. I want to hold the PDF, annotate text and areas, then compare a revision without losing the draft I reviewed.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/doc-review.png",
+      "video": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/doc-review-demo.mp4",
+      "caption": "Portable light · real Typst PDF · anchored notes carried into a later revision"
+    },
+    {
       "prompt": "Make a two-page orbital mechanics cheat sheet: Kepler's three laws, the vis-viva equation, a labelled diagram of an elliptical orbit, a Hohmann transfer from Earth to Mars worked out step by step, and a table of planet data. Two columns, dense but beautiful.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/typst/orbital-mechanics-guide.jpg",
       "caption": "Orbital mechanics field guide · 2-page PDF, 3 figures, 3 tables"
