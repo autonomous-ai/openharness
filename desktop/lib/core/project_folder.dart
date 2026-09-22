@@ -50,22 +50,28 @@ class ProjectFolderRequest {
     this.branchName,
     this.existingBranch = false,
   }) : gitSource = source,
-      createsWorktree = true,
-      repository = null,
-      name = null,
-      generatedLabel = null,
-      generatedAt = null;
+       createsWorktree = true,
+       repository = null,
+       name = null,
+       generatedLabel = null,
+       generatedAt = null;
 
-  const ProjectFolderRequest.branch(String source, String ref)
-    : gitSource = source,
-      branchRef = ref,
-      branchName = null,
-      existingBranch = false,
-      createsWorktree = false,
-      repository = null,
-      name = null,
-      generatedLabel = null,
-      generatedAt = null;
+  /// The folder itself on [ref], or with [newBranch] on that new branch, made
+  /// where the folder is now. [ref] then names the new branch, so a daemon that
+  /// cannot make one refuses it rather than starting on the old one.
+  const ProjectFolderRequest.branch(
+    String source,
+    String ref, {
+    String? newBranch,
+  }) : gitSource = source,
+       branchRef = ref,
+       branchName = newBranch,
+       existingBranch = false,
+       createsWorktree = false,
+       repository = null,
+       name = null,
+       generatedLabel = null,
+       generatedAt = null;
 
   final String? gitSource, branchRef, branchName;
   final bool createsWorktree, existingBranch;

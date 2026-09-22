@@ -90,14 +90,20 @@ class PromptContextView extends StatelessWidget {
               icon: LucideIcons.folder300,
               color: grid.AppPalette.teal,
             ),
+          if (prefs.project && data.worktree?.isNotEmpty == true)
+            (
+              label: 'Worktree',
+              value: data.worktree!,
+              ascii: 'wt:',
+              icon: LucideIcons.folderGit2300,
+              color: grid.AppPalette.teal,
+            ),
           if (prefs.branch && data.branch?.isNotEmpty == true)
             (
-              label: data.worktree ? 'Branch, in a worktree' : 'Branch',
+              label: 'Branch',
               value: data.branch!,
               ascii: 'git:',
-              icon: data.worktree
-                  ? LucideIcons.gitFork300
-                  : LucideIcons.gitBranch300,
+              icon: LucideIcons.gitBranch300,
               color: grid.AppPalette.online,
             ),
         ];

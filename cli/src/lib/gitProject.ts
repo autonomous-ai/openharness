@@ -112,17 +112,20 @@ export type GitProjectOptions = {
  * is made up (`harness/brave-otter`). A remote base is fetched first, briefly.
  *
  * Worktree off: the folder on the local `ref`. A branch that already has a worktree opens there; any
- * other is switched to, only in a folder with nothing uncommitted. */
+ * other is switched to, only in a folder with nothing uncommitted. With `branchName` the folder moves
+ * to that new branch, made where it is now, uncommitted changes and all. */
 export async function prepareGitProject(source: string, options: GitProjectOptions): Promise<string> {
   if (!validGitPath(source) || (options.branchName !== undefined && !plausibleBranchName(options.branchName))
       || (options.existingBranch && !options.branchName)) {
     throw new GitProjectError('INVALID_PROJECT_SOURCE', 'Choose a Git project folder.')
   }
   const existing = options.existingBranch === true
+  // A new branch for the folder itself: `ref` names it and does not exist.
+  const creating = !options.worktree && !!options.branchName && !existing
   let root: string, head: string, prefix: string
   try {
     root = await git(source, ['rev-parse', '--show-toplevel'])
-    if (options.ref) {
+    if (options.ref && !creating) {
       if (!/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/.test(options.ref)) throw new Error('Invalid branch')
       await git(source, ['show-ref', '--verify', '--hash', '--', options.ref])
     }
@@ -131,7 +134,7 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
     const remote = options.worktree && !existing ? remoteBranch(options.ref) : null
     if (remote) await git(source, ['fetch', '--quiet', '--no-tags', remote.remote, remote.refspec], 10_000).catch(() => '')
     head = await git(source, ['rev-parse', '--verify', '--end-of-options',
-      `${existing ? `refs/heads/${options.branchName}` : options.ref ?? 'HEAD'}^{commit}`])
+      `${existing ? `refs/heads/${options.branchName}` : creating ? 'HEAD' : options.ref ?? 'HEAD'}^{commit}`])
     prefix = await git(source, ['rev-parse', '--show-prefix'])
     if (prefix && await git(source, ['cat-file', '-t', `${head}:${prefix.replace(/\/$/, '')}`]) !== 'tree') throw new Error('Missing folder')
   } catch {
@@ -139,6 +142,17 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
   }
   const inside = (folder: string) => prefix ? join(folder, prefix.replace(/\/$/, '')) : folder
   const trees = await worktrees(source)
+  if (creating) {
+    const name = options.branchName!
+    if (await git(source, ['show-ref', '--verify', '--quiet', '--', `refs/heads/${name}`]).then(() => true, () => false)) {
+      throw new GitProjectError('BRANCH_EXISTS', `A branch named ${name} already exists. Choose it instead.`)
+    }
+    try { await git(source, ['check-ref-format', '--branch', name]) }
+    catch { throw new GitProjectError('INVALID_BRANCH', `${name} is not a valid branch name.`) }
+    try { await git(source, ['switch', '-c', name]) }
+    catch { throw new GitProjectError('BRANCH_SWITCH_FAILED', `Could not create ${name} here.`) }
+    return source
+  }
   if (!options.worktree) {
     if (!options.ref?.startsWith('refs/heads/')) throw new GitProjectError('INVALID_BRANCH', 'Choose a local branch, or turn Worktree on.')
     const current = await git(source, ['symbolic-ref', '--quiet', 'HEAD']).catch(() => null)

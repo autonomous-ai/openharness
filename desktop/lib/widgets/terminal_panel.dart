@@ -2138,7 +2138,7 @@ class _TerminalHeader extends StatelessWidget {
                             // the full working folder is in the tooltip.
                             project: narrow ? null : project?.label,
                             branch: narrow ? null : project?.branch,
-                            worktree: project?.worktree == true,
+                            worktree: narrow ? null : project?.worktreeFolder,
                             leading: !narrow && forkedFrom != null
                                 ? 'forked from ${forkedFrom.name}'
                                 : null,

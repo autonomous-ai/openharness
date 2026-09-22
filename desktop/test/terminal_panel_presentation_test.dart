@@ -113,7 +113,34 @@ void main() {
         findsOneWidget,
         reason: 'A worktree root shows as its repository, never its folder.',
       );
-      expect(find.text('codex-0922-1136'), findsNothing);
+      expect(
+        find.text('codex-0922-1136'),
+        findsNothing,
+        reason: 'Its folder is named after the branch already shown.',
+      );
+      app.machineStates['m']!.agents = [
+        const Agent(
+          id: 'a0',
+          name: 'Renamed terminal',
+          engine: 'codex',
+          terminalAvailable: true,
+          project: AgentProject(
+            name: 'harness',
+            cwd: '/work/worktrees/harness/codex-0922-1136',
+            root: '/work/worktrees/harness/codex-0922-1136',
+            branch: 'fix/typo',
+            worktree: true,
+          ),
+        ),
+      ];
+      revision.value = 4;
+      await tester.pump();
+      expect(
+        find.text('codex-0922-1136'),
+        findsOneWidget,
+        reason: 'Once the branch moved on, the folder says where it lives.',
+      );
+      expect(find.text('fix/typo'), findsOneWidget);
       revision.value = 2;
       await tester.pump();
       expect(find.byTooltip('Zoom Pane'), findsOneWidget);

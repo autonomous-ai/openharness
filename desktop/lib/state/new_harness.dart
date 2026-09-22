@@ -196,6 +196,17 @@ WorktreePlan planWorktree(
       : WorktreePlan(WorktreeStart.newBranch, short, base: base);
 }
 
+/// With Worktree off, the new branch the folder moves to: a typed name no
+/// local branch has.
+String? newBranchHere(GitProjectInfo info, String? name) {
+  final typed = name?.trim();
+  return typed == null ||
+          typed.isEmpty ||
+          info.branches.any((b) => !b.remote && b.name == typed)
+      ? null
+      : typed;
+}
+
 /// The preparation a Git project's folder gets at Start.
 ProjectFolderRequest? gitFolderRequest(
   String folder,
@@ -207,6 +218,13 @@ ProjectFolderRequest? gitFolderRequest(
 }) {
   final ref = branchRef ?? defaultBranchRef(info, worktree: worktree);
   if (!worktree) {
+    if (newBranchHere(info, branchName) case final name?) {
+      return ProjectFolderRequest.branch(
+        folder,
+        'refs/heads/$name',
+        newBranch: name,
+      );
+    }
     return ref == null ? null : ProjectFolderRequest.branch(folder, ref);
   }
   final plan = planWorktree(
@@ -524,10 +542,22 @@ class NewHarnessController extends ChangeNotifier {
       .firstOrNull
       ?.worktree;
 
+  /// With Worktree off, the new branch Start makes for the folder.
+  String? get _branchHere =>
+      worktree ? null : newBranchHere(_gitProject, _branchName);
+
+  /// The From or Branch row.
+  String get branchRowLabel {
+    final name = _branchHere;
+    return name == null
+        ? branchLabel
+        : '$name · new from ${_refName(currentBranchRef(_gitProject)) ?? 'HEAD'}';
+  }
+
   /// Start goes into a worktree that already exists.
   bool get opensWorktree => worktree
       ? worktreePlan?.kind == WorktreeStart.openWorktree
-      : _worktreeOf(branchRef) != null;
+      : _branchHere == null && _worktreeOf(branchRef) != null;
 
   /// The Branch row with Worktree on: the branch the harness will be on.
   String get worktreeBranchLabel {
@@ -549,7 +579,10 @@ class NewHarnessController extends ChangeNotifier {
     if (!isGitProject) return '';
     final plan = worktreePlan;
     if (plan == null) {
-      return opensWorktree
+      final here = _branchHere;
+      return here != null
+          ? ', on a new branch $here'
+          : opensWorktree
           ? ', in the worktree of $branchLabel'
           : ', on $branchLabel';
     }
@@ -950,6 +983,11 @@ class NewHarnessController extends ChangeNotifier {
       return;
     }
     if (field == NewHarnessField.projectName) _editingSuggestedProject = false;
+    // A branch has no spaces: words are joined as they are typed.
+    if (field == NewHarnessField.branchName) {
+      value = value.replaceAll(RegExp(r'\s'), '-');
+      if (value == query) return;
+    }
     if (field == NewHarnessField.task) {
       task = query = value;
       error = taskTooLong
@@ -1059,6 +1097,7 @@ class NewHarnessController extends ChangeNotifier {
   static const browseId = 'project:browse';
   static const changeMachineId = 'project:machine';
   static const newProjectId = 'project:name';
+  static const createBranchId = 'branch:create:';
   static const existingProjectId = 'project:existing';
   static const repositoryId = 'project:repository';
   static const storeId = 'agent:store';
@@ -1258,7 +1297,14 @@ class NewHarnessController extends ChangeNotifier {
       case NewHarnessField.machine:
         _selectMachine(option.id);
       case NewHarnessField.branch:
-        _branchRef = option.id;
+        if (option.id.startsWith(createBranchId)) {
+          _branchName = option.id.substring(createBranchId.length);
+          _branchRef = null;
+        } else {
+          _branchRef = option.id;
+          // With Worktree off a picked branch replaces a new one.
+          if (!worktree) _branchName = null;
+        }
       case NewHarnessField.branchName:
         _branchName = option.id.isEmpty || option.id == placeholder
             ? null
@@ -1749,7 +1795,10 @@ class NewHarnessController extends ChangeNotifier {
       NewHarnessField.task ||
       NewHarnessField.agent => const [],
       NewHarnessField.machine => _machineOptions(),
-      NewHarnessField.branch => _ranked(_branchOptions()),
+      NewHarnessField.branch => [
+        ..._ranked(_branchOptions()),
+        ?_createBranchRow(),
+      ],
       NewHarnessField.branchName => _branchNameOptions(),
       NewHarnessField.projectMenu => _projectMenu(),
       NewHarnessField.project ||
@@ -1889,12 +1938,31 @@ class NewHarnessController extends ChangeNotifier {
     ];
   }
 
+  /// With Worktree off, a typed name no branch has can be made here — the
+  /// way an editor's branch picker offers "Create branch".
+  NewHarnessOption? _createBranchRow() {
+    final name = branchNameFrom(query);
+    if (worktree ||
+        !plausibleBranchName(name) ||
+        newBranchHere(_gitProject, name) == null) {
+      return null;
+    }
+    return NewHarnessOption(
+      id: '$createBranchId$name',
+      synthetic: true,
+      title: 'Create branch $name',
+      detail:
+          'New branch from ${_refName(currentBranchRef(_gitProject)) ?? 'HEAD'}',
+    );
+  }
+
   /// What Return does with the typed branch name: one row, never a match.
   List<NewHarnessOption> _branchNameOptions() {
     total = 0;
     matchCount = 0;
-    final typed = query.trim();
-    if (typed.isEmpty || typed == placeholder) {
+    final raw = query.trim();
+    final typed = branchNameFrom(raw);
+    if (raw.isEmpty || typed == placeholder) {
       return [
         NewHarnessOption(
           id: '',
@@ -1907,12 +1975,12 @@ class NewHarnessController extends ChangeNotifier {
     if (!plausibleBranchName(typed)) {
       return [
         NewHarnessOption(
-          id: typed,
+          id: raw,
           synthetic: true,
-          title: typed,
+          title: raw,
           detail: 'Not a valid branch name',
           enabled: false,
-          why: '“$typed” is not a valid branch name.',
+          why: '“$raw” is not a valid branch name.',
         ),
       ];
     }
@@ -2447,9 +2515,10 @@ class NewHarnessController extends ChangeNotifier {
       final ref = branchRef;
       if (!worktree &&
           folder != null &&
-          ref != null &&
-          ref != currentBranchRef(_gitProject) &&
-          _worktreeOf(ref) == null &&
+          (_branchHere != null ||
+              ref != null &&
+                  ref != currentBranchRef(_gitProject) &&
+                  _worktreeOf(ref) == null) &&
           (_machine?.agents ?? const []).any((agent) {
             final cwd = _machine?.projectOf(agent)?.cwd;
             final root = _gitProject.root ?? folder;

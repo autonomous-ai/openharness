@@ -175,6 +175,26 @@ String worktreeFolderName(String branch) {
       : name;
 }
 
+/// What a typed name becomes as a branch, as editors do it: words joined by
+/// `-`, and nothing `git check-ref-format` refuses. Empty when nothing is left.
+String branchNameFrom(String typed) {
+  var name = typed
+      .trim()
+      .replaceAll(RegExp(r'\s+'), '-')
+      .replaceAll(RegExp(r'[\x00-\x1f\x7f~^:?*\[\\]+'), '')
+      .replaceAll(RegExp(r'\.{2,}'), '.')
+      .replaceAll('@{', '@')
+      .replaceAll(RegExp(r'/{2,}'), '/')
+      .replaceAll(RegExp(r'/[.]+'), '/')
+      .replaceAll(RegExp(r'-{2,}'), '-')
+      .replaceAll(RegExp(r'^[-./]+'), '');
+  for (var trimmed = ''; trimmed != name;) {
+    trimmed = name;
+    name = name.replaceAll(RegExp(r'(\.lock|[./])$'), '');
+  }
+  return name == '@' ? '' : name;
+}
+
 /// A name Git accepts for a new branch, checked before Git is asked.
 bool plausibleBranchName(String name) =>
     name.isNotEmpty &&
@@ -284,7 +304,8 @@ Future<Map<String, dynamic>> readLocalGitProject(
 ///
 /// Worktree off: the folder on the local [branchRef]. A branch that already
 /// has a worktree opens there; any other is switched to, only in a folder with
-/// nothing uncommitted.
+/// nothing uncommitted. With [branchName] the folder moves to that new branch,
+/// made where it is now, uncommitted changes and all.
 Future<String> prepareGitProject(
   String source,
   String projectHome, {
@@ -315,7 +336,9 @@ Future<String> prepareGitProject(
   if (root.code != 0) {
     throw const RepositoryCloneException('Choose a Git working folder.');
   }
-  if (branchRef != null) {
+  // A new branch for the folder itself: [branchRef] names it and does not exist.
+  final creating = !worktree && branchName != null && !existingBranch;
+  if (branchRef != null && !creating) {
     final ref = await git(['show-ref', '--verify', '--hash', '--', branchRef]);
     if (ref.code != 0) {
       throw const RepositoryCloneException(
@@ -343,7 +366,11 @@ Future<String> prepareGitProject(
     'rev-parse',
     '--verify',
     '--end-of-options',
-    '${existingBranch ? 'refs/heads/$branchName' : branchRef ?? 'HEAD'}^{commit}',
+    '${existingBranch
+        ? 'refs/heads/$branchName'
+        : creating
+        ? 'HEAD'
+        : branchRef ?? 'HEAD'}^{commit}',
   ]);
   if (head.code != 0) {
     throw const RepositoryCloneException(
@@ -374,6 +401,29 @@ Future<String> prepareGitProject(
   final trees = listed.code == 0
       ? _parseWorktrees(listed.output)
       : const <_Worktree>[];
+  if (creating) {
+    final exists = await git([
+      'show-ref',
+      '--verify',
+      '--quiet',
+      '--',
+      'refs/heads/$branchName',
+    ]);
+    if (exists.code == 0) {
+      throw RepositoryCloneException(
+        'A branch named $branchName already exists. Choose it instead.',
+      );
+    }
+    final format = await git(['check-ref-format', '--branch', branchName]);
+    if (format.code != 0) {
+      throw RepositoryCloneException('$branchName is not a valid branch name.');
+    }
+    final made = await git(['switch', '-c', branchName]);
+    if (made.code != 0) {
+      throw RepositoryCloneException('Could not create $branchName here.');
+    }
+    return source;
+  }
   if (!worktree) {
     if (branchRef == null || !branchRef.startsWith('refs/heads/')) {
       throw const RepositoryCloneException(

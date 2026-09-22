@@ -6,6 +6,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/git_worktree.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/e2ee/envelope.dart';
 import 'package:harness/state/new_harness.dart';
@@ -435,6 +436,78 @@ void main() {
       });
       pick('feature/pay');
       expect(box.createLabel, 'Start in Worktree');
+    },
+  );
+
+  test(
+    'Worktree off can make a new branch for the folder, from its branch',
+    () async {
+      final connection = _Connection()..answers['/repo'] = rich;
+      final app = createApp(connectionForTest: (_) => connection);
+      final box = NewHarnessController(
+        app,
+        machineId: 'm',
+        engine: 'codex',
+        folder: '/repo',
+      );
+      addTearDown(app.dispose);
+      addTearDown(box.dispose);
+      await settle();
+      box.toggleWorktree();
+      box.focusField(NewHarnessField.branch);
+      box.setQuery('feature');
+      expect(
+        box.options.map((row) => row.title),
+        isNot(contains('Create branch feature')),
+        reason: 'It exists: pick it instead.',
+      );
+      box.setQuery('login fix');
+      expect(box.options.last.title, 'Create branch login-fix');
+      expect(box.options.last.detail, 'New branch from main');
+      box.accept(box.options.last);
+      expect(box.branchRowLabel, 'login-fix · new from main');
+      expect(box.projectFolderRequest!.payload, {
+        'projectSource': 'branch',
+        'gitSource': '/repo',
+        'branchRef': 'refs/heads/login-fix',
+        'branchName': 'login-fix',
+      });
+      box.focusField(NewHarnessField.branch);
+      box.accept(box.options.firstWhere((row) => row.title == 'feature'));
+      expect(box.branchRowLabel, 'feature');
+      expect(box.projectFolderRequest!.payload['branchName'], isNull);
+    },
+  );
+
+  test('typed branch names become valid ones as they are typed', () {
+    expect(branchNameFrom('john smith'), 'john-smith');
+    expect(branchNameFrom('  fix: login~bug?  '), 'fix-loginbug');
+    expect(branchNameFrom('a..b//c/.d.lock'), 'a.b/c/d');
+    expect(branchNameFrom('-.lead'), 'lead');
+    expect(branchNameFrom('~^:'), '');
+  });
+
+  test(
+    'the branch name field joins words and previews the valid name',
+    () async {
+      final connection = _Connection()..answers['/repo'] = rich;
+      final app = createApp(connectionForTest: (_) => connection);
+      final box = NewHarnessController(
+        app,
+        machineId: 'm',
+        engine: 'codex',
+        folder: '/repo',
+      );
+      addTearDown(app.dispose);
+      addTearDown(box.dispose);
+      await settle();
+      box.focusField(NewHarnessField.branchName);
+      box.setQuery('john smith');
+      expect(box.query, 'john-smith');
+      box.setQuery('fix: it');
+      expect(box.options.single.title, 'fix-it');
+      box.accept();
+      expect(box.projectFolderRequest!.payload['branchName'], 'fix-it');
     },
   );
 

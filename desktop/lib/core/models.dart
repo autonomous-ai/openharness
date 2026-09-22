@@ -3,6 +3,8 @@ library;
 
 import 'package:flutter/foundation.dart' show immutable;
 
+import 'git_worktree.dart' show worktreeFolderName;
+
 enum MachineAuthMode { managed, remote, self, provider }
 
 enum ConnectionStatus { disconnected, connecting, connected, reconnecting }
@@ -806,6 +808,21 @@ class AgentProject {
             .where((part) => part.isNotEmpty)
             .lastOrNull ??
         name;
+  }
+
+  /// The worktree's own folder, when it says more than the branch: Harness
+  /// names a worktree's folder after its branch, so it shows once the branch
+  /// has moved on — and it is where the engine's session history is kept.
+  String? get worktreeFolder {
+    if (!worktree) return null;
+    final folder = root
+        ?.split(RegExp(r'[/\\]'))
+        .where((part) => part.isNotEmpty)
+        .lastOrNull;
+    if (folder == null) return null;
+    return branch != null && worktreeFolderName(branch!) == folder
+        ? null
+        : folder;
   }
 
   String identity(String machineId) =>

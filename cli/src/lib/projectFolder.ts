@@ -9,7 +9,7 @@ import { GitProjectError, prepareGitProject, validGitPath } from './gitProject.j
  *  harness and the time. */
 export type ProjectFolder = { source: 'new'; name?: string } | { source: 'remote'; repositoryUrl: string; name: string }
   | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean }
-  | { source: 'branch'; gitSource: string; branchRef?: string }
+  | { source: 'branch'; gitSource: string; branchRef?: string; branchName?: string }
 
 export class ProjectFolderError extends Error {
   constructor(readonly code: string, message: string) { super(message) }
@@ -33,6 +33,13 @@ export function parseProjectFolder(payload: Record<string, unknown>): ProjectFol
       }
       return { source: 'worktree', gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}),
         branchName: name, ...(payload.branchMode === 'existing' ? { existingBranch: true } : {}) }
+    }
+    // A new branch for the folder itself, named by `branchRef` too.
+    if (payload.projectSource === 'branch' && name !== undefined) {
+      if (!plausibleBranchName(name) || ref !== `refs/heads/${name}`) {
+        throw new ProjectFolderError('INVALID_PROJECT_SOURCE', 'Choose a Git project and branch.')
+      }
+      return { source: 'branch', gitSource: payload.gitSource, branchRef: ref, branchName: name }
     }
     return { source: payload.projectSource, gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}) }
   }
@@ -88,6 +95,7 @@ export async function prepareProjectFolder(
       return await prepareGitProject(project.gitSource, {
         root, worktree: project.source === 'worktree', ref: project.branchRef,
         ...(project.source === 'worktree' && project.branchName ? { branchName: project.branchName, existingBranch: project.existingBranch === true } : {}),
+        ...(project.source === 'branch' && project.branchName ? { branchName: project.branchName } : {}),
       })
     }
     await mkdir(root, { recursive: true })

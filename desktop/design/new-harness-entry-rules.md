@@ -39,7 +39,12 @@ selected machine without fetching, switching branches, or creating a worktree.
 A failed discovery offers Retry and blocks starting until the result is known.
 
 A worktree is a temporary folder, never a project: a harness is known by the
-folder it was started in and its repository's branch. A folder inside a linked
+folder it was started in and its repository's branch. Pane headers read
+`machine › folder › branch`: a subfolder as itself, a checkout's root (a
+worktree's too) as its repository, the branch with the same icon everywhere.
+A worktree's own folder appears between them only once its branch no longer
+matches it — the folder is where Claude Code and Codex keep that session's
+history — and the header's tooltip always has the full path. A folder inside a linked
 worktree (the focused pane's, or one typed or browsed) shows as the same folder
 in the repository's main checkout, so Cmd-N from a worktree pane starts beside
 it rather than inside it. Worktrees Start made are never offered as recent
@@ -56,8 +61,9 @@ With `[x]` there are two rows, as in JetBrains and GitHub Desktop:
   has locally becomes a local branch of the same name tracking it; a branch
   that already has a worktree opens there, and Start reads **Start in
   Worktree**. Typing a name makes a new branch from From, or uses the existing
-  branch of that name. The project folder's own branch cannot be checked out
-  twice and is refused.
+  branch of that name; spaces become `-` as they are typed and anything else Git
+  refuses in a branch name is dropped. The project folder's own branch cannot
+  be checked out twice and is refused.
 
 The name is settled at Start, where it can be seen and edited; Harness never
 renames a branch afterwards. The worktree is checked out in
@@ -66,8 +72,10 @@ repository's `.worktreeinclude` (gitignore syntax, e.g. `.env`) are copied in.
 
 With `[ ]`, **Branch** is the branch the folder itself is on; only local
 branches are selectable. A branch with a worktree of its own opens there
-(**Start in Worktree**). Switching the folder to another branch needs a folder
-with nothing uncommitted and no harness working in it. No changes are forced,
+(**Start in Worktree**). Typing a name no branch has offers **Create branch**:
+a new branch from the folder's branch, keeping its uncommitted changes.
+Switching or creating needs no harness working in the folder, and switching
+also needs nothing uncommitted. No changes are forced,
 stashed, or discarded. A selected subfolder follows into a new worktree only if
 it exists in that commit.
 

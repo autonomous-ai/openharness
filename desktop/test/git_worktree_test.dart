@@ -138,6 +138,32 @@ void main() {
     expect(await git(['branch', '--show-current']), 'feature');
   });
 
+  test(
+    'a new branch for the folder itself keeps its uncommitted work',
+    () async {
+      await File(p.join(repo, 'src', 'value')).writeAsString('in progress');
+      final path = await ProjectFolderRequest.branch(
+        repo,
+        'refs/heads/login-fix',
+        newBranch: 'login-fix',
+      ).prepareLocal(projectHome: root.path);
+      expect(path, repo);
+      expect(await git(['branch', '--show-current']), 'login-fix');
+      expect(
+        await File(p.join(repo, 'src', 'value')).readAsString(),
+        'in progress',
+      );
+      await expectLater(
+        ProjectFolderRequest.branch(
+          repo,
+          'refs/heads/feature',
+          newBranch: 'feature',
+        ).prepareLocal(projectHome: root.path),
+        throwsA(isA<RepositoryCloneException>()),
+      );
+    },
+  );
+
   Future<String> real(String path) => Directory(path).resolveSymbolicLinks();
 
   test('a branch checked out in another worktree opens there', () async {

@@ -98,6 +98,15 @@ describe('launch Git preparation', () => {
     }
   })
 
+  it('makes a new branch for the folder itself, keeping its uncommitted work, and refuses one that exists', async () => {
+    await writeFile(join(repo, 'src', 'value'), 'in progress')
+    expect(await prepare('branch', 'refs/heads/login-fix', repo, { branchName: 'login-fix' })).toBe(repo)
+    expect(await git('branch', '--show-current')).toBe('login-fix')
+    expect(await readFile(join(repo, 'src', 'value'), 'utf8')).toBe('in progress')
+    await expect(prepare('branch', 'refs/heads/feature', repo, { branchName: 'feature' })).rejects.toMatchObject({ code: 'BRANCH_EXISTS' })
+    expect(() => parseProjectFolder({ projectSource: 'branch', gitSource: repo, branchRef: 'refs/heads/other', branchName: 'login-fix' })).toThrow()
+  })
+
   it('checks out an existing branch as it is in a new worktree, once', async () => {
     await git('branch', 'topic', 'main')
     const path = await prepare('worktree', 'refs/heads/topic', repo, { branchName: 'topic', branchMode: 'existing' })

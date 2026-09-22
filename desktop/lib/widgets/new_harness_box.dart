@@ -226,7 +226,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     box.canUseWorktree,
     box.checkingGit,
     box.gitError,
-    box.branchLabel,
+    box.branchRowLabel,
     box.worktreeBranchLabel,
     box.createLabel,
     box.placement,
@@ -957,7 +957,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                 if (box.isGitProject)
                   _segment(
                     NewHarnessField.branch,
-                    box.branchLabel,
+                    box.branchRowLabel,
                     title: _choiceTitle(_LaunchChoice.branch),
                     tooltip: box.worktree
                         ? 'Where the new branch starts. A remote branch is fetched first.'
