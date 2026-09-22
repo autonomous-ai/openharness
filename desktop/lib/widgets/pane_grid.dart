@@ -553,6 +553,10 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                                   ),
                                   session: pane.session,
                                   visible: rectangles.containsKey(pane.id),
+                                  retainContent:
+                                      pane.session != null &&
+                                      !pane.isWeb &&
+                                      pane.sharedHarness == null,
                                   presentation: _presentation(
                                     pane,
                                     rectangles.containsKey(pane.id),
@@ -821,12 +825,14 @@ class _PaneLayer extends StatefulWidget {
     super.key,
     required this.session,
     required this.visible,
+    required this.retainContent,
     required this.presentation,
     required this.child,
   });
 
   final TerminalSession? session;
   final bool visible;
+  final bool retainContent;
   final Object? presentation;
   final Widget child;
 
@@ -836,12 +842,15 @@ class _PaneLayer extends StatefulWidget {
 
 class _PaneLayerState extends State<_PaneLayer> {
   final _focus = FocusNode(canRequestFocus: false, skipTraversal: true);
-  late Widget _layer = _buildLayer();
+  late Widget _content;
+  late Widget _layer;
 
   @override
   void initState() {
     super.initState();
     prepareInput(widget.visible);
+    _content = widget.child;
+    _layer = _buildLayer();
   }
 
   void prepareInput(bool visible) {
@@ -853,9 +862,18 @@ class _PaneLayerState extends State<_PaneLayer> {
   void didUpdateWidget(_PaneLayer oldWidget) {
     super.didUpdateWidget(oldWidget);
     prepareInput(widget.visible);
-    if (oldWidget.visible != widget.visible ||
-        oldWidget.presentation != widget.presentation ||
-        !identical(oldWidget.session, widget.session)) {
+    // Only the outgoing chrome is reused. Revealing a pane always refreshes
+    // its presentation, including dependencies that changed while hidden.
+    final contentChanged =
+        !identical(oldWidget.session, widget.session) ||
+        oldWidget.retainContent != widget.retainContent ||
+        ((widget.visible || !widget.retainContent) &&
+            (oldWidget.visible != widget.visible ||
+                oldWidget.presentation != widget.presentation));
+    if (contentChanged) {
+      _content = widget.child;
+    }
+    if (oldWidget.visible != widget.visible || contentChanged) {
       _layer = _buildLayer();
     }
   }
@@ -879,10 +897,25 @@ class _PaneLayerState extends State<_PaneLayer> {
       child: Focus.withExternalFocusNode(
         focusNode: _focus,
         includeSemantics: false,
-        child: widget.child,
+        child: _PaneVisibility(visible: widget.visible, child: _content),
       ),
     ),
   );
+}
+
+/// Switching tabs updates the terminal's rendering/input lifecycle without
+/// rebuilding unchanged pane borders, drop targets and header controls.
+class _PaneVisibility extends InheritedWidget {
+  const _PaneVisibility({required this.visible, required super.child});
+
+  final bool visible;
+
+  static bool? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_PaneVisibility>()?.visible;
+
+  @override
+  bool updateShouldNotify(_PaneVisibility oldWidget) =>
+      visible != oldWidget.visible;
 }
 
 /// Five or more tiles: a grid, sized by what a terminal actually needs.
@@ -1459,74 +1492,84 @@ class _PaneContent extends StatelessWidget {
         notice = null;
       }
       return LayoutBuilder(
-        builder: (context, constraints) => TerminalPanel(
-          notifier: notifier,
-          session: session,
-          viewportSize: constraints.biggest,
-          paneLocation: (notifier.activeSwarmId, notifier.panes.indexOf(pane)),
-          layoutRequest: (
-            notifier.paneLayoutRequest,
-            notifier.panes.length,
-            notifier.zoomedPaneId,
-          ),
-          focused: visible && notifier.isPaneFocused(pane.id),
-          outputRepaintInterval: throttleBackgroundOutput
-              ? const Duration(milliseconds: 80)
-              : null,
-          focusRequest: notifier.isPaneFocused(pane.id)
-              ? notifier.paneFocusRequest
-              : 0,
-          focusByUser: notifier.paneFocusByUser,
-          visible: visible,
-          compactHeader: swarmMode,
-          composerVisible: pane.composerVisible,
-          readOnly: notice != null,
-          notice: notice,
-          onToggleComposer: () => notifier.toggleComposer(pane.id),
-          onClose: single && !swarmMode ? null : close,
-          onRestart: agent == null || offline || needsLink
-              ? null
-              : () =>
-                    restartHarness(context, notifier, pane.machineId, agent.id),
-          onFork: agent == null || offline || needsLink || !agent.canFork
-              ? null
-              : () => forkHarness(
-                  context,
-                  notifier,
-                  pane.machineId,
-                  agent.id,
-                  agent.displayName,
-                  engine: agent.engine,
-                ),
-          // The same confirmation the rail's row menu opens. Only for an
-          // agent the machine still lists — a pane whose agent is already
-          // gone has nothing to end.
-          onDelete: agent == null
-              ? null
-              : () => confirmDeleteAgent(
-                  context,
-                  notifier,
-                  pane.machineId,
-                  agent.id,
-                  agent.displayName,
-                  engine: agent.engine,
-                ),
-          zoomed: notifier.zoomedPaneId == pane.id,
-          onToggleZoom:
-              swarmMode && (!single || notifier.zoomedPaneId == pane.id)
-              ? () {
-                  notifier.focusPane(pane.id);
-                  notifier.toggleZoomPane();
-                }
-              : null,
-          onRendererFocus: () => notifier.focusPane(pane.id),
-          paneDrag: single
-              ? null
-              : PaneDragHandle(
-                  ref: PaneDragRef(paneId: pane.id),
-                  size: constraints.biggest,
-                ),
-        ),
+        builder: (context, constraints) {
+          final terminalVisible = _PaneVisibility.maybeOf(context) ?? visible;
+          return TerminalPanel(
+            notifier: notifier,
+            session: session,
+            viewportSize: constraints.biggest,
+            paneLocation: (
+              notifier.activeSwarmId,
+              notifier.panes.indexOf(pane),
+            ),
+            layoutRequest: (
+              notifier.paneLayoutRequest,
+              notifier.panes.length,
+              notifier.zoomedPaneId,
+            ),
+            focused: terminalVisible && notifier.isPaneFocused(pane.id),
+            outputRepaintInterval: terminalVisible && throttleBackgroundOutput
+                ? const Duration(milliseconds: 80)
+                : null,
+            focusRequest: notifier.isPaneFocused(pane.id)
+                ? notifier.paneFocusRequest
+                : 0,
+            focusByUser: notifier.paneFocusByUser,
+            visible: terminalVisible,
+            compactHeader: swarmMode,
+            composerVisible: pane.composerVisible,
+            readOnly: notice != null,
+            notice: notice,
+            onToggleComposer: () => notifier.toggleComposer(pane.id),
+            onClose: single && !swarmMode ? null : close,
+            onRestart: agent == null || offline || needsLink
+                ? null
+                : () => restartHarness(
+                    context,
+                    notifier,
+                    pane.machineId,
+                    agent.id,
+                  ),
+            onFork: agent == null || offline || needsLink || !agent.canFork
+                ? null
+                : () => forkHarness(
+                    context,
+                    notifier,
+                    pane.machineId,
+                    agent.id,
+                    agent.displayName,
+                    engine: agent.engine,
+                  ),
+            // The same confirmation the rail's row menu opens. Only for an
+            // agent the machine still lists — a pane whose agent is already
+            // gone has nothing to end.
+            onDelete: agent == null
+                ? null
+                : () => confirmDeleteAgent(
+                    context,
+                    notifier,
+                    pane.machineId,
+                    agent.id,
+                    agent.displayName,
+                    engine: agent.engine,
+                  ),
+            zoomed: notifier.zoomedPaneId == pane.id,
+            onToggleZoom:
+                swarmMode && (!single || notifier.zoomedPaneId == pane.id)
+                ? () {
+                    notifier.focusPane(pane.id);
+                    notifier.toggleZoomPane();
+                  }
+                : null,
+            onRendererFocus: () => notifier.focusPane(pane.id),
+            paneDrag: single
+                ? null
+                : PaneDragHandle(
+                    ref: PaneDragRef(paneId: pane.id),
+                    size: constraints.biggest,
+                  ),
+          );
+        },
       );
     }
 
