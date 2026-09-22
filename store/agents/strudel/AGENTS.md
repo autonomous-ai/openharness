@@ -34,6 +34,11 @@ listen, name it and **Keep take**. The pane records actual stereo output, up to 
 saves `out/takes/<id>/performance.wav`, `take.json`, numbered source versions and `take.zip`.
 The live track file stays untouched. The saved take reopens in the pane after a restart.
 
+To audition a favorite passage, select its marker and **Loop moment**. This repeats the captured
+audio until the next distinct marker or the end of the take. It does not synthesize the source again
+or trim the saved WAV. **Stop looping** restores full-take playback. The selected range is temporary;
+the original audio, marker journal and downloadable source remain intact.
+
 When asked to develop a kept take or a marked moment, read its `take.json` and the corresponding
 source version before editing `track.strudel`. Use the journal's source, mix, tempo and marker
 events to understand the direction; do not replace the performance with the default template.

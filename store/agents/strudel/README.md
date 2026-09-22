@@ -21,7 +21,9 @@ its preview video pairs the screen recording with the captured take's audio.
   keeps playing. `pane/voices.mjs` is the voice parser (`node --test pane/voices.test.mjs`).
 - **Perform and keep.** Click Play, then **Record take**. Mute, solo, run a code change, or mark a
   moment while the track plays. **Finish take** opens the actual stereo recording, with a waveform
-  and seekable moment buttons. Name it and **Keep take**: the WAV, every successfully played code
+  and seekable moment buttons. Select a moment and **Loop moment** to audition its captured audio
+  through the next marker or the end of the take. The waveform highlights the passage; **Stop
+  looping** returns to the full recording. Name it and **Keep take**: the WAV, every successfully played code
   version, a timed performance journal and an **Audio + source** ZIP live in `out/takes/`.
   Open them again from **Takes**, including after restarting the pane. Listening to a take stops
   the live instrument; playing the instrument pauses the take. Failed saves retain the recording

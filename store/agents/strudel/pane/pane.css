@@ -227,6 +227,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #take-markers { display: flex; gap: 6px; overflow-x: auto; padding: 0 0 8px; }
 #take-markers:empty { display: none; }
 #take-markers button { white-space: nowrap; font-size: 11px; color: var(--h-accent); }
+#performance [aria-pressed="true"] { border-color: var(--h-accent); background: color-mix(in srgb, var(--h-accent) 14%, var(--h-bg)); }
+#take-loop { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+#loop-details { color: var(--h-ink2); font-size: 11px; overflow-wrap: anywhere; }
 #take-name { flex: 1; max-width: 480px; }
 #performance #keep-take { background: var(--h-accent); color: white; border-color: var(--h-accent); white-space: nowrap; }
 #take-message { padding: 0 14px 10px; color: var(--h-ink2); font-size: 12px; }
