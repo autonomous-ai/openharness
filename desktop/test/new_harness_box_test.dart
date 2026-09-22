@@ -13,6 +13,7 @@ import 'package:harness/core/repository_clone.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
+import 'package:harness/widgets/box_chrome.dart' show kWorkspaceInset;
 import 'package:harness/widgets/new_harness_box.dart';
 import 'package:harness/ws/ws_conn.dart';
 import 'package:path/path.dart' as p;
@@ -534,9 +535,9 @@ void main() {
     expect(find.byKey(const ValueKey('new-harness-box')), findsOneWidget);
     // Attached to the workspace's bottom edge, without dimming or resizing it.
     final dock = tester.getRect(find.byKey(const ValueKey('new-harness-box')));
-    expect(dock.left, 6);
-    expect(dock.right, tester.view.physicalSize.width - 6);
-    expect(dock.bottom, tester.view.physicalSize.height - 6);
+    expect(dock.left, kWorkspaceInset);
+    expect(dock.right, tester.view.physicalSize.width - kWorkspaceInset);
+    expect(dock.bottom, tester.view.physicalSize.height - kWorkspaceInset);
     expect(find.byKey(const ValueKey('new-harness-input')), findsNothing);
     expect(
       FocusManager.instance.primaryFocus!.debugLabel,

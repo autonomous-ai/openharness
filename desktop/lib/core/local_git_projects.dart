@@ -118,7 +118,7 @@ class LocalGitProjects {
       final branch = head?.startsWith('ref: refs/heads/') == true
           ? head!.substring(16)
           : head != null && RegExp(r'^[a-fA-F0-9]{40,64}$').hasMatch(head)
-          ? 'Detached ${head.substring(0, 7)}'
+          ? '$kDetachedBranchPrefix${head.substring(0, 7)}'
           : null;
       final project = AgentProject.fromJson({
         // A linked worktree is named for its repository, not its folder.

@@ -1890,7 +1890,7 @@ class _TerminalHeader extends StatelessWidget {
       session.agentName,
       machineName,
       if (project != null) project.cwd,
-      if (project?.branch != null) 'Branch: ${project!.branch}',
+      ?project?.branchDetail,
       if (profile != null) 'Codex profile: $profile',
       'Double-click to rename',
     ].join('\n');
@@ -2145,8 +2145,7 @@ class _TerminalHeader extends StatelessWidget {
                           if (forkedFrom != null)
                             'Forked from ${forkedFrom.name}',
                           if (project != null) project.cwd,
-                          if (project?.branch?.isNotEmpty == true)
-                            'Branch: ${project!.branch}',
+                          ?project?.branchDetail,
                           machineName,
                         ].join('\n'),
                         child: PromptContextView(
@@ -2158,11 +2157,9 @@ class _TerminalHeader extends StatelessWidget {
                             // The folder as it was chosen and its repository's branch;
                             // the full working folder is in the tooltip.
                             project: narrow ? null : project?.label,
-                            // Waiting for the session's name, a branch Harness made
-                            // up at Start is not worth reading.
-                            branch: narrow || project?.branchPending == true
-                                ? null
-                                : project?.branch,
+                            // Not a branch Harness made up that waits for the
+                            // session's name, nor a commit an agent checked out.
+                            branch: narrow ? null : project?.shownBranch,
                             leading: !narrow && forkedFrom != null
                                 ? 'forked from ${forkedFrom.name}'
                                 : null,
