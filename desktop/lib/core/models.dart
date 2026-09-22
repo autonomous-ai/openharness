@@ -788,6 +788,11 @@ class AgentProject {
   final String? remote;
   final String? branch;
 
+  /// What a person calls the project: a Git checkout's remote repository,
+  /// else the name the daemon gave it (the repository folder, or the plain
+  /// folder outside Git). Which folder or worktree it runs in is [cwd].
+  String get label => remote?.split('/').last ?? name;
+
   String identity(String machineId) =>
       remote != null ? 'repo:$remote' : 'folder:$machineId:${root ?? cwd}';
 

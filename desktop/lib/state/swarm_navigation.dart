@@ -396,7 +396,7 @@ Future<void> _resumeStoppedDestination(
 }) {
   final prefix = [
     type,
-    project?.name,
+    project?.label,
   ].whereType<String>().where((part) => part.isNotEmpty).join(' · ');
   final branch = project?.branch;
   return (
@@ -404,7 +404,7 @@ Future<void> _resumeStoppedDestination(
       agentLabel,
       machine,
       if (offline) 'Offline',
-      project?.name,
+      project?.label,
       branch,
     ].whereType<String>().where((part) => part.isNotEmpty).join(' · '),
     text: [
@@ -654,7 +654,7 @@ class SwarmLocationCatalog {
       promptContext: PromptContext(
         harness: label,
         machine: machineLabel,
-        project: project?.name,
+        project: project?.label,
         branch: project?.branch,
         leading: machine?.nodeOnline == false ? 'Offline' : null,
       ),
@@ -1103,6 +1103,7 @@ List<SwarmDestination> swarmDestinations(
       context.addAll([
         row?.$1.machine.displayName,
         row?.$2.name ?? pane.session?.agentName,
+        project?.label,
         project?.name,
         project?.branch,
         project?.cwd,
@@ -1193,7 +1194,7 @@ List<SwarmDestination> swarmDestinations(
         promptContext: PromptContext(
           harness: label,
           machine: machineName,
-          project: project?.name,
+          project: project?.label,
           branch: project?.branch,
           leading: machine?.nodeOnline == false ? 'Offline' : null,
         ),
@@ -1212,6 +1213,7 @@ List<SwarmDestination> swarmDestinations(
           row?.$2.title,
           type,
           machineName,
+          project?.label,
           project?.name,
           project?.branch,
           project?.cwd,

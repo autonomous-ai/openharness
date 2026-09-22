@@ -2137,7 +2137,7 @@ class _TerminalHeader extends StatelessWidget {
                             // The project and its branch identify the pane. Where the
                             // agent stands inside it (a subfolder, a temporary worktree)
                             // is the working folder in the tooltip.
-                            project: narrow ? null : project?.name,
+                            project: narrow ? null : project?.label,
                             branch: narrow ? null : project?.branch,
                             leading: !narrow && forkedFrom != null
                                 ? 'forked from ${forkedFrom.name}'
