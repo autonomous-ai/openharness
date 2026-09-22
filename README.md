@@ -9,7 +9,7 @@ Codex, and others to make software, design parts and circuit boards, explore dat
 with your agents, domain tools, and live viewers in one place and sessions that persist across every
 machine you own.
 
-[Download the app](https://harness.autonomous.ai/desktop) · [Watch the demos](#get-your-hands-on-it) ·
+[Download the app](https://harness.autonomous.ai/desktop) · [Explore the demos](#get-your-hands-on-it) ·
 [What you can make](#domain-specific-harnesses-dsh) · [Run it](#run-it) ·
 [Harness device](#harness-device) · [Contribute](#contributing)
 
@@ -24,64 +24,64 @@ Discover a craft in the Store. Open **Featured** to watch recorded sessions and 
 Shape a lamp. Change a robot's world. Rewind a jump. Perform a track. The agent builds with the
 tools of a craft; you explore the result, make choices and keep the version you like.
 
-Pick a preview to watch its recording, or **Try it** for a starting prompt and a walkthrough.
+Open a preview for a closer look, download a recording, or **Try it** for a starting prompt and a walkthrough.
 
 <!-- Posters and recording captions are from store/hands-on.json. -->
 <table>
   <tr>
     <td width="50%" valign="top">
       <p><strong>Shape a lamp</strong> · Blender</p>
-      <a href="docs/images/blender-shape-lab-demo.mp4"><img src="docs/images/blender-shape-lab.png" width="640" alt="Shape Lab displaying a sculptural ribbon lamp with adjustable dimensions and a shelf of saved designs."></a>
+      <a href="docs/images/blender-shape-lab.png"><img src="docs/images/blender-shape-lab.png" width="640" alt="Shape Lab displaying a sculptural ribbon lamp with adjustable dimensions and a shelf of saved designs."></a>
       <p>Real Blender session · shape a ribbon lamp and keep named design variants</p>
-      <p><a href="docs/images/blender-shape-lab-demo.mp4">▶ Watch session</a> · <a href="docs/hands-on.md#blender-shape-it-until-it-feels-right">Try it</a></p>
+      <p><a href="https://github.com/autonomous-ai/openharness/raw/refs/heads/main/docs/images/blender-shape-lab-demo.mp4">Download recording</a> · <a href="docs/hands-on.md#blender-shape-it-until-it-feels-right">Try it</a></p>
     </td>
     <td width="50%" valign="top">
       <p><strong>Change the world</strong> · MuJoCo</p>
-      <a href="docs/images/mujoco-what-if-demo.mp4"><img src="docs/images/mujoco-what-if-shove.png" width="640" alt="A Unitree Go2 in the native MuJoCo viewer, comparing two futures with a shared timeline and body-height measurements."></a>
+      <a href="docs/images/mujoco-what-if-shove.png"><img src="docs/images/mujoco-what-if-shove.png" width="640" alt="A Unitree Go2 in the native MuJoCo viewer, comparing two futures with a shared timeline and body-height measurements."></a>
       <p>Real Go2 session · 100 N shove · compare two futures and keep the experiment</p>
-      <p><a href="docs/images/mujoco-what-if-demo.mp4">▶ Watch session</a> · <a href="docs/hands-on.md#mujoco-try-a-different-world">Try it</a></p>
+      <p><a href="https://github.com/autonomous-ai/openharness/raw/refs/heads/main/docs/images/mujoco-what-if-demo.mp4">Download recording</a> · <a href="docs/hands-on.md#mujoco-try-a-different-world">Try it</a></p>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
       <p><strong>Rewind a jump</strong> · Godogen</p>
-      <a href="docs/images/godogen-rewind-demo.mp4"><img src="docs/images/godogen-rewind.png" width="640" alt="A playable game paused on its Rewind timeline with Try from here and Pin moment controls."></a>
+      <a href="docs/images/godogen-rewind.png"><img src="docs/images/godogen-rewind.png" width="640" alt="A playable game paused on its Rewind timeline with Try from here and Pin moment controls."></a>
       <p>Alpine Drift · a real playable run, rewind, retry and saved feedback</p>
-      <p><a href="docs/images/godogen-rewind-demo.mp4">▶ Watch session</a> · <a href="docs/hands-on.md#godogen-try-that-moment-again">Try it</a></p>
+      <p><a href="https://github.com/autonomous-ai/openharness/raw/refs/heads/main/docs/images/godogen-rewind-demo.mp4">Download recording</a> · <a href="docs/hands-on.md#godogen-try-that-moment-again">Try it</a></p>
     </td>
     <td width="50%" valign="top">
       <p><strong>Perform a track</strong> · Strudel</p>
-      <a href="docs/images/strudel-live-take-demo.mp4"><img src="docs/images/strudel-live-take.png" width="640" alt="Strudel&#x27;s live voice lanes beside a recorded take with waveform, named moments and an audio-and-source download."></a>
+      <a href="docs/images/strudel-live-take.png"><img src="docs/images/strudel-live-take.png" width="640" alt="Strudel&#x27;s live voice lanes beside a recorded take with waveform, named moments and an audio-and-source download."></a>
       <p>Lantern room · real 112 bpm performance with audio · keep the WAV, source and markers</p>
-      <p><a href="docs/images/strudel-live-take-demo.mp4">▶ Watch session · with audio</a> · <a href="docs/hands-on.md#strudel-perform-the-version-you-love">Try it</a></p>
+      <p><a href="https://github.com/autonomous-ai/openharness/raw/refs/heads/main/docs/images/strudel-live-take-demo.mp4">Download recording · with audio</a> · <a href="docs/hands-on.md#strudel-perform-the-version-you-love">Try it</a></p>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
       <p><strong>Compare the signal</strong> · CircuitJS</p>
-      <a href="docs/images/scope-lab-demo.mp4"><img src="docs/images/scope-lab.png" width="640" alt="Scope Lab comparing native RC filter traces at two resistance values with A and B measurement cursors."></a>
+      <a href="docs/images/scope-lab.png"><img src="docs/images/scope-lab.png" width="640" alt="Scope Lab comparing native RC filter traces at two resistance values with A and B measurement cursors."></a>
       <p>Real CircuitJS solver · compare RC filter traces at 1 kΩ and 2 kΩ, measure and keep both</p>
-      <p><a href="docs/images/scope-lab-demo.mp4">▶ Watch session</a> · <a href="docs/hands-on.md#circuitjs-see-what-changed-in-the-signal">Try it</a></p>
+      <p><a href="https://github.com/autonomous-ai/openharness/raw/refs/heads/main/docs/images/scope-lab-demo.mp4">Download recording</a> · <a href="docs/hands-on.md#circuitjs-see-what-changed-in-the-signal">Try it</a></p>
     </td>
     <td width="50%" valign="top">
       <p><strong>Turn a molecule</strong> · RDKit</p>
-      <a href="docs/images/rdkit-bond-scan-demo.mp4"><img src="docs/images/rdkit-bond-scan.png" width="640" alt="An authored molecule in 3D with a reference pose, native MMFF94 bond-energy curve and a selected rotation angle."></a>
+      <a href="docs/images/rdkit-bond-scan.png"><img src="docs/images/rdkit-bond-scan.png" width="640" alt="An authored molecule in 3D with a reference pose, native MMFF94 bond-energy curve and a selected rotation angle."></a>
       <p>Phenethyl acetate · real rigid MMFF94 bond scan · 25 poses and a kept study</p>
-      <p><a href="docs/images/rdkit-bond-scan-demo.mp4">▶ Watch session</a> · <a href="docs/hands-on.md#rdkit-see-a-molecule-turn">Try it</a></p>
+      <p><a href="https://github.com/autonomous-ai/openharness/raw/refs/heads/main/docs/images/rdkit-bond-scan-demo.mp4">Download recording</a> · <a href="docs/hands-on.md#rdkit-see-a-molecule-turn">Try it</a></p>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
       <p><strong>Review a draft</strong> · Typst</p>
-      <a href="docs/images/doc-review-demo.mp4"><img src="docs/images/doc-review.png" width="640" alt="A native PDF draft held for review, with anchored Change, Keep and Question notes."></a>
+      <a href="docs/images/doc-review.png"><img src="docs/images/doc-review.png" width="640" alt="A native PDF draft held for review, with anchored Change, Keep and Question notes."></a>
       <p>Portable light · real Typst PDF · anchored notes carried into a later revision</p>
-      <p><a href="docs/images/doc-review-demo.mp4">▶ Watch session</a> · <a href="docs/hands-on.md#typst-point-at-what-you-mean">Try it</a></p>
+      <p><a href="https://github.com/autonomous-ai/openharness/raw/refs/heads/main/docs/images/doc-review-demo.mp4">Download recording</a> · <a href="docs/hands-on.md#typst-point-at-what-you-mean">Try it</a></p>
     </td>
     <td width="50%" valign="top">
       <p><strong>Ask a better question</strong> · Jev Sheets</p>
-      <a href="docs/images/question-lab-demo.mp4"><img src="docs/images/question-lab.png" width="640" alt="Question Lab comparing two urgency questions on fictional support rows, prominently labeled offline practice."></a>
+      <a href="docs/images/question-lab.png"><img src="docs/images/question-lab.png" width="640" alt="Question Lab comparing two urgency questions on fictional support rows, prominently labeled offline practice."></a>
       <p>Offline practice recording · fictional support tickets · paired questions and a kept review</p>
-      <p><a href="docs/images/question-lab-demo.mp4">▶ Watch session</a> · <a href="docs/hands-on.md#jev-sheets-ask-a-better-question">Try it</a></p>
+      <p><a href="https://github.com/autonomous-ai/openharness/raw/refs/heads/main/docs/images/question-lab-demo.mp4">Download recording</a> · <a href="docs/hands-on.md#jev-sheets-ask-a-better-question">Try it</a></p>
     </td>
   </tr>
 </table>
