@@ -8,6 +8,7 @@ import 'package:harness/terminal/terminal_text.dart';
 import '../core/harness_file_store.dart';
 import '../core/local_key_value_store.dart';
 import '../core/test_run.dart';
+import '../shared/theme/app_type.dart';
 import '../widgets/box_chrome.dart';
 import '../widgets/terminal_prompt.dart';
 import 'app_keymap.dart';
@@ -328,7 +329,7 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
     if (rows.isEmpty) return;
     setState(() => _cursor = (_cursor + delta).clamp(0, rows.length - 1));
     if (_scroll.hasClients) {
-      final height = 54.0 * terminalTextScaleOf(context);
+      final height = 54.0 * appTextScaleOf(context);
       final top = _cursor * height, bottom = top + height;
       final at = _scroll.offset, view = _scroll.position.viewportDimension;
       if (top < at || bottom > at + view) {
@@ -538,7 +539,7 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
                     : ListView.builder(
                         controller: _scroll,
                         shrinkWrap: true,
-                        itemExtent: 54.0 * terminalTextScaleOf(context),
+                        itemExtent: 54.0 * appTextScaleOf(context),
                         itemCount: rows.length,
                         itemBuilder: (context, i) {
                           final row = rows[i];

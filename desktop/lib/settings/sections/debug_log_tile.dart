@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../../logging/log_file.dart';
 import '../../logging/log_stream.dart';
@@ -63,7 +62,8 @@ class _DebugLogTileState extends State<DebugLogTile> {
                           entry.message,
                           maxLines: 3,
                           overflow: TextOverflow.ellipsis,
-                          style: terminalTextStyle(
+                          style: AppType.monoLabel(
+                            fontWeight: AppFont.regular,
                             height: 1.35,
                             color: AppPalette.textPrimary,
                           ),
@@ -93,7 +93,8 @@ class _DebugLogTileState extends State<DebugLogTile> {
                         entry.error!,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: terminalTextStyle(
+                        style: AppType.monoLabel(
+                          fontWeight: AppFont.regular,
                           height: 1.35,
                           color: debugDangerInk(context),
                         ),
@@ -167,7 +168,7 @@ class _Meta extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final style = terminalTextStyle(color: AppPalette.textFaint);
+    final style = AppType.monoMeta(color: AppPalette.textFaint);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [

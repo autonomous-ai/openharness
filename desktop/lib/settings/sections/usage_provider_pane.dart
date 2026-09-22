@@ -10,8 +10,6 @@
 /// would filter on a distinction this app does not have.
 library;
 
-import 'package:harness/terminal/terminal_text.dart';
-
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -88,7 +86,7 @@ class _UsageProviderPaneState extends State<UsageProviderPane> {
           Text(
             'Cache reuse rate is cache read tokens / (fresh input + cache read '
             'tokens).',
-            style: terminalTextStyle(color: AppPalette.textFaint),
+            style: AppType.caption(color: AppPalette.textFaint),
           ),
           const SizedBox(height: 12),
           UsageDailyChart(
@@ -124,7 +122,6 @@ class _Figures extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     final totals = report.totals;
     final cards = <Widget>[
       UsageStatCard(
@@ -214,10 +211,7 @@ class _Header extends StatelessWidget {
       title: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            '${provider.label} usage',
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
+          Text('${provider.label} usage', style: AppType.heading()),
           const SizedBox(height: 2),
           Text(
             // The range is named here as well as in the picker, because the
@@ -226,7 +220,7 @@ class _Header extends StatelessWidget {
             scanning
                 ? '${range.label} · Scanning local logs…'
                 : 'All local ${provider.label} usage · ${range.label}',
-            style: terminalTextStyle(color: AppPalette.textSecondary),
+            style: AppType.body(color: AppPalette.textSecondary),
           ),
         ],
       ),
@@ -271,10 +265,7 @@ class _DisabledCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            '${provider.label} usage',
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
+          Text('${provider.label} usage', style: AppType.heading()),
           const SizedBox(height: 6),
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 520),
@@ -282,7 +273,7 @@ class _DisabledCard extends StatelessWidget {
               'Reads the logs the ${provider.label} CLI already keeps on this '
               'computer to show token, model and session figures. Nothing is '
               'read until you switch it on.',
-              style: terminalTextStyle(
+              style: AppType.body(
                 height: 1.45,
                 color: AppPalette.textSecondary,
               ),
@@ -295,7 +286,7 @@ class _DisabledCard extends StatelessWidget {
               minimumSize: const Size(0, 30),
               padding: const EdgeInsets.symmetric(horizontal: 14),
             ),
-            child: Text('Enable ${provider.label}', style: terminalTextStyle()),
+            child: Text('Enable ${provider.label}'),
           ),
         ],
       ),
@@ -317,7 +308,7 @@ class _Notice extends StatelessWidget {
       ),
       child: Text(
         message,
-        style: terminalTextStyle(color: AppPalette.textSecondary),
+        style: AppType.body(color: AppPalette.textSecondary),
       ),
     );
   }

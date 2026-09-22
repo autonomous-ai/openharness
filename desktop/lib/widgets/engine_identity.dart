@@ -1014,11 +1014,14 @@ class _InitialMark extends StatelessWidget {
           // glyph would grow while its 17px square did not, and the letter would
           // clip out of its own mark.
           textScaler: TextScaler.noScaling,
-          style: terminalTextStyle(
+          style: TextStyle(
             color: identity.color,
             // The app's mono stack, not a literal: `Menlo` names nothing on
             // Linux, so this initial was drawn in the proportional default
             // while every mark beside it was monospaced.
+            fontFamily: AppFonts.mono,
+            fontFamilyFallback: AppFonts.monoFallback,
+            fontSize: size * 0.68,
             height: 1,
             fontWeight: FontWeight.w700,
           ),

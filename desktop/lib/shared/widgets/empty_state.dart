@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../theme/app_theme.dart';
 
@@ -59,10 +58,7 @@ class EmptyState extends StatelessWidget {
             Text(
               title,
               textAlign: TextAlign.center,
-              style: terminalTextStyle(
-                color: AppPalette.textPrimary,
-                fontWeight: FontWeight.w600,
-              ),
+              style: AppType.heading(color: AppPalette.textPrimary),
             ),
             if (message != null) ...[
               const SizedBox(height: 6),
@@ -71,7 +67,7 @@ class EmptyState extends StatelessWidget {
                 child: Text(
                   message!,
                   textAlign: TextAlign.center,
-                  style: terminalTextStyle(
+                  style: AppType.body(
                     color: AppPalette.textSecondary,
                     height: 1.4,
                   ),

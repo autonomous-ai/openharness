@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
+import '../shared/theme/app_type.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
@@ -179,7 +179,6 @@ class TerminalPromptKeys extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     final focused = Focus(
       focusNode: focusNode,
       autofocus: true,
@@ -220,7 +219,6 @@ class TerminalPrompt extends StatelessWidget {
   final double width;
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Dialog(
       alignment: Alignment.topCenter,
       insetPadding: EdgeInsets.fromLTRB(
@@ -251,7 +249,7 @@ Widget terminalPromptButton(
   onPressed: onPressed,
   style: TextButton.styleFrom(
     foregroundColor: danger ? Colors.orangeAccent : Colors.white70,
-    textStyle: boxMonoStyle(),
+    textStyle: AppType.label(),
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
     minimumSize: const Size(0, 30),
     tapTargetSize: MaterialTapTargetSize.shrinkWrap,

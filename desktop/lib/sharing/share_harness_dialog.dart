@@ -3,7 +3,6 @@ import 'dart:async';
 import '../shared/widgets/labeled_field.dart';
 
 import 'package:flutter/material.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -298,7 +297,7 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
                   child: Text(
                     'They’ll find this harness in Machines → Shared with you using the invited email. '
                     'Keep your machine online while they watch. You can remove access at any time.',
-                    style: terminalTextStyle(height: 1.5),
+                    style: grid.AppType.body(height: 1.5),
                   ),
                 ),
               ],
@@ -338,15 +337,15 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
         backgroundColor: grid.AppSurface.recess,
         child: Text(
           email.substring(0, 1).toUpperCase(),
-          style: terminalTextStyle(),
+          style: grid.AppType.label(),
         ),
       ),
       title: Text(
         email,
         overflow: TextOverflow.ellipsis,
-        style: terminalTextStyle(),
+        style: grid.AppType.label(),
       ),
-      subtitle: Text(subtitle, style: terminalTextStyle()),
+      subtitle: Text(subtitle, style: grid.AppType.body()),
       trailing: TextButton(
         onPressed: _busy ? null : () => _remove(share['id'] as String),
         child: const Text('Remove'),

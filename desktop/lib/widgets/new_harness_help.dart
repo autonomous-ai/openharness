@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart';
 import '../shared/widgets/app_dialog.dart';
@@ -54,9 +53,7 @@ class _HarnessHelpLinkState extends State<HarnessHelpLink> {
             foregroundColor: AppPalette.textSecondary,
             minimumSize: const Size(0, 32),
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            textStyle:
-                widget.textStyle ??
-                terminalTextStyle(fontWeight: FontWeight.w400, height: 1.4),
+            textStyle: widget.textStyle ?? AppType.body(height: 1.4),
             side: BorderSide.none,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(6),
@@ -165,9 +162,8 @@ class _HarnessHelpDialogState extends State<_HarnessHelpDialog> {
                       header: true,
                       child: Text(
                         title,
-                        style: terminalTextStyle(
+                        style: AppType.title(
                           height: 1.2,
-                          fontWeight: AppFont.semibold,
                           color: AppPalette.textPrimary,
                         ),
                       ),
@@ -175,7 +171,7 @@ class _HarnessHelpDialogState extends State<_HarnessHelpDialog> {
                     const SizedBox(height: 20),
                     Text(
                       intro,
-                      style: terminalTextStyle(
+                      style: AppType.body(
                         height: 1.5,
                         color: AppPalette.textSecondary,
                       ),
@@ -310,16 +306,15 @@ class _HelpOption extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: terminalTextStyle(
+                      style: AppType.heading(
                         height: 1.4,
-                        fontWeight: AppFont.semibold,
                         color: AppPalette.textPrimary,
                       ),
                     ),
                     const SizedBox(height: 8),
                     Text(
                       description,
-                      style: terminalTextStyle(
+                      style: AppType.body(
                         height: 1.5,
                         color: AppPalette.textSecondary,
                       ),

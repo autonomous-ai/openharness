@@ -138,8 +138,7 @@ class _StoreCategoryState extends State<StoreCategory> {
                         children: [
                           Text(
                             'Your next tool is waiting.',
-                            style: terminalTextStyle(
-                              fontWeight: FontWeight.w600,
+                            style: grid.AppType.heading(
                               color: grid.AppPalette.textPrimary,
                             ),
                           ),
@@ -147,7 +146,7 @@ class _StoreCategoryState extends State<StoreCategory> {
                           Text(
                             'Explore the harnesses in $name and choose one to try.',
                             textAlign: TextAlign.center,
-                            style: terminalTextStyle(
+                            style: grid.AppType.body(
                               color: grid.AppPalette.textSecondary,
                             ),
                           ),
@@ -249,10 +248,8 @@ class _DisciplineHero extends StatelessWidget {
       children: [
         Text(
           name,
-          style: terminalTextStyle(
+          style: grid.AppType.display(
             height: 1.15,
-            letterSpacing: -1,
-            fontWeight: FontWeight.w700,
             color: grid.AppPalette.textPrimary,
           ),
         ),
@@ -269,26 +266,24 @@ class _DisciplineHero extends StatelessWidget {
                 children: [
                   Text(
                     'GET STARTED',
-                    style: terminalTextStyle(
+                    style: grid.AppType.monoMeta(
                       letterSpacing: 1.2,
-                      fontWeight: FontWeight.w700,
+                      fontWeight: grid.AppFont.medium,
                       color: grid.AppPalette.accentOnSurface,
                     ),
                   ),
                   const SizedBox(height: 12),
                   Text(
                     headline.replaceAll('\n', ' '),
-                    style: terminalTextStyle(
+                    style: grid.AppType.title(
                       height: 1.15,
-                      letterSpacing: -.5,
-                      fontWeight: FontWeight.w700,
                       color: grid.AppPalette.textPrimary,
                     ),
                   ),
                   const SizedBox(height: 12),
                   Text(
                     description,
-                    style: terminalTextStyle(
+                    style: grid.AppType.body(
                       height: 1.5,
                       color: grid.AppPalette.textSecondary,
                     ),
@@ -302,8 +297,7 @@ class _DisciplineHero extends StatelessWidget {
                         Expanded(
                           child: Text(
                             'Explore ${entry!.name}',
-                            style: terminalTextStyle(
-                              fontWeight: FontWeight.w600,
+                            style: grid.AppType.label(
                               color: grid.AppPalette.textPrimary,
                             ),
                           ),

@@ -319,8 +319,8 @@ class _AgentPickerState extends State<AgentPicker> {
   double _rowHeight(TextScaler scaler) => widget.terminalStyle
       ? math.max(
           46,
-          scaler.scale(terminalFontStore.size) * 1.35 +
-              scaler.scale(terminalFontStore.size) * 1.35 +
+          scaler.scale(grid.AppType.monoSize) * 1.35 +
+              scaler.scale(grid.AppType.monoSize) * 1.35 +
               12,
         )
       : swarmSearchRowHeight(scaler, commands: false);
@@ -366,8 +366,7 @@ class _AgentPickerState extends State<AgentPicker> {
       overflow: TextOverflow.ellipsis,
       style: widget.terminalStyle
           ? boxMonoStyle()
-          : terminalTextStyle(
-              fontWeight: FontWeight.w500,
+          : grid.AppType.monoLabel(
               color: choice == null ? Colors.white60 : Colors.white,
             ),
     ),
@@ -609,7 +608,10 @@ class _AgentPickerState extends State<AgentPicker> {
                     'No agents match “${_query.text.trim()}”.',
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: terminalTextStyle(color: Colors.white60),
+                    style: grid.AppType.monoLabel(
+                      fontWeight: FontWeight.w400,
+                      color: Colors.white60,
+                    ),
                   ),
                 ),
               )
@@ -755,7 +757,7 @@ class _AgentPickerState extends State<AgentPicker> {
 
     final compactAction =
         (panelWidth >= 760 ? panelWidth / 2 : panelWidth) <
-        380 * scaler.scale(terminalFontStore.size) / terminalFontSize;
+        380 * scaler.scale(grid.AppType.monoSize) / grid.AppType.monoSize;
     return MouseRegion(
       onHover: (event) {
         if (_pointer.moved(event) && _cursor != index) {
@@ -798,7 +800,7 @@ class _AgentPickerState extends State<AgentPicker> {
                 matches: matches(choice.label, title: true),
                 style: widget.terminalStyle
                     ? boxMonoStyle()
-                    : terminalTextStyle(
+                    : grid.AppType.monoLabel(
                         fontWeight: FontWeight.w600,
                         color: Colors.white,
                       ),
@@ -814,7 +816,7 @@ class _AgentPickerState extends State<AgentPicker> {
                   overflow: TextOverflow.ellipsis,
                   style: widget.terminalStyle
                       ? boxMonoStyle(color: kBoxFaint)
-                      : terminalTextStyle(color: Colors.white54),
+                      : grid.AppType.monoMeta(color: Colors.white54),
                 ),
               ),
             ],
@@ -827,7 +829,7 @@ class _AgentPickerState extends State<AgentPicker> {
                 matches: matches(choice.detail, title: false),
                 style: widget.terminalStyle
                     ? boxMonoStyle(color: Colors.white60)
-                    : terminalTextStyle(color: Colors.white60),
+                    : grid.AppType.monoMeta(color: Colors.white60),
               ),
         trailing: widget.terminalStyle && highlighted
             ? Text('↵', style: boxMonoStyle(color: kBoxFaint))
@@ -836,8 +838,8 @@ class _AgentPickerState extends State<AgentPicker> {
                 constraints: BoxConstraints(
                   maxWidth:
                       170 *
-                      scaler.scale(terminalFontStore.size) /
-                      terminalFontSize,
+                      scaler.scale(grid.AppType.bodySize) /
+                      grid.AppType.bodySize,
                 ),
                 child: TextButton(
                   key: const ValueKey('new-agent-agent-row-action'),
@@ -930,9 +932,12 @@ class _AgentPreview extends StatelessWidget {
   final bool terminalStyle;
 
   static TextStyle get _muted =>
-      terminalTextStyle(height: 1.5, color: Colors.white54);
-  static TextStyle get _body =>
-      terminalTextStyle(height: 1.6, color: Color(0xffe1e1e4));
+      grid.AppType.monoMeta(height: 1.5, color: Colors.white54);
+  static TextStyle get _body => grid.AppType.monoLabel(
+    fontWeight: FontWeight.w400,
+    height: 1.6,
+    color: Color(0xffe1e1e4),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -964,7 +969,7 @@ class _AgentPreview extends StatelessWidget {
                           text: choice.label,
                           style: terminalStyle
                               ? boxMonoStyle()
-                              : terminalTextStyle(
+                              : grid.AppType.monoLabel(
                                   fontWeight: FontWeight.w600,
                                   color: Colors.white,
                                 ),
@@ -974,7 +979,7 @@ class _AgentPreview extends StatelessWidget {
                             text: '  by $creator',
                             style: terminalStyle
                                 ? boxMonoStyle(color: kBoxFaint)
-                                : terminalTextStyle(color: Colors.white54),
+                                : grid.AppType.monoMeta(color: Colors.white54),
                           ),
                       ],
                     ),
@@ -990,7 +995,11 @@ class _AgentPreview extends StatelessWidget {
                 detail,
                 style: terminalStyle
                     ? boxMonoStyle(color: Colors.white70)
-                    : terminalTextStyle(height: 1.4, color: Colors.white70),
+                    : grid.AppType.monoLabel(
+                        fontWeight: FontWeight.w400,
+                        height: 1.4,
+                        color: Colors.white70,
+                      ),
               ),
             ],
             if (chips.isNotEmpty) ...[
@@ -1015,7 +1024,7 @@ class _AgentPreview extends StatelessWidget {
                           ),
                           child: Text(
                             chip,
-                            style: terminalTextStyle(color: Colors.white70),
+                            style: grid.AppType.monoMeta(color: Colors.white70),
                           ),
                         ),
                       ),

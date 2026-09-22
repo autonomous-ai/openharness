@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/theme/appearance_prefs_store.dart';
@@ -69,7 +68,7 @@ class _PaletteChoice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
+    grid.AppTheme.watch(context);
     return Semantics(
       button: true,
       selected: selected,
@@ -107,10 +106,7 @@ class _PaletteChoice extends StatelessWidget {
                   Expanded(
                     child: Text(
                       palette.label,
-                      style: terminalTextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w500,
-                      ),
+                      style: grid.AppType.label(color: Colors.white),
                     ),
                   ),
                   SizedBox(
@@ -135,7 +131,7 @@ class _WorkspacePreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
+    grid.AppTheme.watch(context);
     return ClipRRect(
       borderRadius: BorderRadius.circular(4),
       child: SizedBox(

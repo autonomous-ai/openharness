@@ -4,7 +4,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/color_palette.dart';
-import '../terminal/terminal_font_store.dart';
+import '../shared/theme/app_type.dart';
 import 'build_identity.dart';
 
 /// Whether this build runs inside a window the app is allowed to manage.
@@ -40,9 +40,9 @@ Future<void> configureDesktopWindow({
   if (Platform.isMacOS) {
     await const MethodChannel('harness/swarm_tabs').invokeMethod('configure', {
       'palette': palette.nativeColors,
-      'fontFamily': terminalFontStore.value.fontFamily,
-      'fontSize': terminalFontStore.size,
-      'fontFallbacks': terminalFontStore.value.fontFamilyFallback,
+      'fontFamily': AppType.monoFamily,
+      'fontSize': AppType.chromeSize,
+      'fontFallbacks': AppType.monoFallback,
     });
   }
   // Always open filling the screen (owner, 2026-09-15): the tabs, a viewer

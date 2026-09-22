@@ -51,7 +51,7 @@ class KeymapSettings extends StatelessWidget {
               value: contextKind,
               // Keep the context readable when the user enlarges text. The
               // surrounding Wrap still limits the field to the pane width.
-              width: 160 * terminalTextScaleOf(context),
+              width: 160 * grid.appTextScaleOf(context),
               options: const [
                 SelectOption(
                   value: KeymapContext.workspace,
@@ -84,19 +84,22 @@ class KeymapSettings extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             'Saves apply automatically. Invalid edits keep your last working shortcuts.',
-            style: terminalTextStyle(color: grid.AppPalette.textSecondary),
+            style: grid.AppType.body(color: grid.AppPalette.textSecondary),
           ),
           const SizedBox(height: 4),
           SelectableText(
             keymap!.path!,
-            style: terminalTextStyle(color: grid.AppPalette.textFaint),
+            style: grid.AppType.monoLabel(
+              color: grid.AppPalette.textFaint,
+              fontWeight: FontWeight.w400,
+            ),
           ),
         ],
         if (keymap?.error != null) ...[
           const SizedBox(height: 8),
           SelectableText(
             keymap!.error!,
-            style: terminalTextStyle(color: Colors.orangeAccent),
+            style: grid.AppType.body(color: Colors.orangeAccent),
           ),
         ],
         const SizedBox(height: 16),

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../../analytics/analytics_log.dart';
 import '../../logging/log_file.dart';
@@ -62,7 +61,8 @@ class _TrackingTileState extends State<TrackingTile> {
                           entry.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: terminalTextStyle(
+                          style: AppType.monoLabel(
+                            fontWeight: AppFont.regular,
                             color: AppPalette.textPrimary,
                           ),
                         ),
@@ -91,7 +91,8 @@ class _TrackingTileState extends State<TrackingTile> {
                         summary,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: terminalTextStyle(
+                        style: AppType.monoLabel(
+                          fontWeight: AppFont.regular,
                           height: 1.35,
                           color: failed
                               ? debugDangerInk(context)
@@ -151,7 +152,7 @@ class _Meta extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final style = terminalTextStyle(color: AppPalette.textFaint);
+    final style = AppType.monoMeta(color: AppPalette.textFaint);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [

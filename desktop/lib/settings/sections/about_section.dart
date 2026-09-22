@@ -76,7 +76,7 @@ class _AboutSectionState extends State<AboutSection> {
                     ? 'Harness checks for a newer build when it starts, '
                           'and every six hours after that.'
                     : 'Updates are disabled in this build.',
-                style: terminalTextStyle(
+                style: grid.AppType.body(
                   color: grid.AppPalette.textFaint,
                   height: 1.45,
                 ),
@@ -162,11 +162,7 @@ class _Identity extends StatelessWidget {
             children: [
               Text(
                 desktopAppName,
-                style: terminalTextStyle(
-                  color: grid.AppPalette.textPrimary,
-                  fontWeight: grid.AppFont.semibold,
-                  letterSpacing: -0.1,
-                ),
+                style: grid.AppType.heading(color: grid.AppPalette.textPrimary),
               ),
               const SizedBox(height: 4),
               _VersionLine(state: state),
@@ -204,7 +200,11 @@ class _VersionLineState extends State<_VersionLine> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final style = terminalTextStyle(color: grid.AppPalette.textSecondary);
+    TerminalFontScope.watch(context);
+    final style = grid.AppType.monoLabel(
+      color: grid.AppPalette.textSecondary,
+      fontWeight: FontWeight.w400,
+    );
     return Wrap(
       spacing: 9,
       runSpacing: 6,
@@ -271,7 +271,7 @@ class _StatusPill extends StatelessWidget {
           Flexible(
             child: Text(
               state.label,
-              style: terminalTextStyle(
+              style: grid.AppType.caption(
                 color: state.color,
                 fontWeight: grid.AppFont.medium,
               ),
@@ -396,17 +396,17 @@ class _AboutAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
+    grid.AppTheme.watch(context);
     return LayoutBuilder(
       builder: (context, constraints) {
         final text = Text(
           description,
-          style: terminalTextStyle(
+          style: grid.AppType.body(
             color: grid.AppPalette.textSecondary,
             height: 1.45,
           ),
         );
-        final scale = terminalTextScaleOf(context);
+        final scale = grid.appTextScaleOf(context);
         if (constraints.maxWidth < 420 * scale) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,

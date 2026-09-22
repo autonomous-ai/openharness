@@ -128,7 +128,7 @@ class UpdateNotice extends StatelessWidget {
                               message,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: terminalTextStyle(
+                              style: grid.AppType.body(
                                 color: grid.AppPalette.textPrimary,
                               ),
                             ),
@@ -137,7 +137,7 @@ class UpdateNotice extends StatelessWidget {
                             const SizedBox(width: 8),
                             Text(
                               '· ${formatDownloadSize(update.size)}',
-                              style: terminalTextStyle(
+                              style: grid.AppType.monoMeta(
                                 color: grid.AppPalette.textFaint,
                               ),
                             ),
@@ -243,7 +243,7 @@ class _NoticeAction extends StatelessWidget {
               ? BorderSide(color: grid.AppGlass.hair)
               : BorderSide.none,
         ),
-        textStyle: terminalTextStyle(
+        textStyle: grid.AppType.label(
           fontWeight: primary ? grid.AppFont.semibold : grid.AppFont.regular,
         ),
       ),
@@ -452,7 +452,7 @@ class _UpdateDialog extends StatelessWidget {
       // it belongs to the menu panel, not to a dialog.
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxWidth: 372 * terminalTextScaleOf(context),
+          maxWidth: 372 * grid.appTextScaleOf(context),
         ),
         child: SingleChildScrollView(
           child: Padding(
@@ -485,15 +485,14 @@ class _UpdateDialog extends StatelessWidget {
                 const SizedBox(height: 12),
                 Text(
                   title,
-                  style: terminalTextStyle(
+                  style: grid.AppType.heading(
                     color: grid.AppPalette.textPrimary,
-                    fontWeight: grid.AppFont.semibold,
                   ),
                 ),
                 const SizedBox(height: 5),
                 Text(
                   body,
-                  style: terminalTextStyle(
+                  style: grid.AppType.body(
                     color: grid.AppPalette.textSecondary,
                     height: 1.5,
                   ),
@@ -572,15 +571,19 @@ class _Fact extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          width: 96 * terminalTextScaleOf(context),
+          width: 96 * grid.appTextScaleOf(context),
           child: Text(
             label,
-            style: terminalTextStyle(color: grid.AppPalette.textFaint),
+            style: grid.AppType.body(color: grid.AppPalette.textFaint),
           ),
         ),
         Expanded(
+          // Versions and sizes: copied into a report, so set in mono.
           child: DefaultTextStyle(
-            style: terminalTextStyle(color: grid.AppPalette.textSecondary),
+            style: grid.AppType.monoLabel(
+              fontWeight: FontWeight.w400,
+              color: grid.AppPalette.textSecondary,
+            ),
             child: value,
           ),
         ),
