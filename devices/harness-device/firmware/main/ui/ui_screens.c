@@ -6269,12 +6269,12 @@ bool ui_is_projects_active(void)
 
 // May a vertical drag right now be reported to the computer as a scroll?
 //
-// TWO SCREENS SAY YES, AND THEY MEAN DIFFERENT THINGS BY IT:
-//   · an AGENT TILE — the dial has nothing of its own to scroll there, so the stroke is purely a
-//     touchpad gesture: the glass stays put and only the window on the computer moves.
-//   · the DETAIL READER — LVGL scrolls the text under the finger natively, AND the same stroke goes out.
-//     Both surfaces move together; they hold different documents, so this is "both scroll", not "both
-//     show the same line".
+// ONE SCREEN SAYS YES: an AGENT TILE. The dial has nothing of its own to scroll there, so the stroke is
+// purely a touchpad gesture: the glass stays put and only the window on the computer moves.
+//
+// The DETAIL READER used to say yes as well, scrolling its text and the window together. It says no now
+// (owner, 2026-09-22): the reader is what is being read, and a window scrolling away behind it while the
+// thumb works through a long answer moves a screen the hand did not mean to move.
 //
 // Everything else says no, and each for a reason: Settings, Machines and the pickers own their own
 // scrollable lists, and driving the computer's terminal while the user drags one of those would move a
@@ -6283,7 +6283,6 @@ bool ui_is_projects_active(void)
 bool ui_scroll_reportable(void)
 {
     if (display_is_asleep() || ui_voice_is_active()) return false;
-    if (lv_screen_active() == scr_reader) return true;
     return lv_screen_active() == scr_projects && !s_overview_active && !s_settings_active
            && !s_machines_active && !s_notif_open
            && s_active_idx >= 0 && s_active_idx < s_proj_count;
