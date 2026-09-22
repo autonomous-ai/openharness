@@ -18,6 +18,8 @@ import 'package:harness_mobile/terminal/image_transcode.dart';
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
+import 'package:harness_mobile/terminal/question_pane.dart';
+import 'package:harness_mobile/terminal/question_pane_watcher.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
 import 'package:harness_mobile/widgets/engine_identity.dart'
     show engineIdentity;
@@ -395,6 +397,104 @@ class _TerminalPageState extends State<TerminalPage>
   /// the notifier declined without ever changing a status.
   bool _takingControl = false;
 
+  /// Reads this page's own terminal buffer for an open question dialog.
+  ///
+  /// ⚠️ **Built late and only once**, when the agent's engine is first known:
+  /// the engine decides whether there is anything to look for at all, and it
+  /// arrives with the agent rather than with the page. Null until then, and for
+  /// every engine this parser is not verified against — which keeps the
+  /// keyboard from being raised over a dialog nobody can read.
+  QuestionPaneWatcher? _questionWatcher;
+
+  /// The engine [_questionWatcher] was built for, so a page that somehow
+  /// re-opens on a different engine rebuilds it rather than reading a Codex
+  /// dialog with Claude's rules.
+  QuestionEngine? _questionEngine;
+
+  /// The dialog the keyboard was last raised for.
+  ///
+  /// ⚠️ **This is what stops the keyboard fighting the person.** The watcher
+  /// reports every change of dialog, and a multi-question exchange changes it
+  /// several times; raising on each one would shove the keyboard back up
+  /// seconds after somebody put it away. One raise per question, and a question
+  /// is new only when its text or its options differ.
+  String? _questionRaisedFor;
+
+  /// Point the question watcher at this page's current terminal.
+  ///
+  /// Called from `build`, where both the engine and the session are known, and
+  /// cheap to call on every frame: [QuestionPaneWatcher.attach] returns at once
+  /// for a terminal it already holds.
+  void _syncQuestionWatcher(String? engineId, TerminalSession? session) {
+    final engine = questionEngineOf(engineId);
+    if (engine != _questionEngine) {
+      _questionEngine = engine;
+      _questionWatcher?.removeListener(_onQuestionPane);
+      _questionWatcher?.dispose();
+      // Nothing to watch for on an engine this parser does not know: leave the
+      // watcher null so not even a listener is attached.
+      _questionWatcher = engine == null
+          ? null
+          : (QuestionPaneWatcher(engine: engine)..addListener(_onQuestionPane));
+    }
+    _questionWatcher?.attach(session?.terminal);
+  }
+
+  /// The agent just asked something, or stopped asking.
+  ///
+  /// ⚠️ **Raising the keyboard is the whole feature, and it must happen at
+  /// most once per question.** An agent that blocks mid-turn is waiting on a
+  /// keystroke, and on a phone that keystroke is unreachable until the keyboard
+  /// is up — so the page opens it rather than making the person find the
+  /// terminal and tap it. But a person who puts the keyboard away during a
+  /// question has said they are not answering yet, and a watcher that raised it
+  /// again on the next repaint would be arguing with them.
+  void _onQuestionPane() {
+    if (!mounted) return;
+    final view = _questionWatcher?.view;
+    final open = view != null && view.answerable;
+    setState(() {
+      // Cleared as the dialog goes, so the NEXT question raises the keyboard
+      // again even if it words itself identically.
+      if (!open) _questionRaisedFor = null;
+    });
+    if (!open) return;
+    final key = view.fingerprint;
+    if (_questionRaisedFor == key) return;
+    _questionRaisedFor = key;
+    _raiseKeyboardForQuestion();
+  }
+
+  /// Open the keyboard because an agent is waiting on an answer.
+  ///
+  /// ⚠️ **Not [_raiseKeyboard], and synchronous where that one is not.** That
+  /// one belongs to a TAP on the terminal, and awaits the mic's transcript to
+  /// drain into the prompt first, because tapping mid-sentence is asking to
+  /// finish that sentence. Nothing was said here — the agent asked — so
+  /// draining voice would paste a half-spoken phrase into an answer the person
+  /// has not started, and with nothing to await this runs in one frame.
+  void _raiseKeyboardForQuestion() {
+    final facts = _readFacts();
+    final session = facts.session;
+    // A terminal this page only watches cannot be typed into, so a keyboard
+    // over it would be a keyboard that does nothing.
+    if (session == null || !session.acceptsInput) return;
+    // Already up on THIS page, or on its way: nothing to do, and calling again
+    // would restart the settle hold for no reason.
+    //
+    // ⚠️ `_ownsInput`, not the screen-wide `_keyboardIsUp`. That flag is true
+    // whenever any page's keyboard is showing — it exists to hold the keyboard
+    // across a swipe — so reading it here would skip the raise on a page swiped
+    // to while a keyboard belonging to the page behind it was still up.
+    if (_keyboardRequested || _ownsInput) return;
+    // The controls somebody reaches for next are in the header.
+    _chrome.reveal();
+    setState(() => _keyboardRequested = true);
+    // The keyboard is on its way and the key bar opens with it — see
+    // [_raiseKeyboard], which holds the resize the same way.
+    _armSettle();
+  }
+
   _PageFacts _readFacts() {
     final notifier = widget.notifier;
     final pane = notifier.panes
@@ -496,6 +596,8 @@ class _TerminalPageState extends State<TerminalPage>
   @override
   void dispose() {
     widget.notifier.removeListener(_onNotifier);
+    _questionWatcher?.removeListener(_onQuestionPane);
+    _questionWatcher?.dispose();
     _cancelSettle();
     _searchHoldTimer?.cancel();
     _chrome.dispose();
@@ -986,6 +1088,15 @@ class _TerminalPageState extends State<TerminalPage>
     final canCreate =
         machine != null &&
         phoneMachineStatusOf(machine) == PhoneMachineStatus.ready;
+    // Read this page's own buffer for a dialog, and raise the keyboard when one
+    // appears. Must run on every build: the session arrives a frame or two
+    // after the page, and the engine with the agent.
+    //
+    // ⚠️ **The buffer is the only source there is on a phone.** The daemon
+    // already detects the same dialog and publishes `commander_question`, but
+    // that frame goes out device-and-loopback only — a phone attached over the
+    // relay never receives it. See [QuestionPaneWatcher].
+    _syncQuestionWatcher(agent?.engine, session);
     // Read once: the body reserves it, and search subtracts what the body
     // already took. See [_navigationBar].
     final navigationBar = _navigationBar;
@@ -1467,7 +1578,10 @@ class _TerminalPageState extends State<TerminalPage>
       // door rather than a list of its own — the lists belong on the pages behind them, where they
       // have room for every row and do not push the rest of this sheet down.
       sections: [
-        PhoneSheetSection(caption: 'Harness', actions: [..._agentActions(agent)]),
+        PhoneSheetSection(
+          caption: 'Harness',
+          actions: [..._agentActions(agent)],
+        ),
         PhoneSheetSection(
           caption: 'App',
           actions: [
