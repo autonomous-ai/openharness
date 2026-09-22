@@ -86,6 +86,7 @@ import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from
 import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
+import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { createStopAgentService } from './lib/stopAgentService.js'
 import { createResumeAgentService } from './lib/resumeAgentService.js'
@@ -4024,6 +4025,17 @@ async function runForeground(session: AuthSession): Promise<void> {
     }
   }
 
+  // Rows that drifted out of their project folder while `register` still took the hook's cwd on
+  // every prompt are put back BEFORE anything relaunches them: restore below `cd`s into `entry.cwd`,
+  // and what it archives on the way is copied from the row. See cwdRepair.ts.
+  // Best effort: an archive directory that cannot be listed, or a row that cannot be rewritten, is a
+  // line in the log, never a daemon that does not come up.
+  try {
+    const repaired = await repairClaudeCwd({ registry, stoppedAgents, log: (message) => console.log(message) })
+    if (repaired.registry || repaired.archived) console.log(`[repair] cwd · ${repaired.registry} live · ${repaired.archived} saved`)
+  } catch (error) {
+    console.warn(`[repair] cwd repair skipped · ${error instanceof Error ? error.message : error}`)
+  }
   watcher.start()
   await cursorDiscovery.start()
   // Panes that died while the daemon was down (a reboot takes the whole tmux server with it) are

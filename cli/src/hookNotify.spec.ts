@@ -895,6 +895,44 @@ describe('hook notify terminal scope', () => {
     expect(registry[0]).not.toHaveProperty('launch')
   })
 
+  it('an offline re-register of the session a row already holds keeps the row\'s folder', async () => {
+    // Claude's UserPromptSubmit carries the tracked shell directory — wherever the agent last
+    // `cd`'d — and a daemon-down rebuild must not move the row there any more than the daemon does.
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-cwd-'))
+    tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    const dataDir = join(dir, 'data')
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-1.jsonl')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    mkdirSync(dataDir, { recursive: true })
+    chmodSync(dataDir, 0o755)
+    writeFileSync(transcriptPath, '{}\n')
+    const row = {
+      schemaVersion: 2, active: true, agentId: 'agent-bound', sessionId: 'session-1', boundAt: 1, engine: 'claude',
+      gateway: null, grid: null, codexHome: null, transcriptPath, projectDir: 'demo', cwd: '/tmp/demo',
+      runtimes: [{ backend: 'tmux', paneId: '%7' }], primaryRuntimeKey: 'tmux\u0000%7', tmuxPane: '%7',
+      source: null, title: null, model: null, cliVersion: null,
+      processIdentity: { pid: 7001, executable: 'claude', startMarker: 'Mon Aug 10 10:00:01 2026' },
+      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    }
+    writeLegacyStateFile(join(dataDir, 'registry.json'), JSON.stringify([row]))
+
+    await runHook({
+      port: 9, tmuxPane: '%7', processEngine: 'claude', dataDir, claudeProjectsDir,
+      input: { hook_event_name: 'UserPromptSubmit', session_id: 'session-1', transcript_path: transcriptPath, cwd: '/tmp/demo/cli' },
+    })
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))[0]).toMatchObject({ agentId: 'agent-bound', sessionId: 'session-1', cwd: '/tmp/demo' })
+
+    // A rotation is a new session and takes the folder it reports.
+    const rotated = join(claudeProjectsDir, 'demo', 'session-2.jsonl')
+    writeFileSync(rotated, '{}\n')
+    await runHook({
+      port: 9, tmuxPane: '%7', processEngine: 'claude', dataDir, claudeProjectsDir,
+      input: { hook_event_name: 'SessionStart', session_id: 'session-2', transcript_path: rotated, cwd: '/tmp/demo/cli' },
+    })
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))[0]).toMatchObject({ agentId: 'agent-bound', sessionId: 'session-2', cwd: '/tmp/demo/cli' })
+  })
+
   it('drops stale registry entries when boot marker predates this boot', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-reboot-'))
     tmpDirs.push(dir)

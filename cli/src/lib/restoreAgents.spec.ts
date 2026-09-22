@@ -478,7 +478,7 @@ describe('restoreAgents — terminals', () => {
 })
 
 
-it('retains a missing strict-resume pane for explicit Open after daemon restart', async () => {
+it('retains a missing strict-resume pane whose resume was never confirmed for explicit Open', async () => {
   const entry = row({ resumeOnly: true, launch: { state: 'starting' } })
   const h = harness([entry])
   h.deps.retainStopped = vi.fn((saved, _paneAlive) => { h.rows.delete(saved.agentId) })
@@ -487,6 +487,23 @@ it('retains a missing strict-resume pane for explicit Open after daemon restart'
   expect(summary.restored).toEqual([])
   expect(h.paneCreates).toBe(0)
   expect(h.respawns).toBe(0)
+})
+
+it('restores a confirmed strict-resume pane by exact resume, and never falls back to fresh', async () => {
+  const entry = row({ resumeOnly: true, launch: { state: 'ready' } })
+  const h = harness([entry])
+  h.deps.retainStopped = vi.fn()
+  h.probes.set('%0', [null, null])
+  h.states.set('%0', [{ dead: true }])
+  const summary = await restoreAgents(h.deps)
+  expect(h.deps.retainStopped).not.toHaveBeenCalled()
+  expect(summary.restored).toEqual(['agent-a'])
+  expect(h.paneCreates).toBe(1)
+  expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'session-a' }])
+  await settled(h, 1)
+  expect(h.respawns).toBe(0)
+  expect(h.rows.get('agent-a')?.launch).toMatchObject({ state: 'failed', error: 'RESUME_FAILED' })
+  expect(h.calls).not.toContain('unbind:session-a')
 })
 
 it('archives an engine that exited while the daemon was down without overwriting its shell', async () => {

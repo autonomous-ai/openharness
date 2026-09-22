@@ -145,7 +145,7 @@ Natural engine exit sends `agent_synced` with `status: stopped` and no terminal 
 - `creationId` uses the existing durable receipt protocol and `agent_create_status`. A retry of the same intent returns its recorded result or uncertainty, never a new process.
 - A private, fsynced per-agent `.resume` reservation is written **before** history preparation and tmux allocation. It protects the gap between starting tmux and persisting a new registry row, including requests with a different receipt ID after daemon restart.
 - Confirmed native binding, verified completion or a confirmed stop clears the reservation. Unknown allocation/readiness keeps it; startup failure keeps history and preserves the shell/output when available.
-- On daemon restart, a strict-resume row whose pane disappeared is archived for explicit Open. It never enters restore's fresh fallback. A surviving engine is re-observed, and a surviving shell is separated from the saved conversation.
+- On daemon restart, a strict-resume row whose pane disappeared is restored by exact resume when its previous resume was confirmed (`launch: ready`); one still unconfirmed (`starting`) is archived for explicit Open. Neither ever enters restore's fresh fallback. A surviving engine is re-observed, and a surviving shell is separated from the saved conversation.
 
 ## Scope and review limits
 
