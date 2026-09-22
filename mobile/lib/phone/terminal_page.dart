@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import 'package:harness_mobile/core/models.dart' show AgentProject;
+import 'package:harness_mobile/core/models.dart' show Agent, AgentProject;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/app_icon_button.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
@@ -17,9 +17,13 @@ import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
+import 'package:harness_mobile/widgets/engine_identity.dart'
+    show engineIdentity;
 import 'package:harness_mobile/widgets/rename_agent_dialog.dart';
 import 'package:harness_mobile/widgets/terminal_panel.dart';
 
+import 'agent_model_sections.dart';
+import 'agent_model_sheet.dart';
 import 'agents_list_page.dart';
 import 'agents_page.dart' show openNewAgent;
 import 'delete_agent.dart';
@@ -1250,8 +1254,7 @@ class _TerminalPageState extends State<TerminalPage>
                                 onPressed: () => _showActions(
                                   machineName:
                                       machine?.machine.displayName ?? '',
-                                  agentName: agent.name,
-                                  project: agent.project,
+                                  agent: agent,
                                 ),
                               ),
                           ],
@@ -1351,26 +1354,23 @@ class _TerminalPageState extends State<TerminalPage>
     });
   }
 
-  void _showActions({
-    required String machineName,
-    required String agentName,
-    AgentProject? project,
-  }) {
+  void _showActions({required String machineName, required Agent agent}) {
+    final agentName = agent.name;
     showPhoneSheet(
       context,
       title: '$agentName · $machineName',
       // The agent, then where it runs — machine, folder with its parent, branch — one line each
       // behind its icon. The header has no room for the path.
       titleParts: [agentName],
-      titleDetail: AgentPlaceLines(machineName: machineName, project: project),
+      titleDetail: AgentPlaceLines(
+        machineName: machineName,
+        project: agent.project,
+      ),
       // Two groups: what acts on THIS agent, and the screens the app itself has. Each of those is a
       // door rather than a list of its own — the lists belong on the pages behind them, where they
       // have room for every row and do not push the rest of this sheet down.
       sections: [
-        PhoneSheetSection(
-          caption: 'Agent',
-          actions: [..._agentActions(agentName)],
-        ),
+        PhoneSheetSection(caption: 'Agent', actions: [..._agentActions(agent)]),
         PhoneSheetSection(
           caption: 'App',
           actions: [
@@ -1409,7 +1409,35 @@ class _TerminalPageState extends State<TerminalPage>
     );
   }
 
-  List<PhoneSheetAction> _agentActions(String agentName) => [
+  List<PhoneSheetAction> _agentActions(Agent agent) => [
+    // Where this agent runs, above the actions that act ON it: the desktop
+    // keeps it in the pane header, and this sheet is the phone's pane header.
+    //
+    // Offered only on the engines whose switching has been driven end to end
+    // (see [modelSheetSupports]) — a row that looks like a choice and may not
+    // be one costs an agent answering on a model nobody asked for.
+    if (modelSheetSupports(agent.engine))
+      PhoneSheetAction(
+        icon: LucideIcons.cpu300,
+        label: 'Model',
+        // The model the agent is on now, so the sheet is worth opening only
+        // when somebody means to change it. A grid model is named; its own
+        // login is the engine's name, which is the word the sheet uses too.
+        value:
+            agent.gridModel ??
+            engineIdentity(
+              agent.engine,
+              displayName: agent.engineDisplayName,
+            ).label,
+        onTap: () => unawaited(
+          showAgentModelSheet(
+            context,
+            widget.notifier,
+            machineId: widget.machineId,
+            agentId: widget.agentId,
+          ),
+        ),
+      ),
     PhoneSheetAction(
       icon: LucideIcons.pencil300,
       label: 'Rename agent…',
@@ -1418,7 +1446,7 @@ class _TerminalPageState extends State<TerminalPage>
         widget.notifier,
         widget.machineId,
         widget.agentId,
-        agentName,
+        agent.name,
       ),
     ),
     PhoneSheetAction(
@@ -1444,7 +1472,7 @@ class _TerminalPageState extends State<TerminalPage>
           widget.notifier,
           widget.machineId,
           widget.agentId,
-          agentName,
+          agent.name,
         ),
       ),
     ),

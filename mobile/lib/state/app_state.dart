@@ -35,8 +35,9 @@ import '../settings/config_store.dart';
 import '../stats/harness_stats.dart';
 import '../terminal/terminal_session.dart';
 import '../terminal/remote_media_download.dart';
-import '../widgets/engine_identity.dart' show allEngines;
+import '../widgets/engine_identity.dart' show allEngines, engineIdentity;
 import 'dial_status.dart';
+import 'retarget_refusal.dart';
 import 'pane_layout_store.dart';
 import 'session_preview.dart';
 import 'terminal_pane.dart';
@@ -4991,6 +4992,130 @@ class AppNotifier extends ChangeNotifier {
     // session that may not have happened, since this field is purely additive UI polish.
     final resumed = result['resumed'];
     return RestartAgentResult(resumed: resumed is bool ? resumed : true);
+  }
+
+  /// Live models on every harness grid this machine is signed into, for the
+  /// model sheet.
+  ///
+  /// Asked of the machine the agent runs on rather than kept in app state: the
+  /// answer is whatever that machine's `grid` reports at this moment (an engine
+  /// can join or leave between two opens), and a cached list would offer a
+  /// model nobody is serving any more.
+  ///
+  /// Never throws — a machine whose daemon is too old to know the RPC, one with
+  /// no grid, and one that timed out are all "nothing to offer", which is what
+  /// the sheet shows.
+  Future<GridModels> gridModels(String machineId) async {
+    try {
+      final response = await _conn(machineId)
+          .request('grid_models_list', timeout: const Duration(seconds: 12));
+      List<GridModel> parseModels(Object? raw, {String? grid}) =>
+          (raw as List<dynamic>? ?? [])
+              .whereType<Map<String, dynamic>>()
+              .map(
+                (m) => GridModel(
+                  id: (m['id'] as String?) ?? '',
+                  node: (m['node'] as String?) ?? '',
+                  grid: grid,
+                ),
+              )
+              .where((m) => m.id.isNotEmpty)
+              .toList();
+      final capable = response['localModelEngines'];
+      return GridModels(
+        gridName: response['gridName'] as String?,
+        // The own grid's list, which an older daemon sends on its own.
+        models: parseModels(response['models']),
+        grids: (response['grids'] as List<dynamic>? ?? [])
+            .whereType<Map<String, dynamic>>()
+            .where((g) => (g['name'] as String?)?.isNotEmpty == true)
+            .map(
+              (g) => GridSection(
+                name: g['name'] as String,
+                own: g['own'] == true,
+                models: parseModels(g['models'], grid: g['name'] as String),
+              ),
+            )
+            .toList(),
+        localModelEngines: capable is List
+            ? capable.whereType<String>().map((e) => e.toLowerCase()).toSet()
+            : null,
+        gridCli: GridCli.parse(response['gridCli']),
+      );
+    } catch (_) {
+      // NOT `gridName: null` with an empty list — that is the shape of "this
+      // account has no grid", and a caller cannot tell it from "the machine did
+      // not answer". A signed-in user whose daemon was offline would be told to
+      // sign in again, which is both wrong and unactionable.
+      return const GridModels.unreachable();
+    }
+  }
+
+  /// Point one agent at a model on a harness grid. Returns null on success, or
+  /// the one sentence to show — the phone has no error rail, so the caller
+  /// snackbars it (see [retargetRefusalMessage]).
+  ///
+  /// Sends the model id and nothing else: the daemon on that machine resolves
+  /// the endpoint and the credential from its own signed-in `grid`, so neither
+  /// travels over the relay and the phone never holds a grid key. Moving an
+  /// agent re-execs its pane, which is why this is an explicit choice in a
+  /// sheet rather than something a swipe can do.
+  ///
+  /// [gridName] is the grid the model was picked from — a shared grid's section
+  /// in the sheet. Absent, the daemon uses the account's own grid.
+  Future<String?> retargetAgentToGridModel(
+    String machineId,
+    String agentId,
+    String modelId, {
+    String? gridName,
+  }) => _retarget(machineId, agentId, {
+    'agentId': agentId,
+    'gridModel': modelId,
+    'gridName': ?gridName,
+  });
+
+  /// Put the agent back on its engine's own vendor login.
+  Future<String?> clearAgentGrid(String machineId, String agentId) =>
+      _retarget(machineId, agentId, {'agentId': agentId, 'clearGrid': true});
+
+  /// The one `agent_retarget` call both doors take.
+  ///
+  /// A refusal happens BEFORE the daemon touches the pane — an engine with no
+  /// way onto a Local model, a busy agent, a machine that cannot resolve its
+  /// models — so nothing in the terminal ever says why, and without this the
+  /// tap simply does nothing. One sentence, in the app's own words; the
+  /// daemon's own `detail` is written for its log and names the grid.
+  ///
+  /// A transport failure is NOT a refusal: the daemon may well have done the
+  /// move, and the agent frame that follows is the truth. Nothing is said
+  /// rather than a story the terminal is about to contradict.
+  Future<String?> _retarget(
+    String machineId,
+    String agentId,
+    Map<String, dynamic> payload,
+  ) async {
+    try {
+      await _conn(machineId).request(
+        'agent_retarget',
+        payload: payload,
+        timeout: const Duration(seconds: 30),
+      );
+      return null;
+    } on WsRequestFailure catch (failure) {
+      return _retargetRefusal(machineId, agentId, failure.code);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _retargetRefusal(String machineId, String agentId, String code) {
+    final agent = machineStates[machineId]?.agents
+        .where((a) => a.id == agentId)
+        .firstOrNull;
+    return retargetRefusalMessage(
+      code,
+      engineLabel: engineIdentity(agent?.engine).label,
+    );
   }
 
   /// Every tile on the machine, not just the focused one: the machine is what
