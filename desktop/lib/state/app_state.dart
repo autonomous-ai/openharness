@@ -6563,8 +6563,12 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || machineStates[machineId] != machine) return null;
     _upsertAgent(machine, agent);
     // Apply each creation receipt once, even if its transport result is replayed.
+    // A Git start remembers its repository, never the worktree it made.
     final projectPath =
-        agent.project?.cwd ?? creation.preparedFolder ?? choices['cwd'];
+        choices['gitSource'] ??
+        agent.project?.cwd ??
+        creation.preparedFolder ??
+        choices['cwd'];
     if (projectPath is String && projectPath.isNotEmpty) {
       unawaited(projectHistory.select(machineId, projectPath));
     }

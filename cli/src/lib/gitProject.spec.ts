@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
@@ -70,6 +70,29 @@ describe('launch Git preparation', () => {
     expect(await git('branch', '--show-current')).toBe('main')
   })
 
+  it('names worktrees for the harness and the time, grouped by repository, skipping names already taken', async () => {
+    await git('branch', 'harness/codex-0921-1200-2', 'main')
+    const paths = [await prepare('worktree'), await prepare('worktree')]
+    const folder = join(root, 'harnesses', 'worktrees', 'project with spaces')
+    expect(paths).toEqual([join(folder, 'codex-0921-1200'), join(folder, 'codex-0921-1200-3')])
+    for (const path of paths) {
+      expect((await exec('git', ['-C', path, 'branch', '--show-current'])).stdout.trim()).toBe(`harness/${basename(path)}`)
+    }
+  })
+
+  it('reads a linked worktree as its repository, and a worktree started from one joins the same repository', async () => {
+    const linked = await prepare('worktree')
+    const info = await readGitProject(join(linked, 'src'))
+    expect(info).toMatchObject({ isGit: true, branch: 'harness/codex-0921-1200', mainBranch: 'main' })
+    expect(await realpath((info as { mainFolder: string }).mainFolder)).toBe(await realpath(join(repo, 'src')))
+    const branches = (info as { branches: Array<{ name: string; worktree?: string }> }).branches
+    expect(await realpath(branches.find(branch => branch.name === 'harness/codex-0921-1200')!.worktree!)).toBe(await realpath(linked))
+    expect(await realpath(branches.find(branch => branch.name === 'main')!.worktree!)).toBe(await realpath(repo))
+    expect(await readGitProject(repo)).not.toHaveProperty('mainFolder')
+    const second = await prepare('worktree', 'refs/heads/main', linked)
+    expect(second).toBe(join(root, 'harnesses', 'worktrees', 'project with spaces', 'codex-0921-1200-2'))
+  })
+
   it('keeps the selected subfolder in its new worktree', async () => {
     const path = await prepare('worktree', 'refs/heads/feature', join(repo, 'src'))
     expect(await readFile(join(path, 'value'), 'utf8')).toBe('feature')
@@ -88,9 +111,11 @@ describe('launch Git preparation', () => {
     expect(await prepare('branch')).toBe(repo)
   })
 
-  it('refuses a branch checked out elsewhere, missing refs, revision expressions, and untracked subfolders', async () => {
+  it('opens a branch checked out elsewhere in its worktree, and refuses missing refs, revision expressions, and untracked subfolders', async () => {
     await git('worktree', 'add', join(root, 'other'), 'feature')
-    await expect(prepare('branch')).rejects.toMatchObject({ code: 'BRANCH_SWITCH_FAILED' })
+    expect(await realpath(await prepare('branch'))).toBe(await realpath(join(root, 'other')))
+    expect(await realpath(await prepare('branch', 'refs/heads/feature', join(repo, 'src')))).toBe(await realpath(join(root, 'other', 'src')))
+    expect(await git('branch', '--show-current')).toBe('main')
     for (const ref of ['refs/heads/missing', 'refs/heads/main~0', 'refs/heads/main^{commit}']) {
       await expect(prepare('worktree', ref)).rejects.toMatchObject({ code: 'GIT_PROJECT_UNAVAILABLE' })
     }
@@ -134,7 +159,7 @@ describe('launch Git preparation', () => {
     expect(await readGitProject(repo)).toMatchObject({ isGit: true, branch: null })
     const path = await prepareGitProject(repo, { root, worktree: true })
     expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
-    expect(path).toContain('project-with-spaces-harness-')
+    expect(path).toMatch(/\/worktrees\/project with spaces\/harness-\d{4}-\d{4}$/)
     expect(await prepare('branch')).toBe(repo)
     expect(await git('branch', '--show-current')).toBe('feature')
   })

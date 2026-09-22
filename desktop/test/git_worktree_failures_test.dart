@@ -111,7 +111,7 @@ void main() {
           return _GitProcess(output: '/repo with spaces\n');
         },
       );
-      expect(calls, hasLength(3));
+      expect(calls, hasLength(4));
       expect(
         calls.any((args) => args.contains('switch') || args.contains('fetch')),
         false,
@@ -159,7 +159,7 @@ void main() {
           ),
         ),
       );
-      final parent = Directory('${root.path}/worktrees');
+      final parent = Directory('${root.path}/worktrees/repo');
       expect(
         await parent.list().where((entity) => entity is Directory).length,
         1,
