@@ -336,6 +336,7 @@ Machine:
   harness login                sign in with SSO and save this computer's session
   harness login --force        stop the daemon and sign in with a different SSO account
   harness login --json         emit machine-readable NDJSON instead of opening a browser (for GUI clients)
+  harness login --entry-point=desktop   record which surface started the sign-in (GUI clients; default cli)
   harness auth status --json   print {loggedIn,...} for this computer's saved session
   harness start                start the adapter using the saved SSO session
   harness start -f             run the adapter in the FOREGROUND (for a supervisor; logs to stdout)
@@ -642,9 +643,12 @@ async function loginCommand(
   foreground: boolean,
   force: boolean,
   json: boolean,
-  opts: { chained?: boolean } = {},
+  opts: { chained?: boolean; entryPoint?: string } = {},
 ): Promise<SignInOutcome> {
   if (foreground) throw new Error('`harness login` does not run the adapter. Use `harness start -f`.')
+  // Which surface asked to sign in. A person in a terminal is `cli`; the desktop app runs this same
+  // command and says so with `--entry-point=desktop`. Analytics only — it names no privilege.
+  const entryPoint = opts.entryPoint ?? 'cli'
   const emit = (line: Record<string, unknown>): void => { if (json) console.log(JSON.stringify(line)) }
   const succeed = async (alreadySignedIn: boolean, installing?: Promise<GridInstallResult>): Promise<SignInOutcome> => {
     // `chained` is `harness grid login`, which runs the hand-off itself and reports it as its own
@@ -685,7 +689,7 @@ async function loginCommand(
     }
     return await succeed(true)
   }
-  if (!force) return await browserSignIn(json, emit, () => succeed(false))
+  if (!force) return await browserSignIn(json, emit, () => succeed(false), entryPoint)
   // A forced login may intentionally switch SSO accounts. The old daemon must not keep streaming
   // under its existing socket while this process replaces the durable session — and no NEW daemon
   // may come up on the old session in the meantime. The desktop app re-runs `harness start` whenever
@@ -705,7 +709,7 @@ async function loginCommand(
   try {
     return await withSpawnLock('login', async () => {
       await stopDaemonProcess()
-      return await browserSignIn(json, emit, () => succeed(false, installing))
+      return await browserSignIn(json, emit, () => succeed(false, installing), entryPoint)
     }, {
       onWaiting: (owner) => console.error(`  the daemon is ${describeSpawnLockOwner(owner)} — waiting for it to finish…`),
     })
@@ -738,6 +742,7 @@ async function browserSignIn(
   json: boolean,
   emit: (line: Record<string, unknown>) => void,
   succeed: () => Promise<SignInOutcome>,
+  entryPoint: string,
 ): Promise<SignInOutcome> {
   const callback = createServer()
   await new Promise<void>((resolve, reject) => {
@@ -755,6 +760,7 @@ async function browserSignIn(
       start = await postJson<{ authorizeUrl?: string; tx?: string }>('/api/auth/authorize-native', {
         redirectUri,
         autonomousEnv: env.AUTONOMOUS_ENV,
+        entryPoint,
       })
       if (!start.authorizeUrl || !start.tx) throw new Error('Backend did not return an SSO authorize URL')
     } catch (err) {
@@ -6355,6 +6361,10 @@ const [, , cmd, ...rest] = process.argv
 const flags = rest.filter((a) => a.startsWith('-'))
 const args = rest.filter((a) => !a.startsWith('-'))
 const foreground = flags.includes('--foreground') || flags.includes('-f')
+/** `--entry-point=<key>`: one token, so a build of this CLI that predates the flag drops it with
+ *  every other unknown flag instead of mistaking `<key>` for a subcommand word. */
+const entryPointFlag = (): string | undefined =>
+  flags.find((f) => f.startsWith('--entry-point='))?.slice('--entry-point='.length) || undefined
 const repair = flags.includes('--repair')
 
 /** `argv` with the first occurrence of `token` removed, order otherwise untouched — how a subcommand
@@ -6381,7 +6391,7 @@ switch (cmd) {
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login':
-    loginCommand(foreground, flags.includes('--force'), flags.includes('--json')).catch(onError)
+    loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), { entryPoint: entryPointFlag() }).catch(onError)
     break
   case 'auth':
     if (args[0] !== 'status') { console.error('Unknown command: auth ' + (args[0] ?? '')); usage(1) }

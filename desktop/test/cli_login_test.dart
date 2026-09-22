@@ -10,7 +10,8 @@ class _Runner extends HarnessCliRunner {
   final starts = <Completer<Process>>[];
   @override
   Future<Process> start(List<String> arguments) {
-    expect(arguments, ['login', '--force', '--json']);
+    // The entry point rides along so login tracking can tell an app sign-in from a terminal one.
+    expect(arguments, ['login', '--force', '--json', '--entry-point=desktop']);
     final start = Completer<Process>();
     starts.add(start);
     return start.future;
