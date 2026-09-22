@@ -1008,6 +1008,23 @@ def _serve() -> int:
                 reply.update(ok=True, result=describe_file(request["path"]))
             elif request.get("op") == "ping":
                 reply.update(ok=True, result="pong")
+            elif request.get("op") in ("torsion_options", "torsion_scan", "torsion_keep"):
+                import harness_torsion
+                block = request["molblock"]
+                if request["op"] == "torsion_options":
+                    result = harness_torsion.options(block)
+                else:
+                    result = harness_torsion.scan(block, request["atoms"], request.get("step", 15))
+                    if request["op"] == "torsion_keep" and request.get("fingerprint") != result["fingerprint"]:
+                        raise ValueError("The calculation changed. Run the scan again before keeping it.")
+                    mol = harness_torsion.prepare(block)
+                    record, svg = describe(mol, request.get("name", "molecule"), parent=False, series={"molecules": []})
+                    result["record"] = {**record, "svgText": svg}
+                    if request["op"] == "torsion_keep":
+                        harness_torsion.save(result, request["destination"], request["title"], request["selected"],
+                                             request.get("note", ""), result["record"])
+                        result = {"fingerprint": result["fingerprint"]}
+                reply.update(ok=True, result=result)
             else:
                 reply.update(ok=False, error=f"unknown op {request.get('op')!r}")
         except Exception as error:  # the pane shows the message; the worker keeps serving

@@ -55,6 +55,45 @@ this file?"
 - Click a cell to see the exact question Jev was asked and the full probabilities.
 - Click a header to sort. Double-click a row to edit its text: it is judged again at once.
 
+## Question Lab: try the wording before the whole sheet
+
+Open **Question Lab** beside the sheet controls. Start with an existing question and write a
+clearer version. Preview 10, 20 or 40 rows: a mix of low-confidence rows and rows spread across the
+sheet, just the spread, or the first rows in your current filtered/sorted view. A selected sheet
+cell can pin its row into the trial. The preview freezes the exact text, metadata and context.
+
+**Compare** asks both versions again, together in one paired request per row through the normal
+Jev client. Click any row to read its full text, both distributions and the exact questions. Filter
+to changed answer labels, mark **Original**, **New wording** or **Unsure**, and leave a note about
+what the wording captured or missed. These preferences are your review, not new truth labels.
+Changing question types or answer labels is allowed; a different label does not establish a
+better answer. The selected sample is not representative, and confidence is not accuracy.
+
+![Question Lab comparing a fictional support row, explicitly in offline practice mode](../../../docs/images/question-lab.png)
+
+[Watch the native 13-second walkthrough](../../../docs/images/question-lab-demo.mp4)
+(original fictional rows, offline practice mode).
+
+**Keep this trial** saves an immutable `.harness/question-trials/<id>/` packet. It contains the
+frozen rows, exact wire questions, raw answers, per-call provider/model/usage, your notes,
+`comparison.csv`, `review.md`, a reusable sample `sheet.json`, `column.json`, checksums and a ZIP.
+The packet includes your sampled data; keep it where you would keep the original file. No API
+keys are included. Reopen it from **Kept & open trials**, even after the source file is gone.
+
+**Try on whole sheet** adds the candidate as a separate column, preserving the original and reusing
+the trial's answers when the connected route and requested model still match. It refuses a trial
+whose rows, context or original question changed. This follows the sheet's existing pane-only
+column behavior: ask the agent to retain your chosen header in `sheet.json` across viewer restarts.
+Keeping a trial itself is durable. Open trials last only for the current viewer process.
+
+One trial runs at a time, at most four row requests in flight. Cancellation stops further rows;
+requests already in flight can finish, including the client's normal transient-error retries.
+Failed and cancelled trials can be kept with their incomplete status. Limits: 40 rows, 4,000
+characters per header, 512 KB for the frozen preview, 24 KB per paired response, 2 MB for the
+saved result, eight open trials and 100 kept trials per workspace. Move older packets elsewhere
+to make room. Without a key, every trial is prominently labeled **OFFLINE STAND-IN** and is only
+for practicing the workflow. It provides no evidence about Jev's actual judgment quality.
+
 ## Take it away
 
 - **`answers.csv`** holds every row, its own columns, and each answer with its confidence. Download
@@ -139,10 +178,14 @@ jev-sheets/
     source.mjs               reads the person's file: Excel, CSV, TSV, JSON, JSONL
     xlsx.mjs                 a small Excel reader: zip directory, shared strings, the first sheet
     grammar.mjs              the header parser, shared with the pane and check.mjs
+    questions.mjs            one question builder for the sheet and Question Lab
+    question-lab.mjs         bounded paired trials, row review and immutable portable packets
+    question-lab-ui.mjs question-lab.css trial-zip.mjs    the comparison pane and archive writer
     mock.mjs                 the offline stand-in (reads only the row text and the question)
     kit.mjs                  loopback server, same-origin guard, upload, download, key connect, SSE
     index.html studio.css studio.js base.css jev-hud.js     the pane
-  test/viewer.test.mjs own-file.test.mjs picker.test.mjs xlsx.test.mjs count.test.mjs
+  test/*.test.mjs            server, import/export, grammar and Question Lab regression checks
+  test/question-lab-browser.mjs    native Chrome acceptance journeys with explicit offline data
 ```
 
 ## How it runs
@@ -153,6 +196,14 @@ missing Jev column is a question. Up to 32 calls run at a time. Answers are cach
 column definition, so a new column asks only for that column, an edited row asks only for that row,
 and new rows ask only for themselves. A bad JSON edit keeps the last good sheet on screen and shows
 the error. The viewer writes `answers.csv` and `.harness/verdict.json` itself. The agent reads both.
+
+Run `JEV_OFFLINE=1 node --test test/*.test.mjs` for the package checks. For the real-browser trial
+journeys, run `PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node test/question-lab-browser.mjs`.
+It imports an original fictional CSV, uses the actual viewer and client in explicit offline mode,
+and verifies review editing, archive retries/downloads, source changes, restart and a 390px view.
+The HTTP client test uses a local protocol fixture with a dummy key. Neither check validates live
+Jev accuracy or performance. The browser check requires Chrome; set `CHROME` to its executable
+path on a nonstandard installation. Its `EVIDENCE` directory contains screenshots and results.
 
 ## Logo and icon
 

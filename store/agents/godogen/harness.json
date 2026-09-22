@@ -4,7 +4,7 @@
   "name": "Godogen",
   "category": "Games",
   "author": "Alex Ermolov",
-  "description": "Build a world you can play. Watch your game take shape in a live studio, explore each version, and play while the agent keeps creating.",
+  "description": "Build a world you can play. Rewind a run, try another move, and pin a moment for your agent to improve while your game keeps taking shape.",
   "engine": "claude",
   "workspace": {
     "template": "template",

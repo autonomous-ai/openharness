@@ -5,7 +5,7 @@
   "name": "3D Viewer",
   "category": "3D",
   "author": "Autonomous",
-  "description": "A Blender-style viewport for the glTF a harness exports — outliner, properties in mm, shading modes, measure, section, explode, scene camera, timeline — live on every export.",
+  "description": "Inspect live glTF exports with Blender-style navigation, measured properties and shading. Explore authored Blender controls in Shape Lab and keep rebuildable design directions.",
   "toolchain": {
     "setup": "./setup.sh",
     "doctor": "./doctor.sh"

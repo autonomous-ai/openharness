@@ -18,6 +18,7 @@ from pathlib import Path
 
 import bpy
 from mathutils import Vector
+from harness_design import parameters
 
 _t0 = time.time()
 _WS = Path(os.environ.get("HARNESS_WORKSPACE") or os.getcwd()).resolve()
@@ -177,6 +178,8 @@ def _look_at(obj: bpy.types.Object, target: Vector) -> None:
 
 def render(path: str | Path = "out/preview.png", size: tuple[int, int] = (1280, 720), engine: str | None = None, samples: int = 32) -> Path:
     """A still. Workbench by default (seconds); engine="CYCLES" for a beauty shot (CPU, samples)."""
+    if os.environ.get("HARNESS_DESIGN_PREVIEW") == "1":
+        return Path(path).resolve()
     s = bpy.context.scene
     if s.camera is None:
         frame_all()
@@ -201,6 +204,8 @@ def turntable(path: str | Path = "out/turntable.mp4", seconds: float = 4.0, fps:
     """The camera orbits the model once; an mp4. Workbench, so seconds not minutes. The scene is left
     as it was found: the orbit pivot, its keys and the frame range are removed again, so a glTF
     exported afterwards carries the camera where frame_all put it, not a spinning rig."""
+    if os.environ.get("HARNESS_DESIGN_PREVIEW") == "1":
+        return Path(path).resolve()
     s = bpy.context.scene
     cam = frame_all() if s.camera is None else s.camera
     lo, hi = bounds()

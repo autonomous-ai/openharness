@@ -1,9 +1,9 @@
 # 3D Viewer, a Harness viewer package
 
 The pane for 3D models in [Harness](https://github.com/autonomous-ai/openharness): the glTF a
-harness exports, in a viewport that reads like Blender's — without Blender. It is where you *look*;
-changes happen by asking the agent, and every export lands here live, in place, without losing your
-view. A harness points at it with
+harness exports, in a viewport that reads like Blender's. Inspect the agent's live exports, then
+explore an authored Blender model's controls in **Shape Lab** and keep the directions you like.
+A harness points at it with
 
 ```json
 "viewer": { "use": "autonomous/model-viewer" }
@@ -14,6 +14,12 @@ glTF can. (CAD parts as STEP go to the CAD Viewer instead.)
 
 ## What it does
 
+- **Shape Lab** — optional controls authored by the Blender project, rebuilding real geometry
+  in a separate directory. Explore dimensions, material choices, component counts and other
+  declared parameters; orbit and measure the result; keep named directions with source, values,
+  actual model and rebuild tools. Download a model or a portable project ZIP. An original agent
+  export waits while the lab is open, and appears when you close it. Existing glTF-only projects
+  keep their usual viewport.
 - **Outliner** — the scene's hierarchy under the names it was built with: collections, objects,
   children, cameras, lights. Eye toggles (a hidden collection hides what is in it), click to select,
   Shift-click to add, double-click to frame, hover to highlight, filter by name, isolate one thing.
@@ -78,11 +84,53 @@ navigation and the gizmo), `outliner.js`, `measure.js`, `grid.js`, `env.js` (env
 from small scenes into PMREM — no HDR files) and `app.js` (live state, header, menus, keys).
 Nothing renders while nothing moves.
 
+### Shape Lab contract
+
+Blender's [`parameters()` helper](../../agents/blender/skills/blender/SKILL.md) publishes
+`.harness/design.json`: `spec: 1`, `kind: "blender-parameters"`, a title, relative Python `entry`,
+explicit `sources`, an `out/` glTF `output`, and typed controls. Project `design-values.json`
+contains `{ "spec": 1, "values": { ... } }`. A Python environment with `bpy` and the Blender helper
+are required only for this feature. Harness supplies the consumer's `HARNESS_DSH_DIR`; its
+`.venv/bin/python` and `toolchain/` are used by default. `BLENDER_PYTHON` and `BLENDER_TOOLCHAIN`
+can override these paths for development.
+
+`design.mjs` validates the declaration and values, fingerprints source bytes, and snapshots only
+the declared sources plus helper modules into a temporary directory. There is one active worker
+and one replaceable pending request, with a two-minute timeout. The worker runs the declared
+entry directly, with `HARNESS_DESIGN_PREVIEW=1`; HTTP cannot supply a shell command. It must
+produce the declared glTF and a measured `out/report.json`. The helper skips slow renders and
+turntables during previews. Relative outputs stay in the snapshot; project scripts are trusted
+code and must not hardcode paths back to the original workspace.
+
+The source limit is 128 MB / 2,000 files; a preview model is capped at 64 MB, and a saved ZIP at
+512 MB / 10,000 files. Hidden source files, output/dependency roots and symlinks are excluded or
+rejected. Writes require the page's random token and a matching origin when one is supplied;
+the HTTP host must be loopback. Files are checked against their real workspace paths.
+
+**Keep** writes an atomic directory under `out/designs/<id>/`: `design.json`, `source/` (including
+the chosen values and helper license), `thumbnail.png` when supplied, `rebuild.py`, `README.md`,
+and `project.zip`. `zip.mjs` writes a bounded UTF-8 ZIP without an external archiver. These folders
+are excluded from automatic model/still discovery. Downloads can be rebuilt with Python and
+the recorded version of `bpy`; any additional project dependencies must also be installed.
+
+**Use values on next build** checks the current source fingerprints and writes only
+`design-values.json`. It leaves the original glTF, renders and verdict untouched. Source and
+chosen-value revisions are tracked separately, so a saved direction remains editable when only
+the project's selected values have changed. A changed source requires reloading its controls,
+or asking the agent to adapt an older direction.
+
 ```sh
 ./setup.sh      # npm ci + the smoke test
 ./doctor.sh
 npm run smoke   # the server end to end: shell, three, state, ranges, sandbox, live events
-npm test        # the smoke test, then every branch of the server and the scripts (test/*.test.mjs)
+npm test        # server, lifecycle, scripts and Shape Lab orchestration (test/*.test.mjs)
+
+# Optional: real native geometry and Chrome, with a separate-folder rebuild of a downloaded ZIP.
+BLENDER_PYTHON=/path/to/bpy-venv/bin/python \
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
+CHROME_PATH=/path/to/chrome \
+SHAPE_LAB_EVIDENCE=/tmp/shape-lab-evidence \
+node test/shape-lab-browser.mjs
 ```
 
 ## Credit and stewardship

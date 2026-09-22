@@ -4,7 +4,7 @@
   "name": "Jev Sheets",
   "category": "Productivity",
   "author": "Autonomous",
-  "description": "Ask your spreadsheet anything. Drop in reviews, survey answers, tickets or leads, type a question in plain words, and Jev, TypeSafe's System One model, answers it for every row in seconds for cents, with a confidence on each. Take away a coded file and a findings report.",
+  "description": "Ask every row a question. Bring reviews, surveys, tickets or leads; Jev returns answers with probabilities. Compare new wording on frozen rows in Question Lab, inspect what changed, and keep the questions, answers and your review alongside a coded file and findings.",
   "engine": "claude",
   "workspace": {
     "template": "template",

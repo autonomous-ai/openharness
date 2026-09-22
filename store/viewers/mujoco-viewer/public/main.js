@@ -12,6 +12,8 @@ import { Engine } from './engine.js'
 import { Stage } from './scene.js'
 import { Panel } from './panel.js'
 import { Plot, fmt } from './plot.js'
+import { ExperimentPanel } from './experiment-panel.js'
+import { captureModelFiles } from './experiments.js'
 
 const params = new URLSearchParams(location.search)
 const FILE = (params.get('file') || '').replace(/^\/+/, '')
@@ -45,6 +47,8 @@ const state = {
   resolved: null,
   modelKey: null,
   modelPath: null,
+  modelFiles: [],
+  modelBundle: [],
   traj: null,
   trajKey: null,
   follow: null,             // the rollout whose controls the live simulation replays
@@ -69,6 +73,7 @@ let engine = null
 let stage = null
 let panel = null
 let plot = null
+let experiments = null
 
 // ─── Small UI helpers ─────────────────────────────────────────────────────────────────────────
 
@@ -152,6 +157,9 @@ let refreshing = false
 let refreshQueued = false
 
 async function refresh({ initial = false } = {}) {
+  // A comparison belongs to the compiled model and control tape it started with. New agent work
+  // waits until the user leaves it, instead of replacing the experiment under their hands.
+  if (experiments?.active) { refreshQueued = true; return }
   if (refreshing) { refreshQueued = true; return }
   refreshing = true
   try {
@@ -207,6 +215,7 @@ async function loadModel(r, traj, { initial }) {
       if (first) overlay(`Loading ${label}… ${done} / ${total} files`, { progress: allBytes ? bytes / allBytes : done / total })
     })
     const saved = first ? null : captureSession()
+    experiments?.reset()
     try {
       engine.load({ model: r.model, modelXml: r.modelXml, patch: traj?.patch })
     } catch (error) {
@@ -215,9 +224,13 @@ async function loadModel(r, traj, { initial }) {
       const dir = r.model.includes('/') ? r.model.slice(0, r.model.lastIndexOf('/')) : ''
       const listing = await getJson(`/api/list?dir=${encodeURIComponent(dir)}`)
       await engine.sync(listing.files)
+      files.push(...listing.files)
       engine.load({ model: r.model, modelXml: r.modelXml, patch: traj?.patch })
     }
     state.modelPath = r.model
+    state.modelFiles = files.map((file) => file.path)
+    state.modelBundle = captureModelFiles(engine, state.modelFiles)
+    state.compiledSource = { modelXml: r.modelXml, patch: traj?.patch }
     state.selected = state.selectedJoint = state.selectedActuator = state.selectedSensor = -1
     state.warnings = 0
     stage.build(engine, { keepCamera: sameModel && !first })
@@ -376,6 +389,7 @@ function recordedCtrl(time) {
 // ─── Simulation ───────────────────────────────────────────────────────────────────────────────
 
 function resetSim() {
+  experiments?.leave()
   if (!engine.model) return
   engine.endPerturb()
   engine.clearPerturbForce()
@@ -419,6 +433,7 @@ const BUDGET_MS = 9
  * 0.25 s is made up per frame (a slow renderer still gets real-time physics); a pane that was hidden resumes, it does not fast-forward.
  */
 function stepSim(elapsed, wallElapsed = elapsed) {
+  if (experiments?.active) return
   const m = engine.mujoco, model = engine.model, d = engine.data
   const perturbing = Boolean(engine.perturb?.active)
   if (!state.playing) {
@@ -500,6 +515,7 @@ function replayPlot() {
 }
 
 function setMode(mode, { keepState = false } = {}) {
+  experiments?.leave()
   if (mode === 'replay' && !state.traj) return
   if (mode === 'video' && !state.resolved?.video) return
   const from = state.mode
@@ -571,7 +587,7 @@ function installPointer() {
   const canvas = $('view')
   canvas.addEventListener('contextmenu', (e) => e.preventDefault())
   canvas.addEventListener('dblclick', (e) => {
-    if (!engine?.model || state.mode === 'video') return
+    if (!engine?.model || state.mode === 'video' || experiments?.active) return
     touch()
     const { origin, direction } = stage.rayFrom(e.clientX, e.clientY)
     const hit = engine.ray(origin, direction, visibleGroups())
@@ -586,6 +602,7 @@ function installPointer() {
     if (!engine?.model || !(e.ctrlKey || e.metaKey) || e.button !== 0) return
     e.preventDefault(); e.stopImmediatePropagation()
     touch()
+    if (experiments?.active) { toast('Return to the simulation to push a body'); return }
     if (state.mode !== 'sim') { toast('Switch to Simulate to push the model'); return }
     const { origin, direction } = stage.rayFrom(e.clientX, e.clientY)
     const hit = engine.ray(origin, direction, visibleGroups())
@@ -697,7 +714,7 @@ function configureOption() {
 
 let decorShown = false
 function drawDecor() {
-  if (!decorNeeded() || state.mode === 'video') {
+  if (!decorNeeded() || state.mode === 'video' || experiments?.previewing) {
     if (decorShown) { stage.decor.hideAll(); decorShown = false }
     return
   }
@@ -992,6 +1009,7 @@ function frame(now) {
   const elapsed = Math.min(0.25, wallElapsed)
   last = now
   if (engine?.model) {
+    experiments?.tick(elapsed)
     if (state.mode === 'sim') stepSim(elapsed, wallElapsed)
     else if (state.mode === 'replay' && state.traj) {
       if (state.playing) {
@@ -1045,6 +1063,7 @@ function renderShowMenu() {
 }
 
 function togglePanel(open = $('panel').hidden) {
+  if (!open) experiments?.leave()
   $('panel').hidden = !open
   $('btn-panel').classList.toggle('on', open)
   prefs.panel = open
@@ -1062,9 +1081,12 @@ function layout() {
 /** In a narrow pane the panel floats over the stage; the picture slides left so the model stays in view. */
 function applyInset() {
   const floating = body.classList.contains('narrow') && !$('panel').hidden
-  const inset = floating ? $('panel').offsetWidth : 0
-  stage.setInset(inset)
+  const bottom = floating && body.classList.contains('tiny') && panel.tab === 'experiment'
+  const inset = floating && !bottom ? $('panel').offsetWidth : 0
+  const bottomInset = bottom ? $('panel').offsetHeight : 0
+  stage.setInset(inset, bottomInset)
   body.style.setProperty('--inset', `${inset}px`)
+  body.style.setProperty('--bottom-inset', `${bottomInset}px`)
 }
 
 function closeMenus(except) {
@@ -1097,6 +1119,11 @@ async function openModelMenu() {
 function wire() {
   addEventListener('resize', () => { layout(); applyInset() })
   layout()
+  // Existing transport, model and actuator actions return to the original simulation first.
+  for (const id of ['transport', 'modes']) $(id).addEventListener('pointerdown', () => experiments?.leave(), true)
+  $('btn-experiment').addEventListener('click', () => {
+    touch(); togglePanel(true); panel.showTab('experiment'); experiments.open()
+  })
   $('modes').addEventListener('click', (e) => { const b = e.target.closest('button[data-mode]'); if (b && !b.disabled) setMode(b.dataset.mode) })
   $('btn-play').addEventListener('click', () => {
     touch()
@@ -1165,6 +1192,9 @@ function wire() {
     if (target instanceof HTMLSelectElement || (target instanceof HTMLInputElement && target.type !== 'range' && target.type !== 'checkbox')) return
     if (!$('help').hidden && e.key === 'Escape') { $('help').hidden = true; return }
     if (e.metaKey || e.ctrlKey || e.altKey) return
+    if (experiments?.active && [' ', 'ArrowRight', 'ArrowLeft', 'Backspace', 'Delete', 'Enter', 's', 'r', 'v'].includes(e.key)) experiments.leave()
+    // Tab belongs to normal focus navigation while the experiment form is open.
+    if (panel.tab === 'experiment' && !$('panel').hidden && e.key === 'Tab') return
     const key = e.key
     const handled = () => { e.preventDefault(); touch() }
     if (key === ' ') { handled(); if (state.mode !== 'video') { state.playing = !state.playing; renderTransport() } else { const v = $('video'); v.paused ? v.play() : v.pause() } }
@@ -1240,7 +1270,7 @@ async function main() {
     return
   }
   panel = new Panel($('panel'), {
-    onTab: (tab) => { prefs.tab = tab; savePrefs() },
+    onTab: (tab) => { if (tab !== 'experiment') experiments?.leave(); else experiments?.open(); prefs.tab = tab; savePrefs(); requestAnimationFrame(applyInset) },
     onSelectBody: (id, extra = {}) => { touch(); select(id, extra) },
     onTrackBody: (id) => { stage.setCameraMode({ kind: 'track', body: id }, engine); renderCameraChip(); renderChip() },
     onCtrl: (a, value) => { touch(); if (state.mode === 'replay') setMode('sim'); state.ctrlSource = 'manual'; engine.data.ctrl[a] = value },
@@ -1277,9 +1307,16 @@ async function main() {
 
   overlay('Starting MuJoCo…')
   engine = await Engine.create()
+  experiments = new ExperimentPanel($('tab-experiment'), {
+    get engine() { return engine }, get stage() { return stage }, state,
+    simulate: () => setMode('sim'),
+    legend: (text) => { $('comparison-legend').hidden = !text; $('comparison-time').textContent = text || '' },
+    onLeave: () => { if (refreshQueued) { refreshQueued = false; refresh() } },
+  })
   // For tests and the curious: the live objects, read-only by convention.
-  window.__mujocoViewer = { get engine() { return engine }, get stage() { return stage }, state, vis }
+  window.__mujocoViewer = { get engine() { return engine }, get stage() { return stage }, get experiments() { return experiments }, state, vis }
   await refresh({ initial: true })
+  if (panel.tab === 'experiment' && !$('panel').hidden) experiments.open()
   if (state.pendingMode === 'replay' && state.traj) setMode('replay')
   state.pendingMode = null
   requestAnimationFrame(frame)

@@ -8,6 +8,8 @@
 // pdf.js's modern build leans on JavaScript that only this year's WebKit has (Map.getOrInsertComputed,
 // Math.sumPrecise, RegExp.escape…). The pane is whatever WKWebView the Mac ships, so an older macOS
 // gets pdf.js's legacy build — same version, transpiled and polyfilled — instead of a blank pane.
+import { installReviews } from './reviews.mjs'
+
 const MODERN = !new URLSearchParams(location.search).has('legacy') && [
   Map.prototype.getOrInsertComputed, Math.sumPrecise, RegExp.escape, Promise.try, Promise.withResolvers,
   Uint8Array.fromBase64, Uint8Array.prototype.toHex, globalThis.Float16Array, URL.parse,
@@ -121,6 +123,7 @@ const params = new URLSearchParams(location.search)
 let requested = params.get('file') || ''
 let S = null                 // the server's last state
 let cur = null               // the live document instance
+let reviews = null, loadEpoch = 0
 let layout = store.get('layout', 'continuous')   // continuous | single | two | book
 let zoom = { mode: 'auto', scale: 1 }            // auto | width | page | actual | custom
 let presenting = false
@@ -157,6 +160,8 @@ async function post(path, body) {
 function onState(state) {
   S = state
   app.classList.remove('booting')
+  reviews?.update(state)
+  if (reviews?.holding()) return
   renderBuild()
   renderTitle()
   if (state.pdf) {
@@ -171,6 +176,7 @@ function onState(state) {
 // at the live view's place, wait until the visible pages are painted, swap
 let wanted = null, loader = null, restoreOnce = true
 function scheduleLoad(info) {
+  if (reviews?.holding()) return
   wanted = info
   if (!loader) loader = (async () => { while (wanted) { const next = wanted; wanted = null; try { await loadVersion(next) } catch (e) { console.error('[doc-viewer]', e) } } })().finally(() => { loader = null })
 }
@@ -198,7 +204,9 @@ async function fetchBytes(info) {
 }
 
 async function loadVersion(info) {
+  const epoch = loadEpoch
   const bytes = await fetchBytes(info)
+  if (epoch !== loadEpoch || reviews?.holding()) return
   if (!bytes) {
     if (!wanted) failRead(info, 'the file never finished writing')
     return
@@ -207,19 +215,55 @@ async function loadVersion(info) {
   if (cur && cur.path === info.path && cur.hash === hash) { Object.assign(cur, { mtimeMs: info.mtimeMs, size: info.size }); return }
   let doc
   try {
-    doc = await pdfjs.getDocument({
-      data: bytes, worker, isEvalSupported: false, enableXfa: false,
-      cMapUrl: '/vendor/cmaps/', cMapPacked: true, standardFontDataUrl: '/vendor/standard_fonts/', wasmUrl: '/vendor/wasm/', iccUrl: '/vendor/iccs/',
-    }).promise
+    doc = await parsePdf(bytes)
   } catch (error) {
-    if (!wanted) failRead(info, error?.message || String(error))
+    if (!wanted && epoch === loadEpoch && !reviews?.holding()) failRead(info, error?.message || String(error))
     return
   }
+  if (epoch !== loadEpoch || reviews?.holding()) { await doc.destroy(); return }
   const old = cur && cur.path === info.path ? cur : null
   const inst = await mount(doc, { ...info, hash }, old)
   if (!inst) return
+  if (epoch !== loadEpoch || reviews?.holding()) { retire(inst); return }
   if (cur && cur !== old) retire(cur)
   swapIn(inst, old)
+}
+
+function parsePdf(bytes) {
+  // The worker takes ownership of its buffer. Keep the held review's bytes intact.
+  return pdfjs.getDocument({
+    data: bytes.slice(), worker, isEvalSupported: false, enableXfa: false,
+    cMapUrl: '/vendor/cmaps/', cMapPacked: true, standardFontDataUrl: '/vendor/standard_fonts/', wasmUrl: '/vendor/wasm/', iccUrl: '/vendor/iccs/',
+  }).promise
+}
+
+async function showReview(bytes, info) {
+  const epoch = ++loadEpoch
+  wanted = null
+  const doc = await parsePdf(bytes)
+  if (doc.numPages > 500) { await doc.destroy(); throw new Error('Review comparison supports up to 500 pages') }
+  if (info.expectedPages && doc.numPages !== info.expectedPages) { await doc.destroy(); throw new Error('The saved PDF page count no longer matches the review') }
+  if (epoch !== loadEpoch) { await doc.destroy(); throw new Error('The document changed while opening this review') }
+  const old = cur
+  const inst = await mount(doc, { ...info, hash: fnv(bytes) }, old)
+  if (!inst) throw new Error('The reviewed PDF could not be displayed')
+  if (epoch !== loadEpoch) { retire(inst); throw new Error('The document changed while opening this review') }
+  // Comparing revisions is deliberate: automatic changed-page toasts would obscure the notes.
+  inst.isUpdate = false
+  swapIn(inst, old)
+}
+
+async function followLive() {
+  ++loadEpoch
+  try {
+    const response = await fetch('/api/state?file=' + encodeURIComponent(requested), { cache: 'no-store' })
+    if (!response.ok) throw new Error('Could not read the live workspace')
+    const state = await response.json()
+    if (reviews?.holding()) return
+    if (!state.pdf && cur) { retire(cur); cur = null; syncSidebar() }
+    onState(state)
+    reviews?.loaded()
+  } catch (error) { toast({ text: error.message, tone: 'danger' }) }
 }
 
 function failRead(info, why) {
@@ -410,6 +454,8 @@ function swapIn(inst, old) {
   if (find.open && findInput.value) { inst.quietFind = true; dispatchFind(''); setTimeout(() => { inst.quietFind = false }, 1500) }
   thumbPass(inst)
   loadTitle(inst)
+  reviews?.loaded()
+  reviews?.draw()
 }
 
 function retire(inst) {
@@ -436,9 +482,10 @@ async function loadTitle(inst) {
 function wireInstance(inst) {
   const { eventBus, container } = inst
   eventBus.on('pagechanging', () => { if (inst === cur) { updatePageUI(); markCurrentThumb(); scheduleOutlineSync() } })
-  eventBus.on('scalechanging', () => { if (inst === cur) updateZoomUI() })
+  eventBus.on('scalechanging', () => { if (inst === cur) { updateZoomUI(); reviews?.draw() } })
   eventBus.on('updateviewarea', ({ location }) => { if (inst === cur) { saveView(location); scheduleOutlineSync() } })
   eventBus.on('pagerendered', ({ pageNumber }) => { if (inst === cur && inst.changed.has(pageNumber) && performance.now() - inst.shownAt < 6000) flashPage(inst, pageNumber) })
+  eventBus.on('pagerendered', () => { if (inst === cur) reviews?.draw() })
   eventBus.on('updatefindmatchescount', ({ matchesCount }) => { if (inst === cur) renderFindCount(matchesCount) })
   eventBus.on('updatefindcontrolstate', ({ state, matchesCount, previous }) => { if (inst === cur) renderFindState(state, matchesCount, previous) })
   container.addEventListener('wheel', onWheel, { passive: false })
@@ -661,10 +708,12 @@ $('#back-chip').addEventListener('click', goBack)
 
 function saveView(location) {
   if (!cur) return
+  const inst = cur
   clearTimeout(saveView.t)
   saveView.t = setTimeout(() => {
-    const loc = location ?? cur.pdfViewer._location
-    if (loc) store.set(viewKey(cur.path), { loc: { pageNumber: loc.pageNumber, left: loc.left, top: loc.top }, zoom })
+    if (inst !== cur || inst.dead) return
+    const loc = location ?? inst.pdfViewer._location
+    if (loc) store.set(viewKey(inst.path), { loc: { pageNumber: loc.pageNumber, left: loc.left, top: loc.top }, zoom })
   }, 400)
 }
 const viewKey = (path) => 'view:' + (S?.workspace ?? '') + '/' + path
@@ -1092,6 +1141,7 @@ function hideLinkStatus() { $('#link-status').hidden = true }
 // ---------------------------------------------------------------------------------------------
 // build state: compiling, failed, warnings
 function renderBuild() {
+  if (reviews?.holding()) { buildPill.hidden = true; busyBar.hidden = true; errorCard.hidden = true; return }
   if (!S) return
   const verdict = S.verdict
   const errors = (verdict?.findings ?? []).filter((f) => f.severity === 'error')
@@ -1228,6 +1278,7 @@ titleBtn.addEventListener('click', () => {
   }))])
 })
 function switchFile(path) {
+  if (reviews?.holding()) { toast({ text: 'Choose Back to live before switching documents.' }); return }
   if (path === cur?.path) return
   requested = path
   const url = new URL(location.href)
@@ -1397,7 +1448,7 @@ $('#btn-more').addEventListener('click', () => {
     '-',
   ]
   if (S?.canOpen) {
-    items.push({ label: 'Open in default app', sub: 'to print or annotate', tall: true, icon: 'external', disabled: !path, run: () => openFile('open') })
+    items.push({ label: 'Open in default app', sub: reviews?.holding() ? 'Download the displayed PDF while reviewing' : 'to print or annotate', tall: true, icon: 'external', disabled: !path || reviews?.holding(), run: () => openFile('open') })
     items.push({ label: isMac ? 'Show in Finder' : 'Show in folder', icon: 'folder', disabled: !path, run: () => openFile('reveal') })
   }
   if (inBrowser) {
@@ -1410,23 +1461,31 @@ $('#btn-more').addEventListener('click', () => {
 })
 function setTheme(t) { theme = t; store.set('theme', t); applyTheme() }
 async function openFile(kind) {
+  if (kind !== 'reveal' && reviews?.holding()) return download()
   const path = cur?.path ?? S?.file
   if (!path) return
   const ok = await post('/api/open', { kind, path })
   toast({ text: ok ? (kind === 'reveal' ? `Showing ${baseName(path)}` : `Opened ${baseName(path)}`) : 'Could not open it here', ms: 2200 })
 }
-function download() {
+async function download() {
   const path = cur?.path ?? S?.file
   if (!path) return
-  const a = el('a', { href: '/ws/' + encodePath(path) + '?download=1', download: baseName(path) })
-  document.body.append(a); a.click(); a.remove()
+  try {
+    const href = cur ? URL.createObjectURL(new Blob([await cur.doc.getData()], { type: 'application/pdf' })) : '/ws/' + encodePath(path) + '?download=1'
+    const a = el('a', { href, download: baseName(path) })
+    document.body.append(a); a.click(); a.remove()
+    if (href.startsWith('blob:')) setTimeout(() => URL.revokeObjectURL(href), 60_000)
+  } catch { toast({ text: 'Could not download the displayed PDF', tone: 'danger' }) }
 }
-function printDoc() {
+async function printDoc() {
   const path = cur?.path ?? S?.file
   if (!path) return
   if (!inBrowser && S?.canOpen) return openFile('open')
-  const frame = el('iframe', { style: 'position:fixed;width:0;height:0;border:0;right:0;bottom:0', src: '/ws/' + encodePath(path) })
-  frame.addEventListener('load', () => { try { frame.contentWindow.print() } catch { window.open(frame.src) } setTimeout(() => frame.remove(), 60_000) })
+  let src
+  try { src = cur ? URL.createObjectURL(new Blob([await cur.doc.getData()], { type: 'application/pdf' })) : '/ws/' + encodePath(path) }
+  catch { toast({ text: 'Could not print the displayed PDF', tone: 'danger' }); return }
+  const frame = el('iframe', { style: 'position:fixed;width:0;height:0;border:0;right:0;bottom:0', src })
+  frame.addEventListener('load', () => { try { frame.contentWindow.print() } catch { window.open(frame.src) } setTimeout(() => { frame.remove(); if (src.startsWith('blob:')) URL.revokeObjectURL(src) }, 60_000) })
   document.body.append(frame)
 }
 async function copyText(text) {
@@ -1486,12 +1545,14 @@ $('#hud-exit').addEventListener('click', (e) => { e.stopPropagation(); exitPrese
 document.addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey
   const key = e.key
-  const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement
+  const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement
+  if (['Enter', ' '].includes(key) && e.target.closest?.('button, a, select')) return
   if (!$('#help').hidden) { if (key === 'Escape' || key === '?') { e.preventDefault(); closeHelp() } return }
   if (!menuEl.hidden && key === 'Escape') { e.preventDefault(); closeMenu(); return }
+  if (key === 'Escape' && reviews?.cancelArea()) { e.preventDefault(); return }
   if (mod && key.toLowerCase() === 'f') { e.preventDefault(); openFind(); return }
   if (mod && key.toLowerCase() === 'g') { e.preventDefault(); if (!find.open) openFind(); else dispatchFind('again', e.shiftKey); return }
-  if (typing) return
+  if (typing || e.target.closest?.('#review-panel')) return
   if (presenting) {
     if (['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter', 'j', 'n'].includes(key) && !(key === ' ' && e.shiftKey)) { e.preventDefault(); nextPage(); pokeHud(); return }
     if (['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace', 'k', 'p'].includes(key) || (key === ' ' && e.shiftKey)) { e.preventDefault(); prevPage(); pokeHud(); return }
@@ -1556,6 +1617,16 @@ stage.addEventListener('pointerdown', (e) => { if (cur && e.target.closest('.vie
 
 // ---------------------------------------------------------------------------------------------
 // go
+reviews = installReviews({
+  current: () => cur,
+  freeze() { ++loadEpoch; wanted = null; renderBuild() },
+  follow: followLive,
+  fetch: fetchBytes,
+  show: showReview,
+  go: goToPage,
+  clearFind: closeFind,
+  find(quote) { findInput.value = quote; openFind(); dispatchFind('') },
+})
 connect()
 setInterval(() => { if (S && (S.build !== 'idle' || cur)) { renderTitle() } }, 30_000)
 // For tests and debugging: a read-only look at the reader.
@@ -1571,4 +1642,5 @@ Object.defineProperty(window, 'docViewer', { value: {
   get zoomMode() { return zoom.mode },
   get layout() { return layout },
   get build() { return MODERN ? 'modern' : 'legacy' },
+  get review() { return reviews?.inspect() },
 } })

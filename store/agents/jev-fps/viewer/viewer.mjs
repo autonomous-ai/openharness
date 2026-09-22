@@ -60,21 +60,24 @@ export async function startFpsViewer({ workspace, port = 0 } = {}) {
   // Every binding is declared before anything can call into the closures below.
   let world = null
   let stopped = false, running = false, busy = false
+  let resetRevision = 0
   let timer = null, salt = 1, mapRev = 0, lastVerdictAt = 0
   let overrides = {}
   let human = null // { turn, move, fire, until }
-  let decision = { turn: 'AHEAD', move: 'HOLD', fire: false, pFire: 0, threat: 0, probs: { turn: {}, move: {} }, conf: { turn: 0, move: 0 } }
+  const blankDecision = () => ({ turn: 'AHEAD', move: 'HOLD', fire: false, pFire: 0, threat: 0, probs: { turn: {}, move: {} }, conf: { turn: 0, move: 0 } })
+  let decision = blankDecision()
   let obs = null
   let error = null
   let server = null
   const session = { kills: 0, deaths: 0, bestWave: 1, decisions: 0, shots: 0, hits: 0, wavesCleared: 0 }
 
-  const cfgWatch = watchConfig(join(workspace, 'level.json'), DEFAULT, () => { overrides = {}; restart(1); push() })
+  const cfgWatch = watchConfig(join(workspace, 'level.json'), DEFAULT, () => { resetRevision++; overrides = {}; restart(1); push() })
   const cfg = () => sanitize({ ...cfgWatch.get(), ...overrides })
 
   function restart(waveNo, carry = null) {
     world = createWorld(cfg(), waveNo, carry, session.deaths)
     mapRev++
+    decision = blankDecision(); error = null
     obs = observe(world, cfg())
   }
 
@@ -130,6 +133,7 @@ export async function startFpsViewer({ workspace, port = 0 } = {}) {
   async function decide() {
     if (busy || stopped) return
     busy = true
+    const askedWorld = world
     try {
       const c = cfg()
       if (world.status !== 'playing') {
@@ -142,6 +146,8 @@ export async function startFpsViewer({ workspace, port = 0 } = {}) {
       }
       obs = observe(world, c)
       const res = await evaluate({ state: obs.text, questions: questions(c), salt: salt++, model: process.env.JEV_MODEL || 'jev-latest', mock: fpsMock })
+      // A reset or file edit may have replaced the world while the provider was answering.
+      if (stopped || world !== askedWorld) return
       const a = res.answers
       const turn = TURNS.includes(a.turn?.choice) ? a.turn.choice : 'AHEAD'
       const move = MOVES.includes(a.move?.choice) ? a.move.choice : 'HOLD'
@@ -161,6 +167,7 @@ export async function startFpsViewer({ workspace, port = 0 } = {}) {
       }
       error = null
     } catch (e) {
+      if (stopped || world !== askedWorld) return
       error = clean(e?.message ?? String(e))
     } finally {
       busy = false
@@ -173,8 +180,12 @@ export async function startFpsViewer({ workspace, port = 0 } = {}) {
   async function control(cmd, body) {
     if (cmd === 'pause') { running = false; clearTimeout(timer) }
     else if (cmd === 'start') { if (!running) { running = true; schedule() } }
-    else if (cmd === 'reset') { Object.assign(session, { kills: 0, deaths: 0, bestWave: 1, decisions: 0, shots: 0, hits: 0, wavesCleared: 0 }); overrides = {}; human = null; salt = 1; restart(1) }
-    else if (cmd === 'tick') { const n = Math.round(clampN(body.n, 1, 5000, 1)); for (let i = 0; i < n; i++) await decide() }
+    else if (cmd === 'reset') {
+      resetRevision++
+      Object.assign(session, { kills: 0, deaths: 0, bestWave: 1, decisions: 0, shots: 0, hits: 0, wavesCleared: 0 })
+      overrides = {}; human = null; salt = 1; restart(1)
+    }
+    else if (cmd === 'tick') { const n = Math.round(clampN(body.n, 1, 5000, 1)); for (let i = 0, revision = resetRevision; i < n && !stopped && revision === resetRevision; i++) await decide() }
     else if (cmd === 'spawn') {
       const x = Number(body.x), y = Number(body.y)
       if (Number.isFinite(x) && Number.isFinite(y) && !isWall(world.map, x, y) && world.demons.length < 40) spawnDemon(world, cfg(), { x: (x | 0) + 0.5, y: (y | 0) + 0.5 })

@@ -23,6 +23,7 @@
   </nav>
   <div id="agent" hidden><span class="pulse"></span><span id="agent-text"></span></div>
   <div class="tools">
+    <button type="button" id="btn-experiment" title="Compare two futures from one moment">What if…</button>
     <button type="button" class="icon" id="btn-show" title="Show: contacts, forces, joints, frames… " aria-haspopup="true">
       <svg viewBox="0 0 20 20"><path d="M1.5 10s3-5.5 8.5-5.5S18.5 10 18.5 10s-3 5.5-8.5 5.5S1.5 10 1.5 10Z"/><circle cx="10" cy="10" r="2.6"/></svg>
     </button>
@@ -47,6 +48,7 @@
     <span id="hud-extra"></span>
   </div>
   <div id="camera-chip" hidden></div>
+  <div id="comparison-legend" hidden><b id="comparison-time"></b><span class="original">Original · wireframe</span><span class="changed">Changed · solid</span></div>
   <div id="chip" hidden>
     <span class="swatch"></span>
     <span id="chip-name"></span>
@@ -108,10 +110,12 @@
     <button type="button" data-tab="controls" class="on">Controls</button>
     <button type="button" data-tab="model">Model</button>
     <button type="button" data-tab="sensors">Sensors</button>
+    <button type="button" data-tab="experiment">What if</button>
   </nav>
   <section id="tab-controls" class="tab on"></section>
   <section id="tab-model" class="tab"></section>
   <section id="tab-sensors" class="tab"></section>
+  <section id="tab-experiment" class="tab"></section>
   <section id="plot">
     <div class="plot-head">
       <select id="plot-signal" aria-label="Signal to plot"></select>

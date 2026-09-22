@@ -40,19 +40,22 @@ export async function startPongViewer({ workspace, port = 0 } = {}) {
   let stopped = false, running = false
   let timer = null, salt = 1, lastVerdictAt = 0
   let queue = Promise.resolve()
+  let resetRevision = 0
   let overrides = {}
-  let decision = { move: 'HOLD', probs: {}, conf: 0, reach: 0.5 }
+  const blankDecision = () => ({ move: 'HOLD', probs: {}, conf: 0, reach: 0.5 })
+  let decision = blankDecision()
   let text = ''
   let error = null
   let server = null
   let history = [] // per decision: { step, ballY, paddleY, move, conf }
   const session = { decisions: 0 }
 
-  const cfgWatch = watchConfig(join(workspace, 'pong.json'), DEFAULT, () => { overrides = {}; restart(); push(true) })
+  const cfgWatch = watchConfig(join(workspace, 'pong.json'), DEFAULT, () => { resetRevision++; overrides = {}; restart(); push(true) })
   const cfg = () => sanitize({ ...cfgWatch.get(), ...overrides })
 
   function restart() {
     world = createWorld(cfg())
+    decision = blankDecision(); error = null
     history = []
     text = stateText(world, cfg())
   }
@@ -120,11 +123,13 @@ export async function startPongViewer({ workspace, port = 0 } = {}) {
 
   async function decideOnce() {
     if (stopped) return
+    const askedWorld = world
     try {
       const c = cfg()
       if (world.phase === 'missed') { step(world, c, 'HOLD'); text = stateText(world, c); return } // the ball is gone: nothing to ask
       text = stateText(world, c)
       const res = await evaluate({ state: text, questions: QUESTIONS, salt: salt++, model: process.env.JEV_MODEL || 'jev-latest' })
+      if (stopped || world !== askedWorld) return
       const a = res.answers
       const move = MOVES.includes(a.move?.choice) ? a.move.choice : 'HOLD'
       decision = { move, probs: a.move?.probabilities ?? {}, conf: Number(a.move?.confidence ?? 0), reach: Number(a.reach?.noul ?? 0.5) }
@@ -135,6 +140,7 @@ export async function startPongViewer({ workspace, port = 0 } = {}) {
       text = stateText(world, c)
       error = null
     } catch (e) {
+      if (stopped || world !== askedWorld) return
       error = clean(e?.message ?? String(e))
     }
   }
@@ -147,8 +153,13 @@ export async function startPongViewer({ workspace, port = 0 } = {}) {
   async function control(cmd, body) {
     if (cmd === 'pause') { running = false; clearTimeout(timer) }
     else if (cmd === 'start') { if (!running) { running = true; schedule() } }
-    else if (cmd === 'reset') { overrides = {}; salt = 1; session.decisions = 0; await queue; restart() }
-    else if (cmd === 'tick') { const n = Math.round(clampN(body.n, 1, 20000, 1)); for (let i = 0; i < n; i++) await decide() }
+    else if (cmd === 'reset') {
+      resetRevision++
+      // Reset is a queued operation too; counters clear after the last old answer settles.
+      const reset = () => { overrides = {}; salt = 1; session.decisions = 0; restart() }
+      queue = queue.then(reset, reset); await queue
+    }
+    else if (cmd === 'tick') { const n = Math.round(clampN(body.n, 1, 20000, 1)); for (let i = 0, revision = resetRevision; i < n && !stopped && revision === resetRevision; i++) await decide() }
     else if (cmd === 'set') {
       const range = DIALS[body.key]
       if (range) { overrides = { ...overrides, [body.key]: clampN(body.value, range[0], range[1], cfg()[body.key]) }; applyPace(world, cfg()) }

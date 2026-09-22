@@ -2,8 +2,14 @@
   "homepage": "https://www.rdkit.org",
   "upstream": "https://github.com/rdkit/rdkit",
   "license": "MIT",
-  "tagline": "Open-source cheminformatics software",
+  "tagline": "Explore molecules in 3D, turn a bond, and keep a reproducible study",
   "examples": [
+    {
+      "prompt": "Build 3D conformers of butane and phenethyl acetate with explicit hydrogens. Let me rotate a flexible bond in the acetate, compare the sampled shapes and rigid MMFF94 energy, then keep a pose and a reproducible study.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/rdkit-bond-scan.png",
+      "video": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/rdkit-bond-scan-demo.mp4",
+      "caption": "Phenethyl acetate · real rigid MMFF94 bond scan · 25 poses and a kept study"
+    },
     {
       "prompt": "Take capsaicin, the molecule behind chili heat, and design three analogues: a saturated tail (nonivamide), a shorter tail, and the ester capsiate. Give each a 3D conformer and compare their properties side by side.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/rdkit/capsaicin-analogues.jpg",
@@ -13,6 +19,10 @@
       "prompt": "Design three analogues of ibuprofen that keep the propionic acid but replace the isobutyl group with alternatives that lower cLogP below 3 while staying Lipinski-compliant. For each: SMILES, properties, a 3D conformer and a similarity score to ibuprofen. Pick the best one and explain the choice.",
       "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/rdkit/ibuprofen-analogues.jpg",
       "caption": "Ibuprofen + 3 lower-cLogP analogues · 3D conformers · ESP surface + series table"
+    },
+    {
+      "prompt": "Build a 3D conformer of 2-phenylethanol with explicit hydrogens. I want to explore a flexible non-ring single bond in Bond scan, compare its shapes and understand where steric crowding raises the rigid MMFF94 energy.",
+      "caption": "Input and sampled conformers, selected SDF, energy CSV and reproducible calculation source."
     }
   ]
 }

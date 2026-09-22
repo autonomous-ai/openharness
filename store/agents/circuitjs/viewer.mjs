@@ -14,23 +14,33 @@
 // simulator could not load (the package's own checker, toolchain/verdict.py, plus the app's own
 // load errors), and a legend for the colours, dots and controls.
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, statSync, watch } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync, watch } from 'node:fs'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'node:http'
+import { createCaptureStore, captureHash } from './lab/store.mjs'
+import { CAPTURE_LIMITS } from './lab/capture.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const port = Number(process.env.HARNESS_VIEWER_PORT)
 const workspace = resolve(process.env.HARNESS_WORKSPACE)
 const war = join(here, 'upstream', 'war')
 const clients = new Set()
+const runtime = { engine: 'CircuitJS1', sourceCommit: null, compiledFiles: [] }
+try { runtime.sourceCommit = readFileSync(join(here, 'VERSIONS'), 'utf8').match(/^CIRCUITJS1_COMMIT=([a-f0-9]{40})/m)?.[1] || null } catch {}
+try {
+  const dir = join(war, 'circuitjs1')
+  runtime.compiledFiles = readdirSync(dir).filter((name) => name === 'circuitjs1.nocache.js' || /^[A-Z0-9]+\.cache\.js$/.test(name)).slice(0, 12).sort().map((name) => ({ name, sha256: captureHash(readFileSync(join(dir, name))) }))
+} catch {}
+const captures = createCaptureStore(workspace, runtime)
+const labFiles = new Set(['ui.mjs', 'ui.css', 'capture.mjs', 'plots.mjs'])
 
 // The circuit the app boots on, before the page imports the workspace file: an options line and
 // nothing else, so the canvas never flashes one of upstream's example circuits.
 const BLANK = '$ 1 0.000005 10.20027730826997 50 5 43 5e-11\n'
 
 const TYPES = {
-  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css',
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
   '.txt': 'text/plain; charset=utf-8', '.json': 'application/json', '.xml': 'text/xml',
   '.gif': 'image/gif', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
   '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.eot': 'application/vnd.ms-fontobject',
@@ -102,9 +112,52 @@ function sendFile(res, full, req) {
 }
 
 createServer(async (req, res) => {
+  res.setHeader('x-content-type-options', 'nosniff')
+  if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(req.headers.host || '')) { res.writeHead(403); res.end('Loopback only'); return }
   const url = new URL(req.url, `http://127.0.0.1:${port}`)
   let path
   try { path = decodeURIComponent(url.pathname) } catch { res.writeHead(400); res.end('bad path'); return }
+  if (path === '/__lab/api' || path.startsWith('/__lab/api/')) {
+    const json = (status, data) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(data)) }
+    try {
+      if (req.method === 'GET') {
+        if (path === '/__lab/api') return json(200, { token: captures.token, runtime, captures: captures.list(), limits: CAPTURE_LIMITS })
+        const bits = path.slice('/__lab/api/'.length).split('/')
+        if (bits.length === 2 && bits[1] === 'download') {
+          const file = captures.download(bits[0])
+          res.setHeader('content-disposition', `attachment; filename="circuit-capture-${bits[0]}.zip"`)
+          return send(res, readFileSync(file), 'application/zip', 'no-store')
+        }
+        if (bits.length === 1) return json(200, { capture: captures.read(bits[0]) })
+        return json(404, { error: 'Capture route not found' })
+      }
+      if (req.method !== 'POST' || path !== '/__lab/api') return json(405, { error: 'Method not allowed' })
+      if (req.headers['x-circuit-lab'] !== captures.token || (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) || req.headers['sec-fetch-site'] === 'cross-site') {
+        req.resume(); return json(403, { error: 'Refresh Scope Lab before keeping this capture' })
+      }
+      if (Number(req.headers['content-length']) > CAPTURE_LIMITS.body) { req.resume(); return json(413, { error: 'Capture uploads are limited to 4 MB' }) }
+      const body = await new Promise((resolve) => {
+        let chunks = [], size = 0, ended = false
+        req.on('data', (chunk) => {
+          if (ended) return
+          size += chunk.length
+          if (size > CAPTURE_LIMITS.body) { ended = true; chunks = []; json(413, { error: 'Capture uploads are limited to 4 MB' }); resolve(null) }
+          else chunks.push(chunk)
+        })
+        req.on('end', () => { if (!ended) { ended = true; resolve(Buffer.concat(chunks).toString('utf8')) } })
+        req.on('error', () => { if (!ended) { ended = true; resolve(null) } })
+        req.on('aborted', () => { if (!ended) { ended = true; resolve(null) } })
+      })
+      if (body == null) return
+      let data; try { data = JSON.parse(body) } catch { return json(400, { error: 'Provide a JSON capture' }) }
+      return json(200, { capture: captures.keep(data) })
+    } catch (error) { return json(error.status || 500, { error: String(error.message).slice(0, 300) }) }
+  }
+  if (path.startsWith('/__lab/')) {
+    const name = path.slice('/__lab/'.length)
+    if (!labFiles.has(name)) { res.writeHead(404); res.end('not found'); return }
+    sendFile(res, join(here, 'lab', name), req); return
+  }
   if (path === '/') { send(res, page(), 'text/html; charset=utf-8', 'no-store'); return }
   if (path === '/events') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' })

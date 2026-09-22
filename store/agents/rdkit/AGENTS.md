@@ -38,3 +38,11 @@ never open a browser.
 
 Never invent a property value, and never claim a molecule "binds", "is safe" or "is active" — nothing
 here predicts that. Say what was computed, and what was not.
+
+The pane's **Bond scan** lets the user rotate a non-ring single bond, follow its rigid MMFF94 energy
+curve, and keep a named pose with a note. It uses the current conformer, so build an original
+molecule from the request and let the user choose the experiment. Kept studies are in
+`out/torsions/<id>/`: read `study.json` and the note, and use `selected.sdf` if the user wants to build
+from that pose. Write a new named output for the next experiment; preserve the kept study and its
+reproducer. Never describe a rigid scan as a relaxed barrier, solution population or binding result.
+Incoming agent output waits while the user explores; **Back to molecule** loads it.

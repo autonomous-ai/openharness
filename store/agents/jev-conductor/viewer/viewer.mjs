@@ -41,6 +41,7 @@ export async function startConductorViewer({ workspace, port = 0 } = {}) {
   let plan = [] // [{ bar, chord, bass, lead[], mood, energy, tones[], pos, request, probs, confidence, at }]
   let stateText = ''
   let stopped = false, running = false, busy = false
+  let revision = 0, chain = Promise.resolve()
   let timer = null, watchTimer = null, salt = 1, barCount = 0, lastVerdictAt = 0, cut = 0
   let error = null
   const clients = new Set()
@@ -57,15 +58,24 @@ export async function startConductorViewer({ workspace, port = 0 } = {}) {
   const piece = () => sanitize({ ...raw, ...overrides })
 
   /** One bar: two calls. The harmony first, then every note, with the chosen chord written into the text. */
-  async function composeBar() {
+  function composeBar() {
+    const requested = revision
+    const next = chain.then(() => requested === revision ? composeBarOnce() : false)
+    chain = next.catch(() => {})
+    return next
+  }
+
+  async function composeBarOnce() {
     if (busy || stopped) return false
     busy = true
+    const askedRevision = revision
     try {
       const p = piece()
       if (request && !p.moods.includes(request)) request = null
       const barNo = barCount + 1
+      const audienceRequest = request
       const model = process.env.JEV_MODEL || 'jev-latest'
-      stateText = harmonyState(p, plan, barNo, request)
+      stateText = harmonyState(p, plan, barNo, audienceRequest)
       const h = await evaluate({
         state: stateText,
         questions: {
@@ -75,6 +85,7 @@ export async function startConductorViewer({ workspace, port = 0 } = {}) {
         },
         salt: salt++, model, mock: conductorMock,
       })
+      if (stopped || askedRevision !== revision) return false
       const bar = {
         bar: barNo,
         chord: p.chords.includes(h.answers.chord?.choice) ? h.answers.chord.choice : p.chords[0],
@@ -84,7 +95,8 @@ export async function startConductorViewer({ workspace, port = 0 } = {}) {
       const options = Object.fromEntries([...p.scale.map((n) => [n, n]), ['rest', 'play nothing in this slot']])
       const questions = { bass: jev.choice(p.bassScale, 'Choose the bass note for this bar. The root of the chord is the safe choice.') }
       for (let k = 1; k <= p.leadNotes; k++) questions[`lead${k}`] = jev.choice(options, `Note ${k} of ${p.leadNotes} in this bar's lead phrase (${k % 2 ? 'a strong beat' : 'an off beat'}). Pick a note of the scale, or rest.`)
-      const n = await evaluate({ state: notesState(p, plan, barNo, request, bar), questions, salt: salt++, model, mock: conductorMock })
+      const n = await evaluate({ state: notesState(p, plan, barNo, audienceRequest, bar), questions, salt: salt++, model, mock: conductorMock })
+      if (stopped || askedRevision !== revision) return false
       bar.bass = p.bassScale.includes(n.answers.bass?.choice) ? n.answers.bass.choice : p.bassScale[0]
       bar.lead = []
       const leadProbs = []
@@ -94,7 +106,7 @@ export async function startConductorViewer({ workspace, port = 0 } = {}) {
         leadProbs.push(a.probabilities ?? {})
       }
       Object.assign(bar, {
-        tones: parseChord(bar.chord)?.tones ?? [], pos: ((barNo - 1) % p.phrase) + 1, request,
+        tones: parseChord(bar.chord)?.tones ?? [], pos: ((barNo - 1) % p.phrase) + 1, request: audienceRequest,
         confidence: Number(h.answers.chord?.confidence ?? 0),
         probs: { chord: h.answers.chord?.probabilities ?? {}, mood: h.answers.mood?.probabilities ?? {}, lead: leadProbs },
         at: new Date().toISOString(), model: h.model, client: h.client,
@@ -115,6 +127,7 @@ export async function startConductorViewer({ workspace, port = 0 } = {}) {
       error = null
       return true
     } catch (e) {
+      if (stopped || askedRevision !== revision) return false
       error = clean(e?.message ?? String(e))
       return false
     } finally {
@@ -170,14 +183,20 @@ export async function startConductorViewer({ workspace, port = 0 } = {}) {
   async function run() { await composeBar(); push(true); schedule() }
 
   /** A person changed what Jev faces: write two bars now, and tell the pane to cut over to them. */
-  async function respond() { cut++; await composeBar(); await composeBar(); if (running) schedule() }
+  async function respond() {
+    const requested = ++revision
+    cut++
+    await composeBar()
+    if (requested === revision) await composeBar()
+    if (running) schedule()
+  }
 
   async function control(cmd, body) {
     let ok = true
     if (cmd === 'pause') { running = false; clearTimeout(timer) }
     else if (cmd === 'start') { if (!running) { running = true; schedule() } }
-    else if (cmd === 'reset') { barCount = 0; plan = []; salt = 1; error = null; overrides = {}; request = null; cut++; Object.assign(totals, ZERO); await composeBar(); await composeBar(); if (running) schedule() }
-    else if (cmd === 'tick') { const n = Math.round(num(body.n, 1, 20000, 1)); for (let i = 0; i < n; i++) await composeBar() }
+    else if (cmd === 'reset') { barCount = 0; plan = []; salt = 1; error = null; overrides = {}; request = null; Object.assign(totals, ZERO); await respond() }
+    else if (cmd === 'tick') { const n = Math.round(num(body.n, 1, 20000, 1)), requested = revision; for (let i = 0; i < n && !stopped && requested === revision; i++) await composeBar() }
     else if (cmd === 'onemore') { cut++; ok = await composeBar(); if (running) schedule() }
     else if (cmd === 'request') {
       const mood = body.mood == null || body.mood === '' ? null : String(body.mood)
@@ -203,7 +222,7 @@ export async function startConductorViewer({ workspace, port = 0 } = {}) {
       if (stopped) return
       const before = JSON.stringify(raw)
       load()
-      if (JSON.stringify(raw) !== before) { overrides = {}; if (running) schedule() }
+      if (JSON.stringify(raw) !== before) { revision++; overrides = {}; if (running) schedule() }
       push(true)
     }, 40)
   })

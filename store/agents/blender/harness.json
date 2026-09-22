@@ -4,7 +4,7 @@
   "name": "Blender",
   "category": "3D",
   "author": "Blender Foundation",
-  "description": "Describe an object, a scene, a shot — and watch it take shape: modelled in Blender's Python, rendered headless, exported as glTF you can orbit and zoom in the pane.",
+  "description": "Describe an object or scene, then shape it with authored controls: real Blender geometry, named design directions, and editable source you can keep and rebuild.",
   "engine": "claude",
   "workspace": {
     "template": "template",

@@ -29,6 +29,12 @@ game visible. While you play or inspect an older version, a new version waits be
 The studio log has activity, versions, imported assets, and **Export game**, which writes the
 selected playable build to a new folder under `out/`.
 
+**Rewind** lets you scrub your recent run and try a different move from any recorded moment.
+Choose **Back to live** to return to where you were, or **Try from here** to take another path.
+**Pin moment** keeps the game state, a canvas screenshot, your note, and that playable build.
+Saved moments survive edits and restarts. Ask the agent to read `out/playtests/` when you want
+it to act on the feedback: “Make the jump in my Keep moment last a little longer.”
+
 ## What is installed
 
 - Godogen's pinned upstream instructions and asset skill, fetched into `upstream/` and rendered
@@ -77,6 +83,9 @@ GODOGEN_BROWSER=webkit npm run test:browser
 
 The test creates a disposable workspace and viewer. It exercises controls, a full game loop,
 live source edits, build and runtime failures, version retention, export, and a narrow layout.
+The playtest check also covers rewind, restoring collected gates and a mid-jump state, alternate
+input after rewind, saved feedback, reopening an old game after source edits and server restart,
+and compatibility with games that do not implement snapshots.
 Screenshots go to ignored `test-results/`. Chrome is used if installed on macOS; otherwise
 run `npx playwright install chromium` first. `GAME_VIEWER_DIR` can point at a separate viewer
 checkout; by default the test uses the sibling package in this repository. Browser tooling is

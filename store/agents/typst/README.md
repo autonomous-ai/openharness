@@ -4,6 +4,12 @@
 [Typst](https://typst.app): describe a document in the chat pane, watch the PDF take shape in the
 Doc Viewer pane as Typst compiles it on every save. Runs on Claude Code.
 
+The pane also holds an exact draft for review. Select words or pin an area, leave **Change / Keep /
+Question** notes, and keep the PDF with its feedback as a portable packet. Compare a later compile
+without losing the draft you reviewed; quoted notes can follow unchanged words onto another page.
+Ask the agent to read `.harness/doc-reviews/<id>/review.md` and carry those decisions into the next
+Typst revision. [How document review works](../../viewers/doc-viewer/README.md#carry-the-review-into-the-next-draft).
+
 - `harness.json` — the manifest: engine, template, skill, toolchain, `viewer.use: autonomous/doc-viewer`.
 - `skills/typst/` — the Typst skill (ours): the language, the commands, the rules.
 - `toolchain/setup.sh` downloads the pinned Typst release binary into `bin/` (see `TYPST_VERSION`);

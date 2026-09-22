@@ -32,7 +32,7 @@ export class Panel {
   constructor(root, handlers) {
     this.root = root
     this.h = handlers
-    this.tabs = { controls: root.querySelector('#tab-controls'), model: root.querySelector('#tab-model'), sensors: root.querySelector('#tab-sensors') }
+    this.tabs = Object.fromEntries(['controls', 'model', 'sensors', 'experiment'].map((name) => [name, root.querySelector(`#tab-${name}`)]))
     this.info = null
     this.rows = { actuators: [], joints: [], sensors: [], bodies: new Map(), cameras: [], keys: [] }
     this.tab = 'controls'
@@ -42,9 +42,11 @@ export class Panel {
   }
 
   showTab(tab) {
+    if (!this.tabs[tab]) return
     this.tab = tab
     this.root.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab))
     for (const [name, node] of Object.entries(this.tabs)) node.classList.toggle('on', name === tab)
+    this.root.querySelector('#plot').hidden = tab === 'experiment'
     this.h.onTab?.(tab)
     this.lastUpdate = 0
   }

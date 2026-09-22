@@ -9,14 +9,18 @@
 //   GET  /vendor/<part>/*    pdf.js: build, web, legacy, cmaps, standard_fonts, wasm, iccs
 //   GET  /ws/<path>          a workspace file (?download=1 for an attachment)
 //   GET  /api/state?file=    the document state (lib/workspace.mjs)
+//   GET/POST /api/reviews    list / keep an immutable PDF-and-notes review packet
+//   GET /api/reviews/id/*    the packet's bounded PDF, JSON, Markdown and ZIP files
 //   GET  /events?file=       the same state, pushed on every change
 //   POST /api/open           open the PDF in the default app, reveal it, or open an external link
 import { createServer } from 'node:http'
-import { createReadStream, existsSync, statSync, watch } from 'node:fs'
+import { createReadStream, existsSync, readFileSync, statSync, watch } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { docState, safeJoin, stateKey } from './lib/workspace.mjs'
+import { createReviewService, MAX_UPLOAD } from './lib/reviews.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const port = Number(process.env.HARNESS_VIEWER_PORT)
@@ -31,9 +35,11 @@ const TYPES = {
   '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.json': 'application/json',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif', '.wasm': 'application/wasm',
   '.bcmap': 'application/octet-stream', '.pfb': 'application/octet-stream', '.ttf': 'font/ttf', '.icc': 'application/vnd.iccprofile',
-  '.txt': 'text/plain; charset=utf-8', '.map': 'application/json',
+  '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8', '.zip': 'application/zip', '.map': 'application/json',
 }
 const clients = new Set()
+const reviewToken = randomBytes(32).toString('hex')
+const reviews = createReviewService(workspace)
 
 function sendFile(req, res, full, { cache = 'no-store', download = false } = {}) {
   let st
@@ -59,6 +65,26 @@ function readBody(req, limit = 16_384) {
     req.on('end', () => ok(Buffer.concat(chunks).toString('utf8')))
     req.on('error', fail)
   })
+}
+
+async function keepReview(req, res) {
+  const reject = (status, error) => { req.resume(); res.setHeader('connection', 'close'); json(res, status, { error }) }
+  if (!trusted(req) || req.headers['x-review-token'] !== reviewToken || (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`)) return reject(403, 'Reload the reader before keeping a review')
+  if (Number(req.headers['content-length']) > MAX_UPLOAD) return reject(413, 'A review supports a PDF of at most 30 MB')
+  try {
+    const body = await new Promise((resolve, reject) => {
+      let size = 0, chunks = [], finished = false
+      req.on('data', (chunk) => {
+        if (finished) return
+        size += chunk.length
+        if (size > MAX_UPLOAD) { finished = true; chunks = []; reject(Object.assign(new Error('The review upload is too large'), { status: 413 })); return }
+        chunks.push(chunk)
+      })
+      req.on('end', () => { if (!finished) { finished = true; resolve(Buffer.concat(chunks)) } })
+      req.on('error', reject); req.on('aborted', () => reject(new Error('The review upload was interrupted')))
+    })
+    json(res, 200, reviews.keep(body))
+  } catch (error) { if (!res.destroyed) reject(error.status || 500, error.message) }
 }
 
 // Only this page may ask: a custom header forces a CORS preflight no other origin gets past, and
@@ -106,7 +132,18 @@ const server = createServer((req, res) => {
     url = new URL(req.url, `http://127.0.0.1:${port}`)
     path = decodeURIComponent(url.pathname)
   } catch { res.writeHead(400); res.end(); return }
-  if (path === '/' || path === '/index.html') return sendFile(req, res, join(APP, 'index.html'))
+  if (path === '/' || path === '/index.html') {
+    const html = readFileSync(join(APP, 'index.html'), 'utf8').replace('__REVIEW_TOKEN__', reviewToken)
+    res.writeHead(200, { 'content-type': TYPES['.html'], 'content-length': Buffer.byteLength(html), 'cache-control': 'no-store' }); res.end(req.method === 'HEAD' ? undefined : html); return
+  }
+  if (path === '/api/reviews' && req.method === 'POST') { keepReview(req, res); return }
+  if (path === '/api/reviews' && req.method === 'GET') return json(res, 200, reviews.list())
+  if (path.startsWith('/api/reviews/') && ['GET', 'HEAD'].includes(req.method)) {
+    const parts = path.split('/'); let full
+    try { full = parts.length === 5 && reviews.file(parts[3], parts[4]) } catch { full = null }
+    if (!full) { res.writeHead(404); res.end(); return }
+    return sendFile(req, res, full, { download: url.searchParams.has('download') })
+  }
   if (path.startsWith('/app/')) {
     const full = safeJoin(APP, path.slice('/app/'.length))
     return full ? sendFile(req, res, full) : (res.writeHead(404), res.end())

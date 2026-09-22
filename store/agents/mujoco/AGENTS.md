@@ -36,3 +36,35 @@ open a browser, and never point the user at the video.
 4. **Ask only what you cannot infer**: which robot, what task. Otherwise decide, say so, and simulate.
 5. **Deliver** the script, the rollout under `out/`, and any policy weights, and say where they are:
    "it is running in the pane — push it with ⌘-drag" is the demo; the mp4 is only for sharing.
+
+## Let the user investigate
+
+The viewer's **What if…** lab pins a moment from the simulation or replay, changes gravity,
+surface friction or a short sideways force, and runs two real MuJoCo futures. The original appears
+as a mint wireframe alongside the changed world, with paths, a shared timeline and measured body
+separation. Invite a specific experiment that suits the task: “try a 20 N shove on the base” or
+“compare the same landing with less grip.” Keep the user's model and controller useful beyond the
+demo; the lab also works on their own MJCF.
+Click **Farthest apart** to inspect the first stored frame with the greatest body separation, or
+**Apart at the finish** for the final moment. These are paused views of both actual sampled poses;
+the saved metrics carry the peak's frame index and sample time for follow-up analysis.
+
+Both futures replay the same recorded control tape (or hold the current actuator values). A Python
+controller or learned policy is **not** making new decisions in the lab. Explain that distinction
+when a user asks about recovery or policy performance; implement and rerun a feedback controller
+in Python for that question.
+
+**Save experiment** downloads the compiled model inputs and assets, model patch, full starting
+state, control tape, conditions and measured trajectories. To investigate an experiment the user
+brings back, reproduce it before revising the controller:
+
+```sh
+"$MUJOCO_PYTHON" "$MUJOCO_TOOLCHAIN/experiments.py" physics-experiment.json \
+  --output out/experiment-reproduction.json
+```
+
+The command uses the bundled source and the same MuJoCo version, then compares its native result
+with the browser measurement. Keep the report. A mismatch is evidence to investigate, not a pass.
+Use the starting state and conditions to write a new controller trial, save the user's original
+experiment, and show the new rollout in the pane. Do not call a changed model or an open-loop tape
+a verified feedback policy.

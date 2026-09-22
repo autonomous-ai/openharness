@@ -63,8 +63,19 @@ In `sheet.json` a column is a header string or `{ "id": "team", "header": "Team:
    to read the rows behind a number, `--unsure a`, `--find "words"`), never by eye.
 6. **Sharpen and repeat.** Split a fat `other`. Reword a column whose answers sit near 50%: a yes
    or no about intent usually wants to become "says in words that…" or a three-way choice. Try the
-   rewording on ten hard rows through `toolchain/jev.mjs` first, because a full pass takes most of a
-   minute per 1,000 rows however few columns changed.
+   rewording on a few rows in **Question Lab** first, because a full pass can take most of a
+   minute per 1,000 rows however few columns changed. The pane freezes rows/context, asks both
+   versions together and lets the person keep preferences and notes alongside the raw answers.
+
+Kept Question Lab packets live at `.harness/question-trials/<id>/`. Read `review.md` and the exact
+rows, questions, probabilities and per-call provider/model in `trial.json`; `column.json` contains
+the tested header. Keep human preferences separate from truth labels. This deliberate sample
+cannot estimate whole-sheet accuracy, and greater confidence does not establish correctness.
+`mock` answers are only a practice flow. Failed or cancelled trials retain their status and are
+not complete comparisons. After the person chooses a wording, add it to the original
+`sheet.json`; the pane's **Try on whole sheet** is a temporary extra column, like other pane-added
+columns. Do not replace their source file with the packet's `sheet.json`: that file contains only
+the frozen sample and belongs in a separate workspace if they want to rerun it.
 
 Keep their data in the workspace. Quote only what the report needs.
 

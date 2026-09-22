@@ -37,11 +37,13 @@ export async function startTraderViewer({ workspace, port = 0 } = {}) {
   let world = null
   let episode = 0
   let stopped = false, running = false, busy = false
+  let resetRevision = 0
   let timer = null, watchTimer = null, salt = 1, lastVerdictAt = 0
   let error = null
   let stateText = ''
   let history = [] // one row per decision, newest last
-  let last = { action: 'HOLD', probs: { BUY: 0.2, HOLD: 0.6, SELL: 0.2 }, confidence: 0, conviction: 1, convictionProbs: {}, pConfident: 0.5, regime: 'sideways', regimeProbs: {}, pCrash: 0, shares: 0, side: null, why: '' }
+  const blankLast = () => ({ action: 'HOLD', probs: { BUY: 0.2, HOLD: 0.6, SELL: 0.2 }, confidence: 0, conviction: 1, convictionProbs: {}, pConfident: 0.5, regime: 'sideways', regimeProbs: {}, pCrash: 0, shares: 0, side: null, why: '' })
+  let last = blankLast()
   const clients = new Set()
   const session = { episodes: 0, beats: 0, sumEdge: 0, sumRet: 0, sumBh: 0, days: 0, trades: 0, fees: 0, rightDays: 0, regimeDays: 0, results: [] }
 
@@ -53,6 +55,7 @@ export async function startTraderViewer({ workspace, port = 0 } = {}) {
 
   function newEpisode() {
     world = createEpisode(cfg(), episode)
+    last = blankLast(); error = null
     stateText = observe(world, cfg())
     history = []
   }
@@ -132,6 +135,7 @@ export async function startTraderViewer({ workspace, port = 0 } = {}) {
   async function decide() {
     if (busy || stopped) return
     busy = true
+    const askedWorld = world
     try {
       const c = cfg()
       if (world.status === 'done') {
@@ -153,6 +157,8 @@ export async function startTraderViewer({ workspace, port = 0 } = {}) {
         },
         salt: salt++, model: process.env.JEV_MODEL || 'jev-latest', mock: traderMock,
       })
+      // A reset or file edit may have replaced the world while the provider was answering.
+      if (stopped || world !== askedWorld) return
       const a = res.answers.action ?? {}
       const action = ['BUY', 'HOLD', 'SELL'].includes(String(a.choice).toUpperCase()) ? String(a.choice).toUpperCase() : 'HOLD'
       const conviction = clampN(res.answers.conviction?.score, 0, 2, 1)
@@ -169,6 +175,7 @@ export async function startTraderViewer({ workspace, port = 0 } = {}) {
       if (world.status === 'done') settle()
       error = null
     } catch (e) {
+      if (stopped || world !== askedWorld) return
       error = clean(e?.message ?? e?.name ?? String(e))
     } finally {
       busy = false
@@ -182,10 +189,11 @@ export async function startTraderViewer({ workspace, port = 0 } = {}) {
     if (cmd === 'pause') { running = false; clearTimeout(timer) }
     else if (cmd === 'start') { if (!running) { running = true; schedule() } }
     else if (cmd === 'reset') {
+      resetRevision++
       Object.assign(session, { episodes: 0, beats: 0, sumEdge: 0, sumRet: 0, sumBh: 0, days: 0, trades: 0, fees: 0, rightDays: 0, regimeDays: 0, results: [] })
       overrides = {}; episode = 0; salt = 1; error = null; newEpisode()
     }
-    else if (cmd === 'tick') { const n = Math.round(clampN(body.n, 1, 20000, 1)); for (let i = 0; i < n; i++) await decide() }
+    else if (cmd === 'tick') { const n = Math.round(clampN(body.n, 1, 20000, 1)); for (let i = 0, revision = resetRevision; i < n && !stopped && revision === resetRevision; i++) await decide() }
     else if (cmd === 'shock') injectShock(world, body.kind === 'rally' ? 'rally' : 'crash')
     else if (cmd === 'flatten') flatten(world, cfg())
     else if (cmd === 'set') {
@@ -211,7 +219,7 @@ export async function startTraderViewer({ workspace, port = 0 } = {}) {
         if (!cfgError) {
           overrides = {}
           const after = cfg()
-          if (['startPrice', 'capital', 'seed', 'episodeDays'].some((k) => before[k] !== after[k])) { episode = 0; newEpisode() }
+          if (['startPrice', 'capital', 'seed', 'episodeDays'].some((k) => before[k] !== after[k])) { resetRevision++; episode = 0; newEpisode() }
         }
         push(true)
         schedule()

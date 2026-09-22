@@ -16,13 +16,30 @@ import "@babylonjs/core/Lights/Shadows/shadowGeneratorSceneComponent";
 import "@babylonjs/core/Rendering/outlineRenderer";
 
 type Mode = "explore" | "play";
+type GameSnapshot = {
+  schema: "alpine-drift/1";
+  x: number;
+  z: number;
+  vx: number;
+  jump: number;
+  jumpVelocity: number;
+  elapsed: number;
+  score: number;
+  outcome: string;
+  gates: boolean[];
+  gateRotations: number[];
+  rotation: number[];
+  camera: { target: number[]; alpha: number; beta: number; radius: number };
+};
 declare global {
   interface Window {
     harnessGame: {
       setMode: (value: Mode) => void;
       setPaused: (value: boolean) => void;
       restart: () => void;
-      stats: () => Record<string, string | number>;
+      stats: () => Record<string, string | number | boolean>;
+      captureState: () => GameSnapshot;
+      restoreState: (value: unknown) => void;
     };
   }
 }
@@ -368,6 +385,7 @@ function reset() {
   }
   hud();
   positionRider();
+  dispatchEvent(new CustomEvent("harness:timeline-reset"));
 }
 function positionRider() {
   rider.position.set(x, groundY(x, z) + jump, z);
@@ -392,8 +410,12 @@ function setMode(value: Mode) {
   if (value === "play") {
     camera.detachControl();
     if (!running) reset();
+    camera.setTarget(new Vector3(x, groundY(x, z) + 2, z + 7));
+    camera.alpha = -Math.PI / 2;
+    camera.beta = 1.03;
+    camera.radius = 24;
   } else {
-    camera.attachControl(canvas, true);
+    if (!paused) camera.attachControl(canvas, true);
     camera.setTarget(new Vector3(0, 4, 22));
     camera.alpha = -Math.PI / 2.8;
     camera.beta = 1.05;
@@ -404,7 +426,103 @@ function setMode(value: Mode) {
 function setPaused(value: boolean) {
   paused = value;
   keys.clear();
+  if (value) {
+    camera.detachControl();
+    camera.inertialAlphaOffset =
+      camera.inertialBetaOffset =
+      camera.inertialRadiusOffset =
+        0;
+    camera.inertialPanningX = camera.inertialPanningY = 0;
+  } else if (mode === "explore") camera.attachControl(canvas, true);
   $("pause-label").hidden = !value;
+}
+function captureState(): GameSnapshot {
+  return {
+    schema: "alpine-drift/1",
+    x,
+    z,
+    vx,
+    jump,
+    jumpVelocity,
+    elapsed,
+    score,
+    outcome,
+    gates: gates.map((gate) => gate.taken),
+    gateRotations: gates.map((gate) => gate.mesh.rotation.z),
+    rotation: rider.rotation.asArray(),
+    camera: {
+      target: camera.target.asArray(),
+      alpha: camera.alpha,
+      beta: camera.beta,
+      radius: camera.radius,
+    },
+  };
+}
+function restoreState(value: unknown) {
+  const state = value as GameSnapshot;
+  const finite = (n: unknown): n is number =>
+    typeof n === "number" && Number.isFinite(n) && Math.abs(n) < 1e6;
+  const vector = (v: unknown, length: number) =>
+    Array.isArray(v) && v.length === length && v.every(finite);
+  // Validate before changing the world. Pause and preview mode belong to the
+  // studio, so restoring a frame cannot accidentally start or stop the game.
+  if (
+    !state ||
+    state.schema !== "alpine-drift/1" ||
+    ![
+      state.x,
+      state.z,
+      state.vx,
+      state.jump,
+      state.jumpVelocity,
+      state.elapsed,
+      state.score,
+    ].every(finite) ||
+    state.x < -15 ||
+    state.x > 15 ||
+    state.z < -95 ||
+    state.z > 148 ||
+    state.jump < 0 ||
+    state.elapsed < 0 ||
+    !["running", "crashed", "finished"].includes(state.outcome) ||
+    !Array.isArray(state.gates) ||
+    state.gates.length !== gates.length ||
+    state.gates.some((taken) => typeof taken !== "boolean") ||
+    state.score !== state.gates.filter(Boolean).length ||
+    !vector(state.gateRotations, gates.length) ||
+    !vector(state.rotation, 3) ||
+    !state.camera ||
+    !vector(state.camera.target, 3) ||
+    ![state.camera.alpha, state.camera.beta, state.camera.radius].every(
+      finite,
+    ) ||
+    state.camera.radius <= 0
+  )
+    throw new Error("This is not a compatible Alpine Drift moment");
+  keys.clear();
+  ({ x, z, vx, jump, jumpVelocity, elapsed, score, outcome } = state);
+  running = outcome === "running";
+  gates.forEach((gate, index) => {
+    gate.taken = state.gates[index];
+    gate.mesh.isVisible = !gate.taken;
+    gate.mesh.rotation.z = state.gateRotations[index];
+  });
+  rider.rotation.copyFromFloats(
+    ...(state.rotation as [number, number, number]),
+  );
+  positionRider();
+  camera.setTarget(Vector3.FromArray(state.camera.target));
+  camera.alpha = state.camera.alpha;
+  camera.beta = state.camera.beta;
+  camera.radius = state.camera.radius;
+  camera.inertialAlphaOffset =
+    camera.inertialBetaOffset =
+    camera.inertialRadiusOffset =
+      0;
+  camera.inertialPanningX = camera.inertialPanningY = 0;
+  $("end").hidden = true;
+  if (!running && mode === "play") end(outcome === "crashed");
+  hud();
 }
 function handleKey(event: KeyboardEvent, down: boolean) {
   if (mode !== "play") return;
@@ -495,12 +613,12 @@ scene.onBeforeRenderObservable.add(() => {
     if (z >= 146) end(false);
     hud();
   }
-  if (mode === "play") {
+  if (mode === "play" && !paused) {
     const target = new Vector3(x, groundY(x, z) + 2, z + 7);
     camera.setTarget(Vector3.Lerp(camera.target, target, Math.min(dt * 6, 1)));
     camera.alpha = -Math.PI / 2;
     camera.beta = 1.03;
-    camera.radius = 20;
+    camera.radius = 24;
   }
   if (!paused && !reducedMotion)
     for (const gate of gates)
@@ -512,6 +630,8 @@ window.harnessGame = {
   setMode,
   setPaused,
   restart: reset,
+  captureState,
+  restoreState,
   stats: () => ({
     fps: engine.getFps(),
     objects: scene.meshes.length,
@@ -522,6 +642,7 @@ window.harnessGame = {
     time: elapsed,
     mode,
     state: outcome,
+    running,
   }),
 };
 reset();

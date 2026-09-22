@@ -201,6 +201,15 @@ simulation running. So save early and often, and let the user watch it grow.
 5. **Never write the XML dump.** `exportCircuit()` in the app returns XML; this workspace is the
    text format, which the app still reads and a human can still edit.
 
+6. **Use kept Scope Lab captures as feedback.** The pane can run an isolated native copy, record
+   node voltage or component voltage/current, overlay another take, and keep exact circuits,
+   CSV/JSON samples, a trace and notes under `.harness/circuit-captures/<id>/`. Read the selected
+   packet before revising the circuit; in-pane changes may differ from the source. Edit the
+   original plain-text file and preserve the packet. Its native XML is for simulator import,
+   not a replacement workspace format. Keep node names and element indices stable for comparison.
+   Treat measurements as sampled simulation results, with the recorded timestep and duration;
+   a new capture has its own time origin and can have different initial transients.
+
 ## When something does not work
 
 | What you see | Usually |

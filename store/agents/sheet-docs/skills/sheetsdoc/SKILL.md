@@ -24,6 +24,11 @@ description: Build coordinated editable DOCX reports, formula-driven XLSX workbo
    restore it. Reconcile report totals and prose to the same source.
 6. Hand off DOCX, XLSX and PDF with the source and the checks actually performed.
 
+When the user asks to apply a kept Doc Viewer review, read
+`.harness/doc-reviews/<id>/review.md` and inspect its exact `reference.pdf` where
+needed. Revise the editable source and rebuild; preserve the old packet. Its
+quotes and page regions describe the reviewed version, not necessarily the new one.
+
 ## Formula and source semantics
 
 Comparison workbooks contain SUM, subtraction and guarded growth formulas.
