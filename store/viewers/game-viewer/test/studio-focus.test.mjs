@@ -12,7 +12,7 @@ const playtest = readFileSync(new URL("../web/playtest.js", import.meta.url), "u
 // Execute both real controllers with a small DOM/bridge adapter. This checks
 // focus ownership through asynchronous toolbar/dialog flows, not rendered UI.
 async function fixture() {
-  const elements = new Map(), handlers = new Map();
+  const elements = new Map(), handlers = new Map(), focusEvents = [];
   let source, frame, rejectRestore = false;
   const document = {
     activeElement: null,
@@ -43,7 +43,10 @@ async function fixture() {
       if (tag === "iframe") {
         frame = this;
         this.contentWindow = {
-          focus: () => { if (!this.inert) document.activeElement = this; },
+          focus: () => {
+            focusEvents.push(`window:${this.tag}`);
+            if (!this.inert) document.activeElement = this;
+          },
           postMessage: ({ action, value, requestId }) => {
             if (!requestId) return;
             const result = action === "capture" || action === "restore"
@@ -69,7 +72,10 @@ async function fixture() {
       if (name === "inert") this.inert = false;
     }
     addEventListener(name, handler) { this.listeners.set(name, handler); }
-    focus() { if (!this.inert) document.activeElement = this; }
+    focus() {
+      focusEvents.push(`element:${this.tag}`);
+      if (!this.inert) document.activeElement = this;
+    }
     showModal() { this.open = true; }
     close() {
       this.open = false;
@@ -112,7 +118,7 @@ async function fixture() {
     await target.onclick?.({ preventDefault() {} });
   };
   return {
-    click, stats, document, frame, message,
+    click, stats, document, frame, message, focusEvents,
     element: document.getElementById,
     rejectRestore() { rejectRestore = true; },
     async save() {
@@ -121,6 +127,16 @@ async function fixture() {
     },
   };
 }
+
+test("starting Play focuses the iframe element before its window", async () => {
+  const app = await fixture();
+  app.focusEvents.length = 0;
+  await app.click("play");
+  // A native WebKit pane can keep keyboard input in the neighboring terminal
+  // when only the child window is focused. Exercise the real Play handler.
+  assert.deepEqual(app.focusEvents, ["element:play", "element:iframe", "window:iframe"]);
+  assert.equal(app.document.activeElement, app.frame);
+});
 
 test("Resume returns keyboard focus to the game; Pause and Explore retain toolbar focus", async () => {
   const app = await fixture();
