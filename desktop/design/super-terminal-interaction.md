@@ -408,6 +408,13 @@ refresh, completion, accept, and cancel follow the live picker keymap, including
 through the native menu. Refresh retains the query and reports failure in place.
 The query and key guide stay visible while a short window scrolls the body.
 
+The Machines menu lists every harness a machine remembers, including ones that
+have stopped; those read " · stopped" after the name and stay enabled, because
+choosing one resumes its saved conversation the way ⌘P does. Only a harness
+with neither a terminal nor a saved conversation is disabled. A resume the
+daemon refuses answers with the picker's snackbar — its reason, and Start New
+Conversation in the same place.
+
 Rename selects the existing name in a `name >` input. Enter saves, errors retain
 the edited name for retry, and pending input is read-only. A delete confirmation
 names its account-level effect and starts on Cancel. Local computers cannot be

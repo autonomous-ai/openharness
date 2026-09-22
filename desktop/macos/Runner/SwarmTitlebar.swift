@@ -418,6 +418,14 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       let submenu = NSMenu(title: machine.name)
       for agent in machine.agents {
         let child = NSMenuItem(title: agent.title + (machine.shared ? " · View only" : ""), action: #selector(machineAgentAction(_:)), keyEquivalent: "")
+        if agent.stopped && !machine.shared {
+          // Still a choice — it resumes — but not an attach, so the row says so in the quieter colour,
+          // the way a machine row carries its status after the name.
+          let label = NSMutableAttributedString(string: agent.title, attributes: [.font: NSFont.menuFont(ofSize: 0)])
+          label.append(NSAttributedString(string: " · stopped",
+            attributes: [.font: NSFont.menuFont(ofSize: 0), .foregroundColor: NSColor.secondaryLabelColor]))
+          child.attributedTitle = label
+        }
         child.target = self
         child.representedObject = ["machineId": machine.id, "agentId": agent.id]
         child.image = historyIcons.image(engine: agent.engine, asset: agent.iconAsset)
@@ -847,6 +855,8 @@ private struct SwarmMachineAgent: Equatable {
   let engine: String?
   let iconAsset: String?
   let canOpen: Bool
+  /// Its conversation is saved but nothing is running: choosing it resumes rather than attaches.
+  let stopped: Bool
   init?(_ row: [String: Any]) {
     guard let id = row["id"] as? String, !id.isEmpty,
           let title = row["title"] as? String, !title.isEmpty else { return nil }
@@ -855,6 +865,7 @@ private struct SwarmMachineAgent: Equatable {
     engine = row["engine"] as? String
     iconAsset = row["iconAsset"] as? String
     canOpen = row["canOpen"] as? Bool == true
+    stopped = row["stopped"] as? Bool == true
   }
 }
 

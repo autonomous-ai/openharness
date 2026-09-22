@@ -655,6 +655,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
             agent.engine,
             agent.terminalAvailable ||
                 openAgents.contains((machine.machine.machineId, agent.id)),
+            // Part of the row now (" · stopped", and whether it opens), so a
+            // harness stopping or resuming redraws the menu like a rename does.
+            agent.isStopped,
           ),
       ],
     ];
@@ -684,12 +687,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     // the Claude Code it runs on.
                     'engine': agent.identityEngine,
                     'iconAsset': agentIdentity(agent).asset,
+                    // A stopped harness opens too: choosing it resumes its
+                    // conversation, the road ⌘P takes (`activateSwarmDestination`).
+                    // `stopped` lets the row say so first, since that takes a
+                    // moment and may ask the engine to sign in, unlike an attach.
                     'canOpen':
                         agent.terminalAvailable ||
+                        agent.isStopped ||
                         openAgents.contains((
                           machine.machine.machineId,
                           agent.id,
                         )),
+                    'stopped': agent.isStopped,
                   },
               ],
               // Two independent slots. `presence` is the node's own state
@@ -1022,11 +1031,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
           if (entry != null) {
             _closeSearch();
             _preparePaneFocus();
-            await activateSwarmDestination(
-              app,
-              entry,
-              destinationSwarmId: app.activeSwarmId,
-            );
+            try {
+              await activateSwarmDestination(
+                app,
+                entry,
+                destinationSwarmId: app.activeSwarmId,
+              );
+            } on SwarmResumeFailure catch (failure) {
+              _showResumeFailure(failure, target: app.activeSwarmId);
+            }
           }
         }
       case 'commands':
@@ -1038,11 +1051,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
             .firstOrNull;
         if (entry != null) {
           _preparePaneFocus();
-          await activateSwarmDestination(
-            app,
-            entry,
-            destinationSwarmId: app.activeSwarmId,
-          );
+          try {
+            await activateSwarmDestination(
+              app,
+              entry,
+              destinationSwarmId: app.activeSwarmId,
+            );
+          } on SwarmResumeFailure catch (failure) {
+            _showResumeFailure(failure, target: app.activeSwarmId);
+          }
         }
       case 'closePane':
         if (app.focusedPaneId != null) await app.closePane(app.focusedPaneId!);
@@ -1801,6 +1818,41 @@ class _SwarmScreenState extends State<SwarmScreen> {
     await _activateSearch(selected!, target);
   }
 
+  /// A stopped harness that would not resume — from the picker, the Machines
+  /// menu or History alike: the daemon's reason, and the way on, a new
+  /// conversation in the same place.
+  void _showResumeFailure(
+    SwarmResumeFailure failure, {
+    required String target,
+    HarnessPlacement? placement,
+  }) {
+    if (!mounted) return;
+    final row = failure.destination;
+    final agent = app
+        .stateOf(row.machineId!)
+        ?.agents
+        .where((agent) => agent.id == row.agentId)
+        .firstOrNull;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(failure.message),
+        action: SnackBarAction(
+          label: 'Start New Conversation',
+          onPressed: () => _openNewHarness(
+            machineId: row.machineId!,
+            engine: agent?.dsh ?? agent?.engine,
+            folder: agent?.project?.cwd,
+            swarmId: app.swarms.any((tab) => tab.id == target)
+                ? target
+                : app.activeSwarmId,
+            placement: placement,
+            task: '',
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _activateSearch(
     SwarmSearchSelection selected,
     String target, {
@@ -1840,31 +1892,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         placement: placement,
       );
     } on SwarmResumeFailure catch (failure) {
-      if (!mounted) return;
-      final row = failure.destination;
-      final agent = app
-          .stateOf(row.machineId!)
-          ?.agents
-          .where((agent) => agent.id == row.agentId)
-          .firstOrNull;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(failure.message),
-          action: SnackBarAction(
-            label: 'Start New Conversation',
-            onPressed: () => _openNewHarness(
-              machineId: row.machineId!,
-              engine: agent?.dsh ?? agent?.engine,
-              folder: agent?.project?.cwd,
-              swarmId: app.swarms.any((tab) => tab.id == target)
-                  ? target
-                  : app.activeSwarmId,
-              placement: placement,
-              task: '',
-            ),
-          ),
-        ),
-      );
+      _showResumeFailure(failure, target: target, placement: placement);
       return;
     }
     if (!opened && mounted) {
