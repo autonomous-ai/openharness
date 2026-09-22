@@ -110,6 +110,7 @@ void main() {
             await tester.sendKeyEvent(LogicalKeyboardKey.enter);
           case 'new tab':
             await chord(tester, LogicalKeyboardKey.keyT);
+            await chord(tester, LogicalKeyboardKey.keyO);
             await tester.sendKeyEvent(LogicalKeyboardKey.enter);
           case 'search shortcut':
             await chord(tester, LogicalKeyboardKey.keyP);
@@ -133,6 +134,11 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byType(AlertDialog), findsNothing);
         expect(find.byType(SwarmSearchResults), findsNothing);
+        if (entry == 'new tab') {
+          expect(app.swarms, hasLength(2));
+          expect(app.panes, isEmpty);
+          await chord(tester, LogicalKeyboardKey.keyW);
+        }
         expect(app.focusedPane, same(pane));
         expect(app.activeSwarmId, original);
         expect(app.swarms, hasLength(1));

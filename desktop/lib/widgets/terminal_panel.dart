@@ -24,7 +24,7 @@ import 'terminal_find_bar.dart';
 import '../terminal/terminal_search.dart';
 import '../terminal/terminal_snapshot.dart';
 import '../terminal/terminal_binary.dart';
-import '../terminal/terminal_font_store.dart';
+import '../terminal/terminal_text.dart';
 import '../terminal/terminal_link_opener.dart';
 import '../terminal/remote_media_download.dart';
 import '../terminal/terminal_links.dart';
@@ -35,7 +35,6 @@ import '../terminal/terminal_viewport.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
-import 'box_chrome.dart';
 import 'grid_model_picker.dart';
 import 'pane_header_actions.dart';
 
@@ -214,6 +213,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     _focusNode.addListener(_handleFocusChange);
     _composerFocus.addListener(_handleComposerFocusChange);
     WidgetsBinding.instance.addObserver(this);
+    _lastLifecycle = WidgetsBinding.instance.lifecycleState;
     widget.session.attachViewport(this);
     widget.session.addListener(_onSessionChanged);
     terminalFontStore.addListener(_onFontChanged);
@@ -252,8 +252,24 @@ class _TerminalPanelState extends State<TerminalPanel>
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) =>
-      _syncCursorBlink();
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _syncCursorBlink();
+    // The window came back to the front (⌘-Tab, a click on it): that is a
+    // person returning, and the tile they left focused takes its stream back.
+    // `inactive → resumed` only — the first `resumed` of a launch is nobody
+    // coming back, and a restored pane is not taken over at that point anyway.
+    final returned =
+        state == AppLifecycleState.resumed &&
+        _lastLifecycle != null &&
+        _lastLifecycle != AppLifecycleState.resumed;
+    _lastLifecycle = state;
+    if (returned && widget.focused) _autoTakeControl();
+  }
+
+  /// Seeded from the binding at mount, so a tile opened while the window was
+  /// in the background still sees the `inactive → resumed` that brings it
+  /// forward, rather than mistaking it for the launch's first `resumed`.
+  AppLifecycleState? _lastLifecycle;
 
   @override
   void didUpdateWidget(TerminalPanel oldWidget) {
@@ -298,6 +314,11 @@ class _TerminalPanelState extends State<TerminalPanel>
         (!oldWidget.visible || oldWidget.paneLocation != widget.paneLocation)) {
       _afterTerminalMounted();
     }
+    // Shown again (a tab switched to, a zoom undone) while it is the tile the
+    // person left focused: they are back on it.
+    if (widget.visible && !oldWidget.visible && widget.focused) {
+      _autoTakeControl();
+    }
     if (oldWidget.viewportSize != widget.viewportSize ||
         oldWidget.layoutRequest != widget.layoutRequest) {
       // Geometry can change while a resize handle or another control owns
@@ -307,6 +328,8 @@ class _TerminalPanelState extends State<TerminalPanel>
     if (widget.focused &&
         (!oldWidget.focused || oldWidget.focusRequest != widget.focusRequest)) {
       _claimFocusAfterFrame();
+      // ⌘1–9, ⌘], an attention jump, a click: the person chose this tile.
+      _autoTakeControl();
     }
     // Showing or hiding the box changes how many rows the terminal has. Re-measure so the remote
     // grid is resized to what is actually on screen.
@@ -390,6 +413,14 @@ class _TerminalPanelState extends State<TerminalPanel>
         widget.visible &&
         _keyboardIsOursOrIdle) {
       _claimFocusAfterFrame();
+    }
+    // Retaken from outside this tile (another tile's gesture, through
+    // `retakeTakenOverPanes`): keep the band up through the handshake exactly
+    // as this tile's own ⏎ would, rather than dropping it a beat early.
+    if (_wasBlocked &&
+        !_retakingControl &&
+        widget.session.status == TerminalSessionStatus.opening) {
+      setState(() => _retakingControl = true);
     }
     _wasBlocked = _inputBlocked;
     // A pane can open BEFORE its screen exists: over the relay it mounts empty
@@ -628,11 +659,16 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// Retakes the stream, the same path as the header chip: `selectAgent` on a
   /// dead pane is `reopen()`, and a repeat while it is already `opening` only
   /// re-focuses the tile, so a held ⏎ sends one `terminal_open`.
+  ///
+  /// Every caller is a person acting on this app (⏎, the band's button, the
+  /// header chip, [_autoTakeControl]), so every other tile the same client
+  /// took comes back with this one — one gesture, the whole app.
   Future<void> _takeControl() async {
     final session = widget.session;
     if (_inputBlocked && !_retakingControl) {
       setState(() => _retakingControl = true);
     }
+    unawaited(widget.notifier.retakeTakenOverPanes());
     await widget.notifier.selectAgent(session.machineId, session.agentId);
     // `selectAgent` declines quietly when the pane cannot be attached (machine
     // gone offline meanwhile, agent withdrawn). No status change means no
@@ -643,6 +679,28 @@ class _TerminalPanelState extends State<TerminalPanel>
         identical(widget.session, session) &&
         session.status != TerminalSessionStatus.opening) {
       setState(() => _retakingControl = false);
+    }
+  }
+
+  /// A person came back to this app, at this pane. Every stream another
+  /// client took from the app comes back — this tile through its own path
+  /// (which keeps its band up as "Taking control…"), the rest through
+  /// `retakeTakenOverPanes` — whether or not THIS tile was one of them: a
+  /// click into a pane that is working fine is still the person being here.
+  /// The band stays for what this cannot cover (an attach the daemon declines).
+  ///
+  /// ⚠️ Only ever from a USER gesture — a click, a key that focused the tile, a
+  /// tab switched to, the window brought to the front — never from a session
+  /// or focus-node callback. Those fire on BOTH ends of a takeover: this app's
+  /// pane pulls the keyboard into its terminal the moment it loses the stream
+  /// (`_onSessionChanged`), and a retake on that would have two apps trading
+  /// the one stream forever.
+  void _autoTakeControl() {
+    if (!mounted || !widget.visible) return;
+    if (_inputBlocked) {
+      unawaited(_takeControl());
+    } else {
+      unawaited(widget.notifier.retakeTakenOverPanes());
     }
   }
 
@@ -1124,9 +1182,48 @@ class _TerminalPanelState extends State<TerminalPanel>
     target.terminal.keyInput(TerminalKey.keyV, ctrl: true);
   }
 
-  /// Take the platform's exact paste chord before xterm's text-only action,
-  /// so agent image paste follows the same path. Linux reserves Ctrl-V for
-  /// the terminal program and uses Ctrl-Shift-V for its clipboard.
+  /// ⌘⌫ — kill back to the start of the line, the way a macOS text field does it.
+  ///
+  /// The pty has no Command key. What a prompt understands is readline's ^U (`\x15`), and it means
+  /// the same thing: verified against a live Claude Code and Codex, it clears back to the start of
+  /// the CURRENT line and leaves the lines composed above it standing — which is exactly what ⌘⌫
+  /// does in a Mac field. Asked of the keytab as `^U` rather than written as a byte so a terminal
+  /// carrying its own handler still answers with whatever ^U means to it.
+  ///
+  /// Taken HERE, in the pane's own hook, and not in the input handler with ⌥⌫: a ⌘ chord never
+  /// reaches `keyInput` at all. xterm hands every one of them back to the app untouched (patch 3 in
+  /// `third_party/xterm/README.autonomous.md`) — and `TerminalKeyboardEvent` has no `meta` field to
+  /// answer it with even if it did. Nothing in `app_shortcuts.dart` claims ⌘⌫ either, so the chord
+  /// went up the focus chain and off the end of it, doing nothing.
+  ///
+  /// Apple only. Elsewhere ⌘ is Super, where killing a line is not what it means, and the app's own
+  /// Super chords have to keep reaching the app.
+  KeyEventResult _onDeleteToLineStart() {
+    final keyboard = HardwareKeyboard.instance;
+    final apple =
+        defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+    if (!apple || !keyboard.isMetaPressed) return KeyEventResult.ignored;
+    // ⌃ and ⌥ each carry a kill of their own to the pty (^U and Meta+⌫); a chord mixing them with
+    // ⌘ is nobody's idea of this one, so it is left for the shell to make sense of.
+    if (keyboard.isControlPressed || keyboard.isAltPressed) {
+      return KeyEventResult.ignored;
+    }
+    if (widget.readOnly || !widget.session.acceptsInput) {
+      return KeyEventResult.ignored;
+    }
+    widget.session.terminal.keyInput(TerminalKey.keyU, ctrl: true);
+    return KeyEventResult.handled;
+  }
+
+  /// ⌘V (Ctrl+V off Apple) — taken from xterm so the fallthrough above applies. ⌘⌫ joins it here,
+  /// for the reason spelled out on [_onDeleteToLineStart].
+  ///
+  /// xterm binds paste itself, but only ever to its text-only action. `onKeyEvent`
+  /// is the one hook that runs BEFORE its shortcut map (terminal_view.dart), so
+  /// this is where the binding has to be replaced rather than added. The chord taken is the
+  /// platform's exact one: Linux reserves Ctrl-V for the terminal program and pastes with
+  /// Ctrl-Shift-V.
   KeyEventResult _onTerminalKey(FocusNode node, KeyEvent event) {
     final keyboard = HardwareKeyboard.instance;
     // A pane that lost control still gets the keys (xterm's read-only mode
@@ -1147,6 +1244,12 @@ class _TerminalPanelState extends State<TerminalPanel>
         _nudgeControlBanner();
         return KeyEventResult.ignored;
       }
+    }
+    // A held ⌘⌫ repeats, the way a held Backspace does — unlike ⌘V, where a second paste is never
+    // what the finger that stayed down meant.
+    if ((event is KeyDownEvent || event is KeyRepeatEvent) &&
+        event.logicalKey == LogicalKeyboardKey.backspace) {
+      return _onDeleteToLineStart();
     }
     if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.keyV) {
       return KeyEventResult.ignored;
@@ -1393,8 +1496,9 @@ class _TerminalPanelState extends State<TerminalPanel>
                                       session.agentName,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: boxMonoStyle(
+                                      style: grid.AppType.monoLabel(
                                         color: Colors.white70,
+                                        fontWeight: FontWeight.w400,
                                       ),
                                     ),
                                   ),
@@ -1438,129 +1542,124 @@ class _TerminalPanelState extends State<TerminalPanel>
             // [PhoneHeader], and keeping this one would stack two.
             if (widget.showHeader) Divider(height: 1, color: AppColors.border),
             Expanded(
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: MouseRegion(
-                      onEnter: (event) => _hoverLink(event.position),
-                      onHover: (event) => _hoverLink(event.position),
-                      onExit: (_) => _hoverLink(null),
-                      child: Tooltip(
-                        message: _hoveredLink == null
-                            ? ''
-                            : '${defaultTargetPlatform == TargetPlatform.macOS ? '⌘' : 'Ctrl'}-click to open\n$_hoveredLink',
-                        child: TerminalView(
-                          session.terminal,
-                          key: _terminalViewKey,
-                          controller: _controller,
-                          autoResize: widget.visible && !session.readOnly,
-                          resizeBuffer: false,
-                          renderingEnabled: widget.visible,
-                          outputRepaintInterval: widget.outputRepaintInterval,
-                          scrollController: _scrollController,
-                          focusNode: _focusNode,
-                          autofocus: widget.focused && !showComposer,
-                          readOnly: widget.readOnly || !session.acceptsInput,
-                          theme: terminalThemeFor(
-                            grid.AppTheme.palette.value,
-                            terminalThemeStore.value,
-                          ),
-                          padding: const EdgeInsets.all(10),
-                          textStyle: terminalFontStore.value,
-                          // ⚠️ The terminal is NOT app chrome, and the user said so:
-                          // it carries its own font settings (Settings ▸ Terminal,
-                          // [terminalFontStore]) precisely because its type is a grid
-                          // a remote program is drawing into, not a label.
-                          //
-                          // Without this, `TerminalView` falls back to
-                          // `MediaQuery.textScalerOf(context)` (xterm's
-                          // terminal_view.dart:257), so the app-wide UI size would
-                          // change the cell size — and a changed cell size is not
-                          // cosmetic here: it re-derives `rows`, which fires
-                          // `Terminal.resize` → `session.resize` → a `terminal_resize`
-                          // frame on the wire and a real SIGWINCH at the far end.
-                          //
-                          // Read in `createRenderObject`, not only on update, so this
-                          // holds from the very first frame — no scaled first paint
-                          // and no startup resize.
-                          textScaler: TextScaler.noScaling,
-                          onKeyEvent: _onTerminalKey,
-                          onTapDown: _onLinkTapDown,
-                          onTapUp: _onLinkTapUp,
-                          mouseCursor:
-                              _hoveredLink != null && _linkModifierPressed
-                              ? SystemMouseCursors.click
-                              // An I-beam invites typing; a blocked pane does not.
-                              : _inputBlocked
-                              ? SystemMouseCursors.basic
-                              : SystemMouseCursors.text,
-                          onSecondaryTapDown: (_, _) => _copyOrPaste(),
+              // Any press into the pane's body — the terminal, the band, its
+              // scrollbar; not the header, which is chrome — is the person
+              // coming back to it, and takes the stream back when it was
+              // taken. Translucent: the press still reaches what it landed on.
+              child: Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (_) => _autoTakeControl(),
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: MouseRegion(
+                        onEnter: (event) => _hoverLink(event.position),
+                        onHover: (event) => _hoverLink(event.position),
+                        onExit: (_) => _hoverLink(null),
+                        child: Tooltip(
+                          message: _hoveredLink == null
+                              ? ''
+                              : '${defaultTargetPlatform == TargetPlatform.macOS ? '⌘' : 'Ctrl'}-click to open\n$_hoveredLink',
+                          child: TerminalView(
+                            session.terminal,
+                            key: _terminalViewKey,
+                            controller: _controller,
+                            autoResize: widget.visible && !session.readOnly,
+                            resizeBuffer: false,
+                            renderingEnabled: widget.visible,
+                            outputRepaintInterval: widget.outputRepaintInterval,
+                            scrollController: _scrollController,
+                            focusNode: _focusNode,
+                            autofocus: widget.focused && !showComposer,
+                            readOnly: widget.readOnly || !session.acceptsInput,
+                            theme: terminalThemeFor(
+                              grid.AppTheme.palette.value,
+                              terminalThemeStore.value,
+                            ),
+                            padding: const EdgeInsets.all(10),
+                            textStyle: terminalFontStore.value,
+                            // The chosen point size already sizes each terminal cell.
+                            // Applying the OS text scale again would change rows/cols
+                            // and resize the remote terminal unexpectedly.
+                            textScaler: TextScaler.noScaling,
+                            onKeyEvent: _onTerminalKey,
+                            onTapDown: _onLinkTapDown,
+                            onTapUp: _onLinkTapUp,
+                            mouseCursor:
+                                _hoveredLink != null && _linkModifierPressed
+                                ? SystemMouseCursors.click
+                                // An I-beam invites typing; a blocked pane does not.
+                                : _inputBlocked
+                                ? SystemMouseCursors.basic
+                                : SystemMouseCursors.text,
+                            onSecondaryTapDown: (_, _) => _copyOrPaste(),
 
-                          onAltBufferScroll: session.scrollViaTmuxCopyMode
-                              ? (up) => session.sendScrollCommand(up, 1)
+                            onAltBufferScroll: session.scrollViaTmuxCopyMode
+                                ? (up) => session.sendScrollCommand(up, 1)
+                                : null,
+                          ),
+                        ),
+                      ),
+                    ),
+                    // Keep the control notice beside the work. This band covers the
+                    // frozen output itself, where the eyes already are, and
+                    // stays through `opening` so the pane does not jump when
+                    // it is answered.
+                    if (_inputBlocked ||
+                        (_retakingControl &&
+                            session.status == TerminalSessionStatus.opening))
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: _ControlBanner(
+                          busy: !_inputBlocked,
+                          nudged: _controlNudged,
+                          nudge: _controlNudge,
+                          takerName: session.takenOverBy?.label(
+                            (id) => widget.notifier
+                                .stateOf(id)
+                                ?.machine
+                                .displayName,
+                          ),
+                          onTakeControl: _inputBlocked
+                              ? () => unawaited(_takeControl())
                               : null,
                         ),
                       ),
-                    ),
-                  ),
-                  // The header's status chip is 11pt in a corner; a person
-                  // mid-sentence never sees it. This band sits over the
-                  // frozen output itself, where the eyes already are, and
-                  // stays through `opening` so the pane does not jump when
-                  // it is answered.
-                  if (_inputBlocked ||
-                      (_retakingControl &&
-                          session.status == TerminalSessionStatus.opening))
-                    Positioned(
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      child: _ControlBanner(
-                        busy: !_inputBlocked,
-                        nudged: _controlNudged,
-                        nudge: _controlNudge,
-                        takerName: session.takenOverBy?.label(
-                          (id) =>
-                              widget.notifier.stateOf(id)?.machine.displayName,
+                    if (session.uploadProgress != null ||
+                        _previewProgress != null)
+                      Positioned(
+                        left: 14,
+                        right: 14,
+                        bottom: 12,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (session.uploadProgress != null)
+                              _TransferProgressBadge(
+                                label:
+                                    'Uploading ${session.uploadProgress!.label}',
+                                fraction: session.uploadProgress!.percent,
+                                onCancel: () =>
+                                    unawaited(session.cancelUpload()),
+                              ),
+                            if (session.uploadProgress != null &&
+                                _previewProgress != null)
+                              const SizedBox(height: 8),
+                            if (_previewProgress != null)
+                              _TransferProgressBadge(
+                                label: _previewProgress!.totalBytes == null
+                                    ? 'Preparing preview…'
+                                    : 'Downloading ${_previewProgress!.filename}',
+                                fraction: _previewProgress!.fraction,
+                                onCancel: () => _previewCancellation?.cancel(),
+                              ),
+                          ],
                         ),
-                        onTakeControl: _inputBlocked
-                            ? () => unawaited(_takeControl())
-                            : null,
-                        onFocusTerminal: () =>
-                            _laidOutTerminalView()?.requestKeyboard(),
                       ),
-                    ),
-                  if (session.uploadProgress != null ||
-                      _previewProgress != null)
-                    Positioned(
-                      left: 14,
-                      right: 14,
-                      bottom: 12,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (session.uploadProgress != null)
-                            _TransferProgressBadge(
-                              label:
-                                  'Uploading ${session.uploadProgress!.label}',
-                              fraction: session.uploadProgress!.percent,
-                              onCancel: () => unawaited(session.cancelUpload()),
-                            ),
-                          if (session.uploadProgress != null &&
-                              _previewProgress != null)
-                            const SizedBox(height: 8),
-                          if (_previewProgress != null)
-                            _TransferProgressBadge(
-                              label: _previewProgress!.totalBytes == null
-                                  ? 'Preparing preview…'
-                                  : 'Downloading ${_previewProgress!.filename}',
-                              fraction: _previewProgress!.fraction,
-                              onCancel: () => _previewCancellation?.cancel(),
-                            ),
-                        ],
-                      ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
             // The grip is shown whether or not the box is: collapsed, it is the only way back.
@@ -1709,6 +1808,7 @@ class _TerminalHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final color = switch (session.status) {
       TerminalSessionStatus.controlling => AppColors.success,
       TerminalSessionStatus.opening ||
@@ -1811,7 +1911,7 @@ class _TerminalHeader extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: _stripPadding),
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final scale = MediaQuery.textScalerOf(context).scale(13) / 13;
+              final scale = grid.appTextScaleOf(context);
               final narrow = constraints.maxWidth < 560 * math.max(1, scale);
               final rightWidth = narrow
                   ? math.max(
@@ -1851,10 +1951,9 @@ class _TerminalHeader extends StatelessWidget {
                                 session.agentName,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: boxMonoStyle(
+                                style: grid.AppType.monoLabel(
                                   color: AppColors.text,
-                                  size: 12,
-                                  weight: FontWeight.w600,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ),
@@ -1917,7 +2016,9 @@ class _TerminalHeader extends StatelessWidget {
                                           status.label,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(fontSize: 11),
+                                          style: grid.AppType.monoLabel(
+                                            fontWeight: FontWeight.w400,
+                                          ),
                                         ),
                                       ),
                                     ],
@@ -2037,7 +2138,6 @@ class _TerminalHeader extends StatelessWidget {
                           machineName,
                         ].join('\n'),
                         child: PromptContextView(
-                          size: narrow ? 11 : 12,
                           contextData: PromptContext(
                             machine: machineName,
                             project: narrow ? null : folder,
@@ -2142,10 +2242,6 @@ class _ControlBanner extends StatelessWidget {
   final int nudge;
   final VoidCallback? onTakeControl;
 
-  /// A click on the band's text puts the keyboard in the terminal, so ⏎ works
-  /// even when the person reached the pane with the mouse.
-  final VoidCallback? onFocusTerminal;
-
   /// Who has the terminal now, when the daemon said (`terminal_closed.takenBy`
   /// — the fleet's current name for that machine when this app knows it);
   /// null from an older daemon or a taker that did not introduce itself.
@@ -2156,7 +2252,6 @@ class _ControlBanner extends StatelessWidget {
     required this.nudged,
     required this.nudge,
     required this.onTakeControl,
-    required this.onFocusTerminal,
     this.takerName,
   });
 
@@ -2169,7 +2264,7 @@ class _ControlBanner extends StatelessWidget {
   String? get detail {
     if (busy) return null;
     if (nudged) return 'Keys are ignored — press ⏎ to take control.';
-    return 'Typing is paused. Press ⏎ or click Take control to type here again.';
+    return 'Typing is paused. Click here or press ⏎ to take control.';
   }
 
   @override
@@ -2218,7 +2313,8 @@ class _ControlBanner extends StatelessWidget {
                 // A quarter-width tile at large text cannot seat the sentence
                 // and the button on one line; there the button takes a line of
                 // its own under the title rather than running off the edge.
-                final narrow = constraints.maxWidth < 340;
+                final narrow =
+                    constraints.maxWidth < 340 * grid.appTextScaleOf(context);
                 final lead = !busy
                     ? Icon(Icons.lock_outline, size: 16, color: ink)
                     : SizedBox(
@@ -2237,11 +2333,9 @@ class _ControlBanner extends StatelessWidget {
                       title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
+                      style: grid.AppType.label(
                         color: AppColors.text,
-                        fontFamily: AppFonts.sans,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                     if (detail != null) ...[
@@ -2250,30 +2344,25 @@ class _ControlBanner extends StatelessWidget {
                         detail,
                         maxLines: narrow ? 1 : 2,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
+                        style: grid.AppType.body(
                           color: nudged ? ink : AppColors.textSoft,
-                          fontFamily: AppFonts.sans,
-                          fontSize: 11,
                           height: 1.3,
                         ),
                       ),
                     ],
                   ],
                 );
-                // The text is a click target too: it hands the terminal the
-                // keyboard, which is what makes the ⏎ it promises true.
+                // A press anywhere on the band takes the stream back (the
+                // panel's Listener over the whole body); the text needs no
+                // gesture of its own.
                 final prose = MouseRegion(
                   cursor: SystemMouseCursors.basic,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: onFocusTerminal,
-                    child: Row(
-                      children: [
-                        lead,
-                        const SizedBox(width: 10),
-                        Expanded(child: text),
-                      ],
-                    ),
+                  child: Row(
+                    children: [
+                      lead,
+                      const SizedBox(width: 10),
+                      Expanded(child: text),
+                    ],
                   ),
                 );
                 final button = busy
@@ -2287,13 +2376,7 @@ class _ControlBanner extends StatelessWidget {
                       prose,
                       if (button != null) ...[
                         const SizedBox(height: 8),
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: button,
-                          ),
-                        ),
+                        Align(alignment: Alignment.centerRight, child: button),
                       ],
                     ],
                   );
@@ -2334,14 +2417,7 @@ class _ControlBannerButton extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            'Take control',
-            style: TextStyle(
-              fontFamily: AppFonts.sans,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
+          Flexible(child: Text('Take control', style: grid.AppType.label())),
           const SizedBox(width: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
@@ -2394,12 +2470,7 @@ class _TransferProgressBadge extends StatelessWidget {
                 child: Text(
                   '$label$percentLabel',
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: AppColors.textSoft,
-                    fontFamily: AppFonts.sans,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: grid.AppType.label(color: AppColors.textSoft),
                 ),
               ),
               const SizedBox(width: 8),
@@ -2407,12 +2478,7 @@ class _TransferProgressBadge extends StatelessWidget {
                 onTap: onCancel,
                 child: Text(
                   'CANCEL',
-                  style: TextStyle(
-                    color: AppColors.textSoft,
-                    fontFamily: AppFonts.sans,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: grid.AppType.label(color: AppColors.textSoft),
                 ),
               ),
             ],
@@ -2495,10 +2561,8 @@ class _PaneGhost extends StatelessWidget {
                 child: Center(
                   child: Text(
                     session.agentName,
-                    style: TextStyle(
+                    style: grid.AppType.monoLabel(
                       color: AppColors.mutedStrong,
-                      fontFamily: AppFonts.sans,
-                      fontSize: 15,
                       fontWeight: FontWeight.w600,
                     ),
                   ),

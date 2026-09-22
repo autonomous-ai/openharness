@@ -121,7 +121,10 @@ class LocalGitProjects {
           ? 'Detached ${head.substring(0, 7)}'
           : null;
       final project = AgentProject.fromJson({
-        'name': p.basename(root),
+        // A linked worktree is named for its repository, not its folder.
+        'name': p.basename(common) == '.git'
+            ? p.basename(p.dirname(common))
+            : p.basename(root),
         'cwd': cwd,
         'root': root,
         'remote': _origin(config),

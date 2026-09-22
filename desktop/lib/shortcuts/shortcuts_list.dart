@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import 'app_shortcuts.dart';
@@ -26,6 +27,7 @@ class ShortcutsList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final rows = effectiveShortcutRows(context, contextKind);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -88,7 +90,7 @@ class ShortcutsDeck extends StatelessWidget {
         final width = math.min(constraints.maxWidth, maxWidth);
         // Preserve room for the label as its keycaps grow. Otherwise large
         // text keeps three narrow lanes and leaves only a word per line.
-        final textScale = MediaQuery.textScalerOf(context).scale(12.5) / 12.5;
+        final textScale = grid.appTextScaleOf(context);
         final minWidth = minCardWidth * math.max(1.0, textScale);
         final columns = ((width + _gap) / (minWidth + _gap)).floor().clamp(
           1,
@@ -162,9 +164,8 @@ class _ShortcutCard extends StatelessWidget {
                 Expanded(child: _CardTitle(title)),
                 Text(
                   '${rows.length}',
-                  style: TextStyle(
+                  style: grid.AppType.monoMeta(
                     color: grid.AppPalette.textFaint,
-                    fontSize: 10.5,
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
@@ -213,9 +214,8 @@ class _TerminalCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       key.label,
-                      style: TextStyle(
+                      style: grid.AppType.body(
                         color: grid.AppPalette.textFaint,
-                        fontSize: 12.5,
                       ),
                     ),
                   ),
@@ -244,10 +244,8 @@ class _CardTitle extends StatelessWidget {
     grid.AppTheme.watch(context);
     return Text(
       label.toUpperCase(),
-      style: TextStyle(
+      style: grid.AppType.monoMeta(
         color: grid.AppPalette.textFaint,
-        fontSize: 10.5,
-        letterSpacing: 0.08 * 10.5,
         fontWeight: grid.AppFont.medium,
       ),
     );
@@ -271,9 +269,8 @@ class ShortcutsNote extends StatelessWidget {
       'Harness shortcuts control your workspace. Other input goes to the '
       'focused agent, where prompt editing and cancellation follow that '
       'coding agent’s behavior.',
-      style: TextStyle(
+      style: grid.AppType.body(
         color: grid.AppPalette.textSecondary,
-        fontSize: 11.5,
         height: 1.5,
       ),
     );
@@ -296,6 +293,7 @@ class _GroupHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return Padding(
       padding: const EdgeInsets.only(top: 14, bottom: 6),
       child: _CardTitle(label),
@@ -335,10 +333,7 @@ class _ShortcutRowView extends StatelessWidget {
             Expanded(
               child: Text(
                 row.label,
-                style: TextStyle(
-                  color: grid.AppPalette.textSecondary,
-                  fontSize: 12.5,
-                ),
+                style: grid.AppType.body(color: grid.AppPalette.textSecondary),
               ),
             ),
             const SizedBox(width: _gutter),
@@ -349,9 +344,8 @@ class _ShortcutRowView extends StatelessWidget {
               child: row.chords.isEmpty
                   ? Text(
                       'Unassigned',
-                      style: TextStyle(
+                      style: grid.AppType.body(
                         color: grid.AppPalette.textFaint,
-                        fontSize: 11.5,
                       ),
                     )
                   : KeyChordView(chords: row.chords),

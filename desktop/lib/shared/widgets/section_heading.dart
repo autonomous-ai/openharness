@@ -5,11 +5,10 @@ import '../theme/app_theme.dart';
 /// A heading for one group inside a screen — "Theme", "Typography" — sitting
 /// under the screen's own title and above the rows it names.
 ///
-/// 19pt semibold with a touch of negative tracking, which is a step of its own
-/// rather than a ramp entry: it only has to out-rank the `medium` row titles
-/// BELOW it, not the screen title above. Reaching for `headlineSmall` (25) here
-/// makes every group look like a new screen; reaching for `titleSmall` (14.5)
-/// leaves the group indistinguishable from its own contents.
+/// [AppType.heading]: it only has to out-rank the `medium` row titles BELOW
+/// it, not the screen title above. Reaching for [AppType.title] here makes
+/// every group look like a new screen; reaching for [AppType.label] leaves the
+/// group indistinguishable from its own contents.
 ///
 /// A widget rather than a style so the size cannot drift: before this existed
 /// each pane invented its own, which is how one app ends up with four different
@@ -33,15 +32,7 @@ class SectionHeading extends StatelessWidget {
       children: [
         Text(
           title,
-          style: TextStyle(
-            fontFamily: AppFont.sans,
-            fontFamilyFallback: AppFont.sansFallback,
-            color: AppPalette.textPrimary,
-            fontSize: 19,
-            fontWeight: AppFont.semibold,
-            letterSpacing: -0.2,
-            height: 1.2,
-          ),
+          style: AppType.heading(color: AppPalette.textPrimary, height: 1.2),
         ),
         if (subtitle != null) ...[
           const SizedBox(height: 3),

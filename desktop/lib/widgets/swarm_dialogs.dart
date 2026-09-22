@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:harness/shared/theme/app_type.dart';
 
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_select_field.dart';
@@ -120,83 +121,83 @@ class _ProjectDialogState extends State<_ProjectDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: const Text('Add project'),
-    content: SizedBox(
-      width: 460,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Choose an existing working folder.',
-            style: TextStyle(fontSize: 12, color: Colors.white60),
-          ),
-          const SizedBox(height: 20),
-          if (machineId != null)
-            AppSelectField<String>(
-              value: machineId!,
-              options: [
-                for (final machine in widget.notifier.machineStates.values)
-                  SelectOption(
-                    value: machine.machine.machineId,
-                    label: machine.isLocalMachine
-                        ? 'This computer'
-                        : machine.machine.displayName,
-                  ),
-              ],
-              onChanged: (value) => setState(() {
-                if (machineId == value) return;
-                _machineRevision++;
-                machineId = value;
-                path = null;
-                error = null;
-              }),
-            ),
-          const SizedBox(height: 16),
-          OutlinedButton.icon(
-            onPressed: machineId == null || picking ? null : browse,
-            icon: const Icon(Icons.folder_open, size: 17),
-            label: Text(
-              path ?? 'Choose folder',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          if (widget.notifier.stateOf(machineId ?? '')?.isLocalMachine == true)
-            TextButton(
-              onPressed: picking ? null : clone,
-              style: TextButton.styleFrom(foregroundColor: Colors.white70),
-              child: const Text('Clone repository…'),
-            ),
-          if (error != null)
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Add project'),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
             Text(
-              error!,
-              style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
+              'Choose an existing working folder.',
+              style: AppType.body(color: Colors.white60),
             ),
-        ],
-      ),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel'),
-      ),
-      FilledButton(
-        onPressed: path == null || folderName.isEmpty || picking
-            ? null
-            : () => Navigator.pop(
-                context,
-                SavedSwarmProject(
-                  machineId: machineId!,
-                  path: path!,
-                  name: folderName,
-                ),
+            const SizedBox(height: 20),
+            if (machineId != null)
+              AppSelectField<String>(
+                value: machineId!,
+                options: [
+                  for (final machine in widget.notifier.machineStates.values)
+                    SelectOption(
+                      value: machine.machine.machineId,
+                      label: machine.isLocalMachine
+                          ? 'This computer'
+                          : machine.machine.displayName,
+                    ),
+                ],
+                onChanged: (value) => setState(() {
+                  if (machineId == value) return;
+                  _machineRevision++;
+                  machineId = value;
+                  path = null;
+                  error = null;
+                }),
               ),
-        child: const Text('Add project'),
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              onPressed: machineId == null || picking ? null : browse,
+              icon: const Icon(Icons.folder_open, size: 17),
+              label: Text(
+                path ?? 'Choose folder',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (widget.notifier.stateOf(machineId ?? '')?.isLocalMachine ==
+                true)
+              TextButton(
+                onPressed: picking ? null : clone,
+                style: TextButton.styleFrom(foregroundColor: Colors.white70),
+                child: const Text('Clone repository…'),
+              ),
+            if (error != null)
+              Text(error!, style: AppType.body(color: Colors.orangeAccent)),
+          ],
+        ),
       ),
-    ],
-  );
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: path == null || folderName.isEmpty || picking
+              ? null
+              : () => Navigator.pop(
+                  context,
+                  SavedSwarmProject(
+                    machineId: machineId!,
+                    path: path!,
+                    name: folderName,
+                  ),
+                ),
+          child: const Text('Add project'),
+        ),
+      ],
+    );
+  }
 }
 
 /// Link another machine. The dialog itself lives in

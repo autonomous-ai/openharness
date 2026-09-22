@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../terminal/terminal_font_store.dart';
+import '../shared/theme/app_type.dart';
+import '../terminal/terminal_text.dart';
 import '../terminal/terminal_search.dart';
 import 'box_chrome.dart';
 import 'pane_menu.dart';
@@ -162,23 +163,25 @@ class TerminalFindBarState extends State<TerminalFindBar> {
       onOpen: (_, close) => _closeMenu = close,
       onClose: () => _closeMenu = null,
       children: (close) {
-        Widget option(String label, String hint, VoidCallback action) =>
-            paneMenuItem(
-              onTap: () => close(action),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
+        Widget option(
+          String label,
+          String hint,
+          VoidCallback action,
+        ) => paneMenuItem(
+          onTap: () => close(action),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(label, style: AppType.body(color: Colors.white)),
                 ),
-                child: Row(
-                  children: [
-                    Expanded(child: Text(label, style: boxMonoStyle(size: 12))),
-                    const SizedBox(width: 16),
-                    Text(hint, style: boxMonoStyle(size: 11, color: kBoxFaint)),
-                  ],
-                ),
-              ),
-            );
+                const SizedBox(width: 16),
+                Text(hint, style: kBoxFaintStyle),
+              ],
+            ),
+          ),
+        );
         return [
           option(
             'Match case',
@@ -199,10 +202,13 @@ class TerminalFindBarState extends State<TerminalFindBar> {
   }
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: terminalFontStore,
-    builder: (context, _) => _buildBar(context),
-  );
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return ListenableBuilder(
+      listenable: terminalFontStore,
+      builder: (context, _) => _buildBar(context),
+    );
+  }
 
   Widget _buildBar(BuildContext context) => FocusScope(
     node: _scope,
@@ -227,7 +233,8 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                 focusNode: _focus,
                 autofocus: widget.search != null,
                 textAlignVertical: TextAlignVertical.center,
-                style: boxMonoStyle().copyWith(height: 1),
+                // The query is terminal text, so it is set like the terminal.
+                style: terminalTextStyle(height: 1, color: Colors.white),
                 decoration: const InputDecoration(
                   hintText: 'Find in terminal…',
                   hintStyle: TextStyle(color: Colors.white54),
@@ -309,7 +316,7 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                       child: ExcludeSemantics(
                         child: Text(
                           '/',
-                          style: boxMonoStyle(color: Colors.white70),
+                          style: terminalTextStyle(color: Colors.white70),
                         ),
                       ),
                     ),
@@ -331,13 +338,13 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                             status,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: boxMonoStyle(
-                              size: 11,
+                            style: AppType.monoMeta(
                               color:
                                   count == 0 && query.isNotEmpty && !searching
                                   ? const Color(0xffffb4a9)
                                   : Colors.white54,
-                            ).copyWith(height: 1),
+                              height: 1,
+                            ),
                           ),
                         ),
                       ),
@@ -356,13 +363,13 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                         'Match case',
                         Text(
                           'Aa',
-                          style: boxMonoStyle(
-                            size: 12,
+                          style: AppType.monoLabel(
                             color: sensitive ? Colors.white : Colors.white54,
-                            weight: sensitive
+                            fontWeight: sensitive
                                 ? FontWeight.w700
-                                : FontWeight.normal,
-                          ).copyWith(height: 1),
+                                : FontWeight.w400,
+                            height: 1,
+                          ),
                         ),
                         _toggleCase,
                         selected: sensitive,

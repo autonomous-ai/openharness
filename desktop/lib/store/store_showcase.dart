@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
 import '../core/test_run.dart';
@@ -87,6 +88,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    TerminalFontScope.watch(context);
     final example = widget.example;
     final i = widget.index;
     return LayoutBuilder(
@@ -97,9 +99,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
           children: [
             Text(
               '${(i + 1).toString().padLeft(2, '0')} / ${widget.count.toString().padLeft(2, '0')}',
-              style: TextStyle(
-                fontFamily: grid.AppFont.mono,
-                fontSize: 12,
+              style: grid.AppType.monoMeta(
                 letterSpacing: 2,
                 color: grid.AppPalette.accentOnSurface,
               ),
@@ -111,11 +111,8 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                 '“${example.prompt}”',
                 key: ValueKey('store-example-prompt:$i'),
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: wide ? 34 : 24,
+                style: grid.AppType.title(
                   height: 1.24,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: wide ? -0.8 : -0.4,
                   color: grid.AppPalette.textPrimary,
                 ),
               ),
@@ -136,9 +133,8 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                     foregroundColor: Colors.white,
                     minimumSize: const Size(0, 46),
                     padding: const EdgeInsets.symmetric(horizontal: 22),
-                    textStyle: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
+                    textStyle: grid.AppType.label(
+                      fontWeight: grid.AppFont.semibold,
                     ),
                     shape: const StadiumBorder(),
                   ),
@@ -225,8 +221,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                 Text(
                   example.caption!,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 13,
+                  style: grid.AppType.body(
                     height: 1.4,
                     color: grid.AppPalette.textSecondary,
                   ),
@@ -331,18 +326,20 @@ class _RevealState extends State<_Reveal> with SingleTickerProviderStateMixin {
   }
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _controller,
-    builder: (context, child) {
-      final t = Curves.easeOutCubic.transform(_controller.value);
-      return Opacity(
-        opacity: t,
-        child: Transform.translate(
-          offset: Offset(0, 36 * (1 - t)),
-          child: child,
-        ),
-      );
-    },
-    child: widget.child,
-  );
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        final t = Curves.easeOutCubic.transform(_controller.value);
+        return Opacity(
+          opacity: t,
+          child: Transform.translate(
+            offset: Offset(0, 36 * (1 - t)),
+            child: child,
+          ),
+        );
+      },
+      child: widget.child,
+    );
+  }
 }

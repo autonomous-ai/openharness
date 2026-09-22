@@ -794,3 +794,17 @@ export async function getCommanderJoinGeneration(machineId: string): Promise<num
     return undefined
   }
 }
+
+// ── validated SSO tokens (so N processes ask the profile API once, not N times) ────────────────────
+//
+// Not try/caught like the presence keys above: the cache treats a throw as a miss, and swallowing it
+// here would also swallow the difference between "absent" and "Redis is down" for anyone reading logs.
+// The key is a digest of the token — see `ssoProfileCache.ts` — and the value holds no credential.
+
+export const redisSsoProfileStore = {
+  get: (key: string): Promise<string | null> => pub.get(key),
+  async set(key: string, value: string, ttlMs: number): Promise<void> {
+    const px = Math.floor(ttlMs)
+    if (px > 0) await pub.set(key, value, 'PX', px)
+  },
+}

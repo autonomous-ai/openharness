@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -76,44 +77,26 @@ class StoreDiscover extends StatelessWidget {
         final padding = box.maxWidth < 680 ? 20.0 : 36.0;
         return SingleChildScrollView(
           key: const PageStorageKey('store-discover-scroll'),
-          padding: EdgeInsets.fromLTRB(padding, 12, padding, 40),
+          padding: EdgeInsets.fromLTRB(padding, 32, padding, 40),
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 1440),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Column(
+                  Text(
+                    'Follow your curiosity.',
                     key: const ValueKey('store-curiosity-hero'),
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Follow your curiosity.',
-                        style: TextStyle(
-                          fontSize: 34,
-                          height: 1.15,
-                          letterSpacing: -1.1,
-                          fontWeight: FontWeight.w700,
-                          color: grid.AppPalette.textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Start with code. Build across disciplines.',
-                        style: TextStyle(
-                          fontSize: 15,
-                          height: 1.4,
-                          color: grid.AppPalette.textSecondary,
-                        ),
-                      ),
-                    ],
+                    style: grid.AppType.heading(
+                      height: 1.15,
+                      color: grid.AppPalette.textPrimary,
+                    ),
                   ),
                   if (features.isNotEmpty) ...[
                     const SizedBox(height: 24),
                     LayoutBuilder(
                       builder: (context, constraints) {
-                        final scale =
-                            MediaQuery.textScalerOf(context).scale(14) / 14;
+                        final scale = grid.appTextScaleOf(context);
                         final wide =
                             constraints.maxWidth >= 980 &&
                             scale <= 1.25 &&
@@ -150,7 +133,7 @@ class StoreDiscover extends StatelessWidget {
                   if (engines.isNotEmpty) ...[
                     const SizedBox(height: 24),
                     StoreExploreHeading(
-                      title: 'Your starting point: code.',
+                      title: 'Start with code.',
                       action: 'All coding agents',
                       onAction: onEngines,
                     ),
@@ -208,12 +191,13 @@ class StoreDiscover extends StatelessWidget {
                       onOpen: onOpen,
                     ),
                     const SizedBox(height: 32),
-                    const StoreExploreHeading(title: 'Explore disciplines'),
+                    const StoreExploreHeading(
+                      title: 'Build across disciplines.',
+                    ),
                     const SizedBox(height: 16),
                     LayoutBuilder(
                       builder: (context, constraints) {
-                        final scale =
-                            MediaQuery.textScalerOf(context).scale(14) / 14;
+                        final scale = grid.appTextScaleOf(context);
                         final columns = (constraints.maxWidth / (320 * scale))
                             .floor()
                             .clamp(1, 3);
@@ -246,17 +230,14 @@ class StoreDiscover extends StatelessWidget {
                     const SizedBox(height: 32),
                     Text(
                       'For polymaths in the making.',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
+                      style: grid.AppType.heading(
                         color: grid.AppPalette.textPrimary,
                       ),
                     ),
                     const SizedBox(height: 6),
                     Text(
                       'Learn the next craft through the things you build.',
-                      style: TextStyle(
-                        fontSize: 14,
+                      style: grid.AppType.body(
                         height: 1.5,
                         color: grid.AppPalette.textSecondary,
                       ),
@@ -270,8 +251,7 @@ class StoreDiscover extends StatelessWidget {
                     const SizedBox(height: 32),
                     Text(
                       'Start with a coding agent. More disciplines will appear here as harnesses become available.',
-                      style: TextStyle(
-                        fontSize: 14,
+                      style: grid.AppType.body(
                         height: 1.5,
                         color: grid.AppPalette.textSecondary,
                       ),
@@ -294,6 +274,7 @@ class _FeaturedStory extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final category = entry.isEngine
         ? 'Coding'
         : entry.id == 'autonomous/blender'
@@ -304,7 +285,7 @@ class _FeaturedStory extends StatelessWidget {
       'Design' => 'Give your ideas shape.',
       _ => 'Build something real.',
     };
-    final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+    final scale = grid.appTextScaleOf(context);
     return StoreExploreCard(
       key: ValueKey('store-feature:${entry.id}'),
       color: storeDiscipline(category).color,
@@ -320,10 +301,9 @@ class _FeaturedStory extends StatelessWidget {
               children: [
                 Text(
                   category.toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 10,
+                  style: grid.AppType.monoMeta(
                     letterSpacing: 1.1,
-                    fontWeight: FontWeight.w700,
+                    fontWeight: grid.AppFont.medium,
                     color: grid.AppPalette.accentOnSurface,
                   ),
                 ),
@@ -332,11 +312,8 @@ class _FeaturedStory extends StatelessWidget {
                   height: 50 * scale,
                   child: Text(
                     headline,
-                    style: TextStyle(
-                      fontSize: 21,
+                    style: grid.AppType.title(
                       height: 1.15,
-                      letterSpacing: -.4,
-                      fontWeight: FontWeight.w700,
                       color: grid.AppPalette.textPrimary,
                     ),
                   ),
@@ -350,8 +327,7 @@ class _FeaturedStory extends StatelessWidget {
                         'Explore ${entry.name}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
+                        style: grid.AppType.label(
                           color: grid.AppPalette.textSecondary,
                         ),
                       ),
@@ -411,17 +387,14 @@ class _DisciplineLink extends StatelessWidget {
                 children: [
                   Text(
                     name,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
+                    style: grid.AppType.label(
                       color: grid.AppPalette.textPrimary,
                     ),
                   ),
                   const SizedBox(height: 5),
                   Text(
                     '${entries.length} ${entries.length == 1 ? 'harness' : 'harnesses'}',
-                    style: TextStyle(
-                      fontSize: 12,
+                    style: grid.AppType.body(
                       color: grid.AppPalette.textSecondary,
                     ),
                   ),

@@ -3,7 +3,7 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
-import '../terminal/terminal_font_store.dart';
+import '../terminal/terminal_text.dart';
 
 const double kTerminalCornerRadius = 3;
 const double kWorkspaceInset = 6;
@@ -67,57 +67,56 @@ class CommandDock extends StatelessWidget {
   final bool expanded;
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      final available =
-          (constraints.maxHeight - topClearance - 2 * kWorkspaceInset).clamp(
-            0.0,
-            double.infinity,
-          );
-      final scale = MediaQuery.textScalerOf(context).scale(13) / 13;
-      // A shallow dock at ordinary sizes, with room for readable defaults and
-      // key hints when accessibility text or a narrow window needs more rows.
-      final minimum = constraints.maxWidth < 800 * scale ? 320.0 : 280.0;
-      final maxHeight =
-          (expanded
-                  ? 520.0 * scale
-                  : (available * .4).clamp(minimum * scale, 400.0 * scale))
-              .clamp(0.0, available);
-      return Align(
-        alignment: Alignment.bottomCenter,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            kWorkspaceInset,
-            0,
-            kWorkspaceInset,
-            kWorkspaceInset,
-          ),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              minWidth: (constraints.maxWidth - 2 * kWorkspaceInset).clamp(
-                0.0,
-                double.infinity,
-              ),
-              maxHeight: maxHeight,
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final available =
+            (constraints.maxHeight - topClearance - 2 * kWorkspaceInset).clamp(
+              0.0,
+              double.infinity,
+            );
+        final scale = grid.appTextScaleOf(context);
+        // A shallow dock at ordinary sizes, with room for readable defaults and
+        // key hints when accessibility text or a narrow window needs more rows.
+        final minimum = constraints.maxWidth < 800 * scale ? 320.0 : 280.0;
+        final maxHeight =
+            (expanded
+                    ? 520.0 * scale
+                    : (available * .4).clamp(minimum * scale, 400.0 * scale))
+                .clamp(0.0, available);
+        return Align(
+          alignment: Alignment.bottomCenter,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              kWorkspaceInset,
+              0,
+              kWorkspaceInset,
+              kWorkspaceInset,
             ),
-            child: FocusScope(child: child),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minWidth: (constraints.maxWidth - 2 * kWorkspaceInset).clamp(
+                  0.0,
+                  double.infinity,
+                ),
+                maxHeight: maxHeight,
+              ),
+              child: FocusScope(child: child),
+            ),
           ),
-        ),
-      );
-    },
-  );
+        );
+      },
+    );
+  }
 }
 
-/// Shared typography and frame for prompts that sit over the terminals.
-TextStyle boxMonoStyle({double size = 13, Color? color, FontWeight? weight}) =>
-    TextStyle(
-      fontFamily: terminalFontStore.value.fontFamily,
-      fontFamilyFallback: terminalFontStore.value.fontFamilyFallback,
-      fontSize: size,
-      height: 1.35,
-      color: color ?? Colors.white,
-      fontWeight: weight ?? FontWeight.w400,
-    );
+/// Shared typography and frame for prompts that sit over the terminals: the
+/// terminal's face at [grid.AppType.monoSize], which ⌘+ and ⌘− leave alone.
+TextStyle boxMonoStyle({Color? color, FontWeight? weight}) => grid.AppType.mono(
+  height: 1.35,
+  color: color ?? Colors.white,
+  fontWeight: weight,
+);
 
 class TerminalBox extends StatelessWidget {
   const TerminalBox({super.key, required this.child, this.docked = false});
@@ -125,32 +124,36 @@ class TerminalBox extends StatelessWidget {
   final bool docked;
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: terminalFontStore,
-    builder: (context, _) => Material(
-      elevation: 0,
-      color: grid.AppPalette.swarmField,
-      surfaceTintColor: Colors.transparent,
-      shape: docked
-          ? Border(top: BorderSide(color: Colors.white.withValues(alpha: .24)))
-          : RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(kTerminalCornerRadius),
-              side: BorderSide(color: Colors.white.withValues(alpha: .24)),
-            ),
-      clipBehavior: Clip.antiAlias,
-      child: DefaultTextStyle.merge(style: boxMonoStyle(), child: child),
-    ),
-  );
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return ListenableBuilder(
+      listenable: terminalFontStore,
+      builder: (context, _) => Material(
+        elevation: 0,
+        color: grid.AppPalette.swarmField,
+        surfaceTintColor: Colors.transparent,
+        shape: docked
+            ? Border(
+                top: BorderSide(color: Colors.white.withValues(alpha: .24)),
+              )
+            : RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(kTerminalCornerRadius),
+                side: BorderSide(color: Colors.white.withValues(alpha: .24)),
+              ),
+        clipBehavior: Clip.antiAlias,
+        child: DefaultTextStyle.merge(style: boxMonoStyle(), child: child),
+      ),
+    );
+  }
 }
 
 /// A compact text row that grows with the user's accessibility text size.
 double boxRowHeight(TextScaler scale) =>
-    (scale.scale(13) * 1.35 + 8).clamp(26, double.infinity);
+    (scale.scale(grid.AppType.monoSize) * 1.35 + 8).clamp(26, double.infinity);
 
-/// Small print on the box's surface. 54% white is the floor that still reads
-/// (about 5.5:1 on the surface); 38% at 11px did not pass AA.
+/// Key hints, shortcut glyphs and counts: the box's meta line.
 const kBoxFaint = Colors.white54;
-const kBoxFaintStyle = TextStyle(fontSize: 11, color: kBoxFaint);
+TextStyle get kBoxFaintStyle => grid.AppType.monoMeta(color: kBoxFaint);
 
 /// Keep the user's actual binding, printed like a terminal's local key guide.
 String boxKeyLabel(String hint) => hint
@@ -181,32 +184,34 @@ class BoxRowHighlight extends StatelessWidget {
   // A Material, not a coloured box: a ListTile paints its ink on the nearest
   // Material, and a plain fill between the two hides it (Flutter asserts so).
   @override
-  Widget build(BuildContext context) => Material(
-    color: highlighted
-        ? Colors.white.withValues(alpha: .10)
-        : Colors.transparent,
-    borderRadius: BorderRadius.circular(terminal ? 0 : 6),
-    // No clip: nothing in a row overflows it, and an antialiased rounded clip
-    // per row was paid again on every arrow key.
-    child: Stack(
-      children: [
-        child,
-        if (highlighted && !terminal)
-          Positioned(
-            left: 0,
-            top: 7,
-            bottom: 7,
-            child: Container(
-              width: 3,
-              decoration: BoxDecoration(
-                color: accent,
-                borderRadius: BorderRadius.circular(2),
+  Widget build(BuildContext context) {
+    return Material(
+      color: highlighted
+          ? Colors.white.withValues(alpha: .10)
+          : Colors.transparent,
+      borderRadius: BorderRadius.circular(terminal ? 0 : 6),
+      // No clip: nothing in a row overflows it, and an antialiased rounded clip
+      // per row was paid again on every arrow key.
+      child: Stack(
+        children: [
+          child,
+          if (highlighted && !terminal)
+            Positioned(
+              left: 0,
+              top: 7,
+              bottom: 7,
+              child: Container(
+                width: 3,
+                decoration: BoxDecoration(
+                  color: accent,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             ),
-          ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
 }
 
 /// One entry of the bottom line: the key, what it does, and — because a key
@@ -253,6 +258,7 @@ class BoxHintStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     Widget? notice;
     if (message case final message?) {
       notice = Padding(
@@ -274,7 +280,6 @@ class BoxHintStrip extends StatelessWidget {
                   maxLines: 3,
                   minLines: 1,
                   style: boxMonoStyle(
-                    size: 12,
                     color: isError ? Colors.orangeAccent : Colors.white70,
                   ),
                 ),
@@ -299,7 +304,7 @@ class BoxHintStrip extends StatelessWidget {
                 borderRadius: BorderRadius.circular(5),
                 onTap: hint.onTap,
                 child: Padding(
-                  // 11px text + 2×7 = a target a hand can hit (≥24px).
+                  // Keep a useful pointer target even at the smallest font setting.
                   padding: const EdgeInsets.symmetric(
                     horizontal: 6,
                     vertical: 7,
@@ -465,19 +470,23 @@ class _ReadlineKeysState extends State<ReadlineKeys> {
   }
 
   @override
-  Widget build(BuildContext context) => CallbackShortcuts(
-    bindings: {
-      const SingleActivator(LogicalKeyboardKey.keyW, control: true): _killWord,
-      const SingleActivator(LogicalKeyboardKey.keyU, control: true): _killLine,
-      const SingleActivator(LogicalKeyboardKey.keyH, control: true): () =>
-          _deleteCharacter(backwards: true),
-      const SingleActivator(LogicalKeyboardKey.keyD, control: true): () =>
-          _deleteCharacter(backwards: false),
-      const SingleActivator(LogicalKeyboardKey.keyY, control: true): () {
-        final (start, end) = _span;
-        if (_killed.isNotEmpty) _edit(start, end, insert: _killed);
+  Widget build(BuildContext context) {
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyW, control: true):
+            _killWord,
+        const SingleActivator(LogicalKeyboardKey.keyU, control: true):
+            _killLine,
+        const SingleActivator(LogicalKeyboardKey.keyH, control: true): () =>
+            _deleteCharacter(backwards: true),
+        const SingleActivator(LogicalKeyboardKey.keyD, control: true): () =>
+            _deleteCharacter(backwards: false),
+        const SingleActivator(LogicalKeyboardKey.keyY, control: true): () {
+          final (start, end) = _span;
+          if (_killed.isNotEmpty) _edit(start, end, insert: _killed);
+        },
       },
-    },
-    child: widget.child,
-  );
+      child: widget.child,
+    );
+  }
 }

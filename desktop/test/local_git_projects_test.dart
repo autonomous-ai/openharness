@@ -424,6 +424,12 @@ void main() {
     expect(project.remote, 'github.com/team/repo');
     expect(reader.cached(tree.path)!.remote, project.remote);
     expect(reader.cached(tree.path)!.branch, 'feature/login');
+    expect(project.name, 'repo');
+    expect(
+      reader.cached(tree.path)!.name,
+      'repo',
+      reason: 'A linked worktree is named for its repository.',
+    );
     await reader.read(tree.path);
     expect(reader.cached('$root/repo/src'), same(project));
     await File('${meta.path}/HEAD')

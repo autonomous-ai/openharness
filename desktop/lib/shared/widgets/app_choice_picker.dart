@@ -140,16 +140,8 @@ class _AppChoicePickerState<T> extends State<AppChoicePicker<T>> {
     if (widget.tileSize != null) return _tileChoices();
     final candidates = _visibleOptions;
     if (candidates.isEmpty) return const SizedBox.shrink();
-    final textStyle = TextStyle(
-      fontFamily: AppFont.sans,
-      fontFamilyFallback: AppFont.sansFallback,
-      fontSize: 13,
-      fontWeight: FontWeight.w500,
-    );
-    final detailStyle = textStyle.copyWith(
-      fontSize: 12,
-      fontWeight: FontWeight.w400,
-    );
+    final textStyle = AppType.label();
+    final detailStyle = AppType.body();
     final height = widget.showDetails
         ? (widget.compact ? 52.0 : 58.0)
         : (widget.compact ? 40.0 : 44.0);
@@ -455,54 +447,57 @@ class AppChoiceTile extends StatelessWidget {
   final bool terminalStyle;
 
   @override
-  Widget build(BuildContext context) => SizedBox(
-    width: size.width,
-    height: size.height,
-    child: Semantics(
-      selected: selected,
-      inMutuallyExclusiveGroup: true,
-      child: TextButton(
-        focusNode: focusNode,
-        onPressed: onPressed,
-        style:
-            TextButton.styleFrom(
-              foregroundColor: AppPalette.textPrimary,
-              backgroundColor: selected
-                  ? AppPalette.swarmAccent.withValues(alpha: .16)
-                  : terminalStyle
-                  ? Colors.transparent
-                  : AppSurface.recess,
-              padding: terminalStyle ? terminalPadding : padding,
-              textStyle: terminalStyle
-                  ? DefaultTextStyle.of(context).style
-                  : null,
-              minimumSize: terminalStyle ? Size.zero : null,
-              tapTargetSize: terminalStyle
-                  ? MaterialTapTargetSize.shrinkWrap
-                  : null,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(
-                  terminalStyle ? 2 : AppControl.radius,
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return SizedBox(
+      width: size.width,
+      height: size.height,
+      child: Semantics(
+        selected: selected,
+        inMutuallyExclusiveGroup: true,
+        child: TextButton(
+          focusNode: focusNode,
+          onPressed: onPressed,
+          style:
+              TextButton.styleFrom(
+                foregroundColor: AppPalette.textPrimary,
+                backgroundColor: selected
+                    ? AppPalette.swarmAccent.withValues(alpha: .16)
+                    : terminalStyle
+                    ? Colors.transparent
+                    : AppSurface.recess,
+                padding: terminalStyle ? terminalPadding : padding,
+                textStyle: terminalStyle
+                    ? DefaultTextStyle.of(context).style
+                    : null,
+                minimumSize: terminalStyle ? Size.zero : null,
+                tapTargetSize: terminalStyle
+                    ? MaterialTapTargetSize.shrinkWrap
+                    : null,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(
+                    terminalStyle ? 2 : AppControl.radius,
+                  ),
+                ),
+              ).copyWith(
+                side: WidgetStateProperty.resolveWith(
+                  (states) => BorderSide(
+                    color: selected && !terminalStyle
+                        ? AppPalette.swarmAccent.withValues(alpha: .7)
+                        : Colors.transparent,
+                  ),
                 ),
               ),
-            ).copyWith(
-              side: WidgetStateProperty.resolveWith(
-                (states) => BorderSide(
-                  color: selected && !terminalStyle
-                      ? AppPalette.swarmAccent.withValues(alpha: .7)
-                      : Colors.transparent,
-                ),
-              ),
-            ),
-        child: AppChoiceTileContent(
-          terminalStyle: terminalStyle,
-          label: label,
-          detail: detail,
-          leading: terminalStyle ? Text(selected ? '>' : ' ') : leading,
+          child: AppChoiceTileContent(
+            terminalStyle: terminalStyle,
+            label: label,
+            detail: detail,
+            leading: terminalStyle ? Text(selected ? '>' : ' ') : leading,
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class AppChoiceTileContent extends StatelessWidget {
@@ -522,8 +517,8 @@ class AppChoiceTileContent extends StatelessWidget {
   /// The name's type, and the detail's under it. Written down because the tile
   /// height is arithmetic over exactly these numbers — see [linesFor] and the
   /// New Harness dialog's `tileSize`.
-  static const double labelSize = 16;
-  static const double detailSize = 14;
+  static const double labelSize = AppType.bodySize;
+  static const double detailSize = AppType.bodySize;
   static const double lineHeight = 1.25;
   static const double lineGap = 4;
 
@@ -562,9 +557,9 @@ class AppChoiceTileContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    AppTheme.watch(context);
     if (terminalStyle) {
       final style = DefaultTextStyle.of(context).style.copyWith(
-        fontSize: 13,
         height: 1.35,
         fontWeight: FontWeight.w400,
         color: AppPalette.textPrimary,
@@ -593,10 +588,7 @@ class AppChoiceTileContent extends StatelessWidget {
                         detail!,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: style.copyWith(
-                          fontSize: 12,
-                          color: AppPalette.textSecondary,
-                        ),
+                        style: style.copyWith(color: AppPalette.textSecondary),
                       ),
                     ),
                   ],
@@ -608,12 +600,8 @@ class AppChoiceTileContent extends StatelessWidget {
         ),
       );
     }
-    final labelStyle = TextStyle(
-      fontFamily: AppFont.sans,
-      fontFamilyFallback: AppFont.sansFallback,
-      fontSize: labelSize,
+    final labelStyle = AppType.label(
       height: lineHeight,
-      fontWeight: AppFont.medium,
       color: AppPalette.textPrimary,
     );
     return Row(
@@ -656,10 +644,7 @@ class AppChoiceTileContent extends StatelessWidget {
                       detail!,
                       maxLines: lines.detail,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontFamily: AppFont.sans,
-                        fontFamilyFallback: AppFont.sansFallback,
-                        fontSize: detailSize,
+                      style: AppType.body(
                         height: lineHeight,
                         color: AppPalette.textSecondary,
                       ),

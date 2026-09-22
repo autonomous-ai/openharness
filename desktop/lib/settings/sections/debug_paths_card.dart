@@ -81,7 +81,7 @@ class _DebugPathsCardState extends State<DebugPathsCard> {
               Expanded(
                 child: Text(
                   'What this app is running',
-                  style: Theme.of(context).textTheme.titleSmall,
+                  style: AppType.heading(),
                 ),
               ),
               AppIconButton(
@@ -142,17 +142,15 @@ class _PathRow extends StatelessWidget {
             width: 62,
             child: Text(
               label,
-              style: TextStyle(fontSize: 12, color: AppPalette.textFaint),
+              style: AppType.body(color: AppPalette.textFaint),
             ),
           ),
           Expanded(
             child: SelectableText(
               value,
-              style: TextStyle(
-                fontSize: 12,
+              style: AppType.monoLabel(
+                fontWeight: AppFont.regular,
                 height: 1.4,
-                fontFamily: AppFont.mono,
-                fontFamilyFallback: AppFont.monoFallback,
                 color: AppPalette.textPrimary,
               ),
             ),

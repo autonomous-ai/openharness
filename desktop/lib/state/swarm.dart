@@ -25,7 +25,7 @@ class Swarm {
   /// over the New Tab it was opened from, the way a first agent does.
   String kind;
 
-  /// A deliberately opened tab has a minimal landing page, separate from onboarding.
+  /// Marks a deliberately opened tab so subsequent actions use its destination.
   bool isNewTabPage;
   bool get isBlankNewTab =>
       isNewTabPage && kind == 'harness' && panes.isEmpty && presets.isEmpty;

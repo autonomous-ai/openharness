@@ -80,19 +80,11 @@ class _LensLabel extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          lens.label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: AppFont.medium,
-            color: ink,
-          ),
-        ),
+        Text(lens.label, style: AppType.label(color: ink)),
         const SizedBox(width: 6),
         Text(
           '${lens.count}',
-          style: TextStyle(
-            fontSize: 12.5,
+          style: AppType.monoMeta(
             fontWeight: AppFont.medium,
             color: lens.selected
                 ? ink

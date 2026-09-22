@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_select_field.dart';
@@ -36,6 +37,7 @@ class KeymapSettings extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final keymap = KeymapTheme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -49,7 +51,7 @@ class KeymapSettings extends StatelessWidget {
               value: contextKind,
               // Keep the context readable when the user enlarges text. The
               // surrounding Wrap still limits the field to the pane width.
-              width: 160 * MediaQuery.textScalerOf(context).scale(13.5) / 13.5,
+              width: 160 * grid.appTextScaleOf(context),
               options: const [
                 SelectOption(
                   value: KeymapContext.workspace,
@@ -82,22 +84,22 @@ class KeymapSettings extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             'Saves apply automatically. Invalid edits keep your last working shortcuts.',
-            style: TextStyle(
-              color: grid.AppPalette.textSecondary,
-              fontSize: 12,
-            ),
+            style: grid.AppType.body(color: grid.AppPalette.textSecondary),
           ),
           const SizedBox(height: 4),
           SelectableText(
             keymap!.path!,
-            style: TextStyle(color: grid.AppPalette.textFaint, fontSize: 11),
+            style: grid.AppType.monoLabel(
+              color: grid.AppPalette.textFaint,
+              fontWeight: FontWeight.w400,
+            ),
           ),
         ],
         if (keymap?.error != null) ...[
           const SizedBox(height: 8),
           SelectableText(
             keymap!.error!,
-            style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
+            style: grid.AppType.body(color: Colors.orangeAccent),
           ),
         ],
         const SizedBox(height: 16),

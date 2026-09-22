@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 import '../core/agent_names.dart';
 import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
-import '../terminal/terminal_font_store.dart';
+import '../terminal/terminal_text.dart';
 import 'box_chrome.dart';
 import 'terminal_prompt.dart';
 
@@ -313,137 +313,138 @@ class _ForkAgentPromptState extends State<_ForkAgentPrompt> {
   );
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: terminalFontStore,
-    builder: (context, _) => TerminalPromptKeys(
-      composing: () => _composing,
-      inputFocus: _nameFocus.hasFocus ? _nameFocus : _taskFocus,
-      cancel: _close,
-      accept: _accept,
-      submit: _submit,
-      next: () => _vertical(1),
-      previous: () => _vertical(-1),
-      pageDown: () => _page(1),
-      pageUp: () => _page(-1),
-      child: CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.enter, alt: true): _newline,
-          if (KeymapTheme.of(context) == null)
-            const SingleActivator(LogicalKeyboardKey.enter, meta: true):
-                _submit,
-        },
-        child: TerminalPrompt(
-          width: 760,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Flexible(
-                child: SingleChildScrollView(
-                  controller: _body,
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(
-                        'Fork Harness',
-                        style: boxMonoStyle(size: 12, color: kBoxFaint),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        'from  ${_attempt.source?.name ?? widget.sourceName}',
-                        style: boxMonoStyle(),
-                      ),
-                      if (widget.notifier
-                              .stateOf(widget.machineId)
-                              ?.machine
-                              .displayName
-                          case final machine?)
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return ListenableBuilder(
+      listenable: terminalFontStore,
+      builder: (context, _) => TerminalPromptKeys(
+        composing: () => _composing,
+        inputFocus: _nameFocus.hasFocus ? _nameFocus : _taskFocus,
+        cancel: _close,
+        accept: _accept,
+        submit: _submit,
+        next: () => _vertical(1),
+        previous: () => _vertical(-1),
+        pageDown: () => _page(1),
+        pageUp: () => _page(-1),
+        child: CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.enter, alt: true):
+                _newline,
+            if (KeymapTheme.of(context) == null)
+              const SingleActivator(LogicalKeyboardKey.enter, meta: true):
+                  _submit,
+          },
+          child: TerminalPrompt(
+            width: 760,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Flexible(
+                  child: SingleChildScrollView(
+                    controller: _body,
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
                         Text(
-                          [
-                            machine,
-                            if (_attempt.source?.project?.cwd case final cwd?
-                                when cwd.isNotEmpty)
-                              cwd,
-                          ].join('  '),
-                          style: boxMonoStyle(size: 11, color: kBoxFaint),
+                          'Fork Harness',
+                          style: boxMonoStyle(color: kBoxFaint),
                         ),
-                      const SizedBox(height: 6),
-                      Text(
-                        widget.engine == 'opencode'
-                            ? 'Starts from a handoff summary, in the same project folder.'
-                            : 'Continues the conversation in the same project folder.',
-                        style: boxMonoStyle(size: 11, color: kBoxFaint),
-                      ),
-                      const SizedBox(height: 8),
-                      _input('name', _name, _nameFocus),
-                      _input('task', _task, _taskFocus, task: true),
-                      if (_error case final error?) ...[
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 10),
                         Text(
-                          error,
-                          style: boxMonoStyle(
-                            size: 12,
-                            color: Colors.orangeAccent,
+                          'from  ${_attempt.source?.name ?? widget.sourceName}',
+                          style: boxMonoStyle(),
+                        ),
+                        if (widget.notifier
+                                .stateOf(widget.machineId)
+                                ?.machine
+                                .displayName
+                            case final machine?)
+                          Text(
+                            [
+                              machine,
+                              if (_attempt.source?.project?.cwd case final cwd?
+                                  when cwd.isNotEmpty)
+                                cwd,
+                            ].join('  '),
+                            style: boxMonoStyle(color: kBoxFaint),
                           ),
-                        ),
-                      ],
-                      if (_busy)
+                        const SizedBox(height: 6),
                         Text(
-                          'Forking continues if you close this prompt.',
-                          style: boxMonoStyle(size: 11, color: kBoxFaint),
+                          widget.engine == 'opencode'
+                              ? 'Starts from a handoff summary, in the same project folder.'
+                              : 'Continues the conversation in the same project folder.',
+                          style: boxMonoStyle(color: kBoxFaint),
                         ),
-                    ],
-                  ),
-                ),
-              ),
-              if (_attempt.awaitingConfirmation && !_busy)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: terminalPromptButton(
-                      'Start another fork',
-                      _startAnother,
-                      key: const Key('fork-start-another'),
+                        const SizedBox(height: 8),
+                        _input('name', _name, _nameFocus),
+                        _input('task', _task, _taskFocus, task: true),
+                        if (_error case final error?) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            error,
+                            style: boxMonoStyle(color: Colors.orangeAccent),
+                          ),
+                        ],
+                        if (_busy)
+                          Text(
+                            'Forking continues if you close this prompt.',
+                            style: boxMonoStyle(color: kBoxFaint),
+                          ),
+                      ],
                     ),
                   ),
                 ),
-              BoxHintStrip(
-                message: _busy
-                    ? 'Waiting for fork…'
-                    : (_attempt.awaitingConfirmation
-                          ? 'Fork may already exist.'
-                          : null),
-                isError: !_busy && _attempt.awaitingConfirmation,
-                hints: [
-                  if (!_busy)
-                    BoxHint(
-                      terminalPromptHint(context, 'picker.accept', 'enter'),
-                      _attempt.awaitingConfirmation
-                          ? 'check status'
-                          : (_nameFocus.hasFocus ? 'edit task' : 'fork'),
-                      onTap: _nameFocus.hasFocus
-                          ? _taskFocus.requestFocus
-                          : _submit,
+                if (_attempt.awaitingConfirmation && !_busy)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: terminalPromptButton(
+                        'Start another fork',
+                        _startAnother,
+                        key: const Key('fork-start-another'),
+                      ),
                     ),
-                  if (!_locked)
-                    BoxHint(
-                      terminalPromptHint(context, 'picker.complete', 'tab'),
-                      'fields',
-                    ),
-                  if (!_locked) const BoxHint('alt-enter', 'newline'),
-                  BoxHint(
-                    terminalPromptHint(context, 'picker.cancel', 'esc'),
-                    'close',
-                    onTap: _close,
                   ),
-                ],
-              ),
-            ],
+                BoxHintStrip(
+                  message: _busy
+                      ? 'Waiting for fork…'
+                      : (_attempt.awaitingConfirmation
+                            ? 'Fork may already exist.'
+                            : null),
+                  isError: !_busy && _attempt.awaitingConfirmation,
+                  hints: [
+                    if (!_busy)
+                      BoxHint(
+                        terminalPromptHint(context, 'picker.accept', 'enter'),
+                        _attempt.awaitingConfirmation
+                            ? 'check status'
+                            : (_nameFocus.hasFocus ? 'edit task' : 'fork'),
+                        onTap: _nameFocus.hasFocus
+                            ? _taskFocus.requestFocus
+                            : _submit,
+                      ),
+                    if (!_locked)
+                      BoxHint(
+                        terminalPromptHint(context, 'picker.complete', 'tab'),
+                        'fields',
+                      ),
+                    if (!_locked) const BoxHint('alt-enter', 'newline'),
+                    BoxHint(
+                      terminalPromptHint(context, 'picker.cancel', 'esc'),
+                      'close',
+                      onTap: _close,
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

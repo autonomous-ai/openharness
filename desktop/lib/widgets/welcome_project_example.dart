@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import 'box_chrome.dart';
@@ -21,47 +22,49 @@ class WelcomeProjectOutput extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     if (example != WelcomeProjectExample.code) {
       return SizedBox.expand(
         child: CustomPaint(painter: _RobotComponent(example)),
       );
     }
     final syntax = grid.AppPalette.teal;
-    return FittedBox(
-      fit: BoxFit.scaleDown,
-      alignment: Alignment.topLeft,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('controller.ts', style: boxMonoStyle(size: 10, color: faint)),
-          const SizedBox(height: 10),
-          Text.rich(
-            TextSpan(
-              children: [
-                TextSpan(
-                  text: 'const ',
-                  style: TextStyle(color: syntax),
-                ),
-                const TextSpan(text: 'arm = new RobotArm();\n\n'),
-                for (final command in [
-                  'arm.moveTo(pickup);',
-                  'arm.gripper.close();',
-                  'arm.moveTo(dropoff);',
-                  'arm.gripper.open();',
-                ]) ...[
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('controller.ts', style: boxMonoStyle(color: faint)),
+            const SizedBox(height: 10),
+            Text.rich(
+              TextSpan(
+                children: [
                   TextSpan(
-                    text: 'await ',
+                    text: 'const ',
                     style: TextStyle(color: syntax),
                   ),
-                  TextSpan(text: '$command\n'),
+                  const TextSpan(text: 'arm = new RobotArm();\n\n'),
+                  for (final command in [
+                    'arm.moveTo(pickup);',
+                    'arm.gripper.close();',
+                    'arm.moveTo(dropoff);',
+                    'arm.gripper.open();',
+                  ]) ...[
+                    TextSpan(
+                      text: 'await ',
+                      style: TextStyle(color: syntax),
+                    ),
+                    TextSpan(text: '$command\n'),
+                  ],
                 ],
-              ],
+              ),
+              softWrap: false,
+              style: boxMonoStyle(color: ink),
             ),
-            softWrap: false,
-            style: boxMonoStyle(size: 12, color: ink),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

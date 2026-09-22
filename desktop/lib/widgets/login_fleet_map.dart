@@ -234,6 +234,11 @@ class _MapPainter extends CustomPainter {
   /// The loop's phase, 0 → 1, wrapping.
   final double t;
   final _MapPalette palette;
+  // Machine names in the UI face; the line under each, a place and its agents,
+  // in the terminal's.
+  final _sansStyle = grid.AppType.caption(height: 1.2);
+  final _monoStyle = grid.AppType.monoMeta(height: 1.2);
+  double _paintScale = 1;
 
   static const Size _design = Size(512, 190);
 
@@ -291,6 +296,8 @@ class _MapPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final scale = size.width / _design.width;
+    if (scale <= 0) return;
+    _paintScale = scale;
     canvas.save();
     canvas.scale(scale);
     canvas.clipRRect(
@@ -394,7 +401,7 @@ class _MapPainter extends CustomPainter {
       canvas,
       '● this Mac · 4 linked',
       Offset(_window.left + 7, _window.top + 6),
-      size: 9,
+
       color: _fade(palette.ink2, landed),
     );
     const names = ['Claude', 'Codex', 'Gemini', '+'];
@@ -419,7 +426,7 @@ class _MapPainter extends CustomPainter {
         canvas,
         names[i],
         Offset(pane.left + 5, pane.top + 4),
-        size: 8,
+
         weight: FontWeight.w600,
         color: _fade(tints[i], landed),
       );
@@ -492,8 +499,8 @@ class _MapPainter extends CustomPainter {
 
       // Labels are laid out in unscaled space and only faded, so the text
       // never renders at a fractional scale mid-pop.
-      final nameWidth = _measure(pin.name, size: 10.5, weight: FontWeight.w500);
-      final subWidth = _measure(pin.sub, size: 8.5, mono: true);
+      final nameWidth = _measure(pin.name, weight: FontWeight.w500);
+      final subWidth = _measure(pin.sub, mono: true);
       final width = math.max(nameWidth, subWidth);
       // Centred on the pin, but never off the field.
       final left = (pin.at.dx - width / 2).clamp(
@@ -505,15 +512,17 @@ class _MapPainter extends CustomPainter {
         canvas,
         pin.name,
         Offset(left + (width - nameWidth) / 2, top),
-        size: 10.5,
+
         weight: FontWeight.w500,
         color: _fade(palette.ink2, alpha),
       );
       _text(
         canvas,
         pin.sub,
-        Offset(left + (width - subWidth) / 2, top + 13),
-        size: 8.5,
+        Offset(
+          left + (width - subWidth) / 2,
+          top + grid.AppType.captionSize * 1.2 / _paintScale,
+        ),
         mono: true,
         color: _fade(palette.faint, alpha),
       );
@@ -572,7 +581,6 @@ class _MapPainter extends CustomPainter {
 
   TextPainter _layout(
     String text, {
-    required double size,
     FontWeight weight = FontWeight.w400,
     bool mono = false,
     Color color = const Color(0xFFFFFFFF),
@@ -580,18 +588,14 @@ class _MapPainter extends CustomPainter {
     final painter = TextPainter(
       text: TextSpan(
         text: text,
-        style: TextStyle(
-          fontFamily: mono ? palette.mono : palette.sans,
-          fontFamilyFallback: mono
-              ? palette.monoFallback
-              : palette.sansFallback,
-          fontSize: size,
+        style: (mono ? _monoStyle : _sansStyle).copyWith(
           fontWeight: weight,
           color: color,
-          height: 1.2,
         ),
       ),
       textDirection: TextDirection.ltr,
+      // Scale the drawing, but keep its labels at their own point size.
+      textScaler: TextScaler.linear(1 / _paintScale),
       maxLines: 1,
       ellipsis: '…',
     )..layout(maxWidth: 160);
@@ -600,30 +604,26 @@ class _MapPainter extends CustomPainter {
 
   double _measure(
     String text, {
-    required double size,
     FontWeight weight = FontWeight.w400,
     bool mono = false,
-  }) => _layout(text, size: size, weight: weight, mono: mono).width;
+  }) => _layout(text, weight: weight, mono: mono).width;
 
   void _text(
     Canvas canvas,
     String text,
     Offset at, {
-    required double size,
     required Color color,
     FontWeight weight = FontWeight.w400,
     bool mono = false,
   }) {
-    _layout(
-      text,
-      size: size,
-      weight: weight,
-      mono: mono,
-      color: color,
-    ).paint(canvas, at);
+    _layout(text, weight: weight, mono: mono, color: color).paint(canvas, at);
   }
 
   @override
   bool shouldRepaint(_MapPainter old) =>
-      old.t != t || old.entrance != entrance || old.palette != palette;
+      old.t != t ||
+      old.entrance != entrance ||
+      old.palette != palette ||
+      old._sansStyle != _sansStyle ||
+      old._monoStyle != _monoStyle;
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -215,7 +216,7 @@ class _LayoutPaletteState extends State<_LayoutPalette> {
     final choices = PanePreset.forCount(count);
     final current = _currentChoice(count);
     final cursor = _cursorIn(choices, current);
-    final textScale = MediaQuery.textScalerOf(context).scale(11.5) / 11.5;
+    final textScale = grid.appTextScaleOf(context);
     final shapeWidth = (_Strip.shape * textScale).clamp(_Strip.shape, 216.0);
     final paletteWidth =
         _Strip.width(choices.length) * textScale.clamp(1.0, 2.0);
@@ -305,11 +306,8 @@ class _LayoutPaletteState extends State<_LayoutPalette> {
                         padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
                         child: Text(
                           choices.isEmpty ? 'Layout' : 'Layout · $count panes',
-                          style: TextStyle(
+                          style: grid.AppType.monoLabel(
                             color: grid.AppPalette.textSecondary,
-                            fontSize: 11.5,
-                            letterSpacing: 0.9,
-                            fontWeight: grid.AppFont.medium,
                           ),
                         ),
                       ),
@@ -319,9 +317,9 @@ class _LayoutPaletteState extends State<_LayoutPalette> {
                           child: Text(
                             'One tile has no layout to choose. Open another and the '
                             'shapes appear here.',
-                            style: TextStyle(
+                            style: grid.AppType.monoLabel(
+                              fontWeight: FontWeight.w400,
                               color: grid.AppPalette.textFaint,
-                              fontSize: 12.5,
                               height: 1.45,
                             ),
                           ),
@@ -365,9 +363,8 @@ class _LayoutPaletteState extends State<_LayoutPalette> {
                           child: Text(
                             'Arrows to move · Enter or 1–${choices.length} to apply.\n'
                             'Changing layout resets pane sizes.',
-                            style: TextStyle(
+                            style: grid.AppType.monoMeta(
                               color: grid.AppPalette.textSecondary,
-                              fontSize: 11,
                               height: 1.4,
                             ),
                           ),
@@ -449,6 +446,7 @@ class _ShapeButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -483,19 +481,17 @@ class _ShapeButton extends StatelessWidget {
               preset.label,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
+              style: grid.AppType.monoLabel(
+                fontWeight: FontWeight.w400,
                 color: selected
                     ? grid.AppPalette.textPrimary
                     : grid.AppPalette.textSecondary,
-                fontSize: 11.5,
               ),
             ),
             const SizedBox(height: 2),
             Text(
               '$index',
-              style: TextStyle(
-                fontFamily: grid.AppFont.mono,
-                fontSize: 9.5,
+              style: grid.AppType.monoMeta(
                 color: grid.AppPalette.textSecondary,
               ),
             ),

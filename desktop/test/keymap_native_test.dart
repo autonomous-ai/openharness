@@ -30,6 +30,16 @@ void main() {
       final keymap = MemoryKeymap();
       addTearDown(keymap.dispose);
       final defaults = nativeKeymapSnapshot(keymap);
+      for (final context in ['workspace', 'terminal']) {
+        final rows = ((defaults['contexts'] as Map)[context] as List)
+            .cast<Map>();
+        expect(
+          rows.singleWhere(
+            (row) => (row['keys'] as List).join(' ') == 'cmd+o',
+          )['command'],
+          'agent.open',
+        );
+      }
       keymap.apply('''{"bindings":[
       {"keys":"cmd+t","command":null},
       {"keys":"cmd+o","command":"swarm.new"},

@@ -4,19 +4,13 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/harness_file_store.dart';
 import '../../core/local_key_value_store.dart';
-import 'app_theme.dart';
 import 'color_palette.dart';
 import 'harness_background.dart';
 import 'prompt_style.dart';
 
-/// The app's coordinated palette and UI typography on this computer.
-///
-/// This does not change the terminal's type. The terminal renders a grid a remote
-/// program draws into, so it keeps its own face and its own size in
-/// [TerminalFontStore], reached from Customize Harness ▸ Terminal — and the app's UI
-/// scale is fenced out of it at five seams (see the notes in
-/// `terminal_panel.dart` and `terminal_composer.dart`, and the regression test
-/// in `test/terminal_ui_scale_isolation_test.dart`).
+/// Palette, background, and prompt preferences on this computer.
+/// Legacy UI font fields remain readable for older builds; current typography
+/// is controlled only by TerminalFontStore.
 @immutable
 class AppearancePrefs {
   const AppearancePrefs({
@@ -31,25 +25,11 @@ class AppearancePrefs {
   final HarnessPalette palette;
   final HarnessBackground background;
 
-  /// The face the app's chrome is set in. `null` means the system font, which is
-  /// what [AppFont.sans] falls back to.
-  ///
-  /// Never the empty string. CoreText resolves `''` to nothing at all and the
-  /// text simply disappears, so "use the system font" is represented by the
-  /// absence of a value at every layer — here, and as a deleted key on disk.
+  /// Legacy fields, retained for settings compatibility with older builds.
   final String? uiFamily;
-
-  /// The base size everything else is measured against, in logical pixels.
   final double uiSize;
+  static const double uiSizeDefault = 14;
 
-  /// The size the app was drawn at. [AppFont.uiScale] is this over that, so at
-  /// 14 the scale is exactly 1 and every control keeps the geometry the design
-  /// system specifies.
-  static const double uiSizeDefault = AppFont.uiSizeDefault;
-
-  /// ⚠️ Not a matter of taste. A control here is a fixed-height box built for a
-  /// 13pt label — [AppControl.height] 32, [AppControl.heightField] 36 — and past
-  /// roughly ±35% the label stops fitting the box it sits in.
   static const double uiSizeMin = 11;
   static const double uiSizeMax = 19;
 

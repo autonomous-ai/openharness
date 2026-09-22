@@ -15,6 +15,7 @@ import {
   SsoTokenError,
   webCallbackUri,
   isLoopbackRedirectUri,
+  normalizeEntryPoint,
   resolveWebOrigin,
   requestedWebOrigin,
   type SsoTx,
@@ -157,7 +158,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   // 1b) Native/desktop-driven login (loopback OAuth). Accepts an explicit loopback redirect_uri so a
   //     desktop client can run a local HTTP listener to capture the SSO callback; unlike the web
   //     authorize, it never derives redirect_uri from a web origin. /exchange reuses tx.redirectUri.
-  app.post<{ Body: { redirectUri?: string; autonomousEnv?: AutonomousEnvironment } }>(
+  app.post<{ Body: { redirectUri?: string; autonomousEnv?: AutonomousEnvironment; entryPoint?: string } }>(
     '/api/auth/authorize-native',
     async (req, reply) => {
       const redirectUri = typeof req.body?.redirectUri === 'string' ? req.body.redirectUri.trim() : ''
@@ -173,7 +174,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         const state = randomState()
         const webOrigin = new URL(redirectUri).origin
         const tx = await createTx({ verifier, state, next: '/', redirectUri, webOrigin, autonomousEnv })
-        return sendSuccess(reply, { authorizeUrl: authorizeUrl(challenge, state, redirectUri, autonomousEnv), tx })
+        // Which surface started this sign-in (`cli`, `desktop`) — analytics only, and dropped
+        // unless it is a plain key, because this route needs no token.
+        const entryPoint = normalizeEntryPoint(req.body?.entryPoint)
+        return sendSuccess(reply, { authorizeUrl: authorizeUrl(challenge, state, redirectUri, autonomousEnv, entryPoint), tx })
       } catch {
         return sendError(reply, 'login transaction service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
       }

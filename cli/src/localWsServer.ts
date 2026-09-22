@@ -42,6 +42,13 @@ export interface LocalWsServerOptions {
   relayPool?: RemoteRelayPool
   shareRelay?: HarnessShareRelay
   autonomousEnv?: string
+  /**
+   * Who a window on this computer is, for a `terminal_open` it relays to another machine without
+   * introducing itself (a desktop build from before `client`). This daemon knows what the window
+   * cannot be made to say: the client is a desktop on THIS machine, by id and name. Filled in only
+   * when the frame carries no `client` of its own — a window that does introduce itself is believed.
+   */
+  localClient?: () => { kind: string; name: string; machineId?: string } | null
   /** The desktop app opened an agent's terminal — which agent, and on which machine. Lets the dial follow
    *  the window, so the two screens stay one desk. */
   /** Explicit app focus, including clear/disconnect, for voice routing independent of the dial. */
@@ -198,6 +205,15 @@ function binaryBytes(raw: RawData): Uint8Array {
   return new Uint8Array()
 }
 
+/** `terminal_open` with this computer's own introduction, when the window gave none — see `localClient`. */
+function withLocalClient(frame: Frame, localClient: LocalWsServerOptions['localClient']): Frame {
+  if (frame.type !== 'terminal_open' || !localClient) return frame
+  const payload = frame.payload && typeof frame.payload === 'object' ? frame.payload as Record<string, unknown> : {}
+  if (payload.client !== undefined) return frame
+  const client = localClient()
+  return client ? { ...frame, payload: { ...payload, client } } : frame
+}
+
 /**
  * Add an internal loopback WebSocket endpoint to the CLI's existing HTTP server. It intentionally has
  * no credential: loopback-only, no Origin header, and the desktop computer-id validation identify the
@@ -311,7 +327,10 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           // its pooled entry is suspect (most commonly the relayed machine's own Harness process
           // restarted, dropping its E2EE session without the transport itself ever closing). Drop it
           // so this select dials fresh instead of handing back the same dead session again.
-          if (payload?.forceReconnect === true && payload?.relayIsolation !== true) options.relayPool.invalidate(requestedMachineId)
+          if (payload?.forceReconnect === true) {
+            if (payload?.relayIsolation === true) options.relayPool.invalidateIsolated(requestedMachineId)
+            else options.relayPool.invalidate(requestedMachineId)
+          }
           try {
             relay = payload?.relayIsolation === true
               ? await options.relayPool.acquireIsolated(requestedMachineId, options.autonomousEnv, frame, sink, close)
@@ -453,7 +472,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             return
           }
           if (!parsed) { close(4400, 'invalid json frame'); return }
-          await relay.send(parsed)
+          await relay.send(withLocalClient(parsed, options.localClient))
           return
         }
 

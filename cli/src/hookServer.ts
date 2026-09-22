@@ -5,7 +5,7 @@
  */
 
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { readCodexRolloutMeta } from './engines/codex/rollout.js'
@@ -289,6 +289,23 @@ function registeredHookProcess(body: RegisterInput, engine: AgentEngine): Regist
 }
 
 /**
+ * `claude --resume` from a folder other than the conversation's own: Claude Code announces a transcript
+ * under the CURRENT cwd's project dir, then keeps writing the original file (measured: a resume of
+ * 73f090ca from `cli/` announced `…-openharness-cli/73f090ca.jsonl`, and every later turn still landed
+ * in `…-openharness/73f090ca.jsonl`). The announced file never appears, the hook is dropped, and the
+ * resume is never confirmed — "Start failed" over a pane that is working. The row being resumed already
+ * knows the real file; take it when it names this very conversation.
+ */
+export function knownTranscriptFor(body: RegisterInput, agent: RegisteredSession | undefined): string | undefined {
+  const announced = body.transcriptPath
+  if (!announced || existsSync(announced) || (body.engine ?? 'claude') !== 'claude') return announced
+  const known = agent?.transcriptPath
+  if (!known || !body.sessionId || agent.sessionId !== body.sessionId) return announced
+  if (basename(known) !== `${body.sessionId}.jsonl` || !existsSync(known)) return announced
+  return known
+}
+
+/**
  * Register once the announced transcript exists.
  *
  * Runs detached from the HTTP reply on purpose: this is a SessionStart hook, and the engine is blocked
@@ -299,8 +316,10 @@ async function awaitTranscript(body: RegisterInput, handlers: HookServerHandlers
   for (let i = 0; i < TRANSCRIPT_WAIT_TRIES; i++) {
     await new Promise((resolve) => { const t = setTimeout(resolve, TRANSCRIPT_WAIT_MS); t.unref?.() })
     const engine = body.engine ?? 'claude'
-    if (!registeredHookProcess(body, engine)) return
+    const processAgent = registeredHookProcess(body, engine)
+    if (!processAgent) return
     if (isRecentlyDeleted(body.sessionId)) return
+    body.transcriptPath = knownTranscriptFor(body, processAgent)
     if (!body.transcriptPath || !existsSync(body.transcriptPath)) continue
     const result = registry.register(body)
     if (!result) return
@@ -446,6 +465,7 @@ export function startHookServer(
         body.processIdentity = processAgent.processIdentity ?? undefined
         body.runtimes = processAgent.runtimes
         body.primaryRuntimeKey = processAgent.primaryRuntimeKey
+        body.transcriptPath = knownTranscriptFor(body, processAgent)
         // Deleting an agent no longer kills its pane, so the engine lives on for a moment and its catch
         // hook still fires — and the exact process may remain alive during SIGTERM grace. Without
         // this the tile the user just deleted re-registers itself and comes back.

@@ -164,6 +164,8 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 300));
         expect(app.swarms, hasLength(31));
+        expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
+        await chord(tester, LogicalKeyboardKey.keyO);
         final input = find.byKey(const ValueKey('swarm-search-input'));
         await tester.enterText(input, 'Agent 1');
         await tester.pump();

@@ -1,7 +1,8 @@
-import '../../core/apple_fonts.dart';
-
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
+import 'app_type.dart';
+export 'app_type.dart';
 import 'color_palette.dart';
 
 /// The app's live brightness — the single source of truth the color tokens below
@@ -16,12 +17,6 @@ abstract final class AppTheme {
     Brightness.dark,
   );
 
-  /// Fires when the user's type settings change. Separate from [brightness]
-  /// because the two are independent — a theme flip must not restyle type, and
-  /// changing the font must not repaint as though the palette moved — but read
-  /// through the same [watch], since a widget that reads one token generally
-  /// reads both.
-  static final FontNotifier fonts = FontNotifier();
   static final palette = ValueNotifier(HarnessPalette.graphite);
 
   static bool get isDark => brightness.value == Brightness.dark;
@@ -75,41 +70,17 @@ abstract final class AppTheme {
   /// when the notifier fires — it doesn't rebuild through the widget tree — so
   /// every `const` boundary in between is irrelevant. This is exactly how
   /// `Theme.of(context)` makes a widget follow the theme.
-  /// It also registers for type changes, via [_FontScope]. The two travel
+  /// It also registers for type changes, via [TerminalFontScope]. The two travel
   /// together deliberately: `AppTheme.watch(context)` is the one line a widget
   /// adds to follow the app's appearance, and splitting it into two calls would
   /// mean every widget that already follows the theme still silently ignores the
   /// font — with the exact same symptom (stuck on the value it first built with)
   /// that this method exists to fix.
   static Brightness watch(BuildContext context) {
+    TerminalFontScope.watch(context);
     context.dependOnInheritedWidgetOfExactType<_BrightnessScope>();
-    context.dependOnInheritedWidgetOfExactType<_FontScope>();
     context.dependOnInheritedWidgetOfExactType<_PaletteScope>();
     return brightness.value;
-  }
-}
-
-/// Fires when [AppFont]'s user settings change.
-///
-/// It carries no value: the settings live on [AppFont] as statics, because a
-/// token read like `AppFont.mono` has no context to look one up with. This is
-/// only the signal that they moved.
-class FontNotifier extends ChangeNotifier {
-  /// Push new settings onto [AppFont] and notify, but only if they differ —
-  /// setting the same font twice must not dirty the tree.
-  void apply({
-    String? uiFamily,
-    String? codeFamily,
-    required double uiScale,
-    required double codeSize,
-  }) {
-    final changed = AppFont.apply(
-      uiFamily: uiFamily,
-      codeFamily: codeFamily,
-      uiScale: uiScale,
-      codeSize: codeSize,
-    );
-    if (changed) notifyListeners();
   }
 }
 
@@ -160,10 +131,9 @@ class BrightnessScope extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _BrightnessScope(
-      notifier: AppTheme.brightness,
-      child: _FontScope(
-        notifier: AppTheme.fonts,
+    return TerminalFontScope(
+      child: _BrightnessScope(
+        notifier: AppTheme.brightness,
         child: _PaletteScope(notifier: AppTheme.palette, child: child),
       ),
     );
@@ -172,10 +142,6 @@ class BrightnessScope extends StatelessWidget {
 
 class _BrightnessScope extends InheritedNotifier<ValueNotifier<Brightness>> {
   const _BrightnessScope({required super.notifier, required super.child});
-}
-
-class _FontScope extends InheritedNotifier<FontNotifier> {
-  const _FontScope({required super.notifier, required super.child});
 }
 
 class _PaletteScope extends InheritedNotifier<ValueNotifier<HarnessPalette>> {
@@ -971,7 +937,7 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
     // Also stated at ThemeData level, not only inside the ramp: Material builds
     // text of its own (a dialog's semantics label, a field's error line) that
     // never passes through `textTheme`, and without this those fall through to
-    // Roboto — one stray face in an app drawn entirely in San Francisco.
+    // Roboto instead of the system face.
     fontFamily: AppFont.sans,
     fontFamilyFallback: AppFont.sansFallback,
     scaffoldBackgroundColor: scheme.surface,
@@ -1067,15 +1033,8 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
                 ),
               ],
       ),
-      // A step under the control font: a tooltip is read *while* looking at the
-      // thing it explains, so it should not compete with it. The line height is
-      // for the long ones — a run of selections is several lines of quoted code,
-      // and set solid it reads as a wall.
-      textStyle: TextStyle(
-        fontSize: 12.5,
-        height: 1.45,
-        color: scheme.onSurface,
-      ),
+      // Room for multiline text.
+      textStyle: AppType.caption(height: 1.45, color: scheme.onSurface),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       // Long quoted lines would otherwise take the tooltip out to the window's
       // full width — a panel wider than the conversation it is explaining.
@@ -1125,8 +1084,8 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       isDense: true,
       filled: true,
       fillColor: scheme.surfaceContainerHighest,
-      // A field is a control, so its hint takes the control font — 13pt, the
-      // same as the button beside it. (The typed text is set on the field via
+      // A field hint is set like the field's own text.
+      // (The typed text is set on the field via
       // [kFieldTextStyle]; `InputDecorationTheme` has no `style` of its own, so
       // a field's own text can't be themed globally here.)
       hintStyle: _fieldTextStyle(
@@ -1148,9 +1107,7 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       contentPadding: EdgeInsets.symmetric(
         horizontal: 10,
         vertical:
-            (AppControl.heightFieldScaled -
-                AppControl.fontSize * 1.35 * AppFont.uiScale) /
-            2,
+            (AppControl.heightFieldScaled - AppControl.fontSize * 1.35) / 2,
       ),
       // The glyph sits on the text's line, not in a tap target of its own. A
       // step above [AppControl.iconSize]: that size is tuned to a button's cap
@@ -1211,6 +1168,8 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppCard.radius),
       ),
+      titleTextStyle: AppType.heading(color: scheme.onSurface),
+      contentTextStyle: AppType.body(color: scheme.onSurface),
     ),
     // ⚠️ [AppPalette.accentOnSurface], NOT `colorScheme.primary`.
     //
@@ -1231,11 +1190,7 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       width: 520,
       // A snackbar floats over everything, so it takes the panel fill.
       backgroundColor: panelFill,
-      contentTextStyle: TextStyle(
-        color: scheme.onSurface,
-        fontSize: 13.5,
-        fontWeight: FontWeight.w600,
-      ),
+      contentTextStyle: AppType.body(color: scheme.onSurface),
       actionTextColor: AppPalette.accent,
       closeIconColor: scheme.onSurfaceVariant,
       elevation: 10,
@@ -1298,20 +1253,15 @@ abstract final class AppControl {
   /// [anchoredMenuPosition] clamps to this by default.
   static const double menuMaxHeight = 240;
 
-  /// The label. 13pt medium is the macOS control font — Apple sets a push
-  /// button's label at medium, not semibold; at 13pt the extra step reads as a
-  /// button trying to be a heading.
-  static const double fontSize = 13;
+  /// A button's label: [AppType.label].
+  static const double fontSize = AppType.bodySize;
   static const FontWeight fontWeight = AppFont.medium;
 
   /// A leading glyph inside a button, sized to sit on the cap height of a 13pt
   /// label rather than tower over it.
   static const double iconSize = 16;
 
-  /// The glyph on a chip — an inline affordance whose label runs smaller than a
-  /// button's (11pt, not 13). [iconSize] is cut to a 13pt cap height and towers
-  /// over an 11pt one, so a chip needs its own step down rather than a number
-  /// picked by eye at each call site.
+  /// A compact glyph for an inline chip.
   static const double iconSizeChip = 13;
 
   /// Horizontal breathing room. Apple pads a push button generously sideways and
@@ -1359,11 +1309,6 @@ abstract final class AppControl {
 
   static EdgeInsets get paddingSmallScaled =>
       EdgeInsets.symmetric(horizontal: 10 * AppFont.uiScale);
-
-  // [fontSize] deliberately has no scaled twin. The label inside a button is a
-  // `Text`, so `MediaQuery`'s text scaler already grows it — scaling the
-  // theme's `textStyle` too would apply the user's setting twice, and a button
-  // set to 19px would render at ~26. The boxes above scale; the type does not.
 }
 
 /// How long the app's UI takes to change, and on what curve.
@@ -1420,125 +1365,15 @@ abstract final class AppMotion {
   static const Curve curve = Curves.easeOut;
 }
 
-/// The app's two font stacks, and the rule for which one a given piece of text
-/// gets.
-///
-/// The rule: **mono is for strings the user copies, not for strings they read.**
-/// A model id, an endpoint, a token — those need `l`/`1`/`I` and `0`/`O` to stay
-/// apart, because the user is going to paste them somewhere that cares. Prose
-/// (a heading, a subtitle, a node's name) is *read*, and mono makes reading it
-/// slower while making the surface look like a terminal instead of a product.
-///
-/// Numbers are the case that looks like it wants mono but doesn't: what a stat
-/// actually needs is digits that don't reflow when the value changes, and
-/// [tabularFigures] buys exactly that on the sans stack — no terminal costume
-/// required.
+/// The app's two faces and its weight ladder. Sizes live in [AppType].
 abstract final class AppFont {
-  /// The reading stack — matches the text theme's system font.
-  ///
-  /// A getter, not a const: the user can put a family of their own in front of
-  /// it from Appearance, and a `const` can't be re-resolved. [sansDefault] is
-  /// the shipped value, still a const, and still what everything falls back to.
-  static String get sans => _uiFamily ?? sansDefault;
+  /// The system UI face. See [AppType] for the rule on which face text gets.
+  static String get sans => AppType.sansFamily;
+  static List<String> get sansFallback => AppType.sansFallback;
 
-  /// The shipped reading face, per platform.
-  ///
-  /// A getter now, because the shipped value is not one name: nothing in the
-  /// Apple stack resolves on Linux, so the app was drawn in the engine's own
-  /// default rather than a face anyone chose.
-  ///
-  /// `Ubuntu Sans` (25.04 and later) and `Ubuntu` (before it) lead because they
-  /// are what the desktop itself is set in. Measured on Ubuntu 26.04 they do
-  /// not currently resolve either — both are two-axis variable fonts
-  /// (`wdth,wght`) and measure identically to a family that does not exist,
-  /// while the single-axis `Ubuntu Sans Mono` resolves fine — so today the
-  /// effective face is `Noto Sans`, the next entry. They stay in front because
-  /// they cost nothing and are the right answer the moment the engine can
-  /// reach them; `Noto Sans` and `DejaVu Sans` are what actually carries it.
-  static String get sansDefault =>
-      hasAppleFonts ? _macSansDefault : _linuxSansDefault;
-
-  static const String _macSansDefault = '.AppleSystemUIFont';
-  static const String _linuxSansDefault = 'Ubuntu Sans';
-
-  /// The fallbacks behind [sans].
-  ///
-  /// When the user has chosen a family, the *system* font goes to the front of
-  /// this list rather than being dropped: a chosen face is usually a display or
-  /// text font with a partial repertoire, and one missing glyph should degrade
-  /// to SF Pro — the thing the app was drawn in — rather than to Arial or to a
-  /// row of tofu boxes.
-  static List<String> get sansFallback => _uiFamily == null
-      ? _sansFallbackDefault
-      : [sansDefault, ..._sansFallbackDefault];
-
-  static List<String> get _sansFallbackDefault =>
-      hasAppleFonts ? _macSansFallback : _linuxSansFallback;
-
-  static const List<String> _macSansFallback = [
-    'SF Pro Text',
-    'Helvetica Neue',
-    'Arial',
-  ];
-
-  static const List<String> _linuxSansFallback = [
-    'Ubuntu',
-    'Noto Sans',
-    'DejaVu Sans',
-    'sans-serif',
-  ];
-
-  /// The copy-me stack: SF Mono, the system's own code face.
-  ///
-  /// The name matters. `'SF Mono'` does **not** resolve — CoreText returns nil
-  /// for it, so Flutter quietly falls through to the next entry (that's what the
-  /// login screen's `fontFamily: 'SF Mono'` has always done: it renders Menlo).
-  /// The face is only reachable under its internal name, below. Verified with
-  /// `NSFont(name:size:)` + `CTFontGetBoundingRectsForGlyphs`; a `flutter test`
-  /// probe can't confirm this — the headless test font manager resolves every
-  /// family to the same test face and reports monospace metrics for all of them.
-  ///
-  /// Menlo is the fallback, not a compromise: its glyphs measure within 0.01pt
-  /// of SF Mono's at 13px. SF Mono leads only for a slashed zero and a tailed
-  /// `l`, which is exactly what a model id needs. Avoid Monaco — it lacks a
-  /// slashed zero.
-  static String get mono => _codeFamily ?? monoDefault;
-
-  /// The shipped code face, per platform — same argument as [sansDefault], and
-  /// a worse failure when it is wrong: on Linux the whole Apple stack down to
-  /// `Courier New` resolved to a PROPORTIONAL face, so anything set in "mono"
-  /// was not monospaced at all. The Linux chain is the terminal's own default
-  /// (see `lib/terminal/terminal_typography.dart` for why DejaVu leads).
-  static String get monoDefault =>
-      hasAppleFonts ? _macMonoDefault : _linuxMonoDefault;
-
-  static const String _macMonoDefault = '.AppleSystemUIFontMonospaced';
-  static const String _linuxMonoDefault = 'DejaVu Sans Mono';
-
-  /// The fallbacks behind [mono]. The system's own mono goes in front of them
-  /// once a family is chosen, for the reason given on [sansFallback] — and it
-  /// matters more here: a code block that falls through to a proportional face
-  /// stops being a code block.
-  static List<String> get monoFallback => _codeFamily == null
-      ? _monoFallbackDefault
-      : [monoDefault, ..._monoFallbackDefault];
-
-  static List<String> get _monoFallbackDefault =>
-      hasAppleFonts ? _macMonoFallback : _linuxMonoFallback;
-
-  static const List<String> _macMonoFallback = [
-    'Menlo',
-    'Monaco',
-    'Courier New',
-    'monospace',
-  ];
-
-  static const List<String> _linuxMonoFallback = [
-    'Ubuntu Sans Mono',
-    'Noto Sans Mono',
-    'Liberation Mono',
-    'monospace',
-  ];
+  /// The terminal's face, used for terminal chrome and copyable strings.
+  static String get mono => AppType.monoFamily;
+  static List<String> get monoFallback => AppType.monoFallback;
 
   /// Digits that hold a fixed width, so a stat doesn't reflow as its value
   /// changes and a column of numbers lines up.
@@ -1576,132 +1411,22 @@ abstract final class AppFont {
   /// ladder was introduced to fix. Reach for [medium] first.
   static const FontWeight semibold = FontWeight.w600;
 
-  /// The tracking a given size wants, in logical pixels.
-  ///
-  /// SF Pro is an optically-sized family: on Apple's own platforms the system
-  /// re-spaces it as it scales, opening the letters up at caption sizes and
-  /// pulling them in at display sizes. Flutter asks CoreText for one static
-  /// face, so none of that happens for free and every size came out at the
-  /// metrics of whatever master got picked — which is why small text read as
-  /// cramped and large headings read as one solid mass.
-  ///
-  /// The curve below follows Apple's own SF Pro tracking table, rounded to the
-  /// steps this app actually uses:
-  ///
-  /// ```
-  ///   ≥ 28pt   -0.4   display / greeting
-  ///   ≥ 20pt   -0.25  screen titles
-  ///   ≥ 17pt   -0.1   section headings
-  ///   ≥ 15pt    0     body — the neutral point the app was drawn at
-  ///   ≥ 13pt   +0.05  control labels
-  ///   < 13pt   +0.12  captions, chips, meta
-  /// ```
-  ///
-  /// The numbers are small on purpose. Tracking is not a style knob — at half a
-  /// pixel it is already the difference between a line that breathes and one
-  /// that doesn't, and anything larger starts to look like a logotype.
-  static double trackingFor(double size) {
-    if (size >= 28) return -0.4;
-    if (size >= 20) return -0.25;
-    if (size >= 17) return -0.1;
-    if (size >= 15) return 0;
-    if (size >= 13) return 0.05;
-    return 0.12;
-  }
+  /// Tracking for the sans face; see [AppType.trackingFor].
+  static double trackingFor(double size) => AppType.trackingFor(size);
 
-  // — the user's type settings, mirrored here so a token read resolves them —
-  //
-  // These are set from one place (`FontSync` in `grid_app.dart`, fed by
-  // `fontPrefsProvider`) and read from everywhere, exactly like
-  // `AppTheme.brightness`. A widget reading them must call [AppTheme.watch] to
-  // be rebuilt when they change — see that method for why a top-down rebuild
-  // isn't enough in this app.
+  /// The UI no longer scales with the terminal's size setting: ⌘+ and ⌘−
+  /// resize the terminal alone, so control geometry stays as drawn.
+  static const double uiScale = 1;
 
-  static String? _uiFamily;
-  static String? _codeFamily;
-  static double _uiScale = 1;
-  static double _codeSize = _codeSizeDefault;
+  /// The terminal's size, for a surface that shows terminal output verbatim.
+  static double get codeSize => terminalFontStore.size;
 
-  static const double _codeSizeDefault = 12.5;
-
-  /// The UI size the app was DRAWN at, and therefore the denominator of
-  /// [uiScale]: a setting of 14 gives a scale of exactly 1, which is the only
-  /// value at which every control keeps the geometry this file specifies.
-  ///
-  /// Public because the settings screen has to divide by it to turn a size the
-  /// user picked into the scale [apply] takes, and a second copy of the number
-  /// on that side is a second thing to forget.
-  static const double uiSizeDefault = 14;
-
-  /// What every UI dimension is multiplied by: 1.0 is the size the app was
-  /// drawn at.
-  static double get uiScale => _uiScale;
-
-  /// The size code is set at, in logical pixels.
-  ///
-  /// Absolute, not scaled: the UI scale reaches code through `MediaQuery`'s text
-  /// scaler like it reaches everything else, so a code surface that also
-  /// multiplied by [uiScale] would apply it twice. Code surfaces wrap themselves
-  /// in `MediaQuery.withNoTextScaling` and use this number as-is.
-  static double get codeSize => _codeSize;
-
-  /// Apply the user's type settings. Returns true when something actually
-  /// changed, so the caller only fires listeners on a real change.
-  static bool apply({
-    String? uiFamily,
-    String? codeFamily,
-    required double uiScale,
-    required double codeSize,
-  }) {
-    if (uiFamily == _uiFamily &&
-        codeFamily == _codeFamily &&
-        uiScale == _uiScale &&
-        codeSize == _codeSize) {
-      return false;
-    }
-    _uiFamily = uiFamily;
-    _codeFamily = codeFamily;
-    _uiScale = uiScale;
-    _codeSize = codeSize;
-    return true;
-  }
-
-  /// The style for a surface made of code — a diff, a log, a code block, a
-  /// model id the user is going to paste somewhere.
-  ///
-  /// Carries the user's code family *and* their code size, so a caller gets
-  /// both from one place instead of remembering to read the second. [scale]
-  /// is for the few call sites drawn deliberately smaller than body code (a
-  /// caption under a block, a chip): it keeps them proportional to the user's
-  /// choice rather than pinned to a number that stops matching once the setting
-  /// moves.
-  ///
-  /// Pair this with `MediaQuery.withNoTextScaling` on the surface — see
-  /// [codeSize] for why.
+  /// A block of code or a log: the terminal face at the UI's mono size.
   static TextStyle codeStyle({
     Color? color,
-    double scale = 1,
     double? height,
     FontWeight? fontWeight,
-  }) => TextStyle(
-    fontFamily: mono,
-    fontFamilyFallback: monoFallback,
-    fontSize: codeSize * scale,
-    color: color,
-    height: height,
-    fontWeight: fontWeight,
-  );
-
-  /// Put the type settings back to the shipped defaults.
-  ///
-  /// For tests: the fields are static, so one test that changes the font would
-  /// otherwise leak into every test that runs after it in the same process.
-  static void reset() {
-    _uiFamily = null;
-    _codeFamily = null;
-    _uiScale = 1;
-    _codeSize = _codeSizeDefault;
-  }
+  }) => AppType.mono(color: color, height: height, fontWeight: fontWeight);
 }
 
 /// A text field's rim at one state. Radius matches [AppControl.radius] so a
@@ -1712,38 +1437,20 @@ OutlineInputBorder _fieldBorder(Color color, {double width = 1}) =>
       borderSide: BorderSide(color: color, width: width),
     );
 
-/// The label style shared by every button, carrying the UI font: a
-/// `ButtonStyle.textStyle` does **not** inherit `fontFamily` from the text
-/// theme, so a button that sets only a size silently drops SF Pro.
-///
-/// A getter, not a const: it reads [AppFont.sans], which the user can change.
-TextStyle get _buttonTextStyle => TextStyle(
-  fontFamily: AppFont.sans,
-  fontFamilyFallback: AppFont.sansFallback,
-  fontSize: AppControl.fontSize,
-  fontWeight: AppControl.fontWeight,
-  // From the same ramp as the text theme, rather than a flat 0: a button's
-  // label is 13pt, which is small enough to want its letters opened up.
-  letterSpacing: AppFont.trackingFor(AppControl.fontSize),
-);
+/// The label style shared by every button: a `ButtonStyle.textStyle` does
+/// **not** inherit `fontFamily` from the text theme, so a button must receive
+/// the UI font explicitly.
+TextStyle get _buttonTextStyle =>
+    AppType.label(fontWeight: AppControl.fontWeight);
 
-/// A text field's own text: the macOS control font, so a field sits at the same
-/// scale as the button next to it.
-///
-/// Material's default field text is `bodyLarge` — 16pt, sized for a phone. On a
-/// desktop row that puts a visibly larger search box beside a 13pt button.
+/// A text field's own text: [AppType.mono] — what the user types is set the
+/// way a terminal sets it, at the scale of the button beside it.
 /// `InputDecorationTheme` has no `style` slot (it themes the *decoration*, not
 /// the editable text), so a field must be handed this explicitly:
 /// `TextField(style: kFieldTextStyle, ...)`.
 TextStyle get kFieldTextStyle => _fieldTextStyle(AppPalette.textPrimary);
 
-TextStyle _fieldTextStyle(Color color) => TextStyle(
-  fontFamily: AppFont.sans,
-  fontFamilyFallback: AppFont.sansFallback,
-  fontSize: AppControl.fontSize,
-  letterSpacing: AppFont.trackingFor(AppControl.fontSize),
-  color: color,
-);
+TextStyle _fieldTextStyle(Color color) => AppType.mono(color: color);
 
 /// A field's leading glyph — the magnifier on a search box, and its kind.
 ///
@@ -1830,49 +1537,29 @@ ButtonStyle _textButtonStyle() => TextButton.styleFrom(
 );
 
 TextTheme _appTextTheme(Color primary, Color secondary) {
-  final base = TextStyle(
-    fontFamily: AppFont.sans,
-    fontFamilyFallback: AppFont.sansFallback,
-    color: primary,
-    height: 1.34,
-    fontWeight: AppFont.regular,
-  );
-
-  /// One step of the ramp, with its tracking derived from its size.
-  TextStyle step(double size, {FontWeight? weight, Color? color}) =>
-      base.copyWith(
-        fontSize: size,
-        fontWeight: weight,
-        color: color,
-        letterSpacing: AppFont.trackingFor(size),
-      );
-
-  // The ramp splits along one line: type that *is* a heading keeps semibold,
-  // type that merely names a control drops to medium.
-  //
-  // Large sizes carry weight optically — 25pt at semibold is already emphatic,
-  // and taking it to medium would leave a screen title reading as body copy that
-  // happens to be big. Small sizes are the opposite: at 12–14pt semibold turns
-  // into ink rather than emphasis, and it was on *every* label, so nothing was
-  // emphasised relative to anything else.
+  // Material's fifteen roles folded onto [AppType]'s steps: headings and
+  // labels in mono, body in sans. A heading keeps semibold; a role that names a
+  // control drops to medium.
+  final display = AppType.display(color: primary);
+  final title = AppType.title(color: primary);
+  final heading = AppType.heading(color: primary);
+  final body = AppType.body(color: primary);
+  final label = AppType.label(color: primary);
   return TextTheme(
-    displayLarge: step(57, weight: AppFont.semibold),
-    displayMedium: step(45, weight: AppFont.semibold),
-    displaySmall: step(36, weight: AppFont.semibold),
-    headlineLarge: step(32, weight: AppFont.semibold),
-    headlineMedium: step(29, weight: AppFont.semibold),
-    headlineSmall: step(25, weight: AppFont.semibold),
-    titleLarge: step(22, weight: AppFont.semibold),
-    titleMedium: step(17, weight: AppFont.semibold),
-    // 14.5 is where a "title" stops out-ranking anything and becomes a row
-    // label, so this is the first step down.
-    titleSmall: step(14.5, weight: AppFont.medium),
-    bodyLarge: step(16.5),
-    bodyMedium: step(15),
-    bodySmall: step(13.5, color: secondary),
-    // Every `label*` names a control. Medium, like the controls themselves.
-    labelLarge: step(14.5, weight: AppFont.medium),
-    labelMedium: step(13, weight: AppFont.medium),
-    labelSmall: step(12, weight: AppFont.medium),
+    displayLarge: display,
+    displayMedium: display,
+    displaySmall: display,
+    headlineLarge: title,
+    headlineMedium: title,
+    headlineSmall: title,
+    titleLarge: title,
+    titleMedium: heading,
+    titleSmall: label,
+    bodyLarge: body,
+    bodyMedium: body,
+    bodySmall: body.copyWith(color: secondary),
+    labelLarge: label,
+    labelMedium: label,
+    labelSmall: AppType.monoMeta(color: primary, fontWeight: AppFont.medium),
   );
 }

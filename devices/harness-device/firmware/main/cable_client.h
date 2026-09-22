@@ -176,7 +176,12 @@ void cable_client_send_focus(const char *agent_id);
 // dial to a tile. Focus says where the eye is and the window moves a tile to match; this asks for a tile
 // of its own, because the turn that just finished is a new thing to look at, not a replacement for what
 // the person was already watching. The window opens a new one, or reuses its last when the grid is full.
-void cable_client_send_open(const char *agent_id);
+// `agent.open`: ask the window for a tile of this agent's own. `reason` says why the dial sent it —
+// NULL for a person's tap (notification, question eyebrow, carousel), "question" when a question screen
+// came up on its own. The window opens a tab for a tap; for a question it only brings the agent forward
+// when it is already on screen, and otherwise leaves the desk alone (a reconnect re-shows every
+// unanswered question, and each used to open a tab).
+void cable_client_send_open(const char *agent_id, const char *reason);
 
 // One report of a finger on the glass, on its way to the window on the computer.
 //

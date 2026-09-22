@@ -5,7 +5,7 @@ import 'package:flutter/widgets.dart';
 import '../logging/debug_surface.dart';
 
 /// Harness uses Command as a direct prefix for frequent workspace actions.
-/// T opens a tab, P adds a pane, N creates a harness, S opens the Store,
+/// T opens a tab, O opens a harness (also P), N creates a harness, S opens the Store,
 /// Shift-L chooses a layout. H/J/K/L and arrows focus panes; B routes a task.
 /// The same definitions feed live keys, help and search.
 ///
@@ -585,6 +585,12 @@ List<TerminalKey> get kTerminalOwnedKeys => [
   ],
   const TerminalKey(['esc'], 'Interrupt the engine'),
   const TerminalKey(['⌥', '⏎'], "Newline in the engine's prompt"),
+  // Kept as short as the rows around them: the deck's narrowest card is 280px, where a label much
+  // past thirty characters takes a second line to itself.
+  const TerminalKey(['⌥', '⌫'], 'Delete the previous word'),
+  // ⌘⌫ is taken in the pane on Apple only — elsewhere ⌘ is Super and stays the app's.
+  if (defaultTargetPlatform != TargetPlatform.linux)
+    const TerminalKey(['⌘', '⌫'], "Delete to the line's start"),
   const TerminalKey(['⌃', 'C'], 'Cancel / interrupt in the agent'),
 ];
 

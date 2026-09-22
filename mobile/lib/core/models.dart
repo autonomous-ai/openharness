@@ -25,6 +25,10 @@ class CurrentUserProfile {
       email = 'local terminal',
       avatarUrl = null;
 
+  /// The stand-in for a local terminal session — not a person, so nothing
+  /// should be named after it.
+  bool get isLocalSession => id == null && email == 'local terminal';
+
   factory CurrentUserProfile.fromMe(Map<String, dynamic> response) {
     final rawUser = response['user'];
     if (rawUser is! Map) {

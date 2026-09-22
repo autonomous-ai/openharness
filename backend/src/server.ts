@@ -21,7 +21,8 @@ import { handleManagerUpgrade } from './lib/managerWs.js'
 import { handleAdapterUpgrade } from './lib/adapterWs.js'
 import { logger } from './utils/logger.js'
 import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
-import { closeBus } from './lib/bus.js'
+import { closeBus, redisSsoProfileStore } from './lib/bus.js'
+import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
 
 // Node ≥ 15 turns an unhandled rejection into a process exit. On a cluster worker that holds thousands of
@@ -137,6 +138,10 @@ async function start(): Promise<void> {
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
   })
+
+  // Every process shares one memory of validated tokens; without it each worker asks the profile API
+  // for itself. Attached before anything can authenticate — the REST gate below and the socket upgrades.
+  useSharedSsoProfileStore(redisSsoProfileStore)
 
   // SSO access-token gate for the control API (data-plane auth happens before Fastify).
   registerAuthMiddleware(app)

@@ -8,6 +8,7 @@ import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import 'box_chrome.dart';
 
+import '../shared/theme/app_type.dart';
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
 import 'transient_menus.dart';
@@ -181,15 +182,17 @@ class _PaneMenuFocusState extends State<_PaneMenuFocus> {
   }
 
   @override
-  Widget build(BuildContext context) => KeymapRegion(
-    contextKind: KeymapContext.picker,
-    child: FocusScope(
-      node: _scope,
-      autofocus: true,
-      onKeyEvent: _key,
-      child: FocusTraversalGroup(child: widget.child),
-    ),
-  );
+  Widget build(BuildContext context) {
+    return KeymapRegion(
+      contextKind: KeymapContext.picker,
+      child: FocusScope(
+        node: _scope,
+        autofocus: true,
+        onKeyEvent: _key,
+        child: FocusTraversalGroup(child: widget.child),
+      ),
+    );
+  }
 }
 
 /// One selectable row of a pane menu.
@@ -228,7 +231,7 @@ Widget paneMenuEmpty(String text) => Padding(
     kPaneMenuInset + kPaneMenuRowPadding,
     6,
   ),
-  child: Text(text, style: TextStyle(fontSize: 11, color: AppColors.textSoft)),
+  child: Text(text, style: AppType.body(color: AppColors.textSoft)),
 );
 
 /// A section label. Non-interactive and short, so the groups read as groups rather than as
@@ -253,8 +256,7 @@ Widget paneMenuHeader(String label, {String? caption}) => Padding(
     children: [
       Text(
         label,
-        style: TextStyle(
-          fontSize: 10.5,
+        style: AppType.caption(
           fontWeight: FontWeight.w600,
           letterSpacing: .3,
           color: AppColors.mutedStrong,
@@ -265,7 +267,7 @@ Widget paneMenuHeader(String label, {String? caption}) => Padding(
           padding: const EdgeInsets.only(top: 2),
           child: Text(
             caption,
-            style: TextStyle(fontSize: 10.5, color: AppColors.textSoft),
+            style: AppType.caption(color: AppColors.textSoft),
           ),
         ),
     ],
@@ -308,35 +310,37 @@ class PaneMenuRow extends StatelessWidget {
           leading!,
           const SizedBox(width: 7),
         ],
-        // ⚠️ Expanded on the TITLE, not on the status. The status is a handful of characters and
-        // wants only what it needs; giving it the flexible half truncated
-        // `Qwen3.6-35B-A3B-UD-Q5_K_XL` to `Qwen3.6-35B-A3B-UD-Q5_K…` while empty space sat beside
-        // it. The long string here is the model id, so the model id is what gets the room.
+        // The title gets spare width; trailing metadata may ellipsize when
+        // the combined line is too wide.
         Expanded(
           child: Text(
             title,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 12.5,
-              // Stated rather than inherited: a PopupMenuItem's default text style is heavier than
-              // this menu wants, which read as every row being emphasised.
-              fontWeight: FontWeight.w400,
-              color: AppColors.text,
-            ),
+            // Regular, stated by the style rather than inherited: a PopupMenuItem's default text
+            // style is heavier than this menu wants, which read as every row being emphasised.
+            style: AppType.mono(color: AppColors.text),
           ),
         ),
         if (detail.isNotEmpty) ...[
           const SizedBox(width: 6),
-          Text(
-            detail,
-            style: TextStyle(fontSize: 11, color: AppColors.mutedStrong),
+          Flexible(
+            child: Text(
+              detail,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppType.mono(color: AppColors.mutedStrong),
+            ),
           ),
         ],
         if (status != null) ...[
           const SizedBox(width: 14),
-          Text(
-            status!,
-            style: TextStyle(fontSize: 11, color: AppColors.mutedStrong),
+          Flexible(
+            child: Text(
+              status!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppType.mono(color: AppColors.mutedStrong),
+            ),
           ),
         ],
       ],
@@ -368,7 +372,7 @@ class PaneMenuRow extends StatelessWidget {
                   child: Text(
                     subtitle!,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 10.5, color: AppColors.textSoft),
+                    style: AppType.body(color: AppColors.textSoft),
                   ),
                 ),
               ],

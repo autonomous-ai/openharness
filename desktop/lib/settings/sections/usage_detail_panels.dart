@@ -6,6 +6,8 @@
 /// handed, so the pane can be driven from a fixture.
 library;
 
+import 'package:harness/terminal/terminal_text.dart';
+
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -18,7 +20,7 @@ import '../../usage/ledger/usage_report.dart';
 /// How many days the bar chart shows. Ten, as Orca uses — enough to see a shape,
 /// few enough that each bar keeps a readable label under it.
 const _kChartDays = 10;
-const _kChartLabelStyle = TextStyle(fontSize: 9.5, height: 1.3);
+TextStyle get _kChartLabelStyle => AppType.caption(height: 1.3);
 const _kBarHeight = 118.0;
 
 /// The colours the four token buckets keep, everywhere they are drawn.
@@ -72,7 +74,7 @@ class UsageDailyChart extends StatelessWidget {
               child: Center(
                 child: Text(
                   'Nothing in this range.',
-                  style: TextStyle(fontSize: 12, color: AppPalette.textFaint),
+                  style: AppType.body(color: AppPalette.textFaint),
                 ),
               ),
             )
@@ -214,24 +216,23 @@ class _LegendDot extends StatelessWidget {
   final String label;
 
   @override
-  Widget build(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Container(
-        width: 8,
-        height: 8,
-        decoration: BoxDecoration(
-          color: colour,
-          borderRadius: BorderRadius.circular(2),
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+            color: colour,
+            borderRadius: BorderRadius.circular(2),
+          ),
         ),
-      ),
-      const SizedBox(width: 6),
-      Text(
-        label,
-        style: TextStyle(fontSize: 11.5, color: AppPalette.textSecondary),
-      ),
-    ],
-  );
+        const SizedBox(width: 6),
+        Text(label, style: AppType.caption(color: AppPalette.textSecondary)),
+      ],
+    );
+  }
 }
 
 /// A ranked list — the top few models, or the top few projects.
@@ -243,14 +244,12 @@ class UsageBreakdownCard extends StatelessWidget {
     required this.rows,
     this.limit = 5,
   });
-
   final String title;
   final String subtitle;
 
   /// Heaviest first, as `breakdownByModel` and `breakdownByProject` return them.
   final List<BreakdownRow> rows;
   final int limit;
-
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
@@ -261,7 +260,7 @@ class UsageBreakdownCard extends StatelessWidget {
       child: shown.isEmpty
           ? Text(
               'Nothing in this range.',
-              style: TextStyle(fontSize: 12, color: AppPalette.textFaint),
+              style: AppType.body(color: AppPalette.textFaint),
             )
           : Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -278,8 +277,7 @@ class UsageBreakdownCard extends StatelessWidget {
                               child: Text(
                                 row.label,
                                 overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 12.5,
+                                style: AppType.body(
                                   color: AppPalette.textPrimary,
                                 ),
                               ),
@@ -287,8 +285,7 @@ class UsageBreakdownCard extends StatelessWidget {
                             const SizedBox(width: 10),
                             Text(
                               formatTokens(row.tokens),
-                              style: TextStyle(
-                                fontSize: 12.5,
+                              style: AppType.body(
                                 color: AppPalette.textSecondary,
                                 fontFeatures: const [
                                   FontFeature.tabularFigures(),
@@ -300,10 +297,7 @@ class UsageBreakdownCard extends StatelessWidget {
                         const SizedBox(height: 2),
                         Text(
                           _rowDetail(row),
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: AppPalette.textFaint,
-                          ),
+                          style: AppType.caption(color: AppPalette.textFaint),
                         ),
                       ],
                     ),
@@ -339,7 +333,7 @@ class UsageSessionsTable extends StatelessWidget {
       child: rows.isEmpty
           ? Text(
               'Nothing in this range.',
-              style: TextStyle(fontSize: 12, color: AppPalette.textFaint),
+              style: AppType.body(color: AppPalette.textFaint),
             )
           // A table is the one thing on this pane that can genuinely outgrow
           // its column, so it brings its own horizontal scroll rather than
@@ -383,22 +377,27 @@ const _kSessionColumns = <({String label, double width, bool numeric})>[
 
 class _SessionHeaderRow extends StatelessWidget {
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 6),
-    child: Row(
-      children: [
-        for (final column in _kSessionColumns)
-          SizedBox(
-            width: column.width,
-            child: Text(
-              column.label,
-              textAlign: column.numeric ? TextAlign.right : TextAlign.left,
-              style: TextStyle(fontSize: 11, color: AppPalette.textFaint),
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          for (final column in _kSessionColumns)
+            SizedBox(
+              width: column.width,
+              child: Text(
+                column.label,
+                textAlign: column.numeric ? TextAlign.right : TextAlign.left,
+                style: AppType.caption(
+                  color: AppPalette.textFaint,
+                  fontWeight: AppFont.medium,
+                ),
+              ),
             ),
-          ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
 }
 
 class _SessionRowTile extends StatelessWidget {
@@ -408,6 +407,7 @@ class _SessionRowTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final cells = <String>[
       _sessionTime(row.lastActiveAt),
       row.project,
@@ -429,19 +429,28 @@ class _SessionRowTile extends StatelessWidget {
                 textAlign: _kSessionColumns[i].numeric
                     ? TextAlign.right
                     : TextAlign.left,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: i == 1
-                      ? AppPalette.textPrimary
-                      : AppPalette.textSecondary,
-                  fontFeatures: _kSessionColumns[i].numeric
-                      ? const [FontFeature.tabularFigures()]
-                      : null,
-                ),
+                style: _cellStyle(i),
               ),
             ),
         ],
       ),
+    );
+  }
+
+  /// The model column is an id, so it is set in the terminal's face; the rest
+  /// read as prose, with the numeric columns on fixed-width digits.
+  static TextStyle _cellStyle(int column) {
+    final color = column == 1
+        ? AppPalette.textPrimary
+        : AppPalette.textSecondary;
+    if (column == 2) {
+      return AppType.monoLabel(color: color, fontWeight: AppFont.regular);
+    }
+    return AppType.body(
+      color: color,
+      fontFeatures: _kSessionColumns[column].numeric
+          ? AppFont.tabularFigures
+          : null,
     );
   }
 }
@@ -459,27 +468,26 @@ class _Card extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-    decoration: BoxDecoration(
-      color: AppGlass.surfaceFill,
-      borderRadius: BorderRadius.circular(14),
-      boxShadow: AppGlass.cardShadow,
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 2),
-        Text(
-          subtitle,
-          style: TextStyle(fontSize: 11.5, color: AppPalette.textSecondary),
-        ),
-        const SizedBox(height: 12),
-        child,
-      ],
-    ),
-  );
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      decoration: BoxDecoration(
+        color: AppGlass.surfaceFill,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: AppGlass.cardShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: AppType.heading()),
+          const SizedBox(height: 2),
+          Text(subtitle, style: AppType.body(color: AppPalette.textSecondary)),
+          const SizedBox(height: 12),
+          child,
+        ],
+      ),
+    );
+  }
 }
 
 String _dayLabel(DateTime day) =>
