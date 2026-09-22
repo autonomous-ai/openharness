@@ -19,14 +19,13 @@
 
 ### Every agent, side by side
 
-Claude Code, Codex, Cursor, OpenCode, Devin, Amp, Copilot and seven more. Your subscriptions, your keys.
+Claude Code, Codex, Cursor, OpenCode, Devin, Amp, Copilot and seven more.
 
 <p align="center"><img src=".github/assets/readme/agents.gif" width="960" alt="Four agents working at once in one window: Claude Code and Codex on a MacBook, Cursor on an office desktop, OpenCode on a GPU box. Each pane shows its machine, project and branch."></p>
 
-### Every machine, no SSH
+### Every machine, side by side
 
-Laptop, home server, GPU box. Four commands on the new machine, one Enter in the app.
-No SSH. No Tailscale. No open ports.
+Laptop, home server, work desktop, GPU box. No SSH. No Tailscale. No open ports.
 
 <p align="center"><img src=".github/assets/readme/machines.gif" width="960" alt="A new GPU box runs four setup commands and comes online. The app links it with its password, then starts Claude Code there with one Enter."></p>
 
@@ -46,58 +45,90 @@ Code, keys and keystrokes are sealed on your machine. The relay forwards bytes i
 
 A native app, not Electron. Real terminals on tmux. Close the app and your agents keep working.
 
+| Action | Median | p95 |
+|---|---:|---:|
+| ⌘N new harness | 13.5 ms | 14.6 ms |
+| ⌘O open anything | 15.7 ms | 18.4 ms |
+| ⌘P every command | 14.7 ms | 15.2 ms |
+| ⌘F find in a terminal | 12.5 ms | 18.3 ms |
+| Focus a pane | 11.4 ms | 17.2 ms |
+| Zoom a pane | 14.8 ms | 17.2 ms |
+| Next tab | 17.8 ms | 24.2 ms |
+
+Key dispatch to finished frame. Release build, M2 Max, 16 live terminals. A window in the background
+runs zero timers. [How we measure](https://github.com/autonomous-ai/openharness/blob/codex/perf-integration-checkpoint/docs/performance/2026-09-22-desktop-latency.md).
+
 ## Beyond code
 
-**Coding agents can build far more than software.** Give one a harness and it models in Blender,
-simulates robots in MuJoCo and performs music in Strudel. You steer in a live viewer.
+**Coding agents can build far more than software.** Give one a harness and it works with the real
+tools of a craft. You steer in a live viewer. Every clip below is a real session.
 
-<p align="center"><a href="docs/hands-on.md"><img src=".github/assets/readme/beyond-code.gif" width="960" alt="Eight real sessions, one after another: Blender, MuJoCo, Godogen, CircuitJS, RDKit, Strudel, Typst and Jev Sheets."></a></p>
+### Beyond code: Design
+
+**Blender.** Ask for a lamp and the sliders that matter. Turn them and Blender rebuilds the geometry. Keep the versions you love.
+
+<p align="center"><img src=".github/assets/readme/beyond/blender.gif" width="800" alt="Shape Lab in Blender: dragging height and twist sliders rebuilds a ribbon lamp, and chosen designs are kept."></p>
+
+<p align="center"><a href="docs/hands-on.md#blender-shape-it-until-it-feels-right">Try it</a> · <a href="https://github.com/user-attachments/assets/dc152a0b-94b6-4324-9d30-468b7ed3d14b">Full video</a> · <a href="store/agents/blender/">Harness</a></p>
+
+### Beyond code: Circuits
+
+**CircuitJS.** Build a filter. Change one resistor. Overlay the new trace, measure the difference and keep both.
+
+<p align="center"><img src=".github/assets/readme/beyond/circuitjs.gif" width="800" alt="Scope Lab in CircuitJS: an RC filter captured at 1 kΩ and 2 kΩ, traces overlaid and measured with cursors."></p>
+
+<p align="center"><a href="docs/hands-on.md#circuitjs-see-what-changed-in-the-signal">Try it</a> · <a href="https://github.com/user-attachments/assets/6fb1892a-23a2-49ba-9698-4e71a404f1f4">Full video</a> · <a href="store/agents/circuitjs/">Harness</a></p>
+
+### Beyond code: Robotics
+
+**MuJoCo.** Pin a moment in a robot's run. Shove it with 100 N. Watch two futures split and find where they part.
+
+<p align="center"><img src=".github/assets/readme/beyond/mujoco.gif" width="800" alt="A Unitree Go2 in MuJoCo: the original and shoved futures play together with a height chart."></p>
+
+<p align="center"><a href="docs/hands-on.md#mujoco-try-a-different-world">Try it</a> · <a href="https://github.com/user-attachments/assets/bc214f57-7967-4e4b-9fe2-b722a033157d">Full video</a> · <a href="store/agents/mujoco/">Harness</a></p>
+
+### Beyond code: Games
+
+**Godogen.** Your agent makes a playable game. Miss a jump, rewind, try again. Pin the moment so the agent sees what you mean.
+
+<p align="center"><img src=".github/assets/readme/beyond/godogen.gif" width="800" alt="Alpine Drift, a game made with Godogen: a run is rewound, retried and a moment is pinned with feedback."></p>
+
+<p align="center"><a href="docs/hands-on.md#godogen-try-that-moment-again">Try it</a> · <a href="https://github.com/user-attachments/assets/ee9e1af9-e92b-4a76-8583-36e2ee7ea4ec">Full video</a> · <a href="store/agents/godogen/">Harness</a></p>
+
+### Beyond code: Music
+
+**Strudel.** The track is code you can perform. Bring voices in and out, mark the good parts, keep the WAV.
+
+<p align="center"><img src=".github/assets/readme/beyond/strudel.gif" width="800" alt="A live Strudel performance: voice lanes play beside the code, and the take is kept with markers."></p>
+
+<p align="center"><a href="docs/hands-on.md#strudel-perform-the-version-you-love">Try it</a> · <a href="https://github.com/user-attachments/assets/a3d4381b-5f55-406c-9d68-330cd8792fc5">Full video with sound</a> · <a href="store/agents/strudel/">Harness</a></p>
+
+### Beyond code: Chemistry
+
+**RDKit.** Turn a bond and watch the molecule move. Follow the real energy curve. Keep the pose worth a closer look.
+
+<p align="center"><img src=".github/assets/readme/beyond/rdkit.gif" width="800" alt="A bond scan in RDKit: the molecule rotates through sampled poses along an MMFF94 energy curve."></p>
+
+<p align="center"><a href="docs/hands-on.md#rdkit-see-a-molecule-turn">Try it</a> · <a href="https://github.com/user-attachments/assets/a7132b72-db46-4873-b412-ef5c2b400a8e">Full video</a> · <a href="store/agents/rdkit/">Harness</a></p>
+
+### Beyond code: Documents
+
+**Typst.** Your agent writes a real PDF. Circle a detail, quote a line, leave a note. The next draft answers it.
+
+<p align="center"><img src=".github/assets/readme/beyond/typst.gif" width="800" alt="A Typst PDF under review: notes are pinned to an area and a sentence, then carried to the next draft."></p>
+
+<p align="center"><a href="docs/hands-on.md#typst-point-at-what-you-mean">Try it</a> · <a href="https://github.com/user-attachments/assets/603d7d8d-941d-41d1-8a17-5765487aafea">Full video</a> · <a href="store/agents/typst/">Harness</a></p>
+
+### Beyond code: Data
+
+**Jev Sheets.** Test a question on a few frozen rows before you ask the whole sheet. Compare two wordings side by side.
+
+<p align="center"><img src=".github/assets/readme/beyond/jev-sheets.gif" width="800" alt="Question Lab in Jev Sheets: two wordings of a question are compared on frozen rows, recorded with practice data."></p>
+
+<p align="center"><a href="docs/hands-on.md#jev-sheets-ask-a-better-question">Try it</a> · <a href="https://github.com/user-attachments/assets/afc30e73-2f0a-442e-b929-79126adea76b">Full video</a> · <a href="store/agents/jev-sheets/">Harness</a></p>
 
 Monday, a feature. Tuesday, an enclosure. Wednesday, the launch video.
-For the curious engineer who wants to build beyond software. [Try one in ten minutes](docs/hands-on.md).
-
-<details>
-<summary><b>More things made with Harness</b></summary>
-
-<!-- store-showcase:start -->
-<p align="center">
-  <a href=".github/assets/store/showcase.gif"><img src=".github/assets/store/showcase.gif" width="1280" alt="Six real harness outputs, shown one at a time with their harness name and complete prompt: Autonomous Circuit, text-to-cad, MuJoCo, Blender, Godogen, and Manim."></a>
-</p>
-
-Six real outputs, one at a time. Each slide includes the harness and the original prompt.
-[Still preview](.github/assets/store/showcase-poster.png) · Individual images and prompts below.
-
-<details>
-<summary>Read the prompts and open individual images</summary>
-
-**[Autonomous Circuit](store/showcase/autonomous-circuit/six-key-macropad.jpg)** · [Open harness](store/agents/autonomous-circuit/)
-
-> Design a six-key USB macropad. Start with the schematic.
-
-**[text-to-cad](store/showcase/text-to-cad/planetary-gear-set.jpg)** · [Open harness](store/agents/text-to-cad/)
-
-> Design a 3D-printable planetary gear set: a 12-tooth sun, three 18-tooth planets and a 48-tooth ring gear with mounting lugs, module 1.5 and 8 mm thick, plus a carrier on steel pins. Give each part its own colour.
-
-**[MuJoCo](store/showcase/mujoco/g1-humanoid-hello.jpg)** · [Open harness](store/agents/mujoco/)
-
-> Make the Unitree G1 humanoid say hello: stand, raise its right hand and wave three times, then lower it and take a small bow. Record it.
-
-**[Blender](store/showcase/blender/cozy-reading-nook.jpg)** · [Open harness](store/agents/blender/)
-
-> Make a cozy isometric reading nook: a cut-away corner of a room with an armchair, a floor lamp glowing warm, a bookshelf full of colourful books, a round rug and a monstera, with evening sun through the window and a cat asleep on the rug.
-
-**[Godogen](store/showcase/godogen/neon-drift.jpg)** · [Open harness](store/agents/godogen/)
-
-> Make a synthwave hoverbike racer: ride down a neon grid canyon toward a striped setting sun, weave between glowing pylons, hop barriers and collect energy cores, with a boost and three shields.
-
-**[Manim](store/showcase/manim/fourier-knight.jpg)** · [Open harness](store/agents/manim/)
-
-> Draw a chess knight using nothing but spinning circles: a Fourier series of 120 epicycles, tip to tail, tracing its silhouette in gold.
-
-</details>
-<!-- store-showcase:end -->
-
-</details>
+For the curious engineer who wants to build beyond software. [Browse all 49 harnesses](#domain-specific-harnesses-dsh).
 
 <a id="run-it"></a>
 ## Get started

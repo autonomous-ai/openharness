@@ -6,7 +6,7 @@
 | `machines.gif` | A new box set up in four commands, linked, and running an agent | `render.mjs` |
 | `keyboard.gif` | Open, zoom, answer a waiting agent and split, keyboard only | `render.mjs` |
 | `e2ee.gif` | A session beside the ciphertext the relay carries | `render.mjs` |
-| `beyond-code.gif` | Eight recorded hands-on sessions, cross-faded | `build.py` |
+| `beyond/<harness>.gif` | One recorded hands-on session per harness, full length at real speed | `build.py` |
 
 The first four are scripted scenes in `scenes/index.html`, drawn in the desktop app's design:
 the tab bar, pane headers with machine, project and branch, and the fzf-style command box.
@@ -14,7 +14,7 @@ Open the file with `#agents`, `#machines`, `#keyboard` or `#e2ee` to watch a sce
 Shortcuts, commands and dialog text follow `docs/keyboard.md`, `docs/cli.md` and the app's strings;
 encryption facts follow `docs/architecture.md`. Keep them that way when editing a scene.
 
-`beyond-code.gif` uses the unedited recordings in `docs/images/*-demo.mp4`.
+The eight `beyond/` GIFs convert the unedited recordings in `docs/images/*-demo.mp4`.
 
 Regenerate from the repository root:
 
@@ -22,9 +22,9 @@ Regenerate from the repository root:
 (cd store/tools/experience-tests && npm ci)   # once, for playwright-core
 node .github/assets/readme/render.mjs            # all four scenes, or name one
 node .github/assets/readme/render.mjs --stills 2,6 keyboard   # review stills in .cache/
-python3 .github/assets/readme/build.py           # beyond-code.gif
+python3 .github/assets/readme/build.py           # beyond/*.gif
 ```
 
 `render.mjs` needs Google Chrome and FFmpeg. It renders at twice the scene size and scales down,
-so text stays sharp at README width. `build.py` needs Pillow, FFmpeg and SF Pro, and keeps its
-output under 9 MiB.
+so text stays sharp at README width. `build.py` needs FFmpeg. It writes 800 px GIFs at 8 fps, 6 fps for the busier
+Strudel recording, so each stays under 7 MiB.
