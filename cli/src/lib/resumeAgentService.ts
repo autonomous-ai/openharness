@@ -41,6 +41,13 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
     // Registry observations may update the same object; pin the route being verified.
     const saved = { ...entry }
     const ownsRoute = () => current() && registry.byAgent(saved.agentId)?.tmuxPane === saved.tmuxPane
+    // A second look at an unconfirmed resume: the verdict is withdrawn before the check, or the
+    // readiness probe would return it straight back. The desk sees the tile leave "Start failed".
+    const unconfirmed = ownsRoute() ? registry.byAgent(saved.agentId) : undefined
+    if (unconfirmed?.launch?.state === 'failed' && unconfirmed.launch.error === 'RESUME_UNCONFIRMED') {
+      const starting = registry.setLaunch(saved.agentId, { state: 'starting' })
+      if (starting) announceSession(starting)
+    }
     const result = await waitForResumedAgent(saved, {
       current: ownsRoute,
       session: () => registry.byAgent(saved.agentId),
