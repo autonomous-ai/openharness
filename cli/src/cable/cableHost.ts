@@ -15,6 +15,7 @@ import { registry, projectDisplayName, type RegisteredSession } from '../lib/reg
 import { fetchRelease, loadImage, shouldOffer } from './fwPush.js'
 import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
 import { env } from '../config/env.js'
+import { deriveReaderText } from '../lib/summarize.js'
 
 import type { AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
@@ -27,6 +28,8 @@ export interface RecentTurn {
   text?: string
   /** What the USER asked on that turn. The topic lives here; the recap holds the answer. */
   ask?: string
+  /** The turn's complete answer, where this machine kept it (local agents). What the reader shows. */
+  fullText?: string
 }
 
 export interface CableHostWiring {
@@ -781,7 +784,8 @@ export class DaemonCableHost implements CableHost {
       ? this.wiring.recent(agentId, 3)
       : await this.fleet!.recentSummaries(this.machineOf(agentId), agentId)
     return raw
-      .map((r) => ({ recap: r?.recap ?? '', text: r?.text ?? '', ask: r?.ask ?? '' }))
+      // The reader gets the whole answer where it is kept; the clipped body is the fallback.
+      .map((r) => ({ recap: r?.recap ?? '', text: r?.fullText ? deriveReaderText(r.fullText) : r?.text ?? '', ask: r?.ask ?? '' }))
       .filter((s) => s.recap || s.text || s.ask)
   }
 

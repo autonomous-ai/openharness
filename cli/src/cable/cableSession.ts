@@ -21,7 +21,7 @@
 //   3. SAY NOTHING WHEN NOTHING CHANGED. That is what keeps the link idle during a long turn, and it is
 //      why rule 2 has to exist at all.
 
-import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
+import { CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { FirmwareTransfer } from './fwPush.js'
 import { SerialLink, findDialPort } from './serial.js'
@@ -339,6 +339,28 @@ export type PortOpener = (
   onData: (chunk: Buffer) => void,
   onClosed: (why: string) => void,
 ) => Promise<CablePort | null>
+
+/**
+ * A summary whose `text` is cut, marked with "…", until the whole message fits one cable frame. The text
+ * is the complete answer now, for the device's reader, and a frame the encoder refuses would lose all of
+ * it rather than the tail.
+ */
+export function fitText<T extends { text?: string }>(msg: T): T {
+  const fits = (m: T) => Buffer.byteLength(JSON.stringify(m)) <= CABLE_MAX_PAYLOAD
+  if (fits(msg) || !msg.text) return msg
+  // The longest prefix, in whole letters, that fits with its mark. Searched rather than computed: JSON
+  // escaping and multi-byte letters make the text's bytes and the frame's bytes differ.
+  const letters = Array.from(msg.text)
+  const cut = (n: number) => ({ ...msg, text: `${letters.slice(0, n).join('').trimEnd()}…` })
+  let lo = 0
+  let hi = letters.length - 1
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2)
+    if (fits(cut(mid))) lo = mid
+    else hi = mid - 1
+  }
+  return lo > 0 ? cut(lo) : { ...msg, text: '' }
+}
 
 /** USB first. If the cable is out, browse `_harness-dial._tcp` — welcome still requires a USB-minted bind. */
 export const openDialPort: PortOpener = async (onData, onClosed) => {
@@ -1253,7 +1275,7 @@ export class CableSession {
         // Oldest first, so the newest ends up on top of the tile's stack.
         for (const s of [...row.past].reverse()) {
           if (!s.recap && !s.text) continue
-          await this.send({ t: 'summary', agentId: row.id, recap: s.recap, text: s.text, restore: true })
+          await this.send(fitText({ t: 'summary', agentId: row.id, recap: s.recap, text: s.text, restore: true }))
         }
       }
     })
@@ -1422,7 +1444,7 @@ export class CableSession {
    */
   async summary(agentId: string, recap: string, text: string, quiet = false, silent = false): Promise<void> {
     const who = this.whoIs(agentId)
-    await this.send({ t: 'summary', agentId, ...who, recap, text, ...(quiet ? { quiet: true } : {}), ...(silent ? { silent: true } : {}) })
+    await this.send(fitText({ t: 'summary', agentId, ...who, recap, text, ...(quiet ? { quiet: true } : {}), ...(silent ? { silent: true } : {}) }))
   }
 
   /**
