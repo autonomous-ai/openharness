@@ -289,22 +289,20 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     }
     if let file = main.item(withTitle: "File") { main.removeItem(file) }
     let file = NSMenu(title: "File")
-    // Three groups, most-used first: harnesses, then tabs, then panes. The Dart keymap decides
-    // every chord below — applyMenuKeys rewrites each equivalent here from it.
-    add(file, "New Harness…", "n", "newAgent")
-    add(file, "Open Harness…", "o", "addAgent")
+    // Three groups, most-used first: harnesses, then tabs, then panes. Plain titles, no trailing
+    // ellipsis (owner, 2026-09-22). The Dart keymap decides every chord below — applyMenuKeys
+    // rewrites each equivalent here from it. New Terminal (⇧⌘T) stays in the keymap, off the menu.
+    add(file, "New Harness", "n", "newAgent")
+    add(file, "Open Harness", "o", "addAgent")
     // ⌘⇧N: another agent like the focused pane's, fresh conversation (Dart: `agent.clone`).
     add(file, "Clone Harness", "n", "cloneAgent", [.command, .shift])
     file.addItem(.separator())
     add(file, "New Tab", "t", "new")
-    // ⌘⇧T, as in a terminal app. It used to be Reopen Last Closed (History menu), which keeps its
-    // row and loses its default chord (Dart: `swarm.reopen`).
-    add(file, "New Terminal", "t", "newTerminal", [.command, .shift])
-    add(file, "Rename Tab…", "r", "renameActive", [.command, .shift])
+    add(file, "Rename Tab", "r", "renameActive", [.command, .shift])
     add(file, "Close Tab", "w", "closeActive")
     file.addItem(.separator())
-    add(file, "Split Right…", "r", "splitRight")
-    add(file, "Split Down…", "d", "splitDown")
+    add(file, "Split Right", "r", "splitRight")
+    add(file, "Split Down", "d", "splitDown")
     add(file, "Zoom Pane", "", "zoomPane")
     add(file, "Close Pane", "w", "closePane", [.command, .shift])
     install(file, at: 1)
