@@ -11,10 +11,10 @@
 
 <p align="center">
   <a href="https://harness.autonomous.ai/desktop"><b>Download</b></a> ·
-  <a href="#get-started">Get started</a> ·
-  <a href="docs/keyboard.md">Keybindings</a> ·
-  <a href="docs/architecture.md">How it works</a> ·
-  <a href="#beyond-code">Beyond code</a>
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#beyond-code">Beyond code</a> ·
+  <a href="#domain-specific-harnesses-dsh">Harnesses</a> ·
+  <a href="#harness-device">Device</a>
 </p>
 
 ### Every agent, side by side
@@ -25,9 +25,10 @@ Claude Code, Codex, Cursor, OpenCode, Devin, Amp, Copilot and seven more.
 
 ### Every machine, side by side
 
-Laptop, home server, work desktop, GPU box. No SSH. No Tailscale. No open ports.
+Your laptop, home server and GPU box in one window. Link each one with a password.
+No SSH keys. No Tailscale. No port forwarding.
 
-<p align="center"><img src=".github/assets/readme/machines.gif" width="960" alt="A new GPU box runs four setup commands and comes online. The app links it with its password, then starts Claude Code there with one Enter."></p>
+<p align="center"><img src=".github/assets/readme/machines.gif" width="960" alt="A new GPU box runs four setup commands and comes online. The app links it with its password, then starts Claude Code there."></p>
 
 ### Keyboard first
 
@@ -43,7 +44,7 @@ Code, keys and keystrokes are sealed on your machine. The relay forwards bytes i
 
 ### Fast and light
 
-A native app, not Electron. Real terminals on tmux. Close the app and your agents keep working.
+A native app, not Electron. Close it and your agents keep working.
 
 | Action | Median | p95 |
 |---|---:|---:|
@@ -58,77 +59,52 @@ A native app, not Electron. Real terminals on tmux. Close the app and your agent
 Key dispatch to finished frame. Release build, M2 Max, 16 live terminals. A window in the background
 runs zero timers. [How we measure](https://github.com/autonomous-ai/openharness/blob/codex/perf-integration-checkpoint/docs/performance/2026-09-22-desktop-latency.md).
 
-## Beyond code
+### Built the way developers work
 
-**Coding agents can build far more than software.** Give one a harness and it works with the real
-tools of a craft. You steer in a live viewer. Every clip below is a real session.
+- **Real terminals.** Every agent runs in its own tmux pane. Scrollback, colors and keys just work.
+- **Your CLIs, as they are.** Harness never wraps an agent. It reads transcripts and uses the vendor's own hooks.
+- **A worktree per harness.** Start an agent on its own branch. Your working copy stays clean.
+- **Remap every key.** One JSONC file, reloaded on save. Chords up to four strokes.
+- **Local models.** Run open-weight models on your own machines with Grid, Ollama, MLX-LM and vLLM.
+- **Bytes, not pixels.** Remote terminals stream text peer to peer. No remote desktop.
+- **Open source, all of it.** App, CLI, daemon, relay and device, in this repo.
 
-### Beyond code: Design
+## How it works
 
-**Blender.** Ask for a lamp and the sliders that matter. Turn them and Blender rebuilds the geometry. Keep the versions you love.
+One daemon per machine runs your agents in tmux. It dials out, so no machine opens a port.
 
-<p align="center"><img src=".github/assets/readme/beyond/blender.gif" width="800" alt="Shape Lab in Blender: dragging height and twist sliders rebuilds a ribbon lamp, and chosen designs are kept."></p>
+```mermaid
+flowchart LR
+  subgraph laptop["Your laptop"]
+    app["Harness app"] -- loopback --> d1["daemon"]
+    d1 --> a1["tmux · Claude Code · Codex"]
+  end
+  subgraph box["Your GPU box"]
+    d2["daemon"] --> a2["tmux · OpenCode · Hermes"]
+  end
+  device["Harness device"] -- USB --> d1
+  d1 <-. "direct WebRTC" .-> d2
+  d1 <-- "ciphertext" --> relay["Harness relay · no keys"]
+  relay <-- "ciphertext" --> d2
+```
 
-<p align="center"><a href="docs/hands-on.md#blender-shape-it-until-it-feels-right">Try it</a> · <a href="https://github.com/user-attachments/assets/dc152a0b-94b6-4324-9d30-468b7ed3d14b">Full video</a> · <a href="store/agents/blender/">Harness</a></p>
+Every path is sealed end to end: ChaCha20-Poly1305, X25519 session keys, pinned Ed25519 identities.
+Harness picks the best path on its own.
 
-### Beyond code: Circuits
+**Direct.** A WebRTC channel between your machines. No server in the path.
 
-**CircuitJS.** Build a filter. Change one resistor. Overlay the new trace, measure the difference and keep both.
+<p align="center"><img src=".github/assets/readme/connect/direct.gif" width="800" alt="The Harness window connects straight to home-server, office-desktop, cloud-server and mac-mini over WebRTC, with no server in the path."></p>
 
-<p align="center"><img src=".github/assets/readme/beyond/circuitjs.gif" width="800" alt="Scope Lab in CircuitJS: an RC filter captured at 1 kΩ and 2 kΩ, traces overlaid and measured with cursors."></p>
+**Through Cloudflare.** When a firewall blocks the direct path, the same encrypted channel runs over
+Cloudflare's TURN network. Harness keeps trying for a direct path.
 
-<p align="center"><a href="docs/hands-on.md#circuitjs-see-what-changed-in-the-signal">Try it</a> · <a href="https://github.com/user-attachments/assets/6fb1892a-23a2-49ba-9698-4e71a404f1f4">Full video</a> · <a href="store/agents/circuitjs/">Harness</a></p>
+<p align="center"><img src=".github/assets/readme/connect/cloudflare.gif" width="800" alt="The encrypted WebRTC channel passes through the nearest Cloudflare edge when a firewall blocks the direct path."></p>
 
-### Beyond code: Robotics
+**Through our relay.** A fallback while WebRTC negotiates. The relay holds no keys and forwards ciphertext.
 
-**MuJoCo.** Pin a moment in a robot's run. Shove it with 100 N. Watch two futures split and find where they part.
+<p align="center"><img src=".github/assets/readme/connect/relay.gif" width="800" alt="The Harness relay keeps the session reachable over its WebSocket while WebRTC negotiates. It holds no keys."></p>
 
-<p align="center"><img src=".github/assets/readme/beyond/mujoco.gif" width="800" alt="A Unitree Go2 in MuJoCo: the original and shoved futures play together with a height chart."></p>
-
-<p align="center"><a href="docs/hands-on.md#mujoco-try-a-different-world">Try it</a> · <a href="https://github.com/user-attachments/assets/bc214f57-7967-4e4b-9fe2-b722a033157d">Full video</a> · <a href="store/agents/mujoco/">Harness</a></p>
-
-### Beyond code: Games
-
-**Godogen.** Your agent makes a playable game. Miss a jump, rewind, try again. Pin the moment so the agent sees what you mean.
-
-<p align="center"><img src=".github/assets/readme/beyond/godogen.gif" width="800" alt="Alpine Drift, a game made with Godogen: a run is rewound, retried and a moment is pinned with feedback."></p>
-
-<p align="center"><a href="docs/hands-on.md#godogen-try-that-moment-again">Try it</a> · <a href="https://github.com/user-attachments/assets/ee9e1af9-e92b-4a76-8583-36e2ee7ea4ec">Full video</a> · <a href="store/agents/godogen/">Harness</a></p>
-
-### Beyond code: Music
-
-**Strudel.** The track is code you can perform. Bring voices in and out, mark the good parts, keep the WAV.
-
-<p align="center"><img src=".github/assets/readme/beyond/strudel.gif" width="800" alt="A live Strudel performance: voice lanes play beside the code, and the take is kept with markers."></p>
-
-<p align="center"><a href="docs/hands-on.md#strudel-perform-the-version-you-love">Try it</a> · <a href="https://github.com/user-attachments/assets/a3d4381b-5f55-406c-9d68-330cd8792fc5">Full video with sound</a> · <a href="store/agents/strudel/">Harness</a></p>
-
-### Beyond code: Chemistry
-
-**RDKit.** Turn a bond and watch the molecule move. Follow the real energy curve. Keep the pose worth a closer look.
-
-<p align="center"><img src=".github/assets/readme/beyond/rdkit.gif" width="800" alt="A bond scan in RDKit: the molecule rotates through sampled poses along an MMFF94 energy curve."></p>
-
-<p align="center"><a href="docs/hands-on.md#rdkit-see-a-molecule-turn">Try it</a> · <a href="https://github.com/user-attachments/assets/a7132b72-db46-4873-b412-ef5c2b400a8e">Full video</a> · <a href="store/agents/rdkit/">Harness</a></p>
-
-### Beyond code: Documents
-
-**Typst.** Your agent writes a real PDF. Circle a detail, quote a line, leave a note. The next draft answers it.
-
-<p align="center"><img src=".github/assets/readme/beyond/typst.gif" width="800" alt="A Typst PDF under review: notes are pinned to an area and a sentence, then carried to the next draft."></p>
-
-<p align="center"><a href="docs/hands-on.md#typst-point-at-what-you-mean">Try it</a> · <a href="https://github.com/user-attachments/assets/603d7d8d-941d-41d1-8a17-5765487aafea">Full video</a> · <a href="store/agents/typst/">Harness</a></p>
-
-### Beyond code: Data
-
-**Jev Sheets.** Test a question on a few frozen rows before you ask the whole sheet. Compare two wordings side by side.
-
-<p align="center"><img src=".github/assets/readme/beyond/jev-sheets.gif" width="800" alt="Question Lab in Jev Sheets: two wordings of a question are compared on frozen rows, recorded with practice data."></p>
-
-<p align="center"><a href="docs/hands-on.md#jev-sheets-ask-a-better-question">Try it</a> · <a href="https://github.com/user-attachments/assets/afc30e73-2f0a-442e-b929-79126adea76b">Full video</a> · <a href="store/agents/jev-sheets/">Harness</a></p>
-
-Monday, a feature. Tuesday, an enclosure. Wednesday, the launch video.
-For the curious engineer who wants to build beyond software. [Browse all 49 harnesses](#domain-specific-harnesses-dsh).
+The [architecture guide](docs/architecture.md) has the details.
 
 <a id="run-it"></a>
 ## Get started
@@ -143,9 +119,6 @@ harness login
 harness remote-password set
 harness start
 ```
-
-macOS is the primary platform. Linux builds work with parity in progress; Windows is in progress. Live viewers need macOS.
-The app needs a Harness account for now; [account-free local use is tracked](docs/development.md#account-free-local-use).
 
 <details>
 <summary><b>Build from source</b></summary>
@@ -168,47 +141,74 @@ flutter run -d macos
 
 </details>
 
-<details>
-<summary><b>How it fits together</b></summary>
+## Beyond code
 
-```mermaid
-flowchart LR
-  app["Harness app<br/>(Flutter)"] -- loopback --> daemon["harness daemon<br/>(TypeScript)"]
-  daemon --> tmux["tmux"] --> agents["Claude Code · Codex · OpenCode · …"]
-  daemon --> dsh["harness toolchain<br/>+ live viewer"]
-  daemon <-- "E2EE · WebRTC" --> relay["Harness relay"]
-  relay <--> remote["daemons on your<br/>other machines"]
-```
+> “World-class entrepreneurs are polymaths.” — [Peter Thiel](https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s)
 
-Each daemon dials out to the relay, so no machine opens a port. Frames are sealed with
-ChaCha20-Poly1305 under X25519 session keys and pinned Ed25519 identities. Terminal traffic goes
-peer to peer over WebRTC when the network allows. Details in the [architecture guide](docs/architecture.md).
+**Coding agents can build far more than software.** Give one a harness and it works with the real
+tools of a craft. You steer in a live viewer. Every clip below is a real session.
 
-</details>
+### Beyond code: Design
 
-<a id="domain-specific-harnesses-dsh"></a>
-## Build a harness
+**[Blender](store/agents/blender/).** Ask for a lamp and the sliders that matter. Turn them and Blender rebuilds the geometry. Keep the versions you love.
 
-A harness turns a coding agent into a specialist: instructions, a pinned toolchain, a project
-template and a live viewer, in one folder. Adding a craft never touches the app.
+<p align="center"><img src=".github/assets/readme/beyond/blender.gif" width="800" alt="Shape Lab in Blender: dragging height and twist sliders rebuilds a ribbon lamp, and chosen designs are kept."></p>
 
-```bash
-harness dsh install "$PWD/store/viewers/web-viewer" --link
-cp -R store/examples/hello-world ../my-harness
-harness dsh check ../my-harness
-harness dsh install ../my-harness --link
-```
+### Beyond code: Circuits
 
-Press **⌘N → Hello World** and say hello. The [authoring guide](store/README.md) covers the rest.
+**[CircuitJS](store/agents/circuitjs/).** Build a filter. Change one resistor. Overlay the new trace, measure the difference and keep both.
 
-<details>
-<summary><b>Browse every harness in the Store</b></summary>
+<p align="center"><img src=".github/assets/readme/beyond/circuitjs.gif" width="800" alt="Scope Lab in CircuitJS: an RC filter captured at 1 kΩ and 2 kΩ, traces overlaid and measured with cursors."></p>
+
+### Beyond code: Robotics
+
+**[MuJoCo](store/agents/mujoco/).** Pin a moment in a robot's run. Shove it with 100 N. Watch two futures split.
+
+<p align="center"><img src=".github/assets/readme/beyond/mujoco.gif" width="800" alt="A Unitree Go2 in MuJoCo: the original and shoved futures play together with a height chart."></p>
+
+### Beyond code: Games
+
+**[Godogen](store/agents/godogen/).** Your agent makes a playable game. Miss a jump, rewind, try again. Pin the moment so the agent sees what you mean.
+
+<p align="center"><img src=".github/assets/readme/beyond/godogen.gif" width="800" alt="Alpine Drift, a game made with Godogen: a run is rewound, retried and a moment is pinned with feedback."></p>
+
+### Beyond code: Music
+
+**[Strudel](store/agents/strudel/).** The track is code you can perform. Bring voices in and out, mark the good parts, keep the WAV. [Hear it](https://github.com/user-attachments/assets/a3d4381b-5f55-406c-9d68-330cd8792fc5).
+
+<p align="center"><img src=".github/assets/readme/beyond/strudel.gif" width="800" alt="A live Strudel performance: voice lanes play beside the code, and the take is kept with markers."></p>
+
+### Beyond code: Chemistry
+
+**[RDKit](store/agents/rdkit/).** Turn a bond and watch the molecule move. Follow the real energy curve. Keep the pose worth a closer look.
+
+<p align="center"><img src=".github/assets/readme/beyond/rdkit.gif" width="800" alt="A bond scan in RDKit: the molecule rotates through sampled poses along an MMFF94 energy curve."></p>
+
+### Beyond code: Documents
+
+**[Typst](store/agents/typst/).** Your agent writes a real PDF. Circle a detail, quote a line, leave a note. The next draft answers it.
+
+<p align="center"><img src=".github/assets/readme/beyond/typst.gif" width="800" alt="A Typst PDF under review: notes are pinned to an area and a sentence, then carried to the next draft."></p>
+
+### Beyond code: Data
+
+**[Jev Sheets](store/agents/jev-sheets/).** Test a question on a few frozen rows before you ask the whole sheet. Compare two wordings side by side.
+
+<p align="center"><img src=".github/assets/readme/beyond/jev-sheets.gif" width="800" alt="Question Lab in Jev Sheets: two wordings of a question are compared on frozen rows, recorded with practice data."></p>
+
+## Domain-specific harnesses (DSH)
+
+Code is the common medium. Geometry scripts make parts. Netlists make boards. Animation code makes film.
+
+A **domain-specific harness** turns a coding agent into a specialist. It brings the craft's
+instructions and skills, a pinned toolchain, a project template, checks and a **live viewer**.
+You chat on one side. The board, the part or the game takes shape on the other.
+
+The agent does the reasoning. The harness brings the tools and the view. It's a folder with a
+`harness.json`, so adding a craft never touches the app.
 
 <!-- store-catalog:start -->
-### Coding and beyond
-
-Start with a coding agent you already use. Explore 49 domain-specific harnesses when your
-next idea takes you further.
+### 49 harnesses in the Store
 
 | Category | Agents and harnesses |
 |---|---|
@@ -224,24 +224,46 @@ next idea takes you further.
 | Research | [Jev Browser](store/agents/jev-browser/), [Roundtable](store/agents/roundtable/) |
 | Local AI | [Grid](store/agents/autonomous-grid/), [MLX-LM](store/agents/mlx-lm/), [Ollama](store/agents/ollama/), [vLLM](store/agents/vllm/) |
 
-These are the 49 harnesses currently listed in the Store catalog. They combine upstream
-open-source tools and original workflows, with instructions, setup, checks, and live views for each craft.
-
-The 10 [shared viewers](store/viewers/) cover CAD, 3D models, documents, games, film, video,
-MuJoCo, web pages, isolated web previews, and studios. Viewer packages install alongside the
-harnesses that need them. Experimental packages marked unlisted are not included above.
+Upstream open-source tools and original workflows. 10 [shared viewers](store/viewers/) install alongside
+the harnesses that need them. Unlisted experiments are not shown.
 <!-- store-catalog:end -->
 
-</details>
+### Build your own
+
+The next harness is the one for your craft. Wrap a tool you love or your team's toolchain.
+It can live here or in your own repo. From this repo:
+
+```json
+{
+  "spec": 1,
+  "id": "examples/hello-world",
+  "name": "Hello World",
+  "engine": "codex",
+  "workspace": { "template": "template", "marker": "index.html" },
+  "agent": { "instructions": "AGENTS.md" },
+  "viewer": { "use": "autonomous/web-viewer" }
+}
+```
+
+```bash
+harness dsh install "$PWD/store/viewers/web-viewer" --link
+cp -R store/examples/hello-world ../my-harness
+harness dsh check ../my-harness
+harness dsh install ../my-harness --link
+```
+
+Press **⌘N → Hello World** and say hello. The [authoring guide](store/README.md) covers the rest.
 
 ## Harness device
 
-<p align="center"><img src=".github/assets/hardware/answer.jpg" width="720" alt="A finger taps the round Harness device to answer an agent"></p>
+A round screen beside your keyboard. See who's working, who's done and who needs you.
+Tap to answer. Tap and speak a new task.
 
-A round screen beside your keyboard. See who's working, who's done and who needs you. Answer with a tap
-or your voice. Open hardware: [firmware](devices/harness-device/firmware/),
-[PCB](devices/harness-device/hardware/pcb/), [enclosure](devices/harness-device/hardware/3d/).
-[Get one](https://www.autonomous.ai/harness) or build your own.
+<p align="center"><img src=".github/assets/readme/device.gif" width="960" alt="A finger taps the round Harness device, speaks a task to fix the login flow, and the device shows the agent deploying, then a summary of the shipped fix."></p>
+
+Open hardware: [firmware](devices/harness-device/firmware/), [PCB](devices/harness-device/hardware/pcb/)
+and [enclosure](devices/harness-device/hardware/3d/). [Get one](https://www.autonomous.ai/harness-device)
+or build your own.
 
 ## Contribute
 

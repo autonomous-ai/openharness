@@ -7,6 +7,8 @@
 | `keyboard.gif` | Open, zoom, answer a waiting agent and split, keyboard only | `render.mjs` |
 | `e2ee.gif` | A session beside the ciphertext the relay carries | `render.mjs` |
 | `beyond/<harness>.gif` | One recorded hands-on session per harness, full length at real speed | `build.py` |
+| `connect/*.gif` | Direct, Cloudflare and relay paths, from autonomous.ai/harness-app | `site.mjs` |
+| `device.gif` | The Harness device video from autonomous.ai/harness-device | `site.mjs` |
 
 The first four are scripted scenes in `scenes/index.html`, drawn in the desktop app's design:
 the tab bar, pane headers with machine, project and branch, and the fzf-style command box.
@@ -23,6 +25,7 @@ Regenerate from the repository root:
 node .github/assets/readme/render.mjs            # all four scenes, or name one
 node .github/assets/readme/render.mjs --stills 2,6 keyboard   # review stills in .cache/
 python3 .github/assets/readme/build.py           # beyond/*.gif
+node .github/assets/readme/site.mjs              # connect/*.gif and device.gif
 ```
 
 `render.mjs` needs Google Chrome and FFmpeg. It renders at twice the scene size and scales down,
