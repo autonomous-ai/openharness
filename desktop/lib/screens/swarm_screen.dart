@@ -200,12 +200,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   String? _commandCatalogMachine;
   final _newTabSources = <String, TerminalPane>{};
 
-  bool get _showsStartGuide =>
-      newHarnessOpensInBox &&
-      app.panes.isEmpty &&
-      !app.activeSwarm.isStore &&
-      !app.activeSwarm.isOrchestrator;
-
   Widget _startGuide() => WorkspaceWelcome(onCommand: _runShortcut);
 
   void _showKeyboardShortcuts() {
@@ -688,7 +682,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     'engine': agent.identityEngine,
                     'iconAsset': agentIdentity(agent).asset,
                     // A stopped harness opens too: choosing it resumes its
-                    // conversation, the road ⌘P takes (`activateSwarmDestination`).
+                    // conversation, the road ⌘O takes (`activateSwarmDestination`).
                     // `stopped` lets the row say so first, since that takes a
                     // moment and may ask the engine to sign in, unlike an attach.
                     'canOpen':
@@ -1543,7 +1537,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
         );
       },
     );
-    final onWelcome = _showsStartGuide;
     _newHarnessOverlay = OverlayEntry(
       builder: (context) => KeymapProvider(
         keymap: _keymap,
@@ -1551,32 +1544,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
           listenable: box,
           builder: (context, child) => LayoutBuilder(
             builder: (context, constraints) {
-              if (onWelcome) {
-                return Padding(
-                  padding: EdgeInsets.only(top: _native ? 0 : _tabBarHeight),
-                  child: FocusScope(
-                    child: BlockSemantics(
-                      child: Material(
-                        color: grid.AppPalette.swarmField,
-                        child: Column(
-                          children: [
-                            Expanded(child: _startGuide()),
-                            ConstrainedBox(
-                              constraints: BoxConstraints(
-                                maxHeight:
-                                    (constraints.maxHeight -
-                                        (_native ? 0 : _tabBarHeight)) *
-                                    .65,
-                              ),
-                              child: content,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              }
               return Stack(
                 children: [
                   Positioned.fill(
@@ -1919,8 +1886,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.openStore();
   }
 
-  bool _searchOnWelcome = false;
-
   void _openSearch({
     bool adding = false,
     PaneSplitRequest? split,
@@ -1950,7 +1915,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // Search is an overlay, so late pane attachment needs an explicit focus
     // boundary to keep its programmatic focus request out of the picker.
     _canvasFocus.descendantsAreFocusable = false;
-    _searchOnWelcome = _showsStartGuide;
     _search = SwarmSearchController(
       app,
       _navigation.recent,
@@ -1991,8 +1955,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   void _showSearchCommands() {
-    if (_search == null) _openSearch(adding: true, query: '> ');
-    _search?.setQuery('> ');
+    if (_search == null) _openSearch(adding: true, query: '>');
+    _search?.setQuery('>');
     _focusSearch();
     if (_search != null) _learning.commandSearchOpened();
   }
@@ -2217,33 +2181,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
             onRefocus: _focusSearch,
             child: scoped,
           );
-          if (_searchOnWelcome) {
-            return Padding(
-              padding: EdgeInsets.only(top: _native ? 0 : _tabBarHeight),
-              child: BlockSemantics(
-                child: Material(
-                  color: grid.AppPalette.swarmField,
-                  child: Column(
-                    children: [
-                      Expanded(child: _startGuide()),
-                      ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxHeight:
-                              (constraints.maxHeight -
-                                  (_native ? 0 : _tabBarHeight)) *
-                              (.65 * grid.appTextScaleOf(context)).clamp(
-                                .65,
-                                1.0,
-                              ),
-                        ),
-                        child: contents,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          }
           return Stack(
             children: [
               // A click outside still closes it; it just no longer dims. To a
@@ -2470,7 +2407,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     'navigation.commands': _showSearchCommands,
     'app.customize': () => unawaited(_customize()),
     'app.store': _openStore,
-    'agent.open': _addAgent,
+    'agent.add': _addAgent,
     if (kDebugSurfaceEnabled) 'app.onboarding_review': _newTab,
     'agent.rename': () => _editAgent(),
     'agent.stop': () => _editAgent(stop: true),
@@ -2583,7 +2520,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         detail: 'Run anything by name',
         swarmId: null,
         current: false,
-        pickerQuery: '> ',
+        pickerQuery: '>',
         shortcut: _keymap.hint('navigation.commands'),
       ),
       SwarmDestination(
@@ -2908,7 +2845,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          if (app.panes.isEmpty)
+                          if (app.panes.isEmpty &&
+                              !newHarnessOpensInBox &&
+                              !app.activeSwarm.isNewTabPage)
                             const RepaintBoundary(
                               key: ValueKey('harness-start-background'),
                               child: SwarmWallpaper(),
@@ -2925,18 +2864,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                   app.activeSwarm.isStore ||
                                   app.activeSwarm.isOrchestrator,
                               child: Padding(
-                                // Under the native tab strip the canvas starts
-                                // 10 lower, so the pane titles do not crowd the
-                                // tabs (owner, 2026-09-21; the strip lifts its
-                                // chips 5 to match).
                                 padding: app.panes.isEmpty
                                     ? EdgeInsets.zero
-                                    : EdgeInsets.fromLTRB(
-                                        kWorkspaceInset,
-                                        kWorkspaceInset + (_native ? 10 : 0),
-                                        kWorkspaceInset,
-                                        kWorkspaceInset,
-                                      ),
+                                    : const EdgeInsets.all(kWorkspaceInset),
                                 child: Focus.withExternalFocusNode(
                                   focusNode: _canvasFocus,
                                   includeSemantics: false,

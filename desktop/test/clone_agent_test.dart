@@ -1,4 +1,4 @@
-// Clone Agent (⌘⇧N): another agent of the focused pane's kind with a fresh
+// Clone Harness (⌘⇧N): another agent of the focused pane's kind with a fresh
 // conversation — fork minus the context. Everything a dialog would ask is read
 // off the source agent's frame, so the chord goes straight to `agent_create`
 // on the source's machine; a relayed machine takes the same road as this one.
@@ -116,7 +116,7 @@ void main() {
   Map<String, dynamic> withoutId(Map<String, dynamic> payload) =>
       {...payload}..remove('creationId');
 
-  test('⌘⇧N is Clone Agent in the live table and reaches the native menu', () {
+  test('⌘⇧N is Clone Harness in the live table and reaches the native menu', () {
     final shiftN = kSwarmShortcuts.where(
       (s) =>
           s.activator.trigger == LogicalKeyboardKey.keyN &&

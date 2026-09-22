@@ -290,13 +290,13 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     if let file = main.item(withTitle: "File") { main.removeItem(file) }
     let file = NSMenu(title: "File")
     add(file, "New Tab", "t", "new")
-    add(file, "New Pane…", "p", "addAgent")
+    add(file, "Open Harness…", "o", "addAgent")
     // ⌘⇧T, as in a terminal app. It used to be Reopen Last Closed (History menu), which keeps its
     // row and loses its default chord — the Dart keymap (`swarm.reopen`) is where both are decided,
     // and applyMenuKeys rewrites every equivalent here from it.
     add(file, "New Terminal", "t", "newTerminal", [.command, .shift])
     // ⌘⇧N: another agent like the focused pane's, fresh conversation (Dart: `agent.clone`).
-    add(file, "Clone Agent", "n", "cloneAgent", [.command, .shift])
+    add(file, "Clone Harness", "n", "cloneAgent", [.command, .shift])
     add(file, "Rename Tab…", "r", "renameActive", [.command, .shift])
     add(file, "Close Tab", "w", "closeActive")
     file.addItem(.separator())
@@ -313,7 +313,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // Native menu hints mirror Flutter; the shared picker owns all editing.
     if let edit = main.item(withTitle: "Edit")?.submenu {
       edit.addItem(.separator())
-      add(edit, "Search Commands…", "p", "commands", [.command, .shift])
+      add(edit, "Search Commands…", "p", "commands")
     }
     if let view = main.item(withTitle: "View")?.submenu {
       view.addItem(.separator())

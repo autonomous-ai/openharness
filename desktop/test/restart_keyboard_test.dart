@@ -68,7 +68,7 @@ void main() {
     WidgetTester tester, {
     LogicalKeyboardKey accept = LogicalKeyboardKey.enter,
   }) async {
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     await tester.enterText(
       find.byKey(const ValueKey('swarm-search-input')),
       '> restart',

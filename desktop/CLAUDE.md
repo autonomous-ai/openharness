@@ -517,14 +517,13 @@ its headless debug timings do not establish native display or network latency.
   usually is, since a skeleton that shrinks jumps the page upward. **"Loading" and "answered with
   nothing" must not render the same** — hence `AppNotifier.machinesLoading`, which is set on the
   first fetch only so a refresh keeps the rows already on screen.
-- `lib/shortcuts/app_shortcuts.dart` is the one list that feeds both the live bindings and the ⌘/
-  sheet. `shortcutRows()` there is that list as the UI prints it — one row per action, so the two
-  activators on "focus the next pane" (`⌘]`, `⌃⇥`) fold into one line, and `⌘1`–`⌘9` join as one.
-  `shortcuts/shortcuts_list.dart` renders those rows in the two shapes the app needs and nothing
-  else: `ShortcutsList` (the ⌘/ sheet's column, inside a 420px dialog) and `ShortcutsDeck` (Settings
-  ▸ Keyboard shortcuts, group cards reflowed across the pane, plus the recessed "the terminal keeps"
-  card built from `kTerminalOwnedKeys`). Same rows behind both, so they cannot disagree; keycaps come
-  from `shortcuts/key_cap.dart`. Every shortcut is ⌘-based — Ctrl belongs to the shell/tmux, ⌥ is a
+- `lib/shortcuts/app_shortcuts.dart` and `keymap_commands.dart` supply the live shortcut catalog.
+  `shortcuts/shortcuts_browser.dart` shares searchable, grouped rows between the ⌘/ dialog and
+  Settings ▸ Keyboard shortcuts. It reads resolved bindings through `keyboardLessons()`, so remaps
+  appear immediately; clicking a row or pressing Enter opens keyboard practice without dispatching
+  that action. Labels and keycaps use the selected terminal font and size. ⌘P opens commands with
+  the query `>`; ⌘O opens harnesses. `shortcuts/key_cap.dart` uses the app type scale elsewhere.
+  Every shortcut is ⌘-based — Ctrl belongs to the shell/tmux, ⌥ is a
   Meta prefix for the pty (⌥⏎ and ⌥⌫ only — `AltAsMetaInputHandler` in
   `lib/terminal/terminal_input.dart` turns them into `ESC` + Return and `ESC` + `\x7f`, so the
   engine's prompt breaks the line instead of submitting and kills the word behind the cursor

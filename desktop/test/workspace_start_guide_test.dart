@@ -19,6 +19,8 @@ import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/harness_customize_pane.dart';
+import 'package:harness/settings/appearance/wallpaper_section.dart';
 import 'package:harness/widgets/workspace_start_guide.dart';
 import 'package:harness/widgets/workspace_welcome.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -170,36 +172,39 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets(
-    'Command-O and Command-P explicitly open the same existing-harness picker',
-    (tester) async {
-      final app = _FirstApp();
-      addTearDown(app.dispose);
-      app.machineStates['m']!.agents = [
-        Agent(
-          id: 'saved',
-          engine: 'codex',
-          name: 'Existing work',
-          terminalAvailable: true,
-        ),
-      ];
-      await _mount(tester, app);
-      expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
-      expect(find.byType(NewHarnessBox), findsNothing);
-      expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
-      expect(find.text('Existing work'), findsOneWidget);
-      expect(find.byType(WorkspaceWelcome).hitTestable(), findsOneWidget);
-      await key(tester, LogicalKeyboardKey.escape);
-      app.notifyListeners();
-      await tester.pump();
-      expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
-      expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
-      expect(find.text('Existing work'), findsOneWidget);
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
+  testWidgets('Command-O opens harnesses and Command-P opens commands', (
+    tester,
+  ) async {
+    final app = _FirstApp();
+    addTearDown(app.dispose);
+    app.machineStates['m']!.agents = [
+      Agent(
+        id: 'saved',
+        engine: 'codex',
+        name: 'Existing work',
+        terminalAvailable: true,
+      ),
+    ];
+    await _mount(tester, app);
+    expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
+    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    expect(find.byType(NewHarnessBox), findsNothing);
+    expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
+    expect(find.text('Existing work'), findsOneWidget);
+    expect(find.byType(WorkspaceWelcome), findsOneWidget);
+    await key(tester, LogicalKeyboardKey.escape);
+    app.notifyListeners();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    final input = tester.widget<TextField>(
+      find.byKey(const ValueKey('swarm-search-input')),
+    );
+    expect(input.controller!.text, '>');
+    expect(input.controller!.selection.baseOffset, 1);
+    expect(find.text('Existing work'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets('restored work keeps its focused pane', (tester) async {
     final app = _FirstApp();
@@ -293,27 +298,31 @@ void main() {
           find.byKey(const ValueKey('swarm-search-input')),
           findsOneWidget,
         );
-        void expectGuideAboveDock(Finder dock) {
+        void expectGuideFixed(Finder dock) {
           final drawing = tester.getRect(
             find.byKey(const ValueKey('workspace-welcome-text')).last,
           );
           expect(drawing.top, greaterThanOrEqualTo(0));
-          expect(drawing.bottom, lessThanOrEqualTo(tester.getTopLeft(dock).dy));
+          expect(
+            drawing.center,
+            tester.getRect(find.byType(WorkspaceWelcome).last).center,
+          );
+          expect(dock, findsOneWidget);
           expect(tester.takeException(), isNull);
         }
 
         final searchDock = find.byKey(const ValueKey('swarm-search-results'));
-        expectGuideAboveDock(searchDock);
+        expectGuideFixed(searchDock);
         tester.view.physicalSize = const Size(960, 640);
         await tester.pump();
-        expectGuideAboveDock(searchDock);
+        expectGuideFixed(searchDock);
         expect(tester.state<TerminalViewState>(view), same(renderer));
         expect(app.launches, isEmpty);
 
         await key(tester, LogicalKeyboardKey.keyN, cmd: true);
         await tester.pump(const Duration(milliseconds: 150));
         expect(find.byType(NewHarnessBox), findsOneWidget);
-        expectGuideAboveDock(find.byKey(const ValueKey('new-harness-box')));
+        expectGuideFixed(find.byKey(const ValueKey('new-harness-box')));
         await key(tester, LogicalKeyboardKey.escape);
         await tester.pump();
         await key(tester, LogicalKeyboardKey.keyW, cmd: true);
@@ -421,47 +430,61 @@ void main() {
     },
   );
 
-  testWidgets(
-    'compact welcome stays centered in the visible area above each dock',
-    (tester) async {
-      final app = _FirstApp();
-      addTearDown(app.dispose);
-      app.machineStates['m']!.agents = [
-        Agent(id: 'saved', name: 'Robot arm', engine: 'claude'),
-      ];
-      await _mount(tester, app);
-      await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-      await tester.pumpAndSettle();
-      final page = find.byType(WorkspaceWelcome).last;
-      final tagline = find.byKey(const ValueKey('workspace-welcome-text')).last;
-      void expectCentered() {
-        expect(tester.getCenter(tagline), tester.getRect(page).center);
-        expect(
-          find.descendant(of: page, matching: find.byType(Image)),
-          findsNothing,
-        );
-      }
-
-      expectCentered();
-
-      final search = find.byKey(const ValueKey('swarm-search-input'));
-      expect(search, findsNothing);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
-      await tester.enterText(search, 'nothing matches');
-      await tester.pumpAndSettle();
-      expectCentered();
-
-      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
-      await tester.pumpAndSettle();
-      expect(find.byType(NewHarnessBox), findsOneWidget);
-      expectCentered();
+  testWidgets('welcome text and wallpaper stay fixed when either dock opens', (
+    tester,
+  ) async {
+    final app = _FirstApp();
+    addTearDown(app.dispose);
+    app.machineStates['m']!.agents = [
+      Agent(id: 'saved', name: 'Robot arm', engine: 'claude'),
+    ];
+    await _mount(tester, app);
+    await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+    await tester.pumpAndSettle();
+    final page = find.byType(WorkspaceWelcome).last;
+    final tagline = find.byKey(const ValueKey('workspace-welcome-text')).last;
+    final textRect = tester.getRect(tagline);
+    final wallpaper = find.byKey(const ValueKey('welcome-wallpaper')).last;
+    final wallpaperRect = tester.getRect(wallpaper);
+    void expectCentered() {
+      expect(tester.getRect(tagline), textRect);
+      expect(tester.getRect(wallpaper), wallpaperRect);
+      expect(tester.getCenter(tagline), tester.getRect(page).center);
       expect(
-        tester.getRect(find.byType(NewHarnessBox)).top,
-        greaterThan(tester.getRect(tagline).bottom),
+        find.descendant(of: page, matching: find.byType(Image)),
+        findsNothing,
       );
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
+    }
+
+    expectCentered();
+
+    final search = find.byKey(const ValueKey('swarm-search-input'));
+    expect(search, findsNothing);
+    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await tester.enterText(search, 'nothing matches');
+    await tester.pumpAndSettle();
+    expectCentered();
+
+    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+    await tester.pumpAndSettle();
+    expect(find.byType(NewHarnessBox), findsOneWidget);
+    expectCentered();
+    await key(tester, LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expectCentered();
+    await tester.tap(find.byKey(const ValueKey('welcome-customize')));
+    await tester.pumpAndSettle();
+    expect(find.byType(HarnessCustomizePane), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('customize-appearance')));
+    await tester.pumpAndSettle();
+    expect(find.byType(WallpaperSection), findsOneWidget);
+    expectCentered();
+    await key(tester, LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byType(HarnessCustomizePane), findsNothing);
+    expectCentered();
+    await tester.pumpWidget(const SizedBox());
+  });
 
   final output = Platform.environment['GUIDE_RENDER_DIR'];
   testWidgets('render first entry guide', skip: output == null, (tester) async {

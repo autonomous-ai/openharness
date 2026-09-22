@@ -275,7 +275,7 @@ void main() {
         final inPane = dismiss == 'outside';
         await chord(
           tester,
-          inPane ? LogicalKeyboardKey.keyP : LogicalKeyboardKey.keyT,
+          inPane ? LogicalKeyboardKey.keyO : LogicalKeyboardKey.keyT,
         );
         if (!inPane) await chord(tester, LogicalKeyboardKey.keyO);
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -800,7 +800,7 @@ void main() {
         await tester.pump();
         expect(box.task, task);
         for (final key in [
-          LogicalKeyboardKey.keyP,
+          LogicalKeyboardKey.keyO,
           LogicalKeyboardKey.keyT,
           LogicalKeyboardKey.period,
         ]) {
@@ -883,7 +883,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(find.byType(NewHarnessBox), findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       final box = tester
@@ -901,7 +901,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(find.byType(NewHarnessBox), findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -944,7 +944,7 @@ void main() {
         await mount(tester, app);
         final key = placement == HarnessPlacement.newTab
             ? LogicalKeyboardKey.keyT
-            : LogicalKeyboardKey.keyP;
+            : LogicalKeyboardKey.keyO;
         await chord(tester, key);
         if (placement == HarnessPlacement.newTab) {
           await chord(tester, LogicalKeyboardKey.keyO);
@@ -982,7 +982,7 @@ void main() {
         expect(app.swarms, contains(original));
         // The creation box was opened from a search editor that is now gone.
         // Returning focus to that detached editor would disable shortcuts.
-        await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+        await chord(tester, LogicalKeyboardKey.keyP);
         expect(
           find.byKey(const ValueKey('swarm-search-input')),
           findsOneWidget,

@@ -16,7 +16,7 @@ void main() {
     final input = <TerminalBinaryFrame>[];
     final pane = app.adoptSessionForTest(terminal('a0', input));
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyP);
+    await chord(tester, LogicalKeyboardKey.keyO);
     final field = find.byKey(const ValueKey('swarm-search-input'));
     final results = find.byKey(const ValueKey('swarm-search-results'));
     expect(field, findsOneWidget);
@@ -56,7 +56,7 @@ void main() {
       app.newSwarm();
       final target = app.activeSwarm;
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       final field = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(field, 'Agent 0');
       await tester.pump();

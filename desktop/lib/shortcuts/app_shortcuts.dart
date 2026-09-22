@@ -5,7 +5,7 @@ import 'package:flutter/widgets.dart';
 import '../logging/debug_surface.dart';
 
 /// Harness uses Command as a direct prefix for frequent workspace actions.
-/// T opens a tab, O opens a harness (also P), N creates a harness, S opens the Store,
+/// T opens a tab, O opens a harness, P opens commands, N creates a harness, S opens the Store,
 /// Shift-L chooses a layout. H/J/K/L and arrows focus panes; B routes a task.
 /// The same definitions feed live keys, help and search.
 ///
@@ -355,8 +355,8 @@ List<AppShortcut> appShortcuts({bool swarmMode = true}) => [
 const kSwarmShortcuts = [
   AppShortcut(
     action: ShortcutAction.addAgent,
-    activator: SingleActivator(LogicalKeyboardKey.keyP, meta: true),
-    label: 'New Pane',
+    activator: SingleActivator(LogicalKeyboardKey.keyO, meta: true),
+    label: 'Open Harness',
     group: ShortcutGroup.actions,
   ),
   AppShortcut(
@@ -372,7 +372,7 @@ const kSwarmShortcuts = [
     group: ShortcutGroup.navigate,
   ),
   // ⌘⇧T is New Terminal, as it is in a terminal app. "Reopen last closed
-  // harness" used to sit on it; it lives on in the History menu, the ⌘⇧P
+  // harness" used to sit on it; it lives on in the History menu, the ⌘P
   // command palette and `keybindings.jsonc`, without a default chord.
   AppShortcut(
     action: ShortcutAction.newTerminal,
@@ -393,7 +393,7 @@ const kSwarmShortcuts = [
       meta: true,
       shift: true,
     ),
-    label: 'Clone Agent',
+    label: 'Clone Harness',
     group: ShortcutGroup.actions,
   ),
   AppShortcut(

@@ -71,7 +71,7 @@ void main() {
         );
         await tester.pump(const Duration(milliseconds: 100));
         final field = find.byKey(const ValueKey('swarm-search-input'));
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await chord(tester, LogicalKeyboardKey.keyO);
         expect(field, findsOneWidget);
         expect(find.byType(SwarmSearchResults), findsOneWidget);
         expect(

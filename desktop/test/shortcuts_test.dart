@@ -265,7 +265,7 @@ void main() {
       expect(chordsFor(ShortcutAction.showLayout), ['⇧⌘L']);
       expect(chordsFor(ShortcutAction.orchestrate), isEmpty);
       expect(chordsFor(ShortcutAction.routeTask), ['⌘B']);
-      expect(chordsFor(ShortcutAction.addAgent), ['⌘P']);
+      expect(chordsFor(ShortcutAction.addAgent), ['⌘O']);
       expect(chordsFor(ShortcutAction.newAgent), ['⌘N']);
       expect(chordsFor(ShortcutAction.showAttention), ['⇧⌘I']);
       expect(chordsFor(ShortcutAction.findTerminal), ['⌘F']);

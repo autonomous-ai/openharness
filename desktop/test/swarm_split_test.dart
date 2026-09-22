@@ -239,7 +239,7 @@ void main() {
                   : LogicalKeyboardKey.keyD,
             );
           case 'palette':
-            await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+            await chord(tester, LogicalKeyboardKey.keyP);
             await tester.enterText(
               find.byKey(const ValueKey('swarm-search-input')),
               '> split $direction',
@@ -635,7 +635,7 @@ void main() {
     await mountWide(tester, app);
     tester.view.physicalSize = const Size(3000, 1800);
     await tester.pump();
-    await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+    await chord(tester, LogicalKeyboardKey.keyP);
     await tester.enterText(
       find.byKey(const ValueKey('swarm-search-input')),
       '> split right',
