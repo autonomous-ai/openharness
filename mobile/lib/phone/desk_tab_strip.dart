@@ -37,6 +37,7 @@ class DeskTabStrip extends StatefulWidget {
     required this.selectedId,
     required this.onPick,
     this.onAddTab,
+    this.onRename,
   });
 
   /// Every tab, in the desk's own order, with the leftover group last — see
@@ -53,6 +54,11 @@ class DeskTabStrip extends StatefulWidget {
   /// undrawn — a desk that cannot be written to has nothing for it to do; see
   /// [AppNotifier.deskWritable].
   final VoidCallback? onAddTab;
+
+  /// A name double-tapped. Called only for the groups that are real tabs on a
+  /// desk this phone may write to — the leftover group has no name of its own
+  /// to change.
+  final void Function(DeskGroup group)? onRename;
 
   /// The row's height, which the popup counts into its own.
   ///
@@ -121,6 +127,7 @@ class _DeskTabStripState extends State<DeskTabStrip> {
     final selectedId = widget.selectedId;
     final onPick = widget.onPick;
     final onAddTab = widget.onAddTab;
+    final onRename = widget.onRename;
     const sideInset = DeskTabStrip.sideInset;
     const height = DeskTabStrip.height;
     const gap = DeskTabStrip._gap;
@@ -153,6 +160,20 @@ class _DeskTabStripState extends State<DeskTabStrip> {
                   selected: selected,
                   reachable: !group.isEmpty,
                   onTap: () => onPick(group),
+                  // ⚠️ **Only the tab being SHOWN can be double-tapped, and
+                  // that is a decision about the other tabs rather than about
+                  // this one.** A name that has to wait and see whether a
+                  // second tap is coming answers the first one 300ms late —
+                  // and on every other name that first tap is the switch
+                  // itself, which is the one thing on this row that has to
+                  // feel immediate. On the tab already open the tap does
+                  // nothing anyway, so the wait costs nothing.
+                  //
+                  // Null too for the leftover group and on a desk with no
+                  // writes — see [DeskTabStrip.onRename].
+                  onRename: onRename == null || group.id == null || !selected
+                      ? null
+                      : () => onRename(group),
                 );
               },
             ),
@@ -227,6 +248,7 @@ class _DeskTabName extends StatelessWidget {
     required this.selected,
     required this.reachable,
     required this.onTap,
+    required this.onRename,
   });
 
   final String name;
@@ -237,6 +259,13 @@ class _DeskTabName extends StatelessWidget {
   final bool reachable;
 
   final VoidCallback onTap;
+
+  /// A double tap on the name. Null on the groups that cannot be renamed, and
+  /// that is worth more than a dead callback would be: a name with no
+  /// double-tap recognizer answers a SINGLE tap at once, while one that has to
+  /// wait and see whether a second is coming answers it 300ms later. So the
+  /// tabs that cannot be renamed keep the snappier tap.
+  final VoidCallback? onRename;
 
   static const double _barHeight = 2;
   static const double _barGap = 5;
@@ -254,6 +283,7 @@ class _DeskTabName extends StatelessWidget {
       // the tap — a 15pt word is a small thing to hit with a thumb.
       behavior: HitTestBehavior.opaque,
       onTap: _tapped,
+      onDoubleTap: onRename == null ? null : _renamed,
       child: Center(
         child: Stack(
           children: [
@@ -299,5 +329,10 @@ class _DeskTabName extends StatelessWidget {
   void _tapped() {
     HapticFeedback.selectionClick();
     onTap();
+  }
+
+  void _renamed() {
+    HapticFeedback.selectionClick();
+    onRename?.call();
   }
 }

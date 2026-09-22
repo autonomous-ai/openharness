@@ -64,6 +64,17 @@ void main() {
     await tester.pump();
   }
 
+  /// The rename gesture. The pause between the two taps is inside Flutter's
+  /// 300ms double-tap window, and the wait after it is the dialog's own
+  /// transition.
+  Future<void> doubleTap(WidgetTester tester, String tab) async {
+    await tester.tap(find.text(tab));
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(find.text(tab));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+  }
+
   Future<void> settleSheet(WidgetTester tester) async {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
@@ -193,6 +204,76 @@ void main() {
       reason: 'a tab holding nothing is not a tab whose machine is away',
     );
     expect(find.bySemanticsLabel('Add agent to Empty'), findsOneWidget);
+  });
+
+  testWidgets('a name double-tapped is the tab renamed, and kept custom', (
+    tester,
+  ) async {
+    final app = await pumpHome(
+      tester,
+      tabs: [
+        deskTab('t1', 'Desktop', ['a']),
+        deskTab('t2', 'Docker', ['b']),
+      ],
+    );
+
+    await openPanel(tester);
+    // ⚠️ Switched to first, THEN double-tapped: only the tab being shown takes
+    // the gesture — see [DeskTabStrip.onRename].
+    await showTab(tester, 'Docker');
+    await doubleTap(tester, 'Docker');
+
+    await tester.enterText(find.byType(TextField), 'Servers');
+    await tester.tap(find.text('Save'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(deskApiOf(app).written, [
+      {'op': 'tab.rename', 'id': 't2', 'name': 'Servers', 'nameIsCustom': true},
+    ]);
+    expect(
+      app.deskTabs.firstWhere((tab) => tab.id == 't2').nameIsCustom,
+      isTrue,
+      reason: 'a name a person typed is not one a window may take back',
+    );
+    expect(find.text('Servers'), findsOneWidget);
+  });
+
+  testWidgets('a blank name leaves the tab as it was', (tester) async {
+    final app = await pumpHome(
+      tester,
+      tabs: [
+        deskTab('t1', 'Desktop', ['a']),
+      ],
+    );
+
+    await openPanel(tester);
+    await doubleTap(tester, 'Desktop');
+
+    await tester.enterText(find.byType(TextField), '   ');
+    await tester.tap(find.text('Save'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(deskApiOf(app).written, isEmpty);
+    expect(find.text('Desktop'), findsOneWidget);
+  });
+
+  testWidgets('the agents no tab holds cannot be renamed', (tester) async {
+    final app = await pumpHome(
+      tester,
+      tabs: [
+        deskTab('t1', 'Desktop', ['a']),
+      ],
+    );
+
+    await openPanel(tester);
+    await showTab(tester, 'Other');
+    await doubleTap(tester, 'Other');
+
+    // "Other" is not a tab on the desk — there is no name to write.
+    expect(find.byType(TextField), findsNothing);
+    expect(deskApiOf(app).written, isEmpty);
   });
 
   testWidgets('the agents no tab holds are offered no + of their own', (

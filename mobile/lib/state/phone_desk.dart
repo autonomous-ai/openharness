@@ -270,6 +270,33 @@ class PhoneDesk {
     return id;
   }
 
+  /// A tab renamed by hand on this phone.
+  ///
+  /// ⚠️ **`nameIsCustom: true`, and that is not the same field twice.** A tab
+  /// carries the name of whatever is in it until somebody says otherwise: a
+  /// window re-derives it as panes come and go, and [createTabFor] leaves that
+  /// free. A name typed by a person is the exception every computer has to
+  /// honour, and this flag is how they know — without it the next pane added on
+  /// a desktop would quietly take the name back.
+  ///
+  /// A blank name is not a rename; it is a tap on Save with nothing typed, and
+  /// the tab keeps what it had.
+  void renameTab(String tabId, String name) {
+    if (!_state.enabled) return;
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+    final tab = _state.synced.where((t) => t.id == tabId).firstOrNull;
+    if (tab == null || (tab.name == trimmed && tab.nameIsCustom)) return;
+    _queue([
+      {
+        'op': 'tab.rename',
+        'id': tabId,
+        'name': trimmed,
+        'nameIsCustom': true,
+      },
+    ]);
+  }
+
   /// An agent that already exists joins a tab the person picked — which need
   /// not be the tab the phone is in. Silent where the tab has it already: the
   /// panel offers agents a tab lacks, but the desk can have moved underneath.

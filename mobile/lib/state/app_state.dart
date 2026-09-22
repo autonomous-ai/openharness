@@ -557,6 +557,11 @@ class AppNotifier extends ChangeNotifier {
   void addAgentToDeskTab(String tabId, AgentRef agent) =>
       _desk.addToTab(tabId, agent);
 
+  /// A tab renamed by hand, from a double tap on its name in the tabs panel.
+  /// See [PhoneDesk.renameTab].
+  void renameDeskTab(String tabId, String name) =>
+      _desk.renameTab(tabId, name);
+
   /// An agent that already exists opens a tab of its own — the `+` on the tab
   /// row. See [PhoneDesk.createTabFor].
   String? createDeskTabFor(AgentRef agent, {String? name}) =>

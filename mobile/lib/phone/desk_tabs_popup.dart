@@ -13,6 +13,7 @@ import 'agent_tile.dart';
 import 'agents_page.dart' show openNewAgent;
 import 'desk_add_agent_sheet.dart';
 import 'desk_groups.dart';
+import 'desk_tab_rename_dialog.dart';
 import 'desk_tab_strip.dart';
 import 'phone_card.dart';
 import 'phone_navigation.dart';
@@ -167,6 +168,26 @@ class _DeskTabsPanelState extends State<_DeskTabsPanel> {
           .isNotEmpty ??
       false;
 
+  /// A double tap on a tab's name.
+  ///
+  /// ⚠️ **The tab is picked as well as renamed, and not as an afterthought.**
+  /// The first tap of the two has already picked it, so the panel below is
+  /// showing what is being named — and after a rename the row under the names
+  /// would otherwise belong to a different tab than the one just typed.
+  void _rename(DeskGroup group) {
+    final id = group.id;
+    if (id == null) return;
+    setState(() => _selectedId = id);
+    unawaited(
+      showDeskTabRenameDialog(
+        context,
+        widget.notifier,
+        tabId: id,
+        currentName: group.name,
+      ),
+    );
+  }
+
   /// The `+` on the tab row: a tab of its own for an agent picked or made now.
   ///
   /// ⚠️ **The tab is written only once there is something to put in it.** A
@@ -269,6 +290,7 @@ class _DeskTabsPanelState extends State<_DeskTabsPanel> {
             // Undrawn on a desk that cannot be written to — see
             // [AppNotifier.deskWritable].
             onAddTab: widget.notifier.deskWritable ? _addTab : null,
+            onRename: widget.notifier.deskWritable ? _rename : null,
           ),
           const SizedBox(height: 6),
           // ⚠️ **One height, whatever the tab holds.** Sized to its contents,
