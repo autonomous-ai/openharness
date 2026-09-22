@@ -133,9 +133,7 @@ For the curious engineer who wants to build beyond software. [Browse all 49 harn
 <a id="run-it"></a>
 ## Get started
 
-1. [Download the app](https://harness.autonomous.ai/desktop) for macOS or Linux.
-2. Sign in to an agent you already use.
-3. Press **⌘N**, type a task, press **Return**.
+**[Download the app](https://harness.autonomous.ai/desktop)** for macOS or Linux.
 
 Add a machine. Run this on it, then **Machines → Link Machine** in the app:
 
