@@ -31,57 +31,57 @@ Pick a preview to watch its recording, or **Try it** for a starting prompt and a
   <tr>
     <td width="50%" valign="top">
       <p><strong>Shape a lamp</strong> · Blender</p>
-      <a href="https://github.com/user-attachments/assets/a76c0fa1-70ec-4b51-93a7-50f5704807e6"><img src="docs/images/blender-shape-lab.png" width="640" alt="Shape Lab displaying a sculptural ribbon lamp with adjustable dimensions and a shelf of saved designs."></a>
+      <a href="https://github.com/user-attachments/assets/dc152a0b-94b6-4324-9d30-468b7ed3d14b"><img src="docs/images/blender-shape-lab.png" width="640" alt="Shape Lab displaying a sculptural ribbon lamp with adjustable dimensions and a shelf of saved designs."></a>
       <p>Real Blender session · shape a ribbon lamp and keep named design variants</p>
-      <p><a href="https://github.com/user-attachments/assets/a76c0fa1-70ec-4b51-93a7-50f5704807e6">▶ Watch session</a> · <a href="docs/hands-on.md#blender-shape-it-until-it-feels-right">Try it</a></p>
+      <p><a href="https://github.com/user-attachments/assets/dc152a0b-94b6-4324-9d30-468b7ed3d14b">▶ Watch session</a> · <a href="docs/hands-on.md#blender-shape-it-until-it-feels-right">Try it</a></p>
     </td>
     <td width="50%" valign="top">
       <p><strong>Change the world</strong> · MuJoCo</p>
-      <a href="https://github.com/user-attachments/assets/1d406d60-4dcf-40f0-8927-9944ec317068"><img src="docs/images/mujoco-what-if-shove.png" width="640" alt="A Unitree Go2 in the native MuJoCo viewer, comparing two futures with a shared timeline and body-height measurements."></a>
+      <a href="https://github.com/user-attachments/assets/bc214f57-7967-4e4b-9fe2-b722a033157d"><img src="docs/images/mujoco-what-if-shove.png" width="640" alt="A Unitree Go2 in the native MuJoCo viewer, comparing two futures with a shared timeline and body-height measurements."></a>
       <p>Real Go2 session · 100 N shove · compare two futures and keep the experiment</p>
-      <p><a href="https://github.com/user-attachments/assets/1d406d60-4dcf-40f0-8927-9944ec317068">▶ Watch session</a> · <a href="docs/hands-on.md#mujoco-try-a-different-world">Try it</a></p>
+      <p><a href="https://github.com/user-attachments/assets/bc214f57-7967-4e4b-9fe2-b722a033157d">▶ Watch session</a> · <a href="docs/hands-on.md#mujoco-try-a-different-world">Try it</a></p>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
       <p><strong>Rewind a jump</strong> · Godogen</p>
-      <a href="https://github.com/user-attachments/assets/3d2f7476-6090-4ed4-9a36-9cde67f7bef4"><img src="docs/images/godogen-rewind.png" width="640" alt="A playable game paused on its Rewind timeline with Try from here and Pin moment controls."></a>
+      <a href="https://github.com/user-attachments/assets/ee9e1af9-e92b-4a76-8583-36e2ee7ea4ec"><img src="docs/images/godogen-rewind.png" width="640" alt="A playable game paused on its Rewind timeline with Try from here and Pin moment controls."></a>
       <p>Alpine Drift · a real playable run, rewind, retry and saved feedback</p>
-      <p><a href="https://github.com/user-attachments/assets/3d2f7476-6090-4ed4-9a36-9cde67f7bef4">▶ Watch session</a> · <a href="docs/hands-on.md#godogen-try-that-moment-again">Try it</a></p>
+      <p><a href="https://github.com/user-attachments/assets/ee9e1af9-e92b-4a76-8583-36e2ee7ea4ec">▶ Watch session</a> · <a href="docs/hands-on.md#godogen-try-that-moment-again">Try it</a></p>
     </td>
     <td width="50%" valign="top">
       <p><strong>Perform a track</strong> · Strudel</p>
-      <a href="https://github.com/user-attachments/assets/890d04f6-da6a-4bcf-8d33-e547b3cf6f63"><img src="docs/images/strudel-live-take.png" width="640" alt="Strudel&#x27;s live voice lanes beside a recorded take with waveform, named moments and an audio-and-source download."></a>
+      <a href="https://github.com/user-attachments/assets/a3d4381b-5f55-406c-9d68-330cd8792fc5"><img src="docs/images/strudel-live-take.png" width="640" alt="Strudel&#x27;s live voice lanes beside a recorded take with waveform, named moments and an audio-and-source download."></a>
       <p>Lantern room · real 112 bpm performance with audio · keep the WAV, source and markers</p>
-      <p><a href="https://github.com/user-attachments/assets/890d04f6-da6a-4bcf-8d33-e547b3cf6f63">▶ Watch session · with audio</a> · <a href="docs/hands-on.md#strudel-perform-the-version-you-love">Try it</a></p>
+      <p><a href="https://github.com/user-attachments/assets/a3d4381b-5f55-406c-9d68-330cd8792fc5">▶ Watch session · with audio</a> · <a href="docs/hands-on.md#strudel-perform-the-version-you-love">Try it</a></p>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
       <p><strong>Compare the signal</strong> · CircuitJS</p>
-      <a href="https://github.com/user-attachments/assets/5c1202a1-d97a-4b1e-9063-a204c00564a8"><img src="docs/images/scope-lab.png" width="640" alt="Scope Lab comparing native RC filter traces at two resistance values with A and B measurement cursors."></a>
+      <a href="https://github.com/user-attachments/assets/6fb1892a-23a2-49ba-9698-4e71a404f1f4"><img src="docs/images/scope-lab.png" width="640" alt="Scope Lab comparing native RC filter traces at two resistance values with A and B measurement cursors."></a>
       <p>Real CircuitJS solver · compare RC filter traces at 1 kΩ and 2 kΩ, measure and keep both</p>
-      <p><a href="https://github.com/user-attachments/assets/5c1202a1-d97a-4b1e-9063-a204c00564a8">▶ Watch session</a> · <a href="docs/hands-on.md#circuitjs-see-what-changed-in-the-signal">Try it</a></p>
+      <p><a href="https://github.com/user-attachments/assets/6fb1892a-23a2-49ba-9698-4e71a404f1f4">▶ Watch session</a> · <a href="docs/hands-on.md#circuitjs-see-what-changed-in-the-signal">Try it</a></p>
     </td>
     <td width="50%" valign="top">
       <p><strong>Turn a molecule</strong> · RDKit</p>
-      <a href="https://github.com/user-attachments/assets/4356989d-5ff1-4351-b85d-31b80f7b7cd6"><img src="docs/images/rdkit-bond-scan.png" width="640" alt="An authored molecule in 3D with a reference pose, native MMFF94 bond-energy curve and a selected rotation angle."></a>
+      <a href="https://github.com/user-attachments/assets/a7132b72-db46-4873-b412-ef5c2b400a8e"><img src="docs/images/rdkit-bond-scan.png" width="640" alt="An authored molecule in 3D with a reference pose, native MMFF94 bond-energy curve and a selected rotation angle."></a>
       <p>Phenethyl acetate · real rigid MMFF94 bond scan · 25 poses and a kept study</p>
-      <p><a href="https://github.com/user-attachments/assets/4356989d-5ff1-4351-b85d-31b80f7b7cd6">▶ Watch session</a> · <a href="docs/hands-on.md#rdkit-see-a-molecule-turn">Try it</a></p>
+      <p><a href="https://github.com/user-attachments/assets/a7132b72-db46-4873-b412-ef5c2b400a8e">▶ Watch session</a> · <a href="docs/hands-on.md#rdkit-see-a-molecule-turn">Try it</a></p>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
       <p><strong>Review a draft</strong> · Typst</p>
-      <a href="https://github.com/user-attachments/assets/e5f997fd-460f-4b25-9b4f-b587175198ad"><img src="docs/images/doc-review.png" width="640" alt="A native PDF draft held for review, with anchored Change, Keep and Question notes."></a>
+      <a href="https://github.com/user-attachments/assets/603d7d8d-941d-41d1-8a17-5765487aafea"><img src="docs/images/doc-review.png" width="640" alt="A native PDF draft held for review, with anchored Change, Keep and Question notes."></a>
       <p>Portable light · real Typst PDF · anchored notes carried into a later revision</p>
-      <p><a href="https://github.com/user-attachments/assets/e5f997fd-460f-4b25-9b4f-b587175198ad">▶ Watch session</a> · <a href="docs/hands-on.md#typst-point-at-what-you-mean">Try it</a></p>
+      <p><a href="https://github.com/user-attachments/assets/603d7d8d-941d-41d1-8a17-5765487aafea">▶ Watch session</a> · <a href="docs/hands-on.md#typst-point-at-what-you-mean">Try it</a></p>
     </td>
     <td width="50%" valign="top">
       <p><strong>Ask a better question</strong> · Jev Sheets</p>
-      <a href="https://github.com/user-attachments/assets/fd9dfe03-4579-433d-a765-90fc7c07e54c"><img src="docs/images/question-lab.png" width="640" alt="Question Lab comparing two urgency questions on fictional support rows, prominently labeled offline practice."></a>
+      <a href="https://github.com/user-attachments/assets/afc30e73-2f0a-442e-b929-79126adea76b"><img src="docs/images/question-lab.png" width="640" alt="Question Lab comparing two urgency questions on fictional support rows, prominently labeled offline practice."></a>
       <p>Offline practice recording · fictional support tickets · paired questions and a kept review</p>
-      <p><a href="https://github.com/user-attachments/assets/fd9dfe03-4579-433d-a765-90fc7c07e54c">▶ Watch session</a> · <a href="docs/hands-on.md#jev-sheets-ask-a-better-question">Try it</a></p>
+      <p><a href="https://github.com/user-attachments/assets/afc30e73-2f0a-442e-b929-79126adea76b">▶ Watch session</a> · <a href="docs/hands-on.md#jev-sheets-ask-a-better-question">Try it</a></p>
     </td>
   </tr>
 </table>
