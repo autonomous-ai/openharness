@@ -1,5 +1,43 @@
 # Native Release interaction benchmark
 
+## Framework-dispatch comparison and manual feature checks
+
+The September 22 performance pass adds two separate modes:
+
+```sh
+python3 tool/native_benchmark/prepare.py --flutter /path/to/flutter --flutter-dispatch
+python3 tool/native_benchmark/prepare.py --flutter /path/to/flutter --interactive
+```
+
+Open the printed `BENCHMARK_APP` through normal application controls. These
+copies embed only their own temporary fixture environment in the copied host.
+The dispatch mode runs and exits automatically, writing `interactive.json` in
+`BENCHMARK_ROOT`; the interactive mode remains open for manual checks. They
+cannot be combined. Neither mode opens a real transport or uses saved sessions.
+
+`--flutter-dispatch` measures Cmd+N/O/P/comma/slash/F, tab changes, pane focus,
+and zoom in the macOS Release renderer. It calls the framework's keyboard-state
+and focus dispatch stages, validates the resulting widget/state, and joins the
+exact first frame and fully opened route frame to `FrameTiming`. Each operation
+has five warmups and 40 measured observations. All observations are retained.
+The fixture has 16 sessions, four visible panes and 1,000 scrollback rows per
+session. It measures idle-terminal interactions only. Run baseline and edited
+production sources with identical fixture tooling, sequentially, with builds
+and other tests finished. Preserve every completed run.
+
+This mode **excludes AppKit input delivery, physical keyboard latency, GPU
+presentation, network latency and native titlebar paint completion**. A fully
+opened frame includes any route fade; the first frame is reported separately.
+The reported display maximum is metadata, not an asserted refresh rate.
+Use manual mode for visual/interaction QA, not timing claims. See the
+[September 22 results](../../../docs/performance/2026-09-22-desktop-latency.md).
+
+## Original AppKit event-queue runner
+
+The original path below has no accepted calibration in this performance pass.
+Its Cmd+1…4 pane-focus workload also predates the current default keymap; it
+must be updated and recalibrated before reporting native-event latency.
+
 **Status, September 14, 2026:** the builder supports the current Harness name,
 validates the copied product identity and verifies the resulting bundle. It
 accepts both the current `ai.autonomous.harness` and legacy `.v2` source IDs.

@@ -11,6 +11,11 @@ from isolation import benchmark_configuration, validate_benchmark_bundle
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--flutter', required=True, type=Path)
+mode = parser.add_mutually_exclusive_group()
+mode.add_argument('--interactive', action='store_true',
+                    help='Build a disposable app for manual feature checks through normal input')
+mode.add_argument('--flutter-dispatch', action='store_true',
+                    help='Benchmark Flutter key dispatch and release raster, excluding OS input delivery')
 args = parser.parse_args()
 source = Path(__file__).resolve().parents[2]
 root = Path(tempfile.mkdtemp(prefix='harness-native-benchmark-', dir='/private/tmp'))
@@ -22,6 +27,20 @@ marker = '    super.awakeFromNib()'
 if code.count(marker) != 1:
     raise RuntimeError('Native benchmark insertion point changed')
 code = code.replace(marker, '    NativeBenchmark.install(window: self, messenger: flutterViewController.engine.binaryMessenger)\n' + marker)
+if args.interactive or args.flutter_dispatch:
+    # Only this copied host gets fixture state. Launching through normal app
+    # controls needs no shell environment and never opens a real transport.
+    setup = '\n'.join(f'    setenv("{key}", "{value}", 1)' for key, value in {
+        'FLUTTER_TEST': '1',
+        'HARNESS_NATIVE_BENCHMARK': '1',
+        'HARNESS_BENCH_MANUAL': '0' if args.flutter_dispatch else '1',
+        'HARNESS_BENCH_FLUTTER': '1' if args.flutter_dispatch else '0',
+        'HARNESS_BENCH_OUTPUT': str(root / 'interactive.json'),
+    }.items())
+    engine = '    let flutterViewController = FlutterViewController()'
+    if code.count(engine) != 1:
+        raise RuntimeError('Native fixture startup insertion point changed')
+    code = code.replace(engine, setup + '\n' + engine)
 code += '\n' + (source / 'tool/native_benchmark/NativeBenchmark.swift').read_text()
 window.write_text(code)
 info = desktop / 'macos/Runner/Configs/AppInfo.xcconfig'

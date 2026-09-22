@@ -1,0 +1,478 @@
+{
+  "sourceLog": "/private/tmp/rapid-moose-baseline.log",
+  "observations": [
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "command_dock",
+      "agents": 2000,
+      "reopen": {
+        "samples": 50,
+        "medianMs": 56.769,
+        "p95Ms": 206.007,
+        "p99Ms": 221.243
+      },
+      "broadQuery": {
+        "samples": 50,
+        "medianMs": 44.488,
+        "p95Ms": 98.915,
+        "p99Ms": 119.783
+      },
+      "queryGrowth": {
+        "samples": 50,
+        "medianMs": 18.46,
+        "p95Ms": 50.784,
+        "p99Ms": 66.601
+      },
+      "narrowQuery": {
+        "samples": 50,
+        "medianMs": 41.438,
+        "p95Ms": 97.845,
+        "p99Ms": 103.456
+      },
+      "arrow": {
+        "samples": 50,
+        "medianMs": 9.157,
+        "p95Ms": 12.029,
+        "p99Ms": 18.666
+      },
+      "cmdPThenCmdO": {
+        "samples": 50,
+        "medianMs": 3.674,
+        "p95Ms": 5.833,
+        "p99Ms": 6.949
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "command_dock",
+      "agents": 10000,
+      "reopen": {
+        "samples": 50,
+        "medianMs": 47.766,
+        "p95Ms": 166.375,
+        "p99Ms": 198.675
+      },
+      "broadQuery": {
+        "samples": 50,
+        "medianMs": 52.758,
+        "p95Ms": 58.859,
+        "p99Ms": 61.455
+      },
+      "queryGrowth": {
+        "samples": 50,
+        "medianMs": 29.837,
+        "p95Ms": 64.179,
+        "p99Ms": 116.669
+      },
+      "narrowQuery": {
+        "samples": 50,
+        "medianMs": 46.007,
+        "p95Ms": 174.345,
+        "p99Ms": 178.545
+      },
+      "arrow": {
+        "samples": 50,
+        "medianMs": 7.734,
+        "p95Ms": 10.177,
+        "p99Ms": 10.419
+      },
+      "cmdPThenCmdO": {
+        "samples": 50,
+        "medianMs": 3.129,
+        "p95Ms": 5.191,
+        "p99Ms": 5.272
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "operation": "terminal_output_decode_and_parse",
+      "content": "ASCII",
+      "bytesPerFrame": 16384,
+      "decodeAndParse": {
+        "samples": 100,
+        "medianMs": 0.645,
+        "p95Ms": 0.723,
+        "p99Ms": 1.036
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "operation": "terminal_output_decode_and_parse",
+      "content": "Unicode",
+      "bytesPerFrame": 16384,
+      "decodeAndParse": {
+        "samples": 100,
+        "medianMs": 0.394,
+        "p95Ms": 0.451,
+        "p99Ms": 0.668
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "operation": "jump_catalog",
+      "agents": 2000,
+      "build": {
+        "samples": 100,
+        "medianMs": 3.24,
+        "p95Ms": 4.365,
+        "p99Ms": 4.788
+      },
+      "query": {
+        "samples": 100,
+        "medianMs": 1.179,
+        "p95Ms": 1.469,
+        "p99Ms": 1.599
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "agents": 2000,
+      "machines": 8,
+      "search": {
+        "samples": 100,
+        "medianMs": 2.11,
+        "p95Ms": 2.419,
+        "p99Ms": 2.481
+      },
+      "projectGrouping": {
+        "samples": 100,
+        "medianMs": 0.631,
+        "p95Ms": 0.893,
+        "p99Ms": 0.982
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "operation": "add_agent_search",
+      "agents": 2000,
+      "machines": 8,
+      "projects": 50,
+      "entries": 2059,
+      "coldCatalog": {
+        "samples": 100,
+        "medianMs": 5.985,
+        "p95Ms": 7.168,
+        "p99Ms": 7.458
+      },
+      "unchangedCatalog": {
+        "samples": 100,
+        "medianMs": 0.001,
+        "p95Ms": 0.001,
+        "p99Ms": 0.001
+      },
+      "openAndDisposeController": {
+        "samples": 100,
+        "medianMs": 8.46,
+        "p95Ms": 9.635,
+        "p99Ms": 10.017
+      },
+      "queries": {
+        "agent": {
+          "samples": 100,
+          "medianMs": 2.011,
+          "p95Ms": 2.343,
+          "p99Ms": 2.684,
+          "results": 2000
+        },
+        "agent 12 machine 3": {
+          "samples": 100,
+          "medianMs": 1.793,
+          "p95Ms": 10.306,
+          "p99Ms": 11.846,
+          "results": 43
+        },
+        "agn12": {
+          "samples": 100,
+          "medianMs": 1.625,
+          "p95Ms": 2.473,
+          "p99Ms": 2.869,
+          "results": 168
+        },
+        "project 12 main": {
+          "samples": 100,
+          "medianMs": 2.455,
+          "p95Ms": 12.067,
+          "p99Ms": 17.726,
+          "results": 177
+        },
+        "no-such-agent": {
+          "samples": 100,
+          "medianMs": 1.161,
+          "p95Ms": 1.572,
+          "p99Ms": 1.896,
+          "results": 0
+        }
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "operation": "navigation_locations",
+      "discoveredAgents": 2000,
+      "swarms": 12,
+      "agentLocations": 50,
+      "entries": 62,
+      "coldCatalog": {
+        "samples": 100,
+        "medianMs": 0.264,
+        "p95Ms": 0.486,
+        "p99Ms": 0.754
+      },
+      "unchangedCatalog": {
+        "samples": 100,
+        "medianMs": 0.003,
+        "p95Ms": 0.003,
+        "p99Ms": 0.003
+      },
+      "openAndDisposeController": {
+        "samples": 100,
+        "medianMs": 0.304,
+        "p95Ms": 0.417,
+        "p99Ms": 0.655
+      },
+      "query": {
+        "samples": 100,
+        "medianMs": 0.04,
+        "p95Ms": 0.057,
+        "p99Ms": 0.088
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "operation": "native_history_snapshot",
+      "discoveredAgents": 2000,
+      "swarms": 12,
+      "entries": 60,
+      "changedFocus": {
+        "samples": 100,
+        "medianMs": 0.456,
+        "p95Ms": 0.546,
+        "p99Ms": 1.961
+      },
+      "unchanged": {
+        "samples": 100,
+        "medianMs": 0.002,
+        "p95Ms": 0.003,
+        "p99Ms": 0.004
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "chrome": "flutter_tabs",
+      "discoveredAgents": 70,
+      "swarms": 4,
+      "terminals": 16,
+      "scrollbackLinesPerTerminal": 1000,
+      "viewport": "1280x800",
+      "tabSwitchAndFrame": {
+        "samples": 60,
+        "medianMs": 29.69,
+        "p95Ms": 37.798,
+        "p99Ms": 40.591
+      },
+      "rebuildsPerSwitch": 1708,
+      "focusAndFrame": {
+        "samples": 60,
+        "medianMs": 14.797,
+        "p95Ms": 16.772,
+        "p99Ms": 18.485
+      },
+      "rebuildsPerFocus": 980,
+      "mostRebuiltWidgets": {
+        "_FocusInheritedScope": 93,
+        "Focus": 74,
+        "DefaultSelectionStyle": 62,
+        "IconTheme": 62,
+        "Positioned": 61,
+        "RawGestureDetector": 59,
+        "Actions": 43,
+        "_ActionsScope": 43,
+        "GestureDetector": 37,
+        "DefaultTextStyle": 34,
+        "Builder": 34,
+        "Material": 33
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "chrome": "flutter_tabs",
+      "discoveredAgents": 70,
+      "swarms": 12,
+      "terminals": 48,
+      "scrollbackLinesPerTerminal": 1000,
+      "viewport": "1280x800",
+      "tabSwitchAndFrame": {
+        "samples": 60,
+        "medianMs": 26.11,
+        "p95Ms": 32.299,
+        "p99Ms": 35.893
+      },
+      "rebuildsPerSwitch": 2364,
+      "focusAndFrame": {
+        "samples": 60,
+        "medianMs": 15.045,
+        "p95Ms": 16.391,
+        "p99Ms": 16.579
+      },
+      "rebuildsPerFocus": 1266,
+      "mostRebuiltWidgets": {
+        "_FocusInheritedScope": 117,
+        "Focus": 98,
+        "IconTheme": 94,
+        "DefaultSelectionStyle": 94,
+        "Positioned": 93,
+        "RawGestureDetector": 83,
+        "GestureDetector": 61,
+        "Actions": 59,
+        "_ActionsScope": 59,
+        "DefaultTextStyle": 50,
+        "Builder": 50,
+        "Material": 49
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "chrome": "native_bridge_stubbed",
+      "discoveredAgents": 2000,
+      "swarms": 4,
+      "terminals": 16,
+      "scrollbackLinesPerTerminal": 1000,
+      "viewport": "1280x800",
+      "tabSwitchAndFrame": {
+        "samples": 60,
+        "medianMs": 19.716,
+        "p95Ms": 22.708,
+        "p99Ms": 27.457
+      },
+      "rebuildsPerSwitch": 1307,
+      "focusAndFrame": {
+        "samples": 60,
+        "medianMs": 10.041,
+        "p95Ms": 12.085,
+        "p99Ms": 12.967
+      },
+      "rebuildsPerFocus": 579,
+      "mostRebuiltWidgets": {
+        "_FocusInheritedScope": 78,
+        "Positioned": 61,
+        "Focus": 59,
+        "RawGestureDetector": 43,
+        "DefaultSelectionStyle": 40,
+        "IconTheme": 40,
+        "Actions": 32,
+        "_ActionsScope": 32,
+        "Tooltip": 28,
+        "Container": 26,
+        "ExcludeFocus": 25,
+        "ValueListenableBuilder<PaneDragRef?>": 24
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "chrome": "native_bridge_stubbed",
+      "discoveredAgents": 2000,
+      "swarms": 12,
+      "terminals": 48,
+      "scrollbackLinesPerTerminal": 1000,
+      "viewport": "1280x800",
+      "tabSwitchAndFrame": {
+        "samples": 60,
+        "medianMs": 19.828,
+        "p95Ms": 21.172,
+        "p99Ms": 21.922
+      },
+      "rebuildsPerSwitch": 1371,
+      "focusAndFrame": {
+        "samples": 60,
+        "medianMs": 11.823,
+        "p95Ms": 44.87,
+        "p99Ms": 58.512
+      },
+      "rebuildsPerFocus": 643,
+      "mostRebuiltWidgets": {
+        "Positioned": 93,
+        "_FocusInheritedScope": 78,
+        "Focus": 59,
+        "_PaneLayer": 48,
+        "RawGestureDetector": 43,
+        "DefaultSelectionStyle": 40,
+        "IconTheme": 40,
+        "Actions": 32,
+        "_ActionsScope": 32,
+        "Tooltip": 28,
+        "Container": 26,
+        "ExcludeFocus": 25
+      }
+    },
+    {
+      "kind": "headless_debug_warm_filesystem",
+      "operation": "settings",
+      "samples": 100,
+      "medianMs": 2.408,
+      "p95Ms": 3.238
+    },
+    {
+      "kind": "headless_debug_warm_filesystem",
+      "operation": "settings_and_keymap",
+      "samples": 100,
+      "medianMs": 3.771,
+      "p95Ms": 4.406
+    },
+    {
+      "kind": "headless_debug_event_loop",
+      "rows": 10000,
+      "coldQueryMs": 50.184,
+      "cachedTextQuery": {
+        "samples": 40,
+        "medianMs": 12.874,
+        "p95Ms": 24.093,
+        "p99Ms": 28.505
+      },
+      "liveRowUpdate": {
+        "samples": 40,
+        "medianMs": 4.833,
+        "p95Ms": 10.632,
+        "p99Ms": 21.239
+      },
+      "nextMatch": {
+        "samples": 40,
+        "medianMs": 0.008,
+        "p95Ms": 0.044,
+        "p99Ms": 0.582
+      }
+    },
+    {
+      "kind": "headless_fake_clock_timer_activity",
+      "retainedTerminals": 16,
+      "observationSeconds": 5,
+      "foreground": {
+        "timers": 1,
+        "callbacks": 10
+      },
+      "inactiveWindow": {
+        "timers": 0,
+        "callbacks": 0
+      },
+      "emptySwarm": {
+        "timers": 0,
+        "callbacks": 0
+      }
+    },
+    {
+      "kind": "headless_fake_clock_timer_activity",
+      "retainedTerminals": 48,
+      "observationSeconds": 5,
+      "foreground": {
+        "timers": 1,
+        "callbacks": 10
+      },
+      "inactiveWindow": {
+        "timers": 0,
+        "callbacks": 0
+      },
+      "emptySwarm": {
+        "timers": 0,
+        "callbacks": 0
+      }
+    }
+  ]
+}
