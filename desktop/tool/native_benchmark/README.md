@@ -2,10 +2,11 @@
 
 ## Framework-dispatch comparison and manual feature checks
 
-The September 22 performance pass adds two separate modes:
+The fixture supports three separate modes:
 
 ```sh
 python3 tool/native_benchmark/prepare.py --flutter /path/to/flutter --flutter-dispatch
+python3 tool/native_benchmark/prepare.py --flutter /path/to/flutter --primary-workflows
 python3 tool/native_benchmark/prepare.py --flutter /path/to/flutter --interactive
 ```
 
@@ -35,6 +36,13 @@ time. A preceding busy frame can change the input's position within a refresh
 interval; inspect these components before attributing elapsed-time differences
 to CPU work. Wall-clock phase timestamps are correlated using the engine's
 paired monotonic and wall-clock raster-finish timestamps.
+
+`--primary-workflows` runs only Cmd+N/O/T and tab switching, with five warmups
+and 120 measured samples per action. It inserts a repeatable sequence of 0–20 ms
+delays **before** the measured dispatch to spread input across refresh phases.
+The requested delay is retained on every sample. This supplements the original
+post-frame cadence; preserve and report both if they give different results.
+The recorded preceding frame is the frame awaited before that optional delay.
 Use manual mode for visual/interaction QA, not timing claims. See the
 [September 22 results](../../../docs/performance/2026-09-22-desktop-latency.md).
 

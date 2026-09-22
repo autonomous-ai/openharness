@@ -98,6 +98,19 @@ Future<void> runFlutterDispatchBenchmark(
   Map<String, Object?> metadata,
   Map<int, ui.FrameTiming> timings,
 ) async {
+  final primaryOnly = Platform.environment['HARNESS_BENCH_PRIMARY'] == '1';
+  final sampleCount = primaryOnly ? 120 : 40;
+  int phaseDelay(int sample) => primaryOnly ? (sample + 5) * 11003 % 20000 : 0;
+  Future<int> prepareInput(int sample) async {
+    final frame = await _frame();
+    if (primaryOnly) {
+      // Repeatable offsets spread dispatch across refresh phases. This think
+      // time precedes the measured interval and is identical on both builds.
+      await Future<void>.delayed(Duration(microseconds: phaseDelay(sample)));
+    }
+    return frame;
+  }
+
   final rows = <Map<String, Object?>>[];
   final operations = <(String, _Key, bool Function(Widget))>[
     (
@@ -132,8 +145,9 @@ Future<void> runFlutterDispatchBenchmark(
     ),
   ];
   for (final (operation, key, matches) in operations) {
-    for (var sample = -5; sample < 40; sample++) {
-      final previousFrame = await _frame();
+    if (primaryOnly && operation != 'cmd_n' && operation != 'cmd_o') continue;
+    for (var sample = -5; sample < sampleCount; sample++) {
+      final previousFrame = await prepareInput(sample);
       final began = DateTime.now().microsecondsSinceEpoch;
       _key(key);
       final dispatched = DateTime.now().microsecondsSinceEpoch;
@@ -158,6 +172,7 @@ Future<void> runFlutterDispatchBenchmark(
         'startedWallMicros': began,
         'dispatchMicros': dispatched - began,
         'previousFrame': previousFrame,
+        'phaseDelayMicros': phaseDelay(sample),
         'firstFrame': firstFrame,
         'readyFrame': readyFrame,
       });
@@ -187,8 +202,8 @@ Future<void> runFlutterDispatchBenchmark(
   }
   // Cmd+T creates a blank tab; Escape does not close that tab. Validate both
   // its first welcome frame and the Cmd+W return to the retained workspace.
-  for (var sample = -5; sample < 40; sample++) {
-    final previousFrame = await _frame();
+  for (var sample = -5; sample < sampleCount; sample++) {
+    final previousFrame = await prepareInput(sample);
     final previousTab = app.activeSwarmId;
     final previousCount = app.swarms.length;
     final began = DateTime.now().microsecondsSinceEpoch;
@@ -207,6 +222,7 @@ Future<void> runFlutterDispatchBenchmark(
       'startedWallMicros': began,
       'dispatchMicros': dispatched - began,
       'previousFrame': previousFrame,
+      'phaseDelayMicros': phaseDelay(sample),
       'firstFrame': frame,
       'readyFrame': frame,
     });
@@ -223,10 +239,13 @@ Future<void> runFlutterDispatchBenchmark(
       throw StateError('Cmd+T did not restore the original workspace');
     }
   }
-  for (final operation in ['tab', 'focus', 'zoom']) {
-    for (var sample = -5; sample < 40; sample++) {
+  for (final operation in [
+    'tab',
+    if (!primaryOnly) ...['focus', 'zoom'],
+  ]) {
+    for (var sample = -5; sample < sampleCount; sample++) {
       if (operation == 'focus') app.focusPaneByIndex(0);
-      final previousFrame = await _frame();
+      final previousFrame = await prepareInput(sample);
       final previousTab = app.activeSwarmId;
       final began = DateTime.now().microsecondsSinceEpoch;
       if (operation == 'tab') {
@@ -255,6 +274,7 @@ Future<void> runFlutterDispatchBenchmark(
         'startedWallMicros': began,
         'dispatchMicros': dispatched - began,
         'previousFrame': previousFrame,
+        'phaseDelayMicros': phaseDelay(sample),
         'firstFrame': frame,
         'readyFrame': frame,
       });
@@ -312,6 +332,8 @@ Future<void> runFlutterDispatchBenchmark(
     const JsonEncoder.withIndent('  ').convert({
       'success': true,
       'kind': 'native_release_flutter_dispatch_to_raster',
+      'cadence': primaryOnly ? 'phase_sweep_0_20ms' : 'post_frame',
+      'measuredSamplesPerOperation': sampleCount,
       'metadata': metadata,
       'terminals': app.allPanes.length,
       'summaries': [
