@@ -12,13 +12,14 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/core/models.dart' show Agent, AgentProject;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
-import 'package:harness_mobile/shared/widgets/app_icon_button.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/terminal/image_transcode.dart';
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
+import 'package:harness_mobile/terminal/question_pane.dart';
+import 'package:harness_mobile/terminal/question_pane_watcher.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
 import 'package:harness_mobile/widgets/engine_identity.dart'
     show engineIdentity;
@@ -41,6 +42,7 @@ import 'status_pill.dart';
 import 'terminal_action_column.dart';
 import 'terminal_chrome_scroll.dart';
 import 'terminal_header.dart';
+import 'terminal_header_action.dart';
 import 'terminal_input_dock.dart';
 import 'terminal_search.dart';
 import 'voice_input_controller.dart';
@@ -395,6 +397,104 @@ class _TerminalPageState extends State<TerminalPage>
   /// the notifier declined without ever changing a status.
   bool _takingControl = false;
 
+  /// Reads this page's own terminal buffer for an open question dialog.
+  ///
+  /// ⚠️ **Built late and only once**, when the agent's engine is first known:
+  /// the engine decides whether there is anything to look for at all, and it
+  /// arrives with the agent rather than with the page. Null until then, and for
+  /// every engine this parser is not verified against — which keeps the
+  /// keyboard from being raised over a dialog nobody can read.
+  QuestionPaneWatcher? _questionWatcher;
+
+  /// The engine [_questionWatcher] was built for, so a page that somehow
+  /// re-opens on a different engine rebuilds it rather than reading a Codex
+  /// dialog with Claude's rules.
+  QuestionEngine? _questionEngine;
+
+  /// The dialog the keyboard was last raised for.
+  ///
+  /// ⚠️ **This is what stops the keyboard fighting the person.** The watcher
+  /// reports every change of dialog, and a multi-question exchange changes it
+  /// several times; raising on each one would shove the keyboard back up
+  /// seconds after somebody put it away. One raise per question, and a question
+  /// is new only when its text or its options differ.
+  String? _questionRaisedFor;
+
+  /// Point the question watcher at this page's current terminal.
+  ///
+  /// Called from `build`, where both the engine and the session are known, and
+  /// cheap to call on every frame: [QuestionPaneWatcher.attach] returns at once
+  /// for a terminal it already holds.
+  void _syncQuestionWatcher(String? engineId, TerminalSession? session) {
+    final engine = questionEngineOf(engineId);
+    if (engine != _questionEngine) {
+      _questionEngine = engine;
+      _questionWatcher?.removeListener(_onQuestionPane);
+      _questionWatcher?.dispose();
+      // Nothing to watch for on an engine this parser does not know: leave the
+      // watcher null so not even a listener is attached.
+      _questionWatcher = engine == null
+          ? null
+          : (QuestionPaneWatcher(engine: engine)..addListener(_onQuestionPane));
+    }
+    _questionWatcher?.attach(session?.terminal);
+  }
+
+  /// The agent just asked something, or stopped asking.
+  ///
+  /// ⚠️ **Raising the keyboard is the whole feature, and it must happen at
+  /// most once per question.** An agent that blocks mid-turn is waiting on a
+  /// keystroke, and on a phone that keystroke is unreachable until the keyboard
+  /// is up — so the page opens it rather than making the person find the
+  /// terminal and tap it. But a person who puts the keyboard away during a
+  /// question has said they are not answering yet, and a watcher that raised it
+  /// again on the next repaint would be arguing with them.
+  void _onQuestionPane() {
+    if (!mounted) return;
+    final view = _questionWatcher?.view;
+    final open = view != null && view.answerable;
+    setState(() {
+      // Cleared as the dialog goes, so the NEXT question raises the keyboard
+      // again even if it words itself identically.
+      if (!open) _questionRaisedFor = null;
+    });
+    if (!open) return;
+    final key = view.fingerprint;
+    if (_questionRaisedFor == key) return;
+    _questionRaisedFor = key;
+    _raiseKeyboardForQuestion();
+  }
+
+  /// Open the keyboard because an agent is waiting on an answer.
+  ///
+  /// ⚠️ **Not [_raiseKeyboard], and synchronous where that one is not.** That
+  /// one belongs to a TAP on the terminal, and awaits the mic's transcript to
+  /// drain into the prompt first, because tapping mid-sentence is asking to
+  /// finish that sentence. Nothing was said here — the agent asked — so
+  /// draining voice would paste a half-spoken phrase into an answer the person
+  /// has not started, and with nothing to await this runs in one frame.
+  void _raiseKeyboardForQuestion() {
+    final facts = _readFacts();
+    final session = facts.session;
+    // A terminal this page only watches cannot be typed into, so a keyboard
+    // over it would be a keyboard that does nothing.
+    if (session == null || !session.acceptsInput) return;
+    // Already up on THIS page, or on its way: nothing to do, and calling again
+    // would restart the settle hold for no reason.
+    //
+    // ⚠️ `_ownsInput`, not the screen-wide `_keyboardIsUp`. That flag is true
+    // whenever any page's keyboard is showing — it exists to hold the keyboard
+    // across a swipe — so reading it here would skip the raise on a page swiped
+    // to while a keyboard belonging to the page behind it was still up.
+    if (_keyboardRequested || _ownsInput) return;
+    // The controls somebody reaches for next are in the header.
+    _chrome.reveal();
+    setState(() => _keyboardRequested = true);
+    // The keyboard is on its way and the key bar opens with it — see
+    // [_raiseKeyboard], which holds the resize the same way.
+    _armSettle();
+  }
+
   _PageFacts _readFacts() {
     final notifier = widget.notifier;
     final pane = notifier.panes
@@ -496,6 +596,8 @@ class _TerminalPageState extends State<TerminalPage>
   @override
   void dispose() {
     widget.notifier.removeListener(_onNotifier);
+    _questionWatcher?.removeListener(_onQuestionPane);
+    _questionWatcher?.dispose();
     _cancelSettle();
     _searchHoldTimer?.cancel();
     _chrome.dispose();
@@ -986,6 +1088,15 @@ class _TerminalPageState extends State<TerminalPage>
     final canCreate =
         machine != null &&
         phoneMachineStatusOf(machine) == PhoneMachineStatus.ready;
+    // Read this page's own buffer for a dialog, and raise the keyboard when one
+    // appears. Must run on every build: the session arrives a frame or two
+    // after the page, and the engine with the agent.
+    //
+    // ⚠️ **The buffer is the only source there is on a phone.** The daemon
+    // already detects the same dialog and publishes `commander_question`, but
+    // that frame goes out device-and-loopback only — a phone attached over the
+    // relay never receives it. See [QuestionPaneWatcher].
+    _syncQuestionWatcher(agent?.engine, session);
     // Read once: the body reserves it, and search subtracts what the body
     // already took. See [_navigationBar].
     final navigationBar = _navigationBar;
@@ -1313,7 +1424,7 @@ class _TerminalPageState extends State<TerminalPage>
                               // panel would hold one tab over every agent on the
                               // account, which is what a swipe already walks.
                               if (widget.notifier.deskTabs.isNotEmpty)
-                                _HeaderAction(
+                                TerminalHeaderAction(
                                   icon: LucideIcons.layoutGrid300,
                                   tooltip: 'Tabs',
                                   onPressed: () => unawaited(
@@ -1331,10 +1442,14 @@ class _TerminalPageState extends State<TerminalPage>
                               // nothing to act on yet, and a menu of actions
                               // that all fail is worse than no menu.
                               if (agent != null)
-                                _HeaderAction(
-                                  icon: LucideIcons.ellipsis300,
+                                TerminalHeaderAction(
+                                  // Stood up, not laid flat: three dots in a
+                                  // column is the narrower mark AND the one a
+                                  // phone means by "more actions", so it reads
+                                  // as a menu rather than as a truncation.
+                                  icon: LucideIcons.ellipsisVertical300,
                                   size: 21,
-                                  tooltip: 'Agent actions',
+                                  tooltip: 'Harness actions',
                                   // Last in the row, so its padding stops at
                                   // the header's own right inset.
                                   last: true,
@@ -1463,7 +1578,10 @@ class _TerminalPageState extends State<TerminalPage>
       // door rather than a list of its own — the lists belong on the pages behind them, where they
       // have room for every row and do not push the rest of this sheet down.
       sections: [
-        PhoneSheetSection(caption: 'Agent', actions: [..._agentActions(agent)]),
+        PhoneSheetSection(
+          caption: 'Harness',
+          actions: [..._agentActions(agent)],
+        ),
         PhoneSheetSection(
           caption: 'App',
           actions: [
@@ -1475,7 +1593,7 @@ class _TerminalPageState extends State<TerminalPage>
             // longer than a screenful.
             PhoneSheetAction(
               icon: LucideIcons.squareTerminal300,
-              label: 'Agents',
+              label: 'Harnesses',
               onTap: () => unawaited(_openAgentList()),
             ),
             PhoneSheetAction(
@@ -1533,7 +1651,7 @@ class _TerminalPageState extends State<TerminalPage>
       ),
     PhoneSheetAction(
       icon: LucideIcons.pencil300,
-      label: 'Rename agent…',
+      label: 'Rename Harness…',
       onTap: () => showAgentRenameDialog(
         context,
         widget.notifier,
@@ -1544,7 +1662,7 @@ class _TerminalPageState extends State<TerminalPage>
     ),
     PhoneSheetAction(
       icon: LucideIcons.refreshCw300,
-      label: 'Restart agent',
+      label: 'Restart Harness',
       onTap: () => unawaited(_restart()),
     ),
     // Last, and alone in red: the two above are recoverable and this one is
@@ -1557,7 +1675,7 @@ class _TerminalPageState extends State<TerminalPage>
     // the route.
     PhoneSheetAction(
       icon: LucideIcons.trash2300,
-      label: 'Delete agent…',
+      label: 'Stop Harness…',
       destructive: true,
       onTap: () => unawaited(
         confirmDeleteAgent(
@@ -1674,7 +1792,7 @@ class _AgentGone extends StatelessWidget {
           const SizedBox(height: 14),
           Text(
             name == null || name!.isEmpty
-                ? 'That agent is gone'
+                ? 'That harness is gone'
                 : '$name is gone',
             textAlign: TextAlign.center,
             style: TextStyle(
@@ -1700,7 +1818,7 @@ class _AgentGone extends StatelessWidget {
               foregroundColor: AppPalette.accent,
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
             ),
-            child: const Text('Open another agent'),
+            child: const Text('Open another harness'),
           ),
         ],
       ),
@@ -2048,7 +2166,7 @@ class _AttachingState extends State<_Attaching> with TickerProviderStateMixin {
     )!;
     final bar = (fontSize * 0.62).clamp(5.0, 12.0).toDouble();
     return SkeletonBlock(
-      semanticsLabel: 'Attaching to the agent',
+      semanticsLabel: 'Attaching to the harness',
       // ⚠️ **One painter, repainted, in a layer of its own** — where this was a
       // column of seventy-odd widgets rebuilt on every frame of the breath, under
       // a [ShaderMask] that pushed the whole pane through an offscreen buffer on
@@ -2459,43 +2577,3 @@ String _clipTitle(String name) {
 /// dead space either side and the three stay 24px each — under the 44 iOS asks
 /// for. Fixing that belongs in the shared button, where every screen's header
 /// would get it, not in a wrapper one page defines.
-class _HeaderAction extends StatelessWidget {
-  const _HeaderAction({
-    required this.icon,
-    required this.tooltip,
-    required this.onPressed,
-    this.size = 21,
-    this.last = false,
-  });
-
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onPressed;
-  final double size;
-
-  /// The rightmost action, whose trailing padding is dropped: [PhoneHeader]
-  /// already insets the row's right edge, and keeping it here would push the
-  /// last mark further from the edge than the others are from each other.
-  final bool last;
-
-  /// Half the gap between two marks — each neighbour contributes one, so the
-  /// boxes end up 14 apart.
-  ///
-  /// 14 because that is [PhoneHeader]'s own right inset: the gap between two
-  /// actions and the gap from the last one to the screen edge are then the
-  /// same measure, and the three read as evenly placed rather than as a group
-  /// shoved against the corner.
-  static const double gap = 7;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: EdgeInsets.fromLTRB(gap, 0, last ? 0 : gap, 0),
-    child: AppIconButton(
-      icon: icon,
-      size: size,
-      tooltip: tooltip,
-      color: AppPalette.textSecondary,
-      onPressed: onPressed,
-    ),
-  );
-}

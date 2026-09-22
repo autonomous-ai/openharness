@@ -14,7 +14,7 @@ enum PhoneTab {
   agents(
     LucideIcons.squareTerminal300,
     LucideIcons.squareTerminal400,
-    'Agents',
+    'Harnesses',
   ),
   machines(
     LucideIcons.laptopMinimal300,

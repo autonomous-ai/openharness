@@ -22,6 +22,7 @@ import type { AgentEngine } from '../engines/types.js'
 import { readCodexRolloutMeta, resolveCodexRollout } from '../engines/codex/rollout.js'
 import { agyConversationForPid, findAgyTranscript } from '../engines/agy/session.js'
 import { copilotSessionCwd, copilotSessionForPid, findCopilotTranscript } from '../engines/copilot/session.js'
+import { hermesDbPath, listHermesHomes } from '../engines/hermes/home.js'
 import { sqlitePreflightMessage } from './sqliteAvailability.js'
 import { sqliteReadAll, type SqliteParam } from './sqliteRead.js'
 
@@ -43,6 +44,8 @@ export interface RepairedSession {
   sessionId: string
   /** File-backed engines only; the DB-backed ones are read by session id. */
   transcriptPath?: string
+  /** Hermes only: which home's store the session was found in, when it was not the default one. */
+  hermesHome?: string
 }
 
 interface TranscriptFile { path: string; mtimeMs: number; birthMs: number }
@@ -318,14 +321,28 @@ export async function findLiveSession(
           + ' ORDER BY time_updated DESC LIMIT 2;',
         [...dirs, Math.trunc(sinceMs), Math.trunc(sinceMs)],
       )
-    case 'hermes':
+    case 'hermes': {
       // started_at is epoch SECONDS (fractional).
-      return dbEngineSession(
-        join(env.HERMES_HOME, 'state.db'),
-        `SELECT id FROM sessions WHERE cwd IN (${dirList}) AND started_at >= ?`
-          + ' ORDER BY started_at DESC LIMIT 2;',
-        [...dirs, Math.trunc(sinceMs / 1000)],
-      )
+      //
+      // EVERY home, not just the default: `hermes -p <name>` keeps its sessions in
+      // `~/.hermes/profiles/<name>/state.db`, and a repair that only asked the default store could
+      // never rebind a profile agent after a restart (openharness#191). Each store is asked on its
+      // own and the answers are pooled, so two homes claiming the same cwd is ambiguous — exactly as
+      // two rows in one store already are — rather than "whichever home was listed first".
+      const homes = await listHermesHomes()
+      const found: RepairedSession[] = []
+      for (const home of homes) {
+        const one = await dbEngineSession(
+          hermesDbPath(home),
+          `SELECT id FROM sessions WHERE cwd IN (${dirList}) AND started_at >= ?`
+            + ' ORDER BY started_at DESC LIMIT 2;',
+          [...dirs, Math.trunc(sinceMs / 1000)],
+        )
+        if (one) found.push({ ...one, hermesHome: home })
+        if (found.length > 1) return null
+      }
+      return found[0] ?? null
+    }
     case 'devin':
       // created_at is epoch SECONDS (integer).
       return dbEngineSession(

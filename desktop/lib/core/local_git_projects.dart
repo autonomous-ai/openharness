@@ -118,7 +118,7 @@ class LocalGitProjects {
       final branch = head?.startsWith('ref: refs/heads/') == true
           ? head!.substring(16)
           : head != null && RegExp(r'^[a-fA-F0-9]{40,64}$').hasMatch(head)
-          ? 'Detached ${head.substring(0, 7)}'
+          ? '$kDetachedBranchPrefix${head.substring(0, 7)}'
           : null;
       final project = AgentProject.fromJson({
         // A linked worktree is named for its repository, not its folder.
@@ -129,6 +129,9 @@ class LocalGitProjects {
         'root': root,
         'remote': _origin(config),
         'branch': branch,
+        'worktree': shared != null,
+        'branchPending':
+            branch != null && _placeholder(config, branch) == 'placeholder',
       });
       _publish(entry, project);
     } on FileSystemException {
@@ -253,6 +256,26 @@ class LocalGitProjects {
     } on FormatException {
       return null;
     }
+  }
+
+  /// `branch.<name>.harness` from the repository's config: `placeholder`
+  /// while Harness's made-up name waits for the session's.
+  String? _placeholder(String? config, String branch) {
+    if (config == null) return null;
+    var inBranch = false;
+    for (final line in config.split('\n')) {
+      final text = line.trim();
+      if (text.startsWith('[')) {
+        inBranch = text == '[branch "$branch"]';
+      } else if (inBranch) {
+        final match = RegExp(
+          r'^harness\s*=\s*(\S+)$',
+          caseSensitive: false,
+        ).firstMatch(text);
+        if (match != null) return match.group(1);
+      }
+    }
+    return null;
   }
 
   String? _origin(String? config) {

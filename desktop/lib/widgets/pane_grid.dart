@@ -1476,6 +1476,7 @@ class _PaneContent extends StatelessWidget {
           focusRequest: notifier.isPaneFocused(pane.id)
               ? notifier.paneFocusRequest
               : 0,
+          focusByUser: notifier.paneFocusByUser,
           visible: visible,
           compactHeader: swarmMode,
           composerVisible: pane.composerVisible,

@@ -98,7 +98,10 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('customize-appearance')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('appearance-ui-size-field')), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('customize-terminal')));
+    // Four tabs scroll at this window width; bring Terminal into view first.
+    final terminalTab = find.byKey(const ValueKey('customize-terminal'));
+    await tester.ensureVisible(terminalTab);
+    await tester.tap(terminalTab);
     await tester.pumpAndSettle();
     expect(
       find.byKey(const Key('terminal-font-family-dropdown')),

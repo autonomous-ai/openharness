@@ -1,15 +1,18 @@
 # Store previews
 
-All Store artwork is bundled, so browsing needs no external image service. Featured
-stories only appear when their tool is present in the live catalog.
+Editorial artwork is bundled. **Featured harnesses** uses the poster and recording from
+each harness's live catalog examples; posters load over HTTPS, with an app-icon fallback
+when unavailable. Videos load only after a click. Features only appear for tools present
+in the local machine's catalog.
 
 ## Editorial illustrations
 
 `editorial-*.png` are eleven original illustrations generated with the built-in
 imagegen tool. The exact prompts and file mapping are in
 [`editorial-prompts.json`](../../tool/store_artwork/editorial-prompts.json).
-Discover uses three features (coding, 3D design, circuits); each discipline uses
-one feature. All catalog rows use app icons. These illustrations depict a craft,
+Discover uses three illustrated features (coding, 3D design, circuits); each discipline
+uses one feature. Recordings have their own Featured tab. Catalog rows use app icons.
+These illustrations depict a craft,
 not an app screenshot or a claimed agent result.
 
 ## Original example outputs
@@ -135,6 +138,7 @@ screenshots, with the corresponding software notices preserved.
 | `covers/foam-agent.png` | `store/agents/foam-agent/screenshots/studio.png` |
 | `covers/godogen.jpg` | `store/showcase/godogen/neon-drift.jpg` |
 | `covers/juce-agent-toolkit.png` | `store/agents/juce-agent-toolkit/screenshots/studio.png` |
+| `covers/harness-monitor.png` | `desktop/tool/store_artwork/capture-covers.mjs harness-monitor` |
 | `covers/machine-monitor.png` | `desktop/tool/store_artwork/capture-covers.mjs machine-monitor` |
 | `covers/marp.jpg` | `store/showcase/marp/deep-sea-keynote.jpg` |
 | `covers/mlx-lm.png` | `desktop/tool/store_artwork/capture-covers.mjs mlx-lm` |
@@ -150,8 +154,10 @@ card; the library includes our playable Neon Drift game. The local AI runtimes a
 tools, so their covers show the original Harness model-control interfaces. Selection
 notes for these cases are in `sources.json`.
 
-Machine Monitor and the three local-model covers use synthetic inventories in their real
-viewers. No user machines, account data, model downloads, or benchmark results were used.
+Machine Monitor, Harness Monitor and the three local-model covers use synthetic inventories in
+their real viewers. No user machines, account data, model downloads, or benchmark results were
+used; Harness Monitor also runs against an empty home directory, so no local policy or pause log
+is read. `COVER_DUMP_TEXT=1` prints its capture's visible text, to check it before committing.
 Their original interface captures can be reproduced with an existing Playwright installation:
 
 ```sh

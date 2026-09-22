@@ -282,9 +282,21 @@ void main() {
       );
     });
 
+    test('the sheet is not offered while it is gated off', () {
+      // The row is hidden for now — see [kModelSheetEnabled]. Asserted rather
+      // than left implied so flipping the gate back on fails here first, in the
+      // one place that says what the rule underneath it is.
+      expect(kModelSheetEnabled, isFalse);
+      expect(modelSheetSupports('claude'), isFalse);
+      expect(modelSheetSupports('CODEX'), isFalse);
+    });
+
     test('only the engines whose switching was driven get the sheet', () {
-      expect(modelSheetSupports('claude'), isTrue);
-      expect(modelSheetSupports('CODEX'), isTrue);
+      // The gate above sits in front of this rule; it is the rule the row goes
+      // back to, so it is kept honest while the row is away.
+      expect(kModelSheetEngines.contains('claude'), isTrue);
+      expect(kModelSheetEngines.contains('codex'), isTrue);
+      expect(kModelSheetEngines.contains('cursor'), isFalse);
       expect(modelSheetSupports('cursor'), isFalse);
       expect(modelSheetSupports(null), isFalse);
     });

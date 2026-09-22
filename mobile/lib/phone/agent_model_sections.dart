@@ -23,9 +23,19 @@ import 'package:harness_mobile/core/models.dart';
 /// not be one costs an agent answering on a model nobody asked for.
 const Set<String> kModelSheetEngines = {'claude', 'codex', 'opencode'};
 
+/// Whether the model sheet is offered at all, on any engine.
+///
+/// Off by decision (owner, 2026-09-22): switching works end to end, the feature
+/// is simply not being shown yet. This is the ONE gate — flipping it to true is
+/// the whole of putting the row back, and everything behind it (the sheet, its
+/// sections, its tests) is kept working in the meantime rather than deleted and
+/// rewritten later.
+const bool kModelSheetEnabled = false;
+
 /// Whether [engine] gets the sheet at all. Unknown or absent is NO — a menu
 /// offers nothing it cannot back.
 bool modelSheetSupports(String? engine) =>
+    kModelSheetEnabled &&
     kModelSheetEngines.contains(engine?.trim().toLowerCase());
 
 /// The sections worth a heading: the own grid always (so its empty-state

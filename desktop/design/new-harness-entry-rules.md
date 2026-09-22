@@ -32,28 +32,72 @@ while a pending start needs confirmation.
 
 ## Git projects
 
-Git projects show Branch and Worktree. Worktree defaults to `[x]` for each new
-project context; Enter, Space, or a click toggles `[x]` and `[ ]`. Folders without
-Git show neither row. Discovery runs on the selected machine without fetching,
-switching branches, or creating a worktree. A failed discovery offers Retry and
-blocks starting until the result is known.
+Git projects show Branch, then Worktree. Worktree defaults to `[x]` for a
+repository with a commit; Enter, Space, or a click toggles `[x]` and `[ ]`.
+Folders without Git show neither row. Discovery runs on the selected machine
+without fetching, switching branches, or creating a worktree. A failed
+discovery offers Retry and blocks starting until the result is known.
 
-A worktree is a temporary folder, never a project: a harness is known by its
-repository and branch. A folder inside a linked worktree (the focused pane's,
-or one typed or browsed) shows as the same folder in the repository's main
-checkout, on that checkout's branch, so Cmd-N from a worktree pane starts
-beside it rather than inside it. Pane headers name the repository, and
-worktrees Start made are never offered as recent projects.
+A worktree is a temporary folder, never a project: a harness is known by the
+folder it was started in and its repository's branch. Pane headers read
+`folder › branch`, with the machine first only for another computer: the folder
+the harness started in (a subfolder as itself, a checkout's root — a
+worktree's too — as its repository), which does not follow the agent's shell,
+and the branch with the same icon everywhere. A checkout on no branch — a
+commit an agent checked out to read or test — shows no branch; the tooltip says
+`No branch: on commit 65281563`. Worktree folders are never shown; the header's
+tooltip has the full path. Cut short, the folder shortens in the
+middle before the branch does. A folder inside a linked
+worktree (the focused pane's, or one typed or browsed) shows as the same folder
+in the repository's main checkout, so Cmd-N from a worktree pane starts beside
+it rather than inside it. Worktrees Start made are never offered as recent
+projects.
 
-Branch selects the starting local or remote ref. With `[x]`, Start Harness
-creates branch `harness/<agent>-MMDD-HHMM` checked out in
-`~/harnesses/worktrees/<repository>/<agent>-MMDD-HHMM`, adding `-2`, `-3` only
-when that branch or folder is taken, and keeping uncommitted source files
-intact. With `[ ]`, only local branches are selectable; a branch that already
-has a worktree opens there, and any other branch switches the existing folder
-using Git's normal protections. No changes are forced, stashed, or discarded.
-A selected subfolder follows into the new worktree only if it exists in that
-commit.
+**Branch** starts on the branch of the pane New Harness was opened from, and
+otherwise on the default branch (Worktree on) or the folder's own branch (off).
+The picker names local branches; a remote branch is listed only when no local
+branch has its name.
+
+With `[x]`, **Branch** is what the new worktree works from. At Start a new
+branch starts from the newer of that branch and its upstream, fetched for at
+most ten seconds: `main` behind `origin/main` starts from `origin/main`, and
+`main` with commits of its own starts from `main`, so nothing is lost; offline,
+it starts from the last fetch. The branch the harness works on follows from it, with no row of its
+own: the default or current branch gets a new branch named after the session
+(`onboarding-experience`);
+another local branch is checked out as it is; a remote branch nobody has
+locally becomes a local branch of the same name tracking it; a branch that
+already has a worktree opens there, and Start reads **Start in Worktree**. The
+project folder's own branch cannot be checked out twice. Typing a name no
+branch has offers **Create branch**: a new branch in a new worktree, from the
+default branch. Spaces become `-` and anything Git refuses in a name is
+dropped.
+
+A session has no name at Start, so that branch starts as a made-up
+`<word>-<word>`, marked `branch.<name>.harness = placeholder` in the
+repository's config and left out of the pane header. The daemon renames it once,
+to the session's name (`-2` when a local or remote branch has it), when the
+session first has a name, and never again:
+not after a later session name, a push, or a rename by the person or the agent.
+A picked or created branch keeps its name. The worktree is checked out in
+`~/harnesses/worktrees/<repository>/<branch>`, and ignored files listed in the
+repository's `.worktreeinclude` (gitignore syntax, e.g. `.env`) are copied in.
+
+With `[ ]`, **Branch** is the branch the folder itself is on; only local
+branches are selectable. A branch with a worktree of its own opens there
+(**Start in Worktree**). Typing a name no branch has offers **Create branch**:
+a new branch from the folder's branch, keeping its uncommitted changes.
+Switching or creating needs no harness working in the folder, and switching
+also needs nothing uncommitted. No changes are forced,
+stashed, or discarded. A selected subfolder follows into a new worktree only if
+it exists in that commit.
+
+The picker tags branches `default`, `current`, `worktree` and `remote`, and
+leaves out branches Harness made (marked `branch.<name>.harness`, or named
+`harness/…` by older builds) whose worktree is gone. The daemon removes a
+worktree it finds in `~/harnesses/worktrees` only when no live or stopped
+harness uses it, nothing is uncommitted, and it has been idle for a week; the
+branch stays unless Harness made it and its commits are all elsewhere.
 
 Drafts and advanced options preserve these choices. A lost start reply reuses
 its receipt, and retrying a confirmed launch failure reuses its prepared
@@ -94,8 +138,11 @@ never silently renamed, and existing files are never overwritten.
 
 - `test/new_harness_git_test.dart`, `test/git_worktree_test.dart`, and
   `test/git_worktree_failures_test.dart`: Git defaults, hidden non-Git rows,
-  keyboard/click toggles, branch search, stale replies, retries, actual Git
-  worktrees and branch safety, process deadlines, and bounded output.
+  keyboard/click toggles, branch search, branch resolution, stale
+  replies, retries, actual Git worktrees and branch safety, fetching,
+  tracking, `.worktreeinclude`, process deadlines, and bounded output.
+  `cli/src/lib/gitProject.spec.ts` and `worktreeSweep.spec.ts` cover the same
+  rules on a remote machine and the daemon's cleanup.
 - `test/new_harness_entry_rules_test.dart`: product changes with an open or
   dismissed dock, Open/Try, edited names, machine changes, explicit agent
   precedence, search isolation, exact launch payloads, pending receipts, source

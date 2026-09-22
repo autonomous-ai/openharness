@@ -77,8 +77,9 @@ icon size in thirty seconds instead of in an email twenty minutes later.
 | `1.0.0 (26)` | 2026-09-22 | TestFlight. The tabs panel lists a tab's agents DOWN the page, as the rows the Agents tab draws, instead of as cards read sideways through a letterbox |
 | `1.0.0 (27)` | 2026-09-22 | TestFlight. The tabs panel keeps one height — half the screen — whatever the tab holds, so reading a tab of one agent after a tab of six no longer moves the names along its top |
 | `1.0.0 (28)` | 2026-09-22 | TestFlight. Search rebuilt on the desktop's own box: `>` commands, `#` projects, `@` machines and `?` help, and the desktop's ranking behind them, so a query that finds an agent on the laptop finds the same agent here. A result draws its identity as marks — engine, machine, folder, branch — instead of one run of text, and drops the square glyph and the age the desktop never had. Stopped harnesses are listed again, with `Stopped` on the row and a tap that brings one back; the field sits on the keyboard rather than above a strip of terminal |
+| `1.0.0 (29)` | 2026-09-22 | TestFlight. The new logo reaches the phone — build 28 shipped the crop it superseded. `⋯` beside the tabs grid stands up as `⋮`, and the two marks move apart far enough to hold a whole touch target each: at the old spacing their 44pt reaches overlapped by 6pt and the row hit-tests backwards, so `⋯` answered for the right-hand sixth of the tabs mark and the tabs mark did not |
 
-`pubspec.yaml` is therefore at `1.0.0+29`: the repo always holds the NEXT build number, so a release
+`pubspec.yaml` is therefore at `1.0.0+30`: the repo always holds the NEXT build number, so a release
 runs clean without anyone having to remember the last one.
 
 ### Why the app is iPhone-only

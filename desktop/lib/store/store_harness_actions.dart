@@ -24,7 +24,7 @@ class StoreResumeTarget {
   String get title => agent.name;
   String get detail => [
     machine.machine.displayName,
-    if (agent.project case final project?) project.name,
+    if (agent.project case final project?) project.label,
   ].join(' · ');
   String get tooltip => [
     title,

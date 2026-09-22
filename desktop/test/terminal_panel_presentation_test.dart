@@ -74,17 +74,106 @@ void main() {
           engine: 'codex',
           terminalAvailable: true,
           project: AgentProject(
-            name: 'Terminal project',
-            cwd: '/work/terminal',
-            branch: 'fast-focus',
+            name: 'harness',
+            cwd: '/work/worktrees/harness/codex-0922-1136/desktop',
+            root: '/work/worktrees/harness/codex-0922-1136',
+            branch: 'harness/codex-0922-1136',
           ),
         ),
       ];
       revision.value = 2;
       await tester.pump();
       expect(find.text('Renamed terminal'), findsOneWidget);
-      expect(find.text('fast-focus'), findsOneWidget);
-      expect(find.text('terminal'), findsOneWidget);
+      expect(find.text('harness/codex-0922-1136'), findsOneWidget);
+      expect(
+        find.text('desktop'),
+        findsOneWidget,
+        reason: 'A subfolder shows as itself, beside its repository branch.',
+      );
+      expect(find.text('codex-0922-1136'), findsNothing);
+      app.machineStates['m']!.agents = [
+        const Agent(
+          id: 'a0',
+          name: 'Renamed terminal',
+          engine: 'codex',
+          terminalAvailable: true,
+          project: AgentProject(
+            name: 'harness',
+            cwd: '/work/worktrees/harness/codex-0922-1136',
+            root: '/work/worktrees/harness/codex-0922-1136',
+            branch: 'harness/codex-0922-1136',
+            worktree: true,
+          ),
+        ),
+      ];
+      revision.value = 3;
+      await tester.pump();
+      expect(
+        find.text('harness'),
+        findsOneWidget,
+        reason: 'A worktree root shows as its repository, never its folder.',
+      );
+      expect(
+        find.text('codex-0922-1136'),
+        findsNothing,
+        reason: 'Its folder is named after the branch already shown.',
+      );
+      app.machineStates['m']!.agents = [
+        const Agent(
+          id: 'a0',
+          name: 'Renamed terminal',
+          engine: 'codex',
+          terminalAvailable: true,
+          project: AgentProject(
+            name: 'harness',
+            cwd: '/work/worktrees/harness/brave-otter',
+            root: '/work/worktrees/harness/brave-otter',
+            branch: 'tester/brave-otter',
+            worktree: true,
+            branchPending: true,
+          ),
+        ),
+      ];
+      revision.value = 4;
+      await tester.pump();
+      expect(find.text('harness'), findsOneWidget);
+      expect(
+        find.text('tester/brave-otter'),
+        findsNothing,
+        reason: 'A made-up branch waits for the session to name it.',
+      );
+      app.machineStates['m']!.agents = [
+        const Agent(
+          id: 'a0',
+          name: 'Renamed terminal',
+          engine: 'codex',
+          terminalAvailable: true,
+          project: AgentProject(
+            name: 'harness',
+            cwd: '/work/harness',
+            root: '/work/harness',
+            branch: '${kDetachedBranchPrefix}65281563',
+          ),
+        ),
+      ];
+      revision.value = 5;
+      await tester.pump();
+      expect(find.text('harness'), findsOneWidget);
+      expect(
+        find.textContaining('Detached'),
+        findsNothing,
+        reason: 'A commit an agent checked out is not a branch to show.',
+      );
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Tooltip &&
+              (widget.message ?? '').contains('No branch: on commit 65281563'),
+        ),
+        findsWidgets,
+      );
+      revision.value = 2;
+      await tester.pump();
       expect(find.byTooltip('Zoom Pane'), findsOneWidget);
       session.status = TerminalSessionStatus.takenOver;
       revision.value = 3;
@@ -129,7 +218,7 @@ void main() {
             engine: 'codex',
             terminalAvailable: true,
             project: AgentProject(
-              name: 'Harness project',
+              name: 'harness',
               cwd: '/work/harness',
               branch: 'main',
             ),
@@ -165,14 +254,23 @@ void main() {
         expect(tester.widget<AnimatedOpacity>(details).opacity, 1);
         expect(find.text('harness'), findsOneWidget);
         expect(find.text('main'), findsOneWidget);
-        expect(
-          tester.getRect(find.text('Test host')).left,
-          greaterThan(titleBounds.right),
-        );
-        expect(
-          tester.getRect(find.text('harness')).left,
-          greaterThan(tester.getRect(find.text('Test host')).right),
-        );
+        if (local) {
+          // This computer goes without saying.
+          expect(find.text('Test host'), findsNothing);
+          expect(
+            tester.getRect(find.text('harness')).left,
+            greaterThan(titleBounds.right),
+          );
+        } else {
+          expect(
+            tester.getRect(find.text('Test host')).left,
+            greaterThan(titleBounds.right),
+          );
+          expect(
+            tester.getRect(find.text('harness')).left,
+            greaterThan(tester.getRect(find.text('Test host')).right),
+          );
+        }
         expect(
           tester.getRect(find.text('main')).left,
           greaterThan(tester.getRect(find.text('harness')).right),

@@ -1,0 +1,121 @@
+name: Authoring browser checks
+
+# Only changes used by this suite start the expensive browser/native checks.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'store/agents/generative-art/**'
+      - 'store/agents/music-studio/**'
+      - 'store/agents/creative-direction/**'
+      - 'store/agents/voxel-worlds/**'
+      - 'store/agents/drone-pilot/**'
+      - 'store/agents/game-master/**'
+      - 'store/agents/lab-bench/**'
+      - 'store/agents/data-studio/**'
+      - 'store/viewers/web-viewer/**'
+      - 'store/tools/**'
+      - '.github/workflows/authoring-browser-checks.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'store/agents/generative-art/**'
+      - 'store/agents/music-studio/**'
+      - 'store/agents/creative-direction/**'
+      - 'store/agents/voxel-worlds/**'
+      - 'store/agents/drone-pilot/**'
+      - 'store/agents/game-master/**'
+      - 'store/agents/lab-bench/**'
+      - 'store/agents/data-studio/**'
+      - 'store/viewers/web-viewer/**'
+      - 'store/tools/**'
+      - '.github/workflows/authoring-browser-checks.yml'
+
+permissions:
+  contents: read
+
+# New commits replace obsolete checks for the same PR or branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  authoring-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22.23.2'
+      - name: Install pinned browser tools
+        run: |
+          npm ci --prefix store/tools/experience-tests --ignore-scripts --no-audit --no-fund
+          node store/tools/experience-tests/node_modules/playwright-core/cli.js install --with-deps chromium
+          node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "BROWSER_EXECUTABLE=" + require("./store/tools/experience-tests/node_modules/playwright-core").chromium.executablePath() + "\n")'
+      - name: Edit real projects and reopen their exports
+        env:
+          EXPERIENCE_IDS: generative-art,music-studio,creative-direction
+        run: node store/tools/experience-tests/browser.mjs
+      - name: Edit, walk and export a Voxel Worlds project in the browser
+        env:
+          VOXEL_QA_ROOT: work/experience-evidence/tidelands-browser
+        run: |
+          npm ci --prefix store/agents/voxel-worlds/toolchain --ignore-scripts --no-audit --no-fund
+          node store/agents/voxel-worlds/test/browser.mjs
+          node store/agents/voxel-worlds/test/acceptance.mjs
+      - name: Edit survey geometry, import flight evidence and reopen field kits
+        env:
+          DRONE_QA_ROOT: work/experience-evidence/vector-browser
+          DRONE_ACCEPTANCE_ROOT: work/experience-evidence/vector-acceptance
+        run: |
+          npm ci --prefix store/agents/drone-pilot/toolchain --ignore-scripts --no-audit --no-fund
+          node store/agents/drone-pilot/test/browser.mjs
+          node store/agents/drone-pilot/test/acceptance.mjs
+          python3 -m venv /tmp/vector-geometry-reader
+          /tmp/vector-geometry-reader/bin/pip install shapely==2.0.7 numpy==1.26.4
+          /tmp/vector-geometry-reader/bin/python store/agents/drone-pilot/test/verify-delivery.py work/experience-evidence/vector-acceptance
+      - name: Install print verification tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y poppler-utils
+      - name: Create, play, revise and print original tabletop games
+        env:
+          GAME_QA_ROOT: work/experience-evidence/relay-browser
+          GAME_ACCEPTANCE_ROOT: work/experience-evidence/relay-acceptance
+        run: |
+          npm ci --prefix store/agents/game-master/toolchain --ignore-scripts --no-audit --no-fund
+          node store/agents/game-master/test/browser.mjs
+          node store/agents/game-master/test/acceptance.mjs
+          python3 store/agents/game-master/test/verify-delivery.py work/experience-evidence/relay-acceptance
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Plan experiments, import measurements and independently verify the delivered statistics
+        env:
+          LAB_QA_ROOT: work/experience-evidence/signal-browser
+          LAB_ACCEPTANCE_ROOT: work/experience-evidence/signal-acceptance
+        run: |
+          npm ci --prefix store/agents/lab-bench/toolchain --ignore-scripts --no-audit --no-fund
+          node store/agents/lab-bench/test/browser.mjs
+          node store/agents/lab-bench/test/acceptance.mjs
+          node store/agents/lab-bench/test/reopen-deliveries.mjs work/experience-evidence/signal-acceptance
+          python3 -m venv /tmp/signal-statistics-reader
+          /tmp/signal-statistics-reader/bin/pip install -r store/agents/lab-bench/template/studio/requirements.txt
+          /tmp/signal-statistics-reader/bin/python store/agents/lab-bench/test/verify-delivery.py work/experience-evidence/signal-acceptance
+      - name: Verify MIDI and aligned audio with independent readers
+        run: |
+          python3 -m venv /tmp/music-delivery-reader
+          /tmp/music-delivery-reader/bin/pip install mido==1.3.3
+          /tmp/music-delivery-reader/bin/python store/tools/experience-tests/verify-music-delivery.py work/experience-evidence/afterhours-production.zip
+      - name: Revise and reopen real Data Studio projects in the sandboxed browser
+        env:
+          PLAYWRIGHT_MODULE: store/tools/experience-tests/node_modules/playwright-core/index.mjs
+          DATA_EVIDENCE_DIR: work/data-studio-evidence
+        run: node store/agents/data-studio/test/browser.mjs
+      - name: Independently verify Data Studio exports with Python CSV, Decimal and SQLite
+        run: python3 store/agents/data-studio/test/verify-exports.py work/data-studio-evidence
+      - name: Revise three brand briefs and verify real print deliveries
+        run: |
+          node store/agents/creative-direction/test/acceptance.mjs
+          python3 store/agents/creative-direction/test/verify-delivery.py work/experience-evidence/forme-acceptance/run-*/acceptance.json

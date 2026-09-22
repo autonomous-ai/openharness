@@ -141,7 +141,7 @@ class _PhoneSearchResultsState extends State<PhoneSearchResults> {
       return const EmptyState(
         icon: LucideIcons.laptopMinimal300,
         title: 'Nothing to search yet',
-        message: 'Link a machine and its agents will be findable from here.',
+        message: 'Link a machine and its harnesses will be findable from here.',
       );
     }
     return EmptyState.noMatches(

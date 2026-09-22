@@ -32,6 +32,7 @@ import '../core/models.dart';
 import '../core/project_folder.dart';
 import '../core/project_history.dart';
 import '../core/retry.dart';
+import '../logging/app_log.dart';
 import '../logging/startup_trace.dart';
 import '../settings/config_store.dart';
 import '../stats/harness_stats.dart';
@@ -564,6 +565,34 @@ class AppNotifier extends ChangeNotifier {
   /// The tab the screen has worked out it is showing — see [PhoneDesk.note].
   void noteDeskTab(String? tabId) => _desk.note(tabId);
 
+  /// Whether the desk can be WRITTEN to — what the two `+`s on the tabs panel
+  /// are drawn on. False before the first read answers, and on a backend with
+  /// no desk at all: a `+` there would queue ops nothing will ever take.
+  bool get deskWritable => _desk.enabled;
+
+  /// An agent that already exists joins the tab the person picked — the `+` at
+  /// the foot of a tab's list. See [PhoneDesk.addToTab].
+  void addAgentToDeskTab(String tabId, AgentRef agent) =>
+      _desk.addToTab(tabId, agent);
+
+  /// A tab renamed by hand, from a double tap on its name in the tabs panel.
+  /// See [PhoneDesk.renameTab].
+  void renameDeskTab(String tabId, String name) =>
+      _desk.renameTab(tabId, name);
+
+  /// An agent that already exists opens a tab of its own — the `+` on the tab
+  /// row. See [PhoneDesk.createTabFor].
+  String? createDeskTabFor(AgentRef agent, {String? name}) =>
+      _desk.createTabFor(agent, name: name);
+
+  /// The next agent made on this phone gets a tab of its own — armed by the `+`
+  /// on the tab row before the new-agent form opens, and spent (or forgotten)
+  /// by the time that form closes. See [PhoneDesk.openNextAgentInNewTab].
+  void openNextAgentInNewDeskTab() => _desk.openNextAgentInNewTab();
+
+  /// That form closed without making anything.
+  void forgetNewDeskTabIntent() => _desk.forgetNewTabIntent();
+
   /// Read the desk now, and wait for it — what a sign-in and the app coming
   /// back to the foreground both start without waiting.
   @visibleForTesting
@@ -627,7 +656,7 @@ class AppNotifier extends ChangeNotifier {
     // An unused starter has no work to recover. This also covers empty pages
     // restored from builds that did not mark them as drafts.
     if (entry is ClosedSwarm &&
-        entry.name == 'New Harness' &&
+        entry.name == Swarm.defaultName &&
         entry.panes.isEmpty &&
         entry.presets.isEmpty) {
       return;
@@ -646,7 +675,7 @@ class AppNotifier extends ChangeNotifier {
   bool get canOpenNewTab =>
       swarms.length < maxSwarms || swarms.any((swarm) => swarm.isEmptyStarter);
 
-  // A New Harness remains temporary until it has content or a custom name.
+  // An untitled tab remains temporary until it has content or a custom name.
   // The return destination is session-local; abandoned drafts are never saved.
   final _draftSwarmReturns = <String, String>{};
 
@@ -655,14 +684,14 @@ class AppNotifier extends ChangeNotifier {
     final swarm = swarms.where((swarm) => swarm.id == id).firstOrNull;
     return swarm != null &&
         swarm.panes.isEmpty &&
-        swarm.name == 'New Harness' &&
+        swarm.name == Swarm.defaultName &&
         swarm.presets.isEmpty;
   }
 
-  void newSwarm({String name = 'New Harness', bool draft = false}) {
+  void newSwarm({String name = Swarm.defaultName, bool draft = false}) {
     // Every New Tab entry point reuses the existing start page, including
     // when another tab is selected or the tab limit has been reached.
-    if (name == 'New Harness') {
+    if (name == Swarm.defaultName) {
       final starter = activeSwarm.isEmptyStarter
           ? activeSwarm
           : swarms.where((swarm) => swarm.isEmptyStarter).firstOrNull;
@@ -705,7 +734,7 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Cancel an untouched New Harness without closing a session or recording
+  /// Cancel an untouched new tab without closing a session or recording
   /// Recently Closed. A sole workspace remains the app's starting screen.
   bool cancelSwarmDraft(String id) {
     final returnId = _draftSwarmReturns[id];
@@ -713,7 +742,7 @@ class AppNotifier extends ChangeNotifier {
     if (returnId == null ||
         target == null ||
         target.panes.isNotEmpty ||
-        target.name != 'New Harness' ||
+        target.name != Swarm.defaultName ||
         target.presets.isNotEmpty ||
         swarms.length == 1) {
       return false;
@@ -812,7 +841,7 @@ class AppNotifier extends ChangeNotifier {
     // welcome tabs, evicting the real work from recently closed history.
     if (swarms.length == 1 &&
         swarms.single.panes.isEmpty &&
-        swarms.single.name == 'New Harness' &&
+        swarms.single.name == Swarm.defaultName &&
         swarms.single.presets.isEmpty) {
       return;
     }
@@ -2912,6 +2941,15 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// One tick of the agent-list safety net ([_syncAgentsIfChanged]), which the
+  /// app itself only reaches through a 60-second timer.
+  @visibleForTesting
+  Future<void> syncAgentsForTest(String machineId) async {
+    final machine = machineStates[machineId];
+    if (machine == null) return;
+    await _syncAgentsIfChanged(machine);
+  }
+
   @visibleForTesting
   void connectionStatusForTest(String machineId, ConnectionStatus status) =>
       _onConnectionStatus(machineId, status);
@@ -3115,6 +3153,7 @@ class AppNotifier extends ChangeNotifier {
 
   void _stopAgentSyncTimer(String machineId) {
     _agentSyncTimers.remove(machineId)?.cancel();
+    _agentSyncTimeouts.remove(machineId);
   }
 
   void _stopAllAgentSyncTimers() {
@@ -3122,34 +3161,77 @@ class AppNotifier extends ChangeNotifier {
       timer.cancel();
     }
     _agentSyncTimers.clear();
+    _agentSyncTimeouts.clear();
   }
+
+  /// How many [agentSyncInterval] ticks in a row may time out before the machine
+  /// is treated as gone and redialled ([_recoverStaleSession]).
+  ///
+  /// Two, not one: a single missed tick is a busy machine or a slow relay, and a
+  /// forced redial costs every terminal on it a resync. Two in a row is a minute
+  /// of a machine not answering the cheapest request there is, which nothing
+  /// healthy does.
+  @visibleForTesting
+  static const agentSyncStaleTicks = 2;
+
+  /// Consecutive timed-out [_syncAgentsIfChanged] ticks, per machine. Cleared by
+  /// any answer, by any other failure, and by the timer stopping.
+  final Map<String, int> _agentSyncTimeouts = {};
 
   /// Silent safety-net reconciliation, ticked every [agentSyncInterval] while a machine is connected.
   /// Only writes/notifies if the fetched list actually differs from what's already shown — a steady
   /// state where push events (agent_synced et al.) have kept everything in sync produces zero visible
   /// effect. Deliberately does not touch agentLoadStatus/agentsLoadError/notifyListeners on failure:
-  /// a real connectivity problem is already surfaced by the push path and the existing offline
-  /// detection in _performMachineDataLoad, and a quiet background tick should not fight either.
+  /// a real connectivity problem is already surfaced by the push path, and a quiet background tick
+  /// should not fight it.
+  ///
+  /// ⚠️ **Except a timeout, which this is the only thing left watching for.** A
+  /// stale relay session (see [_recoverStaleSession]) leaves the transport
+  /// "connected", the machine `nodeOnline`, its list `loaded` — so no screen is
+  /// wrong, no push arrives to correct it, and nothing calls
+  /// [_performMachineDataLoad], which is where the offline detection this used
+  /// to defer to actually lives. Swallowed here, that state was permanent:
+  /// measured at 16 minutes and still going, a phone showing a machine's agent
+  /// list from before its Harness restarted, with every agent made since
+  /// invisible — and, with the list feeding `deskGroups`, a desk tab whose
+  /// harnesses had all silently vanished off the phone.
   Future<void> _syncAgentsIfChanged(MachineState machine) async {
     if (machine.connectionStatus != ConnectionStatus.connected) return;
     if (machine.agentsLoadInFlight != null) {
       return; // a real (foreground) load already owns this tick
     }
-    final connection = _conn(machine.machine.machineId);
+    final machineId = machine.machine.machineId;
+    final revision = _authRevision;
+    final connection = _conn(machineId);
     try {
       final response = await connection.request(
         'agents_list',
         payload: kAgentsListPayload,
         timeout: const Duration(seconds: 10),
       );
+      _agentSyncTimeouts.remove(machineId);
+      if (!_machineWorkCurrent(machine, revision)) return;
       final agents = (response['agents'] as List<dynamic>? ?? [])
           .map((item) => Agent.fromJson(item as Map<String, dynamic>))
           .toList();
       if (agentsEqual(machine.agents, agents)) return;
       _replaceAgents(machine, agents);
       notifyListeners();
+    } on WsRequestTimeout {
+      if (!_machineWorkCurrent(machine, revision)) return;
+      final missed = (_agentSyncTimeouts[machineId] ?? 0) + 1;
+      _agentSyncTimeouts[machineId] = missed;
+      if (missed < agentSyncStaleTicks) return;
+      _agentSyncTimeouts.remove(machineId);
+      appLog.warn(
+        'ws',
+        'agents_list timed out $missed× on $machineId — redialling',
+      );
+      _recoverStaleSession(machine, connection);
     } catch (_) {
-      // Silent by design — see doc comment above.
+      // Silent by design — see doc comment above. A socket that dropped
+      // mid-request is already redialling, so the count starts over.
+      _agentSyncTimeouts.remove(machineId);
     }
   }
 
@@ -3898,25 +3980,11 @@ class AppNotifier extends ChangeNotifier {
     } catch (error) {
       if (!_machineWorkCurrent(machine, revision)) return;
       machine.agentsRefreshing = false;
-      // A request timing out while the local relay session still nominally reports "connected" means
-      // the remote node itself has stopped answering — exactly what a REST-status flip to offline
-      // means elsewhere, so route it through _applyNodeStatus (not just `nodeOnline = false`) so the
-      // pending agent gets captured for auto-reattach, same as any other offline detection path.
       if (error is WsRequestTimeout) {
         machine.agentsLoadError = machine.isLocalMachine
             ? 'Harness is offline — run harness login'
             : 'Harness is offline — run harness start on that machine';
-        if (machine.nodeOnline != false) {
-          unawaited(_applyNodeStatus(machine, false));
-        }
-        if (!machine.isLocalMachine) {
-          // The relay's cached upstream session can go stale at the E2EE-session layer without the
-          // underlying transport ever closing — most commonly the relayed machine's own Harness
-          // process restarting, which drops its in-memory session state but doesn't touch the socket.
-          // Nothing else would ever notice, so force a fresh dial rather than let every future retry
-          // keep timing out against the same dead session.
-          unawaited(connection.forceReconnect());
-        }
+        _recoverStaleSession(machine, connection);
       } else if (connection.isClosed || machine.nodeOnline == false) {
         machine.agentsLoadError = 'Could not load harnesses: $error';
       } else {
@@ -3952,6 +4020,30 @@ class AppNotifier extends ChangeNotifier {
     _attachPendingPanes(machine);
     _autoPickFirstAgent();
     notifyListeners();
+  }
+
+  /// An RPC timed out on a machine whose transport still calls itself connected:
+  /// take the machine down and dial it again.
+  ///
+  /// A request timing out while the local relay session still nominally reports
+  /// "connected" means the node itself has stopped answering — exactly what a
+  /// REST-status flip to offline means elsewhere, so it is routed through
+  /// [_applyNodeStatus] (not just `nodeOnline = false`) so the pending agent gets
+  /// captured for auto-reattach, same as any other offline detection path.
+  ///
+  /// ⚠️ **And then a fresh dial, for a remote machine.** The relay's cached
+  /// upstream session can go stale at the E2EE-session layer without the
+  /// underlying transport ever closing — most commonly the relayed machine's own
+  /// Harness process restarting, which drops its in-memory session state but
+  /// doesn't touch the socket. No close event ever fires, so nothing else would
+  /// ever notice; without this every future request keeps timing out against the
+  /// same dead session, for as long as the app runs.
+  void _recoverStaleSession(MachineState machine, WsConn connection) {
+    if (machine.nodeOnline != false) {
+      unawaited(_applyNodeStatus(machine, false));
+    }
+    if (machine.isLocalMachine) return;
+    unawaited(connection.forceReconnect());
   }
 
   bool _machineWorkCurrent(MachineState machine, int revision) =>
@@ -4877,7 +4969,7 @@ class AppNotifier extends ChangeNotifier {
     // Created HERE, so it joins the tab this phone is in — the way an agent
     // created in a window joins that window's tab. See [PhoneDesk.adopt] for
     // what happens when the phone is in no tab.
-    _desk.adopt((machineId: machineId, agentId: agent.id));
+    _desk.adopt((machineId: machineId, agentId: agent.id), name: agent.name);
     await assignAgentToPane(
       null,
       machineId,
@@ -5239,13 +5331,24 @@ class AppNotifier extends ChangeNotifier {
       final pending = machine.pendingOfflineAgentId;
       if (pending != null) {
         unawaited(_recoverPendingAgent(machine, pending));
-      } else if (panesFor(machineId).any(_paneNeedsAttach) &&
-          _pool?[machineId]?.isReady == true) {
-        // A tile restored from the saved layout has no pendingOfflineAgentId —
-        // nothing of its was interrupted, it simply arrived before its machine
-        // did. Without this it would sit on "Attaching…" forever on a machine
-        // that has since come back, because every other route to _attachSession
-        // runs off a load that nothing here would trigger.
+      } else if (_pool?[machineId]?.isReady == true &&
+          (wasOnline == false || panesFor(machineId).any(_paneNeedsAttach))) {
+        // ⚠️ **A machine that was OFF and is back owes a fresh list, whether or
+        // not anything here was waiting on it.** This arrives as a `node_status`
+        // push over a socket that never closed, so `_onConnectionStatus` — which
+        // is what reloads after every real reconnect — does not run, and the
+        // list this app holds is from before that machine's Harness restarted.
+        // Nothing corrects it: the pushes that would have go to a session the
+        // restart dropped. A phone therefore kept showing a machine's agents
+        // from minutes earlier, every agent made since invisible, and a desk tab
+        // holding those agents (`deskGroups`) read as an empty tab.
+        //
+        // A tile restored from the saved layout is the other half, and has no
+        // pendingOfflineAgentId — nothing of its was interrupted, it simply
+        // arrived before its machine did. Without this it would sit on
+        // "Attaching…" forever on a machine that has since come back, because
+        // every other route to _attachSession runs off a load that nothing here
+        // would trigger.
         //
         // ⚠️ **Only once the socket is actually up.** `/api/machines` reports a
         // machine as running well before this app has finished dialling it, and
@@ -5624,7 +5727,7 @@ class AppNotifier extends ChangeNotifier {
       target.arranged = split.after;
       target.arrangedKey = key;
     }
-    if (firstAgent && target.name == 'New Harness') {
+    if (firstAgent && target.name == Swarm.defaultName) {
       final name = agent.name.trim();
       if (name.isNotEmpty) {
         target.name = name.length > 80 ? name.substring(0, 80) : name;
@@ -6173,7 +6276,7 @@ class AppNotifier extends ChangeNotifier {
       final swarm = swarms.where((swarm) => swarm.id == id).firstOrNull;
       return swarm == null ||
           swarm.panes.isNotEmpty ||
-          swarm.name != 'New Harness' ||
+          swarm.name != Swarm.defaultName ||
           swarm.presets.isNotEmpty;
     });
     _layoutRevision++;
@@ -6227,7 +6330,7 @@ class AppNotifier extends ChangeNotifier {
                   0,
                   (raw['name'] as String).length.clamp(0, 80),
                 )
-              : 'New Harness',
+              : Swarm.defaultName,
         );
         for (final item in (raw['panes'] as List).take(maxPanes)) {
           final entry = PaneLayoutEntry.fromJson(item);

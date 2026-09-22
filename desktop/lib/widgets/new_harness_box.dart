@@ -215,7 +215,8 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     box.canUseWorktree,
     box.checkingGit,
     box.gitError,
-    box.branchLabel,
+    box.branchRowLabel,
+    box.createLabel,
     box.placement,
     box.query.trim().isEmpty,
     box.matchCount,
@@ -287,7 +288,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                         ? _summaryText()
                         : _launchChoice == _LaunchChoice.worktree
                         ? 'Worktree ${box.worktree ? 'on' : 'off'}. Enter to toggle.'
-                        : '${_launchChoice.name}. Enter to edit.'
+                        : '${_choiceTitle(_launchChoice)}. Enter to edit.'
                   : box.field == NewHarnessField.task
                   // No row to read here: read what Return will do instead.
                   ? _summaryText()
@@ -347,6 +348,10 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     NewHarnessField.branch => 'Branch',
     NewHarnessField.project => 'Project',
   };
+
+  /// What a launch row is called on screen.
+  static String _choiceTitle(_LaunchChoice choice) =>
+      '${choice.name[0].toUpperCase()}${choice.name.substring(1)}';
 
   bool get _composing =>
       _hasInput &&
@@ -907,7 +912,15 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
               ],
               if (_launching) ...[
                 if (box.isGitProject)
-                  _segment(NewHarnessField.branch, box.branchLabel),
+                  _segment(
+                    NewHarnessField.branch,
+                    box.branchRowLabel,
+                    tooltip: box.worktree
+                        ? 'What the worktree works from, brought up to date with its remote at Start. The default branch gets a new branch named after the session; another is checked out as it is. Type a name to create one.'
+                        : box.opensWorktree
+                        ? '${box.branchLabel} has a worktree of its own: the harness starts there.'
+                        : 'The branch the project folder is on.',
+                  ),
                 if (box.isGitProject || box.checkingGit || box.gitError != null)
                   _default(
                     'worktree',
@@ -922,7 +935,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                     tooltip: box.gitError != null
                         ? 'Could not check Git on ${box.machineLabel}. Retry.'
                         : box.canUseWorktree
-                        ? 'Start in a new Git worktree and branch from the selected branch. Uncommitted changes stay in the original folder.'
+                        ? 'Start in a new Git worktree: a folder of its own, so harnesses never share files. Uncommitted changes stay in the project folder.'
                         : 'Choose an existing Git project to use a worktree.',
                     onTap: () {
                       _selectLaunchChoice(_LaunchChoice.worktree);
@@ -941,9 +954,16 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
           ),
         );
 
-  Widget _segment(NewHarnessField field, String label) => _default(
+  Widget _segment(
+    NewHarnessField field,
+    String label, {
+    String? title,
+    String? tooltip,
+  }) => _default(
     field.name,
     label,
+    title: title,
+    tooltip: tooltip,
     active:
         box.field == field ||
         (field == NewHarnessField.project &&
@@ -968,13 +988,14 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     bool action = false,
     bool enabled = true,
     String? tooltip,
+    String? title,
   }) {
     final choice = _launching
         ? _LaunchChoice.values.where((item) => item.name == name).firstOrNull
         : null;
     final highlighted = choice != null && choice == _launchChoice;
     final disabled = !enabled || (name == 'create' ? box.busy : box.locked);
-    final fieldLabel = '${name[0].toUpperCase()}${name.substring(1)}';
+    final fieldLabel = title ?? '${name[0].toUpperCase()}${name.substring(1)}';
     final checkbox =
         name == 'worktree' && !box.checkingGit && box.gitError == null;
     return MouseRegion(
@@ -1051,8 +1072,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
       ? 'Choose a project before starting ${box.agentLabel}.'
       : 'Return starts ${box.agentLabel} on ${box.machineLabel} in '
             '${box.projectLabel}'
-            '${box.isGitProject ? ', from ${box.branchLabel}' : ''}'
-            '${box.worktree ? ', in a new Git worktree' : ''}'
+            '${box.gitSummary}'
             '${box.hasModes ? ', ${box.modeLabel.toLowerCase()}' : ''}'
             '${box.profileLabel == null ? '' : ', profile ${box.profileLabel}'}'
             '${box.task.trim().isEmpty ? '' : ', and sends what you typed as its first message'}.';

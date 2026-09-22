@@ -289,6 +289,13 @@ const storeCoverArt = <String, StoreCoverArt>{
     imageSize: Size(1280, 1000),
     viewport: Rect.fromLTWH(72, 225, 883, 400),
   ),
+  'autonomous/harness-monitor': StoreCoverArt(
+    asset: 'assets/store/covers/harness-monitor.png',
+    description: 'Harness Monitor’s lanes with an illustrative demo fleet',
+    imageSize: Size(1080, 720),
+    viewport: Rect.fromLTWH(0, 0, 1080, 540),
+    background: Color(0xff131312),
+  ),
   'autonomous/machine-monitor': StoreCoverArt(
     asset: 'assets/store/covers/machine-monitor.png',
     description: 'Machine Monitor’s fleet view with an illustrative demo fleet',

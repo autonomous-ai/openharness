@@ -325,6 +325,14 @@
     "harness": "autonomous/juce-agent-toolkit"
   },
   {
+    "asset": "harness-monitor.png",
+    "source": "desktop/tool/store_artwork/capture-covers.mjs harness-monitor",
+    "credit": "OpenHarness example",
+    "sha256": "613e9a46e2150df2767faa0e8d185c858d39cf0fb30c3b5ba205eba6a14f17f5",
+    "capture": "Synthetic test fleet with an empty home directory. No user account, machines, or activity were read.",
+    "harness": "autonomous/harness-monitor"
+  },
+  {
     "asset": "machine-monitor.png",
     "source": "desktop/tool/store_artwork/capture-covers.mjs machine-monitor",
     "credit": "OpenHarness example",

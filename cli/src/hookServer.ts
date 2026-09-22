@@ -10,6 +10,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { readCodexRolloutMeta } from './engines/codex/rollout.js'
 import { hermesSessionSource } from './engines/hermes/reader.js'
+import { hermesDbPath, listHermesHomes } from './engines/hermes/home.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
 import { LOCAL_WEB_HTML } from './webui.js'
@@ -337,12 +338,23 @@ async function awaitTranscript(body: RegisterInput, handlers: HookServerHandlers
  * exactly the behaviour before this guard existed.
  */
 async function awaitHermesKind(body: RegisterInput, handlers: HookServerHandlers): Promise<void> {
-  const dbPath = join(env.HERMES_HOME, 'state.db')
+  // EVERY home, not just the default. A `hermes -p <name>` session's row lives in that profile's own
+  // store, so asking the default one answered `null` (unknown) six times and fell through — and, worse,
+  // the home found here is the one the whole row then reads its history from (openharness#191).
+  const homes = await listHermesHomes()
+  let hermesHome: string | undefined
   for (let i = 0; i < HERMES_KIND_TRIES; i++) {
     if (i > 0) await new Promise((resolve) => { const t = setTimeout(resolve, HERMES_KIND_WAIT_MS); t.unref?.() })
     if (!registeredHookProcess(body, 'hermes')) return
     if (isRecentlyDeleted(body.sessionId)) return
-    const source = await hermesSessionSource(dbPath, body.sessionId ?? '')
+    let source: string | null = null
+    for (const home of homes) {
+      const answer = await hermesSessionSource(hermesDbPath(home), body.sessionId ?? '')
+      if (answer === null) continue          // not in this store — try the next home
+      source = answer
+      if (home !== env.HERMES_HOME) hermesHome = home
+      break
+    }
     if (source === null) continue
     if (source !== '' && source !== 'cli') {
       console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · hermes_subagent`)
@@ -350,9 +362,9 @@ async function awaitHermesKind(body: RegisterInput, handlers: HookServerHandlers
     }
     break
   }
-  const result = registry.register(body)
+  const result = registry.register(hermesHome ? { ...body, hermesHome } : body)
   if (!result) return
-  console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=hermes · isNew=${result.isNew} · after a source check`)
+  console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=hermes · isNew=${result.isNew} · after a source check${hermesHome ? ` · home=${hermesHome}` : ''}`)
   handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound, orphaned: result.orphaned, hookEvent: body.hookEvent })
 }
 

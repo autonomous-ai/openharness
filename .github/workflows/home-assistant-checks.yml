@@ -1,0 +1,51 @@
+name: Home Assistant checks
+
+# Only changes used by this suite start the expensive browser/native checks.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'store/agents/home-assistant/**'
+      - 'store/tools/runtimes.sh'
+      - 'store/tools/sync-runtimes.mjs'
+      - '.github/workflows/home-assistant-checks.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'store/agents/home-assistant/**'
+      - 'store/tools/runtimes.sh'
+      - 'store/tools/sync-runtimes.mjs'
+      - '.github/workflows/home-assistant-checks.yml'
+
+permissions:
+  contents: read
+
+# New commits replace obsolete checks for the same PR or branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  home-assistant-native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22.23.2'
+      - name: Install the locked native engine and browser runtimes from scratch
+        run: |
+          bash store/agents/home-assistant/toolchain/setup.sh
+          node store/agents/home-assistant/node_modules/playwright-core/cli.js install --with-deps chromium
+          echo "HA_PYTHON=$GITHUB_WORKSPACE/store/agents/home-assistant/.runtime/core/bin/python" >> "$GITHUB_ENV"
+          echo "HA_DSH_DIR=$GITHUB_WORKSPACE/store/agents/home-assistant" >> "$GITHUB_ENV"
+          echo "PLAYWRIGHT_MODULE=$GITHUB_WORKSPACE/store/agents/home-assistant/node_modules/playwright-core/index.mjs" >> "$GITHUB_ENV"
+      - name: Test native timers, fixtures, isolation, drafts and failure preservation
+        run: node --test store/agents/home-assistant/test/*.test.mjs
+      - name: Edit, revise, export and reopen distinct automation workflows in Chromium
+        env:
+          HA_EVIDENCE_DIR: work/home-assistant-evidence
+        run: node store/agents/home-assistant/test/browser.mjs
+      - name: Independently verify portable ZIPs, calls, states and exported Core schemas
+        run: '"$HA_PYTHON" -I store/agents/home-assistant/test/verify-delivery.py work/home-assistant-evidence'

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs'
+import { execFileSync } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { claudeContinuation } from './sessionRepair.js'
@@ -439,4 +440,67 @@ it.each(['bad pid', 'bad start', 'missing file', 'bad json', 'different pid', 'd
   mkdirSync(join(home, 'sessions'))
   if (mode !== 'missing file') writeFileSync(join(home, 'sessions', '77.json'), mode === 'bad json' ? '{' : JSON.stringify(record))
   expect(await claudeProcessSession(mode === 'bad pid' ? -1 : 77, CWD, mode === 'bad start' ? NaN : STARTED_AT)).toBeNull()
+})
+
+/**
+ * Hermes keeps one store per HOME, and `hermes -p <name>` has its own. A repair that only asked
+ * `<HERMES_HOME>/state.db` could never rebind a profile agent after a restart — its row is in a
+ * database that store has never heard of (openharness#191).
+ */
+describe('hermes repair across profile homes', () => {
+  const hasSqlite = (() => {
+    try { execFileSync('sqlite3', ['-version'], { stdio: 'ignore' }); return true } catch { return false }
+  })()
+  const t = hasSqlite ? it : it.skip
+  const SID_DEFAULT = '20260727_162325_e25264'
+  const SID_PROFILE = '20260921_152236_a1b2c3'
+
+  /** A home whose store holds one session started in `cwd`. */
+  function hermesHome(root: string, sessionId: string | null, cwd = CWD): string {
+    mkdirSync(root, { recursive: true })
+    execFileSync('sqlite3', [join(root, 'state.db'),
+      'CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, cwd TEXT, started_at REAL);'
+      + (sessionId ? `INSERT INTO sessions VALUES ('${sessionId}','cli','${cwd}',${Math.trunc(STARTED_AT / 1000) + 5});` : '')])
+    return root
+  }
+
+  async function loadWithHome(home: string) {
+    vi.resetModules()
+    process.env.CLAUDE_PROJECTS_DIR = home
+    process.env.HERMES_HOME = home
+    const homes = await import('../engines/hermes/home.js')
+    homes.forgetHermesHomes()
+    return import('./sessionRepair.js')
+  }
+
+  t('binds a profile session and says which home it came from', async () => {
+    const home = tempRoot()
+    hermesHome(home, null)                                          // the default store: no session here
+    const demo = hermesHome(join(home, 'profiles', 'demo'), SID_PROFILE)
+    const { findLiveSession } = await loadWithHome(home)
+
+    expect(await findLiveSession('hermes', CWD, STARTED_AT, { bornOnly: true }))
+      .toMatchObject({ sessionId: SID_PROFILE, hermesHome: demo })
+  })
+
+  t('a default-home session still binds, and names the default home', async () => {
+    const home = tempRoot()
+    hermesHome(home, SID_DEFAULT)
+    hermesHome(join(home, 'profiles', 'demo'), null)
+    const { findLiveSession } = await loadWithHome(home)
+
+    expect(await findLiveSession('hermes', CWD, STARTED_AT, { bornOnly: true }))
+      .toMatchObject({ sessionId: SID_DEFAULT, hermesHome: home })
+  })
+
+  t('refuses when two homes both claim the directory', async () => {
+    // Same rule as two rows in one store: ambiguous is a refusal, not a coin toss — pointing an agent
+    // at another agent's history is the failure this whole file exists to prevent.
+    const home = tempRoot()
+    hermesHome(home, SID_DEFAULT)
+    hermesHome(join(home, 'profiles', 'demo'), SID_PROFILE)
+    const { findLiveSession } = await loadWithHome(home)
+
+    expect(await findLiveSession('hermes', CWD, STARTED_AT, { bornOnly: true })).toBeNull()
+  })
 })

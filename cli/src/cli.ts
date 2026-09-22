@@ -44,7 +44,7 @@ import { DaemonCableHost, cableEventFor, cableQuestionFor, cableQuestionCloseFor
 import { MachineListCache, machineListCachePath, withStaleMarker } from './device/machineList.js'
 import { DeviceLink } from './device/deviceLink.js'
 import { DeviceFleet } from './device/deviceFleet.js'
-import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
+import { registry, projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './lib/registry.js'
 import { engineSessionTitle } from './lib/sessionTitle.js'
 import { installAmpPlugin, installCodexHooks, installCommandCodeHooks, installCursorHooks, installDevinHooks, installGrokHooks, installAgyHooks, installCopilotHooks, installHermesHooks, installKiloPlugin, installOpencodePlugin, installPiExtension, installSessionHooks } from './lib/hooks.js'
 import { PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
@@ -88,6 +88,9 @@ import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
+import { sweepWorktrees } from './lib/worktreeSweep.js'
+import { nameBranchAfterSession } from './lib/branchNaming.js'
+import { forgetAgentProject } from './lib/agentProject.js'
 import { createStopAgentService } from './lib/stopAgentService.js'
 import { createResumeAgentService } from './lib/resumeAgentService.js'
 import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from './lib/launchOverrides.js'
@@ -199,6 +202,7 @@ import { CopilotNormalizer, copilotHistoryTurnOpen, lastCopilotTurnText } from '
 import { copilotSessionForPid, findCopilotTranscript } from './engines/copilot/session.js'
 import { PiNormalizer, lastPiTurnText } from './engines/pi/normalizer.js'
 import { HermesReader, readHermesMessages } from './engines/hermes/reader.js'
+import { hermesDbForSession } from './lib/hermesHome.js'
 import { DevinReader, readDevinMessages } from './engines/devin/reader.js'
 import { lastHermesTurnText } from './engines/hermes/normalizer.js'
 import { lastDevinTurnText } from './engines/devin/normalizer.js'
@@ -288,8 +292,9 @@ let deviceLinkRef: DeviceLink | null = null
 const OPENCODE_DB = join(env.OPENCODE_DATA_DIR, 'opencode.db')
 // Kilo's SQLite store — same shape, its own file and its own reader (see engines/kilo/).
 const KILO_DB = join(env.KILO_DATA_DIR, 'kilo.db')
-// Hermes keeps every surface's history in one SQLite store — polled per session by HermesReader.
-const HERMES_DB = join(env.HERMES_HOME, 'state.db')
+// Hermes keeps every surface's history in one SQLite store PER HOME — polled per session by
+// HermesReader, against the home that session lives in (`hermesDbForSession`; `hermes -p <name>` has
+// its own). Reading one fixed store is what left profile agents' activity empty (openharness#191).
 // Devin likewise keeps all history in one SQLite store (WAL) — polled per session by DevinReader.
 const DEVIN_DB = join(env.DEVIN_HOME, 'sessions.db')
 /** How many agents' histories are read at once — the first reconcile pass after a boot asks for every
@@ -1658,7 +1663,26 @@ async function runForeground(session: AuthSession): Promise<void> {
     dshFrames.delete(agentId)
   }
 
+  // A worktree branch Harness made up at Start takes its session's name once it has one
+  // (lib/branchNaming.ts). Each agent is looked at once per daemon; the git reads are the cost.
+  const branchNamed = new Set<string>()
+  const nameSessionBranches = (): void => {
+    for (const session of registry.list()) {
+      const title = sessionDisplayTitle(session)
+      if (!title || !session.cwd || branchNamed.has(session.agentId)) continue
+      branchNamed.add(session.agentId)
+      const cwd = session.cwd
+      void nameBranchAfterSession(cwd, title).then((renamed) => {
+        if (!renamed) return
+        console.log(`[worktrees] agent ${sid(session.agentId)} branch named ${renamed}`)
+        forgetAgentProject(cwd)
+        const current = registry.byAgent(session.agentId)
+        if (current) syncSession(current)
+      }).catch(() => {})
+    }
+  }
   const syncTerminalTitles = async (): Promise<void> => {
+    nameSessionBranches()
     const titles = await terminals.titles()
     if (titles.size === 0) return
     for (const session of registry.list()) {
@@ -2089,7 +2113,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     } else if (session.engine === 'hermes') {
       // Hermes has no transcript file — poll its SQLite store, like opencode.
       const reader = new HermesReader({
-        dbPath: HERMES_DB,
+        dbPath: await hermesDbForSession(session),
         sessionId: session.sessionId,
         onEvents: (events) => emitSessionEvents(session.sessionId, events),
         onFatal: (err) => console.warn(`[hermes] ${sid(session.sessionId)} ${err.message}`),
@@ -2414,7 +2438,7 @@ async function runForeground(session: AuthSession): Promise<void> {
       if (!s) return null
       if (s.engine === 'opencode') return lastOpencodeTurnText(await readOpencodeMessages(OPENCODE_DB, sessionId))
       if (s.engine === 'kilo') return lastKiloTurnText(await readKiloMessages(KILO_DB, sessionId))
-      if (s.engine === 'hermes') return lastHermesTurnText(await readHermesMessages(HERMES_DB, sessionId))
+      if (s.engine === 'hermes') return lastHermesTurnText(await readHermesMessages(await hermesDbForSession(s), sessionId))
       if (s.engine === 'devin') return lastDevinTurnText(await readDevinMessages(DEVIN_DB, sessionId))
       if (!s.transcriptPath) return null
       const lines = await tailFile(s.transcriptPath, Infinity)
@@ -2841,6 +2865,7 @@ async function runForeground(session: AuthSession): Promise<void> {
 
     let sessionId = observed.resumeSessionId
     let transcriptPath: string | undefined
+    let hermesHome: string | undefined
     let source = 'terminal-resume'
     if (sessionId) {
       if (isRecentlyDeleted(sessionId)) return
@@ -2883,6 +2908,9 @@ async function runForeground(session: AuthSession): Promise<void> {
       if (!found || registry.has(found.sessionId) || isRecentlyDeleted(found.sessionId)) return
       sessionId = found.sessionId
       transcriptPath = found.transcriptPath
+      // Which Hermes home the repair found it in, so the row starts life reading the right store
+      // rather than looking it up again on its first poll.
+      hermesHome = found.hermesHome
       source = 'process-repair'
     }
 
@@ -2891,6 +2919,7 @@ async function runForeground(session: AuthSession): Promise<void> {
       engine: observed.engine,
       sessionId,
       transcriptPath,
+      ...(hermesHome ? { hermesHome } : {}),
       cwd: observed.cwd,
       source,
       runtimes: observed.runtimes,
@@ -2989,6 +3018,9 @@ async function runForeground(session: AuthSession): Promise<void> {
       // under learns it from the process, before the hook path validates a transcript against it.
       // Fill-only — a profile the row already knows is never re-derived.
       if (observed.codexHome && !current.codexHome) registry.setCodexHome(current.agentId, observed.codexHome)
+      // …and a Hermes home the same way, when the process names one. A row that learns it here never
+      // has to look its session up store by store (openharness#191).
+      if (observed.hermesHome && !current.hermesHome) registry.setHermesHome(current.agentId, observed.hermesHome)
       // And the DSH: a row minted by discovery (or written before the field existed) learns it from
       // the process's own `HARNESS_DSH`, and gets its viewer and verdict watch from here on.
       if (observed.dsh && !current.dsh) registry.setDsh(current.agentId, observed.dsh)
@@ -5444,6 +5476,19 @@ async function runForeground(session: AuthSession): Promise<void> {
   }, env.ADAPTER_DATA_DIR)
   backend.onDirectDeviceRevoked = fp => autonomousDeviceDirect?.revoked(fp)
   autonomousDeviceDirect.start()
+
+  // Worktrees Harness made that no live or stopped harness uses and nothing would miss
+  // (lib/worktreeSweep.ts): a few minutes after start, once restored agents are back in the
+  // registry, then twice a day.
+  const sweepUnusedWorktrees = () => {
+    let inUse: Array<string | null>
+    try { inUse = [...registry.list().map(s => s.cwd), ...stoppedAgents.list().map(s => s.cwd)] } catch { return }
+    void sweepWorktrees({ root: join(homedir(), 'harnesses'), inUse })
+      .then(removed => { if (removed.length) console.log(`[worktrees] removed ${removed.length} unused worktree(s)`) })
+      .catch(() => {})
+  }
+  setTimeout(sweepUnusedWorktrees, 5 * 60_000).unref()
+  setInterval(sweepUnusedWorktrees, 12 * 3600_000).unref()
 
 
   // Every card bound for the WiFi device goes down the cable too, translated once. Teeing beats emitting

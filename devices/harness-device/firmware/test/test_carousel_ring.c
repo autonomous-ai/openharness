@@ -68,6 +68,26 @@ int main(void)
               dir > 0 ? "natural: swipe right goes back" : "reversed: swipe right goes on");
     }
 
+    // ── ‹ › : ONE RULE, AND THE SWIPE SETTING IS NOT IN IT ─────────────────────────────────────────
+    //
+    // The arrow steps through the PANES — › the next one, ‹ the one before, wrapping at either end —
+    // and `ring_dir()` is only what that step costs in columns (ui_screens.c `agent_step`). It used to
+    // step one COLUMN, which is "the tile to the right", and on a dial set to Reversed that walked the
+    // panes backwards: measured on the owner's desk, ring 0 → 2 → 1 → 0 from a right-pointing arrow.
+    for (int dir = -1; dir <= 1; dir += 2) {
+        int col = carousel_col_for_ring_near(0, 0, m, dir);
+        // › all the way round, and one more: the last pane hands back to the first.
+        for (int step = 1; step <= m; step++) {
+            col += dir;                                     // agent_step(+1): `dir * ring_dir()`
+            check(carousel_ring_of_col(col, m, dir), step % m, "› walks the panes on, and wraps");
+        }
+        // ‹ the other way, from wherever that left it.
+        for (int step = 1; step <= m; step++) {
+            col -= dir;                                     // agent_step(-1)
+            check(carousel_ring_of_col(col, m, dir), (m - step % m) % m, "‹ walks them back, and wraps");
+        }
+    }
+
     // ── a one-agent ring (m == 2) still behaves; it is the shape the cover-leading path guards ─────
     for (int dir = -1; dir <= 1; dir += 2)
         for (int cc = -4; cc <= 4; cc++)

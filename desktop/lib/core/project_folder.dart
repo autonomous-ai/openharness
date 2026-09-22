@@ -11,6 +11,9 @@ class ProjectFolderRequest {
   const ProjectFolderRequest.newProject({this.name})
     : gitSource = null,
       branchRef = null,
+      branchName = null,
+      existingBranch = false,
+      placeholder = false,
       createsWorktree = false,
       repository = null,
       generatedLabel = null,
@@ -21,6 +24,9 @@ class ProjectFolderRequest {
     String? name,
   }) : gitSource = null,
        branchRef = null,
+       branchName = null,
+       existingBranch = false,
+       placeholder = false,
        createsWorktree = false,
        repository = null,
        generatedLabel = label,
@@ -29,31 +35,53 @@ class ProjectFolderRequest {
   const ProjectFolderRequest.remote(GitHubRepository value)
     : gitSource = null,
       branchRef = null,
+      branchName = null,
+      existingBranch = false,
+      placeholder = false,
       createsWorktree = false,
       repository = value,
       name = null,
       generatedLabel = null,
       generatedAt = null;
 
-  const ProjectFolderRequest.worktree(String source, {this.branchRef})
-    : gitSource = source,
-      createsWorktree = true,
-      repository = null,
-      name = null,
-      generatedLabel = null,
-      generatedAt = null;
+  /// A new worktree on [branchName]: created from [branchRef], or with
+  /// [existingBranch] that local branch checked out as it is. Without a name
+  /// the machine makes one up.
+  const ProjectFolderRequest.worktree(
+    String source, {
+    this.branchRef,
+    this.branchName,
+    this.existingBranch = false,
+    this.placeholder = false,
+  }) : gitSource = source,
+       createsWorktree = true,
+       repository = null,
+       name = null,
+       generatedLabel = null,
+       generatedAt = null;
 
-  const ProjectFolderRequest.branch(String source, String ref)
-    : gitSource = source,
-      branchRef = ref,
-      createsWorktree = false,
-      repository = null,
-      name = null,
-      generatedLabel = null,
-      generatedAt = null;
+  /// The folder itself on [ref], or with [newBranch] on that new branch, made
+  /// where the folder is now. [ref] then names the new branch, so a daemon that
+  /// cannot make one refuses it rather than starting on the old one.
+  const ProjectFolderRequest.branch(
+    String source,
+    String ref, {
+    String? newBranch,
+  }) : gitSource = source,
+       branchRef = ref,
+       branchName = newBranch,
+       existingBranch = false,
+       placeholder = false,
+       createsWorktree = false,
+       repository = null,
+       name = null,
+       generatedLabel = null,
+       generatedAt = null;
 
-  final String? gitSource, branchRef;
-  final bool createsWorktree;
+  final String? gitSource, branchRef, branchName;
+
+  /// [branchName] was made up: the session's name replaces it once it has one.
+  final bool createsWorktree, existingBranch, placeholder;
 
   final GitHubRepository? repository;
 
@@ -113,6 +141,10 @@ class ProjectFolderRequest {
         : 'remote',
     'gitSource': ?gitSource,
     'branchRef': ?branchRef,
+    // A daemon that predates these names the worktree's branch itself.
+    'branchName': ?branchName,
+    if (existingBranch) 'branchMode': 'existing',
+    if (placeholder) 'branchMode': 'placeholder',
     if (repository != null) 'repositoryUrl': repository!.url,
     // A daemon that predates the field ignores it and names the folder itself.
     if (repository == null && folderName != null) 'projectName': folderName!,
@@ -144,8 +176,9 @@ class ProjectFolderRequest {
           root.path,
           worktree: createsWorktree,
           branchRef: branchRef,
-          label: label,
-          now: now,
+          branchName: branchName,
+          existingBranch: existingBranch,
+          placeholder: placeholder,
         );
       }
       await root.create(recursive: true);

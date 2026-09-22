@@ -19,6 +19,7 @@ import 'package:harness/widgets/agent_picker.dart';
 import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/store/store_controller.dart';
+import 'package:harness/store/store_demo_dialog.dart';
 import 'package:harness/store/store_cover_art.dart';
 import 'package:harness/store/store_explore_widgets.dart';
 import 'package:harness/store/store_editorial.dart';
@@ -26,6 +27,7 @@ import 'package:harness/store/store_exploration.dart';
 import 'package:harness/store/store_featured_art.dart';
 import 'package:harness/store/store_models.dart';
 import 'package:harness/store/store_screen.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 import 'support/real_fonts.dart';
 
@@ -88,6 +90,44 @@ List<DshEntry> _listedCatalog() => [
       )!,
 ];
 
+List<DshEntry> _recordedCatalog() => [
+  for (final item
+      in jsonDecode(File('../store/hands-on.json').readAsStringSync()) as List)
+    DshEntry.fromJson({
+      ...jsonDecode(
+        File('../store/agents/${item['id']}/harness.json').readAsStringSync(),
+      ) as Map<String, dynamic>,
+      ...jsonDecode(
+        File('../store/agents/${item['id']}/store.json').readAsStringSync(),
+      ) as Map<String, dynamic>,
+    })!,
+];
+
+// Seed NetworkImage's cache with the exact published posters for visual review.
+// No replacement art, network connection or production account is needed.
+Future<void> _cacheRecordingPosters(
+  WidgetTester tester,
+  List<DshEntry> entries,
+) async {
+  await tester.runAsync(() async {
+    for (final entry in entries) {
+      final url = entry.examples.first.image!;
+      final path = Uri.parse(url).path.split('/main/').last;
+      final codec = await ui.instantiateImageCodec(
+        await File('../$path').readAsBytes(),
+      );
+      final frame = await codec.getNextFrame();
+      PaintingBinding.instance.imageCache.putIfAbsent(
+        NetworkImage(url),
+        () => OneFrameImageStreamCompleter(
+          Future.value(ImageInfo(image: frame.image)),
+        ),
+      );
+      codec.dispose();
+    }
+  });
+}
+
 class _App extends AppNotifier {
   _App()
     : super(
@@ -99,6 +139,11 @@ class _App extends AppNotifier {
   Future<void> probeDsh(String machineId, {bool force = false}) async {}
   @override
   Future<void> probeEngines(String machineId, {bool force = false}) async {}
+
+  void publishCatalog(List<DshEntry> entries) {
+    localMachineState!.dsh.replace(entries);
+    notifyListeners();
+  }
 }
 
 class _Api implements StoreApi {
@@ -507,6 +552,215 @@ void main() {
         .load();
   });
 
+  for (final (width, scale, brightness) in [
+    (1440.0, 1.0, Brightness.dark),
+    (1440.0, 1.0, Brightness.light),
+    (760.0, 1.5, Brightness.dark),
+  ]) {
+    testWidgets(
+      'illustrated Discover and Featured fit $width at $scale in ${brightness.name}',
+      (tester) async {
+        final entries = _recordedCatalog();
+        await _cacheRecordingPosters(tester, entries);
+        final (_, key) = await _open(
+          tester,
+          entries: [
+            ..._catalog.where(
+              (entry) => !entries.any((recorded) => recorded.id == entry.id),
+            ),
+            ...entries,
+          ],
+          width: width,
+          height: 1080,
+          scale: scale,
+          brightness: brightness,
+        );
+        expect(find.text('Featured harnesses'), findsNothing);
+        expect(find.text('See all 8'), findsNothing);
+        expect(find.byType(StoreFeaturedArt), findsNWidgets(3));
+        expect(
+          find.byKey(const ValueKey('store-session:autonomous/blender')),
+          findsNothing,
+        );
+        expect(find.byType(WebViewWidget), findsNothing);
+        await _capture(
+          tester,
+          key,
+          'restored-discover-${width.toInt()}-${brightness.name}-${scale.toStringAsFixed(1)}',
+        );
+        // Discover's illustrations may evict posters that are not visible yet.
+        await _cacheRecordingPosters(tester, entries);
+        await tester.tap(find.byKey(const ValueKey('store-shelf-sessions')));
+        await tester.pumpAndSettle();
+        expect(find.text('Featured harnesses'), findsOneWidget);
+        expect(find.text('Preview unavailable'), findsNothing);
+        expect(find.byType(StoreFeaturedArt), findsNothing);
+        for (final entry in entries) {
+          final card = find.byKey(ValueKey('store-session:${entry.id}'));
+          if (card.evaluate().isEmpty) continue;
+          final poster = tester.widget<Image>(
+            find.descendant(
+              of: card,
+              matching: find.byWidgetPredicate(
+                (widget) => widget is Image && widget.image is NetworkImage,
+              ),
+            ),
+          );
+          expect(
+            (poster.image as NetworkImage).url,
+            entry.examples.first.image,
+          );
+          expect(poster.fit, BoxFit.contain);
+        }
+        for (final entry in entries) {
+          expect(
+            find.byKey(ValueKey('store-session:${entry.id}')),
+            findsOneWidget,
+          );
+          expect(find.text(entry.examples.first.caption!), findsOneWidget);
+        }
+        expect(
+          tester
+              .widget<SidebarItem>(
+                find.byKey(const ValueKey('store-shelf-sessions')),
+              )
+              .selected,
+          isTrue,
+        );
+        await _capture(
+          tester,
+          key,
+          'featured-all-${width.toInt()}-${brightness.name}-${scale.toStringAsFixed(1)}',
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets('featured recordings play on demand and open the right harness', (
+    tester,
+  ) async {
+    final entries = _recordedCatalog();
+    final (app, _) = await _open(tester, entries: entries);
+    final initialSwarms = app.swarms.length;
+    await tester.tap(find.byKey(const ValueKey('store-shelf-sessions')));
+    await tester.pumpAndSettle();
+    expect(find.byType(StoreDemoDialog), findsNothing);
+    await tester.tap(
+      find.byKey(const ValueKey('store-session-watch:autonomous/blender')),
+    );
+    await tester.pumpAndSettle();
+    final dialog = tester.widget<StoreDemoDialog>(find.byType(StoreDemoDialog));
+    final example = entries
+        .singleWhere((entry) => entry.id == 'autonomous/blender')
+        .examples
+        .first;
+    expect(dialog.video, example.video);
+    expect(dialog.caption, example.caption);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byType(StoreDemoDialog), findsNothing);
+    await tester.tap(
+      find.byKey(const ValueKey('store-session-open:autonomous/blender')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('store-page:autonomous/blender')),
+      findsOneWidget,
+    );
+    expect(find.text('“${example.prompt}”'), findsOneWidget);
+    expect(app.swarms.length, initialSwarms);
+    await tester.tap(find.byKey(const ValueKey('store-back')));
+    await tester.pumpAndSettle();
+    expect(find.text('Featured harnesses'), findsOneWidget);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('store-session-open:autonomous/rdkit')),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('store-session-open:autonomous/rdkit')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('store-page:autonomous/rdkit')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('store-back')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<SidebarItem>(
+            find.byKey(const ValueKey('store-shelf-sessions')),
+          )
+          .selected,
+      isTrue,
+    );
+    expect(
+      find.byKey(const ValueKey('store-session:autonomous/rdkit')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'featured shelf follows catalog publications and removals while open',
+    (tester) async {
+      final (app, _) = await _open(tester, entries: _recordedCatalog());
+      await tester.tap(find.byKey(const ValueKey('store-shelf-sessions')));
+      await tester.pumpAndSettle();
+      const newcomer = DshEntry(
+        id: 'community/after-release',
+        name: 'After release',
+        engine: 'codex',
+        examples: [
+          StoreExample(
+            prompt: 'Make a new thing.',
+            image: 'https://example.com/new-poster.png',
+            video: 'https://example.com/new-recording.mp4',
+          ),
+        ],
+      );
+      app.publishCatalog([newcomer]);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('store-session:community/after-release')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('store-session:autonomous/blender')),
+        findsNothing,
+      );
+      // Failed remote artwork keeps the recording and detail actions usable.
+      expect(find.text('Preview unavailable'), findsOneWidget);
+      expect(
+        find.byKey(
+          const ValueKey('store-session-watch:community/after-release'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(
+          const ValueKey('store-session-open:community/after-release'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('store-page:community/after-release')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('store-back')));
+      await tester.pumpAndSettle();
+      app.publishCatalog([]);
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'Recorded sessions will appear here when they are available in your catalog.',
+        ),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets(
     'search is ready on arrival and stays at the top while browsing',
     (tester) async {
@@ -581,11 +835,15 @@ void main() {
       engine: 'codex',
       tagline: 'Turn observations into pictures.',
       examples: [
-        StoreExample(prompt: 'Visualize rainfall over the last decade.'),
+        StoreExample(
+          prompt: 'Visualize rainfall over the last decade.',
+          caption: 'Monsoon seasons in Sri Lanka',
+        ),
       ],
     );
     expect(storeMatches(entry, 'rainfall decade'), isTrue);
     expect(storeMatches(entry, 'observations'), isTrue);
+    expect(storeMatches(entry, 'monsoon sri lanka'), isTrue);
     expect(storeMatches(entry, 'rainfall circuit'), isFalse);
   });
 
