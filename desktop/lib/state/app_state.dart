@@ -1045,7 +1045,9 @@ class AppNotifier extends ChangeNotifier {
     final view = profileSwarms;
     if (view.isEmpty) return;
     final index = view.indexWhere((swarm) => swarm.id == activeSwarmId);
-    final next = index < 0 ? 0 : (index + delta) % view.length;
+    var next = index < 0 ? (delta < 0 ? -1 : 0) : index + delta;
+    next %= view.length;
+    if (next < 0) next += view.length;
     selectSwarm(view[next].id);
   }
 
@@ -1056,14 +1058,9 @@ class AppNotifier extends ChangeNotifier {
     if (next == _machineProfileId) return;
     _machineProfileId = next;
     unawaited(_paneLayout?.saveMachineProfile(next));
-    final view = profileSwarms;
-    if (view.isEmpty) {
-      newSwarm();
-      return;
-    }
-    if (view.every((swarm) => swarm.id != _activeSwarmId)) {
-      selectSwarm(view.first.id);
-      return;
+    if (!profileSwarms.any((swarm) => swarm.id == _activeSwarmId)) {
+      _ensureProfileFocus();
+      _persistLayout();
     }
     notifyListeners();
   }
@@ -1107,10 +1104,14 @@ class AppNotifier extends ChangeNotifier {
     if (index < 0) return;
     // Held ⌘W must not manufacture and close an endless sequence of blank
     // welcome tabs, evicting the real work from recently closed history.
-    if (swarms.length == 1 &&
-        swarms.single.panes.isEmpty &&
-        swarms.single.name == Swarm.defaultName &&
-        swarms.single.presets.isEmpty) {
+    // Under a machine profile the hidden tabs do not count as something still
+    // open: the last visible welcome is the one this window can see.
+    final visible = profileSwarms;
+    if (visible.length == 1 &&
+        visible.single.id == id &&
+        visible.single.panes.isEmpty &&
+        visible.single.name == Swarm.defaultName &&
+        visible.single.presets.isEmpty) {
       return;
     }
     final removed = swarms.removeAt(index);
@@ -1137,7 +1138,18 @@ class AppNotifier extends ChangeNotifier {
       ),
     );
     if (_activeSwarmId == id) {
-      _activeSwarmId = swarms[index.clamp(0, swarms.length - 1)].id;
+      // The next full-list tab may belong to another computer. Land on the
+      // next tab this profile still shows, never on one it is hiding.
+      final neighbor = profileNeighborId(swarms, _machineProfileId, index);
+      if (neighbor != null) {
+        _activeSwarmId = neighbor;
+      } else if (swarms.isNotEmpty) {
+        final starter = Swarm(
+          id: _desk.enabled ? newDeskId() : 'swarm-${_nextSwarmId++}',
+        );
+        swarms.add(starter);
+        _activeSwarmId = starter.id;
+      }
     }
     _persistLayout();
     notifyListeners();
@@ -9223,7 +9235,24 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _ensureProfileFocus() {
+    if (_machineProfileId == null || _machineProfileId!.isEmpty) return;
+    if (profileSwarms.any((swarm) => swarm.id == _activeSwarmId)) return;
+    final visible = swarmsForMachineProfile(swarms, _machineProfileId);
+    if (visible.isNotEmpty) {
+      _activeSwarmId = visible.first.id;
+    } else {
+      final starter = Swarm(
+        id: _desk.enabled ? newDeskId() : 'swarm-${_nextSwarmId++}',
+      );
+      swarms.add(starter);
+      _activeSwarmId = starter.id;
+    }
+    selectedMachineId = focusedPane?.machineId;
+  }
+
   void _persistLayout() {
+    _ensureProfileFocus();
     _draftSwarmReturns.removeWhere((id, _) {
       final swarm = swarms.where((swarm) => swarm.id == id).firstOrNull;
       return swarm == null ||
@@ -9396,11 +9425,17 @@ class AppNotifier extends ChangeNotifier {
         _activeSwarmId = restored.any((s) => s.id == saved['activeId'])
             ? saved['activeId'] as String
             : restored.first.id;
+        final restoredActive = _activeSwarmId;
+        // A saved active tab can belong to another computer. The profile
+        // choice has to win on launch, or the strip hides the tab on screen.
+        _ensureProfileFocus();
         while (swarms.any((s) => s.id == 'swarm-$_nextSwarmId')) {
           _nextSwarmId++;
         }
         _autoPickedAgent = true;
-        if (hadDuplicateStarters) _persistLayout();
+        if (hadDuplicateStarters || _activeSwarmId != restoredActive) {
+          _persistLayout();
+        }
         notifyListeners();
         return;
       }

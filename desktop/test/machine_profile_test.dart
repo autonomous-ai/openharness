@@ -39,4 +39,20 @@ void main() {
     expect(swarmMatchesMachineProfile(named, 'm1'), isFalse);
     expect(swarmMatchesMachineProfile(named, 'm2'), isTrue);
   });
+
+  test('a stale title does not hide a tab whose agents are all on this computer', () {
+    final local = tab('local', ['m1'])..titleMachineId = 'm2';
+    expect(swarmMatchesMachineProfile(local, 'm1'), isTrue);
+    expect(swarmMatchesMachineProfile(local, 'm2'), isFalse);
+  });
+
+  test('closing a visible tab does not land on a hidden one in between', () {
+    final local = tab('local', ['m1']);
+    final remote = tab('remote', ['m2']);
+    final store = Swarm(id: 'store', name: Swarm.storeName, kind: 'store');
+    final swarms = [local, remote, store];
+    swarms.removeAt(0);
+    expect(profileNeighborId(swarms, 'm1', 0), 'store');
+    expect(profileNeighborId([remote], 'm1', 0), isNull);
+  });
 }
