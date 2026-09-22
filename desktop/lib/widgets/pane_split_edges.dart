@@ -103,7 +103,7 @@ class _PaneSplitEdgesState extends State<PaneSplitEdges> {
               opacity: visible ? 1 : 0,
               duration: MediaQuery.disableAnimationsOf(context)
                   ? Duration.zero
-                  : const Duration(milliseconds: 100),
+                  : grid.AppMotion.hover,
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: AppColors.surface,

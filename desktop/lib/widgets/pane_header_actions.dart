@@ -107,7 +107,7 @@ class PaneHeaderActions extends StatelessWidget {
         alwaysIncludeSemantics: true,
         duration: MediaQuery.disableAnimationsOf(context)
             ? Duration.zero
-            : const Duration(milliseconds: 100),
+            : grid.AppMotion.hover,
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -208,7 +208,7 @@ class PaneHeaderActions extends StatelessWidget {
             opacity: visible ? 0 : 1,
             duration: MediaQuery.disableAnimationsOf(context)
                 ? Duration.zero
-                : const Duration(milliseconds: 100),
+                : grid.AppMotion.hover,
             child: ExcludeSemantics(excluding: visible, child: details!),
           ),
         ),
@@ -375,7 +375,7 @@ class _ViewerToggle extends StatelessWidget {
       tooltip: on ? 'Hide viewer' : 'Show viewer',
       onPressed: onPressed,
       icon: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
+        duration: grid.AppMotion.swap,
         curve: Curves.easeOut,
         decoration: BoxDecoration(
           shape: BoxShape.circle,

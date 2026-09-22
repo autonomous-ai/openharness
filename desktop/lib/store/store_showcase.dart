@@ -4,7 +4,6 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
-import '../core/test_run.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/engine_identity.dart';
@@ -18,8 +17,8 @@ import 'store_demo_dialog.dart';
 /// than reading about it. An example without a picture (an editorial prompt, before the package
 /// ships its own) is the prompt and its button alone.
 ///
-/// Each block rises into place the first time it scrolls into view — unless Reduce Motion is on, or
-/// under `flutter test`, where everything is simply there.
+/// Examples are visible as soon as they are laid out. Optional illustration
+/// motion is reserved for explicit previews, outside the normal Store flow.
 class StoreExampleFlow extends StatelessWidget {
   const StoreExampleFlow({
     super.key,
@@ -35,7 +34,7 @@ class StoreExampleFlow extends StatelessWidget {
   /// Opens New Harness with the prompt as its first message; null when there is nowhere to open it.
   final ValueChanged<String>? onTry;
 
-  /// Rise into view on first sight; defaults to on outside tests.
+  /// Optional motion for an explicit preview. Normal Store pages are instant.
   final bool? animate;
 
   @override
@@ -46,9 +45,8 @@ class StoreExampleFlow extends StatelessWidget {
       children: [
         for (final (i, example) in examples.indexed) ...[
           if (i > 0) const SizedBox(height: 132),
-          _Reveal(
-            animate: animate ?? !kUnderTest,
-            child: _ExampleBlock(
+          _example(
+            _ExampleBlock(
               key: ValueKey('store-example:$i'),
               index: i,
               count: examples.length,
@@ -61,6 +59,9 @@ class StoreExampleFlow extends StatelessWidget {
       ],
     );
   }
+
+  Widget _example(Widget child) =>
+      animate == true ? _Reveal(animate: true, child: child) : child;
 }
 
 class _ExampleBlock extends StatefulWidget {
@@ -199,10 +200,10 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                   onExit: (_) => setState(() => _hovering = false),
                   child: AnimatedScale(
                     scale: _hovering ? 1.012 : 1,
-                    duration: const Duration(milliseconds: 420),
+                    duration: grid.AppMotion.hover,
                     curve: Curves.easeOutCubic,
                     child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 420),
+                      duration: grid.AppMotion.hover,
                       curve: Curves.easeOutCubic,
                       decoration: BoxDecoration(
                         borderRadius: radius,
@@ -271,14 +272,6 @@ class _Output extends StatelessWidget {
       fit: example.video != null ? BoxFit.contain : BoxFit.cover,
       filterQuality: FilterQuality.medium,
       semanticLabel: example.caption ?? 'What ${entry.name} made',
-      frameBuilder: (context, child, frame, synchronous) => synchronous
-          ? child
-          : AnimatedOpacity(
-              opacity: frame == null ? 0 : 1,
-              duration: const Duration(milliseconds: 500),
-              curve: Curves.easeOut,
-              child: child,
-            ),
       loadingBuilder: (context, child, progress) =>
           progress == null ? child : placeholder,
       errorBuilder: (_, _, _) => placeholder,

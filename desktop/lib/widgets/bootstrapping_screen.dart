@@ -96,9 +96,7 @@ class BootstrappingScreen extends StatelessWidget {
                                 const SizedBox(width: 12),
                                 Flexible(
                                   child: AnimatedSwitcher(
-                                    duration: reduceMotion
-                                        ? Duration.zero
-                                        : const Duration(milliseconds: 180),
+                                    duration: Duration.zero,
                                     child: Text(
                                       status,
                                       key: ValueKey(status),

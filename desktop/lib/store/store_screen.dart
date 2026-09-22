@@ -1234,7 +1234,7 @@ class _ProductPageState extends State<_ProductPage> {
                                 unawaited(
                                   Scrollable.ensureVisible(
                                     target,
-                                    duration: const Duration(milliseconds: 600),
+                                    duration: Duration.zero,
                                     curve: Curves.easeInOutCubic,
                                   ),
                                 );
