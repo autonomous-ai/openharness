@@ -44,7 +44,7 @@ import { DaemonCableHost, cableEventFor, cableQuestionFor, cableQuestionCloseFor
 import { MachineListCache, machineListCachePath, withStaleMarker } from './device/machineList.js'
 import { DeviceLink } from './device/deviceLink.js'
 import { DeviceFleet } from './device/deviceFleet.js'
-import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
+import { registry, projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './lib/registry.js'
 import { engineSessionTitle } from './lib/sessionTitle.js'
 import { installAmpPlugin, installCodexHooks, installCommandCodeHooks, installCursorHooks, installDevinHooks, installGrokHooks, installAgyHooks, installCopilotHooks, installHermesHooks, installKiloPlugin, installOpencodePlugin, installPiExtension, installSessionHooks } from './lib/hooks.js'
 import { PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
@@ -89,6 +89,8 @@ import { restoreAgents } from './lib/restoreAgents.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { sweepWorktrees } from './lib/worktreeSweep.js'
+import { nameBranchAfterSession } from './lib/branchNaming.js'
+import { forgetAgentProject } from './lib/agentProject.js'
 import { createStopAgentService } from './lib/stopAgentService.js'
 import { createResumeAgentService } from './lib/resumeAgentService.js'
 import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from './lib/launchOverrides.js'
@@ -1659,7 +1661,26 @@ async function runForeground(session: AuthSession): Promise<void> {
     dshFrames.delete(agentId)
   }
 
+  // A worktree branch Harness made up at Start takes its session's name once it has one
+  // (lib/branchNaming.ts). Each agent is looked at once per daemon; the git reads are the cost.
+  const branchNamed = new Set<string>()
+  const nameSessionBranches = (): void => {
+    for (const session of registry.list()) {
+      const title = sessionDisplayTitle(session)
+      if (!title || !session.cwd || branchNamed.has(session.agentId)) continue
+      branchNamed.add(session.agentId)
+      const cwd = session.cwd
+      void nameBranchAfterSession(cwd, title).then((renamed) => {
+        if (!renamed) return
+        console.log(`[worktrees] agent ${sid(session.agentId)} branch named ${renamed}`)
+        forgetAgentProject(cwd)
+        const current = registry.byAgent(session.agentId)
+        if (current) syncSession(current)
+      }).catch(() => {})
+    }
+  }
   const syncTerminalTitles = async (): Promise<void> => {
+    nameSessionBranches()
     const titles = await terminals.titles()
     if (titles.size === 0) return
     for (const session of registry.list()) {

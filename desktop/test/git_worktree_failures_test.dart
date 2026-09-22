@@ -111,7 +111,7 @@ void main() {
           return _GitProcess(output: '/repo with spaces\n');
         },
       );
-      expect(calls, hasLength(5));
+      expect(calls, hasLength(6));
       expect(
         calls.any((args) => args.contains('switch') || args.contains('fetch')),
         false,

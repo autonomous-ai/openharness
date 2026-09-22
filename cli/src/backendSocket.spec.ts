@@ -499,7 +499,7 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('returns Git branch choices only to the requesting encrypted connection', async () => {
-    const preview = { isGit: true, root: '/remote/workspace', branch: 'main', branches: [{ ref: 'refs/heads/private-branch', name: 'private-branch', remote: false }] }
+    const preview = { isGit: true, root: '/remote/workspace', branch: 'main', owner: 'tester', branches: [{ ref: 'refs/heads/private-branch', name: 'private-branch', remote: false }] }
     const read = vi.spyOn(gitProject, 'readGitProject').mockResolvedValue(preview)
     const socket = new BackendSocket('token')
     socket.connect()

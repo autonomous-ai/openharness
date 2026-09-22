@@ -95,14 +95,6 @@ class PromptContextView extends StatelessWidget {
               icon: LucideIcons.folder300,
               color: grid.AppPalette.teal,
             ),
-          if (prefs.project && data.worktree?.isNotEmpty == true)
-            (
-              label: 'Worktree',
-              value: data.worktree!,
-              ascii: 'wt:',
-              icon: LucideIcons.folderGit2300,
-              color: grid.AppPalette.teal,
-            ),
           if (prefs.branch && data.branch?.isNotEmpty == true)
             (
               label: 'Branch',
@@ -199,12 +191,10 @@ class PromptContextView extends StatelessWidget {
   }
 
   /// Folders shorten in the middle; everything else at the end.
-  static bool _middle(String label) =>
-      label == 'Project' || label == 'Worktree' || label.isEmpty;
+  static bool _middle(String label) => label == 'Project' || label.isEmpty;
 
   /// How much of the line each segment's text gets when it does not all fit:
-  /// the worktree folder gives way first, then the project, the machine, and
-  /// the branch last, each keeping a few characters; narrower than that, all
+  /// the project gives way first, then the machine, and the branch last, each keeping a few characters; narrower than that, all
   /// alike. Null when everything fits.
   List<double>? _fit(
     List<
@@ -237,7 +227,7 @@ class PromptContextView extends StatelessWidget {
     if (excess <= 0) return null;
     final widths = [...natural];
     final floor = _measure('mmmmmm…', style, scaler);
-    const order = ['Worktree', '', 'Project', 'Machine', 'Branch', 'Harness'];
+    const order = ['', 'Project', 'Machine', 'Branch', 'Harness'];
     // To a few characters each, in that order.
     for (final label in order) {
       for (var index = 0; index < segments.length && excess > 0; index++) {

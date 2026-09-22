@@ -43,8 +43,7 @@ async function candidates(home: string): Promise<string[]> {
  * Removes the worktrees Harness made that nothing uses and nothing would miss: under
  * `<root>/worktrees`, no live or stopped harness working in it (a stopped one can be resumed there),
  * nothing uncommitted, untouched for [idleMs], and — on no branch — no commit only it has. The
- * branch stays, unless it is a `harness/` one Harness named whose commits are all on other branches
- * or the remote. Anything that does not pass is left exactly as it is.
+ * branch stays, unless Harness made it and its commits are all on other branches or the remote. Anything that does not pass is left exactly as it is.
  */
 export async function sweepWorktrees(input: {
   root: string
@@ -81,9 +80,12 @@ async function sweepOne(path: string, now: number, idleMs: number): Promise<bool
   const branch = await git(path, ['symbolic-ref', '--quiet', 'HEAD']).catch(() => null)
   if (!branch && await git(path, ['rev-list', '--count', 'HEAD', '--not', '--branches', '--remotes']) !== '0') return false
   await git(main, ['worktree', 'remove', '--', path])
-  if (branch?.startsWith('refs/heads/harness/')) {
+  const name = branch?.slice('refs/heads/'.length)
+  // Only a branch Harness made: marked in the repository's config, or named `harness/…` by older builds.
+  const made = name !== undefined && (name.startsWith('harness/')
+    || await git(main, ['config', '--get', `branch.${name}.harness`]).then(Boolean, () => false))
+  if (branch && name && made) {
     // `--exclude` before `--branches` matches names without `refs/heads/`.
-    const name = branch.slice('refs/heads/'.length)
     const unique = await git(main, ['rev-list', '--count', branch, '--not', `--exclude=${name}`, '--branches', '--remotes']).catch(() => null)
     if (unique === '0') await git(main, ['branch', '-D', name]).catch(() => {})
   }

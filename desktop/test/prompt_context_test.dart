@@ -24,10 +24,9 @@ void main() {
                 child: PromptContextView(
                   prefs: PromptPrefs(style: style),
                   contextData: const PromptContext(
-                    machine: 'iMac – Office',
+                    machine: 'mac-studio',
                     project: 'autonomous-harness',
-                    worktree: 'claude-2026-09-22-11-36-13-uYONBE',
-                    branch: 'fix/pane-header-repo-name',
+                    branch: 'deehw/worktree-and-branches',
                   ),
                 ),
               ),
@@ -39,19 +38,30 @@ void main() {
   }
 
   testWidgets(
-    'a crowded line gives way worktree folder first, cut in the middle',
+    'a crowded line keeps the branch and cuts the folder in the middle',
     (tester) async {
-      await line(tester, 1100);
-      await expectCrowded(tester);
-      await line(tester, 1200, style: PromptStyle.powerline);
-      await expectCrowded(tester);
+      for (final (width, style) in [
+        (560.0, PromptStyle.symbols),
+        (620.0, PromptStyle.powerline),
+      ]) {
+        await line(tester, width, style: style);
+        expect(find.text('deehw/worktree-and-branches'), findsOneWidget);
+        final folder = find.textContaining('…');
+        expect(folder, findsOneWidget);
+        final shown =
+            tester.widget<Text>(folder).data ??
+            tester.widget<Text>(folder).textSpan!.toPlainText();
+        expect(shown, startsWith('aut'));
+        expect(shown, endsWith('ess'));
+        expect(tester.takeException(), isNull);
+      }
     },
   );
 
   testWidgets('a line that fits is shown whole', (tester) async {
     await line(tester, 1590);
     expect(find.textContaining('…'), findsNothing);
-    expect(find.text('claude-2026-09-22-11-36-13-uYONBE'), findsOneWidget);
+    expect(find.text('autonomous-harness'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -59,21 +69,8 @@ void main() {
     tester,
   ) async {
     for (final style in PromptStyle.values) {
-      await line(tester, 240, style: style);
+      await line(tester, 120, style: style);
       expect(tester.takeException(), isNull);
     }
   });
-}
-
-Future<void> expectCrowded(WidgetTester tester) async {
-  expect(find.text('fix/pane-header-repo-name'), findsOneWidget);
-  expect(find.text('autonomous-harness'), findsOneWidget);
-  final worktree = find.textContaining('…');
-  expect(worktree, findsOneWidget);
-  final shown =
-      tester.widget<Text>(worktree).data ??
-      tester.widget<Text>(worktree).textSpan!.toPlainText();
-  expect(shown, startsWith('claude-'));
-  expect(shown, endsWith('uYONBE'));
-  expect(tester.takeException(), isNull);
 }

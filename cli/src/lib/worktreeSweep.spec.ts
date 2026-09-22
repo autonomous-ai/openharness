@@ -54,6 +54,13 @@ describe('sweeping unused worktrees', () => {
     expect(await exists(dirty)).toBe(true)
   })
 
+  it('removes a branch Harness marked in the config, whatever its name', async () => {
+    const path = await add('quiet-owl', 'deehw/quiet-owl')
+    await git(repo, 'config', 'branch.deehw/quiet-owl.harness', 'placeholder')
+    expect(await sweepWorktrees({ root: join(root, 'harnesses'), inUse: [], now: later() })).toEqual([path])
+    expect(await branches()).toEqual(['main'])
+  })
+
   it('keeps branches with commits of their own, and branches Harness did not name', async () => {
     const own = await add('own', 'harness/own')
     await writeFile(join(own, 'file'), 'two')

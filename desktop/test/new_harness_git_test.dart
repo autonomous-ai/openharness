@@ -125,6 +125,7 @@ void main() {
       'gitSource': '/repo',
       'branchRef': 'refs/heads/main',
       'branchName': box.placeholder,
+      'branchMode': 'placeholder',
     });
     box.toggleWorktree();
     expect(box.worktree, false);
@@ -256,6 +257,7 @@ void main() {
         'gitSource': '/repo',
         'branchRef': 'refs/heads/main',
         'branchName': box.placeholder,
+        'branchMode': 'placeholder',
       });
       expect(connection.reads, [folder], reason: 'Branches are shared.');
       expect(await box.create(), NewHarnessOutcome.created);
@@ -311,6 +313,7 @@ void main() {
     'isGit': true,
     'root': '/repo',
     'branch': 'main',
+    'owner': 'deehw',
     'defaultRef': 'refs/remotes/origin/main',
     'branches': [
       {'ref': 'refs/heads/main', 'name': 'main', 'worktree': '/repo'},
@@ -355,16 +358,21 @@ void main() {
       addTearDown(box.dispose);
       await settle();
       final placeholder = box.placeholder;
-      expect(placeholder, matches(RegExp(r'^harness/[a-z]+-[a-z]+$')));
+      expect(
+        placeholder,
+        matches(RegExp(r'^deehw/[a-z]+-[a-z]+$')),
+        reason: 'Made up under the GitHub login the machine reported.',
+      );
       expect(box.worktree, true);
       expect(box.branchLabel, 'origin/main', reason: 'The remote default.');
-      expect(box.worktreeBranchLabel, placeholder);
+      expect(box.worktreeBranchLabel, 'deehw/<session name>');
       expect(box.createLabel, 'Start Harness');
       expect(box.projectFolderRequest!.payload, {
         'projectSource': 'worktree',
         'gitSource': '/repo',
         'branchRef': 'refs/remotes/origin/main',
         'branchName': placeholder,
+        'branchMode': 'placeholder',
       });
 
       box.focusField(NewHarnessField.branch);
@@ -406,11 +414,16 @@ void main() {
       expect(box.worktreeBranchLabel, 'fix-typo · tracks origin/fix-typo');
       expect(box.projectFolderRequest!.payload['branchName'], 'fix-typo');
       pick('main');
-      expect(box.worktreeBranchLabel, placeholder);
+      expect(box.worktreeBranchLabel, 'deehw/<session name>');
       expect(box.projectFolderRequest!.payload['branchRef'], 'refs/heads/main');
 
       box.focusField(NewHarnessField.branchName);
-      expect(box.query, placeholder);
+      expect(
+        box.query,
+        '',
+        reason: 'Nothing typed means the session names it.',
+      );
+      expect(box.options.single.title, 'deehw/<session name>');
       box.setQuery('my/work');
       expect(box.options.single.detail, 'New branch from main');
       box.accept();
@@ -424,7 +437,8 @@ void main() {
       expect(box.error, contains('Turn Worktree off'));
       box.setQuery('');
       box.accept();
-      expect(box.worktreeBranchLabel, placeholder);
+      expect(box.worktreeBranchLabel, 'deehw/<session name>');
+      expect(box.projectFolderRequest!.payload['branchMode'], 'placeholder');
 
       box.toggleWorktree();
       expect(box.worktree, false);

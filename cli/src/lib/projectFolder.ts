@@ -8,7 +8,7 @@ import { GitProjectError, prepareGitProject, validGitPath } from './gitProject.j
 /** `name` on a new project is what the person called it; without one the folder is named after the
  *  harness and the time. */
 export type ProjectFolder = { source: 'new'; name?: string } | { source: 'remote'; repositoryUrl: string; name: string }
-  | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean }
+  | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean; placeholder?: boolean }
   | { source: 'branch'; gitSource: string; branchRef?: string; branchName?: string }
 
 export class ProjectFolderError extends Error {
@@ -28,11 +28,12 @@ export function parseProjectFolder(payload: Record<string, unknown>): ProjectFol
     }
     const name = payload.branchName
     if (payload.projectSource === 'worktree' && name !== undefined) {
-      if (!plausibleBranchName(name) || (payload.branchMode !== undefined && payload.branchMode !== 'existing')) {
+      if (!plausibleBranchName(name) || (payload.branchMode !== undefined && payload.branchMode !== 'existing' && payload.branchMode !== 'placeholder')) {
         throw new ProjectFolderError('INVALID_PROJECT_SOURCE', 'Choose a Git project and branch.')
       }
       return { source: 'worktree', gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}),
-        branchName: name, ...(payload.branchMode === 'existing' ? { existingBranch: true } : {}) }
+        branchName: name, ...(payload.branchMode === 'existing' ? { existingBranch: true } : {}),
+        ...(payload.branchMode === 'placeholder' ? { placeholder: true } : {}) }
     }
     // A new branch for the folder itself, named by `branchRef` too.
     if (payload.projectSource === 'branch' && name !== undefined) {
@@ -94,7 +95,9 @@ export async function prepareProjectFolder(
     if (project.source === 'worktree' || project.source === 'branch') {
       return await prepareGitProject(project.gitSource, {
         root, worktree: project.source === 'worktree', ref: project.branchRef,
-        ...(project.source === 'worktree' && project.branchName ? { branchName: project.branchName, existingBranch: project.existingBranch === true } : {}),
+        ...(project.source === 'worktree' && project.branchName ? {
+          branchName: project.branchName, existingBranch: project.existingBranch === true, placeholder: project.placeholder === true,
+        } : {}),
         ...(project.source === 'branch' && project.branchName ? { branchName: project.branchName } : {}),
       })
     }

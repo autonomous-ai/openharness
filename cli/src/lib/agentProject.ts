@@ -11,6 +11,8 @@ export type AgentProject = {
   branch: string | null
   /** Inside a linked worktree rather than the repository's own checkout. */
   worktree?: true
+  /** The branch still has the name Harness made up at Start; the session's replaces it. */
+  branchPending?: true
 }
 
 /** Compare remote repositories without publishing embedded credentials or transport syntax. */
@@ -58,12 +60,23 @@ async function inspect(cwd: string): Promise<AgentProject> {
     const common = await git(root, ['rev-parse', '--git-common-dir'])
     // A linked worktree is named for its repository, not its folder.
     const main = common && basename(common) === '.git' ? dirname(resolve(root, common)) : root
-    return { name: basename(main), cwd, root, remote: canonicalRepository(remote), branch, ...(main !== root ? { worktree: true as const } : {}) }
+    const pending = branch && !branch.startsWith('Detached ')
+      ? await git(cwd, ['config', '--get', `branch.${branch}.harness`]) === 'placeholder'
+      : false
+    return {
+      name: basename(main), cwd, root, remote: canonicalRepository(remote), branch,
+      ...(main !== root ? { worktree: true as const } : {}), ...(pending ? { branchPending: true as const } : {}),
+    }
   } finally {
     const next = waiting.shift()
     if (next) next()
     else running--
   }
+}
+
+/** Forget what was read for `cwd`, as after renaming its branch. */
+export function forgetAgentProject(cwd: string): void {
+  cache.delete(cwd)
 }
 
 export function agentProject(cwd: string | null, now = Date.now()): Promise<AgentProject | null> {

@@ -3,8 +3,6 @@ library;
 
 import 'package:flutter/foundation.dart' show immutable;
 
-import 'git_worktree.dart' show worktreeFolderName;
-
 enum MachineAuthMode { managed, remote, self, provider }
 
 enum ConnectionStatus { disconnected, connecting, connected, reconnecting }
@@ -784,6 +782,7 @@ class AgentProject {
     this.remote,
     this.branch,
     this.worktree = false,
+    this.branchPending = false,
   });
   final String name;
   final String cwd;
@@ -793,6 +792,10 @@ class AgentProject {
 
   /// In a linked worktree rather than the repository's own checkout.
   final bool worktree;
+
+  /// [branch] still has the name Harness made up at Start; it is shown once
+  /// the session's name replaces it.
+  final bool branchPending;
 
   /// The folder as the person chose it: inside a Git checkout, a subfolder
   /// shows as itself and the checkout's root as its repository ([name]), even
@@ -810,23 +813,6 @@ class AgentProject {
         name;
   }
 
-  /// The worktree's own folder, when it says more than the branch: Harness
-  /// names a worktree's folder after its branch, so it shows once the branch
-  /// has moved on — and it is where the engine's session history is kept.
-  String? get worktreeFolder {
-    if (!worktree) return null;
-    final folder = root
-        ?.split(RegExp(r'[/\\]'))
-        .where((part) => part.isNotEmpty)
-        .lastOrNull;
-    if (folder == null) return null;
-    if (branch != null && worktreeFolderName(branch!) == folder) return null;
-    // Older builds named the folder `<repository>-…`; the project says that.
-    return folder.startsWith('$name-') && folder.length > name.length + 1
-        ? folder.substring(name.length + 1)
-        : folder;
-  }
-
   String identity(String machineId) =>
       remote != null ? 'repo:$remote' : 'folder:$machineId:${root ?? cwd}';
 
@@ -838,9 +824,11 @@ class AgentProject {
       root == other.root &&
       remote == other.remote &&
       branch == other.branch &&
-      worktree == other.worktree;
+      worktree == other.worktree &&
+      branchPending == other.branchPending;
   @override
-  int get hashCode => Object.hash(name, cwd, root, remote, branch, worktree);
+  int get hashCode =>
+      Object.hash(name, cwd, root, remote, branch, worktree, branchPending);
 
   static AgentProject? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -864,6 +852,7 @@ class AgentProject {
       remote: field('remote'),
       branch: field('branch', 256),
       worktree: raw['worktree'] == true,
+      branchPending: raw['branchPending'] == true,
     );
   }
 }

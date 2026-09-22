@@ -13,6 +13,7 @@ class ProjectFolderRequest {
       branchRef = null,
       branchName = null,
       existingBranch = false,
+      placeholder = false,
       createsWorktree = false,
       repository = null,
       generatedLabel = null,
@@ -25,6 +26,7 @@ class ProjectFolderRequest {
        branchRef = null,
        branchName = null,
        existingBranch = false,
+       placeholder = false,
        createsWorktree = false,
        repository = null,
        generatedLabel = label,
@@ -35,6 +37,7 @@ class ProjectFolderRequest {
       branchRef = null,
       branchName = null,
       existingBranch = false,
+      placeholder = false,
       createsWorktree = false,
       repository = value,
       name = null,
@@ -49,6 +52,7 @@ class ProjectFolderRequest {
     this.branchRef,
     this.branchName,
     this.existingBranch = false,
+    this.placeholder = false,
   }) : gitSource = source,
        createsWorktree = true,
        repository = null,
@@ -67,6 +71,7 @@ class ProjectFolderRequest {
        branchRef = ref,
        branchName = newBranch,
        existingBranch = false,
+       placeholder = false,
        createsWorktree = false,
        repository = null,
        name = null,
@@ -74,7 +79,9 @@ class ProjectFolderRequest {
        generatedAt = null;
 
   final String? gitSource, branchRef, branchName;
-  final bool createsWorktree, existingBranch;
+
+  /// [branchName] was made up: the session's name replaces it once it has one.
+  final bool createsWorktree, existingBranch, placeholder;
 
   final GitHubRepository? repository;
 
@@ -137,6 +144,7 @@ class ProjectFolderRequest {
     // A daemon that predates these names the worktree's branch itself.
     'branchName': ?branchName,
     if (existingBranch) 'branchMode': 'existing',
+    if (placeholder) 'branchMode': 'placeholder',
     if (repository != null) 'repositoryUrl': repository!.url,
     // A daemon that predates the field ignores it and names the folder itself.
     if (repository == null && folderName != null) 'projectName': folderName!,
@@ -170,6 +178,7 @@ class ProjectFolderRequest {
           branchRef: branchRef,
           branchName: branchName,
           existingBranch: existingBranch,
+          placeholder: placeholder,
         );
       }
       await root.create(recursive: true);

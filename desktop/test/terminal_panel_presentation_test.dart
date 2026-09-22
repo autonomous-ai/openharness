@@ -126,27 +126,22 @@ void main() {
           terminalAvailable: true,
           project: AgentProject(
             name: 'harness',
-            cwd: '/work/worktrees/harness/codex-0922-1136',
-            root: '/work/worktrees/harness/codex-0922-1136',
-            branch: 'fix/typo',
+            cwd: '/work/worktrees/harness/brave-otter',
+            root: '/work/worktrees/harness/brave-otter',
+            branch: 'tester/brave-otter',
             worktree: true,
+            branchPending: true,
           ),
         ),
       ];
       revision.value = 4;
       await tester.pump();
+      expect(find.text('harness'), findsOneWidget);
       expect(
-        find.byWidgetPredicate(
-          (widget) =>
-              widget is Semantics &&
-              (widget.properties.label ?? '').contains(
-                'Worktree: codex-0922-1136',
-              ),
-        ),
-        findsOneWidget,
-        reason: 'Once the branch moved on, the folder says where it lives.',
+        find.text('tester/brave-otter'),
+        findsNothing,
+        reason: 'A made-up branch waits for the session to name it.',
       );
-      expect(find.text('fix/typo'), findsOneWidget);
       revision.value = 2;
       await tester.pump();
       expect(find.byTooltip('Zoom Pane'), findsOneWidget);
@@ -229,14 +224,23 @@ void main() {
         expect(tester.widget<AnimatedOpacity>(details).opacity, 1);
         expect(find.text('harness'), findsOneWidget);
         expect(find.text('main'), findsOneWidget);
-        expect(
-          tester.getRect(find.text('Test host')).left,
-          greaterThan(titleBounds.right),
-        );
-        expect(
-          tester.getRect(find.text('harness')).left,
-          greaterThan(tester.getRect(find.text('Test host')).right),
-        );
+        if (local) {
+          // This computer goes without saying.
+          expect(find.text('Test host'), findsNothing);
+          expect(
+            tester.getRect(find.text('harness')).left,
+            greaterThan(titleBounds.right),
+          );
+        } else {
+          expect(
+            tester.getRect(find.text('Test host')).left,
+            greaterThan(titleBounds.right),
+          );
+          expect(
+            tester.getRect(find.text('harness')).left,
+            greaterThan(tester.getRect(find.text('Test host')).right),
+          );
+        }
         expect(
           tester.getRect(find.text('main')).left,
           greaterThan(tester.getRect(find.text('harness')).right),

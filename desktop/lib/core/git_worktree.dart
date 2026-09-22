@@ -6,11 +6,21 @@ import 'dart:math';
 import 'package:path/path.dart' as p;
 
 import 'repository_clone.dart';
+import 'test_run.dart';
 
 class GitBranch {
-  const GitBranch(this.ref, this.name, {this.remote = false, this.worktree});
+  const GitBranch(
+    this.ref,
+    this.name, {
+    this.remote = false,
+    this.worktree,
+    this.harness = false,
+  });
   final String ref, name;
   final bool remote;
+
+  /// Harness made this branch for a worktree.
+  final bool harness;
 
   /// Where this local branch is checked out, when it is.
   final String? worktree;
@@ -26,6 +36,7 @@ class GitProjectInfo {
     this.mainBranch,
     this.defaultRef,
     this.root,
+    this.owner,
   });
   factory GitProjectInfo.fromJson(Map<String, dynamic> data) => GitProjectInfo(
     isGit: data['isGit'] == true,
@@ -41,6 +52,7 @@ class GitProjectInfo {
     root: data['root'] is String && validGitPath(data['root'])
         ? data['root'] as String
         : null,
+    owner: data['owner'] is String ? ownerSlug(data['owner'] as String) : null,
     branches: [
       for (final row in (data['branches'] as List? ?? const []))
         if (row is Map && row['ref'] is String && row['name'] is String)
@@ -51,6 +63,7 @@ class GitProjectInfo {
             worktree: row['worktree'] is String
                 ? row['worktree'] as String
                 : null,
+            harness: row['harness'] == true,
           ),
     ],
   );
@@ -66,6 +79,9 @@ class GitProjectInfo {
   /// the checkout the folder belongs to.
   final String? defaultRef, root;
 
+  /// Whose branches Harness makes on that machine: `deehw` in `deehw/…`.
+  final String? owner;
+
   GitProjectInfo copyWith({String? branch, String? root}) => GitProjectInfo(
     isGit: isGit,
     branch: branch ?? this.branch,
@@ -73,6 +89,7 @@ class GitProjectInfo {
     error: error,
     defaultRef: defaultRef,
     root: root ?? this.root,
+    owner: owner,
   );
 }
 
@@ -139,15 +156,20 @@ const kPlaceholderNouns = [
   'river', 'robin', 'sparrow', 'spruce', 'tiger', 'walrus', 'willow', 'zebra',
 ];
 
-/// `harness/brave-otter`: a branch name none of [taken] (branch names, with or
-/// without `refs/heads/`) already uses.
-String placeholderBranch(Iterable<String> taken, {Random? random}) {
+/// `deehw/brave-otter`: the branch a new worktree starts on until its session
+/// has a name, one none of [taken] (branch names, with or without
+/// `refs/heads/`) already uses.
+String placeholderBranch(
+  Iterable<String> taken, {
+  required String owner,
+  Random? random,
+}) {
   final names = {
     for (final name in taken) name.replaceFirst('refs/heads/', ''),
   };
   final pick = random ?? Random();
   String draw() =>
-      'harness/${kPlaceholderAdjectives[pick.nextInt(kPlaceholderAdjectives.length)]}'
+      '$owner/${kPlaceholderAdjectives[pick.nextInt(kPlaceholderAdjectives.length)]}'
       '-${kPlaceholderNouns[pick.nextInt(kPlaceholderNouns.length)]}';
   var name = draw();
   for (var tries = 0; tries < 16 && names.contains(name); tries++) {
@@ -161,11 +183,12 @@ String placeholderBranch(Iterable<String> taken, {Random? random}) {
 }
 
 /// The folder a worktree on [branch] is checked out in, under its repository:
-/// the branch without Harness's prefix, `/` as `-`. Nobody needs to see it.
+/// the branch's last part. Nobody needs to see it, and it keeps its name when
+/// the branch is renamed.
 String worktreeFolderName(String branch) {
   final name = branch
-      .replaceFirst(RegExp(r'^harness/'), '')
-      .replaceAll('/', '-')
+      .split('/')
+      .last
       .replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '')
       .replaceAll(RegExp(r'^[.-]+'), '');
   return name.isEmpty
@@ -201,6 +224,61 @@ bool plausibleBranchName(String name) =>
     name.length <= 255 &&
     !name.startsWith('-') &&
     !RegExp(r'[\x00-\x20\x7f~^:?*\[\\]').hasMatch(name);
+
+/// A handle as a branch takes it: `Dee Huynh` → `dee-huynh`. Null when nothing
+/// is left. Mirrors cli/src/lib/branchOwner.ts.
+String? ownerSlug(String raw) {
+  var slug = raw
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9-]+'), '-')
+      .replaceAll(RegExp(r'-{2,}'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
+  if (slug.length > 39) {
+    slug = slug.substring(0, 39).replaceAll(RegExp(r'-+$'), '');
+  }
+  return slug.isEmpty ? null : slug;
+}
+
+Future<String>? _owner;
+
+/// Whose branches Harness makes on this computer — `<owner>/<session name>`:
+/// the GitHub login `gh` is signed in as (the handle, not the display name),
+/// else Git's `github.user`, else its `user.name`, else this account's login.
+/// Asked once. Mirrors cli/src/lib/branchOwner.ts.
+Future<String> branchOwner() => _owner ??= () async {
+  if (kUnderTest) return 'tester';
+  Future<String> run(String command, List<String> arguments) async {
+    try {
+      final result = await Process.run(
+        command,
+        arguments,
+        environment: const {
+          'GH_PROMPT_DISABLED': '1',
+          'GIT_TERMINAL_PROMPT': '0',
+        },
+      ).timeout(const Duration(seconds: 4));
+      return result.exitCode == 0 ? (result.stdout as String).trim() : '';
+    } on Object {
+      return '';
+    }
+  }
+
+  for (final read in <Future<String> Function()>[
+    () async => Platform.environment['HARNESS_BRANCH_OWNER'] ?? '',
+    () => run('gh', ['api', 'user', '--jq', '.login']),
+    () => run('git', ['config', '--global', '--get', 'github.user']),
+    () => run('git', ['config', '--global', '--get', 'user.name']),
+    () async => Platform.environment['USER'] ?? '',
+  ]) {
+    if (ownerSlug(await read()) case final slug?) return slug;
+  }
+  return 'harness';
+}();
+
+/// `branch.<name>.harness` marks a branch Harness made: `placeholder` while its
+/// name waits for the session's, `created` once it has one or was named at
+/// Start. Mirrors cli/src/lib/gitProject.ts.
+const kHarnessBranchKey = 'harness';
 
 bool validGitPath(String path) =>
     p.isAbsolute(path) &&
@@ -238,7 +316,16 @@ Future<Map<String, dynamic>> readLocalGitProject(
       ]),
       git(['worktree', 'list', '--porcelain']),
       git(['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']),
+      git(['config', '--get-regexp', '^branch\\..*\\.$kHarnessBranchKey\$']),
     ]);
+    final marked = {
+      for (final line in results[4].output.split('\n'))
+        if (line.split(' ').first case final key
+            when key.startsWith('branch.') &&
+                key.endsWith('.$kHarnessBranchKey'))
+          key.substring(7, key.length - kHarnessBranchKey.length - 1),
+    };
+    final owner = await branchOwner();
     if (results[1].code != 0) return {'error': 'GIT_UNAVAILABLE'};
     final refs = {
       for (final line in results[1].output.split('\n'))
@@ -281,6 +368,7 @@ Future<Map<String, dynamic>> readLocalGitProject(
       'mainFolder': ?mainFolder,
       'mainBranch': ?mainBranch,
       'defaultRef': ?defaultRef,
+      'owner': owner,
       'branches': [
         for (final line in results[1].output.split('\n'))
           if (line.split('\t') case [final ref, final name, ''])
@@ -289,6 +377,9 @@ Future<Map<String, dynamic>> readLocalGitProject(
               'name': name,
               'remote': ref.startsWith('refs/remotes/'),
               'worktree': ?checkedOut[ref],
+              if (ref.startsWith('refs/heads/') &&
+                  (marked.contains(name) || name.startsWith('harness/')))
+                'harness': true,
             },
       ],
     };
@@ -313,6 +404,7 @@ Future<String> prepareGitProject(
   String? branchRef,
   String? branchName,
   bool existingBranch = false,
+  bool placeholder = false,
   Random? random,
   GitProcessStarter? startProcess,
 }) async {
@@ -469,7 +561,10 @@ Future<String> prepareGitProject(
     'refs/heads',
   ]);
   final taken = locals.output.split('\n').toSet();
-  final branch = branchName ?? placeholderBranch(taken, random: random);
+  final branch =
+      branchName ??
+      placeholderBranch(taken, owner: await branchOwner(), random: random);
+  final madeUp = branchName == null || placeholder;
   if (existingBranch) {
     if (!taken.contains('refs/heads/$branch')) {
       throw const RepositoryCloneException(
@@ -565,6 +660,15 @@ Future<String> prepareGitProject(
     throw RepositoryCloneException(
       'Could not create the worktree at $destination. Check Git and folder permissions, then retry.',
     );
+  }
+  // Harness made this branch: its cleanup may remove it, and a made-up name
+  // gives way to the session's.
+  if (!existingBranch) {
+    await git([
+      'config',
+      'branch.$branch.$kHarnessBranchKey',
+      madeUp ? 'placeholder' : 'created',
+    ]);
   }
   await _copyIncluded(root.output, destination, startProcess);
   return inside(destination);

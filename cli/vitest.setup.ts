@@ -25,3 +25,5 @@ process.env.DSH_DIR = join(process.env.ADAPTER_DATA_DIR, 'dsh')
 // holds today (a published catalog turned a fixture registry of two into the live shelf of 23).
 // Loopback port 9 refuses at once, so the live catalog falls back to the registry each test stubs.
 process.env.HARNESS_STORE_CATALOG_URL ??= 'http://127.0.0.1:9/catalog.json'
+// Whose branches Harness makes (lib/branchOwner.ts) would otherwise be asked of `gh` over the network.
+process.env.HARNESS_BRANCH_OWNER ??= 'tester'

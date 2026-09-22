@@ -87,7 +87,7 @@ void main() {
         'feature',
       );
       final branch = await git(['branch', '--show-current'], path);
-      expect(branch, startsWith('harness/'));
+      expect(branch, startsWith('tester/'));
       branches.add(branch);
     }
     expect(branches, hasLength(2));
@@ -179,18 +179,21 @@ void main() {
 
   test('placeholder branches are two words no branch uses yet', () {
     expect(
-      placeholderBranch(const [], random: _First()),
-      'harness/amber-badger',
+      placeholderBranch(const [], owner: 'deehw', random: _First()),
+      'deehw/amber-badger',
     );
     expect(
-      placeholderBranch(const [
-        'refs/heads/harness/amber-badger',
-        'harness/amber-badger-2',
-      ], random: _First()),
-      'harness/amber-badger-3',
+      placeholderBranch(
+        const ['refs/heads/deehw/amber-badger', 'deehw/amber-badger-2'],
+        owner: 'deehw',
+        random: _First(),
+      ),
+      'deehw/amber-badger-3',
     );
-    expect(worktreeFolderName('harness/brave-otter'), 'brave-otter');
-    expect(worktreeFolderName('fix/login page'), 'fix-loginpage');
+    expect(worktreeFolderName('deehw/brave-otter'), 'brave-otter');
+    expect(worktreeFolderName('fix/login page'), 'loginpage');
+    expect(ownerSlug('Dee Huynh'), 'dee-huynh');
+    expect(ownerSlug('  '), isNull);
   });
 
   test('new worktrees are on a new branch, in a folder named for it, grouped by repository', () async {
@@ -198,7 +201,11 @@ void main() {
     expect(made.toSet(), hasLength(2));
     for (final path in made) {
       final branch = await git(['branch', '--show-current'], path);
-      expect(branch, matches(RegExp(r'^harness/[a-z]+-[a-z]+(-\d+)?$')));
+      expect(branch, matches(RegExp(r'^tester/[a-z]+-[a-z]+(-\d+)?$')));
+      expect(
+        await git(['config', '--get', 'branch.$branch.harness']),
+        'placeholder',
+      );
       expect(path, p.join(worktrees(), worktreeFolderName(branch)));
       expect(
         await git(['rev-parse', 'HEAD'], path),
@@ -206,8 +213,24 @@ void main() {
       );
     }
     final named = await worktree(name: 'fix/login');
-    expect(named, p.join(worktrees(), 'fix-login'));
+    expect(named, p.join(worktrees(), 'login'));
     expect(await git(['branch', '--show-current'], named), 'fix/login');
+    expect(
+      await git(['config', '--get', 'branch.fix/login.harness']),
+      'created',
+    );
+    final info = GitProjectInfo.fromJson(await readLocalGitProject(repo));
+    expect(info.owner, 'tester');
+    expect(
+      [
+        for (final b in info.branches)
+          if (b.harness) b.name,
+      ]..sort(),
+      [
+        for (final b in info.branches)
+          if (b.name.startsWith('tester/') || b.name == 'fix/login') b.name,
+      ]..sort(),
+    );
     await expectLater(
       worktree(name: 'fix/login'),
       throwsA(isA<RepositoryCloneException>()),

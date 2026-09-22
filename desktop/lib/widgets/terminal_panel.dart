@@ -2133,12 +2133,18 @@ class _TerminalHeader extends StatelessWidget {
                         ].join('\n'),
                         child: PromptContextView(
                           contextData: PromptContext(
-                            machine: machineName,
+                            // This computer goes without saying.
+                            machine: machine?.isLocalMachine == true
+                                ? null
+                                : machineName,
                             // The folder as it was chosen and its repository's branch;
                             // the full working folder is in the tooltip.
                             project: narrow ? null : project?.label,
-                            branch: narrow ? null : project?.branch,
-                            worktree: narrow ? null : project?.worktreeFolder,
+                            // Waiting for the session's name, a branch Harness made
+                            // up at Start is not worth reading.
+                            branch: narrow || project?.branchPending == true
+                                ? null
+                                : project?.branch,
                             leading: !narrow && forkedFrom != null
                                 ? 'forked from ${forkedFrom.name}'
                                 : null,

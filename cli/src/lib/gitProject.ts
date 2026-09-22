@@ -3,6 +3,7 @@ import { cp, lstat, mkdir, realpath, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, normalize } from 'node:path'
 import { promisify } from 'node:util'
 import { placeholderBranch, plausibleBranchName, worktreeFolderName } from './agentNames.js'
+import { branchOwner } from './branchOwner.js'
 
 const exec = promisify(execFile)
 
@@ -38,6 +39,16 @@ function parseWorktrees(output: string): Worktree[] {
     }]
   })
 }
+/** `branch.<name>.harness` in the repository's config marks a branch Harness made: `placeholder` while
+ *  its name waits for the session's, `created` once it has one or was named at Start. */
+export const HARNESS_BRANCH_KEY = 'harness'
+async function harnessBranches(path: string): Promise<Set<string>> {
+  const out = await git(path, ['config', '--get-regexp', `^branch\\..*\\.${HARNESS_BRANCH_KEY}$`]).catch(() => '')
+  return new Set(out.split('\n').flatMap(line => {
+    const key = line.split(' ')[0] ?? ''
+    return key.startsWith('branch.') && key.endsWith(`.${HARNESS_BRANCH_KEY}`) ? [key.slice(7, -(HARNESS_BRANCH_KEY.length + 1))] : []
+  }))
+}
 const worktrees = (path: string) => git(path, ['worktree', 'list', '--porcelain']).then(parseWorktrees, () => [])
 const real = (path: string) => realpath(path).catch(() => normalize(path))
 const isDirectory = (path: string) => stat(path).then(info => info.isDirectory(), () => false)
@@ -61,24 +72,27 @@ export async function readGitProject(path: string) {
     return !failure.killed && failure.code === 128 ? { isGit: false, branches: [] } : { error: 'GIT_UNAVAILABLE' }
   }
   try {
-    const [branch, refs, trees, originHead] = await Promise.all([
+    const [branch, refs, trees, originHead, marked, owner] = await Promise.all([
       git(path, ['symbolic-ref', '--quiet', 'HEAD']).then(ref => ref.replace(/^refs\/heads\//, '')).catch(() => null),
       git(path, ['for-each-ref', '--format=%(refname)%09%(refname:short)%09%(symref)', 'refs/heads', 'refs/remotes']),
       worktrees(path),
       git(path, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']).catch(() => null),
+      harnessBranches(path),
+      branchOwner(),
     ])
     const checkedOut = new Map(trees.flatMap(tree => tree.usable && tree.ref ? [[tree.ref, tree.path] as const] : []))
     const branches = refs.split('\n').filter(Boolean).flatMap(line => {
       const [ref, name, symbolic] = line.split('\t')
       if (!ref || !name || symbolic) return []
       const worktree = checkedOut.get(ref)
-      return [{ ref, name, remote: ref.startsWith('refs/remotes/'), ...(worktree ? { worktree } : {}) }]
+      const harness = !ref.startsWith('refs/remotes/') && (marked.has(name) || name.startsWith('harness/'))
+      return [{ ref, name, remote: ref.startsWith('refs/remotes/'), ...(worktree ? { worktree } : {}), ...(harness ? { harness } : {}) }]
     })
     // Where new work starts by default: the remote's default branch, as a clone names it, else its
     // main or master.
     const known = new Set(branches.map(row => row.ref))
     const defaultRef = [originHead, 'refs/remotes/origin/main', 'refs/remotes/origin/master'].find(ref => ref && known.has(ref))
-    const found = { isGit: true, root, branch, branches, ...(defaultRef ? { defaultRef } : {}) }
+    const found = { isGit: true, root, branch, branches, owner, ...(defaultRef ? { defaultRef } : {}) }
     // A worktree is a temporary folder. The launcher shows its repository.
     const main = await mainCheckout(root, trees)
     if (!main) return found
@@ -104,6 +118,8 @@ export type GitProjectOptions = {
   /** The worktree's branch: created from `ref`, or with `existingBranch` checked out as it is. */
   branchName?: string
   existingBranch?: boolean
+  /** `branchName` was made up (`deehw/brave-otter`): the session's name replaces it once there is one. */
+  placeholder?: boolean
   pick?: (n: number) => number
 }
 
@@ -176,7 +192,8 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
   // Grouped by repository, so the leaf only needs the branch.
   const repository = trees[0]?.usable ? basename(trees[0].path) : basename(root)
   const taken = new Set((await git(source, ['for-each-ref', '--format=%(refname)', 'refs/heads']).catch(() => '')).split('\n'))
-  const branch = options.branchName ?? placeholderBranch(taken, options.pick)
+  const branch = options.branchName ?? placeholderBranch(taken, await branchOwner(), options.pick)
+  const placeholder = !options.branchName || options.placeholder === true
   if (existing) {
     if (!taken.has(`refs/heads/${branch}`)) throw new GitProjectError('GIT_PROJECT_UNAVAILABLE', 'That branch is no longer available. Choose another branch.')
     if (trees.some(tree => tree.ref === `refs/heads/${branch}`)) {
@@ -215,6 +232,10 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
   } catch {
     // Keep any partial checkout and branch available for recovery.
     throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
+  }
+  // Harness made this branch: its cleanup may remove it, and a made-up name gives way to the session's.
+  if (!existing) {
+    await git(source, ['config', `branch.${branch}.${HARNESS_BRANCH_KEY}`, placeholder ? 'placeholder' : 'created']).catch(() => '')
   }
   await copyIncluded(root, destination)
   return inside(destination)

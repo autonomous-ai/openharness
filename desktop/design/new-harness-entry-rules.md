@@ -40,11 +40,12 @@ A failed discovery offers Retry and blocks starting until the result is known.
 
 A worktree is a temporary folder, never a project: a harness is known by the
 folder it was started in and its repository's branch. Pane headers read
-`machine › folder › branch`: a subfolder as itself, a checkout's root (a
-worktree's too) as its repository, the branch with the same icon everywhere.
-A worktree's own folder appears between them only once its branch no longer
-matches it — the folder is where Claude Code and Codex keep that session's
-history — and the header's tooltip always has the full path. A folder inside a linked
+`folder › branch`, with the machine first only for another computer: the folder
+the harness started in (a subfolder as itself, a checkout's root — a
+worktree's too — as its repository), which does not follow the agent's shell,
+and the branch with the same icon everywhere. Worktree folders are never shown;
+the header's tooltip has the full path. Cut short, the folder shortens in the
+middle before the branch does. A folder inside a linked
 worktree (the focused pane's, or one typed or browsed) shows as the same folder
 in the repository's main checkout, so Cmd-N from a worktree pane starts beside
 it rather than inside it. Worktrees Start made are never offered as recent
@@ -56,8 +57,9 @@ With `[x]` there are two rows, as in JetBrains and GitHub Desktop:
   (`origin/HEAD`) unless another is picked. A remote base is fetched at Start,
   for at most ten seconds; offline, it starts from the last fetch.
 - **Branch** is the branch the harness works on. It fills itself in from From:
-  the default or current branch gets a new, made-up `harness/<word>-<word>`
-  branch; another local branch is checked out as it is; a remote branch nobody
+  the default or current branch gets a new branch named after the session,
+  shown as `<login>/<session name>` (the machine's GitHub login, else Git's
+  `user.name`); another local branch is checked out as it is; a remote branch nobody
   has locally becomes a local branch of the same name tracking it; a branch
   that already has a worktree opens there, and Start reads **Start in
   Worktree**. Typing a name makes a new branch from From, or uses the existing
@@ -65,8 +67,12 @@ With `[x]` there are two rows, as in JetBrains and GitHub Desktop:
   refuses in a branch name is dropped. The project folder's own branch cannot
   be checked out twice and is refused.
 
-The name is settled at Start, where it can be seen and edited; Harness never
-renames a branch afterwards. The worktree is checked out in
+A session has no name at Start, so that branch starts as a made-up
+`<login>/<word>-<word>`, marked `branch.<name>.harness = placeholder` in the
+repository's config and left out of the pane header. The daemon renames it once,
+to `<login>/<session name>`, when the session first has a name, and never again:
+not after a later session name, a push, or a rename by the person or the agent.
+A typed, picked or created branch keeps its name. The worktree is checked out in
 `~/harnesses/worktrees/<repository>/<branch>`, and ignored files listed in the
 repository's `.worktreeinclude` (gitignore syntax, e.g. `.env`) are copied in.
 
@@ -80,10 +86,11 @@ stashed, or discarded. A selected subfolder follows into a new worktree only if
 it exists in that commit.
 
 The picker tags branches `default`, `current`, `worktree` and `remote`, and
-leaves out `harness/` branches whose worktree is gone. The daemon removes a
+leaves out branches Harness made (marked `branch.<name>.harness`, or named
+`harness/…` by older builds) whose worktree is gone. The daemon removes a
 worktree it finds in `~/harnesses/worktrees` only when no live or stopped
 harness uses it, nothing is uncommitted, and it has been idle for a week; the
-branch stays unless it is a `harness/` branch whose commits are all elsewhere.
+branch stays unless Harness made it and its commits are all elsewhere.
 
 Drafts and advanced options preserve these choices. A lost start reply reuses
 its receipt, and retrying a confirmed launch failure reuses its prepared

@@ -79,11 +79,11 @@ export const PLACEHOLDER_NOUNS = [
   'puffin', 'quartz', 'raven', 'reef', 'river', 'robin', 'sparrow', 'spruce', 'tiger', 'walrus', 'willow', 'zebra',
 ] as const
 
-/** `harness/brave-otter`: a branch name none of `taken` (branch names, with or without
- *  `refs/heads/`) already uses. */
-export function placeholderBranch(taken: Iterable<string>, pick = (n: number) => Math.floor(Math.random() * n)): string {
+/** `deehw/brave-otter`: the branch a new worktree starts on until its session has a name, one none of
+ *  `taken` (branch names, with or without `refs/heads/`) already uses. */
+export function placeholderBranch(taken: Iterable<string>, owner: string, pick = (n: number) => Math.floor(Math.random() * n)): string {
   const names = new Set([...taken].map(name => name.replace(/^refs\/heads\//, '')))
-  const draw = () => `harness/${PLACEHOLDER_ADJECTIVES[pick(PLACEHOLDER_ADJECTIVES.length)]}-${PLACEHOLDER_NOUNS[pick(PLACEHOLDER_NOUNS.length)]}`
+  const draw = () => `${owner}/${PLACEHOLDER_ADJECTIVES[pick(PLACEHOLDER_ADJECTIVES.length)]}-${PLACEHOLDER_NOUNS[pick(PLACEHOLDER_NOUNS.length)]}`
   let name = draw()
   for (let tries = 0; tries < 16 && names.has(name); tries++) name = draw()
   const base = name
@@ -91,11 +91,19 @@ export function placeholderBranch(taken: Iterable<string>, pick = (n: number) =>
   return name
 }
 
-/** The folder a worktree on `branch` is checked out in, under its repository: the branch without
- *  Harness's prefix, `/` as `-`. Nobody needs to see it. */
+/** The folder a worktree on `branch` is checked out in, under its repository: the branch's last part.
+ *  Nobody needs to see it, and it keeps its name when the branch is renamed. */
 export function worktreeFolderName(branch: string): string {
-  const name = branch.replace(/^harness\//, '').replaceAll('/', '-').replace(/[^A-Za-z0-9._-]+/g, '').replace(/^[.-]+/, '')
+  const name = (branch.split('/').pop() ?? '').replace(/[^A-Za-z0-9._-]+/g, '').replace(/^[.-]+/, '')
   return name ? name.slice(0, 64) : 'worktree'
+}
+
+/** A session's name as a branch's last part: `Worktree and branches organization` →
+ *  `worktree-and-branches-organization`, cut at a word to 48 characters. Null when nothing is left. */
+export function sessionBranchSlug(title: string | null | undefined): string | null {
+  let slug = (title ?? '').normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  if (slug.length > 48) slug = slug.slice(0, 48).replace(/-[^-]*$/, '') || slug.slice(0, 48)
+  return slug || null
 }
 
 /** A name Git might accept for a new branch, checked before Git is asked. */

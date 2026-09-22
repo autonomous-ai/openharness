@@ -83,10 +83,6 @@ class PromptContext {
     this.project,
     this.branch,
     this.leading,
-    this.worktree,
   });
-
-  /// [worktree] is the folder of a worktree, shown between the project and
-  /// the branch when it is not simply named after the branch.
-  final String? harness, machine, project, worktree, branch, leading;
+  final String? harness, machine, project, branch, leading;
 }

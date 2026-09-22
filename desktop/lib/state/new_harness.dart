@@ -249,6 +249,7 @@ ProjectFolderRequest? gitFolderRequest(
       folder,
       branchRef: plan.base,
       branchName: plan.branch,
+      placeholder: plan.branch == placeholder,
     ),
   };
 }
@@ -304,7 +305,9 @@ class NewHarnessDraft {
         worktree: worktree ?? worktreeByDefault(info),
         branchRef: branchRef,
         branchName: branchName,
-        placeholder: placeholder ?? placeholderBranch(const []),
+        placeholder:
+            placeholder ??
+            placeholderBranch(const [], owner: info.owner ?? 'harness'),
       );
     }
     return worktree == true && folder != null && !terminal
@@ -519,9 +522,18 @@ class NewHarnessController extends ChangeNotifier {
 
   /// The branch a new harness in a worktree is on: a name made up here until
   /// one is typed or an existing branch is chosen.
-  String get placeholder => _placeholder ??= placeholderBranch([
-    for (final branch in _gitProject.branches) branch.name,
-  ], random: _random);
+  String get placeholder => _placeholder ??= placeholderBranch(
+    [for (final branch in _gitProject.branches) branch.name],
+    owner: _owner,
+    random: _random,
+  );
+
+  /// Whose branches the machine makes; a daemon that does not say keeps the
+  /// prefix older builds used.
+  String get _owner => _gitProject.owner ?? 'harness';
+
+  /// How a branch still waiting for its session's name is shown.
+  String get _sessionBranch => '$_owner/<session name>';
   WorktreePlan? get worktreePlan => worktree
       ? planWorktree(
           _gitProject,
@@ -565,7 +577,9 @@ class NewHarnessController extends ChangeNotifier {
     if (plan == null) return '';
     return switch (plan.kind) {
       WorktreeStart.newBranch =>
-        plan.tracks
+        plan.branch == placeholder
+            ? _sessionBranch
+            : plan.tracks
             ? '${plan.branch} · tracks ${_refName(plan.base)}'
             : plan.branch,
       WorktreeStart.existingBranch => '${plan.branch} · existing',
@@ -588,7 +602,7 @@ class NewHarnessController extends ChangeNotifier {
     }
     return switch (plan.kind) {
       WorktreeStart.newBranch =>
-        ', in a new worktree on ${plan.branch} from ${_refName(plan.base) ?? 'HEAD'}',
+        ', in a new worktree on ${plan.branch == placeholder ? 'a branch named after the session' : plan.branch} from ${_refName(plan.base) ?? 'HEAD'}',
       WorktreeStart.existingBranch => ', in a new worktree on ${plan.branch}',
       WorktreeStart.openWorktree => ', in the worktree of ${plan.branch}',
       WorktreeStart.unavailable =>
@@ -958,7 +972,9 @@ class NewHarnessController extends ChangeNotifier {
     query = next == NewHarnessField.task
         ? task
         : next == NewHarnessField.branchName
-        ? worktreePlan?.branch ?? ''
+        ? worktreePlan?.branch == placeholder
+              ? ''
+              : worktreePlan?.branch ?? ''
         : next == NewHarnessField.projectName
         ? _project.name ?? ''
         : next == NewHarnessField.projectMenu
@@ -1904,7 +1920,7 @@ class NewHarnessController extends ChangeNotifier {
     bool isCurrent(GitBranch b) => !b.remote && b.name == info.branch;
     final shown = [
       for (final branch in info.branches)
-        if (!(branch.name.startsWith('harness/') &&
+        if (!((branch.harness || branch.name.startsWith('harness/')) &&
             branch.worktree == null &&
             branch.ref != branchRef))
           branch,
@@ -1967,8 +1983,9 @@ class NewHarnessController extends ChangeNotifier {
         NewHarnessOption(
           id: '',
           synthetic: true,
-          title: placeholder,
-          detail: 'New branch from ${_refName(branchRef) ?? 'HEAD'}',
+          title: _sessionBranch,
+          detail:
+              'Named after the session, from ${_refName(branchRef) ?? 'HEAD'}',
         ),
       ];
     }
