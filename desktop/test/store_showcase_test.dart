@@ -17,6 +17,8 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/store/store_showcase.dart';
+import 'package:harness/store/store_demo_dialog.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 import 'package:harness/widgets/new_agent_dialog.dart';
 
 import 'swarm_state_test.dart' show createApp;
@@ -124,6 +126,104 @@ Future<void> _pumpFlow(
 }
 
 void main() {
+  const recording = StoreExample(
+    prompt: 'Shape a ribbon lamp and keep the design.',
+    image: 'https://example.com/lamp.png',
+    video: 'https://raw.githubusercontent.com/autonomous-ai/openharness/main/docs/images/blender-shape-lab-demo.mp4',
+    caption: 'Real Blender session · shape a lamp and keep the source',
+  );
+
+  test('Store example accepts only bounded HTTPS recording URLs', () {
+    expect(
+      StoreExample.fromJson({'prompt': 'Lamp', 'video': recording.video})!
+          .video,
+      recording.video,
+    );
+    for (final video in [
+      'file:///tmp/a.mp4',
+      'http://example.com/a.mp4',
+      'javascript:alert(1)',
+      'https://',
+      'https://${'x' * 2048}',
+    ]) {
+      expect(
+        StoreExample.fromJson({'prompt': 'Lamp', 'video': video})!.video,
+        isNull,
+      );
+    }
+    expect(StoreExample.fromJson({'prompt': 'Lamp'})!.video, isNull);
+  });
+
+  test(
+    'recording HTML escapes catalog attributes and offers a browser player',
+    () {
+      final html = storeDemoHtml(
+        'https://example.com/a.mp4?x=" onerror="bad()',
+      );
+      expect(html, contains('&quot;'));
+      expect(
+        html,
+        isNot(contains('src="https://example.com/a.mp4?x=" onerror=')),
+      );
+      expect(html, contains("default-src 'none'"));
+      expect(
+        storeDemoBrowserUri(recording.video!).toString(),
+        'https://github.com/autonomous-ai/openharness/blob/main/docs/images/blender-shape-lab-demo.mp4',
+      );
+      expect(
+        storeDemoBrowserUri('https://example.com/a.mp4').toString(),
+        'https://example.com/a.mp4',
+      );
+    },
+  );
+
+  testWidgets(
+    'recording opens on demand, closes, and preserves its exact prompt',
+    (tester) async {
+      final tried = <String>[];
+      await _pumpFlow(tester, examples: [recording], onTry: tried.add);
+      expect(find.byType(StoreDemoDialog), findsNothing);
+      expect(find.byType(WebViewWidget), findsNothing);
+      expect(
+        tester.widget<Image>(find.byType(Image).first).fit,
+        BoxFit.contain,
+      );
+      await tester.tap(find.byKey(const ValueKey('store-watch-demo:0')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Watch this recording in your browser.'),
+        findsOneWidget,
+      );
+      expect(find.text(recording.caption!), findsNWidgets(2));
+      await tester.tap(find.byKey(const ValueKey('store-demo-close')));
+      await tester.pumpAndSettle();
+      expect(find.byType(StoreDemoDialog), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('store-try-prompt:0')));
+      expect(tried, [recording.prompt]);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'recording actions wrap at 320 pixels and Escape closes the dialog',
+    (tester) async {
+      await _pumpFlow(
+        tester,
+        examples: [recording],
+        size: const Size(320, 700),
+      );
+      expect(tester.takeException(), isNull);
+      final watch = find.byKey(const ValueKey('store-watch-demo:0'));
+      await tester.ensureVisible(watch);
+      await tester.tap(watch);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byType(StoreDemoDialog), findsNothing);
+    },
+  );
+
   group('StoreExample', () {
     test('keeps a prompt, an https picture and a short caption', () {
       final example = StoreExample.fromJson({

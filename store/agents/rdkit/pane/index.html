@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RDKit</title>
+<meta name="torsion-token" content="__TORSION_TOKEN__">
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -13,6 +14,7 @@
     <div class="lineage" id="lineage"></div>
   </div>
   <div id="status" class="status" title="The pane follows the workspace: it redraws when the agent writes a file"><i class="dot"></i><span>Live</span></div>
+  <button id="bondScanBtn" class="btn" title="Explore a bond rotation">Bond scan</button>
   <div class="menu-anchor">
     <button id="exportBtn" class="btn" aria-haspopup="true" title="Export (E)"><svg viewBox="0 0 16 16"><path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M3 13h10"/></svg><span>Export</span></button>
     <div id="exportMenu" class="menu down" hidden></div>
@@ -27,6 +29,7 @@
     <div id="ghostChip" class="overlay ghost-chip" hidden></div>
     <div id="measures" class="overlay measures" hidden></div>
     <div id="player" class="overlay player" hidden></div>
+    <div id="scanPose" class="overlay scan-pose" hidden></div>
     <div id="toolbar" class="toolbar"></div>
     <div id="tip" class="tip" hidden></div>
     <div id="busy" class="busy" hidden><i class="spinner"></i><span></span></div>
@@ -43,10 +46,34 @@
         <button role="tab" data-tab="props" aria-selected="true">Properties</button>
         <button role="tab" data-tab="confs">Conformers <b id="confCount"></b></button>
         <button role="tab" data-tab="series">Series <b id="seriesCount"></b></button>
+        <button role="tab" data-tab="scan">Bond scan</button>
       </div>
       <div class="tabpanel" id="panel-props"></div>
       <div class="tabpanel" id="panel-confs" hidden></div>
       <div class="tabpanel" id="panel-series" hidden></div>
+      <div class="tabpanel" id="panel-scan" hidden>
+        <p class="scan-intro">Turn a bond. Follow the energy. Keep a shape worth exploring.</p>
+        <div class="scan-row"><button class="btn" id="scanStart">Use current conformer</button><button class="btn" id="scanClose" hidden>Back to molecule</button></div>
+        <p id="scanStatus" role="status">Choose a 3D molecule to begin, or open a kept study below.</p>
+        <div id="scanControls" hidden>
+          <label class="scan-label" for="scanBond">Four atoms around a bond</label>
+          <select id="scanBond" aria-label="Bond to scan"></select>
+          <div class="scan-row"><button class="btn" id="scanMeasured">Use measured dihedral</button><select id="scanStep" aria-label="Angle spacing"><option value="15">15° steps</option><option value="10">10° steps</option><option value="30">30° steps</option></select><button class="btn primary" id="scanRun">Scan bond</button></div>
+        </div>
+        <div id="scanResult" hidden>
+          <div class="scan-numbers"><strong id="scanAngle"></strong><span id="scanEnergy"></span></div>
+          <canvas id="scanPlot" aria-label="Relative MMFF94 energy by torsion angle" title="Click or drag along the energy curve to inspect a pose"></canvas>
+          <input type="range" id="scanScrub" min="0" max="24" step="1" value="0" aria-label="Sampled torsion angle">
+          <div class="scan-row"><button class="btn" id="scanPlay">Play scan</button><button class="btn" id="scanBest">Lowest sampled</button><label class="scan-ghost"><input type="checkbox" id="scanGhost" checked>Starting pose</label></div>
+          <p class="scan-method">Rigid MMFF94 · kcal/mol above this scan’s lowest point. Other internal coordinates stay fixed. These are sampled shapes, without geometry relaxation or solvent.</p>
+          <input id="scanTitle" maxlength="100" placeholder="Name this study" aria-label="Study name">
+          <textarea id="scanNote" maxlength="1000" rows="2" placeholder="What do you want to explore next?" aria-label="Study note"></textarea>
+          <div class="scan-row"><button class="btn primary" id="scanKeep">Keep study</button><span id="scanKept"></span></div>
+        </div>
+        <p id="scanPending" class="scan-pending" hidden>New workspace output is waiting. Back to molecule loads the latest version.</p>
+        <div class="scan-shelf-title">Kept studies <button class="btn" id="scanRefresh">Refresh</button></div>
+        <div id="scanStudies"></div>
+      </div>
     </section>
   </aside>
 </main>

@@ -5,8 +5,8 @@ import 'terminal_typography.dart';
 export 'terminal_font_store.dart';
 export 'terminal_typography.dart' show terminalFontSize;
 
-/// One face and size for terminal output and every app control. Color, weight,
-/// and spacing can distinguish roles without introducing a second type scale.
+/// The selected terminal face and size, also used by the welcome page and
+/// shortcut browser. Other app controls use the roles in AppType.
 TextStyle terminalTextStyle({
   Color? color,
   FontWeight? fontWeight,

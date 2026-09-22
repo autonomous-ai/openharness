@@ -118,7 +118,7 @@ void main() {
           () => chord(tester, LogicalKeyboardKey.keyT),
           newFromChrome,
           () async {
-            await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+            await chord(tester, LogicalKeyboardKey.keyP);
             await tester.enterText(
               find.byKey(const ValueKey('swarm-search-input')),
               '> New Tab',
@@ -181,7 +181,7 @@ void main() {
     (tester) async {
       final app = createApp();
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await tester.pump();
       expect(app.panes, isEmpty);
       await tester.enterText(

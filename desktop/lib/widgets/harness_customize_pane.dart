@@ -93,7 +93,7 @@ class HarnessCustomizePane extends StatelessWidget {
                   child: TabBarView(
                     children: [
                       PromptCustomize(store: store ?? appearancePrefsStore),
-                      const AppearanceSection(),
+                      AppearanceSection(store: store),
                       const TerminalSection(),
                     ],
                   ),

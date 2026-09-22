@@ -23,6 +23,15 @@ has rendered and its required assets loaded. Preserve play/explore, pause, resta
 support. Every visible button must work. Do not call the task done based on compilation alone:
 test input, movement, the goal, losing/restarting where appropriate, and browser runtime errors.
 
+Preserve `captureState()` and `restoreState()` for Rewind and saved playtest moments. Capture
+complete JSON game state; validate snapshots before mutation and restore the visuals as well
+as the rules. Give a new game its own snapshot schema. Keep pause and preview mode independent
+of restored game state; the studio owns those controls.
+Read `out/playtests/*/moment.json` when the user refers to a saved moment: the note, statistics,
+and captured state identify the feedback; the adjacent `game/` is its frozen compiled version.
+Respect Keep notes when revising, and do not erase saved moments. Test a rewind and resume after
+changing mechanics. The studio skill explains the snapshot contract.
+
 Use `.harness/progress.json` for short, truthful progress messages. Do not invent percentages or
 rewrite `.harness/verdict.json`: the viewer writes that from its build and runtime checks.
 Explain creative decisions in chat; the viewer shows the game. Finish with a playable result,

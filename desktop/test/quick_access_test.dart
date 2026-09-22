@@ -113,7 +113,7 @@ void main() {
     expect(search.rows.any((row) => row.agentId == 'a0'), isTrue);
   });
 
-  for (final entry in [LogicalKeyboardKey.keyP, LogicalKeyboardKey.keyT]) {
+  for (final entry in [LogicalKeyboardKey.keyO, LogicalKeyboardKey.keyT]) {
     testWidgets(
       'Quick Access stays in the same picker from ${entry.keyLabel}',
       (tester) async {
@@ -170,8 +170,8 @@ void main() {
         expect(field.focusNode!.hasFocus, isTrue);
         await key(tester, LogicalKeyboardKey.escape);
         expect(field.controller!.text, '@ Office');
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
-        expect(field.controller!.text, '> ');
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        expect(field.controller!.text, '>');
         expect(search.isCommandMode, isTrue);
         expect(search.canGoBack, isFalse);
         // Backspace leaves command mode without closing/reopening the dock.

@@ -1290,7 +1290,12 @@ async function fallbackRegister(input, engine, tmuxPane) {
         : transcriptPath
         ? basename(dirname(transcriptPath))
         : basename(typeof input.cwd === 'string' ? input.cwd : '') || sessionId,
-      cwd: typeof input.cwd === 'string' ? input.cwd : (existing?.cwd ?? null),
+      // The row's folder outranks the hook's for the session the row already holds: Claude reports
+      // its tracked shell directory, which follows every Bash `cd`, and a resume or restore `cd`s
+      // wherever this says. Same rule as `registry.register()`.
+      cwd: existing && existing.sessionId === sessionId && typeof existing.cwd === 'string' && existing.cwd
+        ? existing.cwd
+        : typeof input.cwd === 'string' ? input.cwd : (existing?.cwd ?? null),
       runtimes,
       primaryRuntimeKey: existing?.primaryRuntimeKey && runtimes.some((runtime) => runtimeRouteKey(runtime) === existing.primaryRuntimeKey)
         ? existing.primaryRuntimeKey

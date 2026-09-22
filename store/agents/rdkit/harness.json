@@ -4,7 +4,7 @@
   "name": "RDKit",
   "category": "Chemistry",
   "author": "RDKit",
-  "description": "Describe a molecule — a drug, an analogue, a scaffold — and get it designed, its properties computed and a 3D conformer you can rotate in the pane.",
+  "description": "Build molecules and analogues from a description, explore their 3D conformers, and turn a bond through a native energy scan you can keep and reproduce.",
   "engine": "codex",
   "workspace": {
     "template": "template",

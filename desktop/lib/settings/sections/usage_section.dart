@@ -9,7 +9,7 @@
 ///   agent CLIs' own logs. Off until switched on, per provider, because those
 ///   logs hold every prompt and path a session touched.
 ///
-/// Its sibling readout on the status rail (`widgets/status_rail/usage_panel.dart`)
+/// Its sibling readout in the native Models menu (`usage/models_menu_controller.dart`)
 /// answers a third question — *how much of your rate limit is left* — which is
 /// an account fact and a percentage. All three are true at once and none
 /// substitutes for another.

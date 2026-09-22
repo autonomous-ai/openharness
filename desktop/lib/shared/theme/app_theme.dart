@@ -155,8 +155,8 @@ class _PaletteScope extends InheritedNotifier<ValueNotifier<HarnessPalette>> {
 abstract final class AppPalette {
   // Approved Swarms canvas and native tab-strip palette.
   static Color get swarmField => AppTheme.palette.value.workspace;
-  // The welcome illustration recedes behind the working command dock.
-  static Color get swarmWelcome => const Color(0xff171717);
+  // Empty tabs join the selected native tab as one continuous surface.
+  static Color get swarmWelcome => AppTheme.palette.value.workspace;
   static Color get swarmTabBar => AppTheme.palette.value.tabBar;
   static Color get swarmAccent => AppTheme.palette.value.accent;
   // Shared with the native search field for a continuous input/results surface.
@@ -669,12 +669,13 @@ abstract final class AppGlass {
 ///   menuTheme / popupMenuTheme   #1E1E1E         8          6      no
 ///   appMenuStyle()               #2A2A2A        12         10      yes
 ///   tooltipTheme                 #1E1E1E         —         10      yes
-///   AccountFooter, inline        cardBg         18          8      yes
+///   the account footer, inline   cardBg         18          8      yes
 /// ```
 ///
 /// The cost was exactly what a second recipe always costs: the account footer's
-/// `MenuAnchor` passed no style at all, so it opened the rimless themed default
-/// — the surface `appMenuStyle` had been written to replace.
+/// `MenuAnchor` (since removed with the machine rail) passed no style at all, so
+/// it opened the rimless themed default — the surface `appMenuStyle` had been
+/// written to replace.
 ///
 /// ⚠️ The fill is deliberately **not** the themed default. `#1E1E1E` sits within
 /// 1.02:1 of a raised block ([AppGlass.surfaceFill], `#202020`), and in light

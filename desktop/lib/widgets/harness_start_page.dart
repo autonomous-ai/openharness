@@ -182,7 +182,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
                                 onRefocus: _focus.requestFocus,
                               ),
                             ),
-                            // The same bottom line ⌘P has: this is the first box a
+                            // The same bottom line ⌘O has: this is the first box a
                             // new person sees, and the one that most needs to say
                             // what the keys are. On a window too short for both,
                             // the results keep the room.

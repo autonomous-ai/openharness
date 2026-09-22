@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
+import { playtestStore } from "./playtests.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MIME = {
@@ -91,6 +92,7 @@ export async function startGameViewer({
   const clients = new Set();
   const revisions = new Map();
   const leases = new Map();
+  const playtests = playtestStore(workspace);
   let stopped = false,
     timer,
     watching,
@@ -222,6 +224,7 @@ export async function startGameViewer({
       sourceVersion,
       at: new Date().toISOString(),
       label: state.progress.message || state.project.title,
+      project: { ...state.project },
       ready: false,
     };
     revision.url = `/__game/${revision.id}/index.html`;
@@ -312,7 +315,7 @@ export async function startGameViewer({
     }
     for (const [id, item] of revisions)
       if (!keep.has(id)) {
-        rmSync(item.dir, { recursive: true, force: true });
+        if (!item.archive) rmSync(item.dir, { recursive: true, force: true });
         revisions.delete(id);
       }
   }
@@ -323,6 +326,11 @@ export async function startGameViewer({
   function report(body) {
     const item = revisions.get(body.id);
     if (!item) return false;
+    // Opening a saved game is independent of the agent's current build verdict.
+    if (item.archive) {
+      if (body.type === "error") item.failed = true;
+      return true;
+    }
     if (body.type === "ready" && !item.failed) {
       if (!item.ready) {
         item.ready = true;
@@ -389,12 +397,15 @@ export async function startGameViewer({
     scan(join(workspace, "public"));
     return files;
   }
-  async function bodyOf(req) {
-    let body = "";
+  async function bodyOf(req, limit = 16384) {
+    const chunks = [];
+    let bytes = 0;
     for await (const chunk of req) {
-      body += chunk;
-      if (body.length > 16384) throw new Error("Request too large");
+      bytes += chunk.length;
+      if (bytes > limit) throw new Error("Request too large");
+      chunks.push(chunk);
     }
+    const body = Buffer.concat(chunks).toString("utf8");
     return JSON.parse(body || "{}");
   }
   function serveFile(req, res, file) {
@@ -422,7 +433,45 @@ export async function startGameViewer({
           (req.headers.origin && req.headers.origin !== base)
         )
           return send(res, 403, { error: "Invalid studio request" });
-        const body = await bodyOf(req);
+        const body = await bodyOf(
+          req,
+          url.pathname === "/api/playtests" ? 800_000 : 16384,
+        );
+        if (url.pathname === "/api/playtests") {
+          const item = revisions.get(body.id);
+          if (!item?.ready || item.failed)
+            return send(res, 409, { error: "Choose a working version first" });
+          const moment = playtests.save(item, body);
+          record(
+            "playtest",
+            `Saved ${moment.kind} moment for version ${moment.revision.number}`,
+          );
+          publish();
+          return send(res, 200, moment);
+        }
+        if (url.pathname === "/api/playtests/open") {
+          prune();
+          if (leases.size >= 64)
+            return send(res, 429, { error: "Too many preview clients" });
+          const { moment, game } = playtests.read(body.id);
+          const id = "moment-" + moment.id;
+          const revision = {
+            ...moment.revision,
+            id,
+            dir: game,
+            archive: true,
+            originalRevision: moment.revision,
+            ready: true,
+            url: `/__game/${id}/index.html`,
+          };
+          revisions.set(id, revision);
+          // Give the browser time to acquire its ordinary preview lease.
+          leases.set(id, { ids: [id], until: Date.now() + 90_000 });
+          return send(res, 200, {
+            revision: publicRevision(revision),
+            snapshot: moment.snapshot,
+          });
+        }
         if (url.pathname === "/api/report") {
           const accepted = report(body);
           return send(res, accepted ? 200 : 404, { ok: accepted });
@@ -480,6 +529,19 @@ export async function startGameViewer({
       }
       if (url.pathname === "/api/state") return send(res, 200, state);
       if (url.pathname === "/api/assets") return send(res, 200, assets());
+      if (url.pathname === "/api/playtests")
+        return send(res, 200, playtests.list());
+      const momentImage = url.pathname.match(
+        /^\/api\/playtests\/([a-f0-9]{24})\/image$/,
+      );
+      if (momentImage) {
+        const { dir, moment } = playtests.read(momentImage[1]);
+        return serveFile(
+          req,
+          res,
+          moment.image && fileWithin(dir, "screenshot.jpg"),
+        );
+      }
       if (url.pathname === "/api/events") {
         res.writeHead(200, {
           "content-type": "text/event-stream",
@@ -503,6 +565,23 @@ export async function startGameViewer({
           "/",
         );
         const item = revisions.get(id);
+        if (item?.archive && path.join("/") === "index.html") {
+          const file = fileWithin(item.dir, "index.html");
+          if (!file) return send(res, 404, { error: "Saved game is missing" });
+          const html = readFileSync(file, "utf8");
+          const assignment = `window.__studioRevision=${JSON.stringify(item.originalRevision.id)};`;
+          if (!html.includes(assignment))
+            throw new Error("Saved game has no compatible studio bridge");
+          return send(
+            res,
+            200,
+            html.replace(
+              assignment,
+              `window.__studioRevision=${JSON.stringify(id)};`,
+            ),
+            "text/html; charset=utf-8",
+          );
+        }
         return serveFile(
           req,
           res,
@@ -515,7 +594,7 @@ export async function startGameViewer({
           return send(res, 404, { error: "Not found" });
         return serveFile(req, res, fileWithin(workspace, path));
       }
-      if (["/studio.css", "/studio.js"].includes(url.pathname))
+      if (["/studio.css", "/studio.js", "/playtest.js"].includes(url.pathname))
         return serveFile(
           req,
           res,

@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import { Viewport, AXIS_DIR } from './viewport.js'
 import { Outliner } from './outliner.js'
 import { Measure } from './measure.js'
+import { createShapeLab } from './design.js'
 import { ENVIRONMENTS, BACKGROUNDS } from './env.js'
 import { $, $$, el, put, icon, mm, int, bytes, ago, debounce, store, save } from './util.js'
 
@@ -57,6 +58,46 @@ const outliner = new Outliner(viewport, { tree: $('#tree'), props: $('#props'), 
   modelName: () => app.current?.path.split('/').pop() ?? 'Scene',
 })
 const measure = new Measure(viewport, $('#labels'), () => renderPanels())
+let sidebarBeforeDesign = app.sidebar
+let shadingBeforeDesign = 'solid'
+const shapeLab = createShapeLab({
+  load,
+  toast: message => toast(escapeHtml(message), { ms: 5000 }),
+  original: () => { const target = app.state && chooseModel(app.state); return target ? load(target) : false },
+  open: opened => {
+    $('#model-view').classList.toggle('design-open', opened)
+    $('#design-open').classList.toggle('on', opened)
+    $('#design-open').setAttribute('aria-expanded', String(opened))
+    $('#model-btn').disabled = opened
+    $('#sidebar-btn').disabled = opened
+    for (const button of $$('#views button')) button.disabled = opened
+    if (opened) {
+      sidebarBeforeDesign = app.sidebar
+      shadingBeforeDesign = viewport.options.shading
+      setSidebar(false); setView('model')
+      if (!['material', 'rendered'].includes(shadingBeforeDesign)) setShading('material')
+    } else { setSidebar(sidebarBeforeDesign); setShading(shadingBeforeDesign) }
+  },
+  capture: async () => {
+    const scale = Math.min(1, 640 / stage.clientWidth, 400 / stage.clientHeight)
+    const changedUntil = viewport.changedUntil
+    let blob
+    try {
+      viewport.changedUntil = 0
+      blob = await viewport.capture(scale, (g, w, h) => paintBackground(g, w, h, stage.dataset.bg))
+    } finally { viewport.changedUntil = changedUntil; viewport.invalidate() }
+    if (!blob) throw new Error('Could not capture this design')
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = reject
+      reader.readAsDataURL(blob)
+    })
+  },
+})
+new ResizeObserver(() => {
+  if (shapeLab.active() && app.current?.design) viewport.frameAll(false)
+}).observe(stage)
 
 // options persist per machine; view state per model, per session
 const saved = store('mv:options', {})
@@ -89,10 +130,11 @@ function connect() {
 
 function onState(state) {
   app.state = state
+  shapeLab.receive(state.design)
   const target = chooseModel(state)
   const same = (a, b) => a && b && a.path === b.path && a.mtime === b.mtime && a.size === b.size
   // state events arrive for every step of a build: never restart a load that is already on its way
-  if (target && !same(target, app.current) && !same(target, app.loading?.entry)) {
+  if (!shapeLab.active() && target && !same(target, app.current) && !same(target, app.loading?.entry)) {
     load(target)
   } else if (!target && !app.current) {
     renderEmpty()
@@ -116,15 +158,16 @@ async function load(entry) {
   const token = Symbol('load')
   app.loading = { token, path: entry.path, entry }
   renderStatus()
-  const keep = app.current && app.current.path === entry.path
+  const keep = app.current && (app.current.path === entry.path || app.current.design && entry.design)
   let gltf = null, error = null
   for (let attempt = 0; attempt < 4 && !gltf; attempt++) {
     try {
-      const res = await fetch(wsUrl(entry.path, entry.mtime), { cache: 'no-store' })
+      const url = entry.url || wsUrl(entry.path, entry.mtime)
+      const res = await fetch(url, { cache: 'no-store' })
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
       const buffer = await res.arrayBuffer()
       const dir = entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/') + 1) : ''
-      gltf = await viewport.parse(buffer, wsUrl(dir || '.').replace(/\.$/, ''))
+      gltf = await viewport.parse(buffer, entry.url ? entry.url.slice(0, entry.url.lastIndexOf('/') + 1) : wsUrl(dir || '.').replace(/\.$/, ''))
     } catch (e) {
       error = e
       await new Promise((r) => setTimeout(r, 500 + attempt * 400))
@@ -132,18 +175,21 @@ async function load(entry) {
     if (app.loading?.token !== token) return
   }
   if (app.loading?.token !== token) return
-  app.loading = null
   if (!gltf) {
+    app.loading = null
     app.loadError = { path: entry.path, message: String(error?.message ?? error) }
     if (app.current) toast(`Could not read the new <b>${escapeHtml(entry.path.split('/').pop())}</b> — still showing the last good one`, { kind: 'warn' })
     renderStatus(); renderEmpty()
-    return
+    return false
   }
   app.loadError = null
-  app.report = entry.report ? await findReport(entry.report) : null
+  const report = entry.report && typeof entry.report === 'object' ? entry.report : entry.report ? await findReport(entry.report) : null
+  if (app.loading?.token !== token) return false
+  app.loading = null
+  app.report = report
   const diff = viewport.setModel(gltf, { report: app.report, keep })
   const first = !app.current
-  app.current = { path: entry.path, mtime: entry.mtime, size: entry.size }
+  app.current = { path: entry.path, mtime: entry.mtime, size: entry.size, design: !!entry.design }
   app.lastUpdate = Date.now()
   if (!keep) {
     const saved = store(`mv:view:${entry.path}`, null, sessionStorage)
@@ -152,6 +198,7 @@ async function load(entry) {
   } else {
     measure.rebind()
   }
+  if (entry.design) viewport.frameAll(false)
   outliner.rebuild()
   renderModelButton()
   renderTimeline()
@@ -165,6 +212,7 @@ async function load(entry) {
   } else if (!first) {
     toast(`Showing <b>${escapeHtml(entry.path)}</b>`)
   }
+  return true
 }
 
 async function findReport(path) {
@@ -220,6 +268,7 @@ function renderStatus(offline) {
   let kind = 'idle', text = 'Waiting for a model', progress = undefined
   if (offline === 'offline') { kind = 'failed'; text = 'Viewer disconnected — retrying' }
   else if (app.loading) { kind = 'loading'; text = app.current ? 'Loading the new export…' : 'Loading model…' }
+  else if (app.current?.design) { kind = 'live'; text = `Design · built ${ago(app.current.mtime, Date.now())}` }
   else if (build?.kind === 'building') { kind = 'building'; text = app.current ? `Rebuilding · ${build.label}` : build.label; progress = build.progress }
   else if (build?.kind === 'failed') { kind = 'failed'; text = build.label }
   else if (app.loadError && !app.current) { kind = 'failed'; text = 'Could not read the model' }
@@ -257,6 +306,7 @@ function renderViews() {
 }
 
 function setView(view) {
+  if (shapeLab.active() && view !== 'model') return
   app.view = view
   for (const b of $$('#views button')) b.classList.toggle('on', b.dataset.view === view)
   $('#model-view').hidden = view !== 'model'
@@ -426,6 +476,7 @@ function dragButton(button, fn) {
 }
 
 function setSidebar(open) {
+  if (open && shapeLab.active()) return
   app.sidebar = open
   save('mv:sidebar', open)
   $('#sidebar').classList.toggle('open', open)
@@ -779,7 +830,7 @@ function showHelp() {
   const box = $('#help')
   put(box, el('div', { class: 'help-card', onclick: (e) => e.stopPropagation() },
     el('h2', { text: 'Keyboard and mouse' }),
-    el('div', { class: 'sub', text: 'Blender’s viewport keys. Editing happens in the chat — this pane is for looking closely.' }),
+    el('div', { class: 'sub', text: 'Blender’s viewport keys. Ask the agent to author the scene, then explore its controls in Shape Lab.' }),
     el('div', { class: 'help-cols' }, ...HELP.map(([title, rows]) => el('div', {}, el('h5', { text: title }), el('dl', {}, ...rows.flatMap(([k, d]) => [el('dt', {}, ...k.split(/\s{2,}| (?=[A-Z0-9.\/])/).filter(Boolean).map((part) => el('kbd', { text: part }))), el('dd', { text: d })])))))))
   box.hidden = false
   box.onclick = hideHelp

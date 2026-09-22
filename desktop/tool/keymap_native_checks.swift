@@ -27,7 +27,7 @@ for (key, command) in [
   ("cmd+up", "pane.focus_above"), ("cmd+right", "pane.focus_right"),
   ("cmd+s", "app.store"), ("cmd+shift+l", "pane.layout"),
   ("cmd+b", "task.route"), ("cmd+t", "swarm.new"),
-  ("cmd+p", "agent.add"),
+  ("cmd+o", "agent.open"), ("cmd+p", "navigation.commands"),
   ("cmd+r", "pane.split_right"), ("cmd+d", "pane.split_down"),
   ("cmd+n", "agent.new"),
   ("cmd+h", "pane.focus_left"), ("cmd+j", "pane.focus_below"),
@@ -40,11 +40,13 @@ try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+p")) == nil,
   "The pane picker chord is not mistaken for an orchestrator command")
 try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+b")) == nil,
   "The viewer bridge does not change single-agent routing")
-try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+shift+p")) == nil,
+try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+p")) == nil,
   "The viewer bridge does not take the command palette chord")
 for context in HarnessNativeKeymap.contexts {
-  try checkKeymap(defaults.match([stroke("cmd+shift+n")], context: context).binding == nil,
-    "Shift-Command-N is unbound by default in \(context)")
+  try checkKeymap(defaults.match([stroke("cmd+shift+p")], context: context).binding == nil,
+    "The former commands shortcut is unbound")
+  try checkKeymap(defaults.match([stroke("cmd+shift+n")], context: context).binding?.command == "agent.clone",
+    "Shift-Command-N clones the harness in \(context)")
   for number in 1...9 {
     try checkKeymap(defaults.match([stroke("cmd+\(number)")], context: context).binding?.command == "swarm.select_\(number)",
       "Command-number selects the corresponding tab from \(context)")

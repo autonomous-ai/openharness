@@ -98,16 +98,16 @@ async function viewer({ env = {}, workspace } = {}) {
   }
 }
 
-function http(port, path, { method = 'GET' } = {}) {
+function http(port, path, { method = 'GET', headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
-    const req = request({ host: '127.0.0.1', port, path, method }, (res) => {
+    const req = request({ host: '127.0.0.1', port, path, method, headers }, (res) => {
       let body = ''
       res.setEncoding('utf8')
       res.on('data', (chunk) => { body += chunk })
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }))
     })
     req.on('error', reject)
-    req.end()
+    req.end(body)
   })
 }
 
@@ -160,6 +160,24 @@ describe('files', () => {
       assert.equal(bundle.status, 404) // a checkout without npm ci
     }
     assert.equal((await v.get('/vendor/jquery.js')).status, 404)
+  })
+
+  test('bond-scan writes require the pane token, same origin and bounded input', async () => {
+    const page = await v.get('/')
+    const token = page.body.match(/name="torsion-token" content="([a-f0-9]{64})"/)[1]
+    const endpoint = '/api/torsion/keep', method = 'POST'
+    assert.equal((await v.get(endpoint, { method, body: '{}' })).status, 403)
+    assert.equal((await v.get(endpoint, { method, headers: { 'x-torsion-token': token, origin: 'https://outside.example' }, body: '{}' })).status, 403)
+    assert.equal((await v.get(endpoint, { method, headers: { 'x-torsion-token': token, host: 'outside.example' }, body: '{}' })).status, 403)
+    const headers = { 'x-torsion-token': token, origin: `http://127.0.0.1:${v.port}` }
+    assert.equal((await v.get(endpoint, { method, headers, body: '{bad json' })).status, 400)
+    assert.equal((await v.get(endpoint, { method, headers, body: '{}' })).status, 400)
+    assert.equal((await v.get(endpoint, { method, headers: { ...headers, 'content-length': '262145' }, body: 'x'.repeat(262145) })).status, 413)
+    assert.equal((await v.get(endpoint, { method, headers: { ...headers, 'transfer-encoding': 'chunked' }, body: 'x'.repeat(262145) })).status, 413)
+    assert.equal((await v.get('/', { method: 'PUT' })).status, 405)
+    assert.deepEqual((await v.json('/api/torsions')).body, [])
+    assert.equal((await v.get('/torsion-pane.mjs')).headers['content-type'], 'text/javascript; charset=utf-8')
+    assert.equal((await v.get('/')).status, 200)
   })
 
   test('workspace files, a download, and nothing outside the workspace', async () => {

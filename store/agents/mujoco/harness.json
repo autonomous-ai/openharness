@@ -4,7 +4,7 @@
   "name": "MuJoCo",
   "category": "Simulation",
   "author": "Google DeepMind",
-  "description": "Describe a robot, a scene, a controller — a Unitree quadruped standing, a humanoid learning to walk — and watch the rollout play: MuJoCo physics, Menagerie robots, MJX for training.",
+  "description": "Build robots and controllers, then investigate them in live MuJoCo physics. Push a robot, compare two futures with different gravity or grip, and give the agent a reproducible experiment to improve.",
   "engine": "claude",
   "workspace": {
     "template": "template",
@@ -13,7 +13,9 @@
   },
   "agent": {
     "instructions": "AGENTS.md",
-    "skills": ["skills"],
+    "skills": [
+      "skills"
+    ],
     "env": {
       "MUJOCO_PYTHON": "${dsh}/.venv/bin/python",
       "MUJOCO_TOOLCHAIN": "${dsh}/toolchain",

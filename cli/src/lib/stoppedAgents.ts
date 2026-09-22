@@ -73,6 +73,18 @@ export class StoppedAgentStore {
     atomicWriteJson(join(this.directory, `${session.agentId}.json`), { version: 1, session: snapshot })
   }
 
+  /** Correct one field of an archive in place — the folder a Claude row drifted out of (cwdRepair.ts).
+   *  Not `save`: that recomputes the name and stamps `updatedAt`, and a repair must not reorder the
+   *  catalog or rename anything. Nothing else on the row changes. */
+  patch(agentId: string, patch: Partial<Pick<RegisteredSession, 'cwd'>>): boolean {
+    const saved = this.get(agentId)
+    if (!saved) return false
+    secureStateDirectory(dirname(this.directory))
+    secureStateDirectory(this.directory)
+    atomicWriteJson(join(this.directory, `${agentId}.json`), { version: 1, session: { ...saved, ...patch } })
+    return true
+  }
+
   /** Reserve before tmux allocation. A crash between allocation and registry persistence
    * must not permit a second process under a new request/receipt ID. */
   beginResume(agentId: string): string | null {

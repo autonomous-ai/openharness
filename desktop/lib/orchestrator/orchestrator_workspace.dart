@@ -146,7 +146,7 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
                 ),
               AppIconButton(
                 icon: LucideIcons.plus,
-                tooltip: 'New project (⌘P)',
+                tooltip: 'New project',
                 onPressed: () =>
                     showOrchestratorLauncher(context, widget.notifier),
               ),

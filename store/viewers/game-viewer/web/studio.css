@@ -30,7 +30,10 @@ button:disabled {
   cursor: default;
 }
 button:focus-visible,
-summary:focus-visible {
+summary:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
@@ -583,6 +586,186 @@ details.error pre {
   border-radius: 8px;
   font-size: 12px;
 }
+.playtest-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  background: #1b2428;
+  font-size: 11px;
+}
+.playtest-bar button,
+.timeline button,
+#moment-dialog button {
+  border: 1px solid #ffffff20;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+#rewind {
+  color: var(--accent);
+}
+#rewind-status {
+  color: var(--muted);
+  font-size: 10px;
+}
+#show-moments {
+  margin-left: auto;
+  border-color: transparent;
+}
+.timeline {
+  padding: 13px 16px;
+  background: #24362f;
+  border-top: 1px solid #8ed1ac40;
+}
+.timeline-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  font-size: 11px;
+}
+.timeline-heading strong {
+  font-weight: 550;
+  color: #d5ffea;
+}
+#timeline-position {
+  color: #9bc8b1;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+#timeline-range {
+  display: block;
+  width: 100%;
+  accent-color: var(--accent);
+  margin: 15px 0;
+  cursor: pointer;
+}
+.timeline-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+button.primary {
+  color: #182e25;
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+button.primary:not(:disabled):hover {
+  background: #d1ffe9;
+}
+.moments {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(235px, 1fr));
+  gap: 12px;
+  padding: 12px;
+  max-height: 500px;
+  overflow: auto;
+}
+.moment-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #182127;
+}
+.moment-card img {
+  width: 100%;
+  aspect-ratio: 16/9;
+  object-fit: cover;
+  display: block;
+}
+.moment-content {
+  padding: 13px;
+}
+.moment-badge {
+  text-transform: uppercase;
+  color: var(--accent);
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+.moment-content p {
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.moment-content small {
+  color: var(--muted);
+  display: block;
+  font-size: 10px;
+}
+.moment-content button {
+  margin-top: 12px;
+  border-radius: 5px;
+  border: 1px solid #8ed1ac40;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--accent);
+}
+#moment-dialog {
+  border: 1px solid #ffffff25;
+  color: var(--text);
+  background: var(--surface);
+  padding: 24px;
+  width: min(490px, calc(100% - 28px));
+  max-height: 90svh;
+  border-radius: 14px;
+  box-shadow: 0 25px 90px #0008;
+}
+#moment-dialog::backdrop {
+  background: #091113a6;
+  backdrop-filter: blur(4px);
+}
+#moment-dialog h2 {
+  font-size: 24px;
+  font-weight: 550;
+  letter-spacing: -0.7px;
+  margin: 9px 0 16px;
+}
+#moment-image {
+  display: block;
+  width: 100%;
+  max-height: 210px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #122027;
+}
+#moment-position {
+  color: var(--accent);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+#moment-dialog label {
+  display: block;
+  font-size: 11px;
+  color: #b3c3c9;
+  margin: 17px 0 7px;
+}
+#moment-dialog select,
+#moment-dialog textarea {
+  display: block;
+  width: 100%;
+  font: inherit;
+  font-size: 12px;
+  padding: 10px;
+  border: 1px solid #ffffff25;
+  border-radius: 6px;
+  background: #151e23;
+  color: var(--text);
+}
+#moment-dialog textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+.moment-help {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+  margin: 15px 0 19px;
+}
 .studio.expanded .masthead,
 .studio.expanded .progress,
 .studio.expanded .drawer {
@@ -612,6 +795,28 @@ details.error pre {
   }
 }
 @media (max-width: 600px) {
+  .playtest-bar {
+    flex-wrap: wrap;
+    gap: 5px;
+    padding: 8px;
+  }
+  #rewind-status {
+    width: 100%;
+    order: 4;
+    padding: 4px;
+  }
+  .timeline-heading {
+    align-items: flex-start;
+  }
+  .drawer-head {
+    flex-wrap: wrap;
+  }
+  .drawer-head button {
+    padding: 6px;
+  }
+  #moment-dialog {
+    padding: 18px;
+  }
   .studio {
     padding: 16px 13px 12px;
     gap: 12px;

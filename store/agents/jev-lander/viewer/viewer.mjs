@@ -38,19 +38,22 @@ export async function startLanderViewer({ workspace, port = 0 } = {}) {
   let stopped = false, running = false
   let timer = null, salt = 1, lastVerdictAt = 0
   let queue = Promise.resolve()
+  let resetRevision = 0
   let overrides = {}
-  let decision = { thrust: 'CUT', probs: {}, conf: 0, soft: 0.5 }
+  const blankDecision = () => ({ thrust: 'CUT', probs: {}, conf: 0, soft: 0.5 })
+  let decision = blankDecision()
   let text = ''
   let error = null
   let server = null
   let history = [] // per decision of this flight: { step, y, v, action }
   const session = { decisions: 0 }
 
-  const cfgWatch = watchConfig(join(workspace, 'lander.json'), DEFAULT, () => { overrides = {}; restart(); push(true) })
+  const cfgWatch = watchConfig(join(workspace, 'lander.json'), DEFAULT, () => { resetRevision++; overrides = {}; restart(); push(true) })
   const cfg = () => sanitize({ ...cfgWatch.get(), ...overrides })
 
   function restart() {
     world = createWorld(cfg())
+    decision = blankDecision(); error = null
     history = []
     text = stateText(world, cfg())
   }
@@ -107,6 +110,7 @@ export async function startLanderViewer({ workspace, port = 0 } = {}) {
 
   async function decideOnce() {
     if (stopped) return
+    const askedWorld = world
     try {
       const c = cfg()
       if (world.phase !== 'flight') { // the result is on screen: nothing to ask
@@ -118,6 +122,7 @@ export async function startLanderViewer({ workspace, port = 0 } = {}) {
       }
       text = stateText(world, c)
       const res = await evaluate({ state: text, questions: QUESTIONS, salt: salt++, model: process.env.JEV_MODEL || 'jev-latest' })
+      if (stopped || world !== askedWorld) return
       const a = res.answers
       const thrust = ACTIONS.includes(a.thrust?.choice) ? a.thrust.choice : 'COAST'
       decision = { thrust, probs: a.thrust?.probabilities ?? {}, conf: Number(a.thrust?.confidence ?? 0), soft: Number(a.soft?.noul ?? 0.5) }
@@ -128,6 +133,7 @@ export async function startLanderViewer({ workspace, port = 0 } = {}) {
       text = stateText(world, c)
       error = null
     } catch (e) {
+      if (stopped || world !== askedWorld) return
       error = clean(e?.message ?? String(e))
     }
   }
@@ -140,8 +146,13 @@ export async function startLanderViewer({ workspace, port = 0 } = {}) {
   async function control(cmd, body) {
     if (cmd === 'pause') { running = false; clearTimeout(timer) }
     else if (cmd === 'start') { if (!running) { running = true; schedule() } }
-    else if (cmd === 'reset') { overrides = {}; salt = 1; session.decisions = 0; await queue; restart() }
-    else if (cmd === 'tick') { const n = Math.round(clampN(body.n, 1, 20000, 1)); for (let i = 0; i < n; i++) await decide() }
+    else if (cmd === 'reset') {
+      resetRevision++
+      // Reset is a queued operation too; counters clear after the last old answer settles.
+      const reset = () => { overrides = {}; salt = 1; session.decisions = 0; restart() }
+      queue = queue.then(reset, reset); await queue
+    }
+    else if (cmd === 'tick') { const n = Math.round(clampN(body.n, 1, 20000, 1)); for (let i = 0, revision = resetRevision; i < n && !stopped && revision === resetRevision; i++) await decide() }
     else if (cmd === 'set') {
       const range = DIALS[body.key]
       if (range) {

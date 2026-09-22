@@ -255,7 +255,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.escape);
       for (final shortcut in [
         LogicalKeyboardKey.keyO,
-        LogicalKeyboardKey.keyP,
+        LogicalKeyboardKey.keyO,
       ]) {
         await key(tester, shortcut, cmd: true);
         final input = find.byKey(const ValueKey('swarm-search-input'));

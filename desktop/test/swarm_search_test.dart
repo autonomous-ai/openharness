@@ -27,7 +27,7 @@ void main() {
       await mount(tester, app);
       final input = find.byKey(const ValueKey('swarm-search-input'));
       expect(input, findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await tester.pump();
       final originalController = tester.widget<TextField>(input).controller;
       await tester.enterText(input, 'a query only');
@@ -312,7 +312,7 @@ void main() {
           .take(3)
           .toList();
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       await tester.pump();
       await tester.enterText(jumpField, 'Test host');
       await tester.pump();
@@ -342,7 +342,7 @@ void main() {
     app.adoptSessionForTest(terminal('a1', secondInputs));
     final target = app.activeSwarm;
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyP);
+    await chord(tester, LogicalKeyboardKey.keyO);
     await tester.pump();
     await tester.enterText(jumpField, 'Agent 0');
     await tester.pump();
@@ -385,7 +385,7 @@ void main() {
           ValueKey(adding ? 'swarm-search-input' : 'harness-start-search'),
         );
         if (adding) {
-          await chord(tester, LogicalKeyboardKey.keyP);
+          await chord(tester, LogicalKeyboardKey.keyO);
           await tester.pump();
         } else {
           await tester.tap(field);
