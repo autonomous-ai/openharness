@@ -142,6 +142,36 @@ void main() {
         findsNothing,
         reason: 'A made-up branch waits for the session to name it.',
       );
+      app.machineStates['m']!.agents = [
+        const Agent(
+          id: 'a0',
+          name: 'Renamed terminal',
+          engine: 'codex',
+          terminalAvailable: true,
+          project: AgentProject(
+            name: 'harness',
+            cwd: '/work/harness',
+            root: '/work/harness',
+            branch: '${kDetachedBranchPrefix}65281563',
+          ),
+        ),
+      ];
+      revision.value = 5;
+      await tester.pump();
+      expect(find.text('harness'), findsOneWidget);
+      expect(
+        find.textContaining('Detached'),
+        findsNothing,
+        reason: 'A commit an agent checked out is not a branch to show.',
+      );
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Tooltip &&
+              (widget.message ?? '').contains('No branch: on commit 65281563'),
+        ),
+        findsWidgets,
+      );
       revision.value = 2;
       await tester.pump();
       expect(find.byTooltip('Zoom Pane'), findsOneWidget);
