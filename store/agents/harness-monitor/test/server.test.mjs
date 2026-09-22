@@ -160,3 +160,35 @@ async function post(base, token, path, payload) {
   })
   return response.json()
 }
+
+test('the fleet is read on a tick only while a pane is connected; remote machines on their own clock', async (t) => {
+  let reads = 0
+  const calls = []
+  const { viewer, base } = await serve(undefined, {
+    intervalMs: 40,
+    remoteIntervalMs: 150,
+    collect: async (options) => { reads += 1; calls.push(options.remoteIntervalMs); return { rows: [], machines: [], problems: [], observedAt: Date.now() } },
+  })
+  t.after(() => viewer.close())
+  const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
+
+  await sleep(200)
+  assert.equal(reads, 1, 'the start-up read, and nothing more without a pane')
+
+  const response = await fetch(`${base}/events`)
+  const reader = response.body.getReader()
+  await reader.read()
+  await sleep(220)
+  assert.ok(reads >= 3, `a pane keeps the fleet read on a tick (${reads} reads)`)
+  assert.ok(calls.slice(1).every((v) => v === 150), 'ticks hand the collector the remote clock, not a forced remote read')
+
+  await reader.cancel()
+  await sleep(60)
+  const atLeave = reads
+  await sleep(200)
+  assert.ok(reads - atLeave <= 1, `reads stop once the last pane leaves (${reads - atLeave} more)`)
+
+  // Refresh is the person asking: it reads now and asks the remote machines too.
+  await fetch(`${base}/api/refresh`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hps-token': viewer.token }, body: '{}' })
+  assert.equal(calls.at(-1), 0, 'a refresh forces the remote read')
+})

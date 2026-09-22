@@ -37,6 +37,20 @@ import { isWrapped } from './e2ee/core.js'
 
 const CONNECT_TIMEOUT_MS = 15_000
 const LINGER_MS = 30_000
+// The background pools' linger. A pane that closes its bridge socket after every read polls on a
+// fixed tick (a minute, in the shipped monitors); anything at or under that tick would re-dial the
+// relay (and redo the E2EE handshake) on every poll, which is exactly the churn these pools exist to
+// stop. An idle upstream costs a heartbeat, so the linger is generous.
+const ISOLATED_LINGER_MS = 3 * 60_000
+// After a FAILED background dial, how long the same machine is answered from that failure instead of
+// dialled again. A poller that retries on every tick against an unlinked or unreachable machine would
+// otherwise turn one bad machine into a relay dial per tick, forever. Never applied to the window's
+// pool: a person clicking again deserves a fresh attempt.
+const ISOLATED_DIAL_COOLDOWN_MS = 30_000
+// Warm background sessions kept per machine. Each concurrent background client needs its own (they
+// must not see each other's frames), so the cap is "how many pollers may overlap on one machine and
+// still find a warm session"; beyond it the extra session is torn down on detach as it always was.
+const ISOLATED_IDLE_MAX = 4
 // Same convention/value as localWsServer.ts's app<->daemon heartbeat. Without this, a machine-node
 // cycling (e.g. `harness start` on the OTHER end after a crash/restart) can leave this daemon holding
 // an upstream socket the backend silently dropped with no close frame — every RPC sent through it then
@@ -213,30 +227,89 @@ function framePayload(frame: Frame): Record<string, unknown> {
     : {}
 }
 
+export interface RemoteRelayPoolOptions {
+  /** Negotiate a WebRTC data channel for terminals once the E2EE session is up. Default on; the
+   *  background pool turns it off — a session that will only ever carry `agents_list` has no terminal
+   *  to move onto p2p, and the STUN/TURN round trips would be thrown away with it. */
+  p2p?: boolean
+  /** How long an entry nobody is attached to stays open for the next select. */
+  lingerMs?: number
+  /** After a failed dial, reject further dials for this machine for this long. 0 = never. */
+  dialCooldownMs?: number
+  /** Share one failure record between pools (the background pools all draw on the parent's). */
+  dialFailures?: Map<string, { at: number; error: unknown }>
+}
+
 export class RemoteRelayPool {
   private entries = new Map<string, Entry>()
   private pending = new Map<string, Promise<Entry>>()
+  /** Last failed dial per machine, for the cooldown. Cleared by the next successful dial. */
+  private readonly lastDialFailure: Map<string, { at: number; error: unknown }>
+  private readonly p2pEnabled: boolean
+  private readonly lingerMs: number
+  private readonly dialCooldownMs: number
+  /** Warm background pools per machine, each holding one lingering session nobody is attached to —
+   *  see acquireIsolated(). A pool is either here (idle) or in a client's hands, never both. */
+  private readonly idleIsolated = new Map<string, RemoteRelayPool[]>()
 
   constructor(
     private readonly auth: AuthSessionManager,
     private readonly backendWsBase: string,
     private readonly selfIdentity: Identity,
     private readonly peers: MachinePeerStore,
-  ) {}
+    opts: RemoteRelayPoolOptions = {},
+  ) {
+    this.p2pEnabled = opts.p2p !== false
+    this.lingerMs = opts.lingerMs ?? LINGER_MS
+    this.dialCooldownMs = opts.dialCooldownMs ?? 0
+    this.lastDialFailure = opts.dialFailures ?? new Map()
+  }
 
-  /** Background CLI jobs must not replace the desktop window's one pooled sink. Each isolated
-   * client gets its own encrypted session, released immediately instead of retained for reconnect. */
+  /** Background CLI jobs (a monitor pane polling `agents_list`, a script) must not replace the
+   * desktop window's one pooled sink, and must not see each other's frames either — so each one
+   * gets a pool of its OWN, separate from the window's, with its own encrypted session. What used to
+   * happen next was the expensive part: the pool was thrown away on detach, so every poll was a fresh
+   * relay socket, E2EE handshake AND WebRTC negotiation, terminated a second later (8.5k dials/72 min
+   * fleet-wide, 2026-09-22). Now a detached pool goes back on a per-machine shelf with its session
+   * lingering, and the next background client for that machine takes it — one dial per machine per
+   * linger, however often a pane polls. Concurrent clients still get distinct pools. These pools never
+   * negotiate p2p and share one dial-failure record, so a machine that refused is not re-dialled on
+   * every tick. */
   async acquireIsolated(
     machineId: string, autonomousEnv: string, selectFrame: Frame,
     sink: LocalClientSink, onClosed: (code: number, reason: string) => void,
   ): Promise<RelaySession> {
-    const isolated = new RemoteRelayPool(this.auth, this.backendWsBase, this.selfIdentity, this.peers)
-    const session = await isolated.acquire(machineId, autonomousEnv, selectFrame, {
+    const shelf = this.idleIsolated.get(machineId) ?? []
+    const pool = shelf.pop() ?? new RemoteRelayPool(this.auth, this.backendWsBase, this.selfIdentity, this.peers,
+      { p2p: false, lingerMs: ISOLATED_LINGER_MS, dialCooldownMs: ISOLATED_DIAL_COOLDOWN_MS, dialFailures: this.lastDialFailure })
+    const session = await pool.acquire(machineId, autonomousEnv, selectFrame, {
       ...sink,
       sendFrame: frame => sink.sendFrame(frame.type === 'connected'
         ? { ...frame, payload: { ...framePayload(frame), relayIsolation: true } } : frame),
     }, onClosed)
-    return { ...session, detach: () => isolated.invalidate(machineId) }
+    let detached = false
+    return {
+      ...session,
+      detach: () => {
+        if (detached) return
+        detached = true
+        session.detach() // the pool's own linger starts here
+        const idle = this.idleIsolated.get(machineId) ?? []
+        if (idle.length >= ISOLATED_IDLE_MAX) { pool.invalidate(machineId); return }
+        idle.push(pool)
+        this.idleIsolated.set(machineId, idle)
+      },
+    }
+  }
+
+  /** Test seam: how many warm background sessions are shelved for `machineId`. */
+  idleIsolatedCount(machineId: string): number { return this.idleIsolated.get(machineId)?.length ?? 0 }
+
+  /** `invalidate()` for the shelved background sessions — a background client's own `forceReconnect`
+   *  says the machine behind them restarted, so none of them is worth handing to the next client. */
+  invalidateIsolated(machineId: string): void {
+    for (const pool of this.idleIsolated.get(machineId) ?? []) pool.invalidate(machineId)
+    this.idleIsolated.delete(machineId)
   }
 
   /** Force-drops a pooled entry so the next `acquire()` dials fresh instead of reusing it. For when
@@ -298,6 +371,10 @@ export class RemoteRelayPool {
   }
 
   private connect(machineId: string, autonomousEnv: string, selectFrame: Frame): Promise<Entry> {
+    const failed = this.lastDialFailure.get(machineId)
+    if (failed && this.dialCooldownMs > 0 && Date.now() - failed.at < this.dialCooldownMs) {
+      return Promise.reject(failed.error)
+    }
     const attempt = (forceRefresh: boolean): Promise<Entry> => this.dial(machineId, autonomousEnv, selectFrame, forceRefresh)
     // A stale access token is the single most likely reason the very first select fails (4401 on the
     // upgrade) — one retry with a freshly-refreshed token is cheap next to surfacing that as a hard
@@ -307,6 +384,12 @@ export class RemoteRelayPool {
       if (err instanceof RelayConnectError && err.closeCode === 4401) return attempt(true)
       throw err
     })
+    if (this.dialCooldownMs > 0) {
+      promise.then(
+        () => { this.lastDialFailure.delete(machineId) },
+        (error) => { this.lastDialFailure.set(machineId, { at: Date.now(), error }) },
+      )
+    }
     this.pending.set(machineId, promise)
     // `.finally()` re-throws on rejection, producing a SECOND promise distinct from the one returned
     // below (which callers already await/catch) — left un-caught, every failed dial (e.g. NO_PEER_LINK
@@ -396,7 +479,7 @@ export class RemoteRelayPool {
               // backendSocket, never this relay client), not in the badge, not in p2p_result — and its
               // absence is indistinguishable from "TURN is configured but ICE preferred direct".
               // Names only, never the credential itself.
-              if (entry.p2pPolicy) {
+              if (entry.p2pPolicy && this.p2pEnabled) {
                 const p = entry.p2pPolicy
                 console.log(`[p2p] policy · machine=${sid(machineId)} stun=${p.stunUrls.length}`
                   + ` turn=${p.turn ? `${p.turn.urls.length} urls` : 'NONE'} openWait=${p.openWaitMs}ms`)
@@ -421,7 +504,9 @@ export class RemoteRelayPool {
             // the terminal just quietly stayed on the ws relay. The peer-version case is the important
             // one: a machine whose CLI predates p2p answers no offer, so NO amount of STUN or TURN can
             // help it. That is a very different problem from "ICE tried and failed".
-            if (!entry.p2pPolicy) {
+            if (!this.p2pEnabled) {
+              console.log(`[p2p] off · machine=${sid(machineId)} background session, no terminals — ws relay only`)
+            } else if (!entry.p2pPolicy) {
               console.log(`[p2p] off · machine=${sid(machineId)} backend sent no policy (rollout or kill switch)`)
             } else if (crypto.terminalP2pVersion !== TERMINAL_P2P_PROTOCOL_VERSION) {
               console.log(`[p2p] off · machine=${sid(machineId)} peer speaks p2p v${crypto.terminalP2pVersion},`
@@ -642,7 +727,7 @@ export class RemoteRelayPool {
             try { entry.ws.close(1000, 'idle') } catch { /* ignore */ }
             this.entries.delete(machineId)
           }
-        }, LINGER_MS)
+        }, this.lingerMs)
         entry.lingerTimer.unref?.()
       },
     }
@@ -650,7 +735,9 @@ export class RemoteRelayPool {
 
   private startP2p(machineId: string, entry: Entry): void {
     const policy = entry.p2pPolicy
-    if (!policy || entry.p2p) return
+    // The p2p-off guard lives HERE, not only at the dial-time call: scheduleP2pRetry() re-enters
+    // through this same method, and a background pool must stay relay-only through every retry too.
+    if (!policy || entry.p2p || !this.p2pEnabled) return
     let wasDirect = false
     const p2p = new TerminalP2pInitiator({
       policy,

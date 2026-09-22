@@ -21,6 +21,7 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { pause, resume } from './lib/actions.mjs'
+import { closeBridges } from './lib/bridge.mjs'
 import { collect as collectFleet, summarize, tilde } from './lib/inventory.mjs'
 import { capture, looksBlocked } from './lib/panes.mjs'
 import { DEFAULT_POLICY, decide, normalizePolicy } from './lib/policy.mjs'
@@ -34,10 +35,13 @@ const VERBS = new Set(['pause', 'resume', 'pin', 'unpin'])
  *  is about to act on, which are the only rows where the answer changes anything. */
 const BLOCKED_SCAN_LIMIT = 24
 
-export function createViewer({ workspace, port = 0, intervalMs = 4000, now = () => Date.now(), collect = collectFleet, scan = capture, verbs = { pause, resume } }) {
+export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteIntervalMs = 60_000, now = () => Date.now(), collect = collectFleet, scan = capture, verbs = { pause, resume } }) {
   const token = randomBytes(24).toString('base64url')
   const clients = new Set()
   const cache = new Map()
+  // The remote machines' last answers (lib/inventory.mjs collect): they are asked every
+  // `remoteIntervalMs`, the local machine every `intervalMs`, and only while a pane is connected.
+  const remote = { at: 0, answers: new Map(), problems: [] }
   let snapshot = { spec: 1, status: 'starting', rows: [], summary: null, policy: DEFAULT_POLICY, plan: [], totals: null, problems: [], log: [], observedAt: null, intervalMs }
   let stopped = false, timer, heartbeat, polling = null
   // Resolves after the first observation lands. The server starts listening before it, so the pane draws
@@ -57,14 +61,14 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, now = () 
   }
 
   /** One observation: the fleet, what the policy would do to it, and the pane header's verdict. */
-  async function observe() {
+  async function observe({ forceRemote = false } = {}) {
     const state = await readState(workspace).catch(() => null)
     if (!state) {
       snapshot = { ...snapshot, status: 'unreadable', problems: [{ machine: 'monitor.json', error: 'The policy file could not be read. Ask the agent to check monitor.json.' }] }
       return
     }
     const policy = normalizePolicy(state.policy, { home: homedir() })
-    const { rows, problems, degraded } = await collect({ state, now: now(), includeRemote: true, cache })
+    const { rows, problems, degraded } = await collect({ state, now: now(), includeRemote: true, cache, remote, remoteIntervalMs: forceRemote ? 0 : remoteIntervalMs })
 
     // Look for an open prompt only where it would change a decision, newest candidates first.
     const candidates = rows
@@ -97,17 +101,33 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, now = () 
     await writeVerdict(workspace, { summary, rows, plan: plan.entries, problems }).catch(() => {})
   }
 
-  async function poll({ immediate = false } = {}) {
+  let lastPollAt = 0
+  // The next tick is booked only while a pane is connected: a viewer nobody is looking at — a tab in
+  // the background, a pane the person closed but whose process outlived the daemon — must not keep
+  // every machine on the account answering it.
+  const schedule = () => {
+    clearTimeout(timer); timer = null
+    if (stopped || clients.size === 0) return
+    timer = setTimeout(() => { void poll() }, intervalMs)
+  }
+  // Someone wants the observation now: read again if the one we have is older than a tick.
+  const wake = () => {
+    if (stopped || polling || now() - lastPollAt < intervalMs) return
+    clearTimeout(timer); timer = null
+    void poll()
+  }
+
+  async function poll({ immediate = false, forceRemote = false } = {}) {
     if (polling) return polling
     polling = (async () => {
-      try { await observe() } catch (error) {
+      try { await observe({ forceRemote }) } catch (error) {
         snapshot = { ...snapshot, status: 'unavailable', problems: [{ machine: 'this machine', error: error instanceof Error ? error.message : String(error) }] }
       }
       if (!stopped) publish()
       observed()
     })()
-    try { await polling } finally { polling = null }
-    if (!stopped && !immediate) { clearTimeout(timer); timer = setTimeout(poll, intervalMs) }
+    try { await polling } finally { polling = null; lastPollAt = now() }
+    if (!stopped && !immediate) schedule()
   }
 
   /** The write surface. One verb, up to 64 rows, and a receipt per row — the same library call the CLI
@@ -170,19 +190,24 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, now = () 
         let payload; try { payload = JSON.parse(body || '{}') } catch { json(res, 400, { error: 'Send JSON.' }); return }
         if (url.pathname === '/api/act') { json(res, 200, await act(payload)); return }
         if (url.pathname === '/api/policy') { json(res, 200, await savePolicy(payload.policy ?? {})); return }
-        if (url.pathname === '/api/refresh') { await poll({ immediate: true }); json(res, 200, { ok: true }); return }
+        if (url.pathname === '/api/refresh') { await poll({ immediate: true, forceRemote: true }); json(res, 200, { ok: true }); return }
         json(res, 404, { error: 'Not found' }); return
       }
 
       if (!['GET', 'HEAD'].includes(req.method)) { res.setHeader('allow', 'GET, HEAD, POST'); json(res, 405, { error: 'Not allowed.' }); return }
       if (url.pathname === '/health') { json(res, 200, { ok: true }); return }
-      if (url.pathname === '/api/snapshot') { json(res, 200, snapshot); return }
+      if (url.pathname === '/api/snapshot') { json(res, 200, snapshot); wake(); return }
       if (url.pathname === '/events') {
         if (req.method === 'HEAD') { res.writeHead(200, headers); res.end(); return }
         if (clients.size >= 16) { json(res, 503, { error: 'Too many viewer connections.' }); return }
         res.writeHead(200, { ...headers, 'content-type': 'text/event-stream', connection: 'keep-alive', 'x-accel-buffering': 'no' })
         res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`)
-        clients.add(res); res.on('close', () => clients.delete(res)); return
+        clients.add(res)
+        res.on('close', () => { clients.delete(res); if (clients.size === 0) { clearTimeout(timer); timer = null } })
+        // A pane just opened: catch up if the observation is stale, and start ticking either way.
+        wake()
+        if (!timer && !polling) schedule()
+        return
       }
 
       const assets = {
@@ -225,6 +250,8 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, now = () 
     }),
     close: async () => {
       stopped = true; clearTimeout(timer); clearInterval(heartbeat)
+      await polling?.catch(() => {})
+      closeBridges()
       for (const client of clients) client.end()
       server.closeAllConnections()
       await new Promise((done) => server.close(done))

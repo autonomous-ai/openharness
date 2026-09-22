@@ -101,6 +101,7 @@ import { preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.j
 import { materializeWorkspace } from './dsh/materialize.js'
 import { dshLaunch } from './dsh/launch.js'
 import { DshViewerManager } from './dsh/viewer.js'
+import { ViewerLedger } from './dsh/viewerLedger.js'
 import { DshVerdictWatcher, type DshVerdict } from './dsh/verdict.js'
 import { dshCommand, dshUsage } from './dsh/command.js'
 import type { AgentDshContext } from './lib/agentFrame.js'
@@ -1608,6 +1609,11 @@ async function runForeground(session: AuthSession): Promise<void> {
     const session = registry.byAgent(agentId)
     if (session && registry.terminalAvailable(agentId)) syncSession(session)
   }
+  // Viewers an earlier daemon started and never stopped (crash, force quit, SIGKILL) are still running
+  // and still polling; stop them BEFORE this daemon starts its own, or they accumulate a generation per
+  // restart. Only pids whose live start time matches what that daemon recorded are touched.
+  const viewerLedger = new ViewerLedger({ log: (line) => console.log(line) })
+  viewerLedger.reapOrphans()
   const dshViewers = new DshViewerManager({
     onUrl: (agentId, url) => {
       dshFrameFor(agentId).viewerUrl = url
@@ -1615,6 +1621,7 @@ async function runForeground(session: AuthSession): Promise<void> {
       syncCompanion(agentId)
     },
     log: (line) => console.log(line),
+    ledger: viewerLedger,
   })
   const dshVerdicts = new DshVerdictWatcher({
     onChange: (agentId, verdict) => {
