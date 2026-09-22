@@ -133,7 +133,7 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
 
   String get _semanticLabel => switch (_face) {
     VoiceMicFace.talk =>
-      micHoldsToTalk ? 'Hold to talk to the agent' : 'Talk to the agent',
+      micHoldsToTalk ? 'Hold to talk to the harness' : 'Talk to the harness',
     VoiceMicFace.starting => 'Cancel',
     VoiceMicFace.listening =>
       micHoldsToTalk ? 'Release to send' : 'Done talking',

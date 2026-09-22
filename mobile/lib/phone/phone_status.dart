@@ -86,9 +86,9 @@ PhoneSummary phoneMachineSummary(MachineState machine) =>
     };
 
 String _agentCount(int count) => switch (count) {
-  0 => 'No agents yet',
-  1 => '1 agent',
-  _ => '$count agents',
+  0 => 'No harnesses yet',
+  1 => '1 harness',
+  _ => '$count harnesses',
 };
 
 /// What an agent is doing, as its row says it. Waiting on the person outranks working, which

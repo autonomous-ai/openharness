@@ -68,7 +68,7 @@ void main() {
       final pane = app.adoptSessionForTest(terminal('a0', frames));
       final original = app.activeSwarm;
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+      await chord(tester, LogicalKeyboardKey.keyP);
       final input = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(input, '> pin');
       await tester.pump();
@@ -97,9 +97,9 @@ void main() {
         isTrue,
       );
       // The approved command shortcut opens command mode and leaves pinning alone.
-      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+      await chord(tester, LogicalKeyboardKey.keyP);
       expect(app.isPanePinned(pane), isTrue);
-      expect(tester.widget<TextField>(input).controller!.text, '> ');
+      expect(tester.widget<TextField>(input).controller!.text, '>');
       await tester.enterText(input, '> unpin');
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -117,7 +117,7 @@ void main() {
       final app = createApp();
       await mount(tester, app);
       final input = find.byKey(const ValueKey('swarm-search-input'));
-      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.enterText(input, '> rename');
       await tester.pump();
       expect(

@@ -63,7 +63,7 @@ final harnessCommands = <HarnessCommand>[
     'navigation.commands',
     'Search commands',
     ShortcutGroup.actions,
-    extraKeys: ['cmd+shift+p'],
+    extraKeys: ['cmd+p'],
     nativeAction: 'commands',
   ),
   const HarnessCommand(
@@ -289,15 +289,14 @@ final harnessCommands = <HarnessCommand>[
     'agent.open',
     'Open Harness',
     ShortcutGroup.actions,
-    extraKeys: ['cmd+o'],
+    action: ShortcutAction.addAgent,
+    nativeAction: 'addAgent',
     keywords: ['resume', 'existing', 'pane'],
   ),
   const HarnessCommand(
     'agent.add',
     'New Pane',
     ShortcutGroup.actions,
-    action: ShortcutAction.addAgent,
-    nativeAction: 'addAgent',
   ),
   const HarnessCommand(
     'agent.new',

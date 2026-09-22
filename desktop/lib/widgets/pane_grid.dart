@@ -1051,25 +1051,8 @@ class _MinTile {
   }
 }
 
-/// The space between two tiles.
-///
-/// Wide enough to read as a deliberate separation rather than a rendering seam,
-/// narrow enough that four tiles do not lose a tile's worth of room to the
-/// space between them.
-///
-/// Was 10, taken in 30% on the owner's call once the separation was actually
-/// visible: the gap only had to be that wide while it was doing the work of
-/// showing itself, and with the field behind it reading properly, less space
-/// says the same thing and gives it back to the terminals.
-///
-/// Public because `test/pane_preset_test.dart` measures the lattice against it.
-/// A test carrying its own copy of this number is a second place the design
-/// lives, and the one that goes stale — which is exactly what happened when the
-/// grid stopped separating its tiles with a 1px line.
-/// Nudged 9 → 9.5 on the owner's call. Five percent of nine is under half a
-/// pixel, so it rounds to either no change at all or to ten; a half point is the
-/// honest reading of the ask and lands on a whole device pixel at 2x.
-const double kPaneGap = 9.5;
+/// Pane gaps share the outer workspace inset in both directions.
+const double kPaneGap = kWorkspaceInset;
 
 /// What shows through the gaps.
 ///

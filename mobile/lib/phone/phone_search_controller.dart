@@ -16,7 +16,7 @@ import 'phone_search_rank.dart';
 /// thing, and a hint that named only one of them ("Search agents") was most of
 /// why nobody on the phone knew the other three existed.
 const kPhoneSearchHint =
-    'Search agents   > commands   # projects   @ machines   ? help';
+    'Search harnesses   > commands   # projects   @ machines   ? help';
 
 /// One search session, shared by the field and its results.
 ///
@@ -107,7 +107,7 @@ class PhoneSearchController extends ChangeNotifier {
       : isMachineMode
       ? 'Machines'
       : _groupScope != null
-      ? 'Agents · ${_groupScope!.name}'
+      ? 'Harnesses · ${_groupScope!.name}'
       : 'Search';
 
   String get hint => isCommandMode
@@ -115,7 +115,7 @@ class PhoneSearchController extends ChangeNotifier {
       : isHelpMode
       ? 'Choose a mode or search help…'
       : _groupScope != null
-      ? 'Search agents in ${_groupScope!.name}…'
+      ? 'Search harnesses in ${_groupScope!.name}…'
       : isProjectMode
       ? 'Search projects…'
       : isMachineMode

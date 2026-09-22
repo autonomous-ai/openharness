@@ -8,7 +8,7 @@ import 'package:harness/settings/sections/shortcuts_section.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/shortcuts/keymap.dart';
-import 'package:harness/shortcuts/shortcuts_list.dart';
+import 'package:harness/shortcuts/shortcuts_browser.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_preset.dart';
 import 'package:harness/state/swarm_catalog.dart';
@@ -390,7 +390,7 @@ void main() {
         if (inline) {
           await tester.tap(input);
         } else {
-          await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+          await key(tester, LogicalKeyboardKey.keyO, cmd: true);
         }
         await tester.enterText(input, 'Agent');
         await tester.pump();
@@ -471,13 +471,13 @@ void main() {
           .widget<TextField>(find.byKey(const ValueKey('swarm-search-input')))
           .controller!
           .text,
-      '> ',
+      '>',
     );
     await key(tester, LogicalKeyboardKey.escape);
     expect(field, findsOneWidget);
     expect(find.byType(SwarmSearchResults), findsNothing);
     expect(tester.widget<TextField>(field).controller!.text, isEmpty);
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
     final modal = find.byKey(const ValueKey('swarm-search-input'));
     expect(tester.widget<TextField>(modal).focusNode!.hasFocus, isTrue);
     expect(tester.widget<TextField>(modal).controller!.text, isEmpty);
@@ -572,7 +572,7 @@ void main() {
       );
       final commandField = find.byKey(const ValueKey('swarm-search-input'));
       expect(commandField, findsOneWidget);
-      expect(tester.widget<TextField>(commandField).controller!.text, '> ');
+      expect(tester.widget<TextField>(commandField).controller!.text, '>');
       expect(
         tester.widget<TextField>(commandField).focusNode!.hasPrimaryFocus,
         isTrue,
@@ -682,7 +682,7 @@ void main() {
         if (inline) {
           await tester.tap(field);
         } else {
-          await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+          await key(tester, LogicalKeyboardKey.keyO, cmd: true);
         }
         await tester.enterText(field, 'Agent');
         await tester.pump();
@@ -863,7 +863,7 @@ void main() {
         KeymapContext.terminal,
       );
       expect(terminalRows.where((r) => r.chords.isEmpty), isNotEmpty);
-      expect(find.byType(ShortcutsDeck), findsOneWidget);
+      expect(find.byType(ShortcutsBrowser), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       map.dispose();

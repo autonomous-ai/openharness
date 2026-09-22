@@ -419,7 +419,7 @@ void main() {
       expect(find.byType(NewHarnessBox), findsNothing);
       expect(app.swarms, [source]);
       if (command == 'manageMachines') {
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
           '> machine monitor',

@@ -6,7 +6,9 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../terminal/terminal_text.dart';
 
 const double kTerminalCornerRadius = 3;
-const double kWorkspaceInset = 6;
+
+/// One gutter around the workspace, between panes, and beside command docks.
+const double kWorkspaceInset = 9.5;
 
 /// The selected tab joins the workspace with the same small radius used at
 /// its top corners. The bottom curves turn outward, like a browser tab.

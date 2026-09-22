@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../settings/appearance/wallpaper_section.dart';
 import '../settings/sections/appearance_section.dart';
 import '../settings/sections/terminal_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -29,7 +30,7 @@ Future<void> showHarnessCustomizePane(BuildContext context) =>
       ),
     );
 
-/// Appearance and Terminal share the app's existing preference stores.
+/// Customization tabs share the app's existing preference stores.
 class HarnessCustomizePane extends StatelessWidget {
   const HarnessCustomizePane({super.key, required this.onClose, this.store});
   final VoidCallback onClose;
@@ -46,7 +47,7 @@ class HarnessCustomizePane extends StatelessWidget {
         child: CallbackShortcuts(
           bindings: {const SingleActivator(LogicalKeyboardKey.escape): onClose},
           child: DefaultTabController(
-            length: 3,
+            length: 4,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -86,6 +87,10 @@ class HarnessCustomizePane extends StatelessWidget {
                       key: ValueKey('customize-appearance'),
                       text: 'Appearance',
                     ),
+                    Tab(
+                      key: ValueKey('customize-wallpaper'),
+                      text: 'Wallpaper',
+                    ),
                     Tab(key: ValueKey('customize-terminal'), text: 'Terminal'),
                   ],
                 ),
@@ -93,7 +98,11 @@ class HarnessCustomizePane extends StatelessWidget {
                   child: TabBarView(
                     children: [
                       PromptCustomize(store: store ?? appearancePrefsStore),
-                      const AppearanceSection(),
+                      AppearanceSection(store: store),
+                      SingleChildScrollView(
+                        padding: const EdgeInsets.all(20),
+                        child: WallpaperSection(store: store),
+                      ),
                       const TerminalSection(),
                     ],
                   ),

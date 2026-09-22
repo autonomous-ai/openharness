@@ -41,7 +41,7 @@ void main() {
           harnessCommandById.containsKey('navigation.quick_open'),
           isFalse,
         );
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await chord(tester, LogicalKeyboardKey.keyO);
         expect(jumpField, findsOneWidget);
         expect(app.swarms, [original]);
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
@@ -93,7 +93,7 @@ void main() {
     final frames = <TerminalBinaryFrame>[];
     final pane = app.adoptSessionForTest(terminal('a0', frames));
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+    await chord(tester, LogicalKeyboardKey.keyP);
     final field = find.byKey(const ValueKey('swarm-search-input'));
     for (final query in ['> ', '> Agent 0', '>', '> new']) {
       await tester.enterText(field, query);

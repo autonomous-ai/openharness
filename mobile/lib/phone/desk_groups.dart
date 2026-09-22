@@ -12,7 +12,7 @@ const String kUntabbedGroupName = 'Other';
 
 /// What the strip falls back to when the account has no tabs at all: one group
 /// over everything, which is the phone exactly as it was before the desk.
-const String kEveryAgentGroupName = 'All agents';
+const String kEveryAgentGroupName = 'All harnesses';
 
 /// One tab of the desk as this phone can show it: its name, and the agents of it
 /// that can actually be opened right now.

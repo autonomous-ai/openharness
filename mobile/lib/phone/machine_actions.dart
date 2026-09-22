@@ -38,7 +38,7 @@ void openMachineActions(
     actions: [
       PhoneSheetAction(
         icon: LucideIcons.refreshCw300,
-        label: 'Reload agents',
+        label: 'Reload harnesses',
         onTap: () => unawaited(notifier.reloadMachineData(machineId)),
       ),
       PhoneSheetAction(

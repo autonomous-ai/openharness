@@ -343,7 +343,7 @@ void main() {
       app.newSwarm();
       final target = app.activeSwarm;
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       final input = find.byKey(const ValueKey('swarm-search-input'));
       expect(
         tester.widget<TextField>(input).decoration!.hintText,
@@ -355,6 +355,12 @@ void main() {
       expect(find.byType(ListTile), findsNWidgets(2));
       expect(find.byKey(const ValueKey(kSwarmCreateRowId)), findsOneWidget);
       // Context remains visible and searchable when drawn as separate segments.
+      // A folder short of room keeps both ends; the line still reads it whole.
+      bool shows(String text, String value) =>
+          text == value ||
+          text.contains('…') &&
+              value.startsWith(text.split('…').first) &&
+              value.endsWith(text.split('…').last);
       for (final value in [
         'Claude',
         'Test host',
@@ -363,9 +369,17 @@ void main() {
       ]) {
         expect(
           find.byWidgetPredicate(
-            (widget) => widget is SearchResultText && widget.text == value,
+            (widget) => widget is SearchResultText && shows(widget.text, value),
           ),
           findsOneWidget,
+        );
+        expect(
+          find.byWidgetPredicate(
+            (widget) =>
+                widget is Semantics &&
+                (widget.properties.label ?? '').contains(value),
+          ),
+          findsWidgets,
         );
       }
       expect(

@@ -42,8 +42,8 @@ class PhoneCommand {
 /// A phone has no key to discover them by, so `?` is the only teacher there is.
 List<PhoneDestination> phoneSearchModes(List<PhoneCommand> commands) => [
   _mode('commands', '>  Commands', 'Run anything by name', '> '),
-  _mode('projects', '#  Projects', 'Choose a project, then one of its agents', '# '),
-  _mode('machines', '@  Machines', 'Choose a machine, then one of its agents', '@ '),
+  _mode('projects', '#  Projects', 'Choose a project, then one of its harnesses', '# '),
+  _mode('machines', '@  Machines', 'Choose a machine, then one of its harnesses', '@ '),
   for (final command in commands) command.destination,
 ];
 

@@ -257,6 +257,7 @@ bool storeMatches(DshEntry entry, String query) {
     storeProjectExamples[entry.id]?.prompt,
     storeProjectExamples[entry.id]?.title,
     ...entry.examples.map((example) => example.prompt),
+    ...entry.examples.map((example) => example.caption),
   ].join(' ').toLowerCase();
   return terms.every(text.contains);
 }
