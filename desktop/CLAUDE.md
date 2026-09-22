@@ -250,8 +250,8 @@ its headless debug timings do not establish native display or network latency.
   face leads — headings, labels, buttons, rows, fields, tabs, shortcuts and anything copied are
   mono — and the system sans is kept for prose alone (`body`, `caption`), which is what stops a
   screen reading as a wall of mono. Sizes are fixed: `terminalTextStyle` (the terminal's own size,
-  ⌘+/⌘−) is only for the grid, its composer and find field, and `terminalTextScaleOf` only for their
-  geometry — UI boxes use `appTextScaleOf`. Native tabs get the terminal face at
+  ⌘+/⌘−) is only for the grid, its composer and find field, and the empty tab's welcome page (it
+  stands where a terminal will), and `terminalTextScaleOf` only for their geometry — UI boxes use `appTextScaleOf`. Native tabs get the terminal face at
   `AppType.chromeSize`; native menus keep the system menu font.
 - `ThemeModeStore` and `TerminalFontStore` are `ValueNotifier` singletons (they must resolve above the
   provider scope and before sign-in).

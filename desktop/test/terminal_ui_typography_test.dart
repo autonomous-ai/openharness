@@ -65,7 +65,7 @@ void main() {
   /// terminal's — and never at the terminal's own size unless it is one of the
   /// scale's steps. Returns each text's size so a caller can compare them
   /// across a terminal zoom.
-  Map<String, double> checkText(WidgetTester tester) {
+  Map<String, double> checkText(WidgetTester tester, {int atLeast = 4}) {
     final sizes = <String, double>{};
     void check(InlineSpan span, TextStyle inherited) {
       final style = inherited.merge(span.style);
@@ -91,8 +91,17 @@ void main() {
       }
     }
 
-    for (final widget in tester.widgetList<RichText>(find.byType(RichText))) {
-      check(widget.text, const TextStyle());
+    // The welcome page stands where a terminal will and is set like one, so
+    // it follows the terminal's size instead; see [checkWelcome].
+    final welcome = find.byType(WorkspaceWelcome);
+    for (final element in find.byType(RichText).evaluate()) {
+      if (find
+          .descendant(of: welcome, matching: find.byWidget(element.widget))
+          .evaluate()
+          .isNotEmpty) {
+        continue;
+      }
+      check((element.widget as RichText).text, const TextStyle());
     }
     for (final widget in tester.widgetList<EditableText>(
       find.byType(EditableText),
@@ -103,9 +112,21 @@ void main() {
         terminalFontStore.size,
       }, contains(widget.style.fontSize));
     }
-    expect(sizes.length, greaterThan(3));
+    expect(sizes.length, greaterThanOrEqualTo(atLeast));
     expect(tester.takeException(), isNull);
     return sizes;
+  }
+
+  /// The welcome page is terminal text: the terminal's face at its size.
+  void checkWelcome(WidgetTester tester) {
+    final line = tester.widget<Text>(
+      find.text('Open source software and hardware'),
+    );
+    final style = DefaultTextStyle.of(
+      tester.element(find.text('Open source software and hardware')),
+    ).style.merge(line.style);
+    expect(style.fontSize, terminalFontStore.size);
+    expect(style.fontFamily, terminalFontStore.value.fontFamily);
   }
 
   /// Zooming the terminal leaves every UI text where it was.
@@ -217,7 +238,14 @@ void main() {
 
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
       expect(find.byType(WorkspaceWelcome), findsOneWidget);
-      checkText(tester);
+      // Only the tab chrome is UI text here; the page itself is checked below.
+      checkText(tester, atLeast: 1);
+      checkWelcome(tester);
+      selectFont(22);
+      await tester.pumpAndSettle();
+      checkWelcome(tester);
+      selectFont(18, TerminalFontChoice.monaco);
+      await tester.pumpAndSettle();
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       expect(find.byType(NewHarnessBox), findsOneWidget);
       final box = checkText(tester);
