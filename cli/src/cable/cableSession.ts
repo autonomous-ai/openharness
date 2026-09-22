@@ -338,6 +338,8 @@ export interface CablePort {
 export type PortOpener = (
   onData: (chunk: Buffer) => void,
   onClosed: (why: string) => void,
+  /** A USB port already found to be somebody else's: pass it over and keep looking, WiFi included. */
+  avoid?: string,
 ) => Promise<CablePort | null>
 
 /**
@@ -363,8 +365,8 @@ export function fitText<T extends { text?: string }>(msg: T): T {
 }
 
 /** USB first. If the cable is out, browse `_harness-dial._tcp` — welcome still requires a USB-minted bind. */
-export const openDialPort: PortOpener = async (onData, onClosed) => {
-  const port = await findDialPort()
+export const openDialPort: PortOpener = async (onData, onClosed, avoid) => {
+  const port = await findDialPort(avoid)
   if (port) return SerialLink.open(port.path, onData, onClosed)
   const tcp = await findDialTcp()
   if (!tcp) return null
@@ -516,7 +518,16 @@ export class CableSession {
     }
     // Rule 2. The read never fails on a dead handle, so silence is the only symptom there is.
     if (Date.now() - this.lastRx > SILENCE_MS) {
-      this.log('cable: silent, reopening the port')
+      // Silent from the moment it opened, not a word in our framing: nothing says it is a dial at all, and
+      // going straight back to it is how a quiet second board on USB kept the daemon off WiFi. Passed over
+      // for the same minute as a port that talks but not to us; a dial of ours greets every two seconds.
+      if (this.framesSinceOpen === 0 && !isTcpDialPath(this.link.path)) {
+        this.foreignPort = this.link.path
+        this.foreignRetryAt = Date.now() + 60_000
+        this.log(`cable: ${this.link.path} said nothing in ${SILENCE_MS / 1000}s — passing over it`)
+      } else {
+        this.log('cable: silent, reopening the port')
+      }
       // close() runs onClosed, which is where onDialGone fires — one path for "the dial is not there",
       // whether the cable was pulled or the far end simply stopped answering.
       await this.link.close('silence')
@@ -584,7 +595,12 @@ export class CableSession {
    */
   private async tryOpen(): Promise<void> {
     if (this.opening) return
-    if (this.foreignPort && Date.now() < this.foreignRetryAt) return
+    // A port that turned out to be somebody else's is passed over, not waited on. Waiting held off every
+    // other way in as well: with a second ESP32 board on USB (same USB ids), the daemon rejected it, sat
+    // out the minute, went back to it, and never reached the dial advertising itself on WiFi. A foreign
+    // TCP dial is the one case that still waits, since skipping it leaves nothing else to try.
+    const avoid = this.foreignPort && Date.now() < this.foreignRetryAt ? this.foreignPort : undefined
+    if (avoid && isTcpDialPath(avoid)) return
     if (Date.now() - this.openAt < REOPEN_EVERY_MS) return
     this.opening = true
     this.openAt = Date.now()
@@ -596,6 +612,7 @@ export class CableSession {
       const attempt = this.openPort(
         (chunk) => this.onBytes(chunk),
         (why) => this.onClosed(why),
+        avoid,
       )
       let timer: ReturnType<typeof setTimeout> | undefined
       const expiry = new Promise<never>((_, reject) => {
@@ -623,7 +640,8 @@ export class CableSession {
     if (this.link) await this.link.close('replaced')
     // A port that earned the verdict once is presumed foreign until it proves otherwise, but the evidence
     // is gathered fresh every time: a dial that was replaced behind the same path gets a clean hearing.
-    if (opened.path !== this.foreignPort) this.foreignPort = null
+    // Kept while its window runs, so a WiFi session that drops does not send the next attempt back to it.
+    if (opened.path !== this.foreignPort && Date.now() >= this.foreignRetryAt) this.foreignPort = null
     this.bytesSinceOpen = 0
     this.framesSinceOpen = 0
     this.link = opened

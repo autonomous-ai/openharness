@@ -40,9 +40,10 @@ export interface DialPort {
  * this arms a subtree at the matching node's indentation and takes the first path inside it. A flat scan
  * pairs a vendor id with whatever path happens to come next in the dump, which is a different device.
  */
-export async function findDialPort(): Promise<DialPort | null> {
-  if (process.platform === 'darwin') return findDarwin()
-  if (process.platform === 'linux') return findLinux()
+/** `avoid`: a port already found to be somebody else's, passed over so the search goes on past it. */
+export async function findDialPort(avoid?: string): Promise<DialPort | null> {
+  if (process.platform === 'darwin') return findDarwin(avoid)
+  if (process.platform === 'linux') return findLinux(avoid)
   return null
 }
 
@@ -52,7 +53,7 @@ function depthOf(line: string): number {
   return m ? m[0].length : 0
 }
 
-async function findDarwin(): Promise<DialPort | null> {
+async function findDarwin(avoid?: string): Promise<DialPort | null> {
   let dump: string
   try {
     const { stdout } = await runFile('ioreg', ['-p', 'IOService', '-w0', '-l'], { maxBuffer: 64 * 1024 * 1024 })
@@ -92,13 +93,13 @@ async function findDarwin(): Promise<DialPort | null> {
     if (sawVendor && sawProduct) hostMatch = true
     if (hostMatch && line.includes('"IOCalloutDevice"')) {
       const path = line.split('=')[1]?.trim().replace(/^"|"$/g, '')
-      if (path) return { path, vendorId: DIAL_VENDOR_ID, productId: DIAL_PRODUCT_ID }
+      if (path && path !== avoid) return { path, vendorId: DIAL_VENDOR_ID, productId: DIAL_PRODUCT_ID }
     }
   }
   return null
 }
 
-function findLinux(): DialPort | null {
+function findLinux(avoid?: string): DialPort | null {
   // /sys is the id, /dev/ttyACM* is the path, and the symlink between them is the only honest pairing.
   const base = '/sys/class/tty'
   if (!existsSync(base)) return null
@@ -110,7 +111,7 @@ function findLinux(): DialPort | null {
       try {
         const vid = parseInt(readFileSync(`${dir}/idVendor`, 'utf8').trim(), 16)
         const pid = parseInt(readFileSync(`${dir}/idProduct`, 'utf8').trim(), 16)
-        if (vid === DIAL_VENDOR_ID && pid === DIAL_PRODUCT_ID) {
+        if (vid === DIAL_VENDOR_ID && pid === DIAL_PRODUCT_ID && `/dev/${name}` !== avoid) {
           return { path: `/dev/${name}`, vendorId: vid, productId: pid }
         }
         break

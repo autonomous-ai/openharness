@@ -307,6 +307,62 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it('passes over a foreign USB port and keeps looking, instead of waiting on it', async () => {
+    // Found on a desk with a second ESP32 board plugged in: it shares the dial's USB ids, the daemon
+    // rejected it, then sat out a minute and went straight back to it, and never reached the dial that was
+    // advertising itself on WiFi the whole time.
+    setDialBindDirForTest(mkdtempSync(join(tmpdir(), 'bind-')))
+    const asked: Array<string | undefined> = []
+    let foreign!: LoopbackPort
+    const session = new CableSession(makeHost(), tmpLog(), async (onData, onClosed, avoid) => {
+      asked.push(avoid)
+      if (asked.length === 1) {
+        foreign = new LoopbackPort(onData, onClosed, '/dev/cu.other-board')
+        return foreign
+      }
+      return null   // nothing else here; what matters is that it looked, and past which port
+    })
+    session.start()
+    await vi.waitFor(() => expect(foreign).toBeDefined())
+    await settle()   // the session takes the port before it can hear it
+    foreign.say({ t: 'hello', product: 'grid', fw: '0.1.2', proto: 1, mac: 'aa:bb' })
+    await vi.waitFor(() => expect(foreign.closedWith).toBe('another product'))
+
+    // The next attempt comes on the usual reopen cadence, not a minute later, and skips that port.
+    await vi.waitFor(() => expect(asked.length).toBeGreaterThan(1), { timeout: 5000 })
+    expect(asked[1]).toBe('/dev/cu.other-board')
+    await session.stop()
+  })
+
+  it('passes over a USB port that never says anything, too', async () => {
+    // The same board, gone quiet: no bytes at all, so it never earns the "not ours" verdict above and was
+    // reopened after every silence, forever.
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    try {
+      setDialBindDirForTest(mkdtempSync(join(tmpdir(), 'bind-')))
+      const asked: Array<string | undefined> = []
+      let quiet!: LoopbackPort
+      const session = new CableSession(makeHost(), tmpLog(), async (onData, onClosed, avoid) => {
+        asked.push(avoid)
+        if (asked.length === 1) {
+          quiet = new LoopbackPort(onData, onClosed, '/dev/cu.quiet-board')
+          return quiet
+        }
+        return null
+      })
+      session.start()
+      await vi.waitFor(() => expect(quiet).toBeDefined())
+      await settle()
+      for (let s = 0; s < 25 && !quiet.closedWith; s++) { vi.advanceTimersByTime(1_000); await settle() }
+      expect(quiet.closedWith).toBe('silence')
+      for (let s = 0; s < 5 && asked.length < 2; s++) { vi.advanceTimersByTime(1_000); await settle() }
+      expect(asked[1]).toBe('/dev/cu.quiet-board')
+      await session.stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('refuses a greeting that names no product at all', async () => {
     // Absence has to mean no. Reading it as "probably ours" puts the hole straight back: the firmware
     // that predates this field is exactly the firmware the sibling product can still capture.
