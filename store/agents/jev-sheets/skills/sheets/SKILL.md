@@ -72,9 +72,11 @@ rows, questions, probabilities and per-call provider/model in `trial.json`; `col
 the tested header. Keep human preferences separate from truth labels. This deliberate sample
 cannot estimate whole-sheet accuracy, and greater confidence does not establish correctness.
 `mock` answers are only a practice flow. Failed or cancelled trials retain their status and are
-not complete comparisons. After the person chooses a wording, add it to the original
-`sheet.json`; the pane's **Try on whole sheet** is a temporary extra column, like other pane-added
-columns. Do not replace their source file with the packet's `sheet.json`: that file contains only
+not complete comparisons. After the person chooses a wording, **Use on whole sheet** saves a
+separate question in the original
+`sheet.json`. Read that file before editing so you retain the chosen wording and its `questionTrial`
+identifier. Other pane-added columns remain temporary. Do not replace their source file with the
+packet's `sheet.json`: that file contains only
 the frozen sample and belongs in a separate workspace if they want to rerun it.
 
 Keep their data in the workspace. Quote only what the report needs.

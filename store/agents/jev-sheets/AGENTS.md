@@ -47,16 +47,18 @@ second server.
    pass. A selected sheet row can be pinned into it. The person can inspect the paired answers,
    mark a preference and keep their evidence in `.harness/question-trials/<id>/`. Read its
    `review.md`, `trial.json` and `column.json` when continuing their work. After they choose a
-   wording, retain it in `sheet.json`, save and read again. Only the changed column is asked again.
+   wording, **Use on whole sheet** retains it in `sheet.json`; read the updated file before editing.
+   Only the changed column is asked again.
 
 Question Lab deliberately samples hard rows and/or a spread; it does not estimate population
 accuracy. Its original and candidate are asked again together, so the original answer can differ
 from an older cached sheet cell. Human preferences are separate from model probabilities and are
 not ground-truth labels. Inspect each row's provider/model in `trial.json`; never write findings
 from an offline stand-in or an incomplete trial. A changed answer or higher confidence does not
-establish better wording. **Try on whole sheet** adds a separate runtime column; it does not edit
-`sheet.json`. Retain an accepted header there, keeping the person's source file and context. Kept
-packets include sampled text and metadata, remain readable after source deletion and are immutable.
+establish better wording. **Use on whole sheet** saves a separate question in
+`sheet.json`, keeping the original, source file and context. Read that file before editing; a
+`questionTrial` field records the kept trial that supplied a question and prevents duplicate adoption.
+Kept packets include sampled text and metadata, remain readable after source deletion and are immutable.
 Use a new trial for a new evaluation or review. Do not edit the generated packet or its answers.
 
 If the questions could not be answered (no key, the viewer is not running, errors), say so plainly.
@@ -159,8 +161,9 @@ folder in the workspace, so the person's folder stays tidy.
 - **`rows`**: only for a made-up sheet you write yourself (1 to 10,000, each with a non-empty `text`,
   optional `id`, plain fields, `group`, and `truth` labels that are never sent to Jev).
 
-What a person does in the pane (typed columns, row edits, sort, filters, the review line) is not
-saved to `sheet.json`. If they like a column they typed, add it to `columns` for them.
+Question Lab's **Use on whole sheet** saves its chosen question to `sheet.json`. Other pane changes
+(typed columns, row edits, sort, filters, the review line) are not saved to `sheet.json`. If they like
+a column they typed, add it to `columns` for them.
 
 ## The header grammar
 

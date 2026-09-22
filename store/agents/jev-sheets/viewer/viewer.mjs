@@ -17,6 +17,7 @@ import { writeFileSync, renameSync, readFileSync, existsSync, rmSync } from 'nod
 import { extname } from 'node:path'
 import { questionForColumn } from './questions.mjs'
 import { createQuestionLab, trialHash } from './question-lab.mjs'
+import { keepTrialColumn } from './kept-column.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const MARKER = 'sheet.json'
@@ -34,7 +35,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
   // Every `let` lives here, above the first call that could touch it.
   let server = null, watcher = null
   let sourceWatcher = null, sourceFile = null, sourceInfo = null, sourceError = null, sourceTimer = null // the person's own file, if sheet.json names one
-  let sheet = normalizeSheet({ rows: [] }), configError = null, jevError = null
+  let sheet = normalizeSheet({ rows: [] }), configError = null, jevError = null, lastGoodConfig = null
   let rows = [], rowById = new Map(), columns = []
   let cells = new Map()      // row id -> Map(column id -> cell)
   let cache = new Map()      // column key -> Map(row state -> answer)
@@ -204,7 +205,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
       concurrency: sheet.concurrency, limits: LIMITS,
       questionLabToken: lab.token,
       suggestions: sheet.suggestions.length ? sheet.suggestions : FALLBACK_SUGGESTIONS,
-      columns: columns.map((c) => ({ id: c.id, header: c.header, name: c.name, type: c.type, options: c.options, descriptions: c.descriptions, levels: c.levels, bare: !!c.bare, source: c.source, kind: describeColumn(c) })),
+      columns: columns.map((c) => ({ id: c.id, header: c.header, name: c.name, type: c.type, options: c.options, descriptions: c.descriptions, levels: c.levels, bare: !!c.bare, source: c.source, questionTrial: c.questionTrial, kind: describeColumn(c) })),
       rows: rows.map((r, i) => ({ id: r.id, n: i + 1, text: r.text, meta: r.meta, group: r.group, edited: !!r.edited, labelled: !!r.truth })),
       cells: cellsOut,
       ...lightView(),
@@ -438,6 +439,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     if (!next.rows.length && rows.length && !fresh) { configError = `${MARKER}: ${problems || 'needs at least one row with text'}. Showing the last good sheet`; pushView(); verdictSoon(); return }
     configError = problems ? `${MARKER}: ${problems}` : null
     sheet = next
+    lastGoodConfig = raw
     loadedAt = new Date().toISOString()
     epoch++
     rows = next.rows.map((r) => ({ ...r, edited: false, retryAt: 0 }))
@@ -505,7 +507,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     burst = { active: false, startedAt: 0, cells: 0, rate: 0, ms: 0 }
     patches = []
     ghost = { ...ghost, phase: 'idle', header: '', pausedUntil: 0, nextAt: Date.now() + 5000, cursor: 0 }
-    applySheet(watcher.get(), true)
+    applySheet(lastGoodConfig ?? watcher.get(), true)
     if (watcher.error()) { configError = `${watcher.error()}. Showing the last good sheet`; pushView() } // still broken on disk
   }
 
@@ -580,7 +582,6 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
 
   // Question Lab owns only frozen trials; adding a tested header uses the existing sheet/cache.
   let labSnapshotRev = -1, labData = null
-  const labApplied = new Map()
   function labSnapshot(withConfidence = false) {
     if (labSnapshotRev !== rev) {
       const frozenRows = rows.map((r, i) => ({ id: r.id, n: i + 1, text: r.text, meta: { ...r.meta } }))
@@ -596,15 +597,8 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
   const lab = createQuestionLab({ workspace, snapshot: labSnapshot,
     notify: (data) => server?.broadcast(data, 'trial'),
     apply: (trial) => {
-      const prior = labApplied.get(trial.id)
-      if (prior && columns.includes(prior.column)) return { ...prior.result, alreadyApplied: true }
-      if (columns.length >= LIMITS.maxColumns) return { ok: false, error: 'This sheet has 12 columns. Remove one before trying another.' }
-      // The original stays visible, including when both versions have the same name.
-      const parsed = parseHeader(trial.candidate.header)
-      let id = parsed.column.id, suffix = 2
-      while (colById(id)) id = `${parsed.column.id.slice(0, 24)}_v${suffix++}`
-      const col = { ...parsed.column, id, source: 'pane', addedAt: Date.now() }
-      columns.push(col)
+      const saved = keepTrialColumn(workspace, trial, columns)
+      const col = { ...parseHeader(trial.candidate.header).column, id: saved.id }
       // Reuse only answers from this exact question/data and the currently connected route/model.
       const route = liveRoute() || 'mock', model = process.env.JEV_MODEL || 'jev-latest'
       let reused = 0
@@ -613,10 +607,9 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
         cacheFor(col).set(JSON.stringify(rowState(row)), { answer: row.candidate.answer, latencyMs: row.provenance.latencyMs, tokens: 0 })
         reused++
       }
-      const result = { id, rows: rows.length, reused, persisted: false }
-      labApplied.set(trial.id, { column: col, result })
-      touch(); refill(); changed()
-      return result
+      touch()
+      applySheet(saved.raw, false)
+      return { id: saved.id, rows: rows.length, reused, persisted: true, alreadyApplied: saved.alreadyApplied }
     }
   })
 

@@ -574,10 +574,10 @@ test('real sheet integration caches candidate results, keeps the original, expor
       rows: data.rows.map((r) => ({ id: r.id, text: r.text, ...r.meta }))
     })
   )
-  const viewer = await startSheetsViewer({ workspace: ws, autostart: false })
+  let viewer = await startSheetsViewer({ workspace: ws, autostart: false })
   try {
     const state = async () => (await fetch(viewer.url + '/state')).json()
-    const token = (await state()).questionLabToken
+    let token = (await state()).questionLabToken
     const ctl = async (cmd, body = {}) =>
       (
         await fetch(viewer.url + '/control', {
@@ -615,8 +615,8 @@ test('real sheet integration caches candidate results, keeps the original, expor
     )
     assert.equal(
       JSON.parse(readFileSync(join(ws, 'sheet.json'))).columns.length,
-      1,
-      'try-on-sheet follows existing pane-only semantics'
+      2,
+      'the chosen question is saved alongside the original'
     )
     assert.equal(
       (await fetch(viewer.url + `/download/question-trial-${t.id}.zip`)).status,
@@ -626,6 +626,15 @@ test('real sheet integration caches candidate results, keeps the original, expor
       await (await fetch(viewer.url + '/download/answers.csv')).text(),
       /Urgent.*Urgent/s
     )
+    assert.equal(applied.applied.persisted, true)
+    await ctl('reset')
+    assert.equal((await state()).columns.length, 2, 'an immediate reset retains the question')
+    await viewer.close()
+    viewer = await startSheetsViewer({ workspace: ws, autostart: false })
+    token = (await state()).questionLabToken
+    assert.equal((await state()).columns.length, 2, 'the question survives a process restart')
+    assert.equal((await ctl('labApply', { id: t.id })).applied.alreadyApplied, true)
+    assert.equal(JSON.parse(readFileSync(join(ws, 'sheet.json'))).columns.length, 2)
     await ctl('editRow', { id: 'r12', text: 'Different message' })
     assert.equal((await ctl('labApply', { id: t.id })).ok, false)
     assert.equal(

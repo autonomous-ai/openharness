@@ -80,11 +80,15 @@ frozen rows, exact wire questions, raw answers, per-call provider/model/usage, y
 The packet includes your sampled data; keep it where you would keep the original file. No API
 keys are included. Reopen it from **Kept & open trials**, even after the source file is gone.
 
-**Try on whole sheet** adds the candidate as a separate column, preserving the original and reusing
-the trial's answers when the connected route and requested model still match. It refuses a trial
-whose rows, context or original question changed. This follows the sheet's existing pane-only
-column behavior: ask the agent to retain your chosen header in `sheet.json` across viewer restarts.
-Keeping a trial itself is durable. Open trials last only for the current viewer process.
+**Use on whole sheet** saves the candidate as a separate question in `sheet.json`, preserving the
+original question and your data. It reuses trial answers when the connected route and requested
+model still match, then fills the remaining rows. The chosen wording survives reset and viewer
+restart; repeated clicks or reopening the kept trial do not add duplicate questions. New viewer
+sessions ask the saved questions again rather than treating old answers as current.
+
+If the rows, context or original question changed, start a new trial. A broken or conflicting
+project edit leaves the current sheet and kept trial available for retry. Open trials last only
+for the current viewer process; kept trials remain in the project.
 
 One trial runs at a time, at most four row requests in flight. Cancellation stops further rows;
 requests already in flight can finish, including the client's normal transient-error retries.

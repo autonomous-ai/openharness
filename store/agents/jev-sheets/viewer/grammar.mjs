@@ -129,7 +129,7 @@ export function normalizeSheet(raw) {
     if (!parsed.ok) { errors.push(`column ${i + 1}: ${parsed.error}`); return }
     if (colIds.has(parsed.column.id)) { errors.push(`column ${i + 1}: id "${parsed.column.id}" is used twice`); return }
     colIds.add(parsed.column.id)
-    columns.push(parsed.column)
+    columns.push({ ...parsed.column, ...(typeof c?.questionTrial === 'string' && /^[0-9a-f-]{36}$/i.test(c.questionTrial) ? { questionTrial: c.questionTrial } : {}) })
   })
 
   let reviewBelow = Number(src.reviewBelow ?? 0.65)
