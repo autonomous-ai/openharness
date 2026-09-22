@@ -1,4 +1,4 @@
-// Five tiles and up: the grid.
+// Six tiles and up: the automatic grid.
 //
 // The shape is not ceil(sqrt(n)) — it is "as many columns as the WIDTH can
 // carry at 40 usable terminal columns", because a tile narrower than that shows
@@ -79,8 +79,7 @@ void main() {
   });
 
   testWidgets('four tiles keep the shape they were tuned to', (tester) async {
-    // 2×2, not a lattice. Three tiles are two over one with the bottom SPANNING,
-    // and no uniform grid can say that — so the hand-tuned shapes stay.
+    // Four panes keep equal quadrants as the defaults on either side change.
     await _pump(tester, 4, const Size(1750, 900));
     expect(tester.takeException(), isNull);
     expect(hasScrollableContent(tester), isFalse);

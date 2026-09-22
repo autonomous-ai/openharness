@@ -34,7 +34,11 @@ export async function resumeStoppedAgent(deps: ResumeStoppedDeps): Promise<Resta
       if (!deps.current() || deps.live() !== existing) return resumeChanged
       if (runtime.state === 'unknown') return resumeUnconfirmed
       if (runtime.state === 'alive') {
-        if (existing.resumeOnly && existing.launch?.state === 'failed') return resumeUnconfirmed
+        if (existing.resumeOnly && existing.launch?.state === 'failed') {
+          // Still running and never disproved — only never confirmed (its startup hook was dropped).
+          // Selecting it again asks for confirmation again rather than repeating the old verdict.
+          return existing.launch.error === 'RESUME_UNCONFIRMED' ? deps.waitForReady(existing) : resumeUnconfirmed
+        }
         return { ok: true, session: existing, resumed: true }
       }
       saved = { ...existing }

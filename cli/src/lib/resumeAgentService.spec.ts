@@ -208,6 +208,22 @@ describe('existing runtime and readiness verification', () => {
   it('rechecks a pending allocation after reconnect without spawning again', async () => {
     live(); expect(await start()).toMatchObject({ ok: true }); expect(create).not.toHaveBeenCalled()
   })
+  it('asks a live unconfirmed resume for confirmation again, withdrawing the old verdict first', async () => {
+    live({ processIdentity: identity, launch: { state: 'failed', error: 'RESUME_UNCONFIRMED', detail: 'fixture' } })
+    vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
+    // The registry hands out its live row, so read the state as each announcement is made.
+    const announced: string[] = []; vi.mocked(deps.announceSession).mockImplementation(row => { announced.push(row.launch?.state ?? '') })
+    expect(await start()).toMatchObject({ ok: true, resumed: true, session: { launch: { state: 'ready' } } })
+    expect(create).not.toHaveBeenCalled()
+    expect(announced).toEqual(['starting', 'ready'])
+  })
+  it('does not re-verify a live process that reported another conversation', async () => {
+    live({ processIdentity: identity, launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'fixture' } })
+    vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
+    expect(await start()).toMatchObject({ error: 'RESUME_UNCONFIRMED' })
+    expect(registry.byAgent(saved.agentId)?.launch).toMatchObject({ state: 'failed', error: 'RESUME_SESSION_MISMATCH' })
+    expect(deps.announceSession).not.toHaveBeenCalled()
+  })
   it('waits for a real readiness observation before replying', async () => {
     vi.useFakeTimers(); vi.mocked(resolvePaneEngineProcess).mockResolvedValueOnce(null)
     const result = start(); await vi.advanceTimersByTimeAsync(500)
