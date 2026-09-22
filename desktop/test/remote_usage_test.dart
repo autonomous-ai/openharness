@@ -43,8 +43,10 @@ void main() {
       expect(claude.account, 'k1');
       // Claude's `seven_day` is the Weekly window here exactly as it is for
       // this computer's own reading — one mapper, two sources.
-      expect(claude.railWindow?.label, kWeeklyWindowLabel);
-      expect(claude.railWindow?.usedPercent, 42);
+      final weekly = claude.windows.singleWhere(
+        (window) => window.label == kWeeklyWindowLabel,
+      );
+      expect(weekly.usedPercent, 42);
     });
 
     test('a vendor refusal is read the way this computer reads one', () {

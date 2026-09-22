@@ -1,16 +1,12 @@
 import 'dart:io';
 
 import 'package:dio/dio.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/widgets/engine_identity.dart';
-import 'package:harness/widgets/status_rail/usage_panel.dart';
 import 'package:harness/usage/claude_usage_source.dart';
 import 'package:harness/usage/codex_usage_source.dart';
 import 'package:harness/usage/usage_credentials.dart';
 import 'package:harness/usage/usage_controller.dart';
 import 'package:harness/usage/usage_source.dart';
-import 'package:harness/usage/usage_accounts.dart';
 import 'package:harness/usage/usage_window.dart';
 
 /// A Dio that answers every request with one canned payload, so a source can be
@@ -144,42 +140,7 @@ void main() {
     expect(reading.tightest?.label, 'Weekly');
   });
 
-  test('the rail prints the weekly window, not the tightest one', () {
-    // Two different questions. `tightest` is the limit that will stop the work
-    // first; the rail wants the one worth a GLANCE, and the five-hour window
-    // refills all day — it is back to nothing by the time anybody reads it.
-    const reading = ProviderUsage(
-      provider: UsageProvider.claude,
-      status: UsageStatus.ok,
-      windows: [
-        UsageWindow(label: 'Session', usedPercent: 88),
-        UsageWindow(label: kWeeklyWindowLabel, usedPercent: 42),
-      ],
-    );
-    expect(reading.tightest?.label, 'Session');
-    expect(reading.railWindow?.label, kWeeklyWindowLabel);
-  });
 
-  test('a provider with no weekly window still prints one figure', () {
-    // One figure is the rule, and a blank strip would be a worse answer than
-    // the wrong window.
-    const reading = ProviderUsage(
-      provider: UsageProvider.codex,
-      status: UsageStatus.ok,
-      windows: [
-        UsageWindow(label: '5h', usedPercent: 30),
-        UsageWindow(label: '30d', usedPercent: 61),
-      ],
-    );
-    expect(reading.railWindow?.label, '30d');
-    expect(
-      const ProviderUsage(
-        provider: UsageProvider.codex,
-        status: UsageStatus.ok,
-      ).railWindow,
-      isNull,
-    );
-  });
 
   group('Claude source', () {
     test('maps the three windows the CLI itself shows', () async {
@@ -324,105 +285,6 @@ void main() {
         credentials: _creds(),
       ).read();
       expect(reading.status, UsageStatus.signedOut);
-    });
-  });
-
-  group('the bar', () {
-    /// Pumps one window's row and hands back the fill as it was actually
-    /// LAID OUT — [WidgetTester.getSize], not the `width` property of the
-    /// widget that asked for it.
-    ///
-    /// The difference is the whole point. An earlier version of these tests
-    /// read the properties, and passed against a bar whose fill was laid out
-    /// zero pixels tall and therefore never appeared on screen: the tree said
-    /// coral, the window drew nothing. A property is a request; only the size
-    /// is an outcome.
-    Future<({Size size, Color color})> fill(
-      WidgetTester tester,
-      double percent,
-    ) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Center(
-              child: SizedBox(
-                // The width the rail actually opens this panel at.
-                width: 248,
-                child: UsagePanelContent(
-                  accounts: [
-                    UsageAccount(
-                      isLocal: true,
-                      reading: ProviderUsage(
-                        provider: UsageProvider.claude,
-                        status: UsageStatus.ok,
-                        windows: [
-                          UsageWindow(label: 'Session', usedPercent: percent),
-                        ],
-                        fetchedAt: DateTime.now(),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-      final finder = find.byKey(const Key('usage-bar-fill'));
-      final painted = tester.widget<ColoredBox>(
-        find.descendant(of: finder, matching: find.byType(ColoredBox)),
-      );
-      return (size: tester.getSize(finder), color: painted.color);
-    }
-
-    testWidgets('a single-digit window still shows a band of colour', (
-      tester,
-    ) async {
-      // The bug this guards: at the percentages these windows sit at for most
-      // of their life, a strictly proportional fill is a couple of pixels and
-      // reads as nothing at all.
-      final small = await fill(tester, 2);
-      expect(small.size.width, greaterThanOrEqualTo(4));
-      // And it has to be tall enough to see, which is the half that silently
-      // went missing: a fill laid out flat is present, correct and invisible.
-      expect(small.size.height, 6);
-    });
-
-    testWidgets('an untouched window draws no fill at all', (tester) async {
-      // Zero is the one case that must NOT be over-represented: a bar claiming
-      // usage nobody spent is worse than a bar that is hard to see.
-      expect((await fill(tester, 0)).size.width, 0);
-    });
-
-    testWidgets('the fill wears the account colour, and never a grey', (
-      tester,
-    ) async {
-      final claude = await fill(tester, 30);
-      expect(claude.color, engineIdentity('claude').color);
-      // The mark at the top of the panel is drawn from the same source, so the
-      // two cannot drift into two colours for one account.
-      expect(
-        claude.color.r == claude.color.g && claude.color.g == claude.color.b,
-        isFalse,
-      );
-    });
-
-    testWidgets('a nearly spent window stops wearing the account colour', (
-      tester,
-    ) async {
-      final spent = await fill(tester, 92);
-      expect(spent.color, isNot(engineIdentity('claude').color));
-    });
-
-    testWidgets('a full window fills the bar exactly, not past it', (
-      tester,
-    ) async {
-      // The bar spans the panel, so a spent window's fill is the panel's own
-      // width — and the clamp that widens small fills must not widen this one
-      // past the track it sits in.
-      final full = await fill(tester, 100);
-      expect(full.size.width, 248);
-      expect(full.size.height, 6);
     });
   });
 

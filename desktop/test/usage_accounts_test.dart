@@ -61,7 +61,7 @@ void main() {
     final claude = _claude(accounts);
     expect(claude.map((a) => a.isLocal), [true, false]);
     expect(claude.last.machines, ['box']);
-    expect(claude.last.reading.railWindow?.usedPercent, 71);
+    expect(claude.last.reading.windows.single.usedPercent, 71);
   });
 
   test('two remote machines on one other account are one figure', () {

@@ -262,32 +262,18 @@ its headless debug timings do not establish native display or network latency.
   strings behind `LocalKeyValueStore`): connection config, skipped update version, theme, font, pane
   layout. `~/.harness/computer-id` is the machine identity shared with the CLI.
 - The window is frameless on macOS via `window_manager` (`lib/core/desktop_window.dart`, same size and
-  `TitleBarStyle.hidden` as Grid). The traffic lights float over the rail's head, which leaves
-  `railTopInset` above the wordmark and is a `DragToMoveArea`; so are the pane headers. A screen that
+  `TitleBarStyle.hidden` as Grid). On macOS the tabs are native, in the title bar beside the traffic
+  lights (`SwarmTitlebar.swift`); the pane headers are a `DragToMoveArea`. A screen that
   fills the window goes through `FullWindowScreen` (`lib/widgets/window_chrome.dart`) for its drag
   strip, and a full-width band at the top edge pads by `trafficLightClearance`.
 - `macos/Runner/MainFlutterWindow.swift` installs native menu items and calls into Dart over the
   `harness/app_menu` MethodChannel (`checkForUpdates`, `flashFirmware`, `showShortcuts`, terminal font
   size). Keep the menu in Swift; only the handler lives in `RootShell`.
-- **The status rail is where the app polls** (`lib/widgets/status_rail/`): a 26px full-bleed strip
-  along the window's bottom edge carrying what the agent accounts have spent, right-aligned against
-  the key hints (`key_hints.dart`). The hover/pin surface is `rail_figure.dart` + `rail_panel.dart`.
-  ⚠️ Nothing mounts it since `HomeScreen` was removed: the workspace is `SwarmScreen`, and this
-  strip, the machine rail and the account footer are reached only from their own tests.
-- **Agent-account usage is what the rail reads** (`lib/usage/`, `widgets/status_rail/usage_readout.dart`
-  + `usage_panel.dart`): what the Claude and Codex accounts on this machine — and on the remote
-  machines that answer `usage_read` — have spent. **The strip prints ONE figure per account — the WEEKLY
-  window** (`ProviderUsage.railWindow`, deliberately not `tightest`): Claude answers with three
-  windows and Codex with one, so printing them all made one account three figures wide and the
-  other one — two readouts that read as different KINDS of thing rather than the same thing about
-  two accounts. Weekly rather than the tightest, because the rail wants the figure worth a GLANCE
-  and the five-hour window refills all day: it is back to nothing by the time anybody reads it.
-  `tightest` stays for the question it actually answers, which limit stops the work first. A
-  provider reporting no weekly window falls back to it — one figure is the rule, and a blank strip
-  is a worse answer than the wrong window. `kWeeklyWindowLabel` is written down once because the
-  rail MATCHES on it and the two sources spell it separately; the panel behind the figure still
-  shows every window. The block sits at the RIGHT end of the strip, beside the key hints: furniture
-  you only read belongs at the edge you are not reaching for.
+- **Agent-account usage is what the native Models menu reads** (`lib/usage/`,
+  `usage/models_menu_controller.dart`, `SwarmSubscriptionView` in `SwarmTitlebar.swift`): what the
+  Claude and Codex accounts on this machine — and on the remote machines that answer `usage_read` —
+  have spent. Each account shows its `tightest` window, the limit that stops the work first. Opening
+  the menu reads the cached snapshot and refreshes at most once a minute; nothing polls on startup.
   **Remote machines' accounts arrive through `usage_read`** (`AppNotifier.readRemoteUsage`,
   `usage/remote_usage.dart`, `usage/usage_accounts.dart`; CLI side `cli/src/lib/accountUsage.ts`).
   A remote machine may be signed in to a DIFFERENT subscription, and the only honest way to read
@@ -327,12 +313,9 @@ its headless debug timings do not establish native display or network latency.
   That is also what keeps `flutter test` honest: `kUnderTest` (`core/test_run.dart`, shared with
   `AnalyticsConfig`) stops the poll auto-starting, since a `Timer.periodic` is a `pumpAndSettle` that
   never settles and these sources would otherwise shell out to `security` and open real sockets.
-  The rail figure and `UsageBar` share one pair of thresholds through `usagePressureOf`
-  (`usage/usage_pressure.dart`) — amber from 80%, red from 90% — so a window cannot be amber in the
-  strip and plain in the panel that expands it.
 - **The token ledger is the OTHER usage feature, and the two must not be merged** (`lib/usage/ledger/`,
-  Settings ▸ Usage in `settings/sections/usage_section.dart` + `usage_panels.dart`). The rail's readout
-  above asks the vendors *how much of your rate limit is left* — a percentage, scoped to an **account**,
+  Settings ▸ Usage in `settings/sections/usage_section.dart` + `usage_panels.dart`). The Models menu's
+  readout above asks the vendors *how much of your rate limit is left* — a percentage, scoped to an **account**,
   true whichever machine burned it. This counts **tokens**, scoped to **this machine**, with a history:
   it reads the logs the agent CLIs already wrote to this disk and calls nobody. Ported from Orca
   (`src/main/{claude,codex,opencode}-usage/`); keep the pricing tables in step with its
@@ -354,7 +337,7 @@ its headless debug timings do not establish native display or network latency.
   Claude and Codex are priced from `model_pricing.dart`, and a model that matches no row leaves
   `hasUnpricedModel` set so the panel calls the figure a floor. A Grid session records a real `0.0`
   (Grid inference is free, grid ADR 0039 D-g) and that measurement must not render like an unpriced
-  model. Same rule as the rail: `LedgerStatus.unavailable` is kept apart from `failed`, because a
+  model. Same rule as account usage: `LedgerStatus.unavailable` is kept apart from `failed`, because a
   machine with no OpenCode is never fixed by retrying.
   **Off is the resting state**, per provider, persisted through `LocalKeyValueStore`: these transcripts
   hold every prompt, path and branch a session touched and this feature wants only the counts, so
@@ -379,7 +362,7 @@ its headless debug timings do not establish native display or network latency.
   per-machine source would arrive if that changes.
   `sqlite3` is a **Dart-only FFI** dependency (never `sqlite3_flutter_libs`): it dlopens the system
   library, so it registers no native plugin and leaves the macOS SPM package list alone. `kUnderTest`
-  keeps `UsageSection` from auto-loading, for the same reason the rail's poller does not start there.
+  keeps `UsageSection` from auto-loading, for the same reason `UsageController`'s poll does not start there.
   ⚠️ **The snapshot goes through `SnapshotStore` (`core/snapshot_store.dart`), and a test MUST pass
   `MemorySnapshotStore`** — this is not tidiness. A real `File.writeAsString` never completes inside
   `testWidgets`' fake-async zone, so a store awaiting one hangs the whole run until the shell is
@@ -528,14 +511,12 @@ its headless debug timings do not establish native display or network latency.
   `AppSurface.recess` and `recessHover`, never a shimmer sweep, frozen at the **peak** under Reduce
   Motion because a block held at 40% reads as disabled. A spinner is still right where the shape is
   genuinely unknown (boot, a button mid-action); a list, table, card, row or figure gets a skeleton.
-  Three rules the call sites keep, all guarded by `test/skeleton_test.dart` and
-  `test/skeleton_sites_test.dart`: a placeholder is measured from the real content (`SkeletonText`
+  Three rules the call sites keep, guarded by `test/skeleton_test.dart`: a placeholder is measured from the real content (`SkeletonText`
   lays out the style with a `TextPainter` rather than trusting arithmetic — see `AppMenuRowMetrics`
   for why), it wears the real row's surface and padding, and it is never **taller** than the answer
   usually is, since a skeleton that shrinks jumps the page upward. **"Loading" and "answered with
   nothing" must not render the same** — hence `AppNotifier.machinesLoading`, which is set on the
-  first fetch only so a refresh keeps the rows already on screen. Same reason the status rail blanks
-  its figures only before the first reading.
+  first fetch only so a refresh keeps the rows already on screen.
 - `lib/shortcuts/app_shortcuts.dart` is the one list that feeds both the live bindings and the ⌘/
   sheet. `shortcutRows()` there is that list as the UI prints it — one row per action, so the two
   activators on "focus the next pane" (`⌘]`, `⌃⇥`) fold into one line, and `⌘1`–`⌘9` join as one.
