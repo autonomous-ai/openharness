@@ -4,13 +4,12 @@ import 'package:harness_mobile/core/last_opened_agent.dart' show AgentRef;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
-import 'agent_context_line.dart';
 import 'agent_index.dart';
+import 'agent_tile.dart';
 import 'desk_groups.dart';
 import 'desk_tab_strip.dart';
 import 'phone_card.dart';
 import 'phone_navigation.dart';
-import 'terminal_header.dart' show BadgedEngineMark;
 
 /// The account's tabs, and the agents inside the one being read, as a panel up
 /// from the bottom of the terminal.
@@ -19,15 +18,17 @@ import 'terminal_header.dart' show BadgedEngineMark;
 /// ────────────────────────────────
 ///   Desktop   Docker   Other
 ///   ───────
-///  ┌────────┐┌────────┐┌───────
-///  │ ◆●     ││ ◆●     ││ ◆●
-///  │ api-3  ││ web    ││ cli
-///  │ harness││ site   ││ tools
-///  └────────┘└────────┘└───────
+///  ┌──────────────────────────┐
+///  │ ◆  api-3      Live     › │
+///  │    harness · Mac mini    │
+///  ├──────────────────────────┤
+///  │ ◆  web        Idle     › │
+///  │    site · Mac mini       │
+///  └──────────────────────────┘
 /// ```
 ///
-/// ⚠️ **Two moves, not one.** A tab name changes which agents the row below
-/// offers and nothing else; opening happens on a card. That is what lets
+/// ⚠️ **Two moves, not one.** A tab name changes which agents the list below
+/// offers and nothing else; opening happens on a row. That is what lets
 /// somebody look into another tab — see what is running there — without losing
 /// the terminal they are in, which a sheet of tab names could not do.
 ///
@@ -36,8 +37,14 @@ import 'terminal_header.dart' show BadgedEngineMark;
 /// a list to reach into, so it comes up from the bottom edge like every other
 /// phone sheet here.
 ///
+/// ⚠️ **The agents scroll DOWN, and they are the Agents tab's own rows.** They
+/// were cards side by side, which put a scroll across the panel at right
+/// angles to the one every other list here has — and made a phone read four
+/// agents through a letterbox. A column reads at a glance, takes long names
+/// whole, and is the row an agent already has everywhere else ([AgentTile]).
+///
 /// [showing] is the agent on screen: it decides which tab the panel opens on
-/// (see [activeDeskGroup]), and its card is the one wearing the rim.
+/// (see [activeDeskGroup]), and its row is the one wearing the rim.
 Future<void> showDeskTabsPopup(
   BuildContext context,
   AppNotifier notifier, {
@@ -50,6 +57,14 @@ Future<void> showDeskTabsPopup(
     useRootNavigator: true,
     showDragHandle: true,
     backgroundColor: AppPalette.panelBg,
+    // A column of rows outgrows Flutter's 9/16 cap on the second tab of any
+    // real desk — and short of the top on purpose, so the terminal underneath
+    // stays recognisable while its own panel is open. Same two lines every
+    // phone sheet here is built with; see [showPhoneSheet].
+    isScrollControlled: true,
+    constraints: BoxConstraints(
+      maxHeight: MediaQuery.sizeOf(context).height * 0.85,
+    ),
     builder: (sheetContext) => _DeskTabsPanel(
       groups: groups,
       initialId: active.id,
@@ -65,7 +80,12 @@ Future<void> showDeskTabsPopup(
   );
 }
 
-/// The panel itself: the tab names, and the cards of whichever tab is picked.
+/// The rows' own side inset: [phoneListPadding]'s 16, not the strip's 20. A
+/// card carries its content 13 further in again, so rows lined up on the names
+/// above them read as indented from them.
+const double _sideInset = 16;
+
+/// The panel itself: the tab names, and the rows of whichever tab is picked.
 class _DeskTabsPanel extends StatefulWidget {
   const _DeskTabsPanel({
     required this.groups,
@@ -110,101 +130,47 @@ class _DeskTabsPanelState extends State<_DeskTabsPanel> {
             selectedId: group.id,
             onPick: (picked) => setState(() => _selectedId = picked.id),
           ),
-          const SizedBox(height: 10),
-          SizedBox(
-            height: _cardHeight,
-            child: group.isEmpty
-                ? const _TabIsEmpty()
-                : ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: DeskTabStrip.sideInset,
-                    ),
-                    itemCount: group.entries.length,
-                    separatorBuilder: (context, index) =>
-                        const SizedBox(width: kPhoneCardGap),
-                    itemBuilder: (context, index) {
-                      final entry = group.entries[index];
-                      return SizedBox(
-                        width: _cardWidth,
-                        child: _AgentCard(
-                          entry: entry,
-                          showing:
-                              entry.machineId == widget.showing.machineId &&
-                              entry.agent.id == widget.showing.agentId,
-                          onTap: () => widget.onOpen(group, entry),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          const SizedBox(height: 14),
-        ],
-      ),
-    );
-  }
-}
-
-/// A card's box. Three short lines of type, and wide enough that two and a bit
-/// of them show at once — the half card at the edge is what says the row
-/// scrolls, without a scrollbar on a phone that draws none.
-const double _cardHeight = 104;
-const double _cardWidth = 168;
-
-/// One agent in the row: its engine and state, its name, and where it runs.
-class _AgentCard extends StatelessWidget {
-  const _AgentCard({
-    required this.entry,
-    required this.showing,
-    required this.onTap,
-  });
-
-  final AgentEntry entry;
-
-  /// The agent whose terminal is already on screen. It keeps its card — it is
-  /// the one you came from, and the row would read as missing an agent without
-  /// it — and wears the accent rim instead.
-  final bool showing;
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return PhoneCard(
-      height: _cardHeight,
-      onTap: onTap,
-      border: showing
-          ? Border.all(color: AppPalette.accentOnSurface, width: 1.5)
-          : null,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          BadgedEngineMark(
-            agent: entry.agent,
-            status: entry.summary,
-            // The card's own fill, so the dot reads as notched into the mark.
-            ring: AppGlass.rowFill,
-            size: 26,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            entry.agent.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: AppPalette.textPrimary,
-              fontSize: 15,
-              fontWeight: FontWeight.w600,
-              height: 1.2,
+          const SizedBox(height: 6),
+          if (group.isEmpty)
+            const _TabIsEmpty()
+          else
+            // Flexible, not Expanded: a tab of two agents makes a panel two
+            // rows tall, and only a long one grows to the cap and scrolls.
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                padding: EdgeInsets.fromLTRB(
+                  _sideInset,
+                  4,
+                  _sideInset,
+                  MediaQuery.paddingOf(context).bottom + 8,
+                ),
+                itemCount: group.entries.length,
+                separatorBuilder: (context, index) =>
+                    const SizedBox(height: kPhoneCardGap),
+                itemBuilder: (context, index) {
+                  final entry = group.entries[index];
+                  final showing =
+                      entry.machineId == widget.showing.machineId &&
+                      entry.agent.id == widget.showing.agentId;
+                  return AgentTile(
+                    machine: entry.machine,
+                    agent: entry.agent,
+                    // The agent already on screen keeps its row — it is the one
+                    // you came from, and the list would read as missing an
+                    // agent without it — and wears the accent rim instead.
+                    border: showing
+                        ? Border.all(
+                            color: AppPalette.accentOnSurface,
+                            width: 1.5,
+                          )
+                        : null,
+                    onTap: () => widget.onOpen(group, entry),
+                  );
+                },
+              ),
             ),
-          ),
-          const SizedBox(height: 3),
-          AgentContextLine(
-            project: entry.project,
-            machineName: entry.machineName,
-          ),
+          const SizedBox(height: 4),
         ],
       ),
     );
@@ -221,14 +187,11 @@ class _TabIsEmpty extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: DeskTabStrip.sideInset),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Text(
-          'Nothing here this phone can open — the machine these agents run on '
-          'is asleep or wants its password.',
-          style: TextStyle(color: AppPalette.textSecondary, fontSize: 13.5),
-        ),
+      padding: const EdgeInsets.fromLTRB(_sideInset, 10, _sideInset, 18),
+      child: Text(
+        'Nothing here this phone can open — the machine these agents run on '
+        'is asleep or wants its password.',
+        style: TextStyle(color: AppPalette.textSecondary, fontSize: 13.5),
       ),
     );
   }

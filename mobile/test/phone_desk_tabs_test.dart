@@ -4,7 +4,7 @@ import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/phone/agent_swipe.dart';
 import 'package:harness_mobile/phone/desk_groups.dart';
 import 'package:harness_mobile/phone/desk_tab_strip.dart';
-import 'package:harness_mobile/phone/phone_card.dart';
+import 'package:harness_mobile/phone/agent_tile.dart';
 import 'package:harness_mobile/phone/terminal_header.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/state/app_state.dart';
@@ -74,11 +74,14 @@ void main() {
     await tester.pump();
   }
 
-  /// Tap an agent's card, which opens it and takes the panel away.
-  Future<void> openCard(WidgetTester tester, String agent) async {
-    await tester.tap(
-      find.ancestor(of: find.text(agent), matching: find.byType(PhoneCard)),
-    );
+  /// An agent's row in the open panel.
+  Finder row(String agent) => find.byWidgetPredicate(
+    (widget) => widget is AgentTile && widget.agent.id == agent,
+  );
+
+  /// Tap an agent's row, which opens it and takes the panel away.
+  Future<void> openRow(WidgetTester tester, String agent) async {
+    await tester.tap(row(agent));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
   }
@@ -86,15 +89,10 @@ void main() {
   DeskTabStrip strip(WidgetTester tester) =>
       tester.widget<DeskTabStrip>(find.byType(DeskTabStrip));
 
-  /// The agents the panel is offering: one name per card.
-  ///
-  /// The name is the card's only plain [Text] — `AgentContextLine` draws the
-  /// line under it as a `Text.rich`, whose `data` is null.
-  List<String> cardsShown(WidgetTester tester) => [
-    for (final text in tester.widgetList<Text>(
-      find.descendant(of: find.byType(PhoneCard), matching: find.byType(Text)),
-    ))
-      if (text.data != null) text.data!,
+  /// The agents the panel is offering, in the order it lists them.
+  List<String> agentsShown(WidgetTester tester) => [
+    for (final tile in tester.widgetList<AgentTile>(find.byType(AgentTile)))
+      tile.agent.id,
   ];
 
   List<String> swipesOver(WidgetTester tester) => [
@@ -130,7 +128,7 @@ void main() {
     await openPanel(tester);
 
     expect(strip(tester).selectedId, 't1');
-    expect(cardsShown(tester), ['a', 'b']);
+    expect(agentsShown(tester), ['a', 'b']);
     expect(strip(tester).groups.map((group) => group.name), [
       'Desktop',
       'Docker',
@@ -154,14 +152,14 @@ void main() {
 
     // The other tab's agents are on offer...
     expect(strip(tester).selectedId, 't2');
-    expect(cardsShown(tester), ['c', 'd']);
+    expect(agentsShown(tester), ['c', 'd']);
     // ...and the phone is still in the tab it was in, on the agent it was on.
     // Looking into another tab is not leaving this one.
     expect(pager(tester).agentId, 'a');
     expect(swipesOver(tester), ['a', 'b']);
   });
 
-  testWidgets('a card opens its agent, and the swipe walks that tab', (
+  testWidgets('a row opens its agent, and the swipe walks that tab', (
     tester,
   ) async {
     await pumpHome(
@@ -174,7 +172,7 @@ void main() {
 
     await openPanel(tester);
     await showTab(tester, 'Docker');
-    await openCard(tester, 'd');
+    await openRow(tester, 'd');
 
     expect(pager(tester).agentId, 'd');
     expect(swipesOver(tester), ['c', 'd']);
@@ -192,15 +190,15 @@ void main() {
     await openPanel(tester);
     await showTab(tester, kUntabbedGroupName);
 
-    expect(cardsShown(tester), ['c', 'd']);
+    expect(agentsShown(tester), ['c', 'd']);
 
-    await openCard(tester, 'c');
+    await openRow(tester, 'c');
 
     expect(pager(tester).agentId, 'c');
     expect(swipesOver(tester), ['c', 'd']);
   });
 
-  testWidgets('the agent on screen keeps its card, and wears the rim', (
+  testWidgets('the agent on screen keeps its row, and wears the rim', (
     tester,
   ) async {
     await pumpHome(
@@ -213,11 +211,12 @@ void main() {
 
     await openPanel(tester);
 
-    PhoneCard cardOf(String agent) => tester.widget<PhoneCard>(
-      find.ancestor(of: find.text(agent), matching: find.byType(PhoneCard)),
+    expect(
+      tester.widget<AgentTile>(row('a')).border,
+      isNotNull,
+      reason: 'the agent on screen',
     );
-    expect(cardOf('a').border, isNotNull, reason: 'the agent on screen');
-    expect(cardOf('b').border, isNull);
+    expect(tester.widget<AgentTile>(row('b')).border, isNull);
   });
 
   testWidgets('a tab this phone cannot reach is listed, and says why', (
@@ -235,7 +234,7 @@ void main() {
     await openPanel(tester);
     await showTab(tester, 'Away');
 
-    expect(cardsShown(tester), isEmpty);
+    expect(agentsShown(tester), isEmpty);
     expect(find.textContaining('asleep'), findsOneWidget);
   });
 
