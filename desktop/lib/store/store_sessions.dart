@@ -9,7 +9,7 @@ import 'store_editorial.dart';
 import 'store_listing.dart';
 
 /// A permanent way to browse the catalog's recordings, including sessions that
-/// arrive after this desktop release. The same cards lead Discover.
+/// arrive after this desktop release. Discover keeps its editorial illustrations.
 class StoreSessions extends StatelessWidget {
   const StoreSessions({
     super.key,

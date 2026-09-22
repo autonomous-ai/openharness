@@ -10,8 +10,8 @@ in the local machine's catalog.
 `editorial-*.png` are eleven original illustrations generated with the built-in
 imagegen tool. The exact prompts and file mapping are in
 [`editorial-prompts.json`](../../tool/store_artwork/editorial-prompts.json).
-Discover uses three illustrated features (coding, 3D design, circuits) when the catalog
-has no recorded examples; each discipline uses one feature. Catalog rows use app icons.
+Discover uses three illustrated features (coding, 3D design, circuits); each discipline
+uses one feature. Recordings have their own Featured tab. Catalog rows use app icons.
 These illustrations depict a craft,
 not an app screenshot or a claimed agent result.
 

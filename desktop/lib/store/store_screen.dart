@@ -548,8 +548,6 @@ class _StoreTabState extends State<StoreTab> {
                                       onCategory: (name) =>
                                           _show(_Category(name)),
                                       onAll: () => _show(const _All()),
-                                      onSessions: () =>
-                                          _show(const _Sessions()),
                                       onEngines: () =>
                                           _show(const _Category('Coding')),
                                     )
