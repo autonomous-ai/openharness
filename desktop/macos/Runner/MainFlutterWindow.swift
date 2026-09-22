@@ -224,13 +224,32 @@ class MainFlutterWindow: NSWindow {
         action: #selector(increaseTerminalFontSize(_:)),
         symbol: "character",
         tag: biggerFontMenuItemTag,
-        // "+" (not "=") is the literal string AppKit's own zoom-style menus use — it renders as ⌘+
-        // and, since the default keyEquivalentModifierMask has no .shift in it, still fires on the
-        // plain, easy-to-reach ⌘= keypress, matching Safari/Chrome/Terminal.app exactly.
+        // "+" is the literal string AppKit's own zoom-style menus use — it renders as ⌘+. But a
+        // key equivalent is matched against the character the key TYPES, and "+" is typed with
+        // Shift held: this row fires on ⌘⇧= only. The plain ⌘= a hand reaches for — the key is
+        // labelled "+", and Safari, Chrome and Terminal.app all answer it — matched nothing, so
+        // ⌘- shrank the text and ⌘+ was dead. The hidden twin below carries "=" for it.
         keyEquivalent: "+"
       ),
       at: at
     )
+    at += 1
+    // ⌘= — the same command on the unshifted key. Hidden, so the menu still shows one Bigger row
+    // reading ⌘+ the way Apple's do. A hidden item is skipped by the menu bar's key-equivalent
+    // pass unless it says otherwise — `allowsKeyEquivalentWhenHidden` is that switch, and without
+    // it this row was dead too (verified in a built app; a detached NSMenu's performKeyEquivalent
+    // does match hidden items, which is what made the first attempt look right). Not `isAlternate`:
+    // an alternate must differ from its sibling by modifier mask, and both of these are plain ⌘.
+    let biggerTwin = menuItem(
+      title: "Bigger",
+      action: #selector(increaseTerminalFontSize(_:)),
+      symbol: "character",
+      tag: biggerFontTwinMenuItemTag,
+      keyEquivalent: "="
+    )
+    biggerTwin.isHidden = true
+    biggerTwin.allowsKeyEquivalentWhenHidden = true
+    viewMenu.insertItem(biggerTwin, at: at)
     at += 1
     viewMenu.insertItem(
       menuItem(
@@ -296,6 +315,7 @@ class MainFlutterWindow: NSWindow {
   private var smallerFontMenuItemTag: Int { 7306 }
   private var layoutMenuItemTag: Int { 7307 }
   private var exportLogsMenuItemTag: Int { 7308 }
+  private var biggerFontTwinMenuItemTag: Int { 7309 }
 
   @objc private func checkForUpdates(_ sender: Any?) {
     menuChannel?.invokeMethod("checkForUpdates", arguments: nil)
