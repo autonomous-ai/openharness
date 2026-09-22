@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/prompt_style.dart';
 import 'package:harness/widgets/prompt_context.dart';
+import 'package:harness/widgets/search_result_text.dart';
 
 void main() {
   Future<void> line(
@@ -72,5 +73,41 @@ void main() {
       await line(tester, 120, style: style);
       expect(tester.takeException(), isNull);
     }
+  });
+
+  testWidgets('cached context refreshes identity, matching and text scale', (
+    tester,
+  ) async {
+    const original = PromptContext(machine: 'studio', branch: 'main');
+    Future<void> show({
+      PromptContext data = original,
+      List<SearchFieldMatch> matches = const [],
+      double scale = 1,
+    }) => tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+          child: Scaffold(
+            body: SizedBox(
+              width: 500,
+              child: PromptContextView(contextData: data, matches: matches),
+            ),
+          ),
+        ),
+      ),
+    );
+    await show();
+    expect(find.text('main'), findsOneWidget);
+    await show(matches: [(field: 'main', term: 'mai', title: false)]);
+    final highlighted = tester.widget<Text>(find.text('main'));
+    expect(highlighted.textSpan, isNotNull);
+    await show(
+      data: const PromptContext(machine: 'laptop', branch: 'dev'),
+      scale: 2,
+    );
+    expect(find.text('main'), findsNothing);
+    expect(find.text('dev'), findsOneWidget);
+    expect(find.text('laptop'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }
