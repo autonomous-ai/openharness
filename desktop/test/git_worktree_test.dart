@@ -87,7 +87,7 @@ void main() {
         'feature',
       );
       final branch = await git(['branch', '--show-current'], path);
-      expect(branch, startsWith('tester/'));
+      expect(branch, matches(RegExp(r'^[a-z]+-[a-z]+(-\d+)?$')));
       branches.add(branch);
     }
     expect(branches, hasLength(2));
@@ -178,22 +178,16 @@ void main() {
   });
 
   test('placeholder branches are two words no branch uses yet', () {
+    expect(placeholderBranch(const [], random: _First()), 'amber-badger');
     expect(
-      placeholderBranch(const [], owner: 'deehw', random: _First()),
-      'deehw/amber-badger',
+      placeholderBranch(const [
+        'refs/heads/amber-badger',
+        'amber-badger-2',
+      ], random: _First()),
+      'amber-badger-3',
     );
-    expect(
-      placeholderBranch(
-        const ['refs/heads/deehw/amber-badger', 'deehw/amber-badger-2'],
-        owner: 'deehw',
-        random: _First(),
-      ),
-      'deehw/amber-badger-3',
-    );
-    expect(worktreeFolderName('deehw/brave-otter'), 'brave-otter');
+    expect(worktreeFolderName('brave-otter'), 'brave-otter');
     expect(worktreeFolderName('fix/login page'), 'loginpage');
-    expect(ownerSlug('Dee Huynh'), 'dee-huynh');
-    expect(ownerSlug('  '), isNull);
   });
 
   test('new worktrees are on a new branch, in a folder named for it, grouped by repository', () async {
@@ -201,7 +195,7 @@ void main() {
     expect(made.toSet(), hasLength(2));
     for (final path in made) {
       final branch = await git(['branch', '--show-current'], path);
-      expect(branch, matches(RegExp(r'^tester/[a-z]+-[a-z]+(-\d+)?$')));
+      expect(branch, matches(RegExp(r'^[a-z]+-[a-z]+(-\d+)?$')));
       expect(
         await git(['config', '--get', 'branch.$branch.harness']),
         'placeholder',
@@ -220,16 +214,13 @@ void main() {
       'created',
     );
     final info = GitProjectInfo.fromJson(await readLocalGitProject(repo));
-    expect(info.owner, 'tester');
     expect(
       [
         for (final b in info.branches)
           if (b.harness) b.name,
       ]..sort(),
-      [
-        for (final b in info.branches)
-          if (b.name.startsWith('tester/') || b.name == 'fix/login') b.name,
-      ]..sort(),
+      [...made.map(p.basename), 'fix/login']..sort(),
+      reason: 'Every branch Harness made, and only those.',
     );
     await expectLater(
       worktree(name: 'fix/login'),

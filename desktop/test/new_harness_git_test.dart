@@ -124,7 +124,11 @@ void main() {
     await settle();
     expect(box.worktree, true);
     expect(box.branchRef, 'refs/heads/main');
-    expect(box.placeholder, matches(RegExp(r'^harness/[a-z]+-[a-z]+$')));
+    expect(
+      box.placeholder,
+      matches(RegExp(r'^[a-z]+-[a-z]+$')),
+      reason: 'No login reported: the session name alone, later.',
+    );
     expect(box.draft.projectFolderRequest!.payload, {
       'projectSource': 'worktree',
       'gitSource': '/repo',
@@ -236,7 +240,6 @@ void main() {
     'branch': branch,
     'mainFolder': '/repo',
     'mainBranch': 'main',
-    'owner': 'deehw',
   };
 
   test(
@@ -258,11 +261,6 @@ void main() {
       expect(box.project.folder, '/repo');
       expect(box.worktree, true);
       expect(box.branchLabel, 'main');
-      expect(
-        box.placeholder,
-        startsWith('deehw/'),
-        reason: 'The login survives the switch to the repository.',
-      );
       expect(box.projectFolderRequest!.payload, {
         'projectSource': 'worktree',
         'gitSource': '/repo',
@@ -324,7 +322,6 @@ void main() {
     'isGit': true,
     'root': '/repo',
     'branch': 'main',
-    'owner': 'deehw',
     'defaultRef': 'refs/remotes/origin/main',
     'branches': [
       {'ref': 'refs/heads/main', 'name': 'main', 'worktree': '/repo'},
@@ -371,8 +368,8 @@ void main() {
       final placeholder = box.placeholder;
       expect(
         placeholder,
-        matches(RegExp(r'^deehw/[a-z]+-[a-z]+$')),
-        reason: 'Made up under the GitHub login the machine reported.',
+        matches(RegExp(r'^[a-z]+-[a-z]+$')),
+        reason: 'Two words until the session names it.',
       );
       expect(box.worktree, true);
       expect(

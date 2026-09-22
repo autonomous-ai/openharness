@@ -3,7 +3,6 @@ import { cp, lstat, mkdir, realpath, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, normalize } from 'node:path'
 import { promisify } from 'node:util'
 import { placeholderBranch, plausibleBranchName, worktreeFolderName } from './agentNames.js'
-import { branchOwner } from './branchOwner.js'
 
 const exec = promisify(execFile)
 
@@ -72,13 +71,12 @@ export async function readGitProject(path: string) {
     return !failure.killed && failure.code === 128 ? { isGit: false, branches: [] } : { error: 'GIT_UNAVAILABLE' }
   }
   try {
-    const [branch, refs, trees, originHead, marked, owner] = await Promise.all([
+    const [branch, refs, trees, originHead, marked] = await Promise.all([
       git(path, ['symbolic-ref', '--quiet', 'HEAD']).then(ref => ref.replace(/^refs\/heads\//, '')).catch(() => null),
       git(path, ['for-each-ref', '--format=%(refname)%09%(refname:short)%09%(symref)', 'refs/heads', 'refs/remotes']),
       worktrees(path),
       git(path, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']).catch(() => null),
       harnessBranches(path),
-      branchOwner(),
     ])
     const checkedOut = new Map(trees.flatMap(tree => tree.usable && tree.ref ? [[tree.ref, tree.path] as const] : []))
     const branches = refs.split('\n').filter(Boolean).flatMap(line => {
@@ -92,7 +90,7 @@ export async function readGitProject(path: string) {
     // main or master.
     const known = new Set(branches.map(row => row.ref))
     const defaultRef = [originHead, 'refs/remotes/origin/main', 'refs/remotes/origin/master'].find(ref => ref && known.has(ref))
-    const found = { isGit: true, root, branch, branches, owner, ...(defaultRef ? { defaultRef } : {}) }
+    const found = { isGit: true, root, branch, branches, ...(defaultRef ? { defaultRef } : {}) }
     // A worktree is a temporary folder. The launcher shows its repository.
     const main = await mainCheckout(root, trees)
     if (!main) return found
@@ -118,7 +116,7 @@ export type GitProjectOptions = {
   /** The worktree's branch: created from `ref`, or with `existingBranch` checked out as it is. */
   branchName?: string
   existingBranch?: boolean
-  /** `branchName` was made up (`deehw/brave-otter`): the session's name replaces it once there is one. */
+  /** `branchName` was made up (`brave-otter`): the session's name replaces it once there is one. */
   placeholder?: boolean
   pick?: (n: number) => number
 }
@@ -201,7 +199,7 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
   // Grouped by repository, so the leaf only needs the branch.
   const repository = trees[0]?.usable ? basename(trees[0].path) : basename(root)
   const taken = new Set((await git(source, ['for-each-ref', '--format=%(refname)', 'refs/heads']).catch(() => '')).split('\n'))
-  const branch = options.branchName ?? placeholderBranch(taken, await branchOwner(), options.pick)
+  const branch = options.branchName ?? placeholderBranch(taken, options.pick)
   const placeholder = !options.branchName || options.placeholder === true
   if (existing) {
     if (!taken.has(`refs/heads/${branch}`)) throw new GitProjectError('GIT_PROJECT_UNAVAILABLE', 'That branch is no longer available. Choose another branch.')

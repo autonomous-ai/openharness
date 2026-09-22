@@ -61,8 +61,8 @@ branch starts from the newer of that branch and its upstream, fetched for at
 most ten seconds: `main` behind `origin/main` starts from `origin/main`, and
 `main` with commits of its own starts from `main`, so nothing is lost; offline,
 it starts from the last fetch. The branch the harness works on follows from it, with no row of its
-own: the default or current branch gets a new branch named after the session,
-`<login>/<session name>` (the machine's GitHub login, else Git's `user.name`);
+own: the default or current branch gets a new branch named after the session
+(`onboarding-experience`);
 another local branch is checked out as it is; a remote branch nobody has
 locally becomes a local branch of the same name tracking it; a branch that
 already has a worktree opens there, and Start reads **Start in Worktree**. The
@@ -72,9 +72,10 @@ default branch. Spaces become `-` and anything Git refuses in a name is
 dropped.
 
 A session has no name at Start, so that branch starts as a made-up
-`<login>/<word>-<word>`, marked `branch.<name>.harness = placeholder` in the
+`<word>-<word>`, marked `branch.<name>.harness = placeholder` in the
 repository's config and left out of the pane header. The daemon renames it once,
-to `<login>/<session name>`, when the session first has a name, and never again:
+to the session's name (`-2` when a local or remote branch has it), when the
+session first has a name, and never again:
 not after a later session name, a push, or a rename by the person or the agent.
 A picked or created branch keeps its name. The worktree is checked out in
 `~/harnesses/worktrees/<repository>/<branch>`, and ignored files listed in the

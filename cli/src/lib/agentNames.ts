@@ -79,11 +79,11 @@ export const PLACEHOLDER_NOUNS = [
   'puffin', 'quartz', 'raven', 'reef', 'river', 'robin', 'sparrow', 'spruce', 'tiger', 'walrus', 'willow', 'zebra',
 ] as const
 
-/** `deehw/brave-otter`: the branch a new worktree starts on until its session has a name, one none of
+/** `brave-otter`: the branch a new worktree starts on until its session has a name, one none of
  *  `taken` (branch names, with or without `refs/heads/`) already uses. */
-export function placeholderBranch(taken: Iterable<string>, owner: string, pick = (n: number) => Math.floor(Math.random() * n)): string {
+export function placeholderBranch(taken: Iterable<string>, pick = (n: number) => Math.floor(Math.random() * n)): string {
   const names = new Set([...taken].map(name => name.replace(/^refs\/heads\//, '')))
-  const draw = () => `${owner}/${PLACEHOLDER_ADJECTIVES[pick(PLACEHOLDER_ADJECTIVES.length)]}-${PLACEHOLDER_NOUNS[pick(PLACEHOLDER_NOUNS.length)]}`
+  const draw = () => `${PLACEHOLDER_ADJECTIVES[pick(PLACEHOLDER_ADJECTIVES.length)]}-${PLACEHOLDER_NOUNS[pick(PLACEHOLDER_NOUNS.length)]}`
   let name = draw()
   for (let tries = 0; tries < 16 && names.has(name); tries++) name = draw()
   const base = name

@@ -66,7 +66,7 @@ describe('launch Git preparation', () => {
     for (const path of paths) {
       expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('feature')
       const branch = (await exec('git', ['-C', path, 'branch', '--show-current'])).stdout.trim()
-      expect(branch).toMatch(/^tester\//)
+      expect(branch).toMatch(/^[a-z]+-[a-z]+(-\d+)?$/)
       branches.push(branch)
     }
     expect(new Set(branches).size).toBe(2)
@@ -75,8 +75,8 @@ describe('launch Git preparation', () => {
   })
 
   it('makes up a two-word branch no branch uses, in a folder named for it, grouped by repository', async () => {
-    expect(placeholderBranch([], 'deehw', () => 0)).toBe('deehw/amber-badger')
-    expect(placeholderBranch(['refs/heads/deehw/amber-badger', 'deehw/amber-badger-2'], 'deehw', () => 0)).toBe('deehw/amber-badger-3')
+    expect(placeholderBranch([], () => 0)).toBe('amber-badger')
+    expect(placeholderBranch(['refs/heads/amber-badger', 'amber-badger-2'], () => 0)).toBe('amber-badger-3')
     expect(worktreeFolderName('deehw/brave-otter')).toBe('brave-otter')
     expect(worktreeFolderName('fix/login page')).toBe('loginpage')
     expect(sessionBranchSlug('Worktree and branches organization')).toBe('worktree-and-branches-organization')
@@ -87,7 +87,7 @@ describe('launch Git preparation', () => {
     expect(new Set(made).size).toBe(2)
     for (const path of made) {
       const branch = await current(path)
-      expect(branch).toMatch(/^tester\/[a-z]+-[a-z]+(-\d+)?$/)
+      expect(branch).toMatch(/^[a-z]+-[a-z]+(-\d+)?$/)
       expect(path).toBe(join(worktrees(), worktreeFolderName(branch)))
       expect(await git('config', '--get', `branch.${branch}.harness`)).toBe('placeholder')
     }
@@ -98,12 +98,11 @@ describe('launch Git preparation', () => {
     expect(named).toBe(join(worktrees(), 'login'))
     expect(await current(named)).toBe('fix/login')
     expect(await git('config', '--get', 'branch.fix/login.harness')).toBe('created')
-    const made = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'tester/quiet-owl', branchMode: 'placeholder' })
-    expect(await current(made)).toBe('tester/quiet-owl')
-    expect(await git('config', '--get', 'branch.tester/quiet-owl.harness')).toBe('placeholder')
-    const info = await readGitProject(repo) as { owner: string; branches: Array<{ name: string; harness?: true }> }
-    expect(info.owner).toBe('tester')
-    expect(info.branches.filter(b => b.harness).map(b => b.name).sort()).toEqual(['fix/login', 'tester/quiet-owl'])
+    const made = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-owl', branchMode: 'placeholder' })
+    expect(await current(made)).toBe('quiet-owl')
+    expect(await git('config', '--get', 'branch.quiet-owl.harness')).toBe('placeholder')
+    const info = await readGitProject(repo) as { branches: Array<{ name: string; harness?: true }> }
+    expect(info.branches.filter(b => b.harness).map(b => b.name).sort()).toEqual(['fix/login', 'quiet-owl'])
     await expect(prepare('worktree', 'refs/heads/feature', repo, { branchName: 'fix/login' })).rejects.toMatchObject({ code: 'BRANCH_EXISTS' })
     await expect(prepare('worktree', 'refs/heads/feature', repo, { branchName: 'bad..name' })).rejects.toMatchObject({ code: 'INVALID_BRANCH' })
     for (const extra of [{ branchName: '-x' }, { branchName: 'a b' }, { branchName: 'ok', branchMode: 'other' }]) {
@@ -121,21 +120,25 @@ describe('launch Git preparation', () => {
   })
 
   it('names a made-up worktree branch after its session once, and never a pushed or chosen one', async () => {
-    const path = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'tester/quiet-owl', branchMode: 'placeholder' })
+    const path = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-owl', branchMode: 'placeholder' })
     expect(await nameBranchAfterSession(path, null)).toBeNull()
-    expect(await nameBranchAfterSession(path, 'Worktree and branches organization')).toBe('tester/worktree-and-branches-organization')
-    expect(await current(path)).toBe('tester/worktree-and-branches-organization')
-    expect(await git('config', '--get', 'branch.tester/worktree-and-branches-organization.harness')).toBe('created')
+    expect(await nameBranchAfterSession(path, 'Worktree and branches organization')).toBe('worktree-and-branches-organization')
+    expect(await current(path)).toBe('worktree-and-branches-organization')
+    expect(await git('config', '--get', 'branch.worktree-and-branches-organization.harness')).toBe('created')
     expect(await nameBranchAfterSession(path, 'A later name')).toBeNull()
-    expect(await current(path)).toBe('tester/worktree-and-branches-organization')
-    const second = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'tester/calm-fox', branchMode: 'placeholder' })
-    expect(await nameBranchAfterSession(second, 'Worktree and branches organization')).toBe('tester/worktree-and-branches-organization-2')
+    expect(await current(path)).toBe('worktree-and-branches-organization')
+    const second = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'calm-fox', branchMode: 'placeholder' })
+    expect(await nameBranchAfterSession(second, 'Worktree and branches organization')).toBe('worktree-and-branches-organization-2')
+    // A name a remote has is taken too.
+    const third = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-fox', branchMode: 'placeholder' })
+    await git('update-ref', 'refs/remotes/origin/onboarding-experience', 'main')
+    expect(await nameBranchAfterSession(third, 'Onboarding experience')).toBe('onboarding-experience-2')
     const chosen = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'fix/mine' })
     expect(await nameBranchAfterSession(chosen, 'Anything')).toBeNull()
-    const pushed = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'tester/sunny-owl', branchMode: 'placeholder' })
-    await git('config', 'branch.tester/sunny-owl.remote', 'origin')
+    const pushed = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'sunny-owl', branchMode: 'placeholder' })
+    await git('config', 'branch.sunny-owl.remote', 'origin')
     expect(await nameBranchAfterSession(pushed, 'Anything')).toBeNull()
-    expect(await current(pushed)).toBe('tester/sunny-owl')
+    expect(await current(pushed)).toBe('sunny-owl')
   })
 
   it('checks out an existing branch as it is in a new worktree, once', async () => {

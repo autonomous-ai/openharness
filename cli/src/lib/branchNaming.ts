@@ -13,8 +13,9 @@ async function git(cwd: string, args: string[]): Promise<string> {
 }
 
 /**
- * Names a worktree's branch after its session, once: `deehw/brave-otter`, made up at Start, becomes
- * `deehw/worktree-and-branches-organization` when the session first has a name. Only a branch Harness
+ * Names a worktree's branch after its session, once: `brave-otter`, made up at Start, becomes
+ * `worktree-and-branches-organization` when the session first has a name. A name a local or remote
+ * branch already has gets `-2`. Only a branch Harness
  * marked as a placeholder, with no upstream, is renamed; the mark goes with it, so a later session name,
  * a push, or a rename by the person or the agent is never overridden. Returns the new name, if any.
  */
@@ -26,13 +27,15 @@ export async function nameBranchAfterSession(cwd: string, title: string | null):
   const mark = await git(cwd, ['config', '--get', `branch.${branch}.${HARNESS_BRANCH_KEY}`]).catch(() => null)
   if (mark !== 'placeholder') return null
   if (await git(cwd, ['config', '--get', `branch.${branch}.remote`]).then(() => true, () => false)) return null
-  const owner = branch.includes('/') ? branch.slice(0, branch.indexOf('/')) : null
-  const base = owner ? `${owner}/${slug}` : slug
+  const base = slug
+  // Taken here, or on a remote: a name somebody else pushed is not one to push over.
+  const known = new Set((await git(cwd, ['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes']).catch(() => ''))
+    .split('\n').flatMap(ref => ref.startsWith('refs/heads/') ? [ref.slice(11)]
+      : ref.startsWith('refs/remotes/') ? [ref.split('/').slice(3).join('/')] : []))
   for (let attempt = 1; attempt <= 50; attempt++) {
     const name = attempt === 1 ? base : `${base}-${attempt}`
     if (name === branch) return null
-    const taken = await git(cwd, ['show-ref', '--verify', '--quiet', '--', `refs/heads/${name}`]).then(() => true, () => false)
-    if (taken) continue
+    if (known.has(name)) continue
     try { await git(cwd, ['check-ref-format', '--branch', name]) } catch { return null }
     await git(cwd, ['branch', '-m', branch, name])
     await git(cwd, ['config', `branch.${name}.${HARNESS_BRANCH_KEY}`, 'created']).catch(() => '')

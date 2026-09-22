@@ -311,9 +311,7 @@ class NewHarnessDraft {
         worktree: worktree ?? worktreeByDefault(info),
         branchRef: branchRef,
         branchName: branchName,
-        placeholder:
-            placeholder ??
-            placeholderBranch(const [], owner: info.owner ?? 'harness'),
+        placeholder: placeholder ?? placeholderBranch(const []),
       );
     }
     return worktree == true && folder != null && !terminal
@@ -532,17 +530,11 @@ class NewHarnessController extends ChangeNotifier {
           ?.name ??
       ref?.replaceFirst(RegExp(r'^refs/(heads|remotes)/'), '');
 
-  /// The branch a new harness in a worktree is on: a name made up here until
-  /// one is typed or an existing branch is chosen.
-  String get placeholder => _placeholder ??= placeholderBranch(
-    [for (final branch in _gitProject.branches) branch.name],
-    owner: _owner,
-    random: _random,
-  );
-
-  /// Whose branches the machine makes; a daemon that does not say keeps the
-  /// prefix older builds used.
-  String get _owner => _gitProject.owner ?? 'harness';
+  /// The branch a new worktree is on until its session names it: two words
+  /// the daemon replaces with the session's name.
+  String get placeholder => _placeholder ??= placeholderBranch([
+    for (final branch in _gitProject.branches) branch.name,
+  ], random: _random);
   WorktreePlan? get worktreePlan => worktree
       ? planWorktree(
           _gitProject,
@@ -668,7 +660,6 @@ class NewHarnessController extends ChangeNotifier {
         branch: info.mainBranch,
         branches: info.branches,
         defaultRef: info.defaultRef,
-        owner: info.owner,
       );
     }
     _gitProject = info;
