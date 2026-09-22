@@ -1,6 +1,9 @@
+import { createPlaytest } from "./playtest.js";
+
 const $ = (id) => document.getElementById(id);
 const token = document.querySelector("meta[name=studio-token]").content;
 const frames = new Map();
+const requests = new Map();
 const offered = new Set(),
   client = crypto.randomUUID();
 let state,
@@ -12,7 +15,9 @@ let state,
   selectedTab = "activity",
   toastTimer,
   lastLease = "",
-  followLatest = true;
+  followLatest = true,
+  momentLock = false,
+  savedToOpen = null;
 const phases = [
   ["concept", "Imagine"],
   ["world", "Build"],
@@ -56,6 +61,72 @@ function command(action, value) {
       location.origin,
     );
 }
+function request(action, value) {
+  const entry = frames.get(active);
+  if (!entry?.ready) return Promise.reject(new Error("The game is not ready"));
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      requests.delete(requestId);
+      reject(
+        new Error(
+          "The game did not respond. Try again when its frame is visible.",
+        ),
+      );
+    }, 8000);
+    requests.set(requestId, { id: active, resolve, reject, timer });
+    entry.frame.contentWindow.postMessage(
+      { studioCommand: true, action, value, requestId },
+      location.origin,
+    );
+  });
+}
+function controls() {
+  const features = frames.get(active)?.features || {};
+  $("explore").disabled = momentLock || !active;
+  for (const id of ["play", "pause", "restart"])
+    $(id).disabled = momentLock || !features[id];
+  $("update").disabled = momentLock;
+  for (const button of $("versions").querySelectorAll("button"))
+    button.disabled = momentLock;
+  // A paused rewind frame must not accept game-specific keyboard/touch restart controls.
+  const frame = frames.get(active)?.frame;
+  if (frame) frame.inert = momentLock;
+}
+const playtest = createPlaytest({
+  id: () => active,
+  mode: () => mode,
+  paused: () => paused,
+  pause: setPaused,
+  setMode,
+  post,
+  request,
+  toast,
+  lock(value) {
+    momentLock = value;
+    controls();
+  },
+  focus: () => frames.get(active)?.frame.contentWindow?.focus(),
+  async resume() {
+    if (mode !== "play") setMode("play");
+    setPaused(false);
+    await request("pause", false);
+  },
+  async open(data) {
+    followLatest = false;
+    savedToOpen = data;
+    requested = data.revision.id;
+    ensure(data.revision);
+    activate(data.revision.id);
+  },
+  latest() {
+    if (!state?.latest) return toast("The current game is not ready yet");
+    followLatest = true;
+    requested = state.latest.id;
+    ensure(state.latest);
+    activate(state.latest.id);
+  },
+});
 function retain(force = false) {
   const ids = [
     ...new Set(
@@ -97,6 +168,11 @@ function ensure(revision) {
 function activate(id) {
   const entry = frames.get(id);
   if (!entry?.ready) return;
+  for (const item of requests.values()) {
+    clearTimeout(item.timer);
+    item.reject(new Error("The preview changed"));
+  }
+  requests.clear();
   for (const [key, item] of frames) {
     const show = key === id;
     item.frame.classList.toggle("active", show);
@@ -115,10 +191,20 @@ function activate(id) {
   requested = null;
   $("update").hidden = true;
   $("empty").hidden = true;
-  $("version").textContent = `Version ${entry.revision.number}`;
+  $("version").textContent =
+    `${entry.revision.archive ? "Saved version" : "Version"} ${entry.revision.number}`;
   $("export").disabled = false;
   setMode("explore");
   setPaused(false);
+  playtest.activate();
+  if (savedToOpen?.revision.id === id) {
+    const saved = savedToOpen;
+    savedToOpen = null;
+    void playtest.restoreSaved(saved.snapshot);
+  }
+  if (entry.features)
+    playtest.message({ type: "stats", features: entry.features });
+  renderProject();
   renderVersions();
   cleanup();
 }
@@ -129,7 +215,9 @@ function setMode(value) {
   command("mode", value);
   $("controls").textContent =
     value === "play"
-      ? state?.project.controls || "Click the game to use its controls"
+      ? frames.get(active)?.revision.project?.controls ||
+        state?.project.controls ||
+        "Click the game to use its controls"
       : "Drag to orbit · Scroll to look closer";
   if (value === "play") frames.get(active)?.frame.contentWindow?.focus();
 }
@@ -139,8 +227,14 @@ function setPaused(value) {
   $("pause").setAttribute("aria-label", value ? "Resume game" : "Pause game");
   $("pause").setAttribute("aria-pressed", String(value));
 }
-$("explore").onclick = () => setMode("explore");
-$("play").onclick = () => setMode("play");
+$("explore").onclick = () => {
+  setMode("explore");
+  playtest.render();
+};
+$("play").onclick = () => {
+  setMode("play");
+  playtest.render();
+};
 $("pause").onclick = () => setPaused(!paused);
 $("restart").onclick = () => {
   command("restart");
@@ -178,16 +272,25 @@ $("details").onclick = () => {
   $("drawer").hidden = !show;
   $("details").setAttribute("aria-expanded", String(show));
   if (show && selectedTab === "assets") loadAssets();
+  if (show && selectedTab === "moments") playtest.load();
 };
-for (const tab of ["activity", "versions", "assets"])
+for (const tab of ["activity", "versions", "assets", "moments"])
   $("tab-" + tab).onclick = () => {
     selectedTab = tab;
-    for (const other of ["activity", "versions", "assets"]) {
+    for (const other of ["activity", "versions", "assets", "moments"]) {
       $(other).hidden = other !== tab;
       $("tab-" + other).setAttribute("aria-selected", String(other === tab));
     }
     if (tab === "assets") loadAssets();
+    if (tab === "moments") playtest.load();
   };
+$("show-moments").onclick = () => {
+  setExpanded(false);
+  $("drawer").hidden = false;
+  $("details").setAttribute("aria-expanded", "true");
+  $("tab-moments").click();
+  $("drawer").scrollIntoView({ block: "nearest" });
+};
 $("export").onclick = async () => {
   try {
     const result = await post("/api/export", { id: active });
@@ -211,6 +314,7 @@ function renderVersions() {
   for (const version of state.history) {
     const button = document.createElement("button");
     button.className = "checkpoint" + (active === version.id ? " current" : "");
+    button.disabled = momentLock;
     button.append(
       text("b", `Version ${version.number}`),
       text("p", version.label),
@@ -264,11 +368,17 @@ async function loadAssets() {
     );
   }
 }
+function renderProject() {
+  const revision = frames.get(active)?.revision;
+  const project = revision?.archive ? revision.project : state?.project;
+  if (!project) return;
+  $("title").textContent = project.title;
+  $("description").textContent = project.description;
+  document.title = project.title + " · Game Studio";
+}
 function render(next) {
   state = next;
-  $("title").textContent = state.project.title;
-  $("description").textContent = state.project.description;
-  document.title = state.project.title + " · Game Studio";
+  renderProject();
   $("connection").textContent = "Live";
   document.querySelector(".connection").style.color = "";
   const building = state.status === "building";
@@ -337,6 +447,18 @@ addEventListener("message", async (event) => {
   const data = event.data,
     entry = frames.get(data.id);
   if (!entry || event.source !== entry.frame.contentWindow) return;
+  if (data.type === "response") {
+    const item = requests.get(data.requestId);
+    if (item?.id === data.id) {
+      requests.delete(data.requestId);
+      clearTimeout(item.timer);
+      if (data.error) item.reject(new Error(data.error));
+      else item.resolve(data.result);
+    }
+    return;
+  }
+  if (data.type === "stats") entry.features = data.features;
+  if (data.id === active) playtest.message(data);
   if (data.type === "escape" && data.id === active) setExpanded(false);
   if (data.type === "ready") {
     if (entry.failed) return;
@@ -352,7 +474,7 @@ addEventListener("message", async (event) => {
     if (
       !active ||
       requested === data.id ||
-      (newer && mode !== "play" && followLatest)
+      (newer && mode !== "play" && followLatest && !momentLock)
     )
       activate(data.id);
     else if (
@@ -386,6 +508,7 @@ addEventListener("message", async (event) => {
     }
     if (active === data.id) {
       active = null;
+      playtest.activate();
       $("empty").hidden = false;
       $("export").disabled = true;
       for (const id of ["play", "pause", "restart"]) $(id).disabled = true;
@@ -414,9 +537,7 @@ addEventListener("message", async (event) => {
     ]
       .filter(Boolean)
       .join(" · ");
-    $("play").disabled = !data.features.play;
-    $("pause").disabled = !data.features.pause;
-    $("restart").disabled = !data.features.restart;
+    controls();
   }
   if (data.type === "waiting" && !active)
     $("empty").querySelector("p").textContent = data.message;

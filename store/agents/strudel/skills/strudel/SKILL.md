@@ -20,9 +20,9 @@ python3 "$STRUDEL_TOOLCHAIN/verdict.py"          # track.strudel
 python3 "$STRUDEL_TOOLCHAIN/verdict.py" b.strudel
 ```
 
-It parses the file with the same parser the REPL uses, says whether the track will play, and writes
-`.harness/verdict.json`, which is what the pane header shows. It cannot hear anything — no headless
-check can. **Playing is the pane's job and the user's ears.**
+It parses the file with the same parser the REPL uses, checks offline sound sources, and writes
+`.harness/verdict.json`, which is what the pane header shows. It does not listen to the music.
+**Playing is the pane's job; musical quality needs listening and judgment.**
 
 ## Offline first: use synths, not samples
 
@@ -218,3 +218,19 @@ last `lpf` wins. Use `superimpose` or a second stack entry for a second treatmen
 4. Ask only what you cannot infer — tempo, key, mood, length. Otherwise decide, say so in one line,
    and play it.
 5. Deliver `track.strudel`. It is plain text and pastes straight into strudel.cc.
+
+## Develop a performance the user kept
+
+**Record take** captures the actual stereo mix while the user performs: Mute/Solo, Ctrl+Enter code
+changes and named moments. **Finish take → Keep take** preserves the WAV, source versions and
+`take.json` journal in `out/takes/<id>/`; **Audio + source** downloads them as a ZIP. This works
+for any pattern the engine plays, including original synth-only tracks.
+
+If the user names a take or moment, inspect that journal first. Find the last source event before
+the marker, read its numbered `.strudel` file and account for the mute/solo requests. Continue
+composing from that intention in the live track. Leave the kept take intact. Event times describe
+control requests; scheduled notes, effect tails, randomness and external dependencies mean the
+journal is not an exact audio replay. The recorded WAV is the performance to compare against.
+
+File updates wait while the user records or has unsaved edits. The performer applies them with
+**Load new version**. Mention this only when relevant to their next revision.

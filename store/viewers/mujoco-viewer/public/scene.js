@@ -60,8 +60,9 @@ export class Stage {
   }
 
   /** A panel covering `px` on the right: shift the picture so the scene centres in what is left. */
-  setInset(px) {
+  setInset(px, bottom = 0) {
     this.inset = px
+    this.bottomInset = bottom
     this.resize()
   }
 
@@ -70,8 +71,9 @@ export class Stage {
     const width = Math.max(1, host.clientWidth), height = Math.max(1, host.clientHeight)
     this.renderer.setSize(width, height, false)
     this.camera.aspect = width / height
-    if (this.inset > 0) this.camera.setViewOffset(width, height, this.inset / 2, 0, width, height)
+    if (this.inset > 0 || this.bottomInset > 0) this.camera.setViewOffset(width, height, (this.inset || 0) / 2, (this.bottomInset || 0) / 2, width, height)
     else this.camera.clearViewOffset()
+    this.camera.zoom = Math.max(0.15, Math.min((width - (this.inset || 0)) / width, (height - (this.bottomInset || 0)) / height))
     this.camera.updateProjectionMatrix()
     if (this.floor?.mirror) {
       const size = new THREE.Vector2()
@@ -380,6 +382,7 @@ export class Stage {
   }
 
   dispose() {
+    this.clearComparison()
     this.decor.hideAll()
     if (this.root) this.scene.remove(this.root)
     for (const { light, head } of this.lights) {
@@ -410,6 +413,74 @@ export class Stage {
       group.position.set(xpos[3 * body], xpos[3 * body + 1], xpos[3 * body + 2])
       group.quaternion.set(xquat[4 * body + 1], xquat[4 * body + 2], xquat[4 * body + 3], xquat[4 * body])
     }
+  }
+
+  /** Two measured futures over the same world, sharing the model's geometry without copying it. */
+  buildComparison(result) {
+    this.clearComparison()
+    const root = new THREE.Group()
+    const owned = []
+    const lanes = [new Map(), new Map()]
+    const ghost = new THREE.MeshBasicMaterial({ color: 0x44d9bb, transparent: true, opacity: 0.3, depthWrite: false, wireframe: true })
+    owned.push(ghost)
+    for (let lane = 0; lane < 2; lane++) {
+      for (const entry of this.meshes) {
+        if (entry.body === 0 || entry.plane || entry.shown === false) continue
+        if (!lanes[lane].has(entry.body)) { const group = new THREE.Group(); lanes[lane].set(entry.body, group); root.add(group) }
+        const mesh = new THREE.Mesh(entry.mesh.geometry, lane ? entry.material : ghost)
+        mesh.position.copy(entry.mesh.position)
+        mesh.quaternion.copy(entry.mesh.quaternion)
+        mesh.scale.copy(entry.mesh.scale)
+        mesh.castShadow = lane === 1 && entry.mesh.castShadow
+        mesh.receiveShadow = lane === 1 && entry.mesh.receiveShadow
+        mesh.renderOrder = lane ? 0 : 2
+        lanes[lane].get(entry.body).add(mesh)
+      }
+      const frames = (lane ? result.variant : result.baseline).frames
+      const geometry = new THREE.BufferGeometry().setFromPoints(frames.map((f) => new THREE.Vector3(...f.position)))
+      const material = new THREE.LineBasicMaterial({ color: lane ? 0xffb65c : 0x44d9bb, depthTest: false, transparent: true, opacity: 0.8 })
+      const line = new THREE.Line(geometry, material)
+      line.renderOrder = 3
+      root.add(line)
+      owned.push(geometry, material)
+    }
+    for (const [id, group] of this.bodies) if (id > 0) group.visible = false
+    this.scene.add(root)
+    this.comparison = { root, lanes, owned }
+  }
+
+  syncComparison(original, changed) {
+    if (!this.comparison) return
+    for (const [lane, data] of [original, changed].entries()) {
+      for (const [id, group] of this.comparison.lanes[lane]) {
+        group.position.fromArray(data.xpos, 3 * id)
+        group.quaternion.set(data.xquat[4 * id + 1], data.xquat[4 * id + 2], data.xquat[4 * id + 3], data.xquat[4 * id])
+      }
+    }
+  }
+
+  frameComparison(engine) {
+    if (!this.comparison) return
+    this.setCameraMode({ kind: 'free' }, engine)
+    this.scene.updateMatrixWorld(true)
+    const bounds = new THREE.Box3().setFromObject(this.comparison.root)
+    if (bounds.isEmpty()) return
+    const sphere = bounds.getBoundingSphere(new THREE.Sphere())
+    const host = this.canvas.parentElement
+    const aspect = Math.max(1, host.clientWidth - (this.inset || 0)) / Math.max(1, host.clientHeight - (this.bottomInset || 0))
+    const angle = Math.atan(Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2) * Math.min(1, aspect))
+    const direction = this.camera.position.clone().sub(this.controls.target).normalize()
+    this.controls.target.copy(sphere.center)
+    this.camera.position.copy(sphere.center).addScaledVector(direction, Math.max(.1, sphere.radius) / Math.sin(angle) * 1.15)
+    this.controls.update()
+  }
+
+  clearComparison() {
+    if (!this.comparison) return
+    this.scene.remove(this.comparison.root)
+    for (const item of this.comparison.owned) item.dispose()
+    for (const group of this.bodies.values()) group.visible = true
+    this.comparison = null
   }
 
   applySettings(settings) {

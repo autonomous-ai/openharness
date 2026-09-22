@@ -1519,42 +1519,51 @@
 
   // ---------------------------------------------------------------------------------------------
   // Stills
-  async function frameBlob() {
+  async function captureFrame() {
     const s = P.src
-    if (!s) return null
+    if (!s) throw new Error('No frame is ready yet.')
+    const clip = P.clip, sourceId = s.id, sourceUrl = V.src
     const c = document.createElement('canvas')
     if (s.kind === 'image') {
+      if (!el.still.complete || !el.still.naturalWidth) throw new Error('The image is still loading. Try again once it appears.')
       c.width = el.still.naturalWidth; c.height = el.still.naturalHeight
       c.getContext('2d').drawImage(el.still, 0, 0)
     } else {
-      if (V.seeking) await once(V, ['seeked', 'error'], 3000).catch(() => {})
+      if (V.seeking) await once(V, ['seeked', 'error'], 3000)
+      if (P.src?.id !== sourceId || P.clip !== clip || V.src !== sourceUrl) throw new Error('The render changed before the frame was ready. Try again on the frame you want.')
+      if (V.seeking || P.pendingLocal != null || P.queued != null || V.readyState < 2 || !V.videoWidth) throw new Error('The frame is still loading. Try again once it appears.')
       c.width = V.videoWidth; c.height = V.videoHeight
       c.getContext('2d').drawImage(V, 0, 0)
     }
-    return new Promise((resolve) => c.toBlob(resolve, 'image/png'))
-  }
-  const stillName = () => {
-    const s = P.src
-    return `${s.title}${s.quality ? '-' + s.quality : ''}${s.kind === 'image' ? '' : '-f' + pad(frameNow(), 4)}`
+    // Pixels, label and frame belong to the same synchronous capture. Encoding can
+    // finish after playback, a seek, a new render, or another source has moved on.
+    const frame = frameNow(), title = s.title
+    const name = `${title}${s.quality ? '-' + s.quality : ''}${s.kind === 'image' ? '' : '-f' + pad(frame, 4)}`
+    const blob = await new Promise((resolve) => c.toBlob(resolve, 'image/png'))
+    if (!blob) throw new Error('The browser could not encode this frame.')
+    return { blob, name, title, frame, width: c.width, height: c.height }
   }
   async function copyFrame() {
     closeMenus()
     if (!P.src) return
-    const f = frameNow()
+    const captured = captureFrame()
     try {
       if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('no clipboard')
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': frameBlob() })])
-      toast(`<b>Frame ${f} copied</b> <span>· PNG, ${V.videoWidth || el.still.naturalWidth}×${V.videoHeight || el.still.naturalHeight}</span>`, { kind: 'ok', timeout: 3500 })
+      const png = captured.then(frame => frame.blob)
+      png.catch(() => {}) // A browser may reject ClipboardItem before consuming its promise.
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+      const frame = await captured
+      toast(`<b>Frame ${frame.frame} copied</b> <span>· ${esc(frame.title)} · PNG, ${frame.width}×${frame.height}</span>`, { kind: 'ok', timeout: 3500 })
     } catch {
-      await saveFrame('The clipboard is not available here — saved instead.')
+      await saveFrame('The clipboard is not available here — saved instead.', captured)
     }
   }
-  async function saveFrame(prefix) {
+  async function saveFrame(prefix, captured) {
     closeMenus()
-    if (!P.src) return
+    if (!P.src && !captured) return
     try {
-      const blob = await frameBlob()
-      const res = await fetch(`/api/still?name=${encodeURIComponent(stillName())}`, { method: 'POST', body: blob, headers: { 'content-type': 'image/png', 'x-video-viewer': 'still' } })
+      const frame = await (captured || captureFrame())
+      const res = await fetch(`/api/still?name=${encodeURIComponent(frame.name)}`, { method: 'POST', body: frame.blob, headers: { 'content-type': 'image/png', 'x-video-viewer': 'still' } })
       if (!res.ok) throw new Error(await res.text())
       const { path } = await res.json()
       toast(`<b>${prefix ? esc(prefix) : 'Frame saved'}</b> <span>· ${esc(path)}</span>`, {

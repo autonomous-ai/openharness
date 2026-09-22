@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart' show AgentVerdict;
 import '../core/test_run.dart';
@@ -244,7 +243,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
                           widget.title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: terminalTextStyle(
+                          style: grid.AppType.monoLabel(
                             color: AppColors.text,
                             fontWeight: FontWeight.w600,
                           ),
@@ -253,9 +252,8 @@ class _WebPanePanelState extends State<WebPanePanel> {
                       if (widget.verdict case final verdict?) ...[
                         Text(
                           '  ·  ',
-                          style: terminalTextStyle(
+                          style: grid.AppType.monoLabel(
                             color: AppColors.mutedStrong,
-                            fontWeight: FontWeight.w500,
                           ),
                         ),
                         Flexible(
@@ -352,7 +350,6 @@ class _ViewerActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     Widget action(String tooltip, IconData icon, VoidCallback? callback) =>
         IconButton(
           tooltip: tooltip,
@@ -413,7 +410,6 @@ class _Notice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -424,7 +420,7 @@ class _Notice extends StatelessWidget {
             const SizedBox(height: 10),
             Text(
               title,
-              style: terminalTextStyle(
+              style: grid.AppType.label(
                 color: AppColors.text,
                 fontWeight: FontWeight.w600,
               ),
@@ -435,7 +431,7 @@ class _Notice extends StatelessWidget {
               textAlign: TextAlign.center,
               maxLines: 3,
               overflow: TextOverflow.ellipsis,
-              style: terminalTextStyle(color: AppColors.mutedStrong),
+              style: grid.AppType.body(color: AppColors.mutedStrong),
             ),
             if (action != null) ...[const SizedBox(height: 8), action!],
           ],

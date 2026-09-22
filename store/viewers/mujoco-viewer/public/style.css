@@ -315,3 +315,71 @@ body.tiny #btn-help { display: none; }
 
 body.no-model #transport > *, body.no-model .tools > :not(#btn-help), body.no-model #modes { visibility: hidden; }
 body.no-model #panel { display: none; }
+
+/* The experiment keeps the scene large and puts the two measured futures on the same timeline. */
+#btn-experiment { border: 1px solid var(--line-strong); background: var(--bg); border-radius: 7px; padding: 3px 9px; margin-right: 5px; cursor: pointer; white-space: nowrap; color: var(--accent); }
+#btn-experiment:hover { background: var(--accent-wash); }
+#tab-experiment { padding: 18px 14px; }
+#panel:has(#tab-experiment.on) { width: 326px; }
+.tabs button { padding-inline: 7px; }
+.experiment-intro .eyebrow { font: 10px/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.experiment-intro h2 { font-size: 23px; font-weight: 550; letter-spacing: -.7px; margin: 7px 0; line-height: 1.15; }
+.experiment-intro p { color: var(--text-2); line-height: 1.55; margin: 0 0 16px; }
+.experiment-start { background: var(--accent-wash); padding: 10px; border-radius: 8px; display: grid; gap: 7px; margin-bottom: 16px; }
+.experiment-start span, .experiment-detail { font-size: 11px; line-height: 1.5; color: var(--text-2); }
+#tab-experiment button:not(.accent) { border: 1px solid var(--line-strong); background: var(--bg); padding: 6px 9px; border-radius: 6px; cursor: pointer; }
+#tab-experiment button:disabled { opacity: .5; cursor: default; }
+#tab-experiment button:hover:not(:disabled):not(.accent) { background: var(--hover); }
+.experiment-field { display: grid; gap: 6px; margin: 13px 0; }
+.experiment-field > span { display: flex; justify-content: space-between; align-items: center; }
+.experiment-field output { font: 11px var(--mono); color: var(--accent); }
+.experiment-field select { border: 1px solid var(--line-strong); background: var(--bg); border-radius: 6px; min-width: 0; padding: 6px; width: 100%; }
+.experiment-field input, #experiment-scrub { width: 100%; margin: 0; accent-color: var(--accent); }
+.experiment-presets { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 15px; }
+.experiment-presets button { font-size: 11px; }
+.experiment-duration { display: flex; align-items: center; gap: 8px; }
+.experiment-duration select { width: auto; flex: 1; }
+.experiment-actions { display: flex; gap: 8px; }
+.experiment-actions .accent { flex: 1; padding: 8px; }
+#experiment-status { font-size: 11px; color: var(--text-2); line-height: 1.5; min-height: 16px; }
+#experiment-progress { width: 100%; height: 4px; accent-color: var(--accent); }
+#experiment-results { border-top: 1px solid var(--line); padding-top: 15px; margin-top: 15px; }
+#experiment-result-title { margin: 10px 0 4px; font-size: 13px; }
+.experiment-legend { display: grid; gap: 4px; font-size: 10px; }
+#experiment-frame { margin-top: 9px; font-size: 11px; }
+.original { color: #0b8472; }
+.changed { color: #b5680a; }
+.experiment-legend span::before, #comparison-legend span::before { content: ''; display: inline-block; width: 13px; height: 0; border-top: 2px solid currentColor; margin-right: 6px; vertical-align: middle; }
+.experiment-legend .original::before, #comparison-legend .original::before { border-top-style: dashed; }
+.experiment-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0; }
+.experiment-metrics button { min-width: 0; text-align: left; padding: 8px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--bg); cursor: pointer; }
+.experiment-metrics button:hover:not(:disabled) { background: var(--accent-wash); border-color: var(--accent); }
+.experiment-metrics strong { font: 24px/1.3 var(--mono); letter-spacing: -1px; display: block; }
+.experiment-metrics span { font-size: 10px; color: var(--text-2); }
+.experiment-metrics small { display: block; margin-top: 6px; font-size: 9px; line-height: 1.5; color: var(--accent); }
+#experiment-chart { width: 100%; height: auto; display: block; stroke: none; }
+#experiment-chart .original { stroke: #0b8472; }
+#experiment-chart .changed { stroke: #b5680a; }
+.chart-label { fill: var(--text-2); font: 9px var(--mono); }
+.chart-cursor { stroke: var(--text-3); stroke-width: 1; }
+.experiment-playback { display: flex; align-items: center; justify-content: space-between; gap: 5px; margin: 8px 0; }
+.experiment-playback output { font: 10px var(--mono); white-space: nowrap; color: var(--text-2); }
+.experiment-exports { display: flex; flex-wrap: wrap; gap: 5px; margin: 13px 0 5px; }
+#experiment-return { width: 100%; margin-top: 12px; }
+#comparison-legend { position: absolute; left: 14px; bottom: 14px; z-index: 4; display: grid; gap: 7px; padding: 11px 14px; border-radius: 9px; background: rgba(16,24,32,.9); color: #fff; backdrop-filter: blur(10px); pointer-events: none; font-size: 11px; }
+#comparison-legend b { font-weight: 500; padding-bottom: 2px; }
+#comparison-legend .original { color: #44d9bb; }
+#comparison-legend .changed { color: #ffb65c; }
+body.comparing #hud, body.comparing #chip { visibility: hidden; }
+@media (prefers-color-scheme: dark) {
+  .original { color: #44d9bb; } .changed { color: #ffb65c; }
+  #experiment-chart .original { stroke: #44d9bb; } #experiment-chart .changed { stroke: #ffb65c; }
+}
+@media (max-width: 560px) {
+  #btn-camera, #btn-show { display: none; }
+  #btn-experiment { padding-inline: 6px; margin-right: 2px; }
+  #bar { gap: 5px; padding-inline: 7px; }
+  #model-name { max-width: 80px; }
+  #panel:has(#tab-experiment.on) { width: 100%; height: 45vh; top: auto; bottom: 44px; border-left: 0; border-top: 1px solid var(--line); }
+  body.comparing #comparison-legend { left: 8px; padding: 8px; bottom: calc(var(--bottom-inset, 0px) + 8px); font-size: 10px; }
+}

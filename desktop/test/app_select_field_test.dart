@@ -200,8 +200,8 @@ void main() {
     // 1. the tick, 2. the heavier label. (3. the accent wash is painted by an
     // `Ink` and is checked by eye, not here.)
     expect(find.byIcon(LucideIcons.check300), findsOneWidget);
-    expect(labelIn('Menlo').style?.fontWeight, grid.AppFont.semibold);
-    expect(labelIn('Helvetica Neue').style?.fontWeight, grid.AppFont.medium);
+    expect(labelIn('Menlo').style?.fontWeight, grid.AppFont.medium);
+    expect(labelIn('Helvetica Neue').style?.fontWeight, grid.AppFont.regular);
   });
 
   testWidgets('a note reads as an aside, not as part of the name', (

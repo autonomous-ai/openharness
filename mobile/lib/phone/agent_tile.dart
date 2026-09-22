@@ -26,12 +26,17 @@ class AgentTile extends StatelessWidget {
     required this.agent,
     required this.onTap,
     this.onLongPress,
+    this.border,
   });
 
   final MachineState machine;
   final Agent agent;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
+
+  /// Overrides the card's hairline rim — the tabs panel marks the agent whose
+  /// terminal is already on screen with it. Null keeps the ordinary rim.
+  final BoxBorder? border;
 
   @override
   Widget build(BuildContext context) {
@@ -40,6 +45,7 @@ class AgentTile extends StatelessWidget {
       height: kPhoneAgentCardHeight,
       onTap: agent.terminalAvailable ? onTap : null,
       onLongPress: onLongPress,
+      border: border,
       child: Row(
         children: [
           PhoneCardGlyph(

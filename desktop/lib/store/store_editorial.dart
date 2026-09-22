@@ -80,7 +80,7 @@ const storeStories = <String, StoreStory>{
     headline: 'You can\ndesign in 3D.',
     description: 'Describe a scene. Shape every detail.\nMake something you never thought you could.',
     asset: 'assets/store/blender-studio.png',
-    caption: 'A scene made with Blender · Original OpenHarness artwork',
+    caption: 'A scene made with Blender · Original Harness artwork',
     prompts: [
       'Create a sculptural scene with an orange arch, a chrome sphere, and soft studio lighting.',
       'Design a ceramic mug with a rounded handle. Show me a turntable view.',

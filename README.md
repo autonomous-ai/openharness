@@ -20,7 +20,7 @@ Use the desktop app on its own, or add the optional **Harness device** to follow
 their questions, and speak new tasks from your desk. The app, firmware, schematics, PCB layouts, and
 enclosure CAD files are all open source.
 
-[Who it's for](#for-polymaths-in-the-making) · [What you can make](#domain-specific-harnesses-dsh) · [Run it](#run-it) ·
+[Who it's for](#for-polymaths-in-the-making) · [What you can make](#domain-specific-harnesses-dsh) · [Get hands-on](docs/hands-on.md) · [Run it](#run-it) ·
 [Harness device](#harness-device) · [Architecture](docs/architecture.md) · [Contribute](#contributing)
 
 <p align="center">
@@ -68,15 +68,23 @@ game takes shape on the other, and stays interactive after the agent is done.
 A DSH is a folder with a `harness.json`. The agent does the reasoning; the harness brings the tools
 and the view. Adding a domain never needs a change to the app or the daemon.
 
+**Try the part only you can do.** Change a robot's world, shape a lamp, rewind a jump, perform a
+track, turn a molecular bond, review a draft, sharpen a question, or compare a circuit's traces.
+The [hands-on field guide](docs/hands-on.md) has eight native demos, starting prompts and ways to
+keep your decisions. Open [the interactive guide](docs/hands-on.html) from this checkout in a browser
+to pick a craft and watch the local recordings.
+For a live preview from this checkout, [run a native starter](docs/try-hands-on.md) for physics,
+music or circuits using your installed harness assets.
+
 <!-- store-catalog:start -->
 ### Coding and beyond
 
-Start with a coding agent you already use. Explore 48 domain-specific harnesses when your
+Start with a coding agent you already use. Explore 49 domain-specific harnesses when your
 next idea takes you further.
 
 | Category | Agents and harnesses |
 |---|---|
-| **Coding** | [Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build, Kilo Code](docs/engines.md), [Machine Monitor](store/agents/machine-monitor/) |
+| **Coding** | [Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build, Kilo Code](docs/engines.md), [Harness Monitor](store/agents/harness-monitor/), [Machine Monitor](store/agents/machine-monitor/) |
 | Design | [Autonomous Workshop](store/agents/autonomous-workshop/), [Blender](store/agents/blender/), [Bonsai MCP](store/agents/bonsai-mcp/), [Creative Direction](store/agents/creative-direction/), [Excalidraw](store/agents/excalidraw/), [FreeCAD](store/agents/freecad/), [Generative Art](store/agents/generative-art/), [OpenSCAD](store/agents/openscad/), [text-to-cad](store/agents/text-to-cad/) |
 | Engineering | [Autonomous Circuit](store/agents/autonomous-circuit/), [CircuitJS](store/agents/circuitjs/), [Home Assistant](store/agents/home-assistant/), [KiCad](store/agents/kicad/), [Orca Slicer](store/agents/orca-slicer/), [Yosys](store/agents/yosys/) |
 | Media | [Comfy MCP](store/agents/comfy-mcp/), [Manim](store/agents/manim/), [OpenMontage](store/agents/openmontage/), [Remotion](store/agents/remotion/) |
@@ -88,7 +96,7 @@ next idea takes you further.
 | Research | [Jev Browser](store/agents/jev-browser/), [Roundtable](store/agents/roundtable/) |
 | Local AI | [Grid](store/agents/autonomous-grid/), [MLX-LM](store/agents/mlx-lm/), [Ollama](store/agents/ollama/), [vLLM](store/agents/vllm/) |
 
-These are the 48 harnesses currently listed in the Store catalog. They combine upstream
+These are the 49 harnesses currently listed in the Store catalog. They combine upstream
 open-source tools and original workflows, with instructions, setup, checks, and live views for each craft.
 
 The 10 [shared viewers](store/viewers/) cover CAD, 3D models, documents, games, film, video,

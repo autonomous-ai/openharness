@@ -126,6 +126,14 @@ class Workspace(unittest.TestCase):
 
 
 class NewestSdf(Workspace):
+    def test_kept_scans_do_not_replace_the_live_artifact(self):
+        original = self.write("out/original.sdf", WATER_3D, age=100)
+        self.write("out/torsions/saved-study/scan.sdf", WATER_3D * 25)
+        self.write("out/torsions/saved-study/selected.sdf", WATER_3D)
+        self.assertEqual(newest_sdf(self.ws), original)
+        original.unlink()
+        self.assertIsNone(newest_sdf(self.ws))
+
     def test_the_newest_sdf_wins_and_ensembles_and_dotfiles_never_do(self):
         self.write("out/old.sdf", WATER_3D, age=100)
         new = self.write("out/series/new.sdf", WATER_3D, age=50)

@@ -5,7 +5,6 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/logging/app_log.dart';
-import 'package:harness/logging/app_log_tail.dart';
 import 'package:harness/logging/error_burst_filter.dart';
 import 'package:harness/logging/log_file.dart';
 
@@ -138,34 +137,6 @@ void main() {
       }
 
       expect('\n'.allMatches(sink.currentFile.readAsStringSync()).length, 5);
-    });
-  });
-
-  group('recentErrorLines', () {
-    const log = '''
-[2026-09-07 08:00:00] INFO  app     launched
-[2026-09-07 08:00:01] ERROR ws      first failure
-    #0 a stack frame that must not be picked up
-[2026-09-07 08:00:02] WARN  cli     a warning
-[2026-09-07 08:00:03] ERROR api     second failure
-''';
-
-    test('keeps only ERROR lines, newest last, without their stacks', () {
-      expect(recentErrorLines(log), [
-        '[2026-09-07 08:00:01] ERROR ws      first failure',
-        '[2026-09-07 08:00:03] ERROR api     second failure',
-      ]);
-    });
-
-    test('keeps at most `keep`, taking the newest', () {
-      expect(recentErrorLines(log, keep: 1), [
-        '[2026-09-07 08:00:03] ERROR api     second failure',
-      ]);
-    });
-
-    test('a very long line is clipped', () {
-      final wide = '[2026-09-07 08:00:00] ERROR api     ${'x' * 400}';
-      expect(recentErrorLines(wide, clip: 60).single.length, 61);
     });
   });
 }

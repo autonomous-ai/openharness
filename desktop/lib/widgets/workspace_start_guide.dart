@@ -37,7 +37,7 @@ class WorkspaceStartGuide extends StatelessWidget {
       color: grid.AppPalette.swarmWelcome,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final scale = terminalTextScaleOf(context);
+          final scale = grid.appTextScaleOf(context);
           final compact = constraints.maxWidth < 680 * scale;
           final short = constraints.maxHeight < 420 * scale;
           Widget callout(String command, String label, String explanation) =>

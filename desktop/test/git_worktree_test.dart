@@ -105,7 +105,7 @@ void main() {
     },
   );
 
-  test('branch switching protects dirty changes and branches checked out elsewhere', () async {
+  test('branch switching protects dirty changes', () async {
     Future<String> switchTo(String branch) => ProjectFolderRequest.branch(
       repo,
       'refs/heads/$branch',
@@ -123,10 +123,73 @@ void main() {
     expect(await git(['branch', '--show-current']), 'feature');
     expect(await git(['stash', 'list']), isEmpty);
     expect(await switchTo('feature'), repo);
-    await git(['worktree', 'add', p.join(root.path, 'other'), 'main']);
-    await expectLater(
-      switchTo('main'),
-      throwsA(isA<RepositoryCloneException>()),
+  });
+
+  Future<String> real(String path) => Directory(path).resolveSymbolicLinks();
+
+  test('a branch checked out in another worktree opens there', () async {
+    final other = p.join(root.path, 'other');
+    await git(['worktree', 'add', other, 'feature']);
+    final path = await ProjectFolderRequest.branch(
+      p.join(repo, 'src'),
+      'refs/heads/feature',
+    ).prepareLocal(projectHome: root.path);
+    expect(await real(path), await real(p.join(other, 'src')));
+    expect(await git(['branch', '--show-current']), 'main');
+  });
+
+  test(
+    'worktrees are named for the harness and the time, grouped by repository',
+    () async {
+      await git(['branch', 'harness/codex-0921-1200-2', 'main']);
+      final paths = [await worktree(), await worktree()];
+      final folder = p.join(
+        root.path,
+        'harnesses',
+        'worktrees',
+        'project with spaces',
+      );
+      expect(paths, [
+        p.join(folder, 'codex-0921-1200'),
+        p.join(folder, 'codex-0921-1200-3'),
+      ]);
+      for (final path in paths) {
+        expect(
+          await git(['branch', '--show-current'], path),
+          'harness/${p.basename(path)}',
+        );
+      }
+    },
+  );
+
+  test('a linked worktree reads as its repository, and new worktrees from it join that repository', () async {
+    final linked = await worktree();
+    final info = GitProjectInfo.fromJson(
+      await readLocalGitProject(p.join(linked, 'src')),
+    );
+    expect(info.branch, 'harness/codex-0921-1200');
+    expect(info.mainBranch, 'main');
+    expect(await real(info.mainFolder!), await real(p.join(repo, 'src')));
+    final branches = {for (final b in info.branches) b.name: b.worktree};
+    expect(
+      await real(branches['harness/codex-0921-1200']!),
+      await real(linked),
+    );
+    expect(await real(branches['main']!), await real(repo));
+    expect(branches['origin/feature'], isNull);
+    expect(
+      GitProjectInfo.fromJson(await readLocalGitProject(repo)).mainFolder,
+      isNull,
+    );
+    expect(
+      await worktree(folder: linked),
+      p.join(
+        root.path,
+        'harnesses',
+        'worktrees',
+        'project with spaces',
+        'codex-0921-1200-2',
+      ),
     );
   });
 

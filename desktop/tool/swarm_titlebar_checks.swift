@@ -120,26 +120,25 @@ private extension SwarmTabStrip {
   }
 
   func checkSharedTypography() throws {
-    defer { HarnessTypography.update(["fontFamily": ".AppleSystemUIFontMonospaced", "fontSize": 13]) }
-    for size in [CGFloat(9), 13, 22] {
+    defer { HarnessTypography.update(["fontFamily": ".AppleSystemUIFontMonospaced", "fontSize": 12]) }
+    let menuFont = NSFont.menuFont(ofSize: 0)
+    for size in [CGFloat(12), 14] {
       update(["tabs": [["id": "font-tab", "name": "Typography"]], "activeId": "font-tab",
         "enabled": true, "fontFamily": "Menlo", "fontSize": size])
       let tab = tabs[0]
       try checkTitlebar(tab.labelFont.pointSize == size && tab.labelFont.familyName == "Menlo",
-        "Native tab uses the terminal face and size")
+        "Native tab uses the terminal face at the chrome size Flutter sends")
       try checkTitlebar(storeButton.font?.pointSize == size && storeButton.font?.familyName == "Menlo",
-        "Native store action uses the terminal face and size")
-      let menuFont = NSFont.menuFont(ofSize: 0)
-      try checkTitlebar(tab.menu?.font == menuFont,
-        "Native tab menu keeps the OS default font")
+        "Native store action uses the terminal face at the chrome size")
+      try checkTitlebar(tab.menu?.font.familyName == menuFont.familyName && tab.menu?.font.pointSize == menuFont.pointSize,
+        "Native tab menu keeps the system menu font")
       let history = SwarmHistoryEntry(["id": "font", "title": "Project", "machineName": "Machine"])!
       let font = history.menuTitle().attribute(.font, at: 0, effectiveRange: nil) as! NSFont
-      try checkTitlebar(font == menuFont,
-        "Native history keeps the OS default font")
+      try checkTitlebar(font == menuFont, "Native history keeps the system menu font")
       let item = NSMenuItem()
       let row = SwarmHistoryMenuRow(item: item, entry: history, width: 400)
       try checkTitlebar(row.machineFrame.minY >= 0 && row.machineFrame.maxY <= row.bounds.height,
-        "Native history text fits at every supported point size")
+        "Native history text fits its row")
     }
   }
 
@@ -743,9 +742,9 @@ private extension SwarmTitlebar {
     try checkTitlebar(messenger.calls.last?.method == "machineList",
       "Machines Manager opens through the Flutter command bridge")
     let destinations = machineMenu.items.filter { $0.action == #selector(machineAction(_:)) }
-    try checkTitlebar(machineMenu.minimumWidth == 0 && machineMenu.size.width < SwarmMenuText.width(String(repeating: "M", count: 80)) &&
+    try checkTitlebar(machineMenu.minimumWidth == 0 && machineMenu.size.width < 432 &&
       destinations.first?.attributedTitle?.string.hasSuffix("\t2 harnesses") == true,
-      "Machines sizes with the selected font and aligns harness counts")
+      "Machines gives labels twenty percent more room with aligned counts")
     try checkTitlebar(destinations.map { $0.representedObject as? String } == ["office", "home"],
       "Machines lists each linked computer as a destination")
     try checkTitlebar(destinations[0].attributedTitle?.string.contains("Online") == true &&

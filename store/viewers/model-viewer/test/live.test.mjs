@@ -34,6 +34,7 @@ test('a new export, a verdict and a build feed arrive as state events; the rest 
     ws.put('.git/HEAD', 'ref')
     ws.put('src/__pycache__/m.pyc', 'x')
     ws.put('.harness/log.txt', 'x')
+    ws.put('out/designs/aaaaaaaaaaaaaaaaaaaa/source/out/spin-frames/0001.png', 'kept frame')
     await sleep(900)
     assert.equal(feed.list.slice(seen.index + 1).filter((item) => item.event === 'state').length, 0)
 

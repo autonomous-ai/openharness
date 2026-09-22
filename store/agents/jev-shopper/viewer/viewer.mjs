@@ -47,6 +47,7 @@ export async function startShopperViewer({ workspace, port = 0 } = {}) {
   let stateText = ''
   let error = null
   let running = false, stopped = false, busy = false
+  let resetRevision = 0
   let timer = null, watchTimer = null, salt = 1, lastVerdictAt = 0
   const clients = new Set()
 
@@ -103,6 +104,7 @@ export async function startShopperViewer({ workspace, port = 0 } = {}) {
   async function decide() {
     if (busy || stopped) return false
     busy = true
+    const askedWorld = streams
     try {
       const c = cfg()
       step++; roundTick++
@@ -132,6 +134,8 @@ export async function startShopperViewer({ workspace, port = 0 } = {}) {
         salt: salt++,
         model: process.env.JEV_MODEL || 'jev-latest',
       })
+      // A reset or file edit may have replaced the world while the provider was answering.
+      if (stopped || streams !== askedWorld) return
       const a = res.answers.buy ?? {}
       const pick = o.options.includes(a.choice) ? a.choice : o.options[0]
       const act = typeof res.answers.act?.noul === 'number' ? res.answers.act.noul : 0.5
@@ -160,6 +164,7 @@ export async function startShopperViewer({ workspace, port = 0 } = {}) {
       error = null
       return true
     } catch (e) {
+      if (stopped || streams !== askedWorld) return
       error = clean(e?.message ?? e?.name ?? String(e))
       return true
     } finally {
@@ -243,10 +248,13 @@ export async function startShopperViewer({ workspace, port = 0 } = {}) {
     let reply = {}
     if (cmd === 'pause') { running = false; clearTimeout(timer) }
     else if (cmd === 'start') { if (!running) { running = true; schedule() } }
-    else if (cmd === 'reset') { resetAll(); if (running) schedule() }
+    else if (cmd === 'reset') {
+      resetRevision++
+      resetAll(); if (running) schedule()
+    }
     else if (cmd === 'tick') {
       const n = Math.round(clampN(body.n, 1, 20000, 1))
-      for (let done = 0; done < n && !stopped;) { if (await decide()) done++; else await sleep(1) }
+      for (let done = 0, revision = resetRevision; done < n && !stopped && revision === resetRevision;) { if (await decide()) done++; else await sleep(1) }
     } else if (cmd === 'set') {
       const allowed = { vol: [0, 0.5], tickMs: [60, 5000], cash: [20, 5000], minDeal: [0.01, 0.4] }
       const range = allowed[body.key]
@@ -322,7 +330,7 @@ export async function startShopperViewer({ workspace, port = 0 } = {}) {
         if (stopped) return
         const before = JSON.stringify(fileCfg)
         loadCfg()
-        if (!cfgError && JSON.stringify(fileCfg) !== before) { resetAll(); if (running) schedule() } // a good edit clears the overrides and starts fresh
+        if (!cfgError && JSON.stringify(fileCfg) !== before) { resetRevision++; resetAll(); if (running) schedule() } // a good edit clears the overrides and starts fresh
         push(true)
       }, 40)
     })

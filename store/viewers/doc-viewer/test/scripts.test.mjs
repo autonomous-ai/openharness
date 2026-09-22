@@ -13,7 +13,7 @@ import { cleanup, pkg, put, scratch } from './helpers.mjs'
 after(cleanup)
 
 const PDFJS_FILES = ['build/pdf.min.mjs', 'build/pdf.worker.min.mjs', 'web/pdf_viewer.mjs', 'web/pdf_viewer.css', 'legacy/build/pdf.min.mjs', 'legacy/web/pdf_viewer.mjs']
-const APP_FILES = ['app/index.html', 'app/app.js', 'app/app.css', 'lib/workspace.mjs']
+const APP_FILES = ['app/index.html', 'app/app.js', 'app/app.css', 'app/reviews.mjs', 'lib/workspace.mjs', 'lib/reviews.mjs', 'lib/zip.mjs']
 // A bash line tracer's hooks (BASH_ENV sourcing a DEBUG trap that appends to SHCOV_OUT), passed through when set.
 const TRACER = Object.fromEntries(['BASH_ENV', 'SHCOV_OUT'].filter((k) => process.env[k]).map((k) => [k, process.env[k]]))
 // A node whose `-e` version check fails, as Node 18 fails `>= 20`.

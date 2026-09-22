@@ -352,7 +352,10 @@ class _ShortcutBrowserRow extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final keys = KeyChordView(chords: chords);
+                final keys = KeyChordView(
+                  chords: chords,
+                  textStyle: terminalTextStyle(),
+                );
                 final label = Text(
                   lesson.label,
                   style: terminalTextStyle(color: grid.AppPalette.textPrimary),

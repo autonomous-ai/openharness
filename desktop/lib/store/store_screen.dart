@@ -590,7 +590,7 @@ class _StoreNav extends StatelessWidget {
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
     final shelf = this.shelf;
-    final textScale = (terminalTextScaleOf(context)).clamp(1.0, 1.5);
+    final textScale = grid.appTextScaleOf(context).clamp(1.0, 1.5);
     return Container(
       width:
           (MediaQuery.sizeOf(context).width < 1000 ? 184 : 216) +
@@ -621,9 +621,9 @@ class _StoreNav extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
                   child: Text(
                     'DISCIPLINES',
-                    style: terminalTextStyle(
+                    style: grid.AppType.monoMeta(
                       letterSpacing: 1.4,
-                      fontWeight: FontWeight.w600,
+                      fontWeight: grid.AppFont.medium,
                       color: grid.AppPalette.textFaint,
                     ),
                   ),
@@ -639,10 +639,13 @@ class _StoreNav extends StatelessWidget {
                     trailingWidth: 22,
                     trailing: textScale > 1.2
                         ? null
-                        : Text(
-                            '${counts[name]}',
-                            style: terminalTextStyle(
-                              color: grid.AppPalette.textFaint,
+                        : Align(
+                            alignment: Alignment.centerRight,
+                            child: Text(
+                              '${counts[name]}',
+                              style: grid.AppType.monoMeta(
+                                color: grid.AppPalette.textFaint,
+                              ),
                             ),
                           ),
                     onTap: () => onSelect(_Category(name)),
@@ -725,7 +728,6 @@ class _Shelf$View extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     if (shelf is _Category) {
       return StoreCategory(
         name: _title,
@@ -750,16 +752,12 @@ class _Shelf$View extends StatelessWidget {
             children: [
               Text(
                 _title,
-                style: terminalTextStyle(
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: -.6,
-                  color: grid.AppPalette.textPrimary,
-                ),
+                style: grid.AppType.display(color: grid.AppPalette.textPrimary),
               ),
               const SizedBox(height: 8),
               Text(
                 _subtitle,
-                style: terminalTextStyle(color: grid.AppPalette.textSecondary),
+                style: grid.AppType.body(color: grid.AppPalette.textSecondary),
               ),
               const SizedBox(height: 24),
               if (entries.isEmpty)
@@ -771,7 +769,7 @@ class _Shelf$View extends StatelessWidget {
                         : loaded
                         ? 'Nothing here yet.'
                         : 'Asking this computer…',
-                    style: terminalTextStyle(
+                    style: grid.AppType.body(
                       height: 1.5,
                       color: grid.AppPalette.textSecondary,
                     ),
@@ -819,7 +817,6 @@ class _Stars extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1155,10 +1152,8 @@ class _ProductPageState extends State<_ProductPage> {
                     Text(
                       entry.name,
                       textAlign: TextAlign.center,
-                      style: terminalTextStyle(
-                        height: 1.02,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: wide ? -2.2 : -1.2,
+                      style: grid.AppType.display(
+                        height: 1.1,
                         color: grid.AppPalette.textPrimary,
                       ),
                     ),
@@ -1170,7 +1165,7 @@ class _ProductPageState extends State<_ProductPage> {
                           child: Text(
                             description,
                             textAlign: TextAlign.center,
-                            style: terminalTextStyle(
+                            style: grid.AppType.body(
                               height: 1.45,
                               color: grid.AppPalette.textSecondary,
                             ),
@@ -1191,7 +1186,7 @@ class _ProductPageState extends State<_ProductPage> {
                           'Runs on $baseLabel',
                       ].join(' · '),
                       textAlign: TextAlign.center,
-                      style: terminalTextStyle(
+                      style: grid.AppType.body(
                         color: grid.AppPalette.textFaint,
                       ),
                     ),
@@ -1257,8 +1252,8 @@ class _ProductPageState extends State<_ProductPage> {
                             foregroundColor: grid.AppPalette.windowBg,
                             minimumSize: const Size(148, 50),
                             padding: const EdgeInsets.symmetric(horizontal: 30),
-                            textStyle: terminalTextStyle(
-                              fontWeight: FontWeight.w600,
+                            textStyle: grid.AppType.label(
+                              fontWeight: grid.AppFont.semibold,
                             ),
                             shape: const StadiumBorder(),
                           ),
@@ -1278,7 +1273,7 @@ class _ProductPageState extends State<_ProductPage> {
                       Text(
                         'Your projects and files are kept.',
                         textAlign: TextAlign.center,
-                        style: terminalTextStyle(
+                        style: grid.AppType.body(
                           color: grid.AppPalette.textSecondary,
                         ),
                       ),
@@ -1302,7 +1297,7 @@ class _ProductPageState extends State<_ProductPage> {
                       child: local == null
                           ? Text(
                               'Connecting to this computer…',
-                              style: terminalTextStyle(
+                              style: grid.AppType.body(
                                 color: grid.AppPalette.textFaint,
                               ),
                             )
@@ -1362,9 +1357,7 @@ class _ProductPageState extends State<_ProductPage> {
                         Text(
                           'Ratings and reviews',
                           textAlign: TextAlign.center,
-                          style: terminalTextStyle(
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: -0.6,
+                          style: grid.AppType.heading(
                             color: grid.AppPalette.textPrimary,
                           ),
                         ),
@@ -1387,7 +1380,7 @@ class _ProductPageState extends State<_ProductPage> {
                           Text(
                             'Reviews are unavailable right now.',
                             textAlign: TextAlign.center,
-                            style: terminalTextStyle(
+                            style: grid.AppType.body(
                               color: grid.AppPalette.textSecondary,
                             ),
                           ),
@@ -1397,7 +1390,7 @@ class _ProductPageState extends State<_ProductPage> {
                           Text(
                             'No reviews yet. Be the first.',
                             textAlign: TextAlign.center,
-                            style: terminalTextStyle(
+                            style: grid.AppType.body(
                               color: grid.AppPalette.textFaint,
                             ),
                           ),
@@ -1451,6 +1444,7 @@ class _InstallLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    TerminalFontScope.watch(context);
     final row = _machineHarness(state, entry.id);
     final run = state.dsh.runs[_operationId(state, entry.id)];
     final installing = run != null && run.inProgress;
@@ -1512,7 +1506,7 @@ class _InstallLine extends StatelessWidget {
     } else {
       status = 'Not installed';
     }
-    final faint = terminalTextStyle(color: grid.AppPalette.textFaint);
+    final faint = grid.AppType.body(color: grid.AppPalette.textFaint);
     return Wrap(
       alignment: WrapAlignment.center,
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -1532,7 +1526,7 @@ class _InstallLine extends StatelessWidget {
           Text(
             status,
             key: const ValueKey('store-install-status'),
-            style: terminalTextStyle(
+            style: grid.AppType.body(
               color: run?.failed == true
                   ? grid.AppPalette.warn
                   : grid.AppPalette.textSecondary,
@@ -1544,7 +1538,13 @@ class _InstallLine extends StatelessWidget {
             message: row?.availableCommit == null
                 ? 'Installed version: ${row!.installedCommit}'
                 : 'Installed: ${row!.installedCommit}\nAvailable: ${row.availableCommit}',
-            child: Text(row.installedCommit!.substring(0, 8), style: faint),
+            child: Text(
+              row.installedCommit!.substring(0, 8),
+              style: grid.AppType.monoLabel(
+                fontWeight: grid.AppFont.regular,
+                color: grid.AppPalette.textFaint,
+              ),
+            ),
           ),
         if (installed && !installing && !busy) ...[
           Text('·', style: faint),
@@ -1601,7 +1601,7 @@ class _QuietLinkState extends State<_QuietLink> {
         ? grid.AppPalette.textPrimary
         : grid.AppPalette.textSecondary;
     final content = DefaultTextStyle.merge(
-      style: terminalTextStyle(color: color),
+      style: grid.AppType.label(color: color),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1644,16 +1644,16 @@ class _RatingSummary extends StatelessWidget {
           children: [
             Text(
               rating.average.toStringAsFixed(1),
-              style: terminalTextStyle(
-                fontWeight: FontWeight.w700,
+              style: grid.AppType.title(
                 height: 1,
                 color: grid.AppPalette.textPrimary,
+                fontFeatures: grid.AppFont.tabularFigures,
               ),
             ),
             const SizedBox(height: 6),
             Text(
               'out of 5 · ${rating.count} rating${rating.count == 1 ? '' : 's'}',
-              style: terminalTextStyle(color: grid.AppPalette.textFaint),
+              style: grid.AppType.body(color: grid.AppPalette.textFaint),
             ),
           ],
         ),
@@ -1671,7 +1671,7 @@ class _RatingSummary extends StatelessWidget {
                         child: Text(
                           '$stars',
                           textAlign: TextAlign.right,
-                          style: terminalTextStyle(
+                          style: grid.AppType.monoMeta(
                             color: grid.AppPalette.textFaint,
                           ),
                         ),
@@ -1719,7 +1719,6 @@ class _ReviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -1740,8 +1739,7 @@ class _ReviewCard extends StatelessWidget {
                     review.title!,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: terminalTextStyle(
-                      fontWeight: FontWeight.w600,
+                    style: grid.AppType.label(
                       color: grid.AppPalette.textPrimary,
                     ),
                   ),
@@ -1763,13 +1761,13 @@ class _ReviewCard extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             '${review.mine ? 'You' : review.authorName} · ${_when(review.updatedAt)}',
-            style: terminalTextStyle(color: grid.AppPalette.textFaint),
+            style: grid.AppType.body(color: grid.AppPalette.textFaint),
           ),
           if (review.body != null) ...[
             const SizedBox(height: 8),
             Text(
               review.body!,
-              style: terminalTextStyle(
+              style: grid.AppType.body(
                 height: 1.45,
                 color: grid.AppPalette.textPrimary,
               ),
@@ -1819,7 +1817,6 @@ class _ReviewDialogState extends State<_ReviewDialog> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return _DialogCard(
       width: 460,
       child: Column(
@@ -1830,10 +1827,7 @@ class _ReviewDialogState extends State<_ReviewDialog> {
             widget.existing == null
                 ? 'Rate ${widget.name}'
                 : 'Your review of ${widget.name}',
-            style: terminalTextStyle(
-              fontWeight: FontWeight.w600,
-              color: grid.AppPalette.textPrimary,
-            ),
+            style: grid.AppType.heading(color: grid.AppPalette.textPrimary),
           ),
           const SizedBox(height: 14),
           _Stars(
@@ -1913,7 +1907,6 @@ class _ConfirmCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return _DialogCard(
       width: 420,
       child: Column(
@@ -1922,15 +1915,12 @@ class _ConfirmCard extends StatelessWidget {
         children: [
           Text(
             title,
-            style: terminalTextStyle(
-              fontWeight: FontWeight.w600,
-              color: grid.AppPalette.textPrimary,
-            ),
+            style: grid.AppType.heading(color: grid.AppPalette.textPrimary),
           ),
           const SizedBox(height: 8),
           Text(
             detail,
-            style: terminalTextStyle(
+            style: grid.AppType.body(
               height: 1.4,
               color: grid.AppPalette.textSecondary,
             ),
@@ -1967,7 +1957,6 @@ class _DialogCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Center(
       child: Material(
         color: grid.AppPalette.panelBg,

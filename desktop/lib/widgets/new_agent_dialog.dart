@@ -5,7 +5,6 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../analytics/analytics.dart';
 import '../state/pane_arrangement.dart';
@@ -1019,10 +1018,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                     ),
                   ],
                 );
-                final scale =
-                    MediaQuery.textScalerOf(context)
-                        .scale(terminalFontStore.size) /
-                    13;
+                final scale = grid.appTextScaleOf(context);
                 final stacked =
                     (_advancedOpen || _confirmationPending) &&
                     constraints.maxWidth < 740 * math.min(1.4, scale);
@@ -1123,7 +1119,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   /// but never on its width — so the task field, laid out outside the tiles'
   /// LayoutBuilder, can be the same height as they are.
   static double _tileHeight(TextScaler scaler, {required bool compactHeight}) {
-    return math.max(32, scaler.scale(terminalFontStore.size) * 1.35 + 14);
+    return math.max(32, scaler.scale(grid.AppType.monoSize) * 1.35 + 14);
   }
 
   Widget _choices() => LayoutBuilder(
@@ -1394,7 +1390,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
     builder: (context, _) {
       final radius = BorderRadius.circular(2);
       final line =
-          MediaQuery.textScalerOf(context).scale(terminalFontStore.size) * 1.35;
+          MediaQuery.textScalerOf(context).scale(grid.AppType.monoSize) * 1.35;
       final padding = ((minHeight - line) / 2).clamp(6.0, double.infinity);
       final tooLong = _taskTooLong;
       final errorBorder = OutlineInputBorder(
@@ -1502,16 +1498,10 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   /// How far the agent may go without asking. The field shows the mode; the menu says what each
   /// one does, since "Accept edits" and "Plan first" mean little on their own.
   Widget _permissionModeField(List<PermissionMode> modes) => SizedBox(
-    width:
-        156 *
-        math.min(
-          1.8,
-          MediaQuery.textScalerOf(context).scale(terminalFontStore.size) / 13,
-        ),
+    width: 156 * math.min(1.8, grid.appTextScaleOf(context)),
     height: math.max(
       34,
-      MediaQuery.textScalerOf(context).scale(terminalFontStore.size) * 1.35 +
-          14,
+      MediaQuery.textScalerOf(context).scale(grid.AppType.monoSize) * 1.35 + 14,
     ),
     child: AppSelectField<String>(
       key: const Key('new-agent-permission-mode'),
@@ -1519,7 +1509,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
       radius: 2,
       height: math.max(
         34,
-        MediaQuery.textScalerOf(context).scale(terminalFontStore.size) * 1.35 +
+        MediaQuery.textScalerOf(context).scale(grid.AppType.monoSize) * 1.35 +
             14,
       ),
       menuWidth: 340,

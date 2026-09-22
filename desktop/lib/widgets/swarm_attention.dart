@@ -1,6 +1,7 @@
 import 'swarm_search_field.dart';
 
 import 'package:flutter/material.dart';
+import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/widgets/app_dialog.dart';
@@ -117,9 +118,11 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
     final scale = MediaQuery.textScalerOf(context);
+    // The name, two lines of the question, and the place it came from.
     _rowHeight =
-        (scale.scale(terminalFontStore.size) * 1.35 * 3 +
-                scale.scale(terminalFontStore.size) * 1.3 +
+        (scale.scale(AppType.monoLabelSize) * 1.35 +
+                scale.scale(AppType.bodySize) * 1.35 * 2 +
+                scale.scale(AppType.monoMetaSize) * 1.3 +
                 36)
             .clamp(104, double.infinity);
     final selected = _rows.isEmpty ? null : _rows[_cursor];
@@ -135,11 +138,11 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
             children: [
               Row(
                 children: [
-                  Text('Needs input', style: terminalTextStyle()),
+                  Text('Needs input', style: AppType.heading()),
                   const SizedBox(width: 8),
                   Text(
                     '${_catalog.length}',
-                    style: terminalTextStyle(color: Colors.white54),
+                    style: AppType.monoMeta(color: Colors.white54),
                   ),
                   const Spacer(),
                   IconButton(
@@ -170,7 +173,7 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
                           _catalog.isEmpty
                               ? 'No agents need your input'
                               : 'No matching questions',
-                          style: terminalTextStyle(color: Colors.white60),
+                          style: AppType.body(color: Colors.white60),
                         ),
                       )
                     : ListView.builder(
@@ -204,17 +207,14 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
                                   destination.title,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: terminalTextStyle(
-                                    height: 1.35,
-                                    fontWeight: FontWeight.w500,
-                                  ),
+                                  style: AppType.monoLabel(height: 1.35),
                                 ),
                                 const SizedBox(height: 2),
                                 Text(
                                   row.question.prompt,
                                   maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
-                                  style: terminalTextStyle(
+                                  style: AppType.body(
                                     height: 1.35,
                                     color: Colors.white70,
                                   ),
@@ -224,7 +224,7 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
                                   destination.detail,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: terminalTextStyle(
+                                  style: AppType.monoMeta(
                                     height: 1.3,
                                     color: Colors.white54,
                                   ),
@@ -237,7 +237,7 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
                                   : destination.hasView
                                   ? 'Jump'
                                   : 'Open Harness',
-                              style: terminalTextStyle(color: Colors.white54),
+                              style: AppType.monoMeta(color: Colors.white54),
                             ),
                             onTap: row.available
                                 ? () => Navigator.pop(context, row)
@@ -257,7 +257,7 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
                       : '↑↓ or ⌃N ⌃P to choose · Return to jump · Esc to close',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: terminalTextStyle(color: Colors.white54),
+                  style: AppType.monoMeta(color: Colors.white54),
                 ),
               ),
             ],

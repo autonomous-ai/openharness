@@ -1,0 +1,919 @@
+# Harness experience improvements · September 21
+
+Branch: `codex/harness-improvements`, starting from `735471a1`.
+
+## Start here
+
+- [Eight hands-on experiences](../docs/hands-on.md), with an
+  [interactive local guide](../docs/hands-on.html), original native demo videos and starting prompts.
+- [Three runnable starters](../docs/try-hands-on.md) for the physics, music and circuit panes.
+  They use this checkout's source with already installed native assets.
+- [All 82 packages](HARNESS-INVENTORY-2026-09-21.md): 72 harnesses and 10 shared viewers, including
+  the reviewed explanation for each of the 17 structural warnings.
+
+The eight main additions are MuJoCo's alternative futures, Godogen's rewindable playtests,
+Blender's named design variants, Strudel's recorded performances, RDKit's bond-energy studies,
+Typst/Doc Viewer's anchored revision reviews, Jev Sheets' paired question trials, and CircuitJS's
+saved trace comparisons. Each has native runtime evidence and an editable handoff. Nine Jev
+viewers also reject decisions from superseded sessions; Video Viewer preserves a captured
+frame's identity and earlier saved images. The sections below record implementation and test
+boundaries for each change. Jev's provider checks use local practice responses, not paid live calls.
+
+## Product brief
+
+Read the repository README, `docs/ideal-users.md`, the Store authoring guide, and the previous
+experience rebuild reviews. Build for the curious engineer who wants to participate in the whole
+idea: make, inspect, play, revise, and take the work away. Preserve the user's choices and editable
+source. A themed preset or a green technical check alone is not evidence of a compelling product.
+
+The full objective remains to review **every current harness**, prioritize the most promising
+experiences, and improve the catalog. This log distinguishes source review, implemented changes,
+runtime evidence, and remaining work. No subjective “10×” claim is inferred from tests.
+
+## Review method and priorities
+
+Inventory all package manifests, listing status, templates, viewers, domain instructions, and test
+entry points. Review the actual interaction paths in the most promising packages first. Prefer
+capabilities that connect immediate curiosity to an original, useful, editable result. Preserve
+existing toolchains and authoring workflows; extend the place where people inspect and direct work.
+
+1. **MuJoCo:** branch a real physics state, change the conditions, compare both futures, and retain
+   the exact experiment. Existing live simulation is strong; repeatable user-directed comparison
+   is the missing interaction. Implemented and verified below.
+2. **Godogen / Phaser / Voxel Worlds / Game Master:** play, inspect a particular moment, and turn
+   discoveries into precise revisions of an original game or world. Inspect existing version,
+   input, and export paths before choosing implementation. Godogen/Game Viewer improvement
+   implemented and verified below; the other three received source review in this pass.
+3. **Blender / CAD / Generative Art / Creative Direction:** make direct exploration useful to
+   the next authored revision; preserve approved versions and deliver usable assets.
+4. **Music Studio / Strudel / Score / sound studios:** help people hear, shape and retain a musical
+   idea; verify the listening and export paths as well as controls.
+5. **Science, data, engineering, media, research, local AI, and unlisted experiments:** finish the
+   individual review, prioritize findings by useful first result and ongoing human participation,
+   then implement and verify the domain-appropriate improvements.
+
+These are working priorities, not claims that the unreviewed runtime paths are deficient. The
+existing `work/SUPERPOWERS.md` and subsequent rebuild reports contain useful historical evidence;
+current files and fresh runtime checks decide the next action.
+
+## Verification ledger
+
+- Initial branch and worktree verified clean.
+- Manifest/template/viewer/test inventory and structural warning review completed for all 82 packages.
+- Native runtime journeys were exercised for the implemented experiences; this is not a cold-install
+  or full runtime pass for all 82 packages.
+- No installed package, running user session, published catalog, or existing project changed.
+- Implementation, actual native measurements, browser checks and remaining limits are recorded below.
+
+## First improvement: MuJoCo's What if lab
+
+Implemented a reusable physics experiment, available on any loaded model:
+
+- Pin a complete integration state from live simulation or a recorded frame. Compare two futures
+  from that state with gravity, friction and a timed body force as explicit inputs.
+- Overlay the baseline as a wireframe, show both measured paths, scrub one shared timeline, inspect
+  height and body separation, and return to the untouched live simulation.
+- Preserve current experiments across agent saves. New work appears on return; the previous
+  compiled model's source remains available even if an edit on disk becomes invalid.
+- Save a self-contained experiment: exact source model and assets, compiled-model patch, full
+  integration state, recorded control tape, changes and measured frames. Native Python can
+  reproduce the file independently. A CSV contains actual sampled positions and contacts.
+- Keep the simulation visible above a bottom panel at 390px; provide keyboard-operable comparison
+  controls and actual cancellation. Original sim/replay/actuator controls remain available.
+- Agent instructions explain the experiment-to-revision workflow and distinguish held/recorded
+  controls from a feedback controller that must be rerun in Python.
+
+Verified so far:
+
+- Six real-WASM experiment tests: analytical free fall, analytical impulse, identical/repeated runs,
+  real sliding friction with explicit contact pairs, cancellation/exception cleanup, input bounds
+  and the recorded control interpolation contract.
+- The full viewer suite passes: 29 tests plus WASM and server install smoke tests.
+- Chrome 390px/1280px integration: actual controls and downloads, live-state preservation, deferred
+  source changes, playback, cancellation and no page exceptions. Screenshots visually reviewed.
+- A real servo-patched Menagerie Go2: 19 model/asset files bundled, 19 generalized positions,
+  recorded control tape, 168 measured frames. Its 20 N shove changed maximum body separation by
+  1.13 cm. The export reproduced using native MuJoCo 3.13.0 without the original workspace, with
+  maximum qpos differences below `2.3e-15`. This is a successful reproduction of that finite
+  experiment, not a policy robustness claim.
+- The simpler pendulum experiment reproduced natively within `5e-16` metres of the browser.
+- All 82 package manifests pass conformance. The README/catalog inventory was corrected from 48
+  to the canonical 49 listed harnesses; generated presentation checks pass.
+
+Local evidence is under `/private/tmp/openharness-harness-improvements-evidence/` (`mujoco/`,
+`robot/`, `catalog-conformance.json`). The robot browser check is opt-in and has reproducible
+environment parameters in `test/robot-experiments.browser.mjs`. It reads a scratch rollout and
+installed tools; it does not change installed packages, user workspaces or running sessions.
+
+Final source-bundle and keyboard/playback browser checks pass, and the added **Frame both futures**
+control and a branch from an arbitrary replay frame were exercised on the real robot. A changed
+gravity input correctly fails native reproduction against the saved measurements. The pendulum
+export also reproduces without an external
+model path. Visual evidence: [robot comparison](../docs/images/mujoco-what-if-robot.png) and
+[narrow layout](../docs/images/mujoco-what-if-mobile.png).
+
+No catalog publication or installed app update has been performed.
+
+## Second improvement: rewind, retry, and keep a playtest moment
+
+Reviewed Godogen/Game Viewer, Phaser, Voxel Worlds, and Game Master's current interaction paths.
+Voxel Worlds already has direct object/voxel authoring, undo, source conflict handling, and useful
+3D exports. Game Master already has authored tabletop rules and deterministic playtest replays.
+Phaser retains scene context across edits, but that is not a complete game-state rewind. Game
+Viewer's existing version isolation protects an ongoing run; a specific moment within that run
+was the most useful missing feedback loop to implement first.
+
+Implemented in Game Viewer and demonstrated by Godogen's Alpine Drift starter:
+
+- **Rewind** the recent run, inspect a recorded frame, return to the exact live moment, or
+  **Try from here** with a different move. The studio restores positions, velocity, jumps,
+  collected gates, score, timer, and camera, instead of replaying keyboard events.
+- **Pin moment** with Keep/Change/Explore feedback, a real canvas image, complete JSON state,
+  and a frozen copy of the selected compiled game. Saved moments are ordinary workspace files
+  in `out/playtests/` and reopen after later source edits and a complete viewer restart.
+- Preserve Explore versus Play separately from game state. An agent build waits while the user
+  is inspecting a rewind or writing a note, including in Explore mode.
+- An optional, documented snapshot contract works for other games; games without it keep their
+  existing controls. Bounded history, explicit state validation, atomic saved folders, original
+  build retention, and archive isolation keep the current build verdict truthful.
+- The completed run stops filling its history with duplicate finish-screen frames. Resuming
+  waits for the game's acknowledgement before handing input back. The first Play frame now
+  frames the rider immediately, so even the earliest rewind frame is useful.
+- Agent instructions explain how to read moment notes and preserve Keep feedback. The original
+  editable project remains the source; archived `game/` folders are compiled builds.
+
+Verified:
+
+- All 13 viewer tests pass, including original readiness/failure/retention/export behavior,
+  snapshot bounds and legacy compatibility, rejected-state rollback, terminal-frame retention,
+  persistent moments, traversal rejection, and saved-build/current-verdict isolation.
+- The original Chrome suite passes all eight checks: keyboard/jump/pause/restart, live builds,
+  syntax and runtime failures, version retention, a complete course, standalone export, and
+  a narrow layout. TypeScript and both package conformance checks pass.
+- Seven new real-browser scenarios pass: gates and score rewind, exact mid-jump return,
+  alternate steering after resume, persisted note/image/state/build, saved games after source
+  changes and restart, Explore capture across an agent edit, and legacy games. Invalid states
+  leave the world unchanged. No uncaught browser exceptions were observed.
+- Desktop and 390px screenshots were visually reviewed. The new timing checks exposed and
+  corrected the input-resume race; visual review exposed the unusable early camera position.
+- A 20-second demonstration was recorded in Chrome using the Apple M2 Max Metal renderer,
+  showing play, rewind, a different move, a note, and reopening the saved moment.
+
+Evidence: `/private/tmp/openharness-harness-improvements-evidence/game-moments-final/` and
+`game-demo/`. The repeatable tests are `store/viewers/game-viewer/test/` and
+`store/agents/godogen/test/playtest.e2e.mjs`. These are mechanical and visual checks of the
+implemented workflow, not a claim of independent human playtesting or universal game determinism.
+Snapshot hooks remain the game's responsibility; screenshots capture the canvas rather than its
+HTML overlays, and externally hosted assets still depend on their URLs.
+
+Checked-in evidence: [rewind](../docs/images/godogen-rewind.png),
+[pin a moment](../docs/images/godogen-moment.png),
+[390px saved moment](../docs/images/godogen-moments-mobile.png), and
+[20-second demonstration](../docs/images/godogen-rewind-demo.mp4).
+
+Next: continue the 3D/CAD authoring review, beginning with Blender, Autonomous Workshop, and their
+shared viewers. Initial README review confirms Generative Art, Creative Direction, and Music
+Studio already have substantial original authoring and export workflows; preserve those rather
+than replacing them with cosmetic presets. The full catalog goal remains active.
+
+## Third improvement: shape an authored Blender design and keep its source
+
+Reviewed Blender, the shared 3D Viewer, Autonomous Workshop, FreeCAD, OpenSCAD and text-to-cad.
+The CAD wrappers already emphasize editable native source, measured checks and useful exports;
+Autonomous Workshop's upstream workflow adds an explicit physical-part critique. The generic
+3D Viewer has strong inspection tools, but changing a Blender model previously always required
+another agent turn. This made direct exploration of an original design the most useful addition.
+
+Implemented **Shape Lab**, an optional protocol for any authored Blender scene:
+
+- The scene declares its own numeric, integer, boolean and choice controls with `parameters()`.
+  The values drive actual Python geometry and materials. The mug starter demonstrates the API;
+  a separately authored ribbon lampshade proves the viewer has no mug-specific controls.
+- Changing a control runs native Blender on a snapshot of explicitly declared source and assets.
+  Material shading reveals finish choices; a changed model is fitted into the view while keeping
+  its viewing direction. Existing measure, section, shading and orbit tools remain available.
+- **Keep** preserves the exact source, helper modules/license, parameter values, measured glTF,
+  report, canvas thumbnail, standalone rebuild script and project ZIP in `out/designs/`.
+  Named directions reopen after source changes and after a viewer restart.
+- **Use values on next build** writes only `design-values.json`, after matching source hashes.
+  The next agent build reads the selected values and produces its normal exports and verdict.
+  Main exports wait while the user is exploring; closing the lab returns to the latest one.
+- Source and chosen-value revisions are distinct: revisiting a kept direction stays editable
+  when only the current choice changed. An incompatible source requires reloading controls or
+  having the agent adapt the older direction.
+- One native worker and one replaceable queued request, bounded inputs/artifacts, failed-build
+  recovery, cancellation and process-group cleanup. Snapshot/archive paths reject escaping links.
+  HTTP writes require the page token and same-origin requests. Relative output isolation is a
+  project convention, not a security sandbox for arbitrary Python.
+
+Verified:
+
+- All 33 model-viewer tests pass, including the original server/lifecycle/script checks and new
+  snapshot, queue replacement, timeout/descendant cleanup, cancellation, archive persistence,
+  revision checks, path confinement and write authorization cases.
+- All 63 existing Blender tests pass with native bpy, including real small renders, glTF/STL
+  exports and turntables. Four new parameter tests pass without bpy.
+- Seven actual Chrome/native-Blender workflows pass with no browser errors: controlled geometry
+  and material, independent ZIP verification and rebuild, saved directions and explicit values,
+  deferred agent exports, persistence across restart, changed-source/failure recovery, and a
+  different authored scene with a declared JSON asset.
+- The 75 × 75 × 145 mm tumbler rebuilt from its downloaded ZIP in another directory with matching
+  object names, measured dimensions, vertices, faces and material names. Original model and
+  report hashes stayed unchanged until the test deliberately ran a new main build.
+- The lampshade's 32 ribbons and foot produced 33 native mesh objects, 4,992 vertices and 4,834
+  faces at 135.2 × 135.2 × 328.02 mm. Its ribbon count, twist and finish come from its source.
+- Desktop and 390px screenshots were visually reviewed on Chrome's Apple M2 Max Metal renderer.
+  Review fixed cropped tall variants, invalid timestamp display and transient change highlights
+  in kept thumbnails. Source synchronization and late-created workspaces also have regression
+  coverage. Both package conformance checks and generated catalog checks pass.
+
+Evidence is in `/private/tmp/openharness-harness-improvements-evidence/blender-final/` and
+`blender-demo/`. The repeatable native check is
+`store/viewers/model-viewer/test/shape-lab-browser.mjs`. These checks establish the implemented
+author/explore/keep/rebuild loop; they are not independent user research or an assertion that
+every authored scene supports interactive build speeds. Additional source dependencies still
+need to be installed, and expensive/custom render paths may need a geometry-only preview path.
+
+The recorded lamp session keeps two different directions and reopens one; native preview builds
+for the two kept designs took 0.518 and 0.578 seconds on this machine. Checked-in evidence:
+[design shelf](../docs/images/blender-shape-lab.png),
+[390px controls](../docs/images/blender-shape-lab-mobile.png), and
+[native interaction recording](../docs/images/blender-shape-lab-demo.mp4).
+
+The full catalog review and improvement goal remains active. No installed harness, user session,
+store publication or main-worktree content was changed by this feature.
+
+## Fourth improvement: keep an actual live Strudel performance
+
+Reviewed Music Studio, Score, Generative Art, Creative Direction, Strudel, AbletonAI, JUCE Agent
+Toolkit, Drone Pilot, Autonomous Circuit, CircuitJS, Manim, Remotion, OpenMontage, and their
+relevant shared viewers. This round examined their source and authoring/export instructions;
+only Strudel received new native runtime acceptance work in this round. Music Studio and Score
+already support substantial original composition and useful source/audio exports. Fieldwork,
+Forme and Vector already have real editable artifacts and portable handoffs. Preserve those.
+The upstream media and PCB pipelines remain intact. AbletonAI's optional Live bridge is read-only;
+its starter and JUCE's starter should not be described as complete native DAW/plugin workflows.
+
+Strudel has a different strength: performing an authored program while it plays. The pane already
+had live code, voice lanes, mute and solo, but no way to keep the actual performance. Added:
+
+- **Record take → Finish take → Keep take** captures the real Superdough stereo output through
+  an AudioWorklet. The recording branch emits silence, preserving the existing speaker route.
+  Float WAV preserves the engine's samples, with no normalization or clipping.
+- During performance, mix requests, successful code versions, cycle/tempo and named moments
+  are journaled on the audio clock. A failed evaluation keeps the last successful source in the
+  journal. Markers seek the saved audio; a stereo waveform displays the captured channels.
+- A named take keeps WAV, source versions/hashes, measured audio properties, journal, README
+  and a portable ZIP in `out/takes/`. Saved takes reopen after source changes and server restart.
+  Playback stops the live instrument; restarting the instrument pauses playback.
+- Incoming agent source waits during recording and while pane edits are unsaved. Loading the
+  latest file is explicit. Reconnecting the event stream checks missed file changes too, and
+  stale fetch responses cannot overwrite a newer one. Saved sources do not enter the live picker.
+- Failed saves preserve the browser's take and WAV download. A capture identity makes a retry
+  after a lost save acknowledgement idempotent. A restarted server's token refreshes without
+  reloading the tab. Server writes are validated, bounded, token/origin protected and atomic;
+  escaping symlinks are rejected. Audio files support range requests for native playback/seek.
+- Capture is bounded to 120 seconds or six million frames. Transport stop, context suspension
+  and output replacement finish capture. Interruption keeps complete chunks received so far;
+  unsaved audio is held in the current tab. Journal limits are documented, and source is available
+  for continued agent authoring without overwriting the original take.
+
+Verified:
+
+- All 24 Node tests and 51 existing Python tests pass. New checks cover exact sample/chunk
+  boundaries, independent WAV properties, journal validation, write authentication, failed writes,
+  path confinement, archive isolation, range serving and independent Python ZIP integrity.
+- Seven real Chrome workflows use the installed, unmodified `@strudel/repl` and actual Web Audio:
+  performance/mix/code/markers, native playback/seek, restart/mobile, failed evaluation plus lost
+  save acknowledgement/restart retry, interrupted audio, deferred edits, and full-length capture.
+  No browser page errors. Remote sample maps are empty in this offline synth test; DSP is real.
+- Independent FFT/RMS analysis of a two-voice diagnostic found 220/440 Hz initially; muting the
+  left voice reduced its RMS below 1e-6 while the right voice stayed at 0.0724. A code change
+  produced the expected C4/E5 tones (262/660 Hz FFT bins at this analysis resolution).
+- The full-length take ends at exactly 5,760,000 stereo frames: 120.000 seconds at 48 kHz.
+  Its WAV is 46,080,056 bytes. FFprobe independently identifies stereo `pcm_f32le`; Python
+  verifies the ZIP and the captured WAV hash. This exercises the largest normal upload too.
+- A separately authored five-voice synth piece, **Lantern room**, was performed with four
+  markers and two code versions, then kept and reopened at 390px. It captures 18.907 seconds,
+  with peak 0.959 and RMS 0.0953. These are signal checks, not a claim of subjective listening
+  quality. Desktop/mobile visual review fixed lane sizing when opening the recorder and made
+  mobile voice names legible. Package conformance and generated catalog checks pass.
+
+The repeatable browser check is `store/agents/strudel/test/performance-browser.mjs`; use
+`LONG_CAPTURE=1` to include the two-minute test. Evidence and preserved workspaces are in
+`/private/tmp/openharness-harness-improvements-evidence/strudel-final/` and `strudel-demo/`.
+Checked-in evidence: [desktop](../docs/images/strudel-live-take.png),
+[mobile](../docs/images/strudel-live-take-mobile.png), and
+[performance walkthrough](../docs/images/strudel-live-take-demo.mp4). The MP4 pairs the screen
+recording with the saved WAV, using AAC and approximate visual/audio alignment; the original
+float WAV and source bundle remain in the evidence workspace.
+
+The WAV is the captured performance. Scheduler lookahead, effect tails, random patterns and
+external dependencies mean the journal is not a deterministic replay. Other applications, system
+volume and external MIDI instruments are outside this recorder. Browser acceptance was on Chrome;
+a 390px viewport is a layout check, not a claim of testing mobile Safari or every audio device.
+
+The full catalog review and improvement goal remains active. All implementation, demo artifacts
+and tests stayed in the improvement worktree and disposable evidence directories.
+
+## Science and engineering review, then RDKit bond studies
+
+Reviewed the science/data packages and the shared Studio Viewer bridges, with selected source paths
+and authoring contracts checked in addition to their READMEs. This is source review unless native
+verification is listed below:
+
+- **Data Studio** already supports original CSV input, SQLite joins and queries, traceable source,
+  browser recomputation and a portable report/database/source bundle. **Lab Bench** already supports
+  authored experimental designs, editable protocols, real observations, fit diagnostics and separate
+  confirmation runs with frozen forecasts. Preserve those complete loops.
+- **marimo** uses the upstream reactive notebook editor and runner; it can author arbitrary Python
+  notebooks. **Quantum Studio** is an unlisted 1–8-qubit statevector editor; **GIS** is an unlisted,
+  bounded local GeoJSON explorer. Their existing interactive capabilities and limits matter more
+  than adding a new preset chooser.
+- Reviewed **autoresearch-mlx**, **Foam-Agent**, **SimSkill**, **DimOS**, **Comfy MCP** and **Bonsai MCP**
+  with the shared **Studio Viewer**. Several bridges have useful native paths but narrow starter
+  models: the four-way SUMO intersection, coarse 2D LBM flow and office navigation are not arbitrary
+  general simulators. The CPU character-transition experiment is not an MLX transformer training
+  run, and the procedural SVG path is not diffusion image generation. Preserve those distinctions;
+  this review does not claim native acceptance of every optional runtime. Foam-Agent and SimSkill
+  are not installed in this environment.
+- Reviewed the **Home Assistant**, **KiCad**, **Yosys** and **Orca Slicer** package contracts. Home
+  Assistant's actual Core automation tests and trace export, and Orca's native slicing and portable
+  rerun files, are substantial existing workflows. Avoid replacing those with superficial demos.
+
+Selected **RDKit** next: its existing viewer exposes conformers and measurements, but a person
+could not directly turn a chosen bond into a computed experiment and a reusable result.
+
+Implemented:
+
+- A native **Bond scan** from the current 3D conformer. Choose an eligible chain or pick four atoms
+  directly in 2D/3D and use the measured dihedral. The unmodified RDKit rotates a non-ring single
+  bond and computes MMFF94 energy at 13, 25 or 37 angles. This is a rigid scan, with the other
+  internal coordinates fixed; the UI and exports say so explicitly.
+- Drag the energy curve or scrub its keyboard-accessible slider to inspect the actual calculated
+  3D coordinates. Play the scan, jump to its lowest sampled point and overlay the starting pose.
+  Invalid chains, rings, missing hydrogens or unavailable force-field parameters leave the last
+  valid study available. Scans accept one connected 3D MOL/SDF molecule with 4–200 explicit atoms;
+  no model templates or synthetic energies substitute for the input molecule.
+- **Keep study** preserves a title, note, exact input conformer, selected SDF, every pose, energy
+  CSV and full-precision coordinates in `out/torsions/<id>/`. The server recomputes and checks the
+  calculation fingerprint before publishing an atomic save. Its ZIP includes a standalone Python
+  reproducer, calculation source and license. The original molecule stays unchanged.
+- Studies reopen after changes, server restart or removal of the original molecule. Incoming agent
+  output waits while an experiment is open; returning loads the revised source. Failed saves retain
+  the current browser study for retry, including refreshing a restarted server's token. Write
+  endpoints require the pane token and same origin, bound request sizes, and reject escaping output
+  symlinks. Incomplete saves are not published in the study library. Kept structures do not enter
+  the live molecule picker or the verdict's newest-artifact search. Pose controls are locked while
+  saving the selected point.
+- Updated the package description, README and authoring guidance so an agent can continue from the
+  user's chosen SDF and note while preserving the original study. Added an authored butane and
+  phenethyl-acetate example script; the calculation accepts other compatible molecules too.
+
+Verified:
+
+- 27 Node checks pass, covering existing viewer behavior, atomic persistence, native failure
+  cleanup, concurrent request rejection, symlink boundaries, token/origin checks and both declared
+  and chunked upload bounds. Native chemistry checks validate independently reconstructed MMFF94
+  energies, bond-length preservation, measured angles, periodic endpoints, V3000 input, rejected
+  rings/multiple bonds and a stale calculation fingerprint that writes nothing.
+- All 138 Python checks passed across the full suite and targeted follow-ups. The two optional
+  native setup/initialization checks were run separately with `RDKIT_PYTHON` enabled; the final
+  verdict test also confirms a saved scan cannot become the live artifact.
+- Seven real Chrome workflows use RDKit 2026.03.6 and unmodified 3Dmol 2.5.5: curve/play/ghost/save;
+  deferred changes; failed-save/restart retry; saved/mobile reopen; an independently authored
+  aromatic ester; real four-atom picking and ring rejection; and a library with no original files.
+  No browser page errors. Screenshots were visually checked at 1280×960 and 390×844; these are
+  Chrome layout checks, not a claim of testing every mobile browser.
+- A downloaded/extracted study recomputes in a separate directory using only its bundled source
+  and RDKit. Maximum energy difference is **0 kcal/mol** and coordinate difference is **0 Å** in
+  the tested environment. Displayed MOL coordinates agree with calculation coordinates within
+  **0.000047 Å**, the expected four-decimal MOL rounding; full precision remains in JSON.
+- The separately recorded walkthrough uses an authored ester, turns its chosen chain through the
+  energy curve, and keeps a 60° pose with a note. The portable study and raw video remain under
+  `/private/tmp/openharness-harness-improvements-evidence/rdkit-demo/`; the repeatable acceptance
+  script and JSON results are under `store/agents/rdkit/test/torsion-browser.mjs` and the evidence
+  `rdkit-final/` directory. Package conformance and generated catalog checks pass.
+
+Evidence: [desktop](../docs/images/rdkit-bond-scan.png),
+[mobile](../docs/images/rdkit-bond-scan-mobile.png), and
+[16.84-second native walkthrough](../docs/images/rdkit-bond-scan-demo.mp4).
+
+Scientific limits: compare relative energies only within the same rigid scan. These are not relaxed
+barriers, free energies, solution populations, kinetics or activity predictions. Unsaved studies
+live in the current tab; a reload discards them. No installed package or existing user molecule was
+changed. The full catalog goal remains active; remaining detailed review includes productivity,
+research/browser, monitoring, local AI and the unlisted Jev experiments.
+
+## Sixth improvement: keep a document review attached to its actual draft
+
+Expanded the source review across productivity, research, monitoring and local AI before choosing
+the shared Doc Viewer:
+
+- **Marp** already combines arbitrary Markdown authoring, native Marp exports, slide notes,
+  presenter timing, filmstrip/grid navigation and live changed-slide feedback. **Typst** and
+  **Doc Viewer** already have native compilation, genuine pdf.js search/selection/outline/zoom,
+  stable reader position across recompiles and useful compiler diagnostics. Those paths remain.
+- **Sheet & Docs Studio** coordinates native DOCX, formula-driven XLSX and LibreOffice PDF output
+  from an editable shared source. Its generic literal table and regional-comparison schema are
+  bounded; it does not implement arbitrary spreadsheet formulas or PPTX. The shared PDF review
+  improvement now applies to it too.
+- **Jev Sheets** has row-plus-context classification, per-cell distributions, confidence filtering,
+  file import, original-column CSV export and source attribution. **Jev Browser** has an actual
+  Chrome crawler and source selection. **Roundtable** preserves a motion, separate model responses,
+  a moderator's claim map and exports. These received source/README review here, not fresh paid
+  API calls, a panel run or a claim that every judgment is correct.
+- **Harness Monitor** uses daemon, process, tmux and transcript observations with guarded runtime
+  controls. **Machine Monitor** exposes paired-machine observations with explicit stale/unknown
+  states. **Grid** reuses CLI-backed workers. **Ollama, MLX-LM and vLLM** have native local-runtime,
+  model and job paths, with a shared implementation for the local AI packages. No actual user
+  workers, remote machines, downloaded models or monitoring controls were changed in this review.
+- Read the complete README contracts of all 17 unlisted **Jev experiments**. Archer/Catcher/Slalom
+  are synthetic tracking/intercept problems; Arena supplies path counts to the decision model;
+  Duel's rules engine supplies legal Reversi moves; Blocks models decision time against the fall;
+  FPS is an independently authored software-raycast arena; Lander/Pendulum/Pong are toy control
+  loops. Conductor's notes become browser audio; Compactor can analyze a bounded imported transcript
+  without changing its live session; Firehose can triage a user's bounded data file and export CSV.
+  Launcher launches only on paper; Shopper and Trader use synthetic prices; Guard is a demo,
+  not a security boundary. Their reported mock measurements and earlier live-model samples were
+  read as historical evidence, not rerun or promoted into new performance claims. Further detailed
+  implementation review of these experiments remains, especially preserving useful decisions
+  beyond transient controls. They remain unlisted.
+- **Firmware Studio** compiles through PlatformIO and reports native memory/build output without
+  claiming device verification. **Godot Studio** retains native Godot export and arbitrary source
+  authoring. **Web Studio** retains arbitrary web authoring and an original interactive starter.
+
+The selected gap: someone could read an excellent live PDF, but their judgment was not anchored
+to the exact draft they had read. Added **Review → Hold this draft**:
+
+- Capture the already parsed PDF's actual bytes, not whatever may have just overwritten the file.
+  Select native PDF text, drag a page region, or leave a page note. Label it **Change**, **Keep** or
+  **Question**. Numbered pins reopen and reveal the corresponding feedback. Area picking supports
+  pointer cancellation and Escape; ordinary button activation works from the keyboard.
+- Keep a title, quoted text, page numbers and normalized rectangles with the exact PDF and SHA-256.
+  Each immutable `.harness/doc-reviews/<id>/` packet has `reference.pdf`, `review.md`, `review.json`
+  and a portable ZIP with an explanation. It does not rewrite the source or embed PDF annotations.
+  Editable source and assets stay in the workspace, as the UI documentation and archive explain.
+- Agent recompiles wait while the review is held. **Compare latest** opens the actual latest PDF;
+  quoted notes locate exact normalized wording across changed pagination. A missing or repeated
+  quotation is reported explicitly. Page/area anchors always describe the old PDF. Returning to
+  the reviewed draft restores its bytes and highlights; **Back to live** resumes workspace output.
+- Native PDF download and browser printing use the displayed bytes. In-flight live loads cannot
+  replace a held draft. A delayed reader-position callback was fixed when returning to an empty
+  workspace, and empty workspaces can still reopen their kept reviews.
+- Saves publish atomically with strict metadata, coordinate, PDF signature/hash and size checks;
+  the browser's native pdf.js parses the document. Server validation is not a second full PDF
+  parser. Write requests require a per-process page token, same Origin and loopback Host. Uploads
+  are bounded even without Content-Length; archive paths reject symlinks. A failed save retains
+  browser notes, a lost acknowledgement retries the same ID, and a restarted server refreshes its
+  token without discarding the draft. Unsaved work survives Back to live but not a tab reload.
+- Reviews support 30 MB / 500 pages, 100 notes and 2,000 characters per note. Narrow windows put
+  the PDF above a scrollable review panel. Typst and Sheet & Docs Studio guidance now teaches the
+  agent how to read the packet and revise the original source while preserving the review.
+
+Verified:
+
+- **83 Node checks** pass: existing reader/server/workspace/shell behavior plus packet identity,
+  byte preservation, independent ZIP extraction, immutable retry, failure cleanup, symlink bounds,
+  token/Host/Origin checks, declared/chunked upload bounds and interrupted requests. Archived PDFs
+  cannot become the live artifact. **15 Typst checks** pass with the native compiler enabled.
+- **Nine native Chrome journeys** pass with no page errors. They cover actual mouse text selection,
+  rectangle/page notes, pin navigation and Escape; browser ZIP and displayed-PDF downloads;
+  deferred updates; a quote moving from page 1 to page 2; missing and ambiguous wording;
+  lost-acknowledgement retry and process restart; removal of the original PDF; 390 px layout and
+  scaled highlights; unsaved-draft return and deliberate discard; a pending-load race; and a real
+  failed native compile followed by recovery. The core nine journeys were also run with the forced
+  legacy pdf.js build. This is Chrome verification, not independent Safari/iOS/WKWebView testing.
+- Authored a fictional portable-light brief in Typst, compiled the three-page original and four-page
+  revision with **Typst 0.15.1**, rendered all seven pages with Poppler and visually inspected them.
+  The downloaded review ZIP was read independently with Python's `zipfile`: the stored PDF SHA-256
+  matched the exact original and all four notes were present. The original editable source remains
+  editable and is not limited to this fixture.
+- Visually checked desktop, narrow layout and revision-comparison screenshots. Recorded a paced
+  **13.72-second native walkthrough**, H.264 1280×960, from actual pointer interactions and native
+  recompilation. No simulated PDF renderer or generated screenshots. The three affected packages
+  pass conformance; generated presentation metadata and the 59-entry catalog validate.
+
+Evidence: [desktop](../docs/images/doc-review.png),
+[latest revision](../docs/images/doc-review-latest.png),
+[narrow layout](../docs/images/doc-review-mobile.png), and
+[native walkthrough](../docs/images/doc-review-demo.mp4).
+Repeatable acceptance: `store/viewers/doc-viewer/test/review-browser.mjs`. JSON results, raw video,
+the separate demo script and portable packets are under
+`/private/tmp/openharness-harness-improvements-evidence/doc-review-{final,legacy,demo}/`.
+
+The full catalog objective remains active. No installed harness, original user workspace, paid
+model account, remote service or published catalog was modified. Remaining work includes deeper
+implementation review of the unlisted experiments and selecting the next high-value interaction.
+
+## Seventh improvement: compare a question before asking the whole sheet
+
+Reviewed Jev Sheets' native client, row/context construction, header grammar, cache identity,
+source-file handling, in-pane edits, existing file chooser/export and tests. Also inspected the CAD
+Viewer contract: its pinned upstream viewer already has native measurement, section planes,
+explosion and rendering controls, so replacing those controls would not address a missing workflow.
+
+Jev Sheets already advised an agent to test wording on ten hard rows, but this required writing a
+one-off script. Added **Question Lab**, directly beside the sheet controls:
+
+- Preview 10/20/40 rows selected from low confidence plus a spread, a spread alone, or the current
+  sorted/filtered view. Pin a selected sheet row. Freeze the actual row text, metadata and context;
+  exclude sample truth labels and group labels from the model input.
+- Write any supported yes/no, choice or score header. Re-ask both versions together using the same
+  native client and shared question builder, one paired call per frozen row, with four in flight.
+  Read full probability distributions and exact wire questions. Filter changed labels, record a
+  human preference and write a note without turning that preference into a truth label.
+- Keep an immutable `.harness/question-trials/<id>/` packet with the exact sample, question wire
+  payloads, raw answers, returned provider/model/usage, human notes, CSV, readable review, reusable
+  sample `sheet.json`, candidate `column.json`, file checksums and a portable ZIP. Kept packets
+  reopen after viewer restart or source deletion. They include sampled data, never credentials.
+- Try the candidate across the whole sheet as a separate column. Reuse the trial rows only when
+  context/data and the currently connected route/requested model match. Preserve the original
+  column; reject a changed source/context/question. As with existing pane-added columns, the
+  extra column is runtime state. Updated guidance tells the agent to retain an accepted header in
+  the original `sheet.json`, never replace the original dataset with the trial's small sample.
+- Trials are bounded to 40 rows, 4,000-character headers, a 512 KB preview, 24 KB per paired result,
+  2 MB result JSON, eight open trials and 100 kept trials. Cancellation stops scheduling; in-flight
+  calls may finish using the client's normal transient-error retries. Authentication/credit errors
+  stop further rows after the in-flight batch. Failed/cancelled packets retain their status.
+- New commands require a per-process page token on the existing loopback/Origin-guarded server.
+  Archives reject symlink directories/files, stage writes atomically, validate result checksums on
+  reopening and clean up failed saves. Start, keep and apply tolerate lost acknowledgements without
+  duplicating a trial, archive or column. A restarted server refreshes the page token.
+- A real browser sequence caught a note being overwritten when the result filter changed during
+  its save. Separate note drafts and partial note/preference updates now preserve typing across
+  polling and filtering; the selected preference also updates while the note retains focus.
+
+Verified **57 package checks**, including the existing sheet/import/Excel/counting behavior, sample
+selection, frozen context, result validation, cancellation, partial failures, note/preference
+updates, archive integrity/immutability, write-failure retry, path/token checks, cached whole-sheet
+application and staleness. A local HTTP protocol fixture uses the production Jev client with an
+explicit dummy key and isolated empty credential file: it verifies actual paired requests and
+returned probabilities/model/usage without calling an external provider.
+
+**Seven native Chrome journeys** pass with no page errors: import the original fictional CSV,
+select/pin a real sheet cell, compare, filter and review; retain a note while switching filters;
+retry a lost keep response and independently extract/check the downloaded ZIP with Python;
+apply without duplicating the column; reject stale data while retaining the frozen preview;
+recover a lost start response without a second trial; restart the server, refresh the token and
+reopen after deleting the source; and use the 390px layout, Escape and reopening. These native
+browser runs explicitly use the offline client. They do **not** establish live Jev accuracy,
+latency, calibration or superiority of one wording. The UI, packet and guidance say so.
+
+Visually checked the desktop preview, reviewed comparison and narrow view. Recorded and inspected
+a separate paced **12.84-second H.264 walkthrough**, 1440×1040, from actual browser interactions.
+Package conformance and the doctor pass; shared Jev kit copies remain unchanged and in sync.
+
+Evidence: [comparison](../docs/images/question-lab.png),
+[frozen preview](../docs/images/question-lab-preview.png),
+[narrow layout](../docs/images/question-lab-mobile.png),
+[native walkthrough](../docs/images/question-lab-demo.mp4).
+Repeatable acceptance: `store/agents/jev-sheets/test/question-lab-browser.mjs`. Test logs, JSON
+results, downloaded ZIP, raw recording, separate demo script and workspaces are under
+`/private/tmp/openharness-harness-improvements-evidence/question-lab*`.
+
+The full catalog objective remains active. Continue the detailed source review of the unlisted
+experiments, then prioritize the next interaction or correctness gap supported by that evidence.
+
+## Eighth improvement — CircuitJS Scope Lab
+
+Reviewed the full native JavaScript interface and the existing CircuitJS wrapper. Also revisited
+Video Viewer, Manim, Generative Art/Web Viewer, Yosys and Home Assistant: those already expose
+substantial native timeline, seed, waveform, hardware-flow and scenario controls. CircuitJS had
+excellent live manipulation but no durable comparison between the circuits a person actually tried.
+
+Added **Scope Lab** with up to eight named-node/component voltage/current probes, 1 ms–5 s windows,
+reference overlays, two measured cursors, cursor zoom, keyboard sample stepping, notes and a saved
+capture shelf. It snapshots the visible simulator's exact export, including in-pane edits, then
+runs a separate real CircuitJS instance. Only display/iteration pacing changes; the actual solver
+still supplies every observation through `ontimestep`. The visible circuit, run state and source
+file are untouched. Source edits during capture cannot change the isolated experiment.
+
+Each immutable `.harness/circuit-captures/<id>/` includes the original native export, the isolated
+instance's native export, all stored timestamped measurements in CSV/JSON, sampled statistics,
+standalone SVG, notes, runtime source/build fingerprints, file checksums and a downloadable ZIP.
+Source/build metadata at capture and save are kept separately. Original circuits and kept takes
+remain available after source deletion and restart. Save retries recover lost responses without
+creating another packet; a server restart refreshes the write token. Unsaved takes can be discarded.
+
+This is explicitly a new simulation, not a full checkpoint of every internal solver state. Native
+imports can produce different transients. Comparison follows node names or component type/index.
+RMS/mean use trapezoidal weighting of stored samples, and can miss fast signals or narrow spikes.
+The UI and packet keep these limits visible. Native XML stays in the packet; agent instructions
+continue to require the editable plaintext workspace format. Limits bound probes, elements,
+circuit bytes, samples, callbacks, wall time, request bytes, open takes and kept packets. Partial
+captures retain their actual reason. Token/Origin/Host checks protect writes; real workspace
+folders, staged publication, symlink rejection and content/ZIP checksums protect stored evidence.
+
+Verification:
+
+- **30 Node checks** pass, including the original viewer/server behavior plus pacing preservation,
+  solver sampling, adaptive timestep handling, between-sample clock reversal, stopping, non-finite
+  probes, time-weighted statistics, cursor lookup, comparison identity, source immutability,
+  idempotent keep, corrupt packets/ZIPs, failed-write cleanup, symlinks and bounded HTTP requests.
+  An existing missing-workspace regression caught an eager `realpath` startup failure; the viewer
+  again starts and serves its waiting pane when the workspace is absent.
+- **54 Python checks** pass for the real format judge, setup fixtures, doctor, initialization and
+  viewer launcher. Package conformance, the installed native-runtime doctor and catalog
+  presentation checks pass.
+- **Eight native Chrome journeys** pass with no page errors. An original RC fixture uses the real
+  100 Hz sine source, 1 µF capacitor and 1/2 kΩ resistors. Measured steady-state gains were about
+  0.8466 and 0.6225, versus independent analytic 0.846733 and 0.622677. Resistor current agrees
+  with `(Vin−Vout)/R` to the checked tolerance (the first run's maximum difference was zero).
+  A 500 ms capture recorded 100,001 native solver callbacks in about 1.6 seconds in the isolated
+  single-browser run, while the paused visible circuit's clock and export were exactly unchanged.
+- The unchanged 555 starter, a different topology without labeled nodes, captures timing-capacitor
+  voltage and an output swinging from approximately 0 to 9.98 V. The native sequence also checks
+  source changes during a running capture, stopped partial traces, exact in-pane edits, reference
+  selection, zoom, keyboard cursors, lost acknowledgements, restart, discard, deleted source,
+  readonly saved notes, phone layout and Escape. Downloaded ZIP CRCs and every SHA-256 checksum were
+  independently checked with Python; CSV numeric values equal JSON sample values exactly.
+- Visually checked desktop, zoom, timer and narrow layouts. Corrected clipped right-axis labels and
+  snapped cursor markers to the actual measured sample, including the endpoints after zoom.
+  Recorded a separate paced **13.48-second H.264 walkthrough**, 1440×1040, from actual native
+  browser interactions, with no page errors.
+
+Evidence: [RC comparison](../docs/images/scope-lab.png),
+[timer capture](../docs/images/scope-lab-timer.png),
+[narrow traces](../docs/images/scope-lab-mobile.png),
+[native walkthrough](../docs/images/scope-lab-demo.mp4).
+Repeatable acceptance: `store/agents/circuitjs/test/scope-lab-browser.mjs`. Native results, workspaces,
+exact ZIPs, test logs and the recording script are under
+`/private/tmp/openharness-harness-improvements-evidence/scope-lab*`.
+
+The remaining review is examining delayed model answers in older unlisted Jev experiments. Source
+inspection suggests reset/configuration races in some loops; reproduce them before changing the
+behavior. Compactor and Firehose already carry session/batch revisions, and Launcher/Guard already
+serialize substantial parts of their decision flow. These are source findings, not new live-model
+performance claims.
+
+## Ninth improvement — keep Jev decisions attached to the session they read
+
+Finished the deeper driver review of the 17 unlisted Jev experiments. The control-loop games use
+real local simulation rules, while Launcher remains an explicitly simulated command palette,
+Trader a synthetic paper market, Shopper a synthetic price board and Conductor a typed-decision
+music loop. Compactor's own-transcript path preserves messages, supports pins and writes an
+analysis plan without changing a live session; Firehose's own-data path writes row results and
+uses batch revisions. Guard reads real project diffs and runs the local project's test command,
+but its model judgment is not proof that a change is safe. None was relisted or represented as a
+newly verified live-model benchmark. Existing queue/session guards in Archer, Catcher, Slalom,
+Blocks, Launcher, Compactor and Firehose informed the focused fixes below.
+
+Reproduced **nine reset failures** through the actual viewer servers and production Jev clients,
+using a held local HTTP response, an explicit dummy key and an isolated credential path. Trader,
+Shopper, Arena and FPS applied an old answer to the replacement simulation; Duel added an old
+referee result to the new board; Conductor restored an obsolete bar after reset. Lander, Pendulum
+and Pong cleared their decision counters before waiting for the old queued answer, so a fresh
+reset still reported a completed decision. All nine original reproductions failed for the observed
+state/counter mismatch before the fixes.
+
+- Results and errors now verify the world/board/revision they belong to before being applied.
+  Fresh simulations clear the displayed decision and old error as appropriate.
+- Resets invalidate the rest of an old manual batch. Queued physics resets clear counters after
+  old work settles; watched workspace replacements invalidate pending results too.
+- Conductor queues complete bar work, snapshots the audience request across harmony and notes,
+  skips an obsolete notes call, and makes the newest request produce two fresh bars. A reset
+  again returns two consistently numbered initial bars. Duel queues rethinking so a reset or
+  changed board still gets its first valid move, instead of silently losing that work to `busy`.
+- Existing model telemetry remains a record of calls that actually happened. This does not abort
+  an already sent provider request or claim to undo its cost.
+
+**28 delayed-protocol checks** now pass: each of the nine experiments survives a late success and
+late failure across reset, stops the old three-step batch, runs again, and handles a watched source
+edit while an answer is pending. A separate overlapping-audience test verifies two fresh bars for
+the newest mood request and no obsolete second-stage notes call. **All 123 existing tests** for
+these nine packages also pass in explicit offline mode. Shared Jev kit copies remain unchanged
+and in sync. Added reusable session-lifecycle guidance to the kit README.
+
+Repeatable test: `store/tools/jev-kit/test/async-sessions.test.mjs`. Before/after logs and the original
+package results are in `/private/tmp/openharness-harness-improvements-evidence/jev-async-*.txt`
+and `jev-existing-tests.txt`. These checks verify real wrapper/client protocol behavior using
+local fixture answers; they do not establish live Jev speed, judgment or calibration.
+
+## Tenth improvement: a field guide for getting hands-on
+
+The new experiences now have a common entry point: [the readable field guide](../docs/hands-on.md)
+and its [interactive local version](../docs/hands-on.html). Both are generated from the same
+reviewed `store/hands-on.json`. The guide starts with the user's craft and intended action:
+change a world, shape a design, retry a moment, perform music, inspect a molecular bond, review a
+PDF, refine a question, or compare a signal. Each has a real native screenshot and recording,
+a starting prompt, three concrete interactions, the artifact it keeps and a follow-up prompt that
+carries the user's judgment back into the agent's next revision.
+
+The videos show separately authored projects; suggested prompts are not presented as the prompts
+that produced those recordings. Jev Sheets remains prominently identified as offline practice
+with fictional data. Provider requirements and the important limits of open-loop physics, rigid
+bond scans, PDF anchors, compiled games and native circuit captures stay beside their experience.
+
+The browser guide opens directly from disk. It has no framework, analytics, remote dependencies
+or service. Craft links preserve ordinary linking and browser history; a next-craft action puts
+keyboard focus into the visible experience. Videos load only on an explicit play action and
+pause when hidden. Prompt text stays fully visible in narrow panes; clipboard failure selects
+it and gives a truthful manual-copy instruction. Without JavaScript, all eight articles, prompts,
+images and direct video links remain readable. The generated Markdown gives GitHub readers the
+same instructions without needing to open an HTML file.
+
+The root README links to the guide outside its generated inventory block. Eight Store packages
+now include the same starting prompts; seven generic upstream taglines were rewritten around the
+actual hands-on workflow. Existing screenshot/prompt pairs remain first. The previous Jev Sheets
+Question Lab example was moved behind its original illustrated example because the Store's
+browse surface independently selects the first available image.
+
+Verification:
+
+- 63 browser checks passed against the final HTML opened directly from disk: all eight craft
+  destinations and exact prompts, all eight real MP4s decoding, deep links and Back, keyboard
+  navigation, native clipboard contents and denied-clipboard selection, no remote requests,
+  no early video downloads, hidden-video pause, complete prompt visibility and no horizontal
+  overflow at 390 and 320 pixels, and the JavaScript-free fallback. No page exceptions.
+- Desktop, Jev and narrow screenshots were visually inspected. Evidence:
+  `hands-on/` and `hands-on-browser-final.txt` under the local evidence root.
+- `node store/tools/hands-on.mjs --check` verifies generated content, all local asset paths and
+  matching Store prompts. The 49-harness/10-viewer presentation and 59-entry published-catalog
+  schema checks pass. The catalog was validated locally, not published.
+- Added an actual Go2 MuJoCo recording: a 100 N force for 0.15 seconds, three seconds of native
+  simulation, 19 bundled source/model assets and 168 stored frames. Greatest separation is
+  6.586 cm; final separation is 0.786 cm. The downloaded packet reproduces under native MuJoCo
+  3.13.0 without its original workspace, with max qpos error below `2.8e-15`. The 13.72-second,
+  1440×1040 H.264 video and a native screenshot are committed. Evidence: `mujoco-shove-demo/`.
+
+Finished classifying all 17 first-pass structural warnings by their actual setup, initialization,
+instruction and artifact-routing contracts. The [inventory](HARNESS-INVENTORY-2026-09-21.md)
+records why each warning occurs and the verification boundary. They were not suppressed or
+misrepresented as cold-install/native-runtime passes. Eight setup-created paths were also found
+in the separately installed Circuit, Workshop, Godogen and Remotion packages; KiCad's cold setup
+and the OpenMontage production pipeline were not rerun for that structural review.
+
+## Eleventh improvement: inspect the physics behind a measurement
+
+Recording the robot walkthrough exposed a useful missing interaction: the lab reported the
+largest separation but left the user to search for its frame. The **Farthest apart** measurement
+is now a button that pauses both native worlds at the first stored frame with that maximum.
+**Apart at the finish** similarly jumps to the final moment. Saved experiment metrics include
+`maxSeparationFrame` and the actual `maxSeparationTime`, so an agent can locate the same observation.
+The wording explicitly describes sampled frames, not a continuous-time extremum search.
+
+A shared seek path also fixes a real return-to-comparison error: preview initialization used to
+reset the slider before reading the user's requested value, so scrubbing a retained comparison
+after returning live could jump back to zero. The requested frame is now captured before preview
+initialization, then both real MuJoCo data instances are positioned there without changing the
+live simulation.
+
+- All 29 viewer tests and its native WASM/server smoke checks pass. The analytical freefall check
+  now verifies the maximum is at its final sampled time; an identical-world comparison verifies
+  the first frame wins a zero-valued tie.
+- Twelve native browser journey checks pass, including keyboard activation of the maximum,
+  exact qpos for both displayed native poses, unchanged live state, the final-frame jump and
+  a nonzero seek after returning to the simulation. Existing downloads, deferred edits, narrow
+  layout and cancellation remain verified.
+- The refreshed Go2 recording shows the 6.586 cm maximum at its actual 0.252 s sample (frame 14),
+  then playback and portable exports. The new packet again reproduces with native MuJoCo.
+  Its 14.04-second H.264 video and native screenshot replace the previous guide demo; the guide
+  now describes the direct jump. Both controls and the timeline were visually inspected together.
+
+Evidence: `mujoco-peak-tests.txt`, `mujoco-peak-browser.txt`, `mujoco-peak/` and
+`mujoco-peak-demo/` under the local evidence root.
+
+## Twelfth improvement: keep the video frame the user actually chose
+
+A final review of Video Viewer found two concrete handoff failures. `Save frame` captured its
+pixels before PNG encoding but built the filename afterward, using whatever render and frame
+were then current. Opening Beta while Alpha's encoder finished saved Alpha's pixels with Beta's
+name. Different renders saved at the same scene/quality/frame path also silently replaced the
+older PNG. Both were reproduced with two original, native Manim scenes before changing the code.
+
+The viewer now captures pixels, scene, frame label and dimensions together. A source or clip that
+changes while an outstanding seek is still preparing the frame produces a clear retry message.
+After the pixels have been captured, encoding can complete independently of subsequent playback
+or source changes. Clipboard fallback reuses the same capture, including when the clipboard fails
+only after encoding; it no longer takes a new frame from the later video. An encoder returning no
+PNG reports failure and leaves subsequent saves working.
+
+Saved images have a content hash in their filename. Publishing uses a private staging file and
+an atomic link that cannot overwrite an existing file. Identical retries return the existing path;
+a different image gets a different path. A modified prior file or an occupied short-hash name is
+preserved, with a complete-hash fallback. The save response includes the full SHA-256. Writes do
+not follow symlinked workspace subdirectories or existing image names. The existing workspace
+routes now reject foreign browser origins and non-loopback Host headers; the daemon's remote
+viewer proxy already rewrites Host and Origin to the target origin, so its forwarding contract
+is retained.
+
+Verification:
+
+- Before fixes, native Manim/Chrome reproduced all three failing assertions: wrong source/frame
+  name, same path for different pixels, and replacement of the earlier image.
+- All 50 Video Viewer tests now pass, covering native MP4 headers/library/server behavior plus
+  version preservation, idempotent repeats, collision recovery, staging cleanup, symlink bounds,
+  foreign origin/Host rejection, conflict responses and filesystem failures.
+- Twelve native browser checks pass on the same original Manim renders: exact earlier PNG bytes
+  despite a later render opening, distinct preserved versions, repeat identity, delayed clipboard
+  denial, no recapture from the later video, null-encoder failure and recovery, and a 390px layout.
+  There were no browser exceptions. The narrow pane and its Copy path action were visually checked.
+- The fixture uses the existing Manim render wrapper and installed native engine, isolated under
+  the evidence directory. No installed harness, user project, model provider or remote service was
+  modified or called.
+
+Evidence: `video-stills-before.txt`, `video-stills-before/`, `video-stills-tests-final.txt`,
+`video-stills-final.txt`, and `video-stills-final/` under the local evidence root. The reproducible
+native browser check and its original Manim source are included in the Video Viewer package.
+
+## Thirteenth improvement: try a native starter from the checkout
+
+Added `node store/tools/try-hands-on.mjs mujoco|strudel|circuitjs`. Each launch opens this branch's
+viewer source on an editable, original starter: a pendulum, the Lantern room synth composition,
+or the named-node RC circuit. The command prints a loopback URL, project directory and first action.
+`--workspace` resumes a chosen folder without replacing its source; `--runtime-root` selects an
+existing harness cache. The README and both field guides link to the short launcher instructions.
+
+The launcher checks native assets and exact pinned Node dependency versions before creating the
+project. It copies viewer code into an owned temporary runtime and links existing dependencies;
+it does not install or update packages. Shutdown and startup cancellation stop the owned server
+process group and remove only that runtime. Source and saved work remain in the project. The
+instructions explain that default projects live under the system temporary directory and a durable
+`--workspace` is preferable for ongoing work. A preview starts no agent chat.
+
+Native startup exposed an existing MuJoCo bug: Node canonicalizes a linked entry's `import.meta.url`,
+but the viewer compared it with an uncanonicalized process argument. The program silently exited
+when launched through a linked package or macOS's `/var` alias. The main-module guard now compares
+the real entry path, with an actual linked-package HTTP regression check. The original native
+pendulum browser fixture is shared as an XML file rather than duplicated in the launcher.
+
+Verification:
+
+- All 31 MuJoCo package tests and the native WASM/server smoke checks pass, including a linked
+  package entry serving its real viewer and model API with normal Node resolution and with
+  `--preserve-symlinks-main`.
+- Eleven native Chrome starter checks pass: a real MuJoCo gravity comparison and measured-frame
+  jump, an exported experiment, audible Web Audio with a kept WAV/source/marker, actual CircuitJS
+  samples, source editing and capture rendering after restart, and no browser exceptions.
+- Those three journeys also pass with external requests blocked. Strudel's unchanged REPL attempts
+  optional sample-index requests; its built-in synth composition continues to play and record.
+  The checked native entry-asset hashes remain unchanged, and every owned preview runtime is removed.
+- Seven process-lifecycle checks pass: linked CLI entry, invalid selection before mutation, an
+  already-aborted launch, a reachable printed URL, Ctrl-C after readiness, retained edited source,
+  and Ctrl-C during startup without a lingering runtime.
+  The same seven checks also pass when Node preserves the CLI's symbolic link. A before-fix probe
+  silently printed nothing even for `--help`; both the entry guard and repository lookup now use
+  the real module path. MuJoCo likewise canonicalizes both sides of its entry comparison.
+- The finished field guide passes all 63 browser checks again, including every actual local video,
+  390/320px layouts, clipboard fallback, deep links, back navigation and JavaScript-disabled reading.
+  The generated guide, 49-harness/10-viewer presentation and 59-entry catalog schema checks pass.
+- All 431 existing Store/conformance tests pass on the final source, covering all 82 package
+  manifests, declared instructions and skills, registry membership, licenses and Store facts.
+
+The native starter screenshots were visually inspected. Evidence: `playgrounds-browser.txt`,
+its printed `playgrounds-*/` directory, `playground-cli.txt`, its printed `playground-cli-*/` directory,
+`mujoco-linked-tests.txt`, `hands-on-browser-final.txt`, `final-store-conformance.txt`, and `hands-on/`
+under the local evidence root. The preserved-link CLI results are in
+`playground-cli-preserved-links.txt` and its printed evidence directory.
+
+## Delivery follow-up: recorded examples on the harness detail pages
+
+The eight upgraded harnesses now lead their Store detail pages with the project shown in the
+recording, its complete screenshot and a **Watch real session** action. **Try this prompt** retains
+the exact example text. Existing examples remain available. Jev Sheets explicitly identifies its
+fictional support tickets and offline practice answers. Recorded prompts and captions are kept in
+`store/hands-on.json`; `node store/tools/hands-on.mjs --sync-store` updates the first Store example,
+and `--check` verifies the metadata and committed media together.
+
+An optional bounded HTTPS `video` field passes through the publisher, CLI schema and desktop
+catalog. The detail page loads pictures only until someone chooses to watch. The native player
+fits the complete frame, uses local HTML with a restrictive content policy, offers a browser
+fallback, and pauses and removes its media on every route close. Native testing caught an actual
+cleanup error: WebView rejects an empty HTML string. Closing now replaces the source with a valid
+empty document. The player follows the desktop type scale, and bundled harness taglines now match
+the changed catalog descriptions.
+
+Restored the interrupted session into a durable worktree and integrated `main` at `8fdebad8`.
+Validation on macOS with Flutter 3.47.2 / Dart 3.13:
+
+- CLI typecheck and the complete CLI suite pass: **3,935 tests**, with 63 opt-in tests skipped.
+- The directly affected desktop suites pass **96 tests**: catalog parsing, detail-page actions,
+  narrow layouts, bundled identity, Store pages and exact prompt handoff into New Harness.
+- The native `store_recordings_native_test.dart` passes against the actual GitHub-hosted MP4s:
+  all eight decode and advance time with native controls; close removes the media, reopening
+  works, Escape cleans up, and a missing video gives the browser fallback. The Blender dialog
+  was visually inspected in the native app. This verifies recorded-video playback, not a fresh
+  live-model run of every harness.
+- Flutter analysis has no errors or warnings; 13 informational lints are in unchanged files.
+- The complete desktop suite was exercised. Its remaining known failure is the missing bundled
+  cover for `autonomous/harness-monitor` in `store_discover_test.dart`. The listed-package set,
+  cover mapping, source records and assertion are identical on `main`; independently comparing
+  those inputs confirms the same missing cover before these changes. Copy assertions affected by
+  the new taglines were updated and pass in the focused suite.
+- The eight-experience generator check and 59-entry catalog validation pass.
+
+Repeat native playback from a published commit with:
+
+```sh
+cd desktop
+FLUTTER_TEST=1 flutter test -d macos --no-pub \
+  --dart-define=STORE_DEMO_CHECKOUT=/absolute/path/to/openharness \
+  --dart-define=STORE_DEMO_REF=main \
+  integration_test/store_recordings_native_test.dart
+```
+
+Current logs and the per-recording native dimensions, duration and playback state are in
+`.scratch/harness-detail-evidence/` in the resumed worktree. The native fixture uses no Harness
+account or user state. Catalog metadata publishes after merge; embedded playback ships in the
+next desktop release, while older clients retain the new screenshots and prompts.

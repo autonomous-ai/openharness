@@ -7,7 +7,7 @@
 // Answers are cached by row text plus column definition, so only missing cells are ever computed.
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { evaluate, jev, toWire, PRICE_PER_MTOK, resolveCredentials } from '../toolchain/jev.mjs'
+import { evaluate, toWire, PRICE_PER_MTOK, resolveCredentials } from '../toolchain/jev.mjs'
 import { serveViewer, writeVerdict, watchConfig, watchPath, mulberry32, clean } from './kit.mjs'
 import { parseHeader, normalizeSheet, columnKey, judge, confidenceOf, levelOf, describeColumn, LIMITS } from './grammar.mjs'
 import { sheetMock } from './mock.mjs'
@@ -15,6 +15,8 @@ import { loadSource } from './source.mjs'
 import { createPicker } from './picker.mjs'
 import { writeFileSync, renameSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { extname } from 'node:path'
+import { questionForColumn } from './questions.mjs'
+import { createQuestionLab, trialHash } from './question-lab.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const MARKER = 'sheet.json'
@@ -56,12 +58,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
 
   // ---- questions -----------------------------------------------------------------------------
   const rowState = (row) => ({ text: row.text, ...row.meta })
-  function questionFor(col) {
-    const ctx = sheet.context ? `${sheet.context} ` : ''
-    if (col.type === 'noul') return jev.noul(`${ctx}${col.header}`)
-    if (col.type === 'choice') return jev.choice(Object.fromEntries(col.options.map((o) => [o, col.descriptions?.[o] || o])), `${ctx}${col.name}: which option fits this row best?`)
-    return jev.score(col.levels, `${ctx}${col.name}: where does this row sit on the scale?`)
-  }
+  const questionFor = (col) => questionForColumn(col, sheet.context)
 
   // ---- cells ---------------------------------------------------------------------------------
   const cellOf = (rowId, colId) => cells.get(rowId)?.get(colId)
@@ -205,6 +202,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
       source: sourceInfo, // set when the rows come from the person's own file
       own: !!sourceInfo, answersFile: ANSWERS,
       concurrency: sheet.concurrency, limits: LIMITS,
+      questionLabToken: lab.token,
       suggestions: sheet.suggestions.length ? sheet.suggestions : FALLBACK_SUGGESTIONS,
       columns: columns.map((c) => ({ id: c.id, header: c.header, name: c.name, type: c.type, options: c.options, descriptions: c.descriptions, levels: c.levels, bare: !!c.bare, source: c.source, kind: describeColumn(c) })),
       rows: rows.map((r, i) => ({ id: r.id, n: i + 1, text: r.text, meta: r.meta, group: r.group, edited: !!r.edited, labelled: !!r.truth })),
@@ -580,8 +578,51 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     }
   }
 
+  // Question Lab owns only frozen trials; adding a tested header uses the existing sheet/cache.
+  let labSnapshotRev = -1, labData = null
+  const labApplied = new Map()
+  function labSnapshot(withConfidence = false) {
+    if (labSnapshotRev !== rev) {
+      const frozenRows = rows.map((r, i) => ({ id: r.id, n: i + 1, text: r.text, meta: { ...r.meta } }))
+      labData = { rows: frozenRows, dataSha: trialHash({ context: sheet.context, source: sourceInfo?.name || null, rows: frozenRows }) }
+      labSnapshotRev = rev
+    }
+    const confidences = withConfidence ? Object.fromEntries(columns.map((col) => [col.id, Object.fromEntries(rows.flatMap((row) => {
+      const cell = cellOf(row.id, col.id)
+      return cell ? [[row.id, cell.conf]] : []
+    }))])) : null
+    return { ...labData, title: sheet.title, source: sourceInfo?.name || null, context: sheet.context, columns, order, confidences, invalid: !!configError }
+  }
+  const lab = createQuestionLab({ workspace, snapshot: labSnapshot,
+    notify: (data) => server?.broadcast(data, 'trial'),
+    apply: (trial) => {
+      const prior = labApplied.get(trial.id)
+      if (prior && columns.includes(prior.column)) return { ...prior.result, alreadyApplied: true }
+      if (columns.length >= LIMITS.maxColumns) return { ok: false, error: 'This sheet has 12 columns. Remove one before trying another.' }
+      // The original stays visible, including when both versions have the same name.
+      const parsed = parseHeader(trial.candidate.header)
+      let id = parsed.column.id, suffix = 2
+      while (colById(id)) id = `${parsed.column.id.slice(0, 24)}_v${suffix++}`
+      const col = { ...parsed.column, id, source: 'pane', addedAt: Date.now() }
+      columns.push(col)
+      // Reuse only answers from this exact question/data and the currently connected route/model.
+      const route = liveRoute() || 'mock', model = process.env.JEV_MODEL || 'jev-latest'
+      let reused = 0
+      if (trial.requestedModel === model) for (const row of trial.rows) {
+        if (!row.candidate || row.provenance?.client !== route) continue
+        cacheFor(col).set(JSON.stringify(rowState(row)), { answer: row.candidate.answer, latencyMs: row.provenance.latencyMs, tokens: 0 })
+        reused++
+      }
+      const result = { id, rows: rows.length, reused, persisted: false }
+      labApplied.set(trial.id, { column: col, result })
+      touch(); refill(); changed()
+      return result
+    }
+  })
+
   // ---- control -------------------------------------------------------------------------------
   async function control(cmd, body) {
+    if (typeof cmd === 'string' && cmd.startsWith('lab')) { touch(); return lab.control(cmd, body) }
     switch (cmd) {
       case 'pause': running = false; pushView(); return { running }
       case 'start': running = true; pushView(); pump(); return { running }
@@ -646,8 +687,8 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     if (err) { configError = `${err}. Showing the last good sheet`; pushView(); verdictSoon(); return }
     applySheet(cfg, false)
   })
-  server = await serveViewer({ here: HERE, port, files: ['index.html', 'base.css', 'studio.css', 'studio.js', 'jev-hud.js', 'grammar.mjs'], state: fullState, control,
-    upload, downloads: () => { saveAnswers(); return { [ANSWERS]: join(workspace, ANSWERS) } },
+  server = await serveViewer({ here: HERE, port, files: ['index.html', 'base.css', 'studio.css', 'studio.js', 'jev-hud.js', 'grammar.mjs', 'question-lab-ui.mjs', 'question-lab.css'], state: fullState, control,
+    upload, downloads: () => { saveAnswers(); return { [ANSWERS]: join(workspace, ANSWERS), ...lab.downloads() } },
     // A key just arrived: the stand-in's answers are dropped and every cell is asked again, for real.
     onConnect: () => reset() })
   applySheet(watcher.get(), true)
@@ -658,6 +699,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
   return {
     url: server.url,
     async close() {
+      lab.close()
       sourceWatcher?.close(); clearTimeout(sourceTimer); saveAnswers(); clearTimeout(answersTimer)
       stopped = true
       clearInterval(ghostTimer); clearTimeout(patchTimer); clearTimeout(verdictTimer); clearTimeout(retryTimer); clearTimeout(progressTimer)

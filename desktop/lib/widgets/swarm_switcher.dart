@@ -78,14 +78,11 @@ class _SwarmHistoryState extends State<_SwarmHistory> {
               children: [
                 Row(
                   children: [
-                    Text(
-                      'History',
-                      style: terminalTextStyle(fontWeight: FontWeight.w500),
-                    ),
+                    Text('History', style: grid.AppType.monoLabel()),
                     Spacer(),
                     Text(
                       'This session',
-                      style: terminalTextStyle(color: Colors.white54),
+                      style: grid.AppType.monoMeta(color: Colors.white54),
                     ),
                   ],
                 ),
@@ -336,11 +333,11 @@ double swarmSearchRowHeight(
   bool stacked = false,
 }) => terminal
     ? stacked
-          ? scale.scale(terminalFontStore.size) * 1.35 +
-                scale.scale(terminalFontStore.size) * 1.35 +
+          ? scale.scale(grid.AppType.monoSize) * 1.35 +
+                scale.scale(grid.AppType.monoSize) * 1.35 +
                 8
           : boxRowHeight(scale)
-    : (scale.scale(terminalFontStore.size) * 1.2 + 14).clamp(
+    : (scale.scale(grid.AppType.monoLabelSize) * 1.2 + 14).clamp(
         34,
         double.infinity,
       );
@@ -556,7 +553,10 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
             widget.terminal &&
             !search.isCommandMode &&
             !search.isHelpMode &&
-            resultWidth < 700 * scale.scale(terminalFontStore.size) / 13;
+            resultWidth <
+                700 *
+                    scale.scale(grid.AppType.monoSize) /
+                    grid.AppType.monoSize;
         _rowHeight = swarmSearchRowHeight(
           scale,
           commands: search.isCommandMode,
@@ -572,7 +572,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
             : constraints.maxHeight;
         final compactAction =
             (sideBySide ? constraints.maxWidth / 2 : constraints.maxWidth) <
-            380 * scale.scale(terminalFontStore.size) / terminalFontSize;
+            380 * scale.scale(grid.AppType.monoSize) / grid.AppType.monoSize;
         final geometry = (Size(constraints.maxWidth, height), _rowHeight);
         if (_geometry != geometry) {
           _geometry = geometry;
@@ -595,7 +595,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
             highlighted ? (search.canAccept, search.actionLabel(row)) : null,
             _rowHeight,
             compactAction,
-            scale.scale(terminalFontStore.size),
+            grid.AppType.monoFamily,
             grid.AppTheme.palette.value,
             acceptKey,
             widget.terminal,
@@ -695,15 +695,15 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                 : alreadyHere && search.placement == null
                 ? Text(
                     'Already added',
-                    style: terminalTextStyle(color: Colors.white54),
+                    style: grid.AppType.monoMeta(color: Colors.white54),
                   )
                 : highlighted
                 ? ConstrainedBox(
                     constraints: BoxConstraints(
                       maxWidth:
                           170 *
-                          scale.scale(terminalFontStore.size) /
-                          terminalFontSize,
+                          scale.scale(grid.AppType.bodySize) /
+                          grid.AppType.bodySize,
                     ),
                     child: TextButton(
                       key: const ValueKey('swarm-row-action'),
@@ -721,7 +721,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                 ? null
                 : Text(
                     row.shortcut!,
-                    style: terminalTextStyle(color: Colors.white60),
+                    style: grid.AppType.monoMeta(color: Colors.white60),
                   ),
             onTap: canSubmit ? () => _submit(row) : null,
           );
@@ -776,7 +776,10 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                               : search.adding
                               ? 'No matching harnesses'
                               : 'No matching results',
-                          style: terminalTextStyle(color: Colors.white60),
+                          style: grid.AppType.monoLabel(
+                            fontWeight: FontWeight.w400,
+                            color: Colors.white60,
+                          ),
                         ),
                       )
                     : Padding(
@@ -825,7 +828,10 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                                 : 'No room to open this ${selected.isSwarm || selected.isGroup ? 'group' : 'harness'}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: terminalTextStyle(color: Colors.white60),
+                            style: grid.AppType.monoLabel(
+                              fontWeight: FontWeight.w400,
+                              color: Colors.white60,
+                            ),
                           ),
                         ),
                       ],
@@ -993,7 +999,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
     final title = SearchResultText(
       row.title,
       matches: matches.where((match) => match.title),
-      style: widget.terminal ? boxMonoStyle() : terminalTextStyle(),
+      style: widget.terminal ? boxMonoStyle() : grid.AppType.monoLabel(),
     );
     final detailText = widget.terminal
         ? row.terminalDetail ?? row.detail
@@ -1017,7 +1023,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
             matches: matches.where((match) => !match.title),
             style: widget.terminal
                 ? boxMonoStyle(color: kBoxFaint)
-                : terminalTextStyle(color: Colors.white54),
+                : grid.AppType.monoMeta(color: Colors.white54),
           )
         : null;
     return widget.stacked
@@ -1071,7 +1077,7 @@ class SwarmSearchActionLabel extends StatelessWidget {
                 label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: terminalTextStyle(),
+                style: grid.AppType.label(),
               ),
             ),
           if (hint != null) ...[
@@ -1080,7 +1086,7 @@ class SwarmSearchActionLabel extends StatelessWidget {
               if (hint.length > 1)
                 Text(
                   hint.substring(0, hint.length - 1),
-                  style: terminalTextStyle(),
+                  style: grid.AppType.monoMeta(),
                 ),
               const Icon(Icons.keyboard_return, size: 14),
             ] else
@@ -1090,7 +1096,7 @@ class SwarmSearchActionLabel extends StatelessWidget {
                   hint.replaceAll('↵', 'Return').replaceAll('⇥', 'Tab'),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: terminalTextStyle(),
+                  style: grid.AppType.monoMeta(),
                 ),
               ),
           ],
@@ -1249,10 +1255,7 @@ class SwarmSearchCount extends StatelessWidget {
             key: const ValueKey('swarm-search-count'),
             style: terminal
                 ? boxMonoStyle(color: kBoxFaint)
-                : terminalTextStyle(
-                    color: Colors.white54,
-                    fontFeatures: [FontFeature.tabularFigures()],
-                  ),
+                : grid.AppType.monoMeta(color: Colors.white54),
           ),
         );
       },

@@ -3,6 +3,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CircuitJS</title>
+<link rel="stylesheet" href="/__lab/ui.css">
 <style>
   :root {
     color-scheme: light;
@@ -84,6 +85,7 @@
   <span id="t"></span>
   <button class="btn" id="run" type="button" title="Pause or run the simulation (Space)"><svg viewBox="0 0 12 12"><path id="run-icon" d="M3 2h2v8H3zM7 2h2v8H7z"/></svg><span class="txt">Pause</span></button>
   <button class="btn" id="revert" type="button" title="Load the file again — drops what you changed in the pane"><svg viewBox="0 0 12 12"><path d="M6 1.5a4.5 4.5 0 1 1-4.24 6h1.62A3 3 0 1 0 6 3v1.8L3.2 2.4 6 0z"/></svg><span class="txt">Revert</span></button>
+  <button class="btn" id="scope-lab" type="button" title="Capture native voltage and current traces, compare and keep them">Scope Lab</button>
   <button class="btn icon" id="help-btn" type="button" title="What am I looking at? (?)" aria-pressed="false">?</button>
 </header>
 <div id="nodes" hidden><span class="label">Nodes</span></div>
@@ -112,8 +114,9 @@
   </div>
 </div>
 
-<script>
-(() => {
+<script type="module">
+import { initScopeLab } from '/__lab/ui.mjs'
+;(async () => {
   const $ = (id) => document.getElementById(id)
   const params = new URLSearchParams(location.search)
   const file = params.get('file') || 'circuit.txt'
@@ -132,6 +135,9 @@
   let problems = { check: [], runtime: [] }
   let labels = []              // unique labeled-node names, in file order
   let fileState = 'loading'    // loading | missing | empty | ok
+  let loadSeq = 0
+  const scopeLab = await initScopeLab({ getSim: () => sim, getSourceFile: () => file })
+  $('scope-lab').addEventListener('click', () => scopeLab.show())
 
   // ---- formatting ----
   const si = (v, unit) => {
@@ -186,7 +192,9 @@
 
   async function load({ force = false, announce = true } = {}) {
     if (!sim) return
+    const mine = ++loadSeq
     const text = await fetchText()
+    if (mine !== loadSeq) return
     if (text === undefined) return
     if (text === null) {
       fileState = 'missing'; lastText = null
@@ -225,6 +233,7 @@
       }
     } catch {}
     renderNodes()
+    scopeLab.update()
     renderProblems()
     const scopes = (text.match(/^\s*o\s/gm) || []).length
     let parts = 0
@@ -297,7 +306,7 @@
   function ready(s) {
     if (sim === s) return
     sim = s
-    s.onanalyze = () => {}
+    s.onanalyze = () => scopeLab.update()
     load({ force: true, announce: false })
   }
   // The hook has to be on the iframe's window before its GWT module finishes booting, and the

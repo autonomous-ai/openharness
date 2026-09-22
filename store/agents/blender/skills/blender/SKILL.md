@@ -32,6 +32,52 @@ report()                                   # what the verdict reads
 
 ## What the pane shows, and how to feed it
 
+### Shape Lab: authored controls, real geometry, kept directions
+
+Expose choices that help the user explore **their** object. `parameters()` publishes controls to
+`.harness/design.json` and reads the defaults or the user's `design-values.json` during each run:
+
+```python
+from harness_blender import parameters
+p = parameters({
+    "height": {"default": 260, "min": 180, "max": 380, "step": 5, "unit": "mm"},
+    "ribs": {"type": "integer", "label": "Ribbons", "default": 24, "min": 12, "max": 48},
+    "base": {"type": "boolean", "label": "Include base", "default": True},
+    "finish": {"type": "choice", "default": "Ivory", "options": ["Ivory", "Terracotta"]},
+}, title="Light, shaped by you", sources=["scenes", "assets"], output="out/model.glb")
+# Use p["height"], p["ribs"], p["base"] and p["finish"] in the scene you author.
+```
+
+All controls need a `default`. Numeric controls default to type `number` and step `1`; they need
+finite `min < max` bounds. Integer bounds and steps must be integers. Optional `label`,
+`description` and `unit` explain a control. Support is bounded to 1–16 controls and 2–12 choice
+options. A control ID uses lowercase letters, numbers and underscores, starting with a letter.
+
+`sources` lists existing relative files or folders needed to rebuild: the entry script, local
+imports and assets. By default it includes the entry script's folder and `assets/` when present.
+List root-level imports or other asset folders explicitly. Hidden files, dependencies, output
+folders and symlinks are not inputs. Use relative paths and the helper's workspace convention;
+the native preview is a separate working directory, not a sandbox for arbitrary Python.
+
+Shape Lab snapshots the declared files and runs the entry script with chosen values. It keeps
+the last good preview while another builds, coalesces rapid changes, and stops a preview after
+two minutes. `render()` and `turntable()` are skipped in this mode. Always produce the declared
+`out/*.glb`/`.gltf` and `out/report.json`; prefer a self-contained GLB. Other dependencies must
+already be available in the harness's Python environment.
+
+**Keep** saves source, helper modules and their license, values, actual exports, measurements,
+thumbnail, a rebuild script and a ZIP in `out/designs/<id>/`. Saved directions survive source
+edits and viewer restarts. **Use values on next build** writes the chosen values to the project
+only when the authored source still matches. It does not replace the current model, renders or
+verdict; run the scene and verdict normally to produce that delivery. Preserve the user's values
+when refining, and migrate them explicitly if the control schema changes.
+
+For example, a user may keep a short wide cup and a tall handle-free tumbler, then ask you to
+refine the tumbler's rim. Read its saved source and measurements instead of approximating it from
+the thumbnail. Geometry, camera and finish remain ordinary editable Blender Python.
+
+### Viewport metadata
+
 The pane is a 3D viewport of the glTF, not a video player. `export_glb` carries everything it needs:
 
 - **Names and hierarchy**: every renderable object under its Blender name, collections as the

@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../settings/sections/appearance_section.dart';
 import '../settings/sections/terminal_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/widgets/app_dialog.dart';
-import 'box_chrome.dart';
 import 'prompt_customize.dart';
 
 /// Opens customization over the workspace so appearance changes remain visible
@@ -21,7 +19,7 @@ Future<void> showHarnessCustomizePane(BuildContext context) =>
       builder: (context) => Align(
         alignment: Alignment.centerRight,
         child: SizedBox(
-          width: (440 * terminalTextScaleOf(context)).clamp(
+          width: (440 * grid.appTextScaleOf(context)).clamp(
             0,
             MediaQuery.sizeOf(context).width,
           ),
@@ -59,9 +57,8 @@ class HarnessCustomizePane extends StatelessWidget {
                       Expanded(
                         child: Text(
                           'Customize Harness',
-                          style: boxMonoStyle(
+                          style: grid.AppType.heading(
                             color: grid.AppPalette.textPrimary,
-                            weight: FontWeight.w600,
                           ),
                         ),
                       ),
@@ -82,7 +79,7 @@ class HarnessCustomizePane extends StatelessWidget {
                   unselectedLabelColor: grid.AppPalette.textSecondary,
                   indicatorColor: grid.AppPalette.swarmAccent,
                   dividerColor: grid.AppPalette.divider,
-                  labelStyle: boxMonoStyle(),
+                  labelStyle: grid.AppType.label(),
                   tabs: const [
                     Tab(key: ValueKey('customize-prompt'), text: 'Pane'),
                     Tab(

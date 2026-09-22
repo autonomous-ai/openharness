@@ -4,13 +4,15 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
-import 'project_folder.dart';
 import 'repository_clone.dart';
 
 class GitBranch {
-  const GitBranch(this.ref, this.name, {this.remote = false});
+  const GitBranch(this.ref, this.name, {this.remote = false, this.worktree});
   final String ref, name;
   final bool remote;
+
+  /// Where this local branch is checked out, when it is.
+  final String? worktree;
 }
 
 class GitProjectInfo {
@@ -19,11 +21,17 @@ class GitProjectInfo {
     this.branch,
     this.branches = const [],
     this.error,
+    this.mainFolder,
+    this.mainBranch,
   });
   factory GitProjectInfo.fromJson(Map<String, dynamic> data) => GitProjectInfo(
     isGit: data['isGit'] == true,
     branch: data['branch'] as String?,
     error: data['error'] as String?,
+    mainFolder: data['mainFolder'] is String && validGitPath(data['mainFolder'])
+        ? data['mainFolder'] as String
+        : null,
+    mainBranch: data['mainBranch'] as String?,
     branches: [
       for (final row in (data['branches'] as List? ?? const []))
         if (row is Map && row['ref'] is String && row['name'] is String)
@@ -31,12 +39,76 @@ class GitProjectInfo {
             row['ref'] as String,
             row['name'] as String,
             remote: row['remote'] == true,
+            worktree: row['worktree'] is String
+                ? row['worktree'] as String
+                : null,
           ),
     ],
   );
   final bool isGit;
   final String? branch, error;
   final List<GitBranch> branches;
+
+  /// Set only for a folder inside a linked worktree: the same folder in the
+  /// repository's main checkout, and the branch that checkout is on.
+  final String? mainFolder, mainBranch;
+}
+
+/// One entry of `git worktree list --porcelain`. The main checkout is first.
+typedef _Worktree = ({String path, String? ref, bool usable});
+
+List<_Worktree> _parseWorktrees(String output) => [
+  for (final block in output.split(RegExp(r'\n\s*\n')))
+    if (block
+            .split('\n')
+            .where((line) => line.startsWith('worktree '))
+            .firstOrNull
+        case final line?)
+      (
+        path: line.substring('worktree '.length),
+        ref: block
+            .split('\n')
+            .where((line) => line.startsWith('branch '))
+            .firstOrNull
+            ?.substring('branch '.length),
+        // A bare repository has no files, and a prunable entry lost its folder.
+        usable: !block
+            .split('\n')
+            .any((line) => line == 'bare' || line.startsWith('prunable')),
+      ),
+];
+
+Future<String> _realPath(String path) async {
+  try {
+    return await Directory(path).resolveSymbolicLinks();
+  } on FileSystemException {
+    return p.normalize(path);
+  }
+}
+
+/// The main checkout, when [root] is one of its linked worktrees.
+Future<String?> _mainCheckout(String root, List<_Worktree> trees) async {
+  if (trees.length < 2 || !trees.first.usable) return null;
+  final here = await _realPath(root);
+  if (await _realPath(trees.first.path) == here) return null;
+  for (final tree in trees.skip(1)) {
+    if (await _realPath(tree.path) == here) return trees.first.path;
+  }
+  return null;
+}
+
+/// `claude-0922-1136`: the harness and the local time, short enough to read as
+/// a branch. The worktree's folder is named the same and nobody needs to see it.
+String worktreeName(String label, DateTime at) {
+  String two(int n) => n.toString().padLeft(2, '0');
+  var slug = label
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
+  if (slug.length > 40) {
+    slug = slug.substring(0, 40).replaceAll(RegExp(r'-+$'), '');
+  }
+  return '${slug.isEmpty ? 'harness' : slug}-${two(at.month)}${two(at.day)}-${two(at.hour)}${two(at.minute)}';
 }
 
 bool validGitPath(String path) =>
@@ -73,14 +145,38 @@ Future<Map<String, dynamic>> readLocalGitProject(
         'refs/heads',
         'refs/remotes',
       ]),
+      git(['worktree', 'list', '--porcelain']),
     ]);
     if (results[1].code != 0) return {'error': 'GIT_UNAVAILABLE'};
+    final trees = results[2].code == 0
+        ? _parseWorktrees(results[2].output)
+        : const <_Worktree>[];
+    final checkedOut = {
+      for (final tree in trees)
+        if (tree.usable && tree.ref != null) tree.ref!: tree.path,
+    };
+    // A worktree is a temporary folder. The launcher shows its repository.
+    String? mainFolder, mainBranch;
+    if (await _mainCheckout(root.output, trees) case final main?) {
+      final prefix = await git(['rev-parse', '--show-prefix']);
+      final relative = prefix.code == 0
+          ? prefix.output.replaceFirst(RegExp(r'/$'), '')
+          : '';
+      mainFolder =
+          relative.isNotEmpty &&
+              await Directory(p.join(main, relative)).exists()
+          ? p.join(main, relative)
+          : main;
+      mainBranch = trees.first.ref?.replaceFirst('refs/heads/', '');
+    }
     return {
       'isGit': true,
       'root': root.output,
       'branch': results[0].code == 0
           ? results[0].output.replaceFirst('refs/heads/', '')
           : null,
+      'mainFolder': ?mainFolder,
+      'mainBranch': ?mainBranch,
       'branches': [
         for (final line in results[1].output.split('\n'))
           if (line.split('\t') case [final ref, final name, ''])
@@ -88,6 +184,7 @@ Future<Map<String, dynamic>> readLocalGitProject(
               'ref': ref,
               'name': name,
               'remote': ref.startsWith('refs/remotes/'),
+              'worktree': ?checkedOut[ref],
             },
       ],
     };
@@ -96,7 +193,9 @@ Future<Map<String, dynamic>> readLocalGitProject(
   }
 }
 
-/// Worktrees get a fresh branch. With Worktree off, only an explicitly chosen
+/// Worktrees get a fresh `harness/<name>` branch, in a folder under
+/// `<projectHome>/worktrees/<repository>`. With Worktree off, a branch that
+/// already has a worktree opens there; otherwise only an explicitly chosen
 /// local branch can switch the shared folder, using Git's normal protections.
 Future<String> prepareGitProject(
   String source,
@@ -154,6 +253,13 @@ Future<String> prepareGitProject(
       );
     }
   }
+  String inside(String folder) => relative.isEmpty
+      ? folder
+      : p.join(folder, relative.replaceFirst(RegExp(r'/$'), ''));
+  final listed = await git(['worktree', 'list', '--porcelain']);
+  final trees = listed.code == 0
+      ? _parseWorktrees(listed.output)
+      : const <_Worktree>[];
   if (!worktree) {
     if (branchRef == null || !branchRef.startsWith('refs/heads/')) {
       throw const RepositoryCloneException(
@@ -162,6 +268,15 @@ Future<String> prepareGitProject(
     }
     final current = await git(['symbolic-ref', '--quiet', 'HEAD']);
     if (current.code == 0 && current.output == branchRef) return source;
+    // A branch that already has a worktree is worked on there: Git would
+    // refuse to check it out twice, and the folder is not the person's concern.
+    for (final tree in trees) {
+      if (tree.usable &&
+          tree.ref == branchRef &&
+          await Directory(tree.path).exists()) {
+        return inside(tree.path);
+      }
+    }
     final result = await git([
       'switch',
       '--',
@@ -174,33 +289,66 @@ Future<String> prepareGitProject(
     }
     return source;
   }
-  final parent = Directory(p.join(projectHome, 'worktrees'));
-  await parent.create(recursive: true);
-  final name = projectFolderName(
-    '${p.basename(root.output)}-$label',
-    (now ?? DateTime.now)(),
-    withSeconds: true,
-  );
-  final destination = await parent.createTemp('$name-');
-  final branch = 'harness/${p.basename(destination.path)}';
+  // Grouped by repository, so the leaf only needs the harness and the time.
+  final repository = trees.firstOrNull?.usable == true
+      ? p.basename(trees.first.path)
+      : p.basename(root.output);
+  final taken = await git([
+    'for-each-ref',
+    '--format=%(refname)',
+    'refs/heads/harness/',
+  ]);
+  final base = worktreeName(label, (now ?? DateTime.now)());
+  late final String destination, branch;
+  try {
+    final parent = Directory(p.join(projectHome, 'worktrees', repository));
+    await parent.create(recursive: true);
+    for (var attempt = 1; ; attempt++) {
+      if (attempt > 100) {
+        throw FileSystemException('No free worktree name', parent.path);
+      }
+      final name = attempt == 1 ? base : '$base-$attempt';
+      if (taken.output.split('\n').contains('refs/heads/harness/$name')) {
+        continue;
+      }
+      final folder = p.join(parent.path, name);
+      // Directory.create accepts an existing directory; mkdir reserves the
+      // name exclusively, so concurrent starts never share a worktree.
+      if ((await Process.run('mkdir', [folder])).exitCode == 0) {
+        destination = folder;
+        branch = 'harness/$name';
+        break;
+      }
+      if (await FileSystemEntity.type(folder, followLinks: false) ==
+          FileSystemEntityType.notFound) {
+        throw FileSystemException('Could not create folder', folder);
+      }
+    }
+  } on FileSystemException {
+    throw const RepositoryCloneException(
+      'Could not create a worktree folder. Check folder permissions, then retry.',
+    );
+  } on ProcessException {
+    throw const RepositoryCloneException(
+      'Could not create a worktree folder. Check folder permissions, then retry.',
+    );
+  }
   final result = await git([
     'worktree',
     'add',
     '-b',
     branch,
     '--',
-    destination.path,
+    destination,
     head.output,
   ], timeout: const Duration(minutes: 2));
   if (result.code != 0) {
     // A partial checkout or branch stays available for recovery.
     throw RepositoryCloneException(
-      'Could not create the worktree at ${destination.path}. Check Git and folder permissions, then retry.',
+      'Could not create the worktree at $destination. Check Git and folder permissions, then retry.',
     );
   }
-  return relative.isEmpty
-      ? destination.path
-      : p.join(destination.path, relative);
+  return inside(destination);
 }
 
 Future<({int code, String output})> _git(

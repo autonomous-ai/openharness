@@ -227,7 +227,8 @@ void main() {
       await _search(tester, 'mujoco');
       expect(_read(tester, 'autonomous/mujoco'), (
         by: 'by Google DeepMind',
-        line: 'Advanced physics simulation',
+        line:
+            'Run real physics, change the world, and compare what happens next',
       ), reason: 'an older daemon sends neither: this build knows both');
 
       await _search(tester, 'typst');
@@ -332,7 +333,9 @@ void main() {
       expect(
         find.descendant(
           of: preview,
-          matching: find.text('Advanced physics simulation'),
+          matching: find.text(
+            'Run real physics, change the world, and compare what happens next',
+          ),
         ),
         findsOneWidget,
       );

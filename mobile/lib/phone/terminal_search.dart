@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
+import 'phone_search_actions.dart';
+import 'phone_search_controller.dart';
 import 'phone_search_field.dart';
 import 'phone_search_results.dart';
+import 'phone_search_scope_bar.dart';
 
 /// Search, opened in place over a terminal rather than pushed as a page.
 ///
@@ -54,13 +57,36 @@ class TerminalSearchOverlay extends StatefulWidget {
 class _TerminalSearchOverlayState extends State<TerminalSearchOverlay> {
   final _controller = TextEditingController();
   final _focus = FocusNode(debugLabel: 'Terminal search');
-  String _query = '';
+  late final PhoneSearchController _search = PhoneSearchController(
+    notifier: widget.notifier,
+    history: widget.notifier.searchHistory,
+    commands: () => phoneSearchCommands(context, widget.notifier),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    widget.notifier.searchHistory.load().then((_) {
+      if (mounted) _search.setQuery(_search.query);
+    });
+  }
 
   @override
   void dispose() {
     _controller.dispose();
     _focus.dispose();
+    _search.dispose();
     super.dispose();
+  }
+
+  /// Back leaves the chosen project or machine first, and only then the search —
+  /// the same step `#`/`@` took to get in.
+  void _back() {
+    if (_search.back()) {
+      _controller.text = _search.query;
+      return;
+    }
+    _close();
   }
 
   /// ⚠️ Drops the keyboard BEFORE handing back, so the terminal underneath does
@@ -80,7 +106,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay> {
       // still underneath, and this is what is covering it.
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _close();
+        if (!didPop) _back();
       },
       // ⚠️ No [ListenableBuilder] around this any more. [PhoneSearchResults]
       // watches the notifier itself — and its recall store with it — so a
@@ -92,27 +118,32 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay> {
           color: AppPalette.windowBg,
           child: Column(
             children: [
-              PhoneSearchField(
-                controller: _controller,
-                focus: _focus,
-                onChanged: (value) => setState(() => _query = value),
-                onClear: () {
-                  _controller.clear();
-                  setState(() => _query = '');
-                  // Clearing is a step back into browsing, not out of the
-                  // search — the caret stays where the next query will go.
-                  _focus.requestFocus();
-                },
-                onBack: _close,
+              ListenableBuilder(
+                listenable: _search,
+                builder: (context, _) => PhoneSearchField(
+                  controller: _controller,
+                  focus: _focus,
+                  hintText: _search.hint,
+                  onChanged: _search.setQuery,
+                  onClear: () {
+                    _controller.clear();
+                    _search.setQuery('');
+                    // Clearing is a step back into browsing, not out of the
+                    // search — the caret stays where the next query will go.
+                    _focus.requestFocus();
+                  },
+                  onBack: _back,
+                ),
               ),
               Divider(height: 1, color: AppGlass.hair),
+              PhoneSearchScopeBar(search: _search),
               // ⚠️ Handed the query and nothing else. Ranking lives inside it,
               // so this screen and [PhoneSearchPage] cannot drift into
               // returning different rows for the same words.
               Expanded(
                 child: PhoneSearchResults(
                   notifier: widget.notifier,
-                  query: _query,
+                  controller: _search,
                   // ⚠️ Nothing pops this search — opening an agent swaps the
                   // terminal underneath it instead — so tapping a row has to
                   // close it by hand. Without this the keyboard would still be

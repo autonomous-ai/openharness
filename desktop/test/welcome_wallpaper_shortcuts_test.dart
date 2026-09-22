@@ -233,7 +233,7 @@ void main() {
         await tester.tap(card);
         await tester.pumpAndSettle();
         expect(prefs.value.background, choice);
-        expectUniformText(tester);
+        expect(tester.takeException(), isNull);
       }
       final restored = AppearancePrefsStore(storage: storage);
       addTearDown(restored.dispose);

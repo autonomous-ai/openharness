@@ -22,5 +22,6 @@ test('viewer serves its real app and SSE, blocks mutations and never serves work
   assert.equal((await fetch(`${base}/.harness/grid/../secret`)).status,404);
   const blocked=await new Promise(resolve=>{request(base,{headers:{host:'attacker.test'}},res=>{res.resume();resolve(res.statusCode);}).end();});assert.equal(blocked,403);
   const abort=new AbortController();const events=await fetch(`${base}/events`,{signal:abort.signal});const reader=events.body.getReader();const chunk=new TextDecoder().decode((await reader.read()).value);assert.match(chunk,/event: snapshot/);assert.match(chunk,/Mac Studio/);abort.abort();
-  fail=true;await new Promise(resolve=>setTimeout(resolve,90));const stale=await (await fetch(`${base}/api/snapshot`)).json();assert.equal(stale.status,'unavailable');assert.ok(stale.nodes.every(n=>n.stale));assert.doesNotMatch(JSON.stringify(stale),/secret token/);
+  // No pane is attached any more, so the fleet is read again only when the observation is asked for and stale.
+  fail=true;let stale;for(let retry=0;retry<40;retry++){stale=await (await fetch(`${base}/api/snapshot`)).json();if(stale.status==='unavailable')break;await new Promise(resolve=>setTimeout(resolve,30));}assert.equal(stale.status,'unavailable');assert.ok(stale.nodes.every(n=>n.stale));assert.doesNotMatch(JSON.stringify(stale),/secret token/);
 });

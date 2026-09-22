@@ -13,6 +13,7 @@
     "playwright": "1.63.0"
   },
   "scripts": {
-    "test:browser": "node test/studio.e2e.mjs"
+    "test:browser": "node test/studio.e2e.mjs && node test/playtest.e2e.mjs",
+    "test:playtest": "node test/playtest.e2e.mjs"
   }
 }

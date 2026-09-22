@@ -2,15 +2,16 @@ import 'package:flutter/widgets.dart';
 
 import 'package:harness_mobile/core/fuzzy_match.dart';
 
-import 'phone_search_index.dart';
+import 'phone_destination.dart';
 import 'phone_search_rank.dart';
 
-/// Which field earned each query term its score, and whether that field is the
-/// row's title.
+/// Which field earned each query term its score, and whether that field is one
+/// of the row's names.
 typedef PhoneFieldMatch = ({String field, String term, bool title});
 
 /// [terms] as matches on a content quote (see [phoneContentSnippet]): each term
-/// is its own field, so the emphasis lands on the word wherever the quote holds it.
+/// is its own field, so the emphasis lands on the word wherever the quote holds
+/// it.
 List<PhoneFieldMatch> phoneContentMatches(List<String> terms) => [
   for (final term in terms.take(12).toSet())
     (field: term, term: term, title: false),
@@ -22,7 +23,7 @@ List<PhoneFieldMatch> phoneContentMatches(List<String> terms) => [
 /// bounded by what is on screen, and keeping it out of the ranking path means
 /// scrolling never pays for emphasis it has already drawn.
 List<PhoneFieldMatch> phoneResultMatches(
-  PhoneSearchResult row,
+  PhoneDestination row,
   List<String> terms,
 ) {
   final matches = <PhoneFieldMatch>[];
@@ -35,7 +36,7 @@ List<PhoneFieldMatch> phoneResultMatches(
     matches.add((
       field: row.fields[best.index],
       term: term,
-      title: best.index < row.titleFields,
+      title: best.index < row.titleFieldCount,
     ));
   }
   return matches;
@@ -75,8 +76,8 @@ List<PhoneTextRun> phoneTextRuns(
     folded.write(lower);
   }
   final normalized = folded.toString();
-
   final positions = <({int start, int end})>[];
+
   for (final match in matches) {
     // A row can match on a field it never draws — an engine id, a project path.
     // Emphasising something in unrelated text because of it would be a lie about
@@ -137,16 +138,27 @@ class SearchResultText extends StatelessWidget {
     super.key,
     required this.matches,
     required this.style,
+    this.inlineIcon,
+    this.iconOffset = 0,
   });
 
   final String text;
   final Iterable<PhoneFieldMatch> matches;
   final TextStyle style;
 
+  /// A decorative mark dropped into the line — the branch glyph — without
+  /// changing the searchable text or moving a single match offset. The desktop
+  /// puts its git fork here for the same reason: a branch that reads as a
+  /// branch costs a glyph, and spelling out "branch" costs a phone's whole width.
+  final Widget? inlineIcon;
+  final int iconOffset;
+
   @override
   Widget build(BuildContext context) {
     final runs = phoneTextRuns(text, matches);
-    if (!runs.any((run) => run.matched)) {
+    final insertIcon =
+        inlineIcon != null && iconOffset >= 0 && iconOffset < text.length;
+    if (!insertIcon && !runs.any((run) => run.matched)) {
       return Text(
         text,
         maxLines: 1,
@@ -154,18 +166,41 @@ class SearchResultText extends StatelessWidget {
         style: style,
       );
     }
-    return Text.rich(
-      TextSpan(
-        children: [
-          for (final run in runs)
-            TextSpan(
-              text: run.text,
-              style: run.matched
-                  ? const TextStyle(fontWeight: FontWeight.w700)
-                  : null,
+    final spans = <InlineSpan>[];
+    var offset = 0;
+    for (final run in runs) {
+      final emphasis = run.matched
+          ? const TextStyle(fontWeight: FontWeight.w700)
+          : null;
+      if (insertIcon &&
+          iconOffset >= offset &&
+          iconOffset < offset + run.text.length) {
+        final split = iconOffset - offset;
+        if (split > 0) {
+          spans.add(
+            TextSpan(text: run.text.substring(0, split), style: emphasis),
+          );
+        }
+        spans.add(
+          WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: ExcludeSemantics(
+              child: Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: inlineIcon!,
+              ),
             ),
-        ],
-      ),
+          ),
+        );
+        spans.add(TextSpan(text: run.text.substring(split), style: emphasis));
+      } else {
+        spans.add(TextSpan(text: run.text, style: emphasis));
+      }
+      offset += run.text.length;
+    }
+    return Text.rich(
+      TextSpan(children: spans),
+      semanticsLabel: insertIcon ? text : null,
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: style,

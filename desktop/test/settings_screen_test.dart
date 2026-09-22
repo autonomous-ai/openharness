@@ -73,8 +73,8 @@ void main() {
 
   testWidgets('Settings lists customization under Preferences', (tester) async {
     await openSettings(tester);
-    expect(find.text('Preferences'), findsOneWidget);
-    expect(find.text('Help'), findsOneWidget);
+    expect(find.text('PREFERENCES'), findsOneWidget);
+    expect(find.text('HELP'), findsOneWidget);
     expect(find.text('Usage'), findsNWidgets(2));
     expect(find.text('Customize'), findsOneWidget);
     expect(find.text('Keyboard shortcuts'), findsOneWidget);
@@ -143,7 +143,7 @@ void main() {
     // Filtering the rail preserves the open pane.
     expect(find.text('Usage'), findsOneWidget);
     expect(find.text('Terminal'), findsNothing);
-    expect(find.text('Preferences'), findsNothing);
+    expect(find.text('PREFERENCES'), findsNothing);
 
     await tester.enterText(
       find.byKey(const Key('settings-search-field')),

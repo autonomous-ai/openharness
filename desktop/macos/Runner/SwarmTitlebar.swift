@@ -2,10 +2,12 @@ import Cocoa
 import FlutterMacOS
 import ImageIO
 
-/// In-app titlebar controls use the terminal typography. AppKit menus keep OS defaults.
+/// The title bar's tabs and Store action wear the terminal's face at the chrome size Flutter
+/// sends (`AppType.chromeSize`), never the terminal's own size: ⌘+ and ⌘− zoom the terminal alone.
+/// Menus are not chrome — they use the system menu font, like every other Mac app's.
 enum HarnessTypography {
   private static var families = [".AppleSystemUIFontMonospaced"]
-  private(set) static var size: CGFloat = 13
+  private(set) static var size: CGFloat = 12
 
   @discardableResult
   static func update(_ state: [String: Any]) -> Bool {
@@ -20,7 +22,9 @@ enum HarnessTypography {
     return families != previousFamilies || size != previousSize
   }
 
-  static func font(weight: NSFont.Weight = .regular) -> NSFont {
+  /// The tab label's face. [size] defaults to the chrome size; the ⌘1 badge asks one point less.
+  static func font(weight: NSFont.Weight = .regular, size: CGFloat? = nil) -> NSFont {
+    let size = size ?? self.size
     let base = families.first == ".AppleSystemUIFontMonospaced"
       ? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
       : families.compactMap { NSFont(name: $0, size: size) }.first
@@ -82,7 +86,6 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         self.canClosePane = state["canClosePane"] as? Bool == true
         self.canGoBack = state["canGoBack"] as? Bool == true
         self.canGoForward = state["canGoForward"] as? Bool == true
-        HarnessTypography.update(state)
         self.updateHistory(state["history"] as? [[String: Any]] ?? [], closed: state["closedHistory"] as? [[String: Any]] ?? [])
         self.strip.update(state)
         self.window?.backgroundColor = self.strip.palette.tabBar
@@ -415,6 +418,14 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       let submenu = NSMenu(title: machine.name)
       for agent in machine.agents {
         let child = NSMenuItem(title: agent.title + (machine.shared ? " · View only" : ""), action: #selector(machineAgentAction(_:)), keyEquivalent: "")
+        if agent.stopped && !machine.shared {
+          // Still a choice — it resumes — but not an attach, so the row says so in the quieter colour,
+          // the way a machine row carries its status after the name.
+          let label = NSMutableAttributedString(string: agent.title, attributes: [.font: NSFont.menuFont(ofSize: 0)])
+          label.append(NSAttributedString(string: " · stopped",
+            attributes: [.font: NSFont.menuFont(ofSize: 0), .foregroundColor: NSColor.secondaryLabelColor]))
+          child.attributedTitle = label
+        }
         child.target = self
         child.representedObject = ["machineId": machine.id, "agentId": agent.id]
         child.image = historyIcons.image(engine: agent.engine, asset: agent.iconAsset)
@@ -844,6 +855,8 @@ private struct SwarmMachineAgent: Equatable {
   let engine: String?
   let iconAsset: String?
   let canOpen: Bool
+  /// Its conversation is saved but nothing is running: choosing it resumes rather than attaches.
+  let stopped: Bool
   init?(_ row: [String: Any]) {
     guard let id = row["id"] as? String, !id.isEmpty,
           let title = row["title"] as? String, !title.isEmpty else { return nil }
@@ -852,6 +865,7 @@ private struct SwarmMachineAgent: Equatable {
     engine = row["engine"] as? String
     iconAsset = row["iconAsset"] as? String
     canOpen = row["canOpen"] as? Bool == true
+    stopped = row["stopped"] as? Bool == true
   }
 }
 
@@ -886,12 +900,12 @@ private struct SwarmSubscriptionEntry: Equatable {
 /// follows starts something instead. Without it the action read as one more model, which is the
 /// mistake the in-app menu made before it grew this block.
 private final class SwarmMenuCaptionView: NSView {
-  private static var font: NSFont { NSFont.menuFont(ofSize: 0) }
+  private static let font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize - 1)
   private let caption: NSTextField
 
   init(text: String, width: CGFloat) {
     caption = NSTextField(labelWithString: text)
-    super.init(frame: NSRect(x: 0, y: 0, width: width, height: max(24, ceil(NSFont.menuFont(ofSize: 0).pointSize * 1.35) + 6)))
+    super.init(frame: NSRect(x: 0, y: 0, width: width, height: 24))
     autoresizingMask = [.width]
     caption.font = Self.font
     caption.textColor = .secondaryLabelColor
@@ -935,12 +949,12 @@ private final class SwarmMenuCaptionView: NSView {
 /// both are done here: the fill follows `isHighlighted`, and the mouse dispatches the item's own
 /// target/action the way the menu would have.
 private final class SwarmMenuButtonView: NSView {
-  private static var font: NSFont { NSFont.menuFont(ofSize: 0) }
+  private static let font = NSFont.menuFont(ofSize: 0)
   private let label: NSTextField
 
   init(title: String, width: CGFloat) {
     label = NSTextField(labelWithString: title)
-    super.init(frame: NSRect(x: 0, y: 0, width: width, height: max(34, ceil(NSFont.menuFont(ofSize: 0).pointSize * 1.35) + 12)))
+    super.init(frame: NSRect(x: 0, y: 0, width: width, height: 34))
     autoresizingMask = [.width]
     label.font = Self.font
     label.textColor = .labelColor
@@ -1001,7 +1015,7 @@ private final class SwarmMenuButtonView: NSView {
 /// Read-only account information, with aligned trailing balances. There is no
 /// action or submenu to suggest another step just to read the remaining usage.
 private final class SwarmSubscriptionView: NSView {
-  private static var rowFont: NSFont { NSFont.menuFont(ofSize: 0) }
+  private static let rowFont = NSFont.menuFont(ofSize: 0)
   let identity = NSTextField(labelWithString: "")
   let balance = NSTextField(labelWithString: "")
   private let icon = NSImageView()
@@ -1033,7 +1047,7 @@ private final class SwarmSubscriptionView: NSView {
   /// which AppKit greys wholesale, so a served model looked unavailable beside the accounts above.
   init(title primary: String, account: String, status: String, icon: NSImage?, width: CGFloat,
        accessibility: String, tint: NSColor? = nil) {
-    super.init(frame: NSRect(x: 0, y: 0, width: width, height: max(26, ceil(NSFont.menuFont(ofSize: 0).pointSize * 1.35) + 8)))
+    super.init(frame: NSRect(x: 0, y: 0, width: width, height: 26))
     autoresizingMask = [.width]
     self.icon.image = icon
     self.icon.imageScaling = .scaleProportionallyDown
@@ -1095,7 +1109,7 @@ private final class SwarmHistoryMenuRow: NSView {
   init(item: NSMenuItem, entry: SwarmHistoryEntry, width: CGFloat) {
     self.item = item
     self.entry = entry
-    super.init(frame: NSRect(x: 0, y: 0, width: width, height: max(24, ceil(NSFont.menuFont(ofSize: 0).pointSize * 1.35) + 6)))
+    super.init(frame: NSRect(x: 0, y: 0, width: width, height: 24))
     autoresizingMask = [.width]
     setAccessibilityElement(true)
     setAccessibilityRole(.menuItem)
@@ -1750,6 +1764,10 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   var labelFont = HarnessTypography.font() {
     didSet { if oldValue != labelFont { invalidateLabel() } }
   }
+  /// The ⌘1 badge: the tab's face one point under its label, so the name leads.
+  private var badgeFont: NSFont {
+    HarnessTypography.font(size: max(9, labelFont.pointSize - 1))
+  }
   private var cachedLabel: NSAttributedString?
   var actionsEnabled = true {
     didSet {
@@ -1891,7 +1909,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       let label = self.label
       let labelHeight = label.size().height
       let trailing = shortcut.map { value in
-        max(42, ceil(("⌘\(value)" as NSString).size(withAttributes: [.font: labelFont]).width) + 22)
+        max(42, ceil(("⌘\(value)" as NSString).size(withAttributes: [.font: badgeFont]).width) + 22)
       } ?? 42
       label.draw(in: NSRect(x: 46, y: contentCenterY - labelHeight / 2,
         width: max(0, bounds.width - 46 - trailing), height: labelHeight))
@@ -1907,7 +1925,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       let paragraph = NSMutableParagraphStyle()
       paragraph.alignment = .right
       let badge = NSAttributedString(string: "⌘\(shortcut)",
-        attributes: [.font: labelFont,
+        attributes: [.font: badgeFont,
           .foregroundColor: NSColor(white: 1, alpha: selected ? 0.7 : 0.5), .paragraphStyle: paragraph])
       let badgeHeight = badge.size().height
       let badgeWidth = max(32, ceil(badge.size().width))

@@ -483,7 +483,7 @@ class EnvironmentProvisioner {
         if (!await _hasWritableHome()) {
           systemFailure = const EnvironmentFailure(
             title: 'Home directory is not writable',
-            detail: 'OpenHarness needs to write ~/.harness and ~/.local/bin.',
+            detail: 'Harness needs to write ~/.harness and ~/.local/bin.',
           );
         } else {
           linuxMissingBasePackages = await _missingLinuxBasePackages();
@@ -627,7 +627,7 @@ class EnvironmentProvisioner {
         emit(
           message: _isLinux && linuxMissingPackages.isNotEmpty
               ? 'Linux host packages required: ${linuxMissingPackages.join(', ')}.'
-              : 'Review what OpenHarness will install before continuing.',
+              : 'Review what Harness will install before continuing.',
           phase: EnvironmentSetupPhase.review,
         );
         return state;
@@ -779,7 +779,7 @@ class EnvironmentProvisioner {
             );
           }
           emit(
-            message: 'Complete the visible Linux package prompts in Terminal. OpenHarness never sees your password.',
+            message: 'Complete the visible Linux package prompts in Terminal. Harness never sees your password.',
             output: backgroundInstall == null
                 ? 'Terminal opened to install Linux host dependencies.'
                 : 'Background install was incomplete; Terminal opened to finish Linux host dependencies.',
@@ -836,7 +836,7 @@ class EnvironmentProvisioner {
           emit(
             step: EnvironmentStep.tmux,
             status: EnvironmentStepStatus.needsTerminal,
-            message: 'Complete the visible Homebrew prompts in Terminal. OpenHarness never sees your password.',
+            message: 'Complete the visible Homebrew prompts in Terminal. Harness never sees your password.',
             output: 'Background install failed; Terminal opened to retry tmux.',
             phase: EnvironmentSetupPhase.waitingForTerminal,
             terminalLogPath: terminal.log.path,
@@ -855,7 +855,7 @@ class EnvironmentProvisioner {
         emit(
           step: EnvironmentStep.tmux,
           status: EnvironmentStepStatus.needsTerminal,
-          message: 'Complete any password or macOS prompts in Terminal. OpenHarness never sees your password.',
+          message: 'Complete any password or macOS prompts in Terminal. Harness never sees your password.',
           output: _isMacOS
               ? 'Terminal opened to install Homebrew and tmux.'
               : 'Terminal opened to install tmux.',
@@ -1020,7 +1020,7 @@ class EnvironmentProvisioner {
       return EnvironmentFailure(
         title: 'Required system tools are missing',
         detail: _resultText(base).isEmpty
-            ? 'OpenHarness needs curl, tar, sed, awk, checksum tools and a POSIX shell.'
+            ? 'Harness needs curl, tar, sed, awk, checksum tools and a POSIX shell.'
             : _resultText(base),
         command: _isMacOS
             ? 'xcode-select --install'
@@ -1030,7 +1030,7 @@ class EnvironmentProvisioner {
     if (!await _hasWritableHome()) {
       return const EnvironmentFailure(
         title: 'Home directory is not writable',
-        detail: 'OpenHarness needs to write ~/.harness and ~/.local/bin.',
+        detail: 'Harness needs to write ~/.harness and ~/.local/bin.',
       );
     }
     return null;
@@ -1137,7 +1137,7 @@ class EnvironmentProvisioner {
     if (exitCode == _linuxAptUpdateFailureExitCode) {
       return const EnvironmentFailure(
         title: 'Package repository refresh failed',
-        detail: 'Ubuntu could not refresh its package indexes, so OpenHarness stopped instead of retrying with stale package data.',
+        detail: 'Ubuntu could not refresh its package indexes, so Harness stopped instead of retrying with stale package data.',
         command: 'sudo apt-get update',
         exitCode: _linuxAptUpdateFailureExitCode,
       );
@@ -1229,7 +1229,7 @@ refresh_package_indexes() {
     return 0
   fi
   rm -f "\$apt_update_log"
-  echo 'Package repository refresh failed. OpenHarness will not retry with stale package indexes.' >&2
+  echo 'Package repository refresh failed. Harness will not retry with stale package indexes.' >&2
   return $_linuxAptUpdateFailureExitCode
 }
 install_linux_packages() {
@@ -1391,7 +1391,7 @@ finish() {
   printf '%s\\n' "\$status" > "\$RESULT_FILE"
   if [ "\$status" -ne 0 ]; then
     echo
-    echo 'System setup failed. Review the error above, then return to OpenHarness.'
+    echo 'System setup failed. Review the error above, then return to Harness.'
     read -r '?Press Enter to close this window…' || true
   fi
   return "\$status"
@@ -1428,7 +1428,7 @@ eval "\$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shel
 if ! command -v tmux >/dev/null 2>&1; then
   brew install tmux
 fi
-echo 'tmux is ready. Return to OpenHarness.'
+echo 'tmux is ready. Return to Harness.'
 ''', flush: true);
       await _run('/bin/chmod', ['700', script.path]);
       return script;

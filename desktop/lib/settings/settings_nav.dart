@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/layouts/widgets/rail_section_header.dart';
 import '../shared/layouts/widgets/sidebar_item.dart';
@@ -227,7 +226,7 @@ class _NoMatches extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(10, 16, 10, 0),
       child: Text(
         'No settings match',
-        style: terminalTextStyle(color: grid.AppPalette.textFaint),
+        style: grid.AppType.body(color: grid.AppPalette.textFaint),
       ),
     );
   }

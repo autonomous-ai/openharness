@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../../core/harness_cli_runner.dart';
 import '../../logging/log_file.dart';
@@ -82,7 +81,7 @@ class _DebugPathsCardState extends State<DebugPathsCard> {
               Expanded(
                 child: Text(
                   'What this app is running',
-                  style: Theme.of(context).textTheme.titleSmall,
+                  style: AppType.heading(),
                 ),
               ),
               AppIconButton(
@@ -143,13 +142,14 @@ class _PathRow extends StatelessWidget {
             width: 62,
             child: Text(
               label,
-              style: terminalTextStyle(color: AppPalette.textFaint),
+              style: AppType.body(color: AppPalette.textFaint),
             ),
           ),
           Expanded(
             child: SelectableText(
               value,
-              style: terminalTextStyle(
+              style: AppType.monoLabel(
+                fontWeight: AppFont.regular,
                 height: 1.4,
                 color: AppPalette.textPrimary,
               ),

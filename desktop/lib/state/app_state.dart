@@ -6563,8 +6563,12 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || machineStates[machineId] != machine) return null;
     _upsertAgent(machine, agent);
     // Apply each creation receipt once, even if its transport result is replayed.
+    // A Git start remembers its repository, never the worktree it made.
     final projectPath =
-        agent.project?.cwd ?? creation.preparedFolder ?? choices['cwd'];
+        choices['gitSource'] ??
+        agent.project?.cwd ??
+        creation.preparedFolder ??
+        choices['cwd'];
     if (projectPath is String && projectPath.isNotEmpty) {
       unawaited(projectHistory.select(machineId, projectPath));
     }
@@ -7943,7 +7947,7 @@ class AppNotifier extends ChangeNotifier {
   /// take over the whole content area would blank three working terminals
   /// belonging to two other machines. The one exception is a machine that
   /// already needs linking: that state now surfaces as a blocking popup
-  /// (HomeScreen._maybeShowLinkDialog / showLinkMachineScreenDialog) rather
+  /// (showLinkMachineScreenDialog, from SwarmScreen) rather
   /// than a tile, so opening one here too would just be a redundant "not
   /// linked" pane sitting behind it. Selecting is still worth doing — it's
   /// what makes the popup's gate notice this machine — the tile is not.
@@ -9364,6 +9368,30 @@ class AppNotifier extends ChangeNotifier {
     } else {
       await session.reopen();
     }
+  }
+
+  /// A person acted on this app — clicked a tile, brought the window forward
+  /// — so every stream another client took from it comes back, not only the
+  /// tile they touched: being at this app is a fact about the app, not about
+  /// one pane. Every tab, since a tile parked behind another tab is this
+  /// app's too. Only ever from a user gesture — see
+  /// `_TerminalPanelState._autoTakeControl` for why a session or focus
+  /// callback must never call this.
+  ///
+  /// Reopens in place, as `selectAgent` does for a dead pane; `reopen` itself
+  /// skips a pane already `opening`. A pane the daemon would refuse
+  /// (`_canAttachPane`: machine offline, agent gone) keeps its band. Focus is
+  /// not moved — the tile the person is on stays the one they are on.
+  Future<void> retakeTakenOverPanes() async {
+    final reopening = <Future<void>>[];
+    for (final pane in allPanes) {
+      final session = pane.session;
+      if (session == null || session.readOnly) continue;
+      if (session.status != TerminalSessionStatus.takenOver) continue;
+      if (!_canAttachPane(pane)) continue;
+      reopening.add(session.reopen());
+    }
+    await Future.wait(reopening);
   }
 
   bool _canAttachPane(TerminalPane pane) {

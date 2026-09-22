@@ -1,6 +1,10 @@
 import type { Server } from 'node:http'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { startHookServer, type HookServerHandlers, chooseHookAgent } from './hookServer.js'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { startHookServer, type HookServerHandlers, chooseHookAgent, knownTranscriptFor } from './hookServer.js'
+import type { RegisteredSession } from './lib/registry.js'
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
 import { CommandBarService } from './lib/commandBar.js'
@@ -240,6 +244,36 @@ describe('the Harness Store proxy', () => {
     const { base } = await start({ onStore: async () => ({ status: 200, body: {} }) })
     expect((await fetch(`${base}/api/store/harnesses/a%20b/reviews`)).status).toBe(400)
     expect((await fetch(`${base}/api/store/ratings`, { method: 'POST', headers: { 'x-adapter-local': '1' } })).status).toBe(405)
+  })
+})
+
+describe('knownTranscriptFor', () => {
+  const sessionId = 'eae0ba40-3d0a-4340-9dd5-0a56ecbc080c'
+  const root = mkdtempSync(join(tmpdir(), 'hook-transcript-'))
+  const known = join(root, 'openharness', `${sessionId}.jsonl`)
+  const announced = join(root, 'openharness-cli', `${sessionId}.jsonl`)
+  mkdirSync(join(root, 'openharness'))
+  writeFileSync(known, '{}\n')
+  const row = { sessionId, transcriptPath: known } as RegisteredSession
+  afterAll(() => rmSync(root, { recursive: true, force: true }))
+
+  it('takes the resumed row\'s transcript when Claude Code announced one under the wrong project dir', () => {
+    expect(knownTranscriptFor({ engine: 'claude', sessionId, transcriptPath: announced }, row)).toBe(known)
+  })
+
+  it('keeps an announced transcript that exists', () => {
+    expect(knownTranscriptFor({ engine: 'claude', sessionId, transcriptPath: known }, { ...row, transcriptPath: join(root, 'other.jsonl') })).toBe(known)
+  })
+
+  it.each<[string, Parameters<typeof knownTranscriptFor>[0], RegisteredSession | undefined]>([
+    ['another conversation', { engine: 'claude', sessionId: 'other-conversation', transcriptPath: announced }, row],
+    ['another engine', { engine: 'codex', sessionId, transcriptPath: announced }, row],
+    ['a row whose file is not named by the conversation', { engine: 'claude', sessionId, transcriptPath: announced }, { ...row, transcriptPath: join(root, 'openharness', 'renamed.jsonl') }],
+    ['a row whose file is gone', { engine: 'claude', sessionId, transcriptPath: announced }, { ...row, transcriptPath: join(root, 'gone', `${sessionId}.jsonl`) }],
+    ['no row', { engine: 'claude', sessionId, transcriptPath: announced }, undefined],
+    ['no announcement', { engine: 'claude', sessionId }, row],
+  ])('leaves the announcement alone for %s', (_case, body, agent) => {
+    expect(knownTranscriptFor(body, agent)).toBe(body.transcriptPath)
   })
 })
 

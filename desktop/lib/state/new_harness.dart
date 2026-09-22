@@ -372,6 +372,21 @@ class NewHarnessController extends ChangeNotifier {
     }
     if (_disposed || _gitKey != key || revision != _gitRevision) return;
     checkingGit = false;
+    // A worktree is a temporary folder, so the launcher shows its repository.
+    // With Worktree off its branch stays chosen and Start reopens that
+    // worktree; otherwise new work starts from the repository's own branch.
+    if (info.mainFolder case final main? when _project.folder == key.$2) {
+      if (_worktree == false && _branchRef == null && info.branch != null) {
+        _branchRef = 'refs/heads/${info.branch}';
+      }
+      _project = NewHarnessProject.folder(main);
+      _gitKey = (key.$1, main, key.$3);
+      info = GitProjectInfo(
+        isGit: true,
+        branch: info.mainBranch,
+        branches: info.branches,
+      );
+    }
     _gitProject = info;
     // Keep an explicit branch choice; a removed branch fails at Start.
     if (_branchRef == null &&
@@ -1746,6 +1761,8 @@ class NewHarnessController extends ChangeNotifier {
   Iterable<String> _recentProjectFolders() sync* {
     final machine = _machine;
     final seen = <String>{};
+    // Worktrees Start made are temporary: their repository is the project.
+    final worktrees = _expand('~/harnesses/worktrees');
     for (final folder in [
       ?_project.folder,
       ...app.projectHistory.recent(_machineId),
@@ -1757,7 +1774,8 @@ class NewHarnessController extends ChangeNotifier {
     ]) {
       if (!p.isAbsolute(folder) ||
           folder.length > 4096 ||
-          RegExp(r'[\x00-\x1f\x7f]').hasMatch(folder)) {
+          RegExp(r'[\x00-\x1f\x7f]').hasMatch(folder) ||
+          folder != _project.folder && p.isWithin(worktrees, folder)) {
         continue;
       }
       if (seen.add(p.normalize(folder))) yield folder;

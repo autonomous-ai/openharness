@@ -16,23 +16,46 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { atomicJson, operations, PACKAGE, recordOperation, stateDir, writeVerdict } from './lib/fleet.mjs';
+import { closeSessions } from './lib/daemon.mjs';
 import { linkMachine } from './lib/ops.mjs';
 import { createCollector } from './lib/snapshot.mjs';
 
+/**
+ * How often the fleet is re-read while a pane is looking at it. Every remote machine on the account
+ * is asked over Harness's bridge each time, so this is the one number that decides what a pane costs
+ * the rest of the fleet; a minute is fast enough for a map, and nothing is read at all while no pane
+ * is open (a request for the observation still wakes one read if it has gone stale).
+ */
+const POLL_INTERVAL_MS = 60_000;
+
 const EMPTY = {
-  spec: 1, status: 'connecting', message: null, observedAt: null, pollIntervalMs: 15_000,
+  spec: 1, status: 'connecting', message: null, observedAt: null, pollIntervalMs: POLL_INTERVAL_MS,
   account: null, localMachineId: null, thisComputer: null,
   machines: [], projects: [], operations: [], totals: null,
   summary: { machines: 0, online: 0, needsLink: 0, harnesses: 0, open: 0, projects: 0, engines: {} },
   sources: {},
 };
 
-export function createViewer({ workspace, port = 0, intervalMs = 15_000, collect = createCollector(workspace, { intervalMs }) }) {
+export function createViewer({ workspace, port = 0, intervalMs = POLL_INTERVAL_MS, collect = createCollector(workspace, { intervalMs }) }) {
   const clients = new Set();
   let snapshot = { ...EMPTY, pollIntervalMs: intervalMs };
   let stopped = false, pollTimer, opTimer, heartbeat, linking = false;
   // The poll in flight, so close() can wait for it instead of leaving a write racing the exit.
-  let polling = null;
+  let polling = null, inFlight = false, lastPollAt = 0;
+  // The next tick is booked only while a pane is connected: an unattended viewer (a tab in the
+  // background, a pane the person closed but whose process outlived the daemon) must not keep every
+  // machine on the account answering it.
+  const schedule = () => {
+    clearTimeout(pollTimer); pollTimer = null;
+    if (stopped || clients.size === 0) return;
+    pollTimer = setTimeout(() => { polling = poll(); }, intervalMs);
+  };
+  // Someone wants the observation now: read again if the one we have is older than a tick.
+  const wake = () => {
+    if (stopped || inFlight || Date.now() - lastPollAt < intervalMs) return;
+    clearTimeout(pollTimer); pollTimer = null;
+    polling = poll();
+  };
   const headers = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' };
   const json = (res, code, value) => { res.writeHead(code, { ...headers, 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
   const publish = () => {
@@ -74,8 +97,8 @@ export function createViewer({ workspace, port = 0, intervalMs = 15_000, collect
           });
           if (!result.ok) { json(res, 400, { error: result.error }); return; }
           json(res, 200, { ok: true });
-          clearTimeout(pollTimer);
-          polling = poll();
+          clearTimeout(pollTimer); pollTimer = null;
+          if (!inFlight) polling = poll();
         } finally { linking = false; }
         return;
       }
@@ -85,13 +108,17 @@ export function createViewer({ workspace, port = 0, intervalMs = 15_000, collect
         return;
       }
       if (url.pathname === '/health') { json(res, 200, { ok: true }); return; }
-      if (url.pathname === '/api/snapshot') { json(res, 200, snapshot); return; }
+      if (url.pathname === '/api/snapshot') { json(res, 200, snapshot); wake(); return; }
       if (url.pathname === '/events') {
         if (req.method === 'HEAD') { res.writeHead(200, headers); res.end(); return; }
         if (clients.size >= 32) { json(res, 503, { error: 'Too many viewer connections.' }); return; }
         res.writeHead(200, { ...headers, 'content-type': 'text/event-stream', connection: 'keep-alive', 'x-accel-buffering': 'no' });
         res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
-        clients.add(res); res.on('close', () => clients.delete(res));
+        clients.add(res);
+        res.on('close', () => { clients.delete(res); if (clients.size === 0) { clearTimeout(pollTimer); pollTimer = null; } });
+        // A pane just opened: catch up if the observation is stale, and start ticking either way.
+        wake();
+        if (!pollTimer && !inFlight) schedule();
         return;
       }
       const assets = {
@@ -113,6 +140,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 15_000, collect
   });
 
   async function poll() {
+    inFlight = true;
     try {
       const observed = await collect();
       // A poll that lands after close() has nothing to publish: the workspace may already be gone,
@@ -132,9 +160,11 @@ export function createViewer({ workspace, port = 0, intervalMs = 15_000, collect
       };
       await writeVerdict(workspace, snapshot).catch(() => {});
     }
+    inFlight = false;
+    lastPollAt = Date.now();
     if (stopped) return;
     publish();
-    pollTimer = setTimeout(() => { polling = poll(); }, intervalMs);
+    schedule();
   }
 
   async function pollOperations() {
@@ -161,6 +191,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 15_000, collect
       stopped = true;
       clearTimeout(pollTimer); clearTimeout(opTimer); clearInterval(heartbeat);
       await polling?.catch(() => {});
+      closeSessions();
       for (const client of clients) client.end();
       server.closeAllConnections();
       await new Promise(done => server.close(done));

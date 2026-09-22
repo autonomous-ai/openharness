@@ -32,6 +32,26 @@ The kit gives you the plumbing for this (all in `serveViewer`, all same-origin o
 | `downloads: () => ({ 'answers.csv': path })` | `GET /download/<name>` | the results, as an attachment. Only the names you list |
 | `onConnect: (result) => …` | `POST /connect` | a key pasted into the live panel. It is saved chmod 600, proven with one call, never echoed. Re-ask your cells when it lands |
 
+## Keep asynchronous decisions attached to their session
+
+A model answer belongs to the world, board, dataset or composition it read. After every awaited
+call, check that identity before applying its result or reporting its error. A reset or a live
+workspace edit can arrive while the call is pending. Stop the remaining steps of an old manual
+batch too; they must not silently start operating on the replacement session.
+
+Serialize operations that must preserve order, such as composing harmony before notes or applying
+a board move before judging it. Queue resets with those operations, or invalidate the old session
+and schedule fresh work. Clear counters and the displayed decision together. When a person changes
+their request while music is being composed, capture the request for both calls, discard obsolete
+work and make the newest request produce fresh bars. A `busy` flag that simply drops the request
+does not satisfy the interaction.
+
+`node --test store/tools/jev-kit/test/async-sessions.test.mjs` checks these boundaries in nine
+experiments using their production clients against a delayed local HTTP fixture. It uses a dummy
+key and an isolated credential path, never a paid provider. The checks cover reset, file edits,
+late failures, interrupted batches, recovery and overlapping audience requests. They establish
+session behavior, not model quality or real-provider latency.
+
 ## What Jev is (facts, verified from the docs)
 
 Jev is TypeSafe AI's "System One" model. It never writes text. You send a `state` (text or JSON)

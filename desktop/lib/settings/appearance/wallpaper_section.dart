@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/theme/appearance_prefs_store.dart';
 import '../../shared/theme/harness_background.dart';
-import '../../terminal/terminal_text.dart';
 import '../../widgets/swarm_wallpaper.dart';
 
 class WallpaperSection extends StatelessWidget {
@@ -15,7 +14,6 @@ class WallpaperSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    TerminalFontScope.watch(context);
     final prefs = store ?? appearancePrefsStore;
     return ValueListenableBuilder<AppearancePrefs>(
       valueListenable: prefs,
@@ -24,22 +22,19 @@ class WallpaperSection extends StatelessWidget {
         children: [
           Text(
             'Wallpaper',
-            style: terminalTextStyle(
-              color: grid.AppPalette.textPrimary,
-              fontWeight: FontWeight.w600,
-            ),
+            style: grid.AppType.heading(color: grid.AppPalette.textPrimary),
           ),
           const SizedBox(height: 8),
           Text(
             'A little curiosity for your new tabs.',
-            style: terminalTextStyle(color: grid.AppPalette.textSecondary),
+            style: grid.AppType.body(color: grid.AppPalette.textSecondary),
           ),
           const SizedBox(height: 16),
           LayoutBuilder(
             builder: (context, constraints) {
               final columns =
                   constraints.maxWidth >=
-                      300 * math.max(1, terminalTextScaleOf(context))
+                      300 * math.max(1, grid.appTextScaleOf(context))
                   ? 2
                   : 1;
               final width =
@@ -103,7 +98,7 @@ class WallpaperSection extends StatelessWidget {
                                   const SizedBox(height: 8),
                                   Text(
                                     choice.label,
-                                    style: terminalTextStyle(
+                                    style: grid.AppType.label(
                                       color: grid.AppPalette.textPrimary,
                                     ),
                                   ),

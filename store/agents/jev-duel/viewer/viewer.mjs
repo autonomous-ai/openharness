@@ -43,6 +43,7 @@ export async function startDuelViewer({ workspace, port = 0 } = {}) {
   let pending = null // the player to move has already answered: { disk, moves:[{x,y,flips,p}], choice, confidence }
   let stateText = ''
   let stopped = false, running = false, busy = false
+  let revision = 0, chain = Promise.resolve()
   let timer = null, watchTimer = null, salt = 1, lastVerdictAt = 0
   let gameOver = false, winner = null, rest = 0, error = null
   let history = [] // [{ n, side, disk, x, y, flips, flipped, ref, human, at }]
@@ -70,6 +71,7 @@ export async function startDuelViewer({ workspace, port = 0 } = {}) {
     pending = null
     if (gameOver) return
     const c = cfg()
+    const askedBoard = board
     const moves = legalMoves(board, toMove)
     if (!moves.length) return
     stateText = sideState(c, board, toMove, moves)
@@ -82,6 +84,7 @@ export async function startDuelViewer({ workspace, port = 0 } = {}) {
       },
       salt: salt++, model: process.env.JEV_MODEL || 'jev-latest', mock: duelMock,
     })
+    if (stopped || board !== askedBoard) return
     const a = res.answers.move ?? {}
     const probs = a.probabilities ?? {}
     const pick = moves.find((m) => `${m.x},${m.y}` === String(a.choice)) ?? moves[0]
@@ -127,9 +130,17 @@ export async function startDuelViewer({ workspace, port = 0 } = {}) {
   }
 
   /** One move: the pending answer (or a person's pick) lands, the referee judges it, the next player is asked. */
-  async function step(forced = null) {
+  function locked(job) {
+    const requested = revision
+    const next = chain.then(() => !stopped && requested === revision ? job() : false)
+    chain = next.catch(() => {})
+    return next
+  }
+  function step(forced = null) { return locked(() => stepOnce(forced)) }
+  async function stepOnce(forced = null) {
     if (busy || stopped) return false
     busy = true
+    const askedBoard = board
     try {
       const c = cfg()
       if (gameOver) {
@@ -138,6 +149,7 @@ export async function startDuelViewer({ workspace, port = 0 } = {}) {
         return true
       }
       if (!pending || pending.disk !== toMove) await think()
+      if (stopped || board !== askedBoard) return false
       const legal = legalMoves(board, toMove)
       let pick = null
       if (forced) pick = legal.find((m) => m.x === forced.x && m.y === forced.y) ?? null
@@ -150,6 +162,7 @@ export async function startDuelViewer({ workspace, port = 0 } = {}) {
         moveCount++; totals.moves++
         if (forced) totals.forced++
         const ref = await referee(c, { ...pick, detail }, disk)
+        if (stopped || board !== askedBoard) return false
         const p = pending?.moves.find((m) => m.x === pick.x && m.y === pick.y)?.p ?? null
         history.push({ n: moveCount, side: c.rivals[disk].name, disk, x: pick.x, y: pick.y, flips: pick.flips, flipped, ref, p, human: !!forced, at: new Date().toISOString() })
         if (history.length > 200) history.splice(0, history.length - 200)
@@ -162,6 +175,7 @@ export async function startDuelViewer({ workspace, port = 0 } = {}) {
       error = null
       return true
     } catch (e) {
+      if (stopped || board !== askedBoard) return false
       error = clean(e?.message ?? String(e))
       return false
     } finally {
@@ -227,23 +241,28 @@ export async function startDuelViewer({ workspace, port = 0 } = {}) {
   }
 
   /** A dial or the sides changed: the player to move reads new text, so ask it again. */
-  async function rethink() { if (!busy) { busy = true; try { await think() } catch (e) { error = clean(e.message) } finally { busy = false } } }
+  function rethink() { return locked(async () => {
+    const askedBoard = board
+    busy = true
+    try { await think() } catch (e) { if (!stopped && board === askedBoard) error = clean(e.message) } finally { busy = false }
+  }) }
 
   async function control(cmd, body) {
     let ok = true
     if (cmd === 'pause') { running = false; clearTimeout(timer) }
     else if (cmd === 'start') { if (!running) { running = true; schedule() } }
     else if (cmd === 'reset') {
+      revision++
       Object.assign(totals, { games: 0, winsO: 0, winsX: 0, draws: 0, moves: 0, forced: 0, results: [] })
       overrides = {}; game = 1; salt = 1; newGame(); await rethink()
     }
-    else if (cmd === 'tick' || cmd === 'step') { const n = Math.round(num(body.n, 1, 20000, 1)); for (let i = 0; i < n; i++) await step() }
+    else if (cmd === 'tick' || cmd === 'step') { const n = Math.round(num(body.n, 1, 20000, 1)), requested = revision; for (let i = 0; i < n && !stopped && requested === revision; i++) await step() }
     else if (cmd === 'play') { ok = await step({ x: Math.round(Number(body.x)), y: Math.round(Number(body.y)) }); if (ok && running) schedule() }
     else if (cmd === 'swap') { overrides = { ...overrides, swapped: !overrides.swapped, insightO: overrides.insightX, insightX: overrides.insightO }; await rethink() }
     else if (cmd === 'set') {
       const v = Number(body.value)
       if (body.key === 'speed') { overrides = { ...overrides, speed: Math.round(num(v, 60, 5000, 700)) }; if (running) schedule() }
-      else if (body.key === 'size' && [4, 6, 8, 10, 12].includes(v)) { overrides = { ...overrides, size: v }; game++; newGame(); await rethink() }
+      else if (body.key === 'size' && [4, 6, 8, 10, 12].includes(v)) { revision++; overrides = { ...overrides, size: v }; game++; newGame(); await rethink() }
       else if (body.key === 'insightO' || body.key === 'insightX') { overrides = { ...overrides, [body.key]: Math.round(num(v, 0, 2, 2)) }; await rethink() }
       else ok = false
     } else ok = false
@@ -266,7 +285,7 @@ export async function startDuelViewer({ workspace, port = 0 } = {}) {
       load()
       if (JSON.stringify(raw) !== before) {
         overrides = {}
-        if (cfg().size !== sizeBefore) { game++; newGame() }
+        if (cfg().size !== sizeBefore) { revision++; game++; newGame() }
         await rethink()
       }
       push(true)

@@ -9,7 +9,7 @@
 ///   agent CLIs' own logs. Off until switched on, per provider, because those
 ///   logs hold every prompt and path a session touched.
 ///
-/// Its sibling readout on the status rail (`widgets/status_rail/usage_panel.dart`)
+/// Its sibling readout in the native Models menu (`usage/models_menu_controller.dart`)
 /// answers a third question — *how much of your rate limit is left* — which is
 /// an account fact and a percentage. All three are true at once and none
 /// substitutes for another.
@@ -19,8 +19,6 @@
 /// reaches them — which the subtitle says out loud, because a total that
 /// silently excluded most of a team's work would be worse than no total.
 library;
-
-import 'package:harness/terminal/terminal_text.dart';
 
 import 'dart:async';
 
@@ -184,7 +182,7 @@ class _UsageSectionState extends State<UsageSection> {
               if (states.values.any((state) => state.hasIncompleteFigures)) ...[
                 Text(
                   'Some usage could not be read. Totals are incomplete.',
-                  style: terminalTextStyle(color: AppPalette.warn),
+                  style: AppType.body(color: AppPalette.warn),
                 ),
                 const SizedBox(height: 12),
               ],
@@ -202,7 +200,7 @@ class _UsageSectionState extends State<UsageSection> {
                   ))
                 Text(
                   'No figures available.',
-                  style: terminalTextStyle(color: AppPalette.textSecondary),
+                  style: AppType.body(color: AppPalette.textSecondary),
                 )
               else ...[
                 _cards(overview),
@@ -211,7 +209,7 @@ class _UsageSectionState extends State<UsageSection> {
                     padding: const EdgeInsets.only(top: 8),
                     child: Text(
                       'The cost is a lower bound because some model prices are unavailable.',
-                      style: terminalTextStyle(color: AppPalette.textSecondary),
+                      style: AppType.caption(color: AppPalette.textSecondary),
                     ),
                   ),
                 if (overview.hasAnyData) ...[
@@ -354,7 +352,6 @@ class _PanelPair extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxWidth < 680) {
@@ -387,10 +384,7 @@ class _AnalyticsHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     return UsageHeader(
-      title: Text(
-        'Usage analytics',
-        style: Theme.of(context).textTheme.titleSmall,
-      ),
+      title: Text('Usage analytics', style: AppType.heading()),
       controls: [
         AppSelectField<_Lens>(
           value: lens,
@@ -433,11 +427,11 @@ class _OverviewHeader extends StatelessWidget {
       title: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Usage overview', style: Theme.of(context).textTheme.titleSmall),
+          Text('Usage overview', style: AppType.heading()),
           const SizedBox(height: 2),
           Text(
             _updatedLine(),
-            style: terminalTextStyle(color: AppPalette.textSecondary),
+            style: AppType.body(color: AppPalette.textSecondary),
           ),
         ],
       ),
@@ -496,7 +490,7 @@ class _ProvidersHeading extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Providers', style: Theme.of(context).textTheme.titleSmall),
+              Text('Providers', style: AppType.heading()),
               const SizedBox(height: 2),
               Text(
                 // Two different counts on purpose: a provider can be on and have
@@ -504,7 +498,7 @@ class _ProvidersHeading extends StatelessWidget {
                 // panel impossible to read.
                 '${overview.enabledCount} enabled'
                 '${hasFigures ? ' · ${overview.dataProviderCount} with data' : ''}',
-                style: terminalTextStyle(color: AppPalette.textSecondary),
+                style: AppType.body(color: AppPalette.textSecondary),
               ),
             ],
           ),
@@ -513,7 +507,7 @@ class _ProvidersHeading extends StatelessWidget {
           Text(
             '${overview.sessionCount} '
             '${overview.sessionCount == 1 ? 'session' : 'sessions'}',
-            style: terminalTextStyle(color: AppPalette.textFaint),
+            style: AppType.caption(color: AppPalette.textFaint),
           ),
       ],
     );

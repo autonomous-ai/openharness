@@ -38,6 +38,7 @@ class _Connection extends WsConn {
   final starts = <Map<String, dynamic>>[];
   final reads = <String>[];
   final pending = <String, Completer<Map<String, dynamic>>>{};
+  final answers = <String, Map<String, dynamic>>{};
   Map<String, dynamic>? failure;
   bool loseReply = false;
   @override
@@ -50,7 +51,9 @@ class _Connection extends WsConn {
       final path = payload['path'] as String;
       reads.add(path);
       return pending[path]?.future ??
-          Future.value(path == '/plain' ? {'isGit': false} : _git);
+          Future.value(
+            answers[path] ?? (path == '/plain' ? {'isGit': false} : _git),
+          );
     }
     if (type == 'engines_probe') return {'engines': []};
     if (type == 'dsh_list') return {'dsh': []};
@@ -77,7 +80,12 @@ class _Connection extends WsConn {
           'id': 'created',
           'name': 'Created',
           'engine': 'codex',
-          'project': {'cwd': payload['cwd'] ?? '/worktrees/new'},
+          'project': {
+            'name': 'repo',
+            'cwd':
+                payload['cwd'] ??
+                '/home/user/harnesses/worktrees/repo/codex-0922-1136',
+          },
         },
       };
     }
@@ -210,6 +218,87 @@ void main() {
     expect(connection.starts, hasLength(2));
     expect(connection.starts.last['projectSource'], 'branch');
     expect(connection.starts.last['gitSource'], '/prepared');
+  });
+
+  Map<String, dynamic> linked(String branch) => {
+    ..._git,
+    'branch': branch,
+    'mainFolder': '/repo',
+    'mainBranch': 'main',
+  };
+
+  test(
+    'a worktree folder opens as its repository, on the repository branch',
+    () async {
+      const folder = '/harnesses/worktrees/repo/claude-0922-1136';
+      final connection = _Connection()
+        ..answers[folder] = linked('harness/claude-0922-1136');
+      final app = createApp(connectionForTest: (_) => connection);
+      final box = NewHarnessController(
+        app,
+        machineId: 'm',
+        engine: 'codex',
+        folder: folder,
+      );
+      addTearDown(app.dispose);
+      addTearDown(box.dispose);
+      await settle();
+      expect(box.project.folder, '/repo');
+      expect(box.worktree, true);
+      expect(box.branchLabel, 'main');
+      expect(box.projectFolderRequest!.payload, {
+        'projectSource': 'worktree',
+        'gitSource': '/repo',
+        'branchRef': 'refs/heads/main',
+      });
+      expect(connection.reads, [folder], reason: 'Branches are shared.');
+      expect(await box.create(), NewHarnessOutcome.created);
+      expect(app.projectHistory.recent('m'), ['/repo']);
+      final next = NewHarnessController(app, machineId: 'm', engine: 'codex');
+      addTearDown(next.dispose);
+      await settle();
+      next.focusField(NewHarnessField.projectMenu);
+      final folders = [for (final row in next.options) ?row.project?.folder];
+      expect(folders, contains('/repo'));
+      expect(
+        folders.where((folder) => folder.contains('/harnesses/worktrees/')),
+        isEmpty,
+        reason: 'A worktree Start made is not a project to pick again.',
+      );
+    },
+  );
+
+  test('a refused launch in a new worktree retries on its branch', () async {
+    const prepared = '/harnesses/worktrees/repo/codex-0922-1136';
+    final connection = _Connection()
+      ..answers[prepared] = linked('harness/codex-0922-1136')
+      ..failure = {
+        'preparedFolder': prepared,
+        'failure': {'code': 'TMUX_UNAVAILABLE'},
+      };
+    final app = createApp(connectionForTest: (_) => connection);
+    final box = NewHarnessController(
+      app,
+      machineId: 'm',
+      engine: 'codex',
+      folder: '/repo',
+    );
+    addTearDown(app.dispose);
+    addTearDown(box.dispose);
+    await settle();
+    expect(await box.create(), NewHarnessOutcome.failed);
+    await settle();
+    expect(box.project.folder, '/repo');
+    expect(box.worktree, false);
+    expect(box.branchLabel, 'harness/codex-0922-1136');
+    connection.failure = null;
+    expect(await box.create(), NewHarnessOutcome.created);
+    expect(connection.starts.last, containsPair('projectSource', 'branch'));
+    expect(connection.starts.last, containsPair('gitSource', '/repo'));
+    expect(
+      connection.starts.last,
+      containsPair('branchRef', 'refs/heads/harness/codex-0922-1136'),
+    );
   });
 
   testWidgets(

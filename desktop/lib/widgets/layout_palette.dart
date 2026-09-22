@@ -216,7 +216,7 @@ class _LayoutPaletteState extends State<_LayoutPalette> {
     final choices = PanePreset.forCount(count);
     final current = _currentChoice(count);
     final cursor = _cursorIn(choices, current);
-    final textScale = terminalTextScaleOf(context);
+    final textScale = grid.appTextScaleOf(context);
     final shapeWidth = (_Strip.shape * textScale).clamp(_Strip.shape, 216.0);
     final paletteWidth =
         _Strip.width(choices.length) * textScale.clamp(1.0, 2.0);
@@ -306,10 +306,8 @@ class _LayoutPaletteState extends State<_LayoutPalette> {
                         padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
                         child: Text(
                           choices.isEmpty ? 'Layout' : 'Layout · $count panes',
-                          style: terminalTextStyle(
+                          style: grid.AppType.monoLabel(
                             color: grid.AppPalette.textSecondary,
-                            letterSpacing: 0.9,
-                            fontWeight: grid.AppFont.medium,
                           ),
                         ),
                       ),
@@ -319,7 +317,8 @@ class _LayoutPaletteState extends State<_LayoutPalette> {
                           child: Text(
                             'One tile has no layout to choose. Open another and the '
                             'shapes appear here.',
-                            style: terminalTextStyle(
+                            style: grid.AppType.monoLabel(
+                              fontWeight: FontWeight.w400,
                               color: grid.AppPalette.textFaint,
                               height: 1.45,
                             ),
@@ -364,7 +363,7 @@ class _LayoutPaletteState extends State<_LayoutPalette> {
                           child: Text(
                             'Arrows to move · Enter or 1–${choices.length} to apply.\n'
                             'Changing layout resets pane sizes.',
-                            style: terminalTextStyle(
+                            style: grid.AppType.monoMeta(
                               color: grid.AppPalette.textSecondary,
                               height: 1.4,
                             ),
@@ -482,7 +481,8 @@ class _ShapeButton extends StatelessWidget {
               preset.label,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: terminalTextStyle(
+              style: grid.AppType.monoLabel(
+                fontWeight: FontWeight.w400,
                 color: selected
                     ? grid.AppPalette.textPrimary
                     : grid.AppPalette.textSecondary,
@@ -491,7 +491,9 @@ class _ShapeButton extends StatelessWidget {
             const SizedBox(height: 2),
             Text(
               '$index',
-              style: terminalTextStyle(color: grid.AppPalette.textSecondary),
+              style: grid.AppType.monoMeta(
+                color: grid.AppPalette.textSecondary,
+              ),
             ),
           ],
         ),

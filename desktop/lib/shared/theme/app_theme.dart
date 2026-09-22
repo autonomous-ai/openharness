@@ -1,8 +1,8 @@
-import '../../terminal/terminal_typography.dart';
-
 import 'package:flutter/material.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
+import 'app_type.dart';
+export 'app_type.dart';
 import 'color_palette.dart';
 
 /// The app's live brightness — the single source of truth the color tokens below
@@ -669,12 +669,13 @@ abstract final class AppGlass {
 ///   menuTheme / popupMenuTheme   #1E1E1E         8          6      no
 ///   appMenuStyle()               #2A2A2A        12         10      yes
 ///   tooltipTheme                 #1E1E1E         —         10      yes
-///   AccountFooter, inline        cardBg         18          8      yes
+///   the account footer, inline   cardBg         18          8      yes
 /// ```
 ///
 /// The cost was exactly what a second recipe always costs: the account footer's
-/// `MenuAnchor` passed no style at all, so it opened the rimless themed default
-/// — the surface `appMenuStyle` had been written to replace.
+/// `MenuAnchor` (since removed with the machine rail) passed no style at all, so
+/// it opened the rimless themed default — the surface `appMenuStyle` had been
+/// written to replace.
 ///
 /// ⚠️ The fill is deliberately **not** the themed default. `#1E1E1E` sits within
 /// 1.02:1 of a raised block ([AppGlass.surfaceFill], `#202020`), and in light
@@ -937,7 +938,7 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
     // Also stated at ThemeData level, not only inside the ramp: Material builds
     // text of its own (a dialog's semantics label, a field's error line) that
     // never passes through `textTheme`, and without this those fall through to
-    // Roboto instead of the selected terminal font.
+    // Roboto instead of the system face.
     fontFamily: AppFont.sans,
     fontFamilyFallback: AppFont.sansFallback,
     scaffoldBackgroundColor: scheme.surface,
@@ -1033,8 +1034,8 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
                 ),
               ],
       ),
-      // Tooltips keep the same font and size, with room for multiline text.
-      textStyle: terminalTextStyle(height: 1.45, color: scheme.onSurface),
+      // Room for multiline text.
+      textStyle: AppType.caption(height: 1.45, color: scheme.onSurface),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       // Long quoted lines would otherwise take the tooltip out to the window's
       // full width — a panel wider than the conversation it is explaining.
@@ -1084,7 +1085,7 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       isDense: true,
       filled: true,
       fillColor: scheme.surfaceContainerHighest,
-      // A field hint uses the selected terminal font and size, like its button.
+      // A field hint is set like the field's own text.
       // (The typed text is set on the field via
       // [kFieldTextStyle]; `InputDecorationTheme` has no `style` of its own, so
       // a field's own text can't be themed globally here.)
@@ -1168,6 +1169,8 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppCard.radius),
       ),
+      titleTextStyle: AppType.heading(color: scheme.onSurface),
+      contentTextStyle: AppType.body(color: scheme.onSurface),
     ),
     // ⚠️ [AppPalette.accentOnSurface], NOT `colorScheme.primary`.
     //
@@ -1188,10 +1191,7 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       width: 520,
       // A snackbar floats over everything, so it takes the panel fill.
       backgroundColor: panelFill,
-      contentTextStyle: terminalTextStyle(
-        color: scheme.onSurface,
-        fontWeight: FontWeight.w600,
-      ),
+      contentTextStyle: AppType.body(color: scheme.onSurface),
       actionTextColor: AppPalette.accent,
       closeIconColor: scheme.onSurfaceVariant,
       elevation: 10,
@@ -1254,15 +1254,15 @@ abstract final class AppControl {
   /// [anchoredMenuPosition] clamps to this by default.
   static const double menuMaxHeight = 240;
 
-  /// Button labels use the same selected point size as every other surface.
-  static double get fontSize => terminalFontStore.size;
+  /// A button's label: [AppType.label].
+  static const double fontSize = AppType.bodySize;
   static const FontWeight fontWeight = AppFont.medium;
 
   /// A leading glyph inside a button, sized to sit on the cap height of a 13pt
   /// label rather than tower over it.
   static const double iconSize = 16;
 
-  /// A compact glyph for an inline chip; its text keeps the shared font size.
+  /// A compact glyph for an inline chip.
   static const double iconSizeChip = 13;
 
   /// Horizontal breathing room. Apple pads a push button generously sideways and
@@ -1310,8 +1310,6 @@ abstract final class AppControl {
 
   static EdgeInsets get paddingSmallScaled =>
       EdgeInsets.symmetric(horizontal: 10 * AppFont.uiScale);
-
-  // Text already uses the selected point size. Only control geometry scales.
 }
 
 /// How long the app's UI takes to change, and on what curve.
@@ -1368,17 +1366,15 @@ abstract final class AppMotion {
   static const Curve curve = Curves.easeOut;
 }
 
-/// Compatibility names for the single Terminal font preference.
+/// The app's two faces and its weight ladder. Sizes live in [AppType].
 abstract final class AppFont {
-  /// Legacy token names all resolve to the one terminal font preference.
-  static String get sans => terminalFontStore.value.fontFamily;
-  static String get mono => sans;
-  static List<String> get sansFallback =>
-      terminalFontStore.value.fontFamilyFallback;
-  static List<String> get monoFallback => sansFallback;
-  static String get sansDefault => terminalFontFamily;
-  static String get monoDefault => terminalFontFamily;
-  static List<String> get defaultFallback => terminalFontFallback;
+  /// The system UI face. See [AppType] for the rule on which face text gets.
+  static String get sans => AppType.sansFamily;
+  static List<String> get sansFallback => AppType.sansFallback;
+
+  /// The terminal's face, used for terminal chrome and copyable strings.
+  static String get mono => AppType.monoFamily;
+  static List<String> get monoFallback => AppType.monoFallback;
 
   /// Digits that hold a fixed width, so a stat doesn't reflow as its value
   /// changes and a column of numbers lines up.
@@ -1416,19 +1412,22 @@ abstract final class AppFont {
   /// ladder was introduced to fix. Reach for [medium] first.
   static const FontWeight semibold = FontWeight.w600;
 
-  /// Monospaced characters keep the terminal's natural cell spacing.
-  static double trackingFor(double size) => 0;
+  /// Tracking for the sans face; see [AppType.trackingFor].
+  static double trackingFor(double size) => AppType.trackingFor(size);
 
-  /// Geometry scales with the selected terminal font, without scaling text twice.
-  static const double uiSizeDefault = terminalFontSize;
-  static double get uiScale => terminalFontStore.size / terminalFontSize;
+  /// The UI no longer scales with the terminal's size setting: ⌘+ and ⌘−
+  /// resize the terminal alone, so control geometry stays as drawn.
+  static const double uiScale = 1;
+
+  /// The terminal's size, for a surface that shows terminal output verbatim.
   static double get codeSize => terminalFontStore.size;
 
+  /// A block of code or a log: the terminal face at the UI's mono size.
   static TextStyle codeStyle({
     Color? color,
     double? height,
     FontWeight? fontWeight,
-  }) => terminalTextStyle(color: color, height: height, fontWeight: fontWeight);
+  }) => AppType.mono(color: color, height: height, fontWeight: fontWeight);
 }
 
 /// A text field's rim at one state. Radius matches [AppControl.radius] so a
@@ -1439,26 +1438,20 @@ OutlineInputBorder _fieldBorder(Color color, {double width = 1}) =>
       borderSide: BorderSide(color: color, width: width),
     );
 
-/// The label style shared by every button, carrying the UI font: a
-/// `ButtonStyle.textStyle` does **not** inherit `fontFamily` from the text
-/// theme, so a button must receive the shared font explicitly.
-///
-/// A getter, not a const: it reads [AppFont.sans], which the user can change.
-TextStyle get _buttonTextStyle => terminalTextStyle(
-  fontWeight: AppControl.fontWeight,
-  letterSpacing: AppFont.trackingFor(AppControl.fontSize),
-);
+/// The label style shared by every button: a `ButtonStyle.textStyle` does
+/// **not** inherit `fontFamily` from the text theme, so a button must receive
+/// the UI font explicitly.
+TextStyle get _buttonTextStyle =>
+    AppType.label(fontWeight: AppControl.fontWeight);
 
-/// A text field's own text uses the selected terminal font and size.
+/// A text field's own text: [AppType.mono] — what the user types is set the
+/// way a terminal sets it, at the scale of the button beside it.
 /// `InputDecorationTheme` has no `style` slot (it themes the *decoration*, not
 /// the editable text), so a field must be handed this explicitly:
 /// `TextField(style: kFieldTextStyle, ...)`.
 TextStyle get kFieldTextStyle => _fieldTextStyle(AppPalette.textPrimary);
 
-TextStyle _fieldTextStyle(Color color) => terminalTextStyle(
-  letterSpacing: AppFont.trackingFor(AppControl.fontSize),
-  color: color,
-);
+TextStyle _fieldTextStyle(Color color) => AppType.mono(color: color);
 
 /// A field's leading glyph — the magnifier on a search box, and its kind.
 ///
@@ -1545,29 +1538,29 @@ ButtonStyle _textButtonStyle() => TextButton.styleFrom(
 );
 
 TextTheme _appTextTheme(Color primary, Color secondary) {
-  final base = terminalTextStyle(
-    color: primary,
-    height: 1.34,
-    fontWeight: AppFont.regular,
-  );
-
-  final heading = base.copyWith(fontWeight: AppFont.semibold);
-  final label = base.copyWith(fontWeight: AppFont.medium);
+  // Material's fifteen roles folded onto [AppType]'s steps: headings and
+  // labels in mono, body in sans. A heading keeps semibold; a role that names a
+  // control drops to medium.
+  final display = AppType.display(color: primary);
+  final title = AppType.title(color: primary);
+  final heading = AppType.heading(color: primary);
+  final body = AppType.body(color: primary);
+  final label = AppType.label(color: primary);
   return TextTheme(
-    displayLarge: heading,
-    displayMedium: heading,
-    displaySmall: heading,
-    headlineLarge: heading,
-    headlineMedium: heading,
-    headlineSmall: heading,
-    titleLarge: heading,
+    displayLarge: display,
+    displayMedium: display,
+    displaySmall: display,
+    headlineLarge: title,
+    headlineMedium: title,
+    headlineSmall: title,
+    titleLarge: title,
     titleMedium: heading,
     titleSmall: label,
-    bodyLarge: base,
-    bodyMedium: base,
-    bodySmall: base.copyWith(color: secondary),
+    bodyLarge: body,
+    bodyMedium: body,
+    bodySmall: body.copyWith(color: secondary),
     labelLarge: label,
     labelMedium: label,
-    labelSmall: label,
+    labelSmall: AppType.monoMeta(color: primary, fontWeight: AppFont.medium),
   );
 }

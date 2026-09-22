@@ -147,6 +147,19 @@ made from it, and a line naming the result. The page types the prompt out, revea
 "Try this prompt" opens New Harness with the prompt as the first message. Pictures live in
 `store/showcase/<name>/`, 1600×1000 JPEG under 350 KB, and are real output — never a mock-up.
 
+An example may also carry an HTTPS `video` URL (≤ 2048 characters), with `image` as its poster.
+“Watch real session” opens the existing native web player on supported platforms, with a browser
+fallback. Browsing a detail page loads only its pictures; the video loads after a click, fits the
+whole native pane, and stops when the recording closes. Older clients keep showing the prompt
+and picture. The eight hands-on recordings reuse their original PNG/MP4 assets in `docs/images/`
+rather than the JPEG convention above.
+
+The matching recorded prompts and captions live in `hands-on.json` under `demo`. Run
+`node store/tools/hands-on.mjs --sync-store` to place each recording first in its harness's
+examples, preserving the others. `--check` verifies the pairs and local assets. Suggested
+starting prompts remain separate from the actual projects shown; the Jev Sheets recording is
+explicitly labeled offline practice with fictional rows.
+
 **In a repository of its own**: add `store/registry/<owner>/<name>.json` in a pull request.
 
 ```json

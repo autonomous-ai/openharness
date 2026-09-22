@@ -17,4 +17,10 @@ credentials are needed. Original OpenHarness starter code, MIT licensed.
 Game Studio builds every save, preserves the previous working version on errors, and records
 playable versions. Export copies the selected build into `out/` for you to host with a static server.
 
+Rewind your run, return to the live moment, or try another move from an earlier frame. Pin moment
+keeps your note, game state, canvas image, and the playable version under `out/playtests/`.
+Use Saved moments to return after edits or a studio restart. Ask the agent to read those notes
+to refine a specific jump, obstacle, or feeling. The snapshot hooks in `src/main.ts` restore
+movement, gates, score, timer, and camera; preserve them as you change the game.
+
 Try changing the season, adding a jump ramp, making another course, or replacing this with your own game.

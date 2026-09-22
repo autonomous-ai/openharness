@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../theme/app_theme.dart';
 import 'app_select_field.dart';
@@ -141,8 +140,8 @@ class _AppChoicePickerState<T> extends State<AppChoicePicker<T>> {
     if (widget.tileSize != null) return _tileChoices();
     final candidates = _visibleOptions;
     if (candidates.isEmpty) return const SizedBox.shrink();
-    final textStyle = terminalTextStyle(fontWeight: FontWeight.w500);
-    final detailStyle = textStyle.copyWith(fontWeight: FontWeight.w400);
+    final textStyle = AppType.label();
+    final detailStyle = AppType.body();
     final height = widget.showDetails
         ? (widget.compact ? 52.0 : 58.0)
         : (widget.compact ? 40.0 : 44.0);
@@ -449,7 +448,7 @@ class AppChoiceTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
+    AppTheme.watch(context);
     return SizedBox(
       width: size.width,
       height: size.height,
@@ -518,8 +517,8 @@ class AppChoiceTileContent extends StatelessWidget {
   /// The name's type, and the detail's under it. Written down because the tile
   /// height is arithmetic over exactly these numbers — see [linesFor] and the
   /// New Harness dialog's `tileSize`.
-  static double get labelSize => terminalFontStore.size;
-  static double get detailSize => terminalFontStore.size;
+  static const double labelSize = AppType.bodySize;
+  static const double detailSize = AppType.bodySize;
   static const double lineHeight = 1.25;
   static const double lineGap = 4;
 
@@ -558,7 +557,7 @@ class AppChoiceTileContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
+    AppTheme.watch(context);
     if (terminalStyle) {
       final style = DefaultTextStyle.of(context).style.copyWith(
         height: 1.35,
@@ -601,9 +600,8 @@ class AppChoiceTileContent extends StatelessWidget {
         ),
       );
     }
-    final labelStyle = terminalTextStyle(
+    final labelStyle = AppType.label(
       height: lineHeight,
-      fontWeight: AppFont.medium,
       color: AppPalette.textPrimary,
     );
     return Row(
@@ -646,7 +644,7 @@ class AppChoiceTileContent extends StatelessWidget {
                       detail!,
                       maxLines: lines.detail,
                       overflow: TextOverflow.ellipsis,
-                      style: terminalTextStyle(
+                      style: AppType.body(
                         height: lineHeight,
                         color: AppPalette.textSecondary,
                       ),

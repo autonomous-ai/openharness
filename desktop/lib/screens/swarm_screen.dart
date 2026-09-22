@@ -117,6 +117,10 @@ typedef _NewHarnessContext = ({
   String? projectName,
 });
 
+/// The command box's title line, a step quieter than the rows under it.
+TextStyle get _boxCaption =>
+    grid.AppType.monoLabel(color: kBoxFaint, fontWeight: FontWeight.w400);
+
 class _SwarmScreenState extends State<SwarmScreen> {
   static const _channel = MethodChannel('harness/swarm_tabs');
   late final bool _native =
@@ -437,7 +441,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   padding: const EdgeInsets.fromLTRB(20, 8, 8, 0),
                   child: Row(
                     children: [
-                      Text('Quick Start', style: boxMonoStyle()),
+                      Text('Quick Start', style: grid.AppType.heading()),
                       const Spacer(),
                       TextButton(
                         onPressed: () => Navigator.pop(context, 'tour'),
@@ -542,9 +546,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
       'activeId': app.activeSwarmId,
       'palette': grid.AppTheme.palette.value.nativeColors,
-      'fontFamily': terminalFontStore.value.fontFamily,
-      'fontSize': terminalFontStore.size,
-      'fontFallbacks': terminalFontStore.value.fontFamilyFallback,
+      // The tabs wear the terminal's face at the chrome size, not its size:
+      // ⌘+ and ⌘− zoom the terminal alone.
+      'fontFamily': grid.AppType.monoFamily,
+      'fontSize': grid.AppType.chromeSize,
+      'fontFallbacks': grid.AppType.monoFallback,
       'canReopen': app.canReopenLastClosed,
       'canFind': _canFindTerminal,
       'canClosePane': app.focusedPane != null,
@@ -643,6 +649,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
             agent.engine,
             agent.terminalAvailable ||
                 openAgents.contains((machine.machine.machineId, agent.id)),
+            // Part of the row now (" · stopped", and whether it opens), so a
+            // harness stopping or resuming redraws the menu like a rename does.
+            agent.isStopped,
           ),
       ],
     ];
@@ -672,12 +681,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     // the Claude Code it runs on.
                     'engine': agent.identityEngine,
                     'iconAsset': agentIdentity(agent).asset,
+                    // A stopped harness opens too: choosing it resumes its
+                    // conversation, the road ⌘O takes (`activateSwarmDestination`).
+                    // `stopped` lets the row say so first, since that takes a
+                    // moment and may ask the engine to sign in, unlike an attach.
                     'canOpen':
                         agent.terminalAvailable ||
+                        agent.isStopped ||
                         openAgents.contains((
                           machine.machine.machineId,
                           agent.id,
                         )),
+                    'stopped': agent.isStopped,
                   },
               ],
               // Two independent slots. `presence` is the node's own state
@@ -1010,11 +1025,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
           if (entry != null) {
             _closeSearch();
             _preparePaneFocus();
-            await activateSwarmDestination(
-              app,
-              entry,
-              destinationSwarmId: app.activeSwarmId,
-            );
+            try {
+              await activateSwarmDestination(
+                app,
+                entry,
+                destinationSwarmId: app.activeSwarmId,
+              );
+            } on SwarmResumeFailure catch (failure) {
+              _showResumeFailure(failure, target: app.activeSwarmId);
+            }
           }
         }
       case 'commands':
@@ -1026,11 +1045,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
             .firstOrNull;
         if (entry != null) {
           _preparePaneFocus();
-          await activateSwarmDestination(
-            app,
-            entry,
-            destinationSwarmId: app.activeSwarmId,
-          );
+          try {
+            await activateSwarmDestination(
+              app,
+              entry,
+              destinationSwarmId: app.activeSwarmId,
+            );
+          } on SwarmResumeFailure catch (failure) {
+            _showResumeFailure(failure, target: app.activeSwarmId);
+          }
         }
       case 'closePane':
         if (app.focusedPaneId != null) await app.closePane(app.focusedPaneId!);
@@ -1762,6 +1785,41 @@ class _SwarmScreenState extends State<SwarmScreen> {
     await _activateSearch(selected!, target);
   }
 
+  /// A stopped harness that would not resume — from the picker, the Machines
+  /// menu or History alike: the daemon's reason, and the way on, a new
+  /// conversation in the same place.
+  void _showResumeFailure(
+    SwarmResumeFailure failure, {
+    required String target,
+    HarnessPlacement? placement,
+  }) {
+    if (!mounted) return;
+    final row = failure.destination;
+    final agent = app
+        .stateOf(row.machineId!)
+        ?.agents
+        .where((agent) => agent.id == row.agentId)
+        .firstOrNull;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(failure.message),
+        action: SnackBarAction(
+          label: 'Start New Conversation',
+          onPressed: () => _openNewHarness(
+            machineId: row.machineId!,
+            engine: agent?.dsh ?? agent?.engine,
+            folder: agent?.project?.cwd,
+            swarmId: app.swarms.any((tab) => tab.id == target)
+                ? target
+                : app.activeSwarmId,
+            placement: placement,
+            task: '',
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _activateSearch(
     SwarmSearchSelection selected,
     String target, {
@@ -1801,31 +1859,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         placement: placement,
       );
     } on SwarmResumeFailure catch (failure) {
-      if (!mounted) return;
-      final row = failure.destination;
-      final agent = app
-          .stateOf(row.machineId!)
-          ?.agents
-          .where((agent) => agent.id == row.agentId)
-          .firstOrNull;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(failure.message),
-          action: SnackBarAction(
-            label: 'Start New Conversation',
-            onPressed: () => _openNewHarness(
-              machineId: row.machineId!,
-              engine: agent?.dsh ?? agent?.engine,
-              folder: agent?.project?.cwd,
-              swarmId: app.swarms.any((tab) => tab.id == target)
-                  ? target
-                  : app.activeSwarmId,
-              placement: placement,
-              task: '',
-            ),
-          ),
-        ),
-      );
+      _showResumeFailure(failure, target: target, placement: placement);
       return;
     }
     if (!opened && mounted) {
@@ -2047,7 +2081,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 padding: const EdgeInsets.fromLTRB(14, 9, 14, 2),
                 child: Row(
                   children: [
-                    Text(search.title, style: boxMonoStyle(color: kBoxFaint)),
+                    Text(search.title, style: _boxCaption),
                     if (search.placement == HarnessPlacement.currentTab ||
                         search.split != null)
                       Expanded(
@@ -2058,7 +2092,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             key: const ValueKey('swarm-search-target'),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: boxMonoStyle(color: kBoxFaint),
+                            style: _boxCaption,
                           ),
                         ),
                       )
@@ -2623,7 +2657,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       if (message.isNotEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(message, style: terminalTextStyle()),
+            content: Text(message),
             action: goBack == null
                 ? null
                 : SnackBarAction(
@@ -2741,7 +2775,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                               Expanded(
                                 child: Text(
                                   'Keyboard config has an error. Using the last working shortcuts.',
-                                  style: terminalTextStyle(),
+                                  style: grid.AppType.body(),
                                 ),
                               ),
                               TextButton(
@@ -2763,7 +2797,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           alignment: Alignment.centerLeft,
                           child: Text(
                             '$_pendingKeys …  Esc to cancel',
-                            style: terminalTextStyle(
+                            style: grid.AppType.monoMeta(
                               color: grid.AppPalette.textSecondary,
                             ),
                           ),
@@ -2787,7 +2821,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                   _projects.error ?? app.lastError!,
                                   maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
-                                  style: terminalTextStyle(),
+                                  style: grid.AppType.body(),
                                 ),
                               ),
                               if (_projects.error == null &&
@@ -3142,7 +3176,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                               swarm.name,
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
-                                              style: boxMonoStyle(),
+                                              // Like the native tabs.
+                                              style: grid.AppType.monoLabel(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.w400,
+                                              ),
                                             ),
                                           ),
                                         ],
@@ -3198,7 +3236,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     grid.AppPalette.swarmField,
                   ),
                   overlayColor: grid.AppPalette.swarmAccent,
-                  textStyle: boxMonoStyle(),
+                  textStyle: grid.AppType.monoLabel(),
                   minimumSize: const Size(0, 28),
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -3236,7 +3274,6 @@ class _TabActionsRevealState extends State<_TabActionsReveal> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),

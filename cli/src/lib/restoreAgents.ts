@@ -163,7 +163,15 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
       }
       continue
     }
-    if (entry.resumeOnly && deps.retainStopped) {
+    // A strict-resume row that was never CONFIRMED (its launch still `starting` when the daemon
+    // died) goes back to the archive for an explicit Open: nothing proved the engine ever loaded
+    // that conversation, and this pass has no way to ask. One that was confirmed — hook received,
+    // engine bound, `launch: ready` — was a live agent like any other on the desk, and its tile
+    // comes back the same way the others do: the exact resume below, never the fresh fallback
+    // (`relaunchFresh` refuses it for a resume-only row). Measured: a harness opened from the
+    // catalog, then `harness stop` + `tmux kill-server` + app relaunch — every other tile came
+    // back, this one sat on "no verified terminal pane" with nothing to press.
+    if (entry.resumeOnly && entry.launch?.state !== 'ready' && deps.retainStopped) {
       deps.retainStopped(entry, false)
       summary.skipped.push({ agentId: entry.agentId, reason: 'saved conversation awaits explicit Open' })
       continue

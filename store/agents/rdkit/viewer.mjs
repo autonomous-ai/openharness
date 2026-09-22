@@ -10,37 +10,54 @@
 //   /api/mol?path=out/x.sdf      the first record as a MOL file, for download
 //   /events                      server-sent `change` (the files that changed) and `progress` (out/.progress.json)
 //
-// Read-only: nothing here writes into the workspace. Any path outside the workspace is refused.
+// Bond scans can explicitly keep a native calculation under out/torsions/. Source files are read-only.
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync, statSync, watch } from 'node:fs'
+import { createHash, randomBytes } from 'node:crypto'
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync, watch } from 'node:fs'
 import { createServer } from 'node:http'
 import { basename, dirname, extname, join, normalize, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createTorsionService } from './torsion.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const port = Number(process.env.HARNESS_VIEWER_PORT)
 const workspace = resolve(process.env.HARNESS_WORKSPACE)
 const clients = new Set()
+const token = randomBytes(32).toString('hex')
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.sdf': 'chemical/x-mdl-sdfile',
+  '.json': 'application/json', '.mjs': 'text/javascript; charset=utf-8', '.csv': 'text/csv; charset=utf-8', '.zip': 'application/zip', '.png': 'image/png', '.svg': 'image/svg+xml', '.sdf': 'chemical/x-mdl-sdfile',
   '.mol': 'chemical/x-mdl-molfile', '.mol2': 'chemical/x-mol2', '.pdb': 'chemical/x-pdb', '.xyz': 'chemical/x-xyz',
   '.smi': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8', '.txt': 'text/plain; charset=utf-8',
 }
-const PANE = { '/': 'index.html', '/app.js': 'app.js', '/app.css': 'app.css' }
+const PANE = { '/app.js': 'app.js', '/app.css': 'app.css', '/torsion-pane.mjs': 'torsion-pane.mjs' }
 const VENDOR = { '3Dmol-min.js': join(here, 'node_modules/3dmol/build/3Dmol-min.js') }
 const STRUCTURE = new Set(['.sdf', '.mol', '.pdb', '.mol2'])
 
 function safe(rel) {
   const full = normalize(join(workspace, String(rel || '').replace(/^\/+/, '')))
-  return full === workspace || full.startsWith(workspace + sep) ? full : null
+  if (full !== workspace && !full.startsWith(workspace + sep)) return null
+  try { const real = realpathSync(full), root = realpathSync(workspace); return real === root || real.startsWith(root + sep) ? full : null } catch { return null }
 }
 function stat(full) { try { return statSync(full) } catch { return null } }
 function readJson(full) { try { return JSON.parse(readFileSync(full, 'utf8')) } catch { return null } }
 function send(res, code, body) {
   res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' })
   res.end(JSON.stringify(body))
+}
+function bodyBytes(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0, chunks = [], done = false
+    req.on('data', (chunk) => {
+      if (done) return
+      size += chunk.length
+      if (size > limit) { done = true; chunks = []; reject(Object.assign(new Error('The scan request exceeds 256 KB'), { code: 413 })); return }
+      chunks.push(chunk)
+    })
+    req.on('end', () => { if (!done) { done = true; resolve(Buffer.concat(chunks)) } })
+    req.on('error', reject)
+    req.on('aborted', () => reject(new Error('The scan request was interrupted')))
+  })
 }
 function file(req, res, full, { download = false, cache = false } = {}) {
   const st = full && stat(full)
@@ -100,6 +117,7 @@ function ask(op, payload) {
     setTimeout(() => { if (pending.delete(id)) reject(new Error('RDKit took longer than 60 s')) }, 60_000).unref()
   })
 }
+const torsions = createTorsionService({ workspace, ask })
 
 // ---- molecules ----------------------------------------------------------------------------------
 const described = new Map() // abs path → { key, promise }
@@ -169,7 +187,7 @@ function newestStructure() {
     let names; try { names = readdirSync(dir) } catch { return }
     for (const name of names) {
       if (name.startsWith('.') || ['node_modules', '__pycache__', '.venv', 'molecules'].includes(name)) continue
-      const full = join(dir, name); const s = stat(full); if (!s) continue
+      const full = safe(rel(join(dir, name))); const s = full && stat(full); if (!s || rel(full) === 'out/torsions') continue
       if (s.isDirectory()) walk(full, depth + 1)
       else if (STRUCTURE.has(extname(name).toLowerCase()) && !name.endsWith('.conformers.sdf') && (!best || s.mtimeMs > best.mtime)) best = { path: rel(full), mtime: s.mtimeMs }
     }
@@ -196,9 +214,28 @@ function molBlock(text) {
 }
 
 createServer(async (req, res) => {
+  const reject = (code, error) => { req.resume(); res.setHeader('connection', 'close'); send(res, code, { error }) }
   try {
     const url = new URL(req.url, `http://127.0.0.1:${port}`)
     const path = decodeURIComponent(url.pathname) // throws on a malformed escape: an answer, not a dead pane
+    if (![`127.0.0.1:${port}`, `localhost:${port}`].includes(req.headers.host)) { reject(403, 'Loopback requests only'); return }
+    if (path.startsWith('/api/torsion/') && req.method === 'POST') {
+      if (req.headers['x-torsion-token'] !== token || (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`)) { reject(403, 'Reload the pane before running a bond scan'); return }
+      if (Number(req.headers['content-length']) > 256 * 1024) { reject(413, 'The scan request exceeds 256 KB'); return }
+      let bytes
+      try { bytes = await bodyBytes(req, 256 * 1024) } catch (error) { if (!res.destroyed) reject(error.code || 400, error.message); return }
+      let input
+      try { input = JSON.parse(bytes) } catch { send(res, 400, { error: 'Invalid scan request' }); return }
+      try { send(res, 200, await torsions.calculate(path.split('/').at(-1), input)) }
+      catch (error) { send(res, [400, 404, 409].includes(error.code) ? error.code : 422, { error: error.message }) }
+      return
+    }
+    if (!['GET', 'HEAD'].includes(req.method)) { send(res, 405, { error: 'Method not allowed' }); return }
+    if (path === '/') {
+      const html = readFileSync(join(here, 'pane/index.html'), 'utf8').replace('__TORSION_TOKEN__', token)
+      res.writeHead(200, { 'content-type': TYPES['.html'], 'cache-control': 'no-store', 'content-length': Buffer.byteLength(html) }); res.end(req.method === 'HEAD' ? undefined : html); return
+    }
+    if (path === '/api/torsions') { send(res, 200, torsions.list()); return }
     if (PANE[path]) { file(req, res, join(here, 'pane', PANE[path])); return }
     if (path === '/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' })
@@ -235,7 +272,7 @@ try {
   watch(workspace, { recursive: true }, (_event, name) => {
     /* c8 ignore next */ // fs.watch may pass no filename where the platform gives none; macOS always names it
     const n = String(name ?? '').split(sep).join('/')
-    if (!n || n.startsWith('.harness') || n.includes('node_modules') || n.includes('__pycache__') || n.startsWith('.git/')) return
+    if (!n || n.startsWith('.harness') || n.includes('node_modules') || n.includes('__pycache__') || n.startsWith('.git/') || n === 'out' || n.startsWith('out/torsions')) return
     if (n.endsWith('.progress.json')) {
       const dirRel = dirname(n)
       setTimeout(() => broadcast('progress', { dir: dirRel, progress: progressIn(dirRel) }), 20)

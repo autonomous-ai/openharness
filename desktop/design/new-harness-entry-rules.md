@@ -38,15 +38,26 @@ Git show neither row. Discovery runs on the selected machine without fetching,
 switching branches, or creating a worktree. A failed discovery offers Retry and
 blocks starting until the result is known.
 
+A worktree is a temporary folder, never a project: a harness is known by its
+repository and branch. A folder inside a linked worktree (the focused pane's,
+or one typed or browsed) shows as the same folder in the repository's main
+checkout, on that checkout's branch, so Cmd-N from a worktree pane starts
+beside it rather than inside it. Pane headers name the repository, and
+worktrees Start made are never offered as recent projects.
+
 Branch selects the starting local or remote ref. With `[x]`, Start Harness
-creates a unique worktree and branch under `~/harnesses/worktrees`, keeping
-uncommitted source files intact. With `[ ]`, only local branches are selectable;
-Start Harness switches the existing folder using Git's normal protections.
-No changes are forced, stashed, or discarded. A selected subfolder follows into
-the new worktree only if it exists in that commit.
+creates branch `harness/<agent>-MMDD-HHMM` checked out in
+`~/harnesses/worktrees/<repository>/<agent>-MMDD-HHMM`, adding `-2`, `-3` only
+when that branch or folder is taken, and keeping uncommitted source files
+intact. With `[ ]`, only local branches are selectable; a branch that already
+has a worktree opens there, and any other branch switches the existing folder
+using Git's normal protections. No changes are forced, stashed, or discarded.
+A selected subfolder follows into the new worktree only if it exists in that
+commit.
 
 Drafts and advanced options preserve these choices. A lost start reply reuses
-its receipt, and retrying a confirmed launch failure reuses its prepared folder.
+its receipt, and retrying a confirmed launch failure reuses its prepared
+worktree: the retry selects that worktree's branch with Worktree off.
 
 ## Draft ownership
 

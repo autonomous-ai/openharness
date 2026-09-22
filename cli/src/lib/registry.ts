@@ -16,6 +16,7 @@
 import { DSH_ID_RE } from '../dsh/manifest.js'
 import { AGENT_NAME_RE } from './engineLaunch.js'
 import { namingTitle } from './sessionTitle.js'
+import { claudeProjectMatches, claudeTranscriptCwd, isClaudeProjectTranscript } from './claudeProject.js'
 import { automaticAgentName, engineLabel, isAutomaticName } from './agentNames.js'
 import {
   closeSync,
@@ -1018,7 +1019,10 @@ class Registry {
       existing.runtimes = mergeTerminalRuntimes(existing.runtimes, runtimes)
       existing.tmuxPane = tmuxProjection(existing.runtimes)
       existing.primaryRuntimeKey = selectedRuntimeKey(existing.runtimes, input.primaryRuntimeKey || existing.primaryRuntimeKey)
-      existing.cwd = input.cwd ?? existing.cwd
+      // The pane's current path follows a terminal tile around until an engine session is bound to
+      // it; from then on the bind owns the folder (see `register`), and a pane re-observed in the
+      // subfolder its engine `cd`'d into must not move the row there.
+      if (!existing.sessionId || !existing.cwd) existing.cwd = input.cwd ?? existing.cwd
       existing.processIdentity = processIdentity
       existing.active = true
       if (existing.launch && !existing.resumeOnly) existing.launch = { state: 'ready' }
@@ -1318,10 +1322,18 @@ class Registry {
     // "the agent did not accept this message" and produced no recap. Its layout is deterministic, so derive
     // the path rather than wait to be told. A file that does not exist yet is fine — the watcher starts at
     // offset 0 and chokidar fires when it appears.
+    // WHOSE cwd this bind takes. A re-register of the session the row already holds (every
+    // UserPromptSubmit; the SessionStart a resume gets for the row it was opened into) keeps the row's:
+    // Claude reports its tracked SHELL directory, which follows every Bash `cd`, and a row that took
+    // it each time drifted into subfolders, sibling repos and temp dirs — then the next resume,
+    // restore or restart `cd`'d there and ran the engine in the wrong project. A first bind or a
+    // rotation takes the hook's — that is what gives a terminal-turned-claude row its folder at all.
+    const sameSession = !!existing && existing.sessionId === sessionId
+    const baseCwd = sameSession ? existing.cwd ?? input.cwd ?? null : input.cwd ?? existing?.cwd ?? null
     const derived = !transcriptPath && engine === 'commandcode'
-      ? commandcodeTranscriptPath(input.cwd ?? existing?.cwd, sessionId)
-      : !transcriptPath && engine === 'grok' && (input.cwd ?? existing?.cwd)
-        ? join(env.GROK_HOME, 'sessions', encodeURIComponent((input.cwd ?? existing?.cwd)!), sessionId, 'updates.jsonl')
+      ? commandcodeTranscriptPath(baseCwd ?? undefined, sessionId)
+      : !transcriptPath && engine === 'grok' && baseCwd
+        ? join(env.GROK_HOME, 'sessions', encodeURIComponent(baseCwd), sessionId, 'updates.jsonl')
         // agy's layout is deterministic from the conversation id alone, and its `PreInvocation` hook can
         // land before the first line is flushed — derive rather than wait a turn for the path.
         : !transcriptPath && engine === 'agy'
@@ -1332,6 +1344,15 @@ class Registry {
             ? copilotTranscriptPath(env.COPILOT_HOME, sessionId)
             : null
     const effectiveTranscriptPath = transcriptPath ?? existing?.transcriptPath ?? derived ?? null
+    // Even a first bind can carry a drifted cwd (a fork inherits its source's; `claude --resume` typed
+    // from a subfolder). Claude's transcript never moves from the project dir it was started in, so a
+    // cwd that does not round-trip to that directory name is not this session's folder — the row's own
+    // is kept when it does, else the transcript names the folder itself (claudeProject.ts).
+    const cwd = !sameSession && engine === 'claude' && effectiveTranscriptPath && input.cwd
+        && isClaudeProjectTranscript(effectiveTranscriptPath) && !claudeProjectMatches(input.cwd, effectiveTranscriptPath)
+      ? (existing?.cwd && claudeProjectMatches(existing.cwd, effectiveTranscriptPath) ? existing.cwd
+        : claudeTranscriptCwd(effectiveTranscriptPath) ?? input.cwd)
+      : baseCwd
     const entry: RegisteredSession = {
       schemaVersion: 2,
       active: existing?.active ?? true,
@@ -1358,11 +1379,11 @@ class Registry {
       defaultName: existing?.defaultName,
       transcriptPath: effectiveTranscriptPath,
       projectDir: engine === 'grok' || engine === 'agy' || engine === 'copilot'
-        ? basename(input.cwd ?? existing?.cwd ?? '') || sessionId
+        ? basename(cwd ?? '') || sessionId
         : effectiveTranscriptPath
         ? basename(dirname(effectiveTranscriptPath))
-        : basename(input.cwd ?? existing?.cwd ?? '') || sessionId,
-      cwd: input.cwd ?? existing?.cwd ?? null,
+        : basename(cwd ?? '') || sessionId,
+      cwd,
       runtimes: mergeTerminalRuntimes(existing?.runtimes ?? [], inputRuntimes),
       primaryRuntimeKey: '',
       tmuxPane: '',
@@ -1645,6 +1666,17 @@ class Registry {
 
   /** Fill in the Codex profile a row did not know (discovery read it off the live process). Never
    *  replaces one it already has — the profile is chosen once, see `codexHome`. */
+  /** Put a row back in the folder its transcript belongs to (cwdRepair.ts). Any engine, any value:
+   *  the caller has already proved the new folder from the transcript. */
+  setCwd(agentId: string, cwd: string): boolean {
+    const session = this.agents.get(agentId)
+    if (!session || session.cwd === cwd) return false
+    session.cwd = cwd
+    session.updatedAt = Date.now()
+    this.save()
+    return true
+  }
+
   setCodexHome(agentId: string, codexHome: string): boolean {
     const session = this.agents.get(agentId)
     if (!session || session.engine !== 'codex' || session.codexHome) return false

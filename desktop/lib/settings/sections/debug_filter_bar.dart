@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../../shared/theme/app_theme.dart';
 import '../../shared/widgets/toolbar_pill.dart';
@@ -81,14 +80,11 @@ class _LensLabel extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          lens.label,
-          style: terminalTextStyle(fontWeight: AppFont.medium, color: ink),
-        ),
+        Text(lens.label, style: AppType.label(color: ink)),
         const SizedBox(width: 6),
         Text(
           '${lens.count}',
-          style: terminalTextStyle(
+          style: AppType.monoMeta(
             fontWeight: AppFont.medium,
             color: lens.selected
                 ? ink

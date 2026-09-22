@@ -23,7 +23,7 @@ The app it runs now lives under `lib/`, in the same folders the desktop app uses
 | | |
 |---|---|
 | `lib/core/` | models, config, platform, file store, crash log |
-| `lib/state/` | `AppNotifier` — machines, agents, connections, panes |
+| `lib/state/` | `AppNotifier` — machines, agents, connections, panes, the account's desk |
 | `lib/api/`, `lib/ws/` | REST to the backend, and the relay socket per machine |
 | `lib/auth/`, `lib/viewer/` | SSO, device linking, and the viewer's stand-ins for the harness CLI |
 | `lib/e2ee/` | the end-to-end encryption this app terminates itself |
@@ -38,6 +38,36 @@ Two folders are this package's own, and have no counterpart on the desktop:
 - **`lib/p2p/`** — the phone's second wire to each machine. The `terminal-v1` WebRTC data channel the
   harness CLI opens with werift on the desktop's behalf, so a terminal rides p2p or TURN when it can
   and the relay only when it must.
+
+## The account's tabs are the desk's, here too
+
+The tabs a person has are one document per account on the backend (`/api/desk`), the same on every
+computer they sign in on. The desktop owns its half of that in `desktop/lib/state/desk_sync.dart`,
+which is **vendored here unchanged**; `lib/state/phone_desk.dart` is this package's own other half,
+and it is deliberately not the window's:
+
+- A window's tabs ARE its `swarms`, so the desktop diffs that projection after every layout change.
+  A phone's `swarms` are not tabs — they are where the pager attaches the agents either side of the
+  one on screen — so nothing here is projected onto the desk.
+- The phone reads the tabs, follows them (`desk_changed` rides each machine's relay socket, since a
+  phone holds no adapter socket of its own), and writes exactly twice: an agent created here joins
+  the tab the phone is in, and one deleted here leaves every tab that held it.
+- Which tab is open, and where you were inside it, stay on the device — as they do per window.
+
+What the person sees of it is one mark beside `⋯` in the terminal's header, which brings a panel up
+from the bottom (`lib/phone/desk_tabs_popup.dart`): the tabs as a row of names, and the agents of
+the one picked as a list of rows under it — the Agents tab's own rows. A name changes the list and
+nothing else, so another tab can be read into without leaving the terminal you are in; a row is
+what opens an agent. The swipe then walks
+that tab's agents rather than the whole account (`lib/phone/desk_groups.dart`).
+
+**The terminal keeps the screen**: a rail of tabs standing across the top was tried and taken out —
+it cost a line and a half of somebody's session, all day, for a choice made a few times a day.
+
+The tabs are re-read every 15s while the app is in the foreground (`PhoneDesk.pollInterval`), and
+that is not belt-and-braces here: `desk_changed` reaches a phone only over a machine's relay socket,
+so a backend that does not forward it, or a moment with no machine connected, delivers nothing at
+all.
 
 ## It is a VIEWER build, always
 

@@ -9,7 +9,6 @@ import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_commands.dart';
 import '../terminal/terminal_text.dart';
-import 'box_chrome.dart';
 
 /// A quiet terminal welcome. Opening a command is always an explicit action.
 class WorkspaceWelcome extends StatefulWidget {
@@ -51,10 +50,13 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     final accent = hasArtwork || Theme.of(context).brightness == Brightness.dark
         ? const Color(0xffa5d786)
         : const Color(0xff356522);
-    final style = boxMonoStyle(
+    // The page stands where a terminal will, so it is set like one: the
+    // terminal's face at the terminal's size, following ⌘+ and ⌘−.
+    final style = terminalTextStyle(
       color: ink,
-      weight: FontWeight.w400,
-    ).copyWith(height: 1.5);
+      fontWeight: FontWeight.w400,
+      height: 1.5,
+    );
     final keymap = KeymapTheme.of(context)?.current ?? harnessDefaultKeymap;
     final rows = [
       for (final (command, label, description) in _actions)

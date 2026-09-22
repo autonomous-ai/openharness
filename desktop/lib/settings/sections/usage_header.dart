@@ -2,12 +2,12 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../../terminal/terminal_text.dart';
+import '../../shared/theme/app_type.dart';
 import '../../shared/widgets/app_select_field.dart';
 import '../../usage/ledger/usage_report.dart';
 
 double usageControlWidth(BuildContext context, double width) =>
-    math.max(width, width * terminalTextScaleOf(context));
+    math.max(width, width * appTextScaleOf(context));
 
 /// Keep the controls together, below the caption when larger text needs room.
 class UsageHeader extends StatelessWidget {

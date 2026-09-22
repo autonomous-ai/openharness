@@ -8,11 +8,14 @@ import 'package:harness_mobile/state/app_state.dart';
 import 'agent_index.dart';
 import 'phone_header.dart';
 import 'phone_navigation.dart';
+import 'phone_destination.dart';
+import 'phone_search_catalog.dart';
 import 'phone_search_field.dart';
 import 'phone_search_groups.dart';
-import 'phone_search_index.dart';
 import 'phone_search_rank.dart';
+import 'phone_search_results.dart';
 import 'phone_search_row.dart';
+import 'resume_agent.dart';
 import 'phone_status.dart';
 import 'status_pill.dart';
 
@@ -51,6 +54,11 @@ class _AgentsListPageState extends State<AgentsListPage> {
   final _focus = FocusNode(debugLabel: 'Agents list search');
   String _query = '';
 
+  /// This screen rebuilds on every turn event — it watches the notifier AND the
+  /// preview store — so the catalog behind it must not be re-derived each time.
+  /// See [PhoneSearchCatalogCache].
+  final _catalog = PhoneSearchCatalogCache();
+
   @override
   void initState() {
     super.initState();
@@ -77,7 +85,13 @@ class _AgentsListPageState extends State<AgentsListPage> {
     listenable: _changes,
     builder: (context, _) {
       AppTheme.watch(context);
-      final all = phoneSearchIndex(widget.notifier);
+      // Agents only: this screen groups by machine and has a Machines tab of
+      // its own, so the catalog's machine and project rows would be two ways to
+      // the same place stacked on one screen.
+      final all = [
+        for (final row in _catalog.read(widget.notifier))
+          if (row.isAgent) row,
+      ];
       return Scaffold(
         backgroundColor: AppPalette.windowBg,
         // The keyboard only comes up if the field is tapped, but when it does the list must shrink
@@ -102,6 +116,9 @@ class _AgentsListPageState extends State<AgentsListPage> {
                   controller: _controller,
                   focus: _focus,
                   autofocus: false,
+                  // This field filters the list below it; it is not the door to
+                  // the modes, which [PhoneSearchPage] carries.
+                  hintText: 'Search agents',
                   onChanged: (value) => setState(() => _query = value),
                   onClear: () {
                     _controller.clear();
@@ -126,7 +143,7 @@ class _AgentsListPageState extends State<AgentsListPage> {
   );
 }
 
-class _Body extends StatelessWidget {
+class _Body extends StatefulWidget {
   const _Body({
     required this.notifier,
     required this.all,
@@ -138,18 +155,38 @@ class _Body extends StatelessWidget {
   /// Every agent, most recently active first — see [recentAgents] for why recency and not the
   /// tabs' fixed order: this screen is opened to REACH one agent, and the one reached for is
   /// overwhelmingly the one that just finished.
-  final List<PhoneSearchResult> all;
+  final List<PhoneDestination> all;
 
   /// Trimmed; empty means the whole list.
   final String query;
 
   @override
+  State<_Body> createState() => _BodyState();
+}
+
+class _BodyState extends State<_Body> {
+  /// The row whose agent is being brought back — see [_open]. One at a time, so
+  /// a second tap cannot start a second restart.
+  String? _resuming;
+
+  AppNotifier get notifier => widget.notifier;
+
+  @override
   Widget build(BuildContext context) {
+    final all = widget.all;
+    final query = widget.query;
     if (all.isEmpty) return _empty();
     // The same ranking [PhoneSearchPage] applies, so an agent found by a word here is the agent
     // that word finds there. Grouping happens after: ranking decides the order the rows arrive in,
     // and [phoneMachineGroups] preserves it — so the best match still heads the first group.
-    final rows = query.isEmpty ? all : rankPhoneSearch(all, query);
+    final rows = query.isEmpty
+        ? all
+        : rankPhoneDestinations(
+            all,
+            query,
+            recent: notifier.searchHistory.recent,
+            previews: notifier.sessionPreviews,
+          );
     if (rows.isEmpty) {
       return EmptyState.noMatches(
         compact: false,
@@ -180,10 +217,10 @@ class _Body extends StatelessWidget {
               row: row,
               terms: terms,
               now: now,
-              // The header above named the machine and nothing else, so the row still owes the
-              // folder — and must not repeat the machine.
-              place: PhoneRowContext.machined,
-              onTap: () => _open(context, drawn, row),
+              openable: (row.entry?.isOpenable ?? false) && _resuming == null,
+              resuming: _resuming == row.id,
+              quote: phoneContentSnippet(row, terms, notifier.sessionPreviews),
+              onTap: () => _open(drawn, row),
             ),
         ],
       ],
@@ -201,21 +238,37 @@ class _Body extends StatelessWidget {
     message: notifier.machines.isEmpty
         ? 'Link a machine and its agents will be listed here.'
         : 'Agents appear here once a machine is linked and answering. '
-              'Start one from a machine, or from OpenHarness on it.',
+              'Start one from a machine, or from Harness on it.',
   );
 
-  /// Opens the agent as a pager over the other rows on screen.
-  void _open(
-    BuildContext context,
-    List<PhoneSearchResult> drawn,
-    PhoneSearchResult row,
-  ) {
+  /// Opens the agent as a pager over the other rows on screen, resuming stopped
+  /// work first — the same [resumeAgentForOpen] the search uses, so tapping the
+  /// same agent on either screen does the same thing.
+  Future<void> _open(
+    List<PhoneDestination> drawn,
+    PhoneDestination row,
+  ) async {
     // The keyboard goes away with the screen rather than a frame after it, so the push does not
     // animate over a collapsing inset. [PhoneSearchRow] does this for its own tap; a row opened
     // by any other path still has to.
     FocusManager.instance.primaryFocus?.unfocus();
     final entry = row.entry;
-    if (entry == null || !entry.agent.terminalAvailable) return;
+    if (entry == null) return;
+    if (entry.agent.isStopped) {
+      setState(() => _resuming = row.id);
+      final error = await resumeAgentForOpen(notifier, entry);
+      if (!mounted) return;
+      setState(() => _resuming = null);
+      if (error != null) {
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(SnackBar(content: Text(error)));
+        return;
+      }
+    } else if (!entry.agent.terminalAvailable) {
+      return;
+    }
+    if (!mounted) return;
     openAgentPager(context, notifier, phoneSearchAgentEntries(drawn), entry);
   }
 }
@@ -248,7 +301,7 @@ class _MachineHeader extends StatelessWidget {
           // ⚠️ [Flexible] and no [Spacer]. Both take what is left over, so the two together split
           // it — a long machine name would give up half its width to blank space instead of
           // running on and ellipsing. The count is pushed right by this being the only flexible
-          // child, the way [PhoneSearchFolderHeader] does it.
+          // child.
           Flexible(
             child: Text(
               group.machineName.toUpperCase(),

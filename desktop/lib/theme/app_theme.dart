@@ -58,7 +58,8 @@ abstract final class AppColors {
       grid.AppTheme.pick(const Color(0xFFB3261E), const Color(0xFFF2544B));
 }
 
-/// Legacy names resolve to the single Terminal font preference.
+/// The app's two faces, as [grid.AppFont] names them: system sans for the UI,
+/// the terminal's face for terminal chrome and copyable strings.
 abstract final class AppFonts {
   static String get sans => grid.AppFont.sans;
   static List<String> get sansFallback => grid.AppFont.sansFallback;

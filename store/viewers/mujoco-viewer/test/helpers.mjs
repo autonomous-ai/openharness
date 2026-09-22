@@ -49,14 +49,14 @@ export function removeTree(root) {
  * The viewer on a free port. `via: 'sh'` runs viewer.sh, as Harness does; otherwise node runs
  * viewer.mjs with the test preload. `env` values of null remove the variable.
  */
-export async function startViewer({ env = {}, via = 'node' } = {}) {
+export async function startViewer({ env = {}, via = 'node', entry = VIEWER } = {}) {
   const port = await freePort()
   const merged = { ...process.env, PATH: `${dirname(process.execPath)}:${process.env.PATH}`, HARNESS_VIEWER_PORT: String(port) }
   for (const key of ['HARNESS_DSH_DIR', 'MENAGERIE', 'TEST_TIMERS', 'TEST_WATCH']) delete merged[key]
   for (const [key, value] of Object.entries(env)) { if (value === null) delete merged[key]; else merged[key] = value }
   const child = via === 'sh'
     ? spawn(join(PACKAGE, 'viewer.sh'), [], { env: merged, stdio: ['ignore', 'pipe', 'pipe'] })
-    : spawn(process.execPath, ['--import', PRELOAD, VIEWER], { env: merged, stdio: ['ignore', 'pipe', 'pipe'] })
+    : spawn(process.execPath, ['--import', PRELOAD, entry], { env: merged, stdio: ['ignore', 'pipe', 'pipe'] })
   let out = ''
   child.stdout.on('data', (d) => { out += d })
   child.stderr.on('data', (d) => { out += d })
