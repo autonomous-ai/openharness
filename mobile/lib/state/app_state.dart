@@ -2548,8 +2548,7 @@ class AppNotifier extends ChangeNotifier {
       final updater = desktopUpdater ?? DesktopUpdater();
       final staged = await updater.downloadAndStage(info);
       if (staged == null) {
-        updateError =
-            'Could not download and verify Harness ${info.version}.';
+        updateError = 'Could not download and verify Harness ${info.version}.';
         return false;
       }
       final applied = await updater.applyStaged(staged, selfPid: pid);
@@ -5196,28 +5195,20 @@ class AppNotifier extends ChangeNotifier {
     await selectAgent(machineId, agentId);
   }
 
-  /// Look at [agentId], opening its terminal if it has none.
+  /// Open [agentId] on this phone, taking its terminal.
   ///
-  /// ⚠️ **Looking is not taking.** The daemon keeps ONE controller per agent, so every
-  /// `terminal_open` this sends is a claim — and going to an agent another app is driving used to
-  /// be enough to pull the terminal out from under it: swiping past an agent open on the desktop
-  /// took it, every time, for as long as it took to swipe past. Arriving somewhere is not asking
-  /// for it. So this opens POLITELY (see [TerminalSession.takeover]) and a terminal somebody else
-  /// holds stays theirs; the page shows it as taken over, with the way in beside the words.
+  /// ⚠️ **Arriving IS the claim.** The daemon keeps ONE controller per agent, so every
+  /// `terminal_open` this sends takes the terminal from whoever held it — the desktop included.
+  /// That is the point: a phone is picked up to type at an agent, and asking politely first put a
+  /// read-only stream and a "Take control" band in front of every agent a desktop had open,
+  /// including the one the app opens on.
   ///
-  /// [takeControl] is that way in, and the only thing that sets it is a person pressing "Take
-  /// control" — see `phoneReclaimAction`. It is the one gesture that means the claim, rather than
-  /// merely arriving where the claim could be made.
+  /// The displaced app is told who took it and has the same one press back; the phone's own band
+  /// is for exactly that case, a terminal taken back off this device — see `phoneReclaimAction`.
   ///
-  /// A machine whose CLI predates the key cannot be asked politely — it takes over regardless — so
-  /// on one of those NOTHING here opens a terminal except a press: arriving at an agent leaves the
-  /// tile empty rather than taking a terminal the desktop may be working in, and the button is
-  /// what opens it. See [_attachSession] and [MachineState.terminalNoTakeoverAvailable].
-  Future<void> selectAgent(
-    String machineId,
-    String agentId, {
-    bool takeControl = false,
-  }) async {
+  /// The one open that stays polite is [warmAgentPane]'s guess about the next swipe, which is
+  /// nobody arriving anywhere. See [_attachSession].
+  Future<void> selectAgent(String machineId, String agentId) async {
     final existing = paneOfAgent(machineId, agentId);
     if (existing != null) {
       selectedMachineId = machineId;
@@ -5233,36 +5224,29 @@ class AppNotifier extends ChangeNotifier {
       }
       final terminal = existing.session;
       if (terminal != null) {
-        // A press arms the NEXT open, and only that one: the flag is lowered again the moment an
-        // open it armed is answered (see the `terminal_ready` branch of `TerminalSession`), so a
-        // claim cannot outlive the press that made it and come back as a reconnect hours later.
-        //
-        // Arriving is never a claim, so anything else lowers it — but not out from under an open
-        // already in flight or a stream being held, where lowering it mid-stream would hand the
-        // terminal to a reconnect.
-        if (takeControl) {
-          terminal.takeover = true;
-        } else if (!terminal.holdsTerminal) {
-          terminal.takeover = false;
-        }
+        // Arming the NEXT open, and only that one: the flag is lowered again the moment an open it
+        // armed is answered (see the `terminal_ready` branch of `TerminalSession`), so a claim
+        // cannot outlive the arrival that made it and come back as a reconnect hours later. Coming
+        // back to the agent raises it again, because that is another arrival.
+        terminal.takeover = true;
       }
       if (terminal == null) {
         // The pane wanted this agent before `_attachSession` could actually attach it (the agent's
         // terminal wasn't verified yet, the machine was briefly offline, ...). Nothing else retries a
         // null session on its own — see `_attachPendingPanes` — so a click here has to.
-        await _attachSession(existing, takeControl: takeControl);
-      } else if (takeControl && terminal.watching) {
+        await _attachSession(existing);
+      } else if (terminal.watching) {
         // ⚠️ **The one reopen that replaces a perfectly live stream.** A watcher renders the
         // terminal without holding it (see [TerminalSession.watching]), so by every other measure
         // here it is healthy — `controlling`, with a stream id — and the branches below would
-        // leave it alone. The press is a request for the KEYBOARD, and the only way to ask for it
-        // is a fresh open that takes the lease. Its retained output stays on screen meanwhile.
+        // leave it alone. What this page wants is the KEYBOARD, and the only way to ask for it is
+        // a fresh open that takes the lease. Its retained output stays on screen meanwhile.
         if (!_canAttachPane(existing)) return;
         await terminal.reopen(force: true);
       } else if (terminal.status == TerminalSessionStatus.takenOver) {
-        // Somebody else is driving it. Only the press reopens — see [takeControl]. Arriving here
-        // leaves it exactly as it is, which is what the button in the header is FOR.
-        if (!takeControl || !_canAttachPane(existing)) return;
+        // Somebody else took it while this page held it. Arriving back on the page asks for it
+        // again — the same open the band's button makes.
+        if (!_canAttachPane(existing)) return;
         await terminal.reopen();
       } else if (terminal.status != TerminalSessionStatus.opening &&
           terminal.status != TerminalSessionStatus.controlling &&
@@ -5274,7 +5258,7 @@ class AppNotifier extends ChangeNotifier {
       }
       return;
     }
-    await addAgentToSwarm(machineId, agentId, takeControl: takeControl);
+    await addAgentToSwarm(machineId, agentId, takeControl: true);
   }
 
   /// Opens [agentId]'s stream for a tile nobody is looking at yet — the phone's
@@ -5294,19 +5278,18 @@ class AppNotifier extends ChangeNotifier {
   /// `_paneNeedsAttach` exists to avoid, and a page nobody is looking at has no
   /// business starting it.
   ///
-  /// ⚠️ **Never takes a terminal another app is driving** — like every other
-  /// open the phone makes now (see [selectAgent]); the machine answers only if
-  /// the terminal is free. The tile then sits as `takenOver`, a dead end
-  /// nothing retries, and landing on it changes nothing: only a person pressing
-  /// "Take control" claims a terminal somebody else holds.
+  /// ⚠️ **The one open that never takes a terminal another app is driving.**
+  /// Landing on an agent claims it (see [_attachSession]); this is a guess
+  /// about the next swipe, and a guess must cost the desktop nothing. The
+  /// machine answers only if the terminal is free; otherwise the tile sits as
+  /// `takenOver` until a person actually arrives on it, and arriving is what
+  /// claims it.
   ///
   /// ⚠️ **Nothing is opened at all on an OLDER machine.** A CLI that predates
   /// the key ignores it and takes the terminal over like any other open — so on
-  /// such a machine this guess would cost the desktop its terminal silently,
-  /// which is the one thing it must never do. [_attachSession] refuses there
-  /// for every caller now, a press excepted; this returns first only to avoid
-  /// building a tile for a stream that would be refused a line later. See
-  /// [MachineState.terminalNoTakeoverAvailable].
+  /// such a machine the politeness above is not available, and a guess there
+  /// would cost the desktop its terminal with nobody having arrived anywhere.
+  /// See [MachineState.terminalNoTakeoverAvailable].
   Future<void> warmAgentPane(String machineId, String agentId) async {
     if (_disposed) return;
     if (machineStates[machineId]?.terminalNoTakeoverAvailable != true) return;
@@ -5331,7 +5314,7 @@ class AppNotifier extends ChangeNotifier {
     // Told, so the parked page for this agent builds its panel — which is what
     // measures the viewport `_attachSession` is about to wait for.
     notifyListeners();
-    await _attachSession(pane);
+    await _attachSession(pane, takeControl: false);
   }
 
   /// Show a MACHINE in the grid, for the states that belong to the machine
@@ -5524,9 +5507,19 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
+  /// ⚠️ **Every session built here CLAIMS the terminal** — [takeControl] is
+  /// true unless the caller is a guess about where the thumb goes next
+  /// ([warmAgentPane]), and nothing else opens a stream.
+  ///
+  /// The phone used to ask politely and land on a read-only stream with a "Take
+  /// control" band over it, which is what opening the app looked like whenever
+  /// a desktop had the agent — a band, an empty terminal, and a press before a
+  /// single key could be typed. A phone is picked up to type at an agent, so
+  /// arriving IS the claim now; the desktop it displaces says who took it and
+  /// has the same button back.
   Future<void> _attachSession(
     TerminalPane pane, {
-    bool takeControl = false,
+    bool takeControl = true,
   }) async {
     if (_disposed || !allPanes.contains(pane) || pane.session != null) return;
     final wantedAgentId = pane.agentId;
@@ -5535,29 +5528,6 @@ class AppNotifier extends ChangeNotifier {
     if (machine == null) return;
     if (machine.nodeOnline == false) return;
     if (!machine.terminalCapabilityAvailable) return;
-    // ⚠️ **On a machine that cannot be asked politely, only a press may open at all.**
-    //
-    // `takeover: false` is the whole of the phone's politeness, and a CLI that predates the key
-    // ignores it and takes the terminal over like any other open. So on such a machine EVERY open
-    // is a takeover, whatever this was called with — and the ones that are not a press (a tile
-    // restored at launch, a page swiped onto, a machine coming back online) would take the
-    // desktop's terminal silently, which is the one thing that must never happen.
-    //
-    // [warmAgentPane] already refused to guess here. This is the same refusal, moved to the one
-    // place every session is built, so no caller can reach a silent takeover by another route.
-    // A press still opens: that IS a person asking, and it is the only thing that is.
-    //
-    // Marked rather than merely refused, so the page can offer the press instead of sitting on
-    // "Attaching…" — a null session says nothing about WHY on its own. See
-    // [TerminalPane.heldForTakeControl].
-    if (!takeControl && !machine.terminalNoTakeoverAvailable) {
-      if (!pane.heldForTakeControl) {
-        pane.heldForTakeControl = true;
-        notifyListeners();
-      }
-      return;
-    }
-
     Agent? agent;
     for (final candidate in machine.agents) {
       if (candidate.id == wantedAgentId) {
@@ -5566,11 +5536,6 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     if (agent == null || !agent.terminalAvailable) return;
-    // Cleared only once this is certain to build a session. Cleared any earlier, a press that
-    // fell out above (the agent withdrawn between the tap and here) would leave the tile with no
-    // session AND no mark — which the page reads as "attaching", forever, with the button that is
-    // its only way forward now gone.
-    pane.heldForTakeControl = false;
 
     final terminal = TerminalSession(
       machineId: pane.machineId,
@@ -5602,15 +5567,10 @@ class AppNotifier extends ChangeNotifier {
         await connection.forceReconnect();
         return true;
       },
-      // ⚠️ **Opening is not taking.** The only thing that claims a terminal another app is
-      // driving is a person pressing "Take control" ([selectAgent]'s `takeControl`). Everything
-      // else — a warm tile the pager opened ahead of the thumb, a page swiped to, a tile restored
-      // at launch — asks for the terminal only if it is FREE, and is told no otherwise. See
-      // [TerminalSession.takeover].
-      //
-      // A machine whose CLI predates the key ignores it and takes over anyway; nothing is opened
-      // AHEAD of a person there at all (see [warmAgentPane]), so what reaches this line on such a
-      // machine is a tile somebody is looking at.
+      // ⚠️ **Opening IS taking, for everything a person does.** A page opened, swiped onto or
+      // restored at launch claims the terminal; the one open that still asks politely is the warm
+      // tile the pager builds ahead of the thumb, which is a guess and must not cost the desktop
+      // anything. See [TerminalSession.takeover] and [warmAgentPane].
       takeover: takeControl,
     );
     pane.session = terminal;

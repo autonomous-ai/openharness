@@ -207,13 +207,11 @@ class TerminalPaneHeader extends StatelessWidget {
                         message: status.detail,
                         child: TextButton(
                           onPressed: canReconnect
-                              // The press is the claim: nothing else takes a
-                              // terminal another app holds. See
+                              // Opening it again is the claim — see
                               // [AppNotifier.selectAgent].
                               ? () => notifier.selectAgent(
                                   session.machineId,
                                   session.agentId,
-                                  takeControl: true,
                                 )
                               : null,
                           style: TextButton.styleFrom(

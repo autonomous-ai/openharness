@@ -183,16 +183,16 @@ class TerminalSession extends ChangeNotifier {
   /// for a terminal that is FREE, and is answered `CONTROL_LEASE_HELD` while anyone else holds it.
   ///
   /// Read by every open this session sends, its own recoveries included, so a polite session never
-  /// turns into a takeover behind a reconnect. The ONLY thing that sets it is a person pressing
-  /// "Take control" (`AppNotifier.selectAgent`'s `takeControl`) — arriving on a page does not, and
-  /// a refusal that arrives after a press asks again, properly — see the `terminal_error` branch of
-  /// [handleFrame].
+  /// turns into a takeover behind a reconnect. What raises it is a person ARRIVING on the agent —
+  /// `AppNotifier.selectAgent`, whether that is the app opening, a swipe landing, a card in the
+  /// tabs panel or the "Take control" band — and a refusal that arrives after one asks again,
+  /// properly: see the `terminal_error` branch of [handleFrame].
   ///
-  /// ⚠️ **A press arms ONE open.** Lowered again as soon as an open it armed is answered (the
+  /// ⚠️ **An arrival arms ONE open.** Lowered again as soon as an open it armed is answered (the
   /// `terminal_ready` branch of [handleFrame]), because by then the claim has become a lease this
-  /// session holds and later opens rest on holding it. Left standing it would outlive the press:
+  /// session holds and later opens rest on holding it. Left standing it would outlive the arrival:
   /// a phone in a pocket reconnecting hours later would take the terminal off whoever had it by
-  /// then, which is the silent takeover a press is meant to be the only cause of.
+  /// then, with nobody having picked the phone up at all.
   ///
   /// ⚠️ Only meaningful against a daemon that advertises `noTakeover`: an older one ignores the key
   /// and takes over regardless. The caller checks — `MachineState.terminalNoTakeoverAvailable`.

@@ -116,16 +116,10 @@ PhoneSummary phoneAgentSummary(MachineState machine, Agent agent) {
 /// page opens before the pane has one.
 /// [takerName]: who took the terminal, when known ([phoneTakerName]) — the
 /// dot's tooltip then says "Taken over by Mac mini" rather than just that it was.
-/// [held]: nothing is attaching, on purpose — see `TerminalPane.heldForTakeControl`. "Attaching…"
-/// is what a null session normally means, and it would be a promise nothing is going to keep.
 PhoneSummary phoneSessionSummary(
   TerminalSession? session, {
   String? takerName,
-  bool held = false,
 }) {
-  if (held && session == null) {
-    return (label: 'Not connected', tone: PhoneTone.attention);
-  }
   // ⚠️ Checked BEFORE the status, because a watcher's status is `controlling` — it holds a live
   // stream and renders every byte; what it does not hold is the terminal. "Live" would promise a
   // prompt that ignores typing. See [TerminalSession.watching].
@@ -164,20 +158,10 @@ String? phoneTakerName(
 
 /// The one line under the header while another client drives this terminal —
 /// the desktop's banner, at phone size. Null in every other state.
-/// [held]: nothing has been opened here at all, so nobody "took" anything — the line says why the
-/// terminal is not on screen and what the button will do. See `TerminalPane.heldForTakeControl`.
-String? phoneTakeoverNotice(
-  TerminalSession? session,
-  String? takerName, {
-  bool held = false,
-}) {
-  if (held && session == null) {
-    return 'Opening this terminal would take it from another app';
-  }
-  return session?.status == TerminalSessionStatus.takenOver
-      ? '${takerName ?? 'Another app'} took control of this terminal'
-      : null;
-}
+String? phoneTakeoverNotice(TerminalSession? session, String? takerName) =>
+    session?.status == TerminalSessionStatus.takenOver
+    ? '${takerName ?? 'Another app'} took control of this terminal'
+    : null;
 
 /// The way back into a session this device is not driving, or is no longer
 /// driving — and what the button offers to do about it.
@@ -189,15 +173,7 @@ String? phoneTakeoverNotice(
 /// The desktop puts the same two words on the same two states, in the tile
 /// header it draws (`widgets/terminal_panel.dart`); a phone hides that header
 /// and draws its own, which is how the way out went missing here.
-/// [held]: the tile has no session because opening one would have taken the terminal — an older
-/// CLI, where every open is a takeover, so nothing but a press may open at all. See
-/// `TerminalPane.heldForTakeControl`.
-PhoneSummary? phoneReclaimAction(TerminalSession? session, {bool held = false}) {
-  // Before the status switch: there is no session to read one off, and "Attaching…" is exactly
-  // the wrong thing to say about a tile that is deliberately not attaching.
-  if (held && session == null) {
-    return (label: 'Take control', tone: PhoneTone.attention);
-  }
+PhoneSummary? phoneReclaimAction(TerminalSession? session) {
   // A watcher is the ordinary way onto an agent another app is driving: output is already on
   // screen, and this is the button that asks for the keyboard. See [TerminalSession.watching].
   if (session != null && session.watching) {
