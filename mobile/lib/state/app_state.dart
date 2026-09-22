@@ -547,6 +547,29 @@ class AppNotifier extends ChangeNotifier {
   /// The tab the screen has worked out it is showing — see [PhoneDesk.note].
   void noteDeskTab(String? tabId) => _desk.note(tabId);
 
+  /// Whether the desk can be WRITTEN to — what the two `+`s on the tabs panel
+  /// are drawn on. False before the first read answers, and on a backend with
+  /// no desk at all: a `+` there would queue ops nothing will ever take.
+  bool get deskWritable => _desk.enabled;
+
+  /// An agent that already exists joins the tab the person picked — the `+` at
+  /// the foot of a tab's list. See [PhoneDesk.addToTab].
+  void addAgentToDeskTab(String tabId, AgentRef agent) =>
+      _desk.addToTab(tabId, agent);
+
+  /// An agent that already exists opens a tab of its own — the `+` on the tab
+  /// row. See [PhoneDesk.createTabFor].
+  String? createDeskTabFor(AgentRef agent, {String? name}) =>
+      _desk.createTabFor(agent, name: name);
+
+  /// The next agent made on this phone gets a tab of its own — armed by the `+`
+  /// on the tab row before the new-agent form opens, and spent (or forgotten)
+  /// by the time that form closes. See [PhoneDesk.openNextAgentInNewTab].
+  void openNextAgentInNewDeskTab() => _desk.openNextAgentInNewTab();
+
+  /// That form closed without making anything.
+  void forgetNewDeskTabIntent() => _desk.forgetNewTabIntent();
+
   /// Read the desk now, and wait for it — what a sign-in and the app coming
   /// back to the foreground both start without waiting.
   @visibleForTesting
@@ -4843,7 +4866,7 @@ class AppNotifier extends ChangeNotifier {
     // Created HERE, so it joins the tab this phone is in — the way an agent
     // created in a window joins that window's tab. See [PhoneDesk.adopt] for
     // what happens when the phone is in no tab.
-    _desk.adopt((machineId: machineId, agentId: agent.id));
+    _desk.adopt((machineId: machineId, agentId: agent.id), name: agent.name);
     await assignAgentToPane(
       null,
       machineId,
