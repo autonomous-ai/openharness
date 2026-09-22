@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../core/app_version.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/harness_background.dart';
@@ -11,23 +10,16 @@ import '../shortcuts/keymap_commands.dart';
 import '../terminal/terminal_text.dart';
 
 /// A quiet terminal welcome. Opening a command is always an explicit action.
-class WorkspaceWelcome extends StatefulWidget {
+class WorkspaceWelcome extends StatelessWidget {
   const WorkspaceWelcome({super.key, required this.onCommand});
 
   final ValueChanged<String> onCommand;
 
-  @override
-  State<WorkspaceWelcome> createState() => _WorkspaceWelcomeState();
-}
-
-class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
-  late final _version = runningAppVersion().catchError((_) => 'development');
-
   static const _actions = [
     ('agent.new', 'New Harness', 'to start a new harness'),
     ('agent.open', 'Open Harness', 'to open a harness'),
-    ('swarm.new', 'New Tab', 'to open a new tab'),
-    ('app.store', 'Harness Store', 'to explore the store'),
+    ('app.store', 'Harness Store', 'to browse the harness store'),
+    ('keyboard.help', 'Keyboard Shortcuts', 'to see keyboard shortcuts'),
   ];
 
   @override
@@ -86,7 +78,9 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     final keyWidth = rows
         .map((row) => widthOf('${row.hint ?? row.label}    '))
         .reduce((a, b) => a > b ? a : b);
-    final descriptionWidth = widthOf('to start a new harness');
+    final descriptionWidth = rows
+        .map((row) => widthOf(row.description))
+        .reduce((a, b) => a > b ? a : b);
     final line = MediaQuery.textScalerOf(context).scale(style.fontSize!) * 1.5;
     return Material(
       key: const ValueKey('workspace-welcome'),
@@ -122,17 +116,12 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
                         children: [
                           const Text('HARNESS'),
                           SizedBox(height: line),
-                          FutureBuilder<String>(
-                            future: _version,
-                            builder: (context, snapshot) =>
-                                Text('version ${snapshot.data ?? '…'}'),
-                          ),
-                          const Text('Open source software and hardware'),
-                          SizedBox(height: line * 2),
+                          const Text('Follow your curiosity.'),
+                          SizedBox(height: line),
                           for (final row in rows)
                             TextButton(
                               key: ValueKey('welcome-${row.command}'),
-                              onPressed: () => widget.onCommand(row.command),
+                              onPressed: () => onCommand(row.command),
                               style: TextButton.styleFrom(
                                 foregroundColor: ink,
                                 textStyle: style,
@@ -182,7 +171,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
             bottom: 16,
             child: TextButton.icon(
               key: const ValueKey('welcome-customize'),
-              onPressed: () => widget.onCommand('app.customize'),
+              onPressed: () => onCommand('app.customize'),
               icon: const Icon(Icons.edit_outlined, size: 18),
               label: const Text('Customize Harness'),
               style: TextButton.styleFrom(
