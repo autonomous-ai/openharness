@@ -783,25 +783,40 @@ class _TerminalPageState extends State<TerminalPage>
   /// platform channel and a native class on both platforms to answer what one
   /// number already answers.)
   ///
-  /// ⚠️ **Zero while the keyboard is up.** Android's IME inset already includes
-  /// the bar — the keyboard reserves that strip inside its own height and the
-  /// bar is drawn over it — and `PhoneShell`'s Scaffold has resized this page
-  /// to sit above the whole of it. Reserving it again here opened a band of
-  /// background between the key bar and the keyboard.
-  ///
-  /// [View.of] rather than MediaQuery for the reason [didChangeMetrics] gives,
-  /// and its value is in PHYSICAL pixels.
+  /// ⚠️ **Zero while the keyboard is up**, which [_windowBottomInset] is where
+  /// this reads it: Android's IME inset already includes the bar — the keyboard
+  /// reserves that strip inside its own height and the bar is drawn over it —
+  /// and `PhoneShell`'s Scaffold has resized this page to sit above the whole
+  /// of it. Reserving it again here opened a band of background between the key
+  /// bar and the keyboard.
   double get _navigationBar {
     if (defaultTargetPlatform != TargetPlatform.android) return 0;
-    if (_keyboardUp) return 0;
-    final view = View.of(context);
-    final inset = view.viewPadding.bottom / view.devicePixelRatio;
+    final inset = _windowBottomInset;
     return inset >= _navigationBarMin ? inset : 0;
   }
 
   /// Between a 24dp gesture handle and a 48dp navigation bar — see
   /// [_navigationBar].
   static const double _navigationBarMin = 36;
+
+  /// The whole inset at the foot of the WINDOW — bar, gesture handle or home
+  /// indicator alike — for the chrome that wants to clear all three. The
+  /// terminal is the one thing that does not: see [_navigationBar].
+  ///
+  /// ⚠️ **Zero while the keyboard is up, and that is the whole point of it
+  /// being a getter.** `viewPadding` never moves for a keyboard — that is what
+  /// separates it from `viewInsets` — so read raw it still claims a bar's
+  /// height on a page the Scaffold has already cut off at the top of the
+  /// keyboard. Search read it that way and left a strip of terminal showing
+  /// between its last result and the keys.
+  ///
+  /// [View.of] rather than MediaQuery for the reason [didChangeMetrics] gives,
+  /// and its value is in PHYSICAL pixels.
+  double get _windowBottomInset {
+    if (_keyboardUp) return 0;
+    final view = View.of(context);
+    return view.viewPadding.bottom / view.devicePixelRatio;
+  }
 
   /// Starts the hold that covers [TerminalKeyBar]'s slide, if this build is the
   /// one that sets it going.
@@ -1368,11 +1383,10 @@ class _TerminalPageState extends State<TerminalPage>
                         // Android with a navigation bar the two are the same
                         // inset, and padded twice the last result sat a bar's
                         // height above the bar. See [_navigationBar].
-                        bottom:
-                            (View.of(context).viewPadding.bottom /
-                                        View.of(context).devicePixelRatio -
-                                    navigationBar)
-                                .clamp(0.0, double.infinity),
+                        bottom: (_windowBottomInset - navigationBar).clamp(
+                          0.0,
+                          double.infinity,
+                        ),
                       ),
                       child: TerminalSearchOverlay(
                         notifier: widget.notifier,
