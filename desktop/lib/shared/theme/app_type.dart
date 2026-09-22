@@ -19,7 +19,8 @@ import '../../terminal/terminal_font_store.dart';
 ///   face earns its place.
 ///
 /// Sizes are fixed. The terminal's own size setting (⌘+ / ⌘−) moves the
-/// terminal grid, its composer and its find field — [terminalTextStyle] — and
+/// terminal grid, its composer, its find field and the empty tab's welcome
+/// page, which stands where a terminal will — [terminalTextStyle] — and
 /// nothing here. An earlier build set every text in the app in the terminal
 /// face at the terminal size, which left a heading and its body copy one size
 /// apart only by weight.
