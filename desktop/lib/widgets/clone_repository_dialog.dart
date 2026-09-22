@@ -165,6 +165,9 @@ class _CloneRepositoryDialogState extends State<CloneRepositoryDialog> {
                     controller: _url,
                     autofocus: true,
                     readOnly: _busy,
+                    style: grid.AppType.mono(
+                      color: grid.AppPalette.textPrimary,
+                    ),
                     decoration: const InputDecoration(
                       hintText: 'https://github.com/owner/repository',
                     ),

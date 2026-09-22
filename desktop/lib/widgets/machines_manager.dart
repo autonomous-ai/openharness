@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import '../core/fuzzy_match.dart';
 import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
-import '../terminal/terminal_font_store.dart';
+import '../terminal/terminal_text.dart';
 import 'box_chrome.dart';
 import 'link_machine_dialog.dart';
 import 'link_machine_screen.dart';
@@ -399,7 +399,7 @@ class _MachinesManagerState extends State<_MachinesManager> {
                           ),
                           Text(
                             entry.detail,
-                            style: boxMonoStyle(size: 11, color: kBoxFaint),
+                            style: boxMonoStyle(color: kBoxFaint),
                           ),
                         ],
                       ),
@@ -415,200 +415,204 @@ class _MachinesManagerState extends State<_MachinesManager> {
   }
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([app, terminalFontStore]),
-    builder: (context, _) {
-      final rows = _entries;
-      final machine = _machine;
-      final empty = _machineId != null && machine == null
-          ? 'This machine is no longer available.'
-          : machine?.machine.isShared == true
-          ? 'Shared machines are view-only. Their owner manages machine settings.'
-          : app.machinesLoading
-          ? 'Loading machines…'
-          : 'No matching ${_machineId == null ? 'machines' : 'actions'}.';
-      return Offstage(
-        offstage: _nested,
-        child: TerminalPromptKeys(
-          inputFocus: _input,
-          composing: () => _composing,
-          cancel: _back,
-          accept: _accept,
-          next: () => _move(1),
-          previous: () => _move(-1),
-          pageDown: () => _move(8),
-          pageUp: () => _move(-8),
-          refresh: () => unawaited(_refresh()),
-          child: TerminalPrompt(
-            width: 760,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          _machineId == null
-                              ? 'Machines Manager'
-                              : machine?.machine.displayName ??
-                                    _machineTitle ??
-                                    'Machine',
-                          style: boxMonoStyle(size: 12, color: kBoxFaint),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      Text(
-                        '${rows.length}/${_allEntries.length}',
-                        style: boxMonoStyle(size: 11, color: kBoxFaint),
-                      ),
-                    ],
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  child: ReadlineKeys(
-                    controller: _query,
-                    onChanged: _changed,
-                    child: TextField(
-                      key: const Key('machines-manager-search'),
-                      controller: _query,
-                      focusNode: _input,
-                      style: boxMonoStyle(),
-                      textAlignVertical: TextAlignVertical.center,
-                      textInputAction: TextInputAction.done,
-                      decoration: InputDecoration(
-                        hintText: _machineId == null
-                            ? 'find a machine / link another'
-                            : 'find an action',
-                        hintStyle: boxMonoStyle(color: kBoxFaint),
-                        isDense: true,
-                        filled: false,
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        prefixIcon: Padding(
-                          padding: const EdgeInsets.only(right: 10),
-                          child: Center(
-                            widthFactor: 1,
-                            heightFactor: 1,
-                            child: Text(
-                              _machineId == null ? 'machine >' : 'action >',
-                              style: boxMonoStyle(color: Colors.white70),
-                            ),
-                          ),
-                        ),
-                        prefixIconConstraints: const BoxConstraints(
-                          minHeight: 38,
-                        ),
-                        contentPadding: EdgeInsets.zero,
-                      ),
-                      onChanged: _changed,
-                      onEditingComplete: () {},
-                      onSubmitted: (_) => _accept(),
-                    ),
-                  ),
-                ),
-                Flexible(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(6, 8, 6, 8),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return ListenableBuilder(
+      listenable: Listenable.merge([app, terminalFontStore]),
+      builder: (context, _) {
+        final rows = _entries;
+        final machine = _machine;
+        final empty = _machineId != null && machine == null
+            ? 'This machine is no longer available.'
+            : machine?.machine.isShared == true
+            ? 'Shared machines are view-only. Their owner manages machine settings.'
+            : app.machinesLoading
+            ? 'Loading machines…'
+            : 'No matching ${_machineId == null ? 'machines' : 'actions'}.';
+        return Offstage(
+          offstage: _nested,
+          child: TerminalPromptKeys(
+            inputFocus: _input,
+            composing: () => _composing,
+            cancel: _back,
+            accept: _accept,
+            next: () => _move(1),
+            previous: () => _move(-1),
+            pageDown: () => _move(8),
+            pageUp: () => _move(-8),
+            refresh: () => unawaited(_refresh()),
+            child: TerminalPrompt(
+              width: 760,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (machine != null)
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-                            child: SelectableText(
-                              [
-                                _status(machine),
-                                if (machine.machine.ownerName case final owner?)
-                                  'shared by $owner',
-                                ?machine.machine.hostname,
-                                machine.machine.machineId,
-                              ].join(' · '),
-                              style: boxMonoStyle(size: 11, color: kBoxFaint),
-                            ),
+                        Expanded(
+                          child: Text(
+                            _machineId == null
+                                ? 'Machines Manager'
+                                : machine?.machine.displayName ??
+                                      _machineTitle ??
+                                      'Machine',
+                            style: boxMonoStyle(color: kBoxFaint),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                        if (_machineId == null &&
-                            app.machineStates.isEmpty &&
-                            _machineQuery.text.isEmpty)
-                          Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Text(
-                              app.machinesLoading
-                                  ? 'Loading machines…'
-                                  : app.machineListError != null
-                                  ? 'Machine list unavailable.'
-                                  : 'No machines available yet.',
-                              style: boxMonoStyle(size: 12, color: kBoxFaint),
-                            ),
-                          ),
-                        if (rows.isEmpty)
-                          Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Text(
-                              empty,
-                              style: boxMonoStyle(size: 12, color: kBoxFaint),
-                            ),
-                          )
-                        else
-                          ...rows.map(_row),
+                        ),
+                        Text(
+                          '${rows.length}/${_allEntries.length}',
+                          style: boxMonoStyle(color: kBoxFaint),
+                        ),
                       ],
                     ),
                   ),
-                ),
-                BoxHintStrip(
-                  message: _refreshing || app.machinesRefreshing
-                      ? 'Refreshing machines…'
-                      : _message ?? app.machineListError,
-                  isError:
-                      !_refreshing &&
-                      !app.machinesRefreshing &&
-                      (_error ||
-                          _message == null && app.machineListError != null),
-                  hints: [
-                    if (rows.isNotEmpty)
-                      BoxHint(
-                        '${_hint('picker.previous', '↑')}/${_hint('picker.next', '↓')}',
-                        'select',
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    child: ReadlineKeys(
+                      controller: _query,
+                      onChanged: _changed,
+                      child: TextField(
+                        key: const Key('machines-manager-search'),
+                        controller: _query,
+                        focusNode: _input,
+                        style: boxMonoStyle(),
+                        textAlignVertical: TextAlignVertical.center,
+                        textInputAction: TextInputAction.done,
+                        decoration: InputDecoration(
+                          hintText: _machineId == null
+                              ? 'find a machine / link another'
+                              : 'find an action',
+                          hintStyle: boxMonoStyle(color: kBoxFaint),
+                          isDense: true,
+                          filled: false,
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          prefixIcon: Padding(
+                            padding: const EdgeInsets.only(right: 10),
+                            child: Center(
+                              widthFactor: 1,
+                              heightFactor: 1,
+                              child: Text(
+                                _machineId == null ? 'machine >' : 'action >',
+                                style: boxMonoStyle(color: Colors.white70),
+                              ),
+                            ),
+                          ),
+                          prefixIconConstraints: const BoxConstraints(
+                            minHeight: 38,
+                          ),
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                        onChanged: _changed,
+                        onEditingComplete: () {},
+                        onSubmitted: (_) => _accept(),
                       ),
-                    if (rows.isNotEmpty)
-                      BoxHint(
-                        _hint('picker.accept', 'enter'),
-                        _machineId == null && _selected?.machine != null
-                            ? 'actions'
-                            : 'open',
-                        onTap: () => unawaited(_open(_selected)),
-                      ),
-                    BoxHint(
-                      _hint(
-                        'picker.refresh',
-                        Theme.of(context).platform == TargetPlatform.macOS
-                            ? 'cmd-r'
-                            : 'ctrl-r',
-                      ),
-                      'refresh',
-                      onTap: () => unawaited(_refresh()),
                     ),
-                    BoxHint(
-                      _hint('picker.cancel', 'esc'),
-                      _machineId == null ? 'close' : 'back',
-                      onTap: _back,
+                  ),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(6, 8, 6, 8),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (machine != null)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+                              child: SelectableText(
+                                [
+                                  _status(machine),
+                                  if (machine.machine.ownerName
+                                      case final owner?)
+                                    'shared by $owner',
+                                  ?machine.machine.hostname,
+                                  machine.machine.machineId,
+                                ].join(' · '),
+                                style: boxMonoStyle(color: kBoxFaint),
+                              ),
+                            ),
+                          if (_machineId == null &&
+                              app.machineStates.isEmpty &&
+                              _machineQuery.text.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Text(
+                                app.machinesLoading
+                                    ? 'Loading machines…'
+                                    : app.machineListError != null
+                                    ? 'Machine list unavailable.'
+                                    : 'No machines available yet.',
+                                style: boxMonoStyle(color: kBoxFaint),
+                              ),
+                            ),
+                          if (rows.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Text(
+                                empty,
+                                style: boxMonoStyle(color: kBoxFaint),
+                              ),
+                            )
+                          else
+                            ...rows.map(_row),
+                        ],
+                      ),
                     ),
-                  ],
-                ),
-              ],
+                  ),
+                  BoxHintStrip(
+                    message: _refreshing || app.machinesRefreshing
+                        ? 'Refreshing machines…'
+                        : _message ?? app.machineListError,
+                    isError:
+                        !_refreshing &&
+                        !app.machinesRefreshing &&
+                        (_error ||
+                            _message == null && app.machineListError != null),
+                    hints: [
+                      if (rows.isNotEmpty)
+                        BoxHint(
+                          '${_hint('picker.previous', '↑')}/${_hint('picker.next', '↓')}',
+                          'select',
+                        ),
+                      if (rows.isNotEmpty)
+                        BoxHint(
+                          _hint('picker.accept', 'enter'),
+                          _machineId == null && _selected?.machine != null
+                              ? 'actions'
+                              : 'open',
+                          onTap: () => unawaited(_open(_selected)),
+                        ),
+                      BoxHint(
+                        _hint(
+                          'picker.refresh',
+                          Theme.of(context).platform == TargetPlatform.macOS
+                              ? 'cmd-r'
+                              : 'ctrl-r',
+                        ),
+                        'refresh',
+                        onTap: () => unawaited(_refresh()),
+                      ),
+                      BoxHint(
+                        _hint('picker.cancel', 'esc'),
+                        _machineId == null ? 'close' : 'back',
+                        onTap: _back,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-      );
-    },
-  );
+        );
+      },
+    );
+  }
 }
 
 Future<void> showMachineRenameDialog(

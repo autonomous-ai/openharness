@@ -12,7 +12,6 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/core/models.dart' show Agent, AgentProject;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
-import 'package:harness_mobile/shared/widgets/app_icon_button.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/terminal/image_transcode.dart';
@@ -41,6 +40,7 @@ import 'status_pill.dart';
 import 'terminal_action_column.dart';
 import 'terminal_chrome_scroll.dart';
 import 'terminal_header.dart';
+import 'terminal_header_action.dart';
 import 'terminal_input_dock.dart';
 import 'terminal_search.dart';
 import 'voice_input_controller.dart';
@@ -1313,7 +1313,7 @@ class _TerminalPageState extends State<TerminalPage>
                               // panel would hold one tab over every agent on the
                               // account, which is what a swipe already walks.
                               if (widget.notifier.deskTabs.isNotEmpty)
-                                _HeaderAction(
+                                TerminalHeaderAction(
                                   icon: LucideIcons.layoutGrid300,
                                   tooltip: 'Tabs',
                                   onPressed: () => unawaited(
@@ -1331,8 +1331,12 @@ class _TerminalPageState extends State<TerminalPage>
                               // nothing to act on yet, and a menu of actions
                               // that all fail is worse than no menu.
                               if (agent != null)
-                                _HeaderAction(
-                                  icon: LucideIcons.ellipsis300,
+                                TerminalHeaderAction(
+                                  // Stood up, not laid flat: three dots in a
+                                  // column is the narrower mark AND the one a
+                                  // phone means by "more actions", so it reads
+                                  // as a menu rather than as a truncation.
+                                  icon: LucideIcons.ellipsisVertical300,
                                   size: 21,
                                   tooltip: 'Agent actions',
                                   // Last in the row, so its padding stops at
@@ -2459,43 +2463,3 @@ String _clipTitle(String name) {
 /// dead space either side and the three stay 24px each — under the 44 iOS asks
 /// for. Fixing that belongs in the shared button, where every screen's header
 /// would get it, not in a wrapper one page defines.
-class _HeaderAction extends StatelessWidget {
-  const _HeaderAction({
-    required this.icon,
-    required this.tooltip,
-    required this.onPressed,
-    this.size = 21,
-    this.last = false,
-  });
-
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onPressed;
-  final double size;
-
-  /// The rightmost action, whose trailing padding is dropped: [PhoneHeader]
-  /// already insets the row's right edge, and keeping it here would push the
-  /// last mark further from the edge than the others are from each other.
-  final bool last;
-
-  /// Half the gap between two marks — each neighbour contributes one, so the
-  /// boxes end up 14 apart.
-  ///
-  /// 14 because that is [PhoneHeader]'s own right inset: the gap between two
-  /// actions and the gap from the last one to the screen edge are then the
-  /// same measure, and the three read as evenly placed rather than as a group
-  /// shoved against the corner.
-  static const double gap = 7;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: EdgeInsets.fromLTRB(gap, 0, last ? 0 : gap, 0),
-    child: AppIconButton(
-      icon: icon,
-      size: size,
-      tooltip: tooltip,
-      color: AppPalette.textSecondary,
-      onPressed: onPressed,
-    ),
-  );
-}

@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import '../logging/startup_trace.dart';
+import '../phone/phone_name_store.dart';
 import '../phone/voice_language_store.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../stats/harness_stats.dart';
 import '../terminal/terminal_font_store.dart';
 import '../terminal/terminal_theme_store.dart';
+import 'device_name.dart';
 
 /// Every preference that has to be in place BEFORE the first frame.
 ///
@@ -23,7 +27,12 @@ Future<void> loadPersistedSettings({
   AppearancePrefsStore? appearance,
   HarnessStats? stats,
   VoiceLanguageStore? voiceLanguage,
+  PhoneNameStore? phoneName,
 }) async {
+  // What the OS calls this phone, asked now so it is on hand by the first
+  // `terminal_open`; not awaited — a slow answer must not hold the first frame,
+  // and the name has a fallback (`composePhoneName`) until it lands.
+  unawaited(NativeDeviceInfo.describe());
   // Independent stores may load together, but all must finish before runApp.
   // Font and appearance share a serialized file store; each reads its related
   // preferences as one snapshot. Stats uses a separate file and can overlap.
@@ -63,5 +72,8 @@ Future<void> loadPersistedSettings({
       'prefs.voiceLanguage',
       (voiceLanguage ?? voiceLanguageStore).load,
     ),
+    // The person's own name for this phone; read late, the first terminal it
+    // took would introduce it by the OS's name instead.
+    StartupTrace.time('prefs.phoneName', (phoneName ?? phoneNameStore).load),
   ]);
 }

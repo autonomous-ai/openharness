@@ -89,7 +89,7 @@ class _CheckingContent extends StatelessWidget {
       Text(
         'Checking this computer',
         textAlign: TextAlign.center,
-        style: Theme.of(context).textTheme.titleLarge,
+        style: grid.AppType.display(),
       ),
       const SizedBox(height: 8),
       Text(
@@ -125,7 +125,7 @@ class _ReadyContent extends StatelessWidget {
         Text(
           'Environment ready',
           textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.titleLarge,
+          style: grid.AppType.display(),
         ),
         const SizedBox(height: 8),
         Text(

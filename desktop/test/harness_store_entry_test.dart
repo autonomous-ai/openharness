@@ -171,7 +171,7 @@ void main() {
         .controller;
     box.setFolder('/work/project');
     await tester.pump();
-    await openLaunchRow(tester, 'task');
+    await openLegacyTaskEditor(tester);
     await tester.enterText(input, 'Finish the login feature');
     await tester.pump();
     final draft = box.draft;

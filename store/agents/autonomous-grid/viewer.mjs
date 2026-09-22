@@ -8,7 +8,20 @@ import { createCollector } from './lib/telemetry.mjs';
 export function createViewer({ workspace, port = 0, intervalMs = 8000, collect = createCollector(workspace, { intervalMs }), select = gridSelect }) {
   const clients = new Set();
   let snapshot = { spec: 1, status: 'connecting', grid: 'Your grid', nodes: [], machines: [], models: [], events: [], operations: [], history: {}, sources: {}, summary: {}, observedAt: null, pollIntervalMs: intervalMs };
-  let stopped = false, pollTimer, opTimer, heartbeat;
+  let stopped = false, pollTimer, opTimer, heartbeat, inFlight = false, lastPollAt = 0;
+  // The next tick is booked only while a pane is connected: a viewer nobody is looking at must not keep
+  // running the grid CLI every few seconds. A request for the observation still wakes one read if the
+  // one on hand has gone stale.
+  const schedule = () => {
+    clearTimeout(pollTimer); pollTimer = null;
+    if (stopped || clients.size === 0) return;
+    pollTimer = setTimeout(poll, intervalMs);
+  };
+  const wake = () => {
+    if (stopped || inFlight || Date.now() - lastPollAt < intervalMs) return;
+    clearTimeout(pollTimer); pollTimer = null;
+    void poll();
+  };
   const headers = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' };
   const json = (res, code, value) => { res.writeHead(code, { ...headers, 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
   const publish = () => {
@@ -38,13 +51,17 @@ export function createViewer({ workspace, port = 0, intervalMs = 8000, collect =
       }
       if (!['GET', 'HEAD'].includes(req.method)) { res.setHeader('allow', 'GET, HEAD, POST'); json(res, 405, { error: 'This viewer is read-only. Talk to the Grid agent to make changes.' }); return; }
       if (url.pathname === '/health') { json(res, 200, { ok: true }); return; }
-      if (url.pathname === '/api/snapshot') { json(res, 200, snapshot); return; }
+      if (url.pathname === '/api/snapshot') { json(res, 200, snapshot); wake(); return; }
       if (url.pathname === '/events') {
         if (req.method === 'HEAD') { res.writeHead(200, headers); res.end(); return; }
         if (clients.size >= 32) { json(res, 503, { error: 'Too many viewer connections.' }); return; }
         res.writeHead(200, { ...headers, 'content-type': 'text/event-stream', connection: 'keep-alive', 'x-accel-buffering': 'no' });
         res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
-        clients.add(res); res.on('close', () => clients.delete(res)); return;
+        clients.add(res);
+        res.on('close', () => { clients.delete(res); if (clients.size === 0) { clearTimeout(pollTimer); pollTimer = null; } });
+        wake();
+        if (!pollTimer && !inFlight) schedule();
+        return;
       }
       const assets = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/app.css': ['app.css', 'text/css; charset=utf-8'] };
       if (!assets[url.pathname]) { json(res, 404, { error: 'Not found' }); return; }
@@ -73,13 +90,15 @@ export function createViewer({ workspace, port = 0, intervalMs = 8000, collect =
   }
 
   async function poll() {
+    inFlight = true;
     try { snapshot = await collect(); }
     catch {
       snapshot = { ...snapshot, status: 'unavailable', nodes: snapshot.nodes.map(n => ({ ...n, stale: true })), sources: { configuration: { ok: false, error: 'Cannot refresh the fleet. Ask the agent to check grid-fleet.json and run fleet refresh.' } } };
       await atomicJson(join(workspace, '.harness', 'verdict.json'), { spec: 1, ready: false, summary: 'Grid telemetry could not refresh', findings: [{ severity: 'error', kind: 'telemetry', message: snapshot.sources.configuration.error }], updatedAt: now() }).catch(() => {});
     }
+    inFlight = false; lastPollAt = Date.now();
     if (stopped) return;
-    publish(); pollTimer = setTimeout(poll, intervalMs);
+    publish(); schedule();
   }
   async function pollOperations() {
     const latest = await operations(workspace).catch(() => []);

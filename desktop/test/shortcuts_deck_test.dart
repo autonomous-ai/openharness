@@ -227,7 +227,7 @@ void main() {
                     child: Text(
                       label,
                       key: probe,
-                      style: const TextStyle(fontSize: 11.5, height: 1),
+                      style: AppType.monoMeta(height: 1),
                     ),
                   ),
                   const KeyCap('⇥'),

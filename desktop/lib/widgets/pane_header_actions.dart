@@ -277,7 +277,7 @@ class _CompactPaneActionsState extends State<_CompactPaneActions> {
               focusNode: i == 0 ? _firstFocus : null,
               onPressed: enabled[i].callback,
               style: ButtonStyle(
-                textStyle: WidgetStatePropertyAll(boxMonoStyle(size: 12)),
+                textStyle: WidgetStatePropertyAll(grid.AppType.body()),
                 foregroundColor: WidgetStatePropertyAll(AppColors.text),
                 minimumSize: const WidgetStatePropertyAll(Size(180, 30)),
                 shape: const WidgetStatePropertyAll(RoundedRectangleBorder()),
@@ -323,19 +323,21 @@ class PaneHeaderHover extends StatefulWidget {
 class _PaneHeaderHoverState extends State<PaneHeaderHover> {
   bool _hovered = false, _focused = false;
   @override
-  Widget build(BuildContext context) => MouseRegion(
-    onEnter: (_) => setState(() => _hovered = true),
-    onExit: (_) => setState(() => _hovered = false),
-    child: Focus(
-      canRequestFocus: false,
-      includeSemantics: false,
-      onFocusChange: (value) => setState(() => _focused = value),
-      child: _PaneHeaderVisibility(
-        visible: _hovered || _focused,
-        child: widget.child,
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Focus(
+        canRequestFocus: false,
+        includeSemantics: false,
+        onFocusChange: (value) => setState(() => _focused = value),
+        child: _PaneHeaderVisibility(
+          visible: _hovered || _focused,
+          child: widget.child,
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _PaneHeaderVisibility extends InheritedWidget {

@@ -221,6 +221,7 @@ class _SidebarRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    AppTheme.watch(context);
     const radius = BorderRadius.all(Radius.circular(8));
     // Weight tracks the selection itself, not the transition: it changes the
     // label's metrics, so it wants to happen once, at the start, rather than
@@ -392,19 +393,21 @@ class _RowLabel extends StatelessWidget {
   /// keeps every row's text on the same baseline whatever font falls out of the
   /// fallback chain, and a travelling label that dropped it would jump a pixel
   /// as the pointer landed.
-  static const _strut = StrutStyle(
-    fontSize: 13.5,
+  static StrutStyle get _strut => StrutStyle(
+    fontSize: AppType.bodySize,
+    fontFamily: AppType.sansFamily,
+    fontFamilyFallback: AppType.sansFallback,
     height: 1.25,
     forceStrutHeight: true,
   );
 
   @override
   Widget build(BuildContext context) {
-    final style = TextStyle(
+    AppTheme.watch(context);
+    final style = AppType.label(
       color: ink,
-      fontSize: 13.7,
       height: 1.25,
-      fontWeight: strong ? AppFont.medium : FontWeight.w400,
+      fontWeight: strong ? AppFont.medium : AppFont.regular,
     );
 
     if (!item.revealLabelOnHover || !hovered) {
@@ -454,6 +457,7 @@ class _RowIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    AppTheme.watch(context);
     // A row's icon carries the accent whenever the row stands out — the selected
     // nav item and the emphasized action (New chat) both — so the accent reads
     // as "this is the one", matching the selected row's rail. Everything else
@@ -495,28 +499,31 @@ class _SelectionRail extends StatelessWidget {
   final double select;
 
   @override
-  Widget build(BuildContext context) => Positioned(
-    left: 0,
-    top: 1,
-    bottom: 1,
-    child: Center(
-      child: Transform.translate(
-        offset: Offset(-_railTravel * (1 - select), 0),
-        child: Container(
-          width: _railWidth,
-          height: 18,
-          decoration: BoxDecoration(
-            // Same reason as the icon — a mark on the row, so it takes the
-            // on-surface accent.
-            color: AppPalette.accentOnSurface.withValues(alpha: select),
-            borderRadius: const BorderRadius.horizontal(
-              right: Radius.circular(3),
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return Positioned(
+      left: 0,
+      top: 1,
+      bottom: 1,
+      child: Center(
+        child: Transform.translate(
+          offset: Offset(-_railTravel * (1 - select), 0),
+          child: Container(
+            width: _railWidth,
+            height: 18,
+            decoration: BoxDecoration(
+              // Same reason as the icon — a mark on the row, so it takes the
+              // on-surface accent.
+              color: AppPalette.accentOnSurface.withValues(alpha: select),
+              borderRadius: const BorderRadius.horizontal(
+                right: Radius.circular(3),
+              ),
             ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// A quiet section label above a group of [SidebarItem]s ("Chats", "Workspace").
@@ -584,15 +591,11 @@ class _SidebarSectionLabelState extends State<SidebarSectionLabel> {
           children: [
             Expanded(
               child: Text(
-                widget.label,
+                widget.label.toUpperCase(),
+                semanticsLabel: widget.label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: ink,
-                  fontSize: 11.2,
-                  fontWeight: AppFont.medium,
-                  letterSpacing: 0,
-                ),
+                style: AppType.monoMeta(color: ink, fontWeight: AppFont.medium),
               ),
             ),
             if (foldable)

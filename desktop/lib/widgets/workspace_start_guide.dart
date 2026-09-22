@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
@@ -6,35 +7,6 @@ import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_commands.dart';
 import 'box_chrome.dart';
 import 'welcome_project_example.dart';
-
-/// The everyday New Tab page leaves the dock as the only action surface.
-class NewTabStartPage extends StatelessWidget {
-  const NewTabStartPage({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    return ColoredBox(
-      key: const ValueKey('new-tab-start-page'),
-      color: grid.AppPalette.swarmWelcome,
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Text(
-            'Follow your curiosity.',
-            key: const ValueKey('new-tab-tagline'),
-            textAlign: TextAlign.center,
-            style: boxMonoStyle(
-              size: 24,
-              color: const Color(0xffd3d0ca),
-              weight: FontWeight.w600,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 /// A quiet, live keyboard map for an empty workspace. The drawing illustrates
 /// tabs and panes. Only the full shortcuts link is interactive.
@@ -65,7 +37,7 @@ class WorkspaceStartGuide extends StatelessWidget {
       color: grid.AppPalette.swarmWelcome,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final scale = MediaQuery.textScalerOf(context).scale(13) / 13;
+          final scale = grid.appTextScaleOf(context);
           final compact = constraints.maxWidth < 680 * scale;
           final short = constraints.maxHeight < 420 * scale;
           Widget callout(String command, String label, String explanation) =>
@@ -85,13 +57,10 @@ class WorkspaceStartGuide extends StatelessWidget {
                           TextSpan(text: label),
                         ],
                       ),
-                      style: boxMonoStyle(size: 13, color: ink),
+                      style: boxMonoStyle(color: ink),
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      explanation,
-                      style: boxMonoStyle(size: 12, color: faint),
-                    ),
+                    Text(explanation, style: boxMonoStyle(color: faint)),
                   ],
                 ),
               );
@@ -103,11 +72,7 @@ class WorkspaceStartGuide extends StatelessWidget {
                 child: Text(
                   'Follow your curiosity. Build across disciplines.',
                   textAlign: TextAlign.center,
-                  style: boxMonoStyle(
-                    size: 20,
-                    color: ink,
-                    weight: FontWeight.w600,
-                  ),
+                  style: boxMonoStyle(color: ink, weight: FontWeight.w600),
                 ),
               ),
               Row(
@@ -158,33 +123,24 @@ class WorkspaceStartGuide extends StatelessWidget {
                                       'robot arm',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: boxMonoStyle(
-                                        size: 12,
-                                        color: faint,
-                                      ),
+                                      style: boxMonoStyle(color: faint),
                                     ),
                                   ),
                                   if (!compact) ...[
                                     const SizedBox(width: 32),
                                     Text(
                                       'launch video',
-                                      style: boxMonoStyle(
-                                        size: 12,
-                                        color: faint,
-                                      ),
+                                      style: boxMonoStyle(color: faint),
                                     ),
                                   ],
                                   const SizedBox(width: 20),
-                                  Text(
-                                    '+',
-                                    style: boxMonoStyle(size: 14, color: faint),
-                                  ),
+                                  Text('+', style: boxMonoStyle(color: faint)),
                                 ],
                               ),
                             ),
                             Text(
                               compact ? 'Store' : 'Harness Store',
-                              style: boxMonoStyle(size: 12, color: faint),
+                              style: boxMonoStyle(color: faint),
                             ),
                           ],
                         ),
@@ -269,7 +225,7 @@ class WorkspaceStartGuide extends StatelessWidget {
                         child: Text(
                           '${_hint(context, 'keyboard.help')}  All Keyboard Shortcuts'
                               .trimLeft(),
-                          style: boxMonoStyle(size: 11, color: faint),
+                          style: boxMonoStyle(color: faint),
                         ),
                       ),
                     ),
@@ -295,10 +251,8 @@ class WorkspaceStartGuide extends StatelessWidget {
               vertical: 12,
             ),
             child: Center(
-              // The dock owns its actual height. Scale the entire original
-              // diagram together, including the tagline and all its arrows.
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
+              // Scroll the reference without shrinking its text.
+              child: SingleChildScrollView(
                 child: SizedBox(
                   key: const ValueKey('workspace-welcome-diagram'),
                   width: (constraints.maxWidth - horizontalPadding * 2).clamp(
@@ -332,6 +286,7 @@ class _DrawnPane extends StatelessWidget {
   final bool showLocation;
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final copy = Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -340,7 +295,7 @@ class _DrawnPane extends StatelessWidget {
           name,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: boxMonoStyle(size: 14, color: ink),
+          style: boxMonoStyle(color: ink),
         ),
         if (showLocation) ...[
           const SizedBox(height: 6),
@@ -348,7 +303,7 @@ class _DrawnPane extends StatelessWidget {
             'This Mac:~/work/robot-arm',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: boxMonoStyle(size: 11, color: faint),
+            style: boxMonoStyle(color: faint),
           ),
         ],
         const SizedBox(height: 10),
@@ -364,7 +319,7 @@ class _DrawnPane extends StatelessWidget {
           ),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
-          style: boxMonoStyle(size: 12, color: ink),
+          style: boxMonoStyle(color: ink),
         ),
       ],
     );

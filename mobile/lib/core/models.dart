@@ -25,6 +25,10 @@ class CurrentUserProfile {
       email = 'local terminal',
       avatarUrl = null;
 
+  /// The stand-in for a local terminal session — not a person, so nothing
+  /// should be named after it.
+  bool get isLocalSession => id == null && email == 'local terminal';
+
   factory CurrentUserProfile.fromMe(Map<String, dynamic> response) {
     final rawUser = response['user'];
     if (rawUser is! Map) {
@@ -266,6 +270,15 @@ class Agent {
     terminalAvailable: terminalAvailable,
     terminalUnavailableReason: terminalUnavailableReason,
   );
+
+  /// Saved work the daemon is no longer running, as the desktop's [Agent] reads
+  /// it. Its conversation is on disk; `agent_restart` brings it back.
+  ///
+  /// ⚠️ **Only ever set on a machine the app asked `includeStopped: true` of.**
+  /// The daemon's plain `agents_list` answers with `registry.advertised()` —
+  /// live agents only — so a client that does not ask sees a fleet with its
+  /// stopped work silently missing, which is exactly what this app did.
+  bool get isStopped => status == 'stopped';
 
   static String? _safeEngine(Object? raw) {
     if (raw is! String || raw.isEmpty || raw.length > 64) return null;

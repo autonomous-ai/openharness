@@ -109,6 +109,7 @@ void main() {
       }
 
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
       await tester.enterText(input, 'login claude M2');
       await tester.pump();
       await key(tester, LogicalKeyboardKey.enter);

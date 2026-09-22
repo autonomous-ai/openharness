@@ -28,6 +28,15 @@ class AgentEntry {
 
   bool get isWorking => machine.processingAgentIds.contains(agent.id);
 
+  /// Whether a tap can land on this agent — it has a terminal, or it is saved
+  /// work a resume can bring back ([AppNotifier.resumeAgent]).
+  ///
+  /// ⚠️ **Not `terminalAvailable` alone.** A stopped agent has no terminal and
+  /// never will until something restarts it, so the bare flag sorted every one
+  /// of them to the bottom of every list and made them untappable — which,
+  /// before the app asked for them at all, was invisible. It is visible now.
+  bool get isOpenable => agent.terminalAvailable || agent.isStopped;
+
   /// When its conversation last moved: the machine's own [Agent.updatedAt], or
   /// a turn this app saw since ([MachineState.agentActivityAt]) — whichever is
   /// later. Null when neither is known.
@@ -82,8 +91,8 @@ List<AgentEntry> otherAgents(List<AgentEntry> entries) =>
       entries.where((entry) => !entry.isWaiting),
       (a, b) =>
           _firstWhere(a.isWorking, b.isWorking) ??
-          // Then agents that can actually be opened, so a row with no terminal never heads the list.
-          _firstWhere(a.agent.terminalAvailable, b.agent.terminalAvailable) ??
+          // Then agents that can actually be opened, so a row a tap cannot land on never heads the list.
+          _firstWhere(a.isOpenable, b.isOpenable) ??
           0,
     );
 
@@ -99,7 +108,7 @@ List<AgentEntry> recentAgents(List<AgentEntry> entries) => _stableSorted(
   (a, b) =>
       _firstWhere(a.isWaiting, b.isWaiting) ??
       _firstWhere(a.isWorking, b.isWorking) ??
-      _firstWhere(a.agent.terminalAvailable, b.agent.terminalAvailable) ??
+      _firstWhere(a.isOpenable, b.isOpenable) ??
       _newestFirst(a.lastActiveAt, b.lastActiveAt),
 );
 

@@ -59,8 +59,8 @@ class HarnessTopBar extends StatelessWidget {
         alignment: Alignment.centerLeft,
         child: Text(
           'Harness',
-          style: TextStyle(
-            fontSize: 12.5,
+          // Title-bar chrome, set like the native tabs beside it.
+          style: grid.AppType.monoLabel(
             fontWeight: FontWeight.w600,
             color: grid.AppPalette.textSecondary,
           ),

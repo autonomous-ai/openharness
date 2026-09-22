@@ -62,10 +62,11 @@ import { recordRemoteUsage } from './dailyTracking.js'
  * prefixed, so they fell through this handler's namespace checks into the verbatim forward at the
  * bottom. See the block in `handleFrame` for what each one does when forged.
  *
- * Senders, all backend-side: `lib/adapterWs.ts` (on connect) and `services/MachineService.ts`
- * (rename, revoke).
+ * Senders, all backend-side: `lib/adapterWs.ts` (on connect), `services/MachineService.ts`
+ * (rename, revoke) and `lib/adapterAccountPushes.ts` (desk_changed, machines_changed — forged, each
+ * one makes every window on that computer re-read from this backend).
  */
-export const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked'])
+export const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'machines_changed'])
 
 const wss = createWss(WS_LIMITS.web, { echoFirstProtocol: true })
 

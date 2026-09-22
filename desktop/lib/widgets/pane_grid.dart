@@ -21,7 +21,7 @@ import '../state/pane_preset.dart';
 import '../state/pane_arrangement.dart';
 import '../state/terminal_pane.dart';
 import '../terminal/terminal_binary.dart';
-import '../terminal/terminal_font_store.dart';
+import '../terminal/terminal_text.dart';
 import '../terminal/terminal_session.dart';
 import '../theme/app_theme.dart';
 import 'agent_drag.dart';
@@ -54,6 +54,7 @@ class PaneGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return ValueListenableBuilder<AgentDragRef?>(
       valueListenable: agentDrag,
       builder: (context, dragging, _) {
@@ -95,9 +96,6 @@ class PaneGrid extends StatelessWidget {
     );
   }
 
-  /// Row-major, and the odd count spans rather than leaving a hole: three tiles
-  /// are two over one, not two over one-and-a-gap.
-  ///
   /// Keyed on the number of CELLS, not of panes: mid-drag an extra drop slot
   /// joins them, and the grid on screen is the one the shape has to describe.
   Widget _arrange(List<Widget> cells) {
@@ -109,10 +107,8 @@ class PaneGrid extends StatelessWidget {
       return _PresetCells(cells: cells, preset: preset);
     }
 
-    // Above four, one family of shapes: a grid whose COLUMN COUNT is either
-    // stated by the preset or measured from the width. The hand-tuned shapes
-    // below stay as they are — three tiles are two over one with the bottom one
-    // SPANNING, and no uniform grid can say that.
+    // Lattices use a stated or measured column count. Spanning presets keep
+    // their own geometry, including the default five-pane middle column.
     if (cells.length == 5 && preset == PanePreset.middleMain) {
       // The one five-tile shape that is not a lattice: a full-height column down
       // the middle, two stacked either side. Read in TILE order — 1 and 4 to the
@@ -470,120 +466,123 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
   }
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      final app = widget.notifier;
-      final viewportChanged = _viewportSize != constraints.biggest;
-      _viewportSize = constraints.biggest;
-      if (_focusRevealPending && viewportChanged) {
-        _revealFocusedPane(correctingLayout: true);
-      }
-      _focusRevealPending = false;
-      final visible = [
-        for (final pane in app.panes)
-          if (app.zoomedPaneId == null || pane.id == app.zoomedPaneId) pane,
-      ];
-      final layout = _SwarmGeometry(
-        count: visible.length,
-        viewport: constraints.biggest,
-        preset: app.presetFor(visible.length),
-        minimum: _MinTile.of(),
-        sizes: app.activeSwarm.paneSizes,
-      );
-      if (app.zoomedPaneId == null) {
-        app.activeSwarm.arranged = layout.arrangement;
-        app.activeSwarm.arrangedKey = layout.key;
-        final minimum = _MinTile.of();
-        app.activeSwarm.arrangedMinimum = Size(
-          (minimum.width + kPaneGap) / (layout.width + kPaneGap),
-          (minimum.height + kPaneGap) / (layout.height + kPaneGap),
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final app = widget.notifier;
+        final viewportChanged = _viewportSize != constraints.biggest;
+        _viewportSize = constraints.biggest;
+        if (_focusRevealPending && viewportChanged) {
+          _revealFocusedPane(correctingLayout: true);
+        }
+        _focusRevealPending = false;
+        final visible = [
+          for (final pane in app.panes)
+            if (app.zoomedPaneId == null || pane.id == app.zoomedPaneId) pane,
+        ];
+        final layout = _SwarmGeometry(
+          count: visible.length,
+          viewport: constraints.biggest,
+          preset: app.presetFor(visible.length),
+          minimum: _MinTile.of(),
+          sizes: app.activeSwarm.paneSizes,
         );
-      }
-      if (layout.columns != null) app.gridColumns = layout.columns;
-      final rectangles = {
-        for (var i = 0; i < visible.length; i++)
-          visible[i].id: layout.rectangles[i],
-      };
-      final retainedIds = app.allPanes.map((pane) => pane.id).toSet();
-      _inputLayers.removeWhere((id, _) => !retainedIds.contains(id));
-      final scrollBehavior = ScrollConfiguration.of(context);
-      // Both scroll views stay mounted when content fits. Stable ancestry
-      // retains terminal views as a split grows or shrinks the canvas.
-      return Focus(
-        focusNode: _idleFocus,
-        includeSemantics: false,
-        child: Scrollbar(
-          key: const ValueKey('swarm-horizontal-scrollbar'),
-          controller: _horizontalScroll,
-          thumbVisibility: layout.width > constraints.maxWidth,
-          scrollbarOrientation: ScrollbarOrientation.bottom,
-          notificationPredicate: (notification) =>
-              notification.depth == 1 &&
-              notification.metrics.axis == Axis.horizontal,
-          // Keep the horizontal thumb at the viewport's bottom even when the
-          // workspace also scrolls vertically. Terminals retain their bars.
-          child: SingleChildScrollView(
-            controller: _scroll,
-            child: ScrollConfiguration(
-              behavior: scrollBehavior.copyWith(scrollbars: false),
-              child: SingleChildScrollView(
-                controller: _horizontalScroll,
-                scrollDirection: Axis.horizontal,
-                child: ScrollConfiguration(
-                  behavior: scrollBehavior,
-                  child: SizedBox(
-                    width: layout.width,
-                    height: layout.height,
-                    child: Stack(
-                      children: [
-                        if (visible.isEmpty)
-                          Positioned.fill(
-                            child: widget.empty ?? _EmptyGrid(notifier: app),
-                          ),
-                        for (final pane in app.allPanes)
-                          if (rectangles.containsKey(pane.id) ||
-                              pane.lastViewSize != null)
-                            Positioned.fromRect(
-                              key: ValueKey(pane.id),
-                              rect:
-                                  rectangles[pane.id] ??
-                                  Offset.zero & pane.lastViewSize!,
-                              child: _PaneLayer(
-                                key: _inputLayers.putIfAbsent(
-                                  pane.id,
-                                  () => GlobalKey<_PaneLayerState>(),
-                                ),
-                                session: pane.session,
-                                visible: rectangles.containsKey(pane.id),
-                                presentation: _presentation(
-                                  pane,
-                                  rectangles.containsKey(pane.id),
-                                ),
-                                child: _PaneCell(
-                                  key: pane.cellKey,
-                                  notifier: app,
-                                  pane: pane,
-                                  dragging: widget.dragging,
+        if (app.zoomedPaneId == null) {
+          app.activeSwarm.arranged = layout.arrangement;
+          app.activeSwarm.arrangedKey = layout.key;
+          final minimum = _MinTile.of();
+          app.activeSwarm.arrangedMinimum = Size(
+            (minimum.width + kPaneGap) / (layout.width + kPaneGap),
+            (minimum.height + kPaneGap) / (layout.height + kPaneGap),
+          );
+        }
+        if (layout.columns != null) app.gridColumns = layout.columns;
+        final rectangles = {
+          for (var i = 0; i < visible.length; i++)
+            visible[i].id: layout.rectangles[i],
+        };
+        final retainedIds = app.allPanes.map((pane) => pane.id).toSet();
+        _inputLayers.removeWhere((id, _) => !retainedIds.contains(id));
+        final scrollBehavior = ScrollConfiguration.of(context);
+        // Both scroll views stay mounted when content fits. Stable ancestry
+        // retains terminal views as a split grows or shrinks the canvas.
+        return Focus(
+          focusNode: _idleFocus,
+          includeSemantics: false,
+          child: Scrollbar(
+            key: const ValueKey('swarm-horizontal-scrollbar'),
+            controller: _horizontalScroll,
+            thumbVisibility: layout.width > constraints.maxWidth,
+            scrollbarOrientation: ScrollbarOrientation.bottom,
+            notificationPredicate: (notification) =>
+                notification.depth == 1 &&
+                notification.metrics.axis == Axis.horizontal,
+            // Keep the horizontal thumb at the viewport's bottom even when the
+            // workspace also scrolls vertically. Terminals retain their bars.
+            child: SingleChildScrollView(
+              controller: _scroll,
+              child: ScrollConfiguration(
+                behavior: scrollBehavior.copyWith(scrollbars: false),
+                child: SingleChildScrollView(
+                  controller: _horizontalScroll,
+                  scrollDirection: Axis.horizontal,
+                  child: ScrollConfiguration(
+                    behavior: scrollBehavior,
+                    child: SizedBox(
+                      width: layout.width,
+                      height: layout.height,
+                      child: Stack(
+                        children: [
+                          if (visible.isEmpty)
+                            Positioned.fill(
+                              child: widget.empty ?? _EmptyGrid(notifier: app),
+                            ),
+                          for (final pane in app.allPanes)
+                            if (rectangles.containsKey(pane.id) ||
+                                pane.lastViewSize != null)
+                              Positioned.fromRect(
+                                key: ValueKey(pane.id),
+                                rect:
+                                    rectangles[pane.id] ??
+                                    Offset.zero & pane.lastViewSize!,
+                                child: _PaneLayer(
+                                  key: _inputLayers.putIfAbsent(
+                                    pane.id,
+                                    () => GlobalKey<_PaneLayerState>(),
+                                  ),
+                                  session: pane.session,
                                   visible: rectangles.containsKey(pane.id),
-                                  swarmMode: true,
-                                  onSplit: widget.onSplit,
+                                  presentation: _presentation(
+                                    pane,
+                                    rectangles.containsKey(pane.id),
+                                  ),
+                                  child: _PaneCell(
+                                    key: pane.cellKey,
+                                    notifier: app,
+                                    pane: pane,
+                                    dragging: widget.dragging,
+                                    visible: rectangles.containsKey(pane.id),
+                                    swarmMode: true,
+                                    onSplit: widget.onSplit,
+                                  ),
                                 ),
                               ),
-                            ),
-                        if (app.zoomedPaneId == null &&
-                            layout.arrangement?.dividers.isNotEmpty == true)
-                          Positioned.fill(child: _resizeLayer(layout)),
-                      ],
+                          if (app.zoomedPaneId == null &&
+                              layout.arrangement?.dividers.isNotEmpty == true)
+                            Positioned.fill(child: _resizeLayer(layout)),
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
-      );
-    },
-  );
+        );
+      },
+    );
+  }
 
   Widget _resizeLayer(_SwarmGeometry layout) {
     final app = widget.notifier;
@@ -622,10 +621,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                   children: [
                     Text(
                       'resize >',
-                      style: boxMonoStyle(
-                        size: 12,
-                        color: grid.AppPalette.swarmAccent,
-                      ),
+                      style: boxMonoStyle(color: grid.AppPalette.swarmAccent),
                     ),
                     for (final (key, action) in const [
                       ('arrows', 'resize'),
@@ -643,7 +639,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                             TextSpan(text: action),
                           ],
                         ),
-                        style: boxMonoStyle(size: 12, color: kBoxFaint),
+                        style: kBoxFaintStyle,
                       ),
                   ],
                 ),
@@ -786,33 +782,36 @@ class _PresetCells extends StatelessWidget {
   final PanePreset preset;
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      final minimum = _MinTile.of();
-      final geometry = _SwarmGeometry(
-        count: cells.length,
-        viewport: constraints.biggest,
-        preset: preset,
-        minimum: Size(minimum.width, minimum.height),
-      );
-      final canvas = SizedBox(
-        width: constraints.maxWidth,
-        height: geometry.height,
-        child: Stack(
-          children: [
-            for (var i = 0; i < cells.length; i++)
-              Positioned.fromRect(
-                rect: geometry.rectangles[i],
-                child: ClipRect(child: cells[i]),
-              ),
-          ],
-        ),
-      );
-      return geometry.height > constraints.maxHeight
-          ? SingleChildScrollView(child: canvas)
-          : canvas;
-    },
-  );
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final minimum = _MinTile.of();
+        final geometry = _SwarmGeometry(
+          count: cells.length,
+          viewport: constraints.biggest,
+          preset: preset,
+          minimum: Size(minimum.width, minimum.height),
+        );
+        final canvas = SizedBox(
+          width: constraints.maxWidth,
+          height: geometry.height,
+          child: Stack(
+            children: [
+              for (var i = 0; i < cells.length; i++)
+                Positioned.fromRect(
+                  rect: geometry.rectangles[i],
+                  child: ClipRect(child: cells[i]),
+                ),
+            ],
+          ),
+        );
+        return geometry.height > constraints.maxHeight
+            ? SingleChildScrollView(child: canvas)
+            : canvas;
+      },
+    );
+  }
 }
 
 /// A hidden view retains its last configuration and geometry. Status changes
@@ -862,7 +861,10 @@ class _PaneLayerState extends State<_PaneLayer> {
   }
 
   @override
-  Widget build(BuildContext context) => _layer;
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return _layer;
+  }
 
   @override
   void dispose() {
@@ -913,6 +915,7 @@ class _Lattice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final minTile = _MinTile.of();
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -989,6 +992,7 @@ class _Axis extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     if (children.length < 2) {
       return children.isEmpty ? const SizedBox.shrink() : children.first;
     }
@@ -1033,12 +1037,7 @@ class _MinTile {
     final painter = TextPainter(
       text: TextSpan(
         text: 'mmmmmmmmmm',
-        style: TextStyle(
-          fontFamily: style.fontFamily,
-          fontFamilyFallback: style.fontFamilyFallback,
-          fontSize: style.fontSize,
-          height: style.height,
-        ),
+        style: terminalTextStyle(height: style.height),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -1115,16 +1114,19 @@ class GridField extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: const BoxDecoration(gradient: _plum),
-    child: DecoratedBox(
-      decoration: const BoxDecoration(gradient: _rose),
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return DecoratedBox(
+      decoration: const BoxDecoration(gradient: _plum),
       child: DecoratedBox(
-        decoration: const BoxDecoration(gradient: _amber),
-        child: child,
+        decoration: const BoxDecoration(gradient: _rose),
+        child: DecoratedBox(
+          decoration: const BoxDecoration(gradient: _amber),
+          child: child,
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// The space between two tiles.
@@ -1147,10 +1149,13 @@ class _Gap extends StatelessWidget {
   final Axis axis;
 
   @override
-  Widget build(BuildContext context) => SizedBox(
-    width: axis == Axis.horizontal ? kPaneGap : null,
-    height: axis == Axis.horizontal ? null : kPaneGap,
-  );
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return SizedBox(
+      width: axis == Axis.horizontal ? kPaneGap : null,
+      height: axis == Axis.horizontal ? null : kPaneGap,
+    );
+  }
 }
 
 /// How round a card's corners are — a pane, and the rail beside it. Public for the same reason
@@ -1182,12 +1187,15 @@ class _PaneCell extends StatelessWidget {
   bool get _single => notifier.panes.length == 1;
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      if (visible) pane.lastViewSize = constraints.biggest;
-      return _build(context);
-    },
-  );
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (visible) pane.lastViewSize = constraints.biggest;
+        return _build(context);
+      },
+    );
+  }
 
   Widget _build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -1345,6 +1353,7 @@ class _PaneContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final machine = notifier.stateOf(pane.machineId);
     void close() => notifier.closePane(pane.id);
     if (pane.sharedHarness case final grant?) {
@@ -1687,12 +1696,7 @@ class _FileDropZoneState extends State<_FileDropZone> {
                       ),
                       child: Text(
                         'Drop to attach',
-                        style: TextStyle(
-                          color: AppColors.text,
-                          fontFamily: AppFonts.sans,
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        style: grid.AppType.label(color: AppColors.text),
                       ),
                     ),
                   ),
@@ -1917,11 +1921,8 @@ class _SwapZone extends StatelessWidget {
                               ),
                               child: Text(
                                 'Swap with this pane',
-                                style: TextStyle(
+                                style: grid.AppType.label(
                                   color: AppColors.text,
-                                  fontFamily: AppFonts.sans,
-                                  fontSize: 12.5,
-                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ),
@@ -1963,6 +1964,7 @@ class _Guide extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return LayoutBuilder(
       builder: (context, constraints) {
         final roomForCard =
@@ -2012,10 +2014,8 @@ class _PaneHeader extends StatelessWidget {
                 child: Text(
                   title,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
+                  style: grid.AppType.monoLabel(
                     color: AppColors.text,
-                    fontFamily: AppFonts.sans,
-                    fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -2079,13 +2079,13 @@ class _PaneStatus extends StatelessWidget {
                         : Icon(icon, size: 26, color: AppColors.mutedStrong),
                   ),
                   const SizedBox(height: 10),
-                  Text(
-                    message,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: AppColors.mutedStrong,
-                      fontFamily: AppFonts.sans,
-                      fontSize: 11.5,
+                  Flexible(
+                    child: SingleChildScrollView(
+                      child: Text(
+                        message,
+                        textAlign: TextAlign.center,
+                        style: grid.AppType.body(color: AppColors.mutedStrong),
+                      ),
                     ),
                   ),
                   if (actionLabel != null && onAction != null) ...[
@@ -2155,12 +2155,7 @@ class _DropZone extends StatelessWidget {
                             paneId == null
                                 ? 'Open ${candidate.first?.name ?? 'agent'} here'
                                 : 'Show ${candidate.first?.name ?? 'agent'} in this pane',
-                            style: TextStyle(
-                              color: AppColors.text,
-                              fontFamily: AppFonts.sans,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
+                            style: grid.AppType.label(color: AppColors.text),
                           ),
                         ),
                       ),
@@ -2192,11 +2187,7 @@ class _AddSlot extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               'Drop here for a new pane',
-              style: TextStyle(
-                color: AppColors.mutedStrong,
-                fontFamily: AppFonts.sans,
-                fontSize: 11.5,
-              ),
+              style: grid.AppType.body(color: AppColors.mutedStrong),
             ),
           ],
         ),
@@ -2255,11 +2246,7 @@ class _EmptyGrid extends StatelessWidget {
             children: [
               Text(
                 'Select an agent, or drag one in from the left.',
-                style: TextStyle(
-                  color: AppColors.mutedStrong,
-                  fontFamily: AppFonts.sans,
-                  fontSize: 12,
-                ),
+                style: grid.AppType.body(color: AppColors.mutedStrong),
               ),
               // Selecting and dragging both need an agent to already exist. On a
               // first launch none does, so the two sentences around this button
@@ -2285,11 +2272,7 @@ class _EmptyGrid extends StatelessWidget {
               Text(
                 'Press ${shortcutHintFor(ShortcutAction.showShortcuts)} for '
                 'keyboard shortcuts',
-                style: TextStyle(
-                  color: grid.AppPalette.textFaint,
-                  fontFamily: AppFonts.sans,
-                  fontSize: 11.5,
-                ),
+                style: grid.AppType.body(color: grid.AppPalette.textFaint),
               ),
             ],
           ),
@@ -2309,8 +2292,9 @@ String viewerPaneName(Agent? owner, Iterable<DshEntry> catalog) {
   final used = entry?.viewerUse;
   if (used != null) {
     final viewer = catalog.where((e) => e.id == used).firstOrNull;
-    if (viewer != null && viewer.name.trim().isNotEmpty)
+    if (viewer != null && viewer.name.trim().isNotEmpty) {
       return viewer.name.trim();
+    }
   }
   final harness = owner.dshName ?? entry?.name;
   return harness == null || harness.trim().isEmpty

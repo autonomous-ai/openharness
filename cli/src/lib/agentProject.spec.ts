@@ -28,6 +28,18 @@ describe('owning-machine project metadata', () => {
     git('symbolic-ref', 'HEAD', 'refs/heads/feature/real-branch')
     expect(await agentProject(cwd, 20_000)).toMatchObject({ branch: 'feature/real-branch' })
   })
+  it('names a linked worktree for its repository rather than its folder', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'harness-v2-worktree-')); roots.push(root)
+    const repo = join(root, 'app')
+    const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' })
+    await mkdir(repo)
+    git('init', '-b', 'main')
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'initial')
+    const linked = join(root, 'worktrees', 'app', 'claude-0922-1136')
+    git('worktree', 'add', '-b', 'harness/claude-0922-1136', linked)
+    expect(await agentProject(linked)).toMatchObject({ name: 'app', root: await realpath(linked), branch: 'harness/claude-0922-1136' })
+    expect(await agentProject(repo)).toMatchObject({ name: 'app', branch: 'main' })
+  })
   it('keeps a non-repository project branchless and rejects absent cwd', async () => {
     const root = await mkdtemp(join(tmpdir(), 'harness-v2-folder-')); roots.push(root)
     expect(await agentProject(root)).toMatchObject({ cwd: root, root: null, remote: null, branch: null })

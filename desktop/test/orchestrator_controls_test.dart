@@ -329,7 +329,7 @@ void main() {
       final folder = find.byWidgetPredicate(
         (w) =>
             w is TextField &&
-            w.decoration?.labelText == 'Project folder (optional)',
+            w.decoration?.hintText == 'Absolute path to an existing folder',
       );
       await tester.ensureVisible(folder);
       await tester.enterText(folder, ' /tmp/fixture-project ');

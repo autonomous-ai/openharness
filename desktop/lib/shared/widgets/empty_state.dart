@@ -58,11 +58,7 @@ class EmptyState extends StatelessWidget {
             Text(
               title,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                color: AppPalette.textPrimary,
-                fontSize: compact ? 13 : 14.5,
-                fontWeight: FontWeight.w600,
-              ),
+              style: AppType.heading(color: AppPalette.textPrimary),
             ),
             if (message != null) ...[
               const SizedBox(height: 6),
@@ -71,9 +67,8 @@ class EmptyState extends StatelessWidget {
                 child: Text(
                   message!,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
+                  style: AppType.body(
                     color: AppPalette.textSecondary,
-                    fontSize: compact ? 12 : 13,
                     height: 1.4,
                   ),
                 ),

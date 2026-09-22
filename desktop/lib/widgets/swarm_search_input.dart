@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/swarm_search.dart';
@@ -27,7 +28,6 @@ class SwarmSearchInput extends StatelessWidget {
     this.fillColor,
     this.trailing,
     this.height,
-    this.fontSize = 16,
     this.prompt,
     this.terminal = false,
   });
@@ -54,7 +54,7 @@ class SwarmSearchInput extends StatelessWidget {
   final double? height;
 
   /// The typed text and the hint; the search glyph grows with it.
-  final double fontSize;
+  double get fontSize => grid.AppType.monoSize;
   final String? prompt;
 
   /// Plain monospace input in a TerminalBox, without a decorative search glyph.
@@ -62,12 +62,15 @@ class SwarmSearchInput extends StatelessWidget {
   final bool terminal;
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    // Command mode changes with the editor value. Result highlights do not,
-    // so arrow navigation must not rebuild the text field.
-    listenable: controller,
-    builder: (context, _) => _buildInput(context),
-  );
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return ListenableBuilder(
+      // Command mode changes with the editor value. Result highlights do not,
+      // so arrow navigation must not rebuild the text field.
+      listenable: controller,
+      builder: (context, _) => _buildInput(context),
+    );
+  }
 
   Widget _buildInput(BuildContext context) {
     final open = search != null;
@@ -98,8 +101,8 @@ class SwarmSearchInput extends StatelessWidget {
       onTapOutside: onTapOutside == null ? null : (_) => onTapOutside!(),
       onChanged: onChanged,
       style: terminalStyle
-          ? boxMonoStyle(size: fontSize)
-          : TextStyle(fontSize: fontSize, color: Colors.white),
+          ? boxMonoStyle()
+          : grid.AppType.mono(color: Colors.white),
       cursorColor: grid.AppPalette.swarmAccent,
       textAlignVertical: TextAlignVertical.center,
       decoration: InputDecoration(
@@ -110,8 +113,8 @@ class SwarmSearchInput extends StatelessWidget {
             ? search!.hint
             : hintText ?? search?.hint ?? kSwarmSearchHint,
         hintStyle: terminalStyle
-            ? boxMonoStyle(size: fontSize, color: kBoxFaint)
-            : TextStyle(fontSize: fontSize, color: Colors.white60),
+            ? boxMonoStyle(color: kBoxFaint)
+            : grid.AppType.mono(color: Colors.white60),
         hintMaxLines: 1,
         prefixIcon: prompt != null
             ? Padding(
@@ -121,10 +124,7 @@ class SwarmSearchInput extends StatelessWidget {
                   heightFactor: 1,
                   child: Text(
                     prompt!,
-                    style: boxMonoStyle(
-                      size: fontSize,
-                      color: grid.AppPalette.swarmAccent,
-                    ),
+                    style: boxMonoStyle(color: grid.AppPalette.swarmAccent),
                   ),
                 ),
               )
@@ -153,10 +153,7 @@ class SwarmSearchInput extends StatelessWidget {
                           foregroundColor: Colors.white60,
                           minimumSize: const Size(36, 28),
                         ),
-                        child: const Text(
-                          'esc',
-                          style: TextStyle(fontSize: 11),
-                        ),
+                        child: Text('esc', style: grid.AppType.monoMeta()),
                       ),
                   ],
                 ),

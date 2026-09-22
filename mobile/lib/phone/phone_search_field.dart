@@ -4,6 +4,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'composing_keyboard.dart';
+import 'phone_search_controller.dart';
 
 /// The search page's whole header: one bar, with the way out inside it.
 ///
@@ -25,6 +26,7 @@ class PhoneSearchField extends StatelessWidget {
     required this.onClear,
     this.onBack,
     this.autofocus = true,
+    this.hintText = kPhoneSearchHint,
   });
 
   final TextEditingController controller;
@@ -44,6 +46,15 @@ class PhoneSearchField extends StatelessWidget {
   /// the field sits over a list worth reading first: raising the keyboard there
   /// would bury half of what the person opened the screen to look at.
   final bool autofocus;
+
+  /// What the empty field says it can do.
+  ///
+  /// ⚠️ **It names all four kinds, and that is the point.** It used to read
+  /// "Search agents", which was true and was also the whole reason nobody on the
+  /// phone knew that `>`, `#`, `@` and `?` existed — the desktop teaches its
+  /// modes here and only here. The controller narrows it once a mode is open
+  /// ("Search projects…"), so the long form is only ever read on an empty box.
+  final String hintText;
 
   @override
   Widget build(BuildContext context) {
@@ -88,6 +99,7 @@ class PhoneSearchField extends StatelessWidget {
                 focus: focus,
                 onChanged: onChanged,
                 autofocus: autofocus,
+                hintText: hintText,
               ),
             ),
             _ClearButton(controller: controller, onTap: onClear),
@@ -134,12 +146,14 @@ class _QueryInput extends StatelessWidget {
     required this.focus,
     required this.onChanged,
     required this.autofocus,
+    required this.hintText,
   });
 
   final TextEditingController controller;
   final FocusNode focus;
   final ValueChanged<String> onChanged;
   final bool autofocus;
+  final String hintText;
 
   @override
   Widget build(BuildContext context) {
@@ -192,8 +206,10 @@ class _QueryInput extends StatelessWidget {
         filled: false,
         contentPadding: EdgeInsets.zero,
         constraints: const BoxConstraints(),
-        hintText: 'Search agents',
-        hintStyle: TextStyle(color: AppPalette.textFaint, fontSize: 16),
+        hintText: hintText,
+        // A size down from the query's own 16pt: the hint spells out four modes
+        // and has to survive a 390pt screen without ellipsing the last of them.
+        hintStyle: TextStyle(color: AppPalette.textFaint, fontSize: 13),
       ),
     );
   }

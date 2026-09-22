@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../../theme/app_theme.dart';
 import '../theme/app_theme.dart' as grid;
@@ -20,6 +21,7 @@ class CommandRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return InkWell(
       onTap: onCopy,
       borderRadius: BorderRadius.circular(grid.AppCard.insetRadius),
@@ -33,15 +35,11 @@ class CommandRow extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Text('\$ ', style: TextStyle(color: AppColors.mutedStrong)),
+            Text('\$ ', style: grid.AppType.mono(color: AppColors.mutedStrong)),
             Expanded(
               child: SelectableText(
                 command,
-                style: TextStyle(
-                  color: AppColors.text,
-                  fontFamily: AppFonts.mono,
-                  fontSize: 13,
-                ),
+                style: grid.AppType.mono(color: AppColors.text),
               ),
             ),
             Icon(

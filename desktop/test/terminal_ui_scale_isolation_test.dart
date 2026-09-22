@@ -15,28 +15,7 @@ import 'package:harness/widgets/terminal_composer.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 import 'package:xterm/xterm.dart';
 
-/// The app's UI type settings must not reach the terminal.
-///
-/// The user drew that line themselves — the terminal carries its OWN font
-/// settings (Settings ▸ Terminal) because its type is a grid a remote program
-/// draws into, not a label the app writes. The cost of getting it wrong is not
-/// cosmetic: a changed cell size or a changed pane height re-derives `rows`,
-/// and `Terminal.resize` fires `onResize` unconditionally, which puts a
-/// `terminal_resize` frame on the wire and a SIGWINCH at the far end.
-///
-/// There are TWO independent channels that could carry the setting across, and
-/// they need different fences, so both are measured here:
-///
-///   1. `MediaQuery`'s text scaler — reaches the xterm grid through
-///      `TerminalView`'s `textScaler ?? MediaQuery.textScalerOf(context)`.
-///   2. `AppFont.uiScale` — a plain static the THEME reads
-///      (`AppControl.heightFieldScaled`, and a padding multiplied by it), so no
-///      scaling scope can hold it back. It reaches the terminal by growing the
-///      composer's box and shrinking the pane above it.
-///
-/// Geometry is MEASURED with `getRect`/`getSize` rather than argued from the
-/// source, per §14.1 of the design-system doc.
-
+/// OS text scaling must not apply a second multiplier to terminal cells or input.
 AppNotifier _notifier() {
   final app = AppNotifier(
     config: AppConfig.dev,
@@ -92,8 +71,7 @@ Future<TerminalSession> _liveSession() async {
   return session;
 }
 
-/// The pane, under a given app-wide UI text scale — the same mechanism
-/// `MaterialApp.builder` uses in `main.dart`.
+/// An isolated pane under OS text scaling, outside the app-wide no-scaling scope.
 Widget _host(AppNotifier app, TerminalSession session, {double uiScale = 1}) =>
     MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.dark),
@@ -123,17 +101,11 @@ Widget _host(AppNotifier app, TerminalSession session, {double uiScale = 1}) =>
       ),
     );
 
-/// The top of the UI-size range the Appearance screen offers (19 / 14). The
-/// isolation is measured at the extreme, because that is where a leak is
-/// largest and where a row is actually lost.
-const double _maxScale = 19 / 14;
+/// A large OS text scale makes an accidental second multiplier visible.
+const double _maxScale = 1.5;
 
 void main() {
-  // `AppFont`'s settings are process-wide statics, so a test that moves them
-  // would otherwise leak into every test that runs after it.
-  tearDown(grid.AppFont.reset);
-
-  testWidgets('the terminal grid refuses the app-wide text scale', (
+  testWidgets('the terminal grid does not apply a second text scale', (
     tester,
   ) async {
     final app = _notifier();
@@ -143,12 +115,12 @@ void main() {
 
     final view = tester.widget<TerminalView>(find.byType(TerminalView));
     // Explicit, not inherited: without this the view falls back to the ambient
-    // scaler and the UI setting would land on the cell size.
+    // scaler would multiply the chosen cell size again.
     expect(
       view.textScaler,
       TextScaler.noScaling,
       reason:
-          'TerminalView must pin its own scaler, not inherit the app UI one',
+          'TerminalView must use the chosen point size without a second scale',
     );
     session.dispose();
     app.dispose();
@@ -157,11 +129,7 @@ void main() {
   testWidgets('the terminal is drawn ONLY from its own settings', (
     tester,
   ) async {
-    // A standing fence, not a scaling one. The pane a remote agent draws into is
-    // reviewed with the terminal, never with the app's design system — so every
-    // input that decides what the grid looks like has to come from
-    // `terminalFontStore` and nothing else. If a future design pass reaches in
-    // here, this is what says no.
+    // The renderer and app controls share the persisted terminal preference.
     final app = _notifier();
     final session = await _liveSession();
     await tester.pumpWidget(_host(app, session, uiScale: _maxScale));
@@ -181,7 +149,7 @@ void main() {
   });
 
   testWidgets(
-    'the composer renders its type at the terminal size, not the UI one',
+    'the composer uses the terminal point size without a second scale',
     (tester) async {
       final app = _notifier();
       final session = await _liveSession();
@@ -208,11 +176,9 @@ void main() {
   );
 
   testWidgets(
-    'AppFont.uiScale cannot change the pane height the terminal gets',
+    'ambient text scaling cannot change the pane height the terminal gets',
     (tester) async {
-      // This is the channel a scaling scope does NOT cover: the theme reads
-      // `AppFont.uiScale` directly, so the composer's BOX would grow with it
-      // and steal rows from the terminal.
+      // Ambient scaling must not silently take rows away from the terminal.
       final app = _notifier();
       final session = await _liveSession();
 
@@ -221,15 +187,10 @@ void main() {
       final restingComposer = tester.getSize(find.byType(TerminalComposer));
       final restingTerminal = tester.getSize(find.byType(TerminalView));
 
-      grid.AppTheme.fonts.apply(uiScale: _maxScale, codeSize: 12.5);
       await tester.pumpWidget(_host(app, session, uiScale: _maxScale));
       await tester.pumpAndSettle();
       final scaledComposer = tester.getSize(find.byType(TerminalComposer));
       final scaledTerminal = tester.getSize(find.byType(TerminalView));
-
-      // Proof the setting really moved, so a no-op apply cannot make the two
-      // assertions below pass for the wrong reason.
-      expect(grid.AppControl.heightFieldScaled, greaterThan(40));
 
       expect(
         scaledComposer.height,
