@@ -270,7 +270,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       item.representedObject = action
       item.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + action)
       let symbols = [
-        "new": "plus.square", "newAgent": "plus", "addAgent": "plus", "newTerminal": "terminal",
+        "new": "plus.square", "newAgent": "plus", "addAgent": "arrow.up.right.square", "newTerminal": "terminal",
         "cloneAgent": "plus.square.on.square",
         "renameActive": "pencil", "closeActive": "xmark",
         "splitRight": "rectangle.split.2x1", "splitDown": "rectangle.split.1x2",
@@ -289,14 +289,17 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     }
     if let file = main.item(withTitle: "File") { main.removeItem(file) }
     let file = NSMenu(title: "File")
-    add(file, "New Tab", "t", "new")
+    // Three groups, most-used first: harnesses, then tabs, then panes. The Dart keymap decides
+    // every chord below — applyMenuKeys rewrites each equivalent here from it.
+    add(file, "New Harness…", "n", "newAgent")
     add(file, "Open Harness…", "o", "addAgent")
-    // ⌘⇧T, as in a terminal app. It used to be Reopen Last Closed (History menu), which keeps its
-    // row and loses its default chord — the Dart keymap (`swarm.reopen`) is where both are decided,
-    // and applyMenuKeys rewrites every equivalent here from it.
-    add(file, "New Terminal", "t", "newTerminal", [.command, .shift])
     // ⌘⇧N: another agent like the focused pane's, fresh conversation (Dart: `agent.clone`).
     add(file, "Clone Harness", "n", "cloneAgent", [.command, .shift])
+    file.addItem(.separator())
+    add(file, "New Tab", "t", "new")
+    // ⌘⇧T, as in a terminal app. It used to be Reopen Last Closed (History menu), which keeps its
+    // row and loses its default chord (Dart: `swarm.reopen`).
+    add(file, "New Terminal", "t", "newTerminal", [.command, .shift])
     add(file, "Rename Tab…", "r", "renameActive", [.command, .shift])
     add(file, "Close Tab", "w", "closeActive")
     file.addItem(.separator())
