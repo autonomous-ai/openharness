@@ -28,6 +28,8 @@ its preview video pairs the screen recording with the captured take's audio.
   Open them again from **Takes**, including after restarting the pane. Listening to a take stops
   the live instrument; playing the instrument pauses the take. Failed saves retain the recording
   for retry or direct WAV download. Retrying a lost save response keeps one copy.
+  A take whose samples exceed full scale shows its measured peak and a reminder to lower the mix
+  for the next recording; the original audio stays unchanged.
 - Agent file changes wait during capture or when the editor has unsaved changes. **Load new
   version** applies the latest file when the performer is ready. Saving a take leaves the live
   `.strudel` file untouched; the take's source files are available for the next agent revision.

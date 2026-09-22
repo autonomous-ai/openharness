@@ -221,6 +221,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .draft-head, .keep-row { display: flex; gap: 10px; align-items: center; }
 .draft-head { margin-bottom: 6px; }
 #draft-details { color: var(--h-ink2); font-size: 11px; }
+#take-level { color: var(--h-err); font-size: 12px; margin: 6px 0; }
 .grow { flex: 1; }
 #take-wave { display: block; width: 100%; height: 52px; border-radius: 5px; background: var(--h-card); cursor: pointer; }
 #take-audio { display: block; width: 100%; height: 34px; margin: 6px 0; }

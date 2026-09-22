@@ -169,6 +169,8 @@ export function installPerformance({ state: S, cycle, stop }) {
     $('download-draft').href = url
     $('take-name').value = value.title
     $('take-name').readOnly = !!value.id
+    $('take-level').hidden = true
+    $('take-level').textContent = ''
     $('keep-take').hidden = !!value.id
     $('discard-take').textContent = value.id ? 'Close' : 'Discard'
     $('take-draft').hidden = false
@@ -209,6 +211,11 @@ export function installPerformance({ state: S, cycle, stop }) {
         const b = Math.min(bins - 1, Math.floor((i / floats.length) * bins))
         waveSamples.left[b] = Math.max(waveSamples.left[b], Math.abs(floats[i]))
         waveSamples.right[b] = Math.max(waveSamples.right[b], Math.abs(floats[i + 1]))
+      }
+      const peak = Math.max(...waveSamples.left, ...waveSamples.right)
+      if (peak > 1) {
+        $('take-level').textContent = `Peak +${(20 * Math.log10(peak)).toFixed(1)} dBFS: this recording exceeds full scale and may distort during playback. Lower the mix for your next take.`
+        $('take-level').hidden = false
       }
       drawWave()
     } catch {
