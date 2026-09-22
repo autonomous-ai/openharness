@@ -267,6 +267,15 @@ class Agent {
     terminalUnavailableReason: terminalUnavailableReason,
   );
 
+  /// Saved work the daemon is no longer running, as the desktop's [Agent] reads
+  /// it. Its conversation is on disk; `agent_restart` brings it back.
+  ///
+  /// ⚠️ **Only ever set on a machine the app asked `includeStopped: true` of.**
+  /// The daemon's plain `agents_list` answers with `registry.advertised()` —
+  /// live agents only — so a client that does not ask sees a fleet with its
+  /// stopped work silently missing, which is exactly what this app did.
+  bool get isStopped => status == 'stopped';
+
   static String? _safeEngine(Object? raw) {
     if (raw is! String || raw.isEmpty || raw.length > 64) return null;
     return RegExp(r'^[a-zA-Z0-9._-]+$').hasMatch(raw) ? raw : null;

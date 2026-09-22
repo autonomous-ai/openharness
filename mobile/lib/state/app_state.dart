@@ -24,6 +24,7 @@ import '../core/engine_availability.dart';
 import '../core/local_hostname.dart';
 import '../core/local_git_projects.dart';
 import '../core/last_opened_agent.dart';
+import '../core/phone_search_history.dart';
 import '../core/machine_cache.dart';
 import '../core/test_run.dart';
 import '../core/models.dart';
@@ -320,6 +321,20 @@ class RailRow {
   @override
   int get hashCode => Object.hash(machineId, agentId);
 }
+
+/// What every `agents_list` asks for.
+///
+/// ⚠️ **`includeStopped` is not optional polish — without it the fleet is
+/// silently incomplete.** The daemon answers a plain `agents_list` with
+/// `registry.advertised()`, which is live agents only, and adds saved-but-
+/// stopped work only when asked (`cli/src/backendSocket.ts`, `agents_list`).
+/// This app did not ask, so a machine with nine stopped harnesses reported
+/// none of them and the phone showed a different fleet than the desktop on the
+/// same account — for the search, the Agents tab and every count drawn off them.
+///
+/// The daemon ignores the flag for the hardware dial (`sessionRole == 'device'`);
+/// this app pairs as `'web'`, so it is honoured here.
+const kAgentsListPayload = {'includeStopped': true};
 
 class AppNotifier extends ChangeNotifier {
   final AuthSession session;
@@ -1202,6 +1217,7 @@ class AppNotifier extends ChangeNotifier {
        agentPreference = AgentPreference(paneLayoutStore?.storage),
        projectHistory = ProjectHistory(paneLayoutStore?.storage),
        lastOpenedAgent = LastOpenedAgent(paneLayoutStore?.storage),
+       searchHistory = PhoneSearchHistory(paneLayoutStore?.storage),
        // On the same terms as the stores above: a layout store means this is a
        // real app with a real Harness home to cache into, and its absence means
        // a test, which must not read or write one.
@@ -1273,6 +1289,15 @@ class AppNotifier extends ChangeNotifier {
 
   /// The agent the phone's terminal had open, kept across launches — see [LastOpenedAgent].
   final LastOpenedAgent lastOpenedAgent;
+
+  /// The agents and commands reached from the search, most recent first — what
+  /// ranks the box before a word is typed. See [PhoneSearchHistory].
+  ///
+  /// ⚠️ **On the app, not on the search screen.** It has to outlive one opening
+  /// of the box: a history built per page would load the last run's visits and
+  /// then forget every visit made since, which is exactly the half that matters
+  /// while somebody is switching between two agents.
+  final PhoneSearchHistory searchHistory;
 
   /// Last run's machine list, used to start dialling before this run's
   /// `/api/machines` answers — see [MachineCache] and [_warmStartMachines].
@@ -3112,6 +3137,7 @@ class AppNotifier extends ChangeNotifier {
     try {
       final response = await connection.request(
         'agents_list',
+        payload: kAgentsListPayload,
         timeout: const Duration(seconds: 10),
       );
       final agents = (response['agents'] as List<dynamic>? ?? [])
@@ -3818,7 +3844,11 @@ class AppNotifier extends ChangeNotifier {
       );
       final response = await StartupTrace.time(
         'agents.list',
-        () => connection.request('agents_list', timeout: remaining),
+        () => connection.request(
+          'agents_list',
+          payload: kAgentsListPayload,
+          timeout: remaining,
+        ),
       );
       if (!_machineWorkCurrent(machine, revision)) return;
       final rawAgents = response['agents'] as List<dynamic>? ?? [];
@@ -4423,7 +4453,9 @@ class AppNotifier extends ChangeNotifier {
   /// Machines tab's pull-to-refresh, the screen whose job is listing them.
   ///
   /// Nothing on screen waits for this: each machine publishes as it answers,
-  /// and the rows already drawn keep their places (`PhoneSearchOrder`).
+  /// and the rows already drawn keep their places — the search ranks on the
+  /// visit history and the name, neither of which a late-answering machine
+  /// moves. See [PhoneSearchHistory] and `rankPhoneDestinations`.
   Future<void> reachAllMachines() async {
     // No transport yet — before sign-in, or in a test with no fake connection.
     // The same guard [_canFetchPreview] uses, and for the same reason: `_conn`
@@ -4957,6 +4989,32 @@ class AppNotifier extends ChangeNotifier {
   /// confirmed, so this upserts from the reply directly — idempotent on `agent.id`, same as
   /// [createAgent], and safe even if the CLI's own `agent_synced` push for the restart arrives
   /// separately (fire-and-forget on the CLI side, unordered relative to this reply).
+  /// Bring a stopped agent back, so something can be opened on it.
+  ///
+  /// The desktop's `resumeAgent`: a thin guard over [restartAgent], which is the
+  /// same `agent_restart` RPC. Split out because the two have different
+  /// preconditions — restart is "this agent is misbehaving, relaunch it", resume
+  /// is "this agent is not running, it should be".
+  ///
+  /// An agent that already has a terminal succeeds without touching the machine:
+  /// the caller's job is "make it openable", and it is.
+  Future<RestartAgentResult> resumeAgent(String machineId, String agentId) {
+    final agent = stateOf(
+      machineId,
+    )?.agents.where((agent) => agent.id == agentId).firstOrNull;
+    if (agent?.terminalAvailable == true) {
+      return Future.value(const RestartAgentResult());
+    }
+    if (agent?.isStopped != true) {
+      return Future.value(
+        const RestartAgentResult(
+          error: 'That harness is no longer available. Search again.',
+        ),
+      );
+    }
+    return restartAgent(machineId, agentId);
+  }
+
   Future<RestartAgentResult> restartAgent(
     String machineId,
     String agentId,
