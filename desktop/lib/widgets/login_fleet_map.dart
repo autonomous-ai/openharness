@@ -14,82 +14,14 @@ import '../shared/theme/app_theme.dart' as grid;
 /// and the old workspace preview (three agents side by side on one screen)
 /// never hinted that the agents could be on other computers at all.
 ///
-/// **Every motion is a packet.** One leaves a pin plain (a grey square — bytes
-/// on hardware you own), rings the pin as it goes, is sealed on the way in
-/// (the square turns accent and grows a halo) and lands in the pane it was
-/// for, which flashes once. Nothing else moves on its own: no drifting dots,
-/// no rotating rims. The four arcs fire a quarter of a cycle apart, so four
-/// moving parts read as one instrument rather than four effects arguing.
-///
-/// Two clocks. [_entrance] runs ONCE, on first build: the window lands, the
-/// pins pop in one after another, and each arc draws itself as its pin
-/// arrives — "linking", said without a word. [_loop] is the heartbeat every
-/// packet is a phase of, and it is the same 3.2 s the relay diagram before it
-/// used, for the same reason: the aurora behind the card breathes at an exact
-/// multiple, so the two never drift into a beat.
-///
-/// Reduce Motion (and a disabled `TickerMode`, which is how the widget tests
-/// keep `pumpAndSettle` from hanging on an endless loop) parks both clocks:
-/// the entrance at its end, so the field is fully drawn, and the loop at a
-/// phase where one packet is sealed and another still plain — the picture
-/// keeps making its point instead of becoming a diagram of nothing happening.
-class LoginFleetMap extends StatefulWidget {
+/// A fully drawn still shows a sealed packet and a plain packet together,
+/// without an entrance delay or a continuous idle repaint loop.
+class LoginFleetMap extends StatelessWidget {
   const LoginFleetMap({super.key});
 
-  /// The drawing's own aspect, so the caller can size it without guessing.
   static const double aspectRatio = 512 / 190;
-
-  @override
-  State<LoginFleetMap> createState() => _LoginFleetMapState();
-}
-
-/// The shared heartbeat. Every packet, ring and pane flash is a phase of it.
-const Duration _period = Duration(milliseconds: 3200);
-
-/// How long the field takes to assemble on first sight.
-const Duration _entranceLength = Duration(milliseconds: 1700);
-
-class _LoginFleetMapState extends State<LoginFleetMap>
-    with TickerProviderStateMixin {
-  late final AnimationController _entrance = AnimationController(
-    vsync: this,
-    duration: _entranceLength,
-  );
-  late final AnimationController _loop = AnimationController(
-    vsync: this,
-    duration: _period,
-  );
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final stilled =
-        MediaQuery.disableAnimationsOf(context) ||
-        !TickerMode.valuesOf(context).enabled;
-    if (stilled) {
-      _entrance
-        ..stop()
-        ..value = 1;
-      _loop
-        ..stop()
-        ..value = _reducedPhase;
-    } else {
-      if (!_entrance.isAnimating && _entrance.value < 1) _entrance.forward();
-      if (!_loop.isAnimating) _loop.repeat();
-    }
-  }
-
-  /// Where the loop stops for someone who asked for less motion: a quarter
-  /// past the seal on one arc, so that packet glows while the next one along
-  /// is still a plain grey square mid-flight.
+  // Show both sealed and plain packets without running a ticker while idle.
   static const double _reducedPhase = 0.66;
-
-  @override
-  void dispose() {
-    _entrance.dispose();
-    _loop.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -122,16 +54,9 @@ class _LoginFleetMapState extends State<LoginFleetMap>
     return RepaintBoundary(
       child: AspectRatio(
         aspectRatio: LoginFleetMap.aspectRatio,
-        child: AnimatedBuilder(
-          animation: Listenable.merge([_entrance, _loop]),
-          builder: (context, _) => CustomPaint(
-            painter: _MapPainter(
-              entrance: Curves.easeOut.transform(_entrance.value),
-              t: _loop.value,
-              palette: palette,
-            ),
-            size: Size.infinite,
-          ),
+        child: CustomPaint(
+          painter: _MapPainter(entrance: 1, t: _reducedPhase, palette: palette),
+          size: Size.infinite,
         ),
       ),
     );

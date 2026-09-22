@@ -334,8 +334,8 @@ class SwarmSearchController extends ChangeNotifier {
       ? row != null &&
                 row.agentId == null &&
                 split == null &&
-                _missingIds(row).length > 1
-            ? 'Open ${_missingIds(row).length} Harnesses'
+                _missingCount(row) > 1
+            ? 'Open ${_missingCount(row)} Harnesses'
             : primaryAction
       : row == null
       ? 'Go to'
@@ -350,7 +350,7 @@ class SwarmSearchController extends ChangeNotifier {
       : selected != null &&
             selected!.agentId == null &&
             selected!.members.isNotEmpty &&
-            _missingIds(selected!).isEmpty
+            !_hasMissing(selected!)
       ? 'Everything in it is already open here.'
       : 'No room for another harness.';
 
@@ -652,10 +652,9 @@ class SwarmSearchController extends ChangeNotifier {
                 canOpenSwarmGroup(app, row, destinationSwarmId: targetId)) &&
             (row.closedId == null || app.canReopenClosed(row.closedId!));
 
-  Set<String> _missingIds(SwarmDestination row) {
-    final members = row.agentId == null ? row.members : {row.id};
-    return members.difference(_presentIds);
-  }
+  int _missingCount(SwarmDestination row) => row.agentId != null
+      ? (_presentIds.contains(row.id) ? 0 : 1)
+      : row.members.where((id) => !_presentIds.contains(id)).length;
 
   bool _hasMissing(SwarmDestination row) => row.agentId != null
       ? !_presentIds.contains(row.id)
@@ -672,7 +671,7 @@ class SwarmSearchController extends ChangeNotifier {
       row.closedId == null &&
       (placement == null || row.agentId != null) &&
       (placement != null && alreadyHere(row) ||
-          _missingIds(row).isNotEmpty &&
+          _hasMissing(row) &&
               (split == null || row.agentId != null) &&
               (split == null || app.isPaneSplitCurrent(split!)) &&
               (placement == HarnessPlacement.newTab ||
@@ -681,7 +680,7 @@ class SwarmSearchController extends ChangeNotifier {
                         swarm.id == targetId &&
                         !swarm.isStore &&
                         !swarm.isOrchestrator &&
-                        swarm.panes.length + _missingIds(row).length <=
+                        swarm.panes.length + _missingCount(row) <=
                             AppNotifier.maxPanes,
                   )));
 

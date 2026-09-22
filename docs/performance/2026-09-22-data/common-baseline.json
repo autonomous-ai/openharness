@@ -1,0 +1,55 @@
+{
+  "sourceLog": "/private/tmp/rapid-moose-common-before-2.log",
+  "observations": [
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_n",
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 12.794,
+        "p95Ms": 17.132,
+        "p99Ms": 24.292
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_o",
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 27.833,
+        "p95Ms": 45.763,
+        "p99Ms": 75.577
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_p",
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 24.884,
+        "p95Ms": 28.859,
+        "p99Ms": 64.872
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_comma",
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 36.115,
+        "p95Ms": 116.317,
+        "p99Ms": 139.949
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_slash",
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 51.96,
+        "p95Ms": 149.896,
+        "p99Ms": 183.393
+      }
+    }
+  ]
+}

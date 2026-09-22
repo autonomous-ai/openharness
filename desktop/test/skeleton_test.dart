@@ -1,5 +1,5 @@
 // The skeleton primitives, checked against the four rules they exist for:
-// the rhythm is a breath that Reduce Motion freezes at the PEAK, a text
+// placeholders stay steady without a ticker, a text
 // placeholder is exactly as tall as the text it stands in for, a list fades
 // towards its bottom, and none of it takes the pointer.
 import 'package:flutter/material.dart';
@@ -24,16 +24,15 @@ Color _fillOf(WidgetTester tester) {
 }
 
 void main() {
-  testWidgets('breathes between recess and recessHover', (tester) async {
+  testWidgets('skeleton stays visible without scheduling animation frames', (
+    tester,
+  ) async {
     await tester.pumpWidget(_host(const Skeleton(width: 40)));
-    // The first frame is at rest.
-    expect(_fillOf(tester), AppSurface.recess);
-    // Half a cycle later it has reached the peak.
-    await tester.pump(const Duration(milliseconds: 1100));
     expect(_fillOf(tester), AppSurface.recessHover);
-    // And it comes back down: a breath, not a one-shot fade.
-    await tester.pump(const Duration(milliseconds: 1100));
-    expect(_fillOf(tester), AppSurface.recess);
+    expect(tester.binding.transientCallbackCount, 0);
+    await tester.pump(const Duration(milliseconds: 2200));
+    expect(_fillOf(tester), AppSurface.recessHover);
+    expect(tester.binding.transientCallbackCount, 0);
   });
 
   testWidgets('Reduce Motion holds the skeleton at the peak, not the middle', (

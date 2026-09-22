@@ -1,0 +1,710 @@
+{
+  "before": {
+    "sourceProfile": "/private/tmp/rapid-moose-before-2000.json",
+    "samplePeriodMicros": 1000,
+    "sampleCount": 12084,
+    "timeExtentMicros": 19160501,
+    "topProductInclusive": [
+      {
+        "function": "SwarmSearchController._filter",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 837,
+        "exclusiveTicks": 6
+      },
+      {
+        "function": "SwarmSearchController.setQuery",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 731,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "rankSwarmDestinations.<anonymous closure>",
+        "source": "lib/state/swarm_navigation.dart",
+        "inclusiveTicks": 285,
+        "exclusiveTicks": 149
+      },
+      {
+        "function": "rankSwarmDestinations",
+        "source": "lib/state/swarm_navigation.dart",
+        "inclusiveTicks": 214,
+        "exclusiveTicks": 33
+      },
+      {
+        "function": "_KeymapHostState._handle",
+        "source": "lib/shortcuts/keymap_host.dart",
+        "inclusiveTicks": 179,
+        "exclusiveTicks": 1
+      },
+      {
+        "function": "swarmFieldMatchScore",
+        "source": "lib/state/swarm_navigation.dart",
+        "inclusiveTicks": 158,
+        "exclusiveTicks": 46
+      },
+      {
+        "function": "<anonymous closure>.<anonymous closure>",
+        "source": "lib/screens/swarm_screen.dart",
+        "inclusiveTicks": 157,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "_SwarmScreenState._runShortcut",
+        "source": "lib/screens/swarm_screen.dart",
+        "inclusiveTicks": 157,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "_SwarmScreenState._addAgent",
+        "source": "lib/screens/swarm_screen.dart",
+        "inclusiveTicks": 157,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "_SwarmScreenState._openSearch",
+        "source": "lib/screens/swarm_screen.dart",
+        "inclusiveTicks": 157,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "SwarmSearchController.canSubmit",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 154,
+        "exclusiveTicks": 4
+      },
+      {
+        "function": "SwarmSearchController.SwarmSearchController",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 150,
+        "exclusiveTicks": 2
+      },
+      {
+        "function": "SwarmSearchController._refresh",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 148,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "SwarmSearchController.canAdd",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 136,
+        "exclusiveTicks": 7
+      },
+      {
+        "function": "SwarmSearchController._missingIds",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 112,
+        "exclusiveTicks": 4
+      },
+      {
+        "function": "<anonymous closure>.<anonymous closure>",
+        "source": "lib/widgets/prompt_context.dart",
+        "inclusiveTicks": 58,
+        "exclusiveTicks": 1
+      },
+      {
+        "function": "BoxHintStrip.build",
+        "source": "lib/widgets/box_chrome.dart",
+        "inclusiveTicks": 52,
+        "exclusiveTicks": 1
+      },
+      {
+        "function": "canAdd.<anonymous closure>",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 49,
+        "exclusiveTicks": 1
+      },
+      {
+        "function": "PromptContextView._line",
+        "source": "lib/widgets/prompt_context.dart",
+        "inclusiveTicks": 44,
+        "exclusiveTicks": 3
+      },
+      {
+        "function": "BoxHintStrip._reservedWidth",
+        "source": "lib/widgets/box_chrome.dart",
+        "inclusiveTicks": 39,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "_line.<anonymous closure>",
+        "source": "lib/widgets/prompt_context.dart",
+        "inclusiveTicks": 38,
+        "exclusiveTicks": 2
+      },
+      {
+        "function": "_SearchRowContentState.build",
+        "source": "lib/widgets/swarm_switcher.dart",
+        "inclusiveTicks": 38,
+        "exclusiveTicks": 2
+      },
+      {
+        "function": "<anonymous closure>.buildRow",
+        "source": "lib/widgets/swarm_switcher.dart",
+        "inclusiveTicks": 36,
+        "exclusiveTicks": 4
+      },
+      {
+        "function": "subsequenceSpread",
+        "source": "lib/core/fuzzy_match.dart",
+        "inclusiveTicks": 35,
+        "exclusiveTicks": 7
+      },
+      {
+        "function": "<anonymous closure>.<anonymous closure>",
+        "source": "lib/widgets/swarm_switcher.dart",
+        "inclusiveTicks": 34,
+        "exclusiveTicks": 2
+      },
+      {
+        "function": "SwarmSearchCatalog.read",
+        "source": "lib/state/swarm_navigation.dart",
+        "inclusiveTicks": 24,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "build.<anonymous closure>",
+        "source": "lib/widgets/swarm_search_preview.dart",
+        "inclusiveTicks": 24,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "_changed.<anonymous closure>",
+        "source": "lib/widgets/swarm_switcher.dart",
+        "inclusiveTicks": 24,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "BoxAnnouncer.row",
+        "source": "lib/widgets/box_chrome.dart",
+        "inclusiveTicks": 24,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "build.<anonymous closure>",
+        "source": "lib/widgets/swarm_switcher.dart",
+        "inclusiveTicks": 23,
+        "exclusiveTicks": 0
+      }
+    ],
+    "changedPaths": [
+      {
+        "function": "PromptContextView._line",
+        "source": "lib/widgets/prompt_context.dart",
+        "inclusiveTicks": 44,
+        "exclusiveTicks": 3
+      },
+      {
+        "function": "PromptContextView._measure",
+        "source": "lib/widgets/prompt_context.dart",
+        "inclusiveTicks": 22,
+        "exclusiveTicks": 2
+      },
+      {
+        "function": "SwarmSearchController._filter",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 837,
+        "exclusiveTicks": 6
+      },
+      {
+        "function": "SwarmSearchController.canSubmit",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 154,
+        "exclusiveTicks": 4
+      },
+      {
+        "function": "SwarmSearchController.canAdd",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 136,
+        "exclusiveTicks": 7
+      },
+      {
+        "function": "SwarmSearchController._missingIds",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 112,
+        "exclusiveTicks": 4
+      }
+    ],
+    "topOverallExclusive": [
+      {
+        "function": "Element._debugCheckForCycles",
+        "source": "flutter/packages/flutter/lib/src/widgets/framework.dart",
+        "inclusiveTicks": 455,
+        "exclusiveTicks": 432
+      },
+      {
+        "function": "[Stub] DebugStepCheck",
+        "source": "",
+        "inclusiveTicks": 357,
+        "exclusiveTicks": 357
+      },
+      {
+        "function": "[Stub] MegamorphicCall",
+        "source": "",
+        "inclusiveTicks": 349,
+        "exclusiveTicks": 348
+      },
+      {
+        "function": "__psynch_cvwait",
+        "source": "",
+        "inclusiveTicks": 220,
+        "exclusiveTicks": 220
+      },
+      {
+        "function": "rankSwarmDestinations.<anonymous closure>",
+        "source": "lib/state/swarm_navigation.dart",
+        "inclusiveTicks": 285,
+        "exclusiveTicks": 149
+      },
+      {
+        "function": "Element.depth",
+        "source": "flutter/packages/flutter/lib/src/widgets/framework.dart",
+        "inclusiveTicks": 131,
+        "exclusiveTicks": 130
+      },
+      {
+        "function": "<unknown Dart function>",
+        "source": "",
+        "inclusiveTicks": 1113,
+        "exclusiveTicks": 112
+      },
+      {
+        "function": "_RenderObjectSemantics.markNeedsUpdate",
+        "source": "flutter/packages/flutter/lib/src/rendering/object.dart",
+        "inclusiveTicks": 555,
+        "exclusiveTicks": 111
+      },
+      {
+        "function": "RenderObject.adoptChild",
+        "source": "flutter/packages/flutter/lib/src/rendering/object.dart",
+        "inclusiveTicks": 626,
+        "exclusiveTicks": 105
+      },
+      {
+        "function": "[Stub] AllocateClosure1",
+        "source": "",
+        "inclusiveTicks": 128,
+        "exclusiveTicks": 102
+      },
+      {
+        "function": "[Stub] Type Test Type: Element",
+        "source": "",
+        "inclusiveTicks": 101,
+        "exclusiveTicks": 101
+      },
+      {
+        "function": "dart::VMHandles::AllocateHandle(dart::Zone*)",
+        "source": "",
+        "inclusiveTicks": 97,
+        "exclusiveTicks": 95
+      },
+      {
+        "function": "_tlv_get_addr",
+        "source": "",
+        "inclusiveTicks": 85,
+        "exclusiveTicks": 85
+      },
+      {
+        "function": "_xzm_free",
+        "source": "",
+        "inclusiveTicks": 85,
+        "exclusiveTicks": 85
+      },
+      {
+        "function": "RenderObject.parent",
+        "source": "flutter/packages/flutter/lib/src/rendering/object.dart",
+        "inclusiveTicks": 78,
+        "exclusiveTicks": 78
+      },
+      {
+        "function": "_compareNumerically",
+        "source": "file:///Users/ab/.pub-cache/hosted/pub.dev/collection-1.19.1/lib/src/comparators.dart",
+        "inclusiveTicks": 75,
+        "exclusiveTicks": 74
+      },
+      {
+        "function": "[Stub] SmiEqualInlineCache",
+        "source": "",
+        "inclusiveTicks": 76,
+        "exclusiveTicks": 73
+      },
+      {
+        "function": "Element.widget",
+        "source": "flutter/packages/flutter/lib/src/widgets/framework.dart",
+        "inclusiveTicks": 86,
+        "exclusiveTicks": 68
+      },
+      {
+        "function": "[Stub] AllocateObjectParameterized",
+        "source": "",
+        "inclusiveTicks": 64,
+        "exclusiveTicks": 64
+      },
+      {
+        "function": "dart::Object::InitializeObject(unsigned long, long, long, bool, unsigned long, unsigned long)",
+        "source": "",
+        "inclusiveTicks": 70,
+        "exclusiveTicks": 63
+      }
+    ]
+  },
+  "after": {
+    "sourceProfile": "/private/tmp/rapid-moose-after-2000.json",
+    "samplePeriodMicros": 1000,
+    "sampleCount": 8501,
+    "timeExtentMicros": 13019091,
+    "topProductInclusive": [
+      {
+        "function": "SwarmSearchController._filter",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 586,
+        "exclusiveTicks": 7
+      },
+      {
+        "function": "SwarmSearchController.setQuery",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 518,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "rankSwarmDestinations.<anonymous closure>",
+        "source": "lib/state/swarm_navigation.dart",
+        "inclusiveTicks": 242,
+        "exclusiveTicks": 138
+      },
+      {
+        "function": "rankSwarmDestinations",
+        "source": "lib/state/swarm_navigation.dart",
+        "inclusiveTicks": 169,
+        "exclusiveTicks": 13
+      },
+      {
+        "function": "_KeymapHostState._handle",
+        "source": "lib/shortcuts/keymap_host.dart",
+        "inclusiveTicks": 132,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "<anonymous closure>.<anonymous closure>",
+        "source": "lib/screens/swarm_screen.dart",
+        "inclusiveTicks": 119,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "_SwarmScreenState._runShortcut",
+        "source": "lib/screens/swarm_screen.dart",
+        "inclusiveTicks": 118,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "_SwarmScreenState._addAgent",
+        "source": "lib/screens/swarm_screen.dart",
+        "inclusiveTicks": 118,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "_SwarmScreenState._openSearch",
+        "source": "lib/screens/swarm_screen.dart",
+        "inclusiveTicks": 117,
+        "exclusiveTicks": 1
+      },
+      {
+        "function": "swarmFieldMatchScore",
+        "source": "lib/state/swarm_navigation.dart",
+        "inclusiveTicks": 115,
+        "exclusiveTicks": 28
+      },
+      {
+        "function": "SwarmSearchController.SwarmSearchController",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 111,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "SwarmSearchController._refresh",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 111,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "<anonymous closure>.<anonymous closure>",
+        "source": "lib/widgets/prompt_context.dart",
+        "inclusiveTicks": 60,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "SwarmSearchController.canSubmit",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 53,
+        "exclusiveTicks": 7
+      },
+      {
+        "function": "_PromptContextViewState._cachedLine",
+        "source": "lib/widgets/prompt_context.dart",
+        "inclusiveTicks": 50,
+        "exclusiveTicks": 1
+      },
+      {
+        "function": "BoxHintStrip.build",
+        "source": "lib/widgets/box_chrome.dart",
+        "inclusiveTicks": 45,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "SwarmSearchController.canAdd",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 41,
+        "exclusiveTicks": 7
+      },
+      {
+        "function": "_PromptContextViewState._line",
+        "source": "lib/widgets/prompt_context.dart",
+        "inclusiveTicks": 38,
+        "exclusiveTicks": 1
+      },
+      {
+        "function": "_PromptContextViewState._measure",
+        "source": "lib/widgets/prompt_context.dart",
+        "inclusiveTicks": 38,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "_line.<anonymous closure>",
+        "source": "lib/widgets/prompt_context.dart",
+        "inclusiveTicks": 35,
+        "exclusiveTicks": 2
+      },
+      {
+        "function": "BoxHintStrip._reservedWidth",
+        "source": "lib/widgets/box_chrome.dart",
+        "inclusiveTicks": 31,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "_PromptContextViewState._middleEllipsis",
+        "source": "lib/widgets/prompt_context.dart",
+        "inclusiveTicks": 26,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "_PromptContextViewState._fit",
+        "source": "lib/widgets/prompt_context.dart",
+        "inclusiveTicks": 25,
+        "exclusiveTicks": 1
+      },
+      {
+        "function": "SwarmSearchCatalog.read",
+        "source": "lib/state/swarm_navigation.dart",
+        "inclusiveTicks": 23,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "subsequenceSpread",
+        "source": "lib/core/fuzzy_match.dart",
+        "inclusiveTicks": 23,
+        "exclusiveTicks": 5
+      },
+      {
+        "function": "<anonymous closure>.buildRow",
+        "source": "lib/widgets/swarm_switcher.dart",
+        "inclusiveTicks": 22,
+        "exclusiveTicks": 2
+      },
+      {
+        "function": "_changed.<anonymous closure>",
+        "source": "lib/widgets/swarm_switcher.dart",
+        "inclusiveTicks": 22,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "BoxAnnouncer.row",
+        "source": "lib/widgets/box_chrome.dart",
+        "inclusiveTicks": 22,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "SearchResultText.build",
+        "source": "lib/widgets/search_result_text.dart",
+        "inclusiveTicks": 20,
+        "exclusiveTicks": 1
+      },
+      {
+        "function": "<anonymous closure>.<anonymous closure>",
+        "source": "lib/widgets/swarm_switcher.dart",
+        "inclusiveTicks": 20,
+        "exclusiveTicks": 0
+      }
+    ],
+    "changedPaths": [
+      {
+        "function": "_PromptContextViewState._cachedLine",
+        "source": "lib/widgets/prompt_context.dart",
+        "inclusiveTicks": 50,
+        "exclusiveTicks": 1
+      },
+      {
+        "function": "_PromptContextViewState._line",
+        "source": "lib/widgets/prompt_context.dart",
+        "inclusiveTicks": 38,
+        "exclusiveTicks": 1
+      },
+      {
+        "function": "_PromptContextViewState._measure",
+        "source": "lib/widgets/prompt_context.dart",
+        "inclusiveTicks": 38,
+        "exclusiveTicks": 0
+      },
+      {
+        "function": "SwarmSearchController._filter",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 586,
+        "exclusiveTicks": 7
+      },
+      {
+        "function": "SwarmSearchController.canSubmit",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 53,
+        "exclusiveTicks": 7
+      },
+      {
+        "function": "SwarmSearchController.canAdd",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 41,
+        "exclusiveTicks": 7
+      },
+      {
+        "function": "SwarmSearchController._hasMissing",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 7,
+        "exclusiveTicks": 1
+      },
+      {
+        "function": "SwarmSearchController._missingCount",
+        "source": "lib/state/swarm_search.dart",
+        "inclusiveTicks": 8,
+        "exclusiveTicks": 2
+      }
+    ],
+    "topOverallExclusive": [
+      {
+        "function": "Element._debugCheckForCycles",
+        "source": "flutter/packages/flutter/lib/src/widgets/framework.dart",
+        "inclusiveTicks": 337,
+        "exclusiveTicks": 318
+      },
+      {
+        "function": "[Stub] DebugStepCheck",
+        "source": "",
+        "inclusiveTicks": 254,
+        "exclusiveTicks": 254
+      },
+      {
+        "function": "[Stub] MegamorphicCall",
+        "source": "",
+        "inclusiveTicks": 240,
+        "exclusiveTicks": 239
+      },
+      {
+        "function": "__psynch_cvwait",
+        "source": "",
+        "inclusiveTicks": 170,
+        "exclusiveTicks": 170
+      },
+      {
+        "function": "rankSwarmDestinations.<anonymous closure>",
+        "source": "lib/state/swarm_navigation.dart",
+        "inclusiveTicks": 242,
+        "exclusiveTicks": 138
+      },
+      {
+        "function": "Element.depth",
+        "source": "flutter/packages/flutter/lib/src/widgets/framework.dart",
+        "inclusiveTicks": 126,
+        "exclusiveTicks": 122
+      },
+      {
+        "function": "dart::VMHandles::AllocateHandle(dart::Zone*)",
+        "source": "",
+        "inclusiveTicks": 89,
+        "exclusiveTicks": 86
+      },
+      {
+        "function": "RenderObject.parent",
+        "source": "flutter/packages/flutter/lib/src/rendering/object.dart",
+        "inclusiveTicks": 84,
+        "exclusiveTicks": 84
+      },
+      {
+        "function": "[Stub] AllocateClosure1",
+        "source": "",
+        "inclusiveTicks": 99,
+        "exclusiveTicks": 82
+      },
+      {
+        "function": "RenderObject.adoptChild",
+        "source": "flutter/packages/flutter/lib/src/rendering/object.dart",
+        "inclusiveTicks": 469,
+        "exclusiveTicks": 80
+      },
+      {
+        "function": "<unknown Dart function>",
+        "source": "",
+        "inclusiveTicks": 574,
+        "exclusiveTicks": 68
+      },
+      {
+        "function": "_xzm_free",
+        "source": "",
+        "inclusiveTicks": 68,
+        "exclusiveTicks": 68
+      },
+      {
+        "function": "_RenderObjectSemantics.markNeedsUpdate",
+        "source": "flutter/packages/flutter/lib/src/rendering/object.dart",
+        "inclusiveTicks": 348,
+        "exclusiveTicks": 66
+      },
+      {
+        "function": "[Stub] Type Test Type: Element",
+        "source": "",
+        "inclusiveTicks": 65,
+        "exclusiveTicks": 65
+      },
+      {
+        "function": "[Stub] SmiEqualInlineCache",
+        "source": "",
+        "inclusiveTicks": 65,
+        "exclusiveTicks": 62
+      },
+      {
+        "function": "_LazyListIterator.moveNext",
+        "source": "flutter/packages/flutter/lib/src/foundation/basic_types.dart",
+        "inclusiveTicks": 313,
+        "exclusiveTicks": 61
+      },
+      {
+        "function": "dart::Object::InitializeObject(unsigned long, long, long, bool, unsigned long, unsigned long)",
+        "source": "",
+        "inclusiveTicks": 58,
+        "exclusiveTicks": 54
+      },
+      {
+        "function": "dart::StackResource::Init(dart::ThreadState*)",
+        "source": "",
+        "inclusiveTicks": 52,
+        "exclusiveTicks": 52
+      },
+      {
+        "function": "_tlv_get_addr",
+        "source": "",
+        "inclusiveTicks": 52,
+        "exclusiveTicks": 52
+      },
+      {
+        "function": "[Stub] AllocateObjectParameterized",
+        "source": "",
+        "inclusiveTicks": 49,
+        "exclusiveTicks": 49
+      }
+    ]
+  }
+}

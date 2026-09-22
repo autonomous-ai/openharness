@@ -18,9 +18,12 @@ import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
+import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/terminal/terminal_session.dart';
+
+import 'flutter_driver.dart';
 
 const _host = MethodChannel('harness/isolated_benchmark');
 final _timings = <int, ui.FrameTiming>{};
@@ -32,6 +35,8 @@ bool _burstPending = false;
 int _outputBytes = 0;
 int _skippedBursts = 0;
 int _inputBytes = 0;
+final _interactive = Platform.environment['HARNESS_BENCH_MANUAL'] == '1';
+final _flutterDriven = Platform.environment['HARNESS_BENCH_FLUTTER'] == '1';
 
 class _Sample {
   _Sample(
@@ -141,6 +146,10 @@ Future<AppNotifier> _fixture(int count, Directory stateDirectory) async {
       send: (_, _) async => true,
       sendBinary: (packet) async {
         if (packet.kind != TerminalBinaryKind.input) return true;
+        if (_interactive || _flutterDriven) {
+          await _output(session, packet.bytes);
+          return true;
+        }
         final sample = _pending;
         if (sample == null ||
             sample.operation != 'typing' ||
@@ -296,6 +305,9 @@ Future<void> _run() async {
     ),
   );
   final projects = SwarmProjectStore();
+  // Production defaults to this path; FLUTTER_TEST otherwise selects a legacy
+  // creation form for older tests. Exercise the actual Cmd-N box here.
+  newHarnessOpensInBox = true;
   runApp(
     grid.BrightnessScope(
       child: MaterialApp(
@@ -310,7 +322,20 @@ Future<void> _run() async {
     ),
   );
   await _frame();
+  if (_interactive) return;
   await Future<void>.delayed(const Duration(seconds: 1));
+  if (_flutterDriven) {
+    try {
+      await runFlutterDispatchBenchmark(app, output, metadata!, _timings);
+    } catch (error, stack) {
+      await File(output).writeAsString(
+        jsonEncode({'success': false, 'error': '$error', 'stack': '$stack'}),
+      );
+    } finally {
+      await _host.invokeMethod<void>('finish');
+    }
+    return;
+  }
   final random = Random(77);
   final phases = <Map<String, Object?>>[];
   try {

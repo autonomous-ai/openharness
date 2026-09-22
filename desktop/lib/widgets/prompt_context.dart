@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/rendering.dart' show OverflowBoxFit;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -10,7 +12,7 @@ import 'search_result_text.dart';
 /// The same compact identity line in the picker, pane header and live preview.
 /// Symbols use our bundled icon font; Powerline separators are drawn shapes.
 /// Changing the terminal font therefore never requires a patched Nerd Font.
-class PromptContextView extends StatelessWidget {
+class PromptContextView extends StatefulWidget {
   const PromptContextView({
     super.key,
     required this.contextData,
@@ -26,6 +28,44 @@ class PromptContextView extends StatelessWidget {
   final Iterable<SearchFieldMatch> matches;
 
   @override
+  State<PromptContextView> createState() => _PromptContextViewState();
+}
+
+class _PromptContextViewState extends State<PromptContextView> {
+  PromptContext get contextData => widget.contextData;
+  PromptPrefs? get prefs => widget.prefs;
+  AppearancePrefsStore? get store => widget.store;
+  Iterable<SearchFieldMatch> get matches => widget.matches;
+  double get size => widget.size;
+
+  Object? _lineKey;
+  List<SearchFieldMatch> _lineMatches = const [];
+  Widget? _lineWidget;
+
+  Widget _cachedLine(PromptPrefs prefs, double width, TextScaler scaler) {
+    final key = (
+      contextData,
+      prefs,
+      width,
+      scaler,
+      _style(Colors.white),
+      size,
+      grid.AppPalette.swarmAccent,
+      grid.AppPalette.teal,
+      grid.AppPalette.online,
+    );
+    final nextMatches = matches.toList(growable: false);
+    if (_lineKey == key && listEquals(_lineMatches, nextMatches)) {
+      return _lineWidget!;
+    }
+    _lineKey = key;
+    _lineMatches = nextMatches;
+    // Most searches match the title. Keep the breadcrumb's render tree intact
+    // while typing or moving its highlight, until its own content changes.
+    return _lineWidget = _line(prefs, width, scaler);
+  }
+
+  @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     return ListenableBuilder(
@@ -34,7 +74,7 @@ class PromptContextView extends StatelessWidget {
         terminalFontStore,
       ]),
       builder: (context, _) => LayoutBuilder(
-        builder: (context, constraints) => _line(
+        builder: (context, constraints) => _cachedLine(
           prefs ?? (store ?? appearancePrefsStore).value.prompt,
           constraints.maxWidth,
           MediaQuery.textScalerOf(context),
@@ -245,9 +285,9 @@ class PromptContextView extends StatelessWidget {
     return [for (final width in widths) (width * scale).floorToDouble()];
   }
 
-  static final _widths = <(String, double, double), double>{};
+  static final _widths = <(String, TextStyle, TextScaler), double>{};
   static double _measure(String text, TextStyle style, TextScaler scaler) {
-    final key = (text, style.fontSize ?? 0, scaler.scale(100));
+    final key = (text, style, scaler);
     final known = _widths[key];
     if (known != null) return known;
     if (_widths.length > 512) _widths.clear();
@@ -298,9 +338,11 @@ class _Clipped extends StatelessWidget {
   @override
   Widget build(BuildContext context) => clip
       ? ClipRect(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            physics: const NeverScrollableScrollPhysics(),
+          child: OverflowBox(
+            fit: OverflowBoxFit.deferToChild,
+            alignment: Alignment.centerLeft,
+            minWidth: 0,
+            maxWidth: double.infinity,
             child: child,
           ),
         )

@@ -1,5 +1,78 @@
 # Native Release interaction benchmark
 
+Start with the [September 22 wrap-up and resume notes](../../../docs/performance/2026-09-22-wrap-up.md)
+for the ready PRs, measured improvements, rejected experiments and remaining priorities.
+
+## Framework-dispatch comparison and manual feature checks
+
+The fixture supports three separate modes:
+
+```sh
+python3 tool/native_benchmark/prepare.py --flutter /path/to/flutter --flutter-dispatch
+python3 tool/native_benchmark/prepare.py --flutter /path/to/flutter --primary-workflows
+python3 tool/native_benchmark/prepare.py --flutter /path/to/flutter --interactive
+```
+
+Open the printed `BENCHMARK_APP` through normal application controls. These
+copies embed only their own temporary fixture environment in the copied host.
+The dispatch mode runs and exits automatically, writing `interactive.json` in
+`BENCHMARK_ROOT`; the interactive mode remains open for manual checks. They
+cannot be combined. Neither mode opens a real transport or uses saved sessions.
+
+`--flutter-dispatch` measures Cmd+N/O/T/P/comma/slash/F, tab changes, pane focus,
+and zoom in the macOS Release renderer. It calls the framework's keyboard-state
+and focus dispatch stages, validates the resulting widget/state, and joins the
+exact first frame and fully opened route frame to `FrameTiming`. Each operation
+has five warmups and 40 measured observations. All observations are retained.
+The fixture has 16 sessions, four visible panes and 1,000 scrollback rows per
+session. It measures idle-terminal interactions only. Run baseline and edited
+production sources with identical fixture tooling, sequentially, with builds
+and other tests finished. Preserve every completed run.
+
+This mode **excludes AppKit input delivery, physical keyboard latency, GPU
+presentation, network latency and native titlebar paint completion**. A fully
+opened frame includes any route fade; the first frame is reported separately.
+The reported display maximum is metadata, not an asserted refresh rate.
+The driver also records the preceding frame, dispatch offset from its vsync,
+waiting time until the requested frame starts building, and build-start-to-raster
+time. A preceding busy frame can change the input's position within a refresh
+interval; inspect these components before attributing elapsed-time differences
+to CPU work. Wall-clock phase timestamps are correlated using the engine's
+paired monotonic and wall-clock raster-finish timestamps.
+
+`--primary-workflows` runs only Cmd+N/O/T and tab switching, with five warmups
+and 120 measured samples per action. It inserts a repeatable sequence of 0–20 ms
+delays **before** the measured dispatch to spread input across refresh phases.
+The requested delay is retained on every sample. This supplements the original
+post-frame cadence; preserve and report both if they give different results.
+The recorded preceding frame is the frame awaited before that optional delay.
+Use manual mode for visual/interaction QA, not timing claims. See the
+[September 22 results](../../../docs/performance/2026-09-22-desktop-latency.md).
+
+For primary-workflow debug CPU comparisons at 16/48 retained terminals:
+
+```sh
+flutter test --no-pub test/benchmarks/primary_workflows_benchmark.dart --concurrency=1 --reporter expanded
+```
+
+The fixture exercises Cmd+N/O/T and workspace switching with synthetic metadata
+replies and 1,000 scrollback rows per terminal. It checks the destination and
+terminal input isolation for every action. Five warmups and a separate rebuild
+instrumentation pass precede 40 timed samples per action. Optional
+`HARNESS_PRIMARY_CPU_PROFILE=/private/tmp/primary` with `--enable-vmservice`
+records profiles; `HARNESS_PRIMARY_OPERATION=cmd_t` restricts the action.
+See the [primary-workflow results](../../../docs/performance/2026-09-22-primary-workflows.md)
+for the isolated Cmd+O comparison, unchanged controls and rejected new-tab experiment.
+The [pane-caching experiment](../../../docs/performance/2026-09-22-pane-workflows.md)
+reports both input cadences and frame-phase diagnostics; less build work did not
+translate into faster tab switching, so that production change was rejected.
+
+## Original AppKit event-queue runner
+
+The original path below has no accepted calibration in this performance pass.
+Its Cmd+1…4 pane-focus workload also predates the current default keymap; it
+must be updated and recalibrated before reporting native-event latency.
+
 **Status, September 14, 2026:** the builder supports the current Harness name,
 validates the copied product identity and verifies the resulting bundle. It
 accepts both the current `ai.autonomous.harness` and legacy `.v2` source IDs.

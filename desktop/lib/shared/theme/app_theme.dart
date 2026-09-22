@@ -1312,57 +1312,15 @@ abstract final class AppControl {
       EdgeInsets.symmetric(horizontal: 10 * AppFont.uiScale);
 }
 
-/// How long the app's UI takes to change, and on what curve.
-///
-/// These aren't new numbers — they're the ones already in use, given a name. The
-/// app had settled on ~130ms for a hover and `Curves.easeOut` almost everywhere
-/// (31 call sites against 8 for the next most common), but every one of them
-/// typed the number in by hand, and the drift had already started: 120, 130, 140
-/// and 160 all appear for the same kind of change. A tile in Plugins even
-/// carries a comment saying its timing "matches the job list's, so a row lifts
-/// the same way everywhere in the app" — an intent with nothing enforcing it.
-///
-/// Motion here is for *continuity*, not decoration: it says the thing you're
-/// looking at is the same thing it was a moment ago. That's why it's this short.
-/// Anything long enough to notice as an animation is too long for a hover.
+/// Desktop feedback is visible on the next frame. Keep these shared names so
+/// hover, selection, panels, and meters cannot grow independent animation delays.
+/// Progress indicators may still animate while real work is in flight.
 abstract final class AppMotion {
-  /// A surface reacting to the pointer — a row's hover fill, a chip warming up.
-  static const Duration hover = Duration(milliseconds: 130);
-
-  /// Content being replaced in place: a list swapping to another set of rows.
-  static const Duration swap = Duration(milliseconds: 160);
-
-  /// A panel folding or unfolding — the sidebar collapsing to its glyphs.
-  ///
-  /// Longer than [swap], and it has to be: what moves is the window's left
-  /// edge and everything to the right of it, over 212px. At [swap] that reads
-  /// as the layout jumping rather than the rail folding, which is the one thing
-  /// the animation exists to prevent.
-  static const Duration fold = Duration(milliseconds: 220);
-
-  /// A meter filling to the figure beside it — the node panel's speed bars.
-  ///
-  /// Longer than [fold] even though what moves is 26px, because this one is not
-  /// a surface getting out of the way: it is a value being drawn, and a reader
-  /// is meant to watch it arrive. Under about a quarter second the bars read as
-  /// having simply appeared at their length, which is the same as no animation
-  /// at all.
-  ///
-  /// Still short enough to survive repetition. These panels open on hover, so
-  /// the fill replays every time the pointer crosses the pill — anything that
-  /// lingers turns into a toll on a gesture people make dozens of times an hour.
-  static const Duration meter = Duration(milliseconds: 300);
-
-  /// A surface acknowledging a click while the button is still down.
-  ///
-  /// Shorter than [hover], and it has to be: hover follows a pointer that is
-  /// merely passing, while this one answers a press the user is *making*. A
-  /// dip that outlasts the click reads as lag in the click itself. Four call
-  /// sites had already converged on this number by hand before it had a name.
-  static const Duration press = Duration(milliseconds: 110);
-
-  /// The app's curve. Fast to start, settling at the end — the thing arrives
-  /// under the pointer rather than drifting toward it.
+  static const Duration hover = Duration.zero;
+  static const Duration swap = Duration.zero;
+  static const Duration fold = Duration.zero;
+  static const Duration meter = Duration.zero;
+  static const Duration press = Duration.zero;
   static const Curve curve = Curves.easeOut;
 }
 
@@ -1484,6 +1442,7 @@ ButtonStyle dangerButtonStyle() => FilledButton.styleFrom(
 );
 
 ButtonStyle _filledButtonStyle() => FilledButton.styleFrom(
+  animationDuration: Duration.zero,
   minimumSize: Size(0, AppControl.heightScaled),
   padding: AppControl.paddingScaled,
   shape: _buttonShape,
@@ -1504,6 +1463,7 @@ ButtonStyle _filledButtonStyle() => FilledButton.styleFrom(
 /// The secondary action: a hairline rim, no fill — Apple's "bordered" button.
 ButtonStyle _outlinedButtonStyle(ColorScheme scheme) =>
     OutlinedButton.styleFrom(
+      animationDuration: Duration.zero,
       minimumSize: Size(0, AppControl.heightScaled),
       padding: AppControl.paddingScaled,
       shape: _buttonShape,
@@ -1516,6 +1476,7 @@ ButtonStyle _outlinedButtonStyle(ColorScheme scheme) =>
 
 /// The tertiary action: text only, for the quiet way out of a dialog.
 ButtonStyle _textButtonStyle() => TextButton.styleFrom(
+  animationDuration: Duration.zero,
   minimumSize: Size(0, AppControl.heightScaled),
   padding: AppControl.paddingSmallScaled,
   shape: _buttonShape,

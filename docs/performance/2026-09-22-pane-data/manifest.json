@@ -1,0 +1,98 @@
+{
+  "status": "rejected_no_demonstrated_latency_improvement",
+  "pullRequest": 232,
+  "driverRevision": "37cd801cf6b99f9e52184869fbdc895d5b6234d8",
+  "comparison": "release-initial-comparison.json",
+  "runsInOrder": [
+    {
+      "file": "pane-release-baseline-1.json",
+      "revision": "d4eeec74c2a403c5af6fff37bb793c2683771bf0",
+      "firstDispatchWallMicros": 1790096460351490
+    },
+    {
+      "file": "pane-release-after-1.json",
+      "revision": "1a2d89d9aea6b23e12cab07492d17d423add0bba",
+      "firstDispatchWallMicros": 1790096497620162
+    },
+    {
+      "file": "pane-release-baseline-2.json",
+      "revision": "d4eeec74c2a403c5af6fff37bb793c2683771bf0",
+      "firstDispatchWallMicros": 1790096553808813
+    },
+    {
+      "file": "pane-release-after-2.json",
+      "revision": "1a2d89d9aea6b23e12cab07492d17d423add0bba",
+      "firstDispatchWallMicros": 1790096612182517
+    },
+    {
+      "file": "pane-release-baseline-3.json",
+      "revision": "d4eeec74c2a403c5af6fff37bb793c2683771bf0",
+      "firstDispatchWallMicros": 1790096671043116
+    },
+    {
+      "file": "pane-release-after-3.json",
+      "revision": "1a2d89d9aea6b23e12cab07492d17d423add0bba",
+      "firstDispatchWallMicros": 1790096779390706
+    }
+  ],
+  "notes": [
+    "Only lib/widgets/pane_grid.dart differs in the modified Release source.",
+    "Three alternating baseline/modified pairs, all observations retained.",
+    "Both input cadences reduce median tab-switch build work but increase dispatch-to-raster median. PR closed; production changes excluded from accepted work."
+  ],
+  "phaseDiagnostics": {
+    "driverRevision": "0f4ab589c621f8f78306fe2c5677e5a212bf75b3",
+    "files": [
+      "pane-phase-baseline-1.json",
+      "pane-phase-after-1.json"
+    ],
+    "note": "The cadence is unchanged; these runs add diagnostics. Every sample passed the identity firstRasterMicros == waitForBuildMicros + buildStartToRasterMicros.",
+    "runsInOrder": [
+      {
+        "file": "pane-phase-baseline-1.json",
+        "firstDispatchWallMicros": 1790097067448124
+      },
+      {
+        "file": "pane-phase-after-1.json",
+        "firstDispatchWallMicros": 1790097181194560
+      }
+    ]
+  },
+  "variedInput": {
+    "driverRevision": "09b138a13beb042f3f4af53f8cb7756a9cdca6b1",
+    "comparison": "release-sweep-comparison.json",
+    "runsInOrder": [
+      {
+        "file": "pane-sweep-baseline-1.json",
+        "revision": "d4eeec74c2a403c5af6fff37bb793c2683771bf0",
+        "firstDispatchWallMicros": 1790097581266033
+      },
+      {
+        "file": "pane-sweep-after-1.json",
+        "revision": "1a2d89d9aea6b23e12cab07492d17d423add0bba",
+        "firstDispatchWallMicros": 1790097658095992
+      },
+      {
+        "file": "pane-sweep-baseline-2.json",
+        "revision": "d4eeec74c2a403c5af6fff37bb793c2683771bf0",
+        "firstDispatchWallMicros": 1790097801613824
+      },
+      {
+        "file": "pane-sweep-after-2.json",
+        "revision": "1a2d89d9aea6b23e12cab07492d17d423add0bba",
+        "firstDispatchWallMicros": 1790097851180826
+      },
+      {
+        "file": "pane-sweep-baseline-3.json",
+        "revision": "d4eeec74c2a403c5af6fff37bb793c2683771bf0",
+        "firstDispatchWallMicros": 1790098052169920
+      },
+      {
+        "file": "pane-sweep-after-3.json",
+        "revision": "1a2d89d9aea6b23e12cab07492d17d423add0bba",
+        "firstDispatchWallMicros": 1790098090157683
+      }
+    ]
+  },
+  "observationCount": 6600
+}

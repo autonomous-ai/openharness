@@ -140,22 +140,17 @@ void main() {
     expect(find.text('Try again'), findsOneWidget);
   });
 
-  testWidgets('the diagram keeps running, frame after frame', (tester) async {
+  testWidgets('the login illustration stays visible without idle frames', (
+    tester,
+  ) async {
     final app = _notifier(AppStatus.unauthenticated);
     await tester.pumpWidget(_host(app));
-
-    // ⚠️ NEVER `pumpAndSettle` on this screen. The diagram and the aurora both
-    // repeat forever — deliberately — and `pumpAndSettle` waits for a frame
-    // that never comes. Pump fixed durations instead, the same way the app's
-    // other endless animations (`Pulse`, a `CircularProgressIndicator`) are
-    // tested. Reduce Motion is the one case that does settle; see below.
-    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
     expect(find.text('Sign in'), findsOneWidget);
-
-    // Still animating a full cycle later, rather than having stopped.
+    expect(find.byType(LoginFleetMap), findsOneWidget);
+    expect(tester.binding.hasScheduledFrame, isFalse);
     await tester.pump(const Duration(milliseconds: 3200));
-    expect(find.text('Sign in'), findsOneWidget);
-    expect(tester.binding.hasScheduledFrame, isTrue);
+    expect(tester.binding.hasScheduledFrame, isFalse);
   });
 
   testWidgets('Reduce Motion still shows the picture, not a blank', (
