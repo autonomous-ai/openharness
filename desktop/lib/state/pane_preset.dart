@@ -16,7 +16,7 @@ enum PanePreset {
   /// Two tiles, one above the other.
   rows,
 
-  /// Three tiles: two over one, the bottom one spanning. The shipped shape.
+  /// Three tiles: two over one, the bottom one spanning.
   twoOverOne,
 
   /// Three tiles: one over two, the top one spanning.
@@ -26,7 +26,7 @@ enum PanePreset {
   mainLeft,
 
   /// As many columns as the window can carry at the 40-column floor. The
-  /// measured answer, and the one a grid gets when nobody has chosen.
+  /// measured default for six or more tiles.
   auto,
 
   /// A stated column count, for any number of tiles. The rows fall out of it:
@@ -293,11 +293,11 @@ enum PanePreset {
     < 2 => const [],
     2 => const [PanePreset.columns, PanePreset.rows],
     3 => const [
+      PanePreset.cols3,
       PanePreset.twoOverOne,
       PanePreset.oneOverTwo,
       PanePreset.mainLeft,
       PanePreset.mainRight,
-      PanePreset.cols3,
       PanePreset.rows,
     ],
     4 => const [
@@ -308,9 +308,9 @@ enum PanePreset {
       PanePreset.rows,
     ],
     5 => const [
+      PanePreset.middleMain,
       PanePreset.balanced3,
       PanePreset.twoOverThree,
-      PanePreset.middleMain,
       PanePreset.mainAndGrid,
       PanePreset.mainOverGrid,
       PanePreset.cols5,
@@ -375,8 +375,9 @@ enum PanePreset {
     return switch (count) {
       < 2 => null,
       2 => PanePreset.splitLong,
-      3 => PanePreset.twoOverOne,
+      3 => PanePreset.cols3,
       4 => PanePreset.quad,
+      5 => PanePreset.middleMain,
       _ => PanePreset.auto,
     };
   }
