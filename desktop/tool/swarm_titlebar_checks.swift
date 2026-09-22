@@ -277,7 +277,25 @@ private extension SwarmTabStrip {
     storeButton.performClick(nil)
     try checkTitlebar(events == ["new", "sessions", "store"],
       "The tab, Harnesses and Store buttons dispatch once")
-    try checkTitlebar(sessionsButton.attention > 0 && sessionsButton.toolTip?.contains("need input") == true, "Harnesses represents pending agent attention")
+    try checkTitlebar(sessionsButton.attention > 0 && sessionsButton.toolTip?.contains("input") == true, "Harnesses represents pending agent attention")
+    let originalAttention = sessionsButton.attention
+    sessionsButton.attention = 0
+    let quietPixels = sessionsButton.renderedPixels()
+    try checkTitlebar(sessionsButton.attentionLabel == nil,
+      "Running harnesses without questions have no notification badge")
+    for count in [1, 6, 42, 100] {
+      sessionsButton.attention = count
+      let label = sessionsButton.attentionLabel!
+      let width = (label as NSString).size(withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold)]).width
+      let badge = sessionsButton.badgeFrame(textWidth: width)
+      try checkTitlebar(sessionsButton.bounds.contains(badge) && badge.maxX == sessionsButton.bounds.maxX &&
+        (sessionsButton.isFlipped ? badge.minY == sessionsButton.bounds.minY : badge.maxY == sessionsButton.bounds.maxY),
+        "The attention badge stays in the top-right corner and fits at count \(count)")
+      try checkTitlebar(sessionsButton.renderedPixels() != quietPixels,
+        "Pending questions visibly add a count badge at \(count)")
+    }
+    try checkTitlebar(sessionsButton.attentionLabel == "99+", "Large attention counts stay compact")
+    sessionsButton.attention = originalAttention
     let oldButton = newButton
     var themedState = state([["id": "swarm-0", "name": "Renamed tab"]], active: "swarm-0")
     themedState["palette"] = ["workspace": Int64(0xff252d43), "search": Int64(0xff262f46)]

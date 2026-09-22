@@ -771,6 +771,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(HarnessSessionManager), findsNothing);
     expect(updates.last['sessionsOpen'], isFalse);
+    app.machineStates['m']!.blockedAgents['a0'] = question('a0');
+    app.notifyListeners();
+    await tester.pumpAndSettle();
+    expect(updates.last['attention'], 1);
+    app.machineStates['m']!.blockedAgents.clear();
+    app.notifyListeners();
+    await tester.pumpAndSettle();
+    expect(updates.last['attention'], 0);
   });
 
   testWidgets('session manager fits the minimum Mac window and scaled text', (

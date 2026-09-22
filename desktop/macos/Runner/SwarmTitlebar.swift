@@ -1453,15 +1453,34 @@ private final class SwarmSessionsButton: SwarmIconButton {
   var attention = 0 { didSet { needsDisplay = true } }
   var expanded = false { didSet { needsDisplay = true } }
 
+  var attentionLabel: String? {
+    attention > 0 ? (attention > 99 ? "99+" : String(attention)) : nil
+  }
+
+  func badgeFrame(textWidth: CGFloat) -> NSRect {
+    let width = max(12, ceil(textWidth) + 5)
+    return NSRect(x: bounds.maxX - width,
+      y: isFlipped ? bounds.minY : bounds.maxY - 12, width: width, height: 12)
+  }
+
   override func draw(_ dirtyRect: NSRect) {
     if expanded {
       NSColor.white.withAlphaComponent(0.08).setFill()
       NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 7, yRadius: 7).fill()
     }
     super.draw(dirtyRect)
-    if attention > 0 || running > 0 {
-      (attention > 0 ? NSColor.systemOrange : NSColor.systemGreen).withAlphaComponent(0.85).setFill()
-      NSBezierPath(ovalIn: NSRect(x: bounds.maxX - 7, y: bounds.maxY - 7, width: 4, height: 4)).fill()
+    if let label = attentionLabel {
+      let attributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold),
+        .foregroundColor: NSColor.white,
+      ]
+      let text = label as NSString
+      let size = text.size(withAttributes: attributes)
+      let badge = badgeFrame(textWidth: size.width)
+      NSColor.systemRed.withAlphaComponent(isEnabled ? 1 : 0.45).setFill()
+      NSBezierPath(roundedRect: badge, xRadius: 6, yRadius: 6).fill()
+      text.draw(at: NSPoint(x: badge.midX - size.width / 2, y: badge.midY - size.height / 2),
+        withAttributes: attributes)
     }
   }
 
@@ -1656,11 +1675,13 @@ private final class SwarmTabStrip: NSView {
     sessionsButton.isEnabled = actionsEnabled
     sessionsButton.running = state["runningSessions"] as? Int ?? 0
     sessionsButton.expanded = state["sessionsOpen"] as? Bool == true
-    sessionsButton.setAccessibilityValue(sessionsButton.expanded ? "Expanded" : "Collapsed")
+    let expandedState = sessionsButton.expanded ? "Expanded" : "Collapsed"
     sessionsButton.toolTip = sessionsButton.running > 0 ? "Harnesses · \(sessionsButton.running) running" : "Harnesses"
     let attention = state["attention"] as? Int ?? 0
     sessionsButton.attention = attention
-    if attention > 0 { sessionsButton.toolTip = "Harnesses · \(attention) need input" }
+    let attentionState = "\(attention) \(attention == 1 ? "needs" : "need") input"
+    sessionsButton.setAccessibilityValue(attention > 0 ? "\(expandedState), \(attentionState)" : expandedState)
+    if attention > 0 { sessionsButton.toolTip = "Harnesses · \(attentionState)" }
     needsLayout = true
     layoutSubtreeIfNeeded()
     if ids != previousOrder {

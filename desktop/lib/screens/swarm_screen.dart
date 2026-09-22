@@ -3382,8 +3382,19 @@ class _SwarmScreenState extends State<SwarmScreen>
               isSelected: _sessionsOverlay != null,
               icon: Badge(
                 isLabelVisible: _attention > 0,
-                backgroundColor: const Color(0xffd9ad70),
-                smallSize: 4,
+                backgroundColor: const Color(0xffcf4038),
+                textColor: Colors.white,
+                largeSize: 13,
+                alignment: Alignment.topRight,
+                label: Text(
+                  _attention > 99 ? '99+' : '$_attention',
+                  semanticsLabel:
+                      '$_attention ${_attention == 1 ? 'harness needs' : 'harnesses need'} input',
+                  style: const TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
                 child: const Icon(
                   Icons.terminal_rounded,
                   size: 20,

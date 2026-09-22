@@ -14,7 +14,7 @@ provider; the checks did not require paid model requests.
 | Desktop manager, lifecycle, navigation, shortcuts, and terminal regressions | 131 passed, including the rendered preview |
 | Lifecycle suite | 200 passed; 100% statements, branches, functions, and lines in the five covered lifecycle modules |
 | Related CLI transport, activity timestamps, process, and terminal regressions | 188 passed |
-| Native AppKit titlebar checks | 461 passed |
+| Native AppKit titlebar checks | 471 passed |
 | Native Claude and Codex lifecycle fixtures | Passed, including three immediate pause/resume cycles per engine |
 | Native Mac UI acceptance | Passed, including three manager pause/resume cycles per engine, repeated clicks, background resume, pane reopening, and original history |
 | Final visual render | Passed |
@@ -36,7 +36,8 @@ Keyboard navigation, machine search, activity sorting and compact ages, current 
 replaced questions, separate accessible open/control actions, small windows, larger
 text, and Reduce Motion are covered. The clock stays on the context line; only a
 waiting harness adds a help action beside pause/play. The former bell and its
-shortcut now open Needs input in this same manager.
+shortcut now open Needs input in this same manager. A numbered badge appears at
+the icon’s top right only for pending questions; large counts use `99+`.
 
 Pause/resume controls currently support saved Claude and Codex conversations.
 Other engines remain viewable with a tooltip explaining that exact resume is

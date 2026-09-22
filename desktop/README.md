@@ -37,10 +37,11 @@ branch, and last activity (`5m`, `1h`, `2d`). Search matches names, machines,
 projects, branches, and pending questions. Filter All, Needs input, Running, or
 Paused; sort by recently active, name, machine, or project.
 
-Needs input replaces the separate bell. An amber help action opens the waiting
-harness; its question appears on a third line in the Needs input view. The same
-view opens with **⌘⇧I**. Questions update live and stale actions cannot redirect
-you after a question is answered or replaced elsewhere.
+Needs input replaces the separate bell. A red count badge at the terminal icon’s
+top-right corner appears only when harnesses need input. An amber help action
+opens the waiting harness; its question appears on a third line in the Needs input
+view. The same view opens with **⌘⇧I**. Questions update live and stale actions
+cannot redirect you after a question is answered or replaced elsewhere.
 
 Select a row to reveal its existing pane or resume and open saved work. The
 separate play button resumes in the background. Pause/play remains at the right;
