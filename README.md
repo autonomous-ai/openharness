@@ -9,25 +9,93 @@ Codex, and others to make software, design parts and circuit boards, explore dat
 with your agents, domain tools, and live viewers in one place and sessions that persist across every
 machine you own.
 
+[Download the app](https://harness.autonomous.ai/desktop) · [Watch the demos](#get-your-hands-on-it) ·
+[What you can make](#domain-specific-harnesses-dsh) · [Run it](#run-it) ·
+[Harness device](#harness-device) · [Contribute](#contributing)
+
+<p align="center">
+  <a href="desktop/design/review/store-discover.png"><img src="desktop/design/review/store-discover.png" width="1280" alt="Harness Store Discover, with illustrated invitations to coding, design and engineering, followed by coding agents and new harnesses."></a>
+</p>
+
+Discover a craft in the Store. Open **Featured** to watch recorded sessions and find something you want to make.
+
+## Get your hands on it
+
+Shape a lamp. Change a robot's world. Rewind a jump. Perform a track. The agent builds with the
+tools of a craft; you explore the result, make choices and keep the version you like.
+
+Pick a preview to watch its recording, or **Try it** for a starting prompt and a walkthrough.
+
+<!-- Posters and recording captions are from store/hands-on.json. -->
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <p><strong>Shape a lamp</strong> · Blender</p>
+      <a href="docs/images/blender-shape-lab-demo.mp4"><img src="docs/images/blender-shape-lab.png" width="640" alt="Shape Lab displaying a sculptural ribbon lamp with adjustable dimensions and a shelf of saved designs."></a>
+      <p>Real Blender session · shape a ribbon lamp and keep named design variants</p>
+      <p><a href="docs/images/blender-shape-lab-demo.mp4">▶ Watch session</a> · <a href="docs/hands-on.md#blender-shape-it-until-it-feels-right">Try it</a></p>
+    </td>
+    <td width="50%" valign="top">
+      <p><strong>Change the world</strong> · MuJoCo</p>
+      <a href="docs/images/mujoco-what-if-demo.mp4"><img src="docs/images/mujoco-what-if-shove.png" width="640" alt="A Unitree Go2 in the native MuJoCo viewer, comparing two futures with a shared timeline and body-height measurements."></a>
+      <p>Real Go2 session · 100 N shove · compare two futures and keep the experiment</p>
+      <p><a href="docs/images/mujoco-what-if-demo.mp4">▶ Watch session</a> · <a href="docs/hands-on.md#mujoco-try-a-different-world">Try it</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <p><strong>Rewind a jump</strong> · Godogen</p>
+      <a href="docs/images/godogen-rewind-demo.mp4"><img src="docs/images/godogen-rewind.png" width="640" alt="A playable game paused on its Rewind timeline with Try from here and Pin moment controls."></a>
+      <p>Alpine Drift · a real playable run, rewind, retry and saved feedback</p>
+      <p><a href="docs/images/godogen-rewind-demo.mp4">▶ Watch session</a> · <a href="docs/hands-on.md#godogen-try-that-moment-again">Try it</a></p>
+    </td>
+    <td width="50%" valign="top">
+      <p><strong>Perform a track</strong> · Strudel</p>
+      <a href="docs/images/strudel-live-take-demo.mp4"><img src="docs/images/strudel-live-take.png" width="640" alt="Strudel&#x27;s live voice lanes beside a recorded take with waveform, named moments and an audio-and-source download."></a>
+      <p>Lantern room · real 112 bpm performance with audio · keep the WAV, source and markers</p>
+      <p><a href="docs/images/strudel-live-take-demo.mp4">▶ Watch session · with audio</a> · <a href="docs/hands-on.md#strudel-perform-the-version-you-love">Try it</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <p><strong>Compare the signal</strong> · CircuitJS</p>
+      <a href="docs/images/scope-lab-demo.mp4"><img src="docs/images/scope-lab.png" width="640" alt="Scope Lab comparing native RC filter traces at two resistance values with A and B measurement cursors."></a>
+      <p>Real CircuitJS solver · compare RC filter traces at 1 kΩ and 2 kΩ, measure and keep both</p>
+      <p><a href="docs/images/scope-lab-demo.mp4">▶ Watch session</a> · <a href="docs/hands-on.md#circuitjs-see-what-changed-in-the-signal">Try it</a></p>
+    </td>
+    <td width="50%" valign="top">
+      <p><strong>Turn a molecule</strong> · RDKit</p>
+      <a href="docs/images/rdkit-bond-scan-demo.mp4"><img src="docs/images/rdkit-bond-scan.png" width="640" alt="An authored molecule in 3D with a reference pose, native MMFF94 bond-energy curve and a selected rotation angle."></a>
+      <p>Phenethyl acetate · real rigid MMFF94 bond scan · 25 poses and a kept study</p>
+      <p><a href="docs/images/rdkit-bond-scan-demo.mp4">▶ Watch session</a> · <a href="docs/hands-on.md#rdkit-see-a-molecule-turn">Try it</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <p><strong>Review a draft</strong> · Typst</p>
+      <a href="docs/images/doc-review-demo.mp4"><img src="docs/images/doc-review.png" width="640" alt="A native PDF draft held for review, with anchored Change, Keep and Question notes."></a>
+      <p>Portable light · real Typst PDF · anchored notes carried into a later revision</p>
+      <p><a href="docs/images/doc-review-demo.mp4">▶ Watch session</a> · <a href="docs/hands-on.md#typst-point-at-what-you-mean">Try it</a></p>
+    </td>
+    <td width="50%" valign="top">
+      <p><strong>Ask a better question</strong> · Jev Sheets</p>
+      <a href="docs/images/question-lab-demo.mp4"><img src="docs/images/question-lab.png" width="640" alt="Question Lab comparing two urgency questions on fictional support rows, prominently labeled offline practice."></a>
+      <p>Offline practice recording · fictional support tickets · paired questions and a kept review</p>
+      <p><a href="docs/images/question-lab-demo.mp4">▶ Watch session</a> · <a href="docs/hands-on.md#jev-sheets-ask-a-better-question">Try it</a></p>
+    </td>
+  </tr>
+</table>
+
+[Explore all eight experiences](docs/hands-on.md) · [Run a native starter](docs/try-hands-on.md)
+
+## For polymaths in the making.
+
 The old rule said ten thousand hours to a craft. That was the tax on curiosity, and most of us could
 only afford to pay it once, so we specialized and called the rest hobbies.
 
 Coding agents become the specialists, given the tools of a craft and a way to see what they made:
 the geometry that becomes a part, the netlist that becomes a circuit board, the script that becomes
 a film. You bring the idea, the taste, and the judgment about what is worth making.
-
-Use the desktop app on its own, or add the optional **Harness device** to follow your agents, answer
-their questions, and speak new tasks from your desk. The app, firmware, schematics, PCB layouts, and
-enclosure CAD files are all open source.
-
-[Who it's for](#for-polymaths-in-the-making) · [What you can make](#domain-specific-harnesses-dsh) · [Get hands-on](docs/hands-on.md) · [Run it](#run-it) ·
-[Harness device](#harness-device) · [Architecture](docs/architecture.md) · [Contribute](#contributing)
-
-<p align="center">
-  <a href=".github/assets/store/workshop-overview.svg"><img src=".github/assets/store/workshop-overview.svg" width="1280" alt="Start with Coding: 14 agents including Claude Code, Codex, and Cursor. Then explore Design, Engineering, Media, Music, Productivity, Science and Data, Simulation, Games, Research, and Local AI."></a>
-</p>
-
-## For polymaths in the making.
 
 Built for the curious engineer who wants to build beyond software. Get your hands on more of what
 you are making, from the physical product to the analysis and the launch video. Makers and creators
@@ -46,6 +114,10 @@ the next iteration. The code and project files are there to read, change, versio
 harness supplies the tools and feedback for a different craft. You can get your hands on more of
 the product and the work of bringing it to customers.
 
+Use the desktop app on its own, or add the optional **Harness device** to follow your agents, answer
+their questions, and speak new tasks from your desk. The app, firmware, schematics, PCB layouts, and
+enclosure CAD files are all open source.
+
 Start with what you know and learn the next craft through the things you build. The
 [ideal-user guide](docs/ideal-users.md) records who we're building for and how the app, community,
 and device serve them.
@@ -57,9 +129,6 @@ parts, animation code makes videos, and analysis code turns data into charts and
 what connects the dots between crafts, and a harness gives the agent the tools and feedback to work
 in each one.
 
-<img width="1000" height="563" alt="harness" src="https://github.com/user-attachments/assets/25c63335-279a-4f9a-b702-2ffaec2b096f" />
-
-
 A **domain-specific harness** turns a coding agent into a specialist. It brings the domain's
 instructions and skills, a pinned toolchain, a project template, a verdict the app can read, and a
 **live viewer** for what the agent makes. You chat on one side; the board, the part, the robot or the
@@ -67,14 +136,6 @@ game takes shape on the other, and stays interactive after the agent is done.
 
 A DSH is a folder with a `harness.json`. The agent does the reasoning; the harness brings the tools
 and the view. Adding a domain never needs a change to the app or the daemon.
-
-**Try the part only you can do.** Change a robot's world, shape a lamp, rewind a jump, perform a
-track, turn a molecular bond, review a draft, sharpen a question, or compare a circuit's traces.
-The [hands-on field guide](docs/hands-on.md) has eight native demos, starting prompts and ways to
-keep your decisions. Open [the interactive guide](docs/hands-on.html) from this checkout in a browser
-to pick a craft and watch the local recordings.
-For a live preview from this checkout, [run a native starter](docs/try-hands-on.md) for physics,
-music or circuits using your installed harness assets.
 
 <!-- store-catalog:start -->
 ### Coding and beyond
@@ -107,6 +168,9 @@ harnesses that need them. Experimental packages marked unlisted are not included
 **The harness we'd love to see next is the one for your craft.** Bring an open-source tool you use,
 a workflow you know well, or your own company's toolchain. A harness can live in this repository or
 in yours.
+
+<details>
+<summary>More things made with Harness: circuits, CAD, robots, rooms, games and animation</summary>
 
 <!-- store-showcase:start -->
 <p align="center">
@@ -146,7 +210,9 @@ Six real outputs, one at a time. Each slide includes the harness and the origina
 </details>
 <!-- store-showcase:end -->
 
-Every picture is real output from the harness's own toolchain, and the prompt is the one that made it.
+Every picture in this slideshow is output from the harness's own toolchain, with its original prompt.
+
+</details>
 
 ## Coding agents, on every machine
 
