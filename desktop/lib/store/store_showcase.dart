@@ -88,6 +88,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    TerminalFontScope.watch(context);
     final example = widget.example;
     final i = widget.index;
     return LayoutBuilder(
@@ -98,7 +99,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
           children: [
             Text(
               '${(i + 1).toString().padLeft(2, '0')} / ${widget.count.toString().padLeft(2, '0')}',
-              style: terminalTextStyle(
+              style: grid.AppType.monoMeta(
                 letterSpacing: 2,
                 color: grid.AppPalette.accentOnSurface,
               ),
@@ -110,10 +111,8 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                 '“${example.prompt}”',
                 key: ValueKey('store-example-prompt:$i'),
                 textAlign: TextAlign.center,
-                style: terminalTextStyle(
+                style: grid.AppType.title(
                   height: 1.24,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: wide ? -0.8 : -0.4,
                   color: grid.AppPalette.textPrimary,
                 ),
               ),
@@ -134,7 +133,9 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                     foregroundColor: Colors.white,
                     minimumSize: const Size(0, 46),
                     padding: const EdgeInsets.symmetric(horizontal: 22),
-                    textStyle: terminalTextStyle(fontWeight: FontWeight.w600),
+                    textStyle: grid.AppType.label(
+                      fontWeight: grid.AppFont.semibold,
+                    ),
                     shape: const StadiumBorder(),
                   ),
                 ),
@@ -220,7 +221,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                 Text(
                   example.caption!,
                   textAlign: TextAlign.center,
-                  style: terminalTextStyle(
+                  style: grid.AppType.body(
                     height: 1.4,
                     color: grid.AppPalette.textSecondary,
                   ),
@@ -241,7 +242,6 @@ class _Output extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     final placeholder = Center(
       child: Opacity(
         opacity: 0.5,
@@ -327,7 +327,6 @@ class _RevealState extends State<_Reveal> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, child) {

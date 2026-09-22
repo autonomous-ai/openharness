@@ -160,16 +160,19 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
     children: [
       Text(
         eyebrow.toUpperCase(),
-        style: terminalTextStyle(
+        style: grid.AppType.monoMeta(
           color: AppColors.accent,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1.4,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 1.2,
         ),
       ),
       const SizedBox(height: 6),
-      Text(title, style: terminalTextStyle(fontWeight: FontWeight.w600)),
+      Text(title, style: grid.AppType.display()),
       const SizedBox(height: 8),
-      Text(lead, style: TextStyle(color: AppColors.textSoft, height: 1.55)),
+      Text(
+        lead,
+        style: grid.AppType.body(color: AppColors.textSoft, height: 1.55),
+      ),
       const SizedBox(height: 16),
     ],
   );
@@ -372,7 +375,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
         'Every dependency is ready. Continue to final verification.',
       );
     }
-    final stacked = terminalTextScaleOf(context) > 1.25;
+    final stacked = grid.appTextScaleOf(context) > 1.25;
     return _Panel(
       child: Column(
         children: [
@@ -383,13 +386,13 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
                 radius: 14,
                 backgroundColor: AppColors.hover,
                 foregroundColor: AppColors.text,
-                child: Text('${index + 1}', style: terminalTextStyle()),
+                child: Text('${index + 1}', style: grid.AppType.monoLabel()),
               ),
-              title: Text(items[index].title, style: terminalTextStyle()),
+              title: Text(items[index].title, style: grid.AppType.label()),
               subtitle: stacked
                   ? Text(
                       items[index].detail,
-                      style: terminalTextStyle(color: AppColors.textSoft),
+                      style: grid.AppType.body(color: AppColors.textSoft),
                     )
                   : null,
               trailing: stacked
@@ -401,7 +404,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.end,
-                        style: terminalTextStyle(color: AppColors.muted),
+                        style: grid.AppType.body(color: AppColors.muted),
                       ),
                     ),
             ),
@@ -428,7 +431,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
               children: [
                 Text(
                   '${index + 1} · ${items[index].title}',
-                  style: terminalTextStyle(fontWeight: FontWeight.w600),
+                  style: grid.AppType.heading(),
                 ),
                 const SizedBox(height: 9),
                 CommandRow(
@@ -463,10 +466,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
         title: Row(
           children: [
             Expanded(
-              child: Text(
-                'Setup details',
-                style: terminalTextStyle(fontWeight: FontWeight.w600),
-              ),
+              child: Text('Setup details', style: grid.AppType.heading()),
             ),
             TextButton.icon(
               onPressed: () => _copy(diagnostics),
@@ -486,7 +486,8 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
               padding: const EdgeInsets.all(14),
               child: SelectableText(
                 diagnostics,
-                style: terminalTextStyle(
+                style: grid.AppType.monoLabel(
+                  fontWeight: FontWeight.w400,
                   height: 1.55,
                   color: AppColors.textSoft,
                 ),
@@ -518,12 +519,12 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
               children: [
                 Text(
                   title,
-                  style: terminalTextStyle(fontWeight: FontWeight.w600),
+                  style: grid.AppType.label(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   detail,
-                  style: terminalTextStyle(
+                  style: grid.AppType.body(
                     color: AppColors.textSoft,
                     height: 1.45,
                   ),
@@ -614,7 +615,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
       liveRegion: _copyError != null,
       child: Text(
         _copyError ?? 'Next: sign in and start a harness.',
-        style: terminalTextStyle(
+        style: grid.AppType.body(
           color: _copyError == null ? AppColors.textSoft : AppColors.danger,
         ),
       ),
@@ -628,7 +629,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           if (constraints.maxWidth < 600 ||
-              terminalTextScaleOf(context) > 1.25) {
+              grid.appTextScaleOf(context) > 1.25) {
             return Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -655,7 +656,6 @@ class _Panel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Container(
       width: double.infinity,
       padding: padding,
@@ -686,9 +686,9 @@ class _CheckSectionLabel extends StatelessWidget {
       ),
       child: Text(
         label.toUpperCase(),
-        style: terminalTextStyle(
+        style: grid.AppType.monoMeta(
           color: AppColors.textSoft,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w600,
           letterSpacing: 1.1,
         ),
       ),
@@ -710,7 +710,7 @@ class _CheckRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
+    grid.AppTheme.watch(context);
     final color = switch (status) {
       EnvironmentStepStatus.ready => AppColors.success,
       EnvironmentStepStatus.failed => AppColors.danger,
@@ -749,12 +749,9 @@ class _CheckRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  label,
-                  style: terminalTextStyle(fontWeight: FontWeight.w500),
-                ),
+                Text(label, style: grid.AppType.label()),
                 const SizedBox(height: 3),
-                Text(detail, style: terminalTextStyle(color: AppColors.muted)),
+                Text(detail, style: grid.AppType.body(color: AppColors.muted)),
               ],
             ),
           ),
@@ -765,7 +762,7 @@ class _CheckRow extends StatelessWidget {
             EnvironmentStepStatus.running => 'Working',
             EnvironmentStepStatus.notApplicable => 'Not applicable',
             _ => checking ? 'Checking' : 'Required',
-          }, style: terminalTextStyle(color: color)),
+          }, style: grid.AppType.label(color: color)),
         ],
       ),
     );

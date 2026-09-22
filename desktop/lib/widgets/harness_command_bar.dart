@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/command_bar.dart';
@@ -197,7 +196,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                           enabled: controller.phase != CommandPhase.executing,
                           autofocus: !widget.compact,
                           maxLength: 2000,
-                          style: terminalTextStyle(
+                          style: grid.AppType.mono(
                             color: grid.AppPalette.commandInk,
                           ),
                           cursorColor: grid.AppPalette.commandInk,
@@ -208,7 +207,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                             hintText: narrow
                                 ? 'Ask Harness…'
                                 : 'Ask, find, or make something happen',
-                            hintStyle: terminalTextStyle(
+                            hintStyle: grid.AppType.mono(
                               color: grid.AppPalette.commandMuted,
                             ),
                             border: InputBorder.none,
@@ -274,8 +273,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                                 const SizedBox(width: 7),
                                 Text(
                                   _findOnly ? 'Find' : 'Auto',
-                                  style: terminalTextStyle(
-                                    fontWeight: FontWeight.w500,
+                                  style: grid.AppType.monoLabel(
                                     color: grid.AppPalette.commandInk,
                                   ),
                                 ),
@@ -333,7 +331,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                           const SizedBox(width: 6),
                           Text(
                             'JEV · OpenRouter',
-                            style: terminalTextStyle(
+                            style: grid.AppType.monoMeta(
                               color: grid.AppPalette.textFaint,
                             ),
                           ),
@@ -359,13 +357,13 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                       ),
                       style: TextButton.styleFrom(
                         foregroundColor: grid.AppPalette.textSecondary,
-                        textStyle: terminalTextStyle(),
+                        textStyle: grid.AppType.label(),
                       ),
                     ),
                   if (!widget.compact && !watchesVisible)
                     Text(
                       '⌘⇧J · toggle   Esc · close',
-                      style: terminalTextStyle(
+                      style: grid.AppType.monoMeta(
                         color: grid.AppPalette.textFaint,
                       ),
                     ),
@@ -413,7 +411,8 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                     liveRegion: true,
                     child: Text(
                       controller.message,
-                      style: terminalTextStyle(
+                      style: grid.AppType.monoLabel(
+                        fontWeight: FontWeight.w400,
                         color: grid.AppPalette.textSecondary,
                       ),
                     ),
@@ -422,7 +421,9 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                 if (controller.elapsedMs != null)
                   Text(
                     '${(controller.elapsedMs! / 1000).toStringAsFixed(1)}s',
-                    style: terminalTextStyle(color: grid.AppPalette.textFaint),
+                    style: grid.AppType.monoMeta(
+                      color: grid.AppPalette.textFaint,
+                    ),
                   ),
                 IconButton(
                   visualDensity: VisualDensity.compact,
@@ -441,7 +442,8 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                   liveRegion: true,
                   child: Text(
                     controller.error!,
-                    style: terminalTextStyle(
+                    style: grid.AppType.monoLabel(
+                      fontWeight: FontWeight.w400,
                       height: 1.5,
                       color: grid.AppPalette.textPrimary,
                     ),
@@ -533,8 +535,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                             action.title,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: terminalTextStyle(
-                              fontWeight: FontWeight.w500,
+                            style: grid.AppType.monoLabel(
                               color: grid.AppPalette.textPrimary,
                             ),
                           ),
@@ -543,7 +544,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                             action.detail,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: terminalTextStyle(
+                            style: grid.AppType.monoMeta(
                               height: 1.4,
                               color: grid.AppPalette.textSecondary,
                             ),
@@ -557,10 +558,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                       onPressed: controller.busy
                           ? null
                           : () => unawaited(controller.choose(action)),
-                      child: Text(
-                        action.buttonLabel,
-                        style: terminalTextStyle(),
-                      ),
+                      child: Text(action.buttonLabel),
                     ),
                   ],
                 ),
@@ -570,7 +568,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                     '“${controller.query}”',
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
-                    style: terminalTextStyle(
+                    style: grid.AppType.mono(
                       height: 1.5,
                       color: grid.AppPalette.textPrimary,
                     ),
@@ -580,7 +578,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                       padding: const EdgeInsets.only(top: 8),
                       child: Text(
                         'Current sessions only · checks changed activity once a minute · alerts appear here',
-                        style: terminalTextStyle(
+                        style: grid.AppType.monoMeta(
                           color: grid.AppPalette.textFaint,
                         ),
                       ),
@@ -595,7 +593,8 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                       action.context,
                       maxLines: 4,
                       overflow: TextOverflow.ellipsis,
-                      style: terminalTextStyle(
+                      style: grid.AppType.monoLabel(
+                        fontWeight: FontWeight.w400,
                         height: 1.5,
                         color: grid.AppPalette.textSecondary,
                       ),
@@ -637,7 +636,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                         watch.prompt,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: terminalTextStyle(),
+                        style: grid.AppType.monoLabel(),
                       ),
                     ),
                     IconButton(
@@ -652,7 +651,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                       (watch.checking
                           ? 'Checking recent activity…'
                           : '${watch.matches.length} matches · watching ${watch.scope.length} sessions'),
-                  style: terminalTextStyle(
+                  style: grid.AppType.monoMeta(
                     color: grid.AppPalette.textSecondary,
                   ),
                 ),

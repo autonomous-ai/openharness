@@ -245,6 +245,14 @@ its headless debug timings do not establish native display or network latency.
 - `lib/theme/app_theme.dart` (`AppColors`, `AppTheme.terminalLight/terminalDark`) is a set of
   adapters over those tokens. Nothing here is `const` on purpose — freezing a colour is how light mode
   silently breaks. Do not add a parallel palette.
+- **Type** is `AppType` (`lib/shared/theme/app_type.dart`): one size scale (display 28, title 20,
+  heading 15, label/mono 13, monoLabel 12, caption/monoMeta 11) across two faces. The terminal's
+  face leads — headings, labels, buttons, rows, fields, tabs, shortcuts and anything copied are
+  mono — and the system sans is kept for prose alone (`body`, `caption`), which is what stops a
+  screen reading as a wall of mono. Sizes are fixed: `terminalTextStyle` (the terminal's own size,
+  ⌘+/⌘−) is only for the grid, its composer and find field, and `terminalTextScaleOf` only for their
+  geometry — UI boxes use `appTextScaleOf`. Native tabs get the terminal face at
+  `AppType.chromeSize`; native menus keep the system menu font.
 - `ThemeModeStore` and `TerminalFontStore` are `ValueNotifier` singletons (they must resolve above the
   provider scope and before sign-in).
 

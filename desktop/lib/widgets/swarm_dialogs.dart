@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
-import 'package:harness/terminal/terminal_text.dart';
+import 'package:harness/shared/theme/app_type.dart';
 
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_select_field.dart';
@@ -122,7 +122,6 @@ class _ProjectDialogState extends State<_ProjectDialog> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return AlertDialog(
       title: const Text('Add project'),
       content: SizedBox(
@@ -133,7 +132,7 @@ class _ProjectDialogState extends State<_ProjectDialog> {
           children: [
             Text(
               'Choose an existing working folder.',
-              style: terminalTextStyle(color: Colors.white60),
+              style: AppType.body(color: Colors.white60),
             ),
             const SizedBox(height: 20),
             if (machineId != null)
@@ -174,10 +173,7 @@ class _ProjectDialogState extends State<_ProjectDialog> {
                 child: const Text('Clone repository…'),
               ),
             if (error != null)
-              Text(
-                error!,
-                style: terminalTextStyle(color: Colors.orangeAccent),
-              ),
+              Text(error!, style: AppType.body(color: Colors.orangeAccent)),
           ],
         ),
       ),

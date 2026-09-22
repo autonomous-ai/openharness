@@ -192,9 +192,15 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
       if (widget.value != null) widget.value!.path: widget.value!,
     };
     const refreshValue = '__refresh_profiles__';
+    // A profile names a folder on disk, so the field is set in mono.
+    final textStyle =
+        widget.textStyle ??
+        grid.AppType.mono(color: grid.AppPalette.textPrimary);
     final height = math.max(
       34.0,
-      MediaQuery.textScalerOf(context).scale(terminalFontStore.size) * 1.35 +
+      MediaQuery.textScalerOf(context)
+                  .scale(textStyle.fontSize ?? grid.AppType.monoSize) *
+              1.35 +
           14,
     );
     return Wrap(
@@ -203,7 +209,7 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         SizedBox(
-          width: 252 * math.min(1.4, terminalTextScaleOf(context)),
+          width: 252 * math.min(1.4, grid.appTextScaleOf(context)),
           height: height,
           child: AppSelectField<String>(
             key: const Key('new-agent-codex-profile-field'),
@@ -239,9 +245,7 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
                     'Codex profile: ${widget.value?.label ?? (_loading ? 'Loading…' : 'Default')}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style:
-                        widget.textStyle ??
-                        terminalTextStyle(color: grid.AppPalette.textPrimary),
+                    style: textStyle,
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -260,14 +264,14 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
             foregroundColor: grid.AppPalette.textSecondary,
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
             minimumSize: const Size(0, 32),
-            textStyle: widget.textStyle ?? terminalTextStyle(),
+            textStyle: textStyle,
           ),
           child: Text(_linking ? 'Adding…' : 'Add'),
         ),
         if (_error != null)
           Text(
             _error!,
-            style: terminalTextStyle(
+            style: grid.AppType.body(
               color: Theme.of(context).colorScheme.error,
             ),
           ),

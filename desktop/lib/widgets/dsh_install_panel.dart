@@ -107,18 +107,14 @@ class _DshInstallPanelState extends State<DshInstallPanel> {
                   run.done
                       ? '${widget.harnessName} installed on ${widget.machineName}'
                       : 'Installing ${widget.harnessName} on ${widget.machineName}',
-                  style: terminalTextStyle(
-                    fontWeight: grid.AppFont.semibold,
+                  style: grid.AppType.heading(
                     color: grid.AppPalette.textPrimary,
                   ),
                 ),
               ),
               Text(
                 _clock(elapsed),
-                style: terminalTextStyle(
-                  color: grid.AppPalette.textFaint,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
+                style: grid.AppType.monoMeta(color: grid.AppPalette.textFaint),
               ),
             ],
           ),
@@ -162,7 +158,7 @@ class _DshInstallPanelState extends State<DshInstallPanel> {
                       : run.done
                       ? 'Starting the harness…'
                       : 'The first install takes a few minutes. You can keep using Harness.',
-                  style: terminalTextStyle(color: grid.AppPalette.textFaint),
+                  style: grid.AppType.body(color: grid.AppPalette.textFaint),
                 ),
               ),
             ],
@@ -461,8 +457,7 @@ class _StepRow extends StatelessWidget {
             children: [
               Text(
                 step.name,
-                style: terminalTextStyle(
-                  fontWeight: grid.AppFont.medium,
+                style: grid.AppType.label(
                   color: muted
                       ? grid.AppPalette.textFaint
                       : grid.AppPalette.textPrimary,
@@ -475,7 +470,7 @@ class _StepRow extends StatelessWidget {
                     sub!,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: terminalTextStyle(
+                    style: grid.AppType.body(
                       color: state == _StepState.active
                           ? grid.AppPalette.textSecondary
                           : grid.AppPalette.textFaint,
@@ -489,10 +484,7 @@ class _StepRow extends StatelessWidget {
           const SizedBox(width: 10),
           Text(
             _DshInstallPanelState._short(took!),
-            style: terminalTextStyle(
-              color: grid.AppPalette.textFaint,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
+            style: grid.AppType.monoMeta(color: grid.AppPalette.textFaint),
           ),
         ],
       ],
@@ -527,7 +519,8 @@ class _LogTail extends StatelessWidget {
               tail[i],
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: terminalTextStyle(
+              style: grid.AppType.monoLabel(
+                fontWeight: FontWeight.w400,
                 height: 1.5,
                 color: i == tail.length - 1
                     ? grid.AppPalette.textSecondary
@@ -562,7 +555,7 @@ class _FailureCard extends StatelessWidget {
         children: [
           Text(
             failure.title,
-            style: terminalTextStyle(
+            style: grid.AppType.label(
               fontWeight: grid.AppFont.semibold,
               color: grid.AppPalette.textPrimary,
             ),
@@ -573,7 +566,7 @@ class _FailureCard extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 2),
                 child: Text(
                   line,
-                  style: terminalTextStyle(
+                  style: grid.AppType.body(
                     color: grid.AppPalette.textSecondary,
                   ),
                 ),
@@ -583,7 +576,10 @@ class _FailureCard extends StatelessWidget {
               padding: const EdgeInsets.only(top: 6),
               child: SelectableText(
                 failure.command!,
-                style: terminalTextStyle(color: grid.AppPalette.textPrimary),
+                style: grid.AppType.monoLabel(
+                  fontWeight: FontWeight.w400,
+                  color: grid.AppPalette.textPrimary,
+                ),
               ),
             ),
         ],

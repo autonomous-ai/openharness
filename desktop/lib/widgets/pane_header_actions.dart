@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../theme/app_theme.dart';
@@ -245,7 +244,6 @@ class _CompactPaneActionsState extends State<_CompactPaneActions> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     final enabled = widget.items
         .where((item) => item.callback != null)
         .toList();
@@ -279,7 +277,7 @@ class _CompactPaneActionsState extends State<_CompactPaneActions> {
               focusNode: i == 0 ? _firstFocus : null,
               onPressed: enabled[i].callback,
               style: ButtonStyle(
-                textStyle: WidgetStatePropertyAll(boxMonoStyle()),
+                textStyle: WidgetStatePropertyAll(grid.AppType.body()),
                 foregroundColor: WidgetStatePropertyAll(AppColors.text),
                 minimumSize: const WidgetStatePropertyAll(Size(180, 30)),
                 shape: const WidgetStatePropertyAll(RoundedRectangleBorder()),
@@ -326,7 +324,6 @@ class _PaneHeaderHoverState extends State<PaneHeaderHover> {
   bool _hovered = false, _focused = false;
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
@@ -373,7 +370,6 @@ class _ViewerToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     final glow = color.withValues(alpha: .55);
     return IconButton(
       tooltip: on ? 'Hide viewer' : 'Show viewer',

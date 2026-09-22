@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 
@@ -233,7 +232,7 @@ class _RelayPainter extends CustomPainter {
   final double t;
   final _DiagramPalette palette;
   final _DiagramLabels labels;
-  final _textStyle = terminalTextStyle(height: 1.0);
+  final _textStyle = grid.AppType.caption(height: 1.0);
   double _paintScale = 1;
 
   static const Size _design = Size(440, 140);
@@ -554,7 +553,7 @@ class _RelayPainter extends CustomPainter {
         style: _textStyle.copyWith(color: color),
       ),
       textDirection: TextDirection.ltr,
-      // Counteract only the drawing scale; labels retain the terminal size.
+      // Counteract only the drawing scale; labels keep their own point size.
       textScaler: TextScaler.linear(1 / _paintScale),
       maxLines: 1,
       ellipsis: '…',

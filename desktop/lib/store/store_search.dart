@@ -41,14 +41,13 @@ class StoreSearch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return LayoutBuilder(
       builder: (context, box) {
         final padding = box.maxWidth < 680 ? 20.0 : 36.0;
         // A control's height, grown with the text so a scaled label still has air.
         final height = math.max(
           grid.AppControl.height,
-          MediaQuery.textScalerOf(context).scale(terminalFontStore.size) + 18,
+          MediaQuery.textScalerOf(context).scale(grid.AppType.bodySize) + 18,
         );
         return Container(
           key: const ValueKey('store-search-header'),
@@ -253,14 +252,14 @@ class _Field extends StatelessWidget {
                       onChanged: onChanged,
                       textInputAction: TextInputAction.search,
                       textAlignVertical: TextAlignVertical.center,
-                      style: terminalTextStyle(
+                      style: grid.AppType.mono(
                         color: grid.AppPalette.textPrimary,
                       ),
                       // Bare: the outline around it is this field's border,
                       // so none of the theme's own may draw inside it.
                       decoration: InputDecoration(
                         hintText: 'Search harnesses',
-                        hintStyle: terminalTextStyle(
+                        hintStyle: grid.AppType.mono(
                           color: grid.AppPalette.textSecondary,
                         ),
                         isCollapsed: true,
@@ -289,7 +288,7 @@ class _Field extends StatelessWidget {
                       padding: const EdgeInsets.only(right: 5),
                       child: Text(
                         shortcut,
-                        style: terminalTextStyle(
+                        style: grid.AppType.monoMeta(
                           color: grid.AppPalette.textFaint,
                         ),
                       ),
@@ -317,7 +316,6 @@ class _CreateHarness extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     return Tooltip(
       message: 'Your first harness in ten minutes, on GitHub',
       child: FilledButton(
@@ -333,7 +331,7 @@ class _CreateHarness extends StatelessWidget {
           padding: EdgeInsets.symmetric(horizontal: labelled ? 14 : 0),
           backgroundColor: grid.AppPalette.textPrimary,
           foregroundColor: grid.AppPalette.windowBg,
-          textStyle: terminalTextStyle(fontWeight: FontWeight.w600),
+          textStyle: grid.AppType.label(),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(grid.AppControl.radius),
           ),

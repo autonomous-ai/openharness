@@ -35,7 +35,6 @@ import '../terminal/terminal_viewport.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
-import 'box_chrome.dart';
 import 'grid_model_picker.dart';
 import 'pane_header_actions.dart';
 
@@ -1497,8 +1496,9 @@ class _TerminalPanelState extends State<TerminalPanel>
                                       session.agentName,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: boxMonoStyle(
+                                      style: grid.AppType.monoLabel(
                                         color: Colors.white70,
+                                        fontWeight: FontWeight.w400,
                                       ),
                                     ),
                                   ),
@@ -1911,7 +1911,7 @@ class _TerminalHeader extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: _stripPadding),
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final scale = terminalTextScaleOf(context);
+              final scale = grid.appTextScaleOf(context);
               final narrow = constraints.maxWidth < 560 * math.max(1, scale);
               final rightWidth = narrow
                   ? math.max(
@@ -1951,10 +1951,9 @@ class _TerminalHeader extends StatelessWidget {
                                 session.agentName,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: boxMonoStyle(
+                                style: grid.AppType.monoLabel(
                                   color: AppColors.text,
-
-                                  weight: FontWeight.w600,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ),
@@ -2017,7 +2016,9 @@ class _TerminalHeader extends StatelessWidget {
                                           status.label,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
-                                          style: terminalTextStyle(),
+                                          style: grid.AppType.monoLabel(
+                                            fontWeight: FontWeight.w400,
+                                          ),
                                         ),
                                       ),
                                     ],
@@ -2195,7 +2196,6 @@ class _LinkModeMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     final (icon, color, label) = switch (mode) {
       'p2p' => (
         LucideIcons.link2,
@@ -2314,7 +2314,7 @@ class _ControlBanner extends StatelessWidget {
                 // and the button on one line; there the button takes a line of
                 // its own under the title rather than running off the edge.
                 final narrow =
-                    constraints.maxWidth < 340 * terminalTextScaleOf(context);
+                    constraints.maxWidth < 340 * grid.appTextScaleOf(context);
                 final lead = !busy
                     ? Icon(Icons.lock_outline, size: 16, color: ink)
                     : SizedBox(
@@ -2333,9 +2333,9 @@ class _ControlBanner extends StatelessWidget {
                       title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: terminalTextStyle(
+                      style: grid.AppType.label(
                         color: AppColors.text,
-                        fontWeight: FontWeight.w700,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                     if (detail != null) ...[
@@ -2344,7 +2344,7 @@ class _ControlBanner extends StatelessWidget {
                         detail,
                         maxLines: narrow ? 1 : 2,
                         overflow: TextOverflow.ellipsis,
-                        style: terminalTextStyle(
+                        style: grid.AppType.body(
                           color: nudged ? ink : AppColors.textSoft,
                           height: 1.3,
                         ),
@@ -2405,7 +2405,6 @@ class _ControlBannerButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     final onAccent = Theme.of(context).colorScheme.onPrimary;
     return FilledButton(
       onPressed: onPressed,
@@ -2418,12 +2417,7 @@ class _ControlBannerButton extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Flexible(
-            child: Text(
-              'Take control',
-              style: terminalTextStyle(fontWeight: FontWeight.w600),
-            ),
-          ),
+          Flexible(child: Text('Take control', style: grid.AppType.label())),
           const SizedBox(width: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
@@ -2476,10 +2470,7 @@ class _TransferProgressBadge extends StatelessWidget {
                 child: Text(
                   '$label$percentLabel',
                   overflow: TextOverflow.ellipsis,
-                  style: terminalTextStyle(
-                    color: AppColors.textSoft,
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: grid.AppType.label(color: AppColors.textSoft),
                 ),
               ),
               const SizedBox(width: 8),
@@ -2487,10 +2478,7 @@ class _TransferProgressBadge extends StatelessWidget {
                 onTap: onCancel,
                 child: Text(
                   'CANCEL',
-                  style: terminalTextStyle(
-                    color: AppColors.textSoft,
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: grid.AppType.label(color: AppColors.textSoft),
                 ),
               ),
             ],
@@ -2573,7 +2561,7 @@ class _PaneGhost extends StatelessWidget {
                 child: Center(
                   child: Text(
                     session.agentName,
-                    style: terminalTextStyle(
+                    style: grid.AppType.monoLabel(
                       color: AppColors.mutedStrong,
                       fontWeight: FontWeight.w600,
                     ),

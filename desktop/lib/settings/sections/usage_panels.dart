@@ -6,8 +6,6 @@
 /// handed — none reads a store — so the pane can be driven from a fixture.
 library;
 
-import 'package:harness/terminal/terminal_text.dart';
-
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -36,17 +34,11 @@ class UsageLoadingState extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              message,
-              style: terminalTextStyle(color: AppPalette.textSecondary),
-            ),
+            Text(message, style: AppType.body(color: AppPalette.textSecondary)),
             const SizedBox(height: 12),
-            SkeletonText(
-              style: terminalTextStyle(height: 1.1),
-              widthFactor: .45,
-            ),
+            SkeletonText(style: AppType.title(height: 1.1), widthFactor: .45),
             const SizedBox(height: 8),
-            SkeletonText(style: terminalTextStyle(), widthFactor: .7),
+            SkeletonText(style: AppType.body(), widthFactor: .7),
           ],
         ),
       ),
@@ -78,7 +70,7 @@ class StatsSummaryCards extends StatelessWidget {
         child: Center(
           child: Text(
             'Start your first agent to begin tracking.',
-            style: terminalTextStyle(color: AppPalette.textSecondary),
+            style: AppType.body(color: AppPalette.textSecondary),
           ),
         ),
       );
@@ -120,7 +112,7 @@ class StatsSummaryCards extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             'Tracking since ${_trackingDate(since)}',
-            style: terminalTextStyle(color: AppPalette.textFaint),
+            style: AppType.caption(color: AppPalette.textFaint),
           ),
         ],
       ],
@@ -200,7 +192,7 @@ class UsageStatCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   label,
-                  style: terminalTextStyle(color: AppPalette.textSecondary),
+                  style: AppType.caption(color: AppPalette.textSecondary),
                 ),
               ),
             ],
@@ -208,17 +200,17 @@ class UsageStatCard extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             value,
-            style: terminalTextStyle(
-              fontWeight: FontWeight.w600,
+            style: AppType.title(
               color: AppPalette.textPrimary,
               height: 1.1,
+              fontFeatures: AppFont.tabularFigures,
             ),
           ),
           if (footnote != null) ...[
             const SizedBox(height: 3),
             Text(
               footnote!,
-              style: terminalTextStyle(color: AppPalette.textFaint),
+              style: AppType.caption(color: AppPalette.textFaint),
             ),
           ],
         ],
@@ -297,27 +289,21 @@ class DailyIntensityGrid extends StatelessWidget {
             children: [
               Text(
                 days.isEmpty ? '' : _shortDate(days.first.day),
-                style: terminalTextStyle(color: AppPalette.textFaint),
+                style: AppType.caption(color: AppPalette.textFaint),
               ),
               const Spacer(),
-              Text(
-                'Less',
-                style: terminalTextStyle(color: AppPalette.textFaint),
-              ),
+              Text('Less', style: AppType.caption(color: AppPalette.textFaint)),
               const SizedBox(width: 6),
               for (var level = 0; level <= 4; level++) ...[
                 _IntensityCell(level: level, size: 9),
                 const SizedBox(width: 3),
               ],
               const SizedBox(width: 3),
-              Text(
-                'More',
-                style: terminalTextStyle(color: AppPalette.textFaint),
-              ),
+              Text('More', style: AppType.caption(color: AppPalette.textFaint)),
               const Spacer(),
               Text(
                 days.isEmpty ? '' : _shortDate(days.last.day),
-                style: terminalTextStyle(color: AppPalette.textFaint),
+                style: AppType.caption(color: AppPalette.textFaint),
               ),
             ],
           ),
@@ -337,7 +323,6 @@ class _IntensityCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     // Step 0 is the recess the empty grid is made of; the rest climb the accent.
     // Discrete steps rather than a ramp, because a heatmap is read by comparing
     // squares and a smooth gradient gives the eye nothing to compare.
@@ -432,7 +417,7 @@ class TokenMixBar extends StatelessWidget {
                     child: Text(
                       '${slice.label}: ${formatTokens(slice.tokens)}',
                       overflow: TextOverflow.ellipsis,
-                      style: terminalTextStyle(color: AppPalette.textSecondary),
+                      style: AppType.caption(color: AppPalette.textSecondary),
                     ),
                   ),
                 ],
@@ -492,11 +477,11 @@ class _PanelCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title, style: Theme.of(context).textTheme.titleSmall),
+                    Text(title, style: AppType.heading()),
                     const SizedBox(height: 2),
                     Text(
                       subtitle,
-                      style: terminalTextStyle(
+                      style: AppType.body(
                         height: 1.35,
                         color: AppPalette.textSecondary,
                       ),
@@ -517,7 +502,7 @@ class _PanelCard extends StatelessWidget {
                   ),
                   child: Text(
                     label,
-                    style: terminalTextStyle(
+                    style: AppType.caption(
                       height: 1.25,
                       color: AppPalette.textSecondary,
                     ),
@@ -607,22 +592,16 @@ class ProviderUsageRow extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-                child: Text(
-                  state.enabled ? 'Turn off' : 'Enable',
-                  style: terminalTextStyle(),
-                ),
+                child: Text(state.enabled ? 'Turn off' : 'Enable'),
               ),
             ],
           ),
           const SizedBox(height: 4),
           if (_detail() case final detail?)
-            Text(
-              detail,
-              style: terminalTextStyle(color: AppPalette.textSecondary),
-            ),
+            Text(detail, style: AppType.body(color: AppPalette.textSecondary)),
           if (state.status == LedgerStatus.scanning && !ledger.hasData) ...[
             const SizedBox(height: 10),
-            SkeletonText(style: terminalTextStyle(), widthFactor: .55),
+            SkeletonText(style: AppType.body(), widthFactor: .55),
           ],
           if (state.enabled &&
               (state.status == LedgerStatus.ok ||
@@ -635,12 +614,15 @@ class ProviderUsageRow extends StatelessWidget {
                 Expanded(
                   child: Text(
                     '${formatTokens(ledger.totals.total)} tokens',
-                    style: terminalTextStyle(color: AppPalette.textPrimary),
+                    style: AppType.body(
+                      color: AppPalette.textPrimary,
+                      fontFeatures: AppFont.tabularFigures,
+                    ),
                   ),
                 ),
                 Text(
                   formatCost(ledger.costUsd),
-                  style: terminalTextStyle(
+                  style: AppType.body(
                     color: AppPalette.textPrimary,
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
@@ -724,7 +706,7 @@ class _StatusPill extends StatelessWidget {
         color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(6),
       ),
-      child: Text(label, style: terminalTextStyle(color: color, height: 1.3)),
+      child: Text(label, style: AppType.caption(color: color, height: 1.3)),
     );
   }
 }
@@ -771,7 +753,7 @@ class UsageEmptyState extends StatelessWidget {
               'Switch on a provider to read the logs its CLI already keeps on '
               'this computer, and build the token ledger from them. Nothing is '
               'read until you do, and nothing leaves this machine.',
-              style: terminalTextStyle(
+              style: AppType.body(
                 height: 1.45,
                 color: AppPalette.textSecondary,
               ),
@@ -789,10 +771,7 @@ class UsageEmptyState extends StatelessWidget {
                     minimumSize: const Size(0, 30),
                     padding: const EdgeInsets.symmetric(horizontal: 14),
                   ),
-                  child: Text(
-                    'Enable ${provider.label}',
-                    style: terminalTextStyle(),
-                  ),
+                  child: Text('Enable ${provider.label}'),
                 ),
             ],
           ),

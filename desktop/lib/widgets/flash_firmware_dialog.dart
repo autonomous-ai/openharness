@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../flash/flasher.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -255,15 +254,12 @@ class _FlashDialogState extends State<_FlashDialog> {
             children: [
               Text(
                 title,
-                style: terminalTextStyle(
-                  color: grid.AppPalette.textPrimary,
-                  fontWeight: grid.AppFont.semibold,
-                ),
+                style: grid.AppType.heading(color: grid.AppPalette.textPrimary),
               ),
               const SizedBox(height: 3),
               Text(
                 sub,
-                style: terminalTextStyle(
+                style: grid.AppType.body(
                   color: grid.AppPalette.textSecondary,
                   height: 1.5,
                 ),
@@ -334,13 +330,14 @@ class _FlashDialogState extends State<_FlashDialog> {
           width: 104,
           child: Text(
             label,
-            style: terminalTextStyle(color: grid.AppPalette.textFaint),
+            style: grid.AppType.body(color: grid.AppPalette.textFaint),
           ),
         ),
         Expanded(
           child: Text(
             value,
-            style: terminalTextStyle(
+            style: grid.AppType.monoLabel(
+              fontWeight: FontWeight.w400,
               color: tone ?? grid.AppPalette.textSecondary,
             ),
           ),
@@ -357,7 +354,7 @@ class _FlashDialogState extends State<_FlashDialog> {
         children: [
           Text(
             'More than one board is connected — pick one:',
-            style: terminalTextStyle(color: grid.AppPalette.textSecondary),
+            style: grid.AppType.body(color: grid.AppPalette.textSecondary),
           ),
           const SizedBox(height: 7),
           for (final port in _ports)
@@ -392,7 +389,7 @@ class _FlashDialogState extends State<_FlashDialog> {
           Expanded(
             child: RichText(
               text: TextSpan(
-                style: terminalTextStyle(
+                style: grid.AppType.body(
                   color: grid.AppPalette.textSecondary,
                   height: 1.5,
                 ),
@@ -460,14 +457,17 @@ class _FlashDialogState extends State<_FlashDialog> {
                 const SizedBox(width: 8),
                 Text(
                   'Output',
-                  style: terminalTextStyle(
+                  style: grid.AppType.caption(
                     color: grid.AppPalette.textSecondary,
+                    fontWeight: grid.AppFont.medium,
                   ),
                 ),
                 const Spacer(),
                 Text(
                   'flash-circle.sh',
-                  style: terminalTextStyle(color: grid.AppPalette.textFaint),
+                  style: grid.AppType.monoMeta(
+                    color: grid.AppPalette.textFaint,
+                  ),
                 ),
               ],
             ),
@@ -489,7 +489,10 @@ class _FlashDialogState extends State<_FlashDialog> {
                       ),
                   ],
                 ),
-                style: terminalTextStyle(height: 1.62),
+                style: grid.AppType.monoLabel(
+                  fontWeight: FontWeight.w400,
+                  height: 1.62,
+                ),
               ),
             ),
           ),
@@ -676,7 +679,7 @@ class _StepRow extends StatelessWidget {
               label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: terminalTextStyle(color: ink),
+              style: grid.AppType.body(color: ink),
             ),
           ),
         ],
@@ -723,7 +726,7 @@ class _DialogButton extends StatelessWidget {
               ? BorderSide(color: grid.AppGlass.hair)
               : BorderSide.none,
         ),
-        textStyle: terminalTextStyle(
+        textStyle: grid.AppType.label(
           fontWeight: primary ? grid.AppFont.semibold : grid.AppFont.regular,
         ),
       ),
@@ -780,7 +783,10 @@ class _PortChoice extends StatelessWidget {
             const SizedBox(width: 9),
             Text(
               port,
-              style: terminalTextStyle(color: grid.AppPalette.textPrimary),
+              style: grid.AppType.monoLabel(
+                fontWeight: FontWeight.w400,
+                color: grid.AppPalette.textPrimary,
+              ),
             ),
           ],
         ),

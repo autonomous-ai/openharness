@@ -35,11 +35,11 @@ class CommandRow extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Text('\$ ', style: TextStyle(color: AppColors.mutedStrong)),
+            Text('\$ ', style: grid.AppType.mono(color: AppColors.mutedStrong)),
             Expanded(
               child: SelectableText(
                 command,
-                style: terminalTextStyle(color: AppColors.text),
+                style: grid.AppType.mono(color: AppColors.text),
               ),
             ),
             Icon(

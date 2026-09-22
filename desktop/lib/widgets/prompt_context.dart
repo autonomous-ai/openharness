@@ -5,7 +5,6 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/prompt_style.dart';
 import '../terminal/terminal_text.dart';
-import 'box_chrome.dart';
 import 'search_result_text.dart';
 
 /// The same compact identity line in the picker, pane header and live preview.
@@ -23,7 +22,7 @@ class PromptContextView extends StatelessWidget {
   final PromptContext contextData;
   final PromptPrefs? prefs;
   final AppearancePrefsStore? store;
-  double get size => terminalFontStore.size;
+  double get size => grid.AppType.monoLabelSize;
   final Iterable<SearchFieldMatch> matches;
 
   @override
@@ -38,6 +37,14 @@ class PromptContextView extends StatelessWidget {
           _line(prefs ?? (store ?? appearancePrefsStore).value.prompt),
     );
   }
+
+  /// Breadcrumbs name places a person copies, so they are mono, one step
+  /// under the terminal's own text.
+  static TextStyle _style(Color tone) => grid.AppType.monoLabel(
+    color: tone,
+    fontWeight: FontWeight.w400,
+    height: 1.35,
+  );
 
   Widget _line(PromptPrefs prefs) {
     final data = contextData;
@@ -118,7 +125,7 @@ class PromptContextView extends StatelessWidget {
                         if (part.ascii.isNotEmpty) ...[
                           if (prefs.style == PromptStyle.plain ||
                               part.icon == null)
-                            Text(part.ascii, style: boxMonoStyle(color: tone))
+                            Text(part.ascii, style: _style(tone))
                           else
                             Icon(part.icon, size: size, color: tone),
                           const SizedBox(width: 4),
@@ -127,7 +134,7 @@ class PromptContextView extends StatelessWidget {
                           child: SearchResultText(
                             part.value,
                             matches: matches,
-                            style: boxMonoStyle(color: tone),
+                            style: _style(tone),
                           ),
                         ),
                       ],

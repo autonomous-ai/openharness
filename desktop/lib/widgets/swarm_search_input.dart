@@ -54,7 +54,7 @@ class SwarmSearchInput extends StatelessWidget {
   final double? height;
 
   /// The typed text and the hint; the search glyph grows with it.
-  double get fontSize => terminalFontStore.size;
+  double get fontSize => grid.AppType.monoSize;
   final String? prompt;
 
   /// Plain monospace input in a TerminalBox, without a decorative search glyph.
@@ -102,7 +102,7 @@ class SwarmSearchInput extends StatelessWidget {
       onChanged: onChanged,
       style: terminalStyle
           ? boxMonoStyle()
-          : terminalTextStyle(color: Colors.white),
+          : grid.AppType.mono(color: Colors.white),
       cursorColor: grid.AppPalette.swarmAccent,
       textAlignVertical: TextAlignVertical.center,
       decoration: InputDecoration(
@@ -114,7 +114,7 @@ class SwarmSearchInput extends StatelessWidget {
             : hintText ?? search?.hint ?? kSwarmSearchHint,
         hintStyle: terminalStyle
             ? boxMonoStyle(color: kBoxFaint)
-            : terminalTextStyle(color: Colors.white60),
+            : grid.AppType.mono(color: Colors.white60),
         hintMaxLines: 1,
         prefixIcon: prompt != null
             ? Padding(
@@ -153,7 +153,7 @@ class SwarmSearchInput extends StatelessWidget {
                           foregroundColor: Colors.white60,
                           minimumSize: const Size(36, 28),
                         ),
-                        child: Text('esc', style: terminalTextStyle()),
+                        child: Text('esc', style: grid.AppType.monoMeta()),
                       ),
                   ],
                 ),

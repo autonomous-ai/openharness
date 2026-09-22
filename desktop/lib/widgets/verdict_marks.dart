@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart';
+import '../shared/theme/app_type.dart';
 import '../theme/app_theme.dart';
 
 /// Ready wins; then errors; then the phase under way; then warnings; then the
@@ -89,7 +90,7 @@ class VerdictStatus extends StatelessWidget {
                 label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: terminalTextStyle(color: color, fontWeight: weight),
+                style: AppType.monoLabel(color: color, fontWeight: weight),
               ),
             ),
           ],

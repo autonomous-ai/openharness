@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../../analytics/analytics_sink.dart';
 import '../../shared/theme/app_theme.dart';
@@ -58,10 +57,7 @@ class _TrackingStreamCardState extends State<TrackingStreamCard> {
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  'Analytics stream',
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
+                child: Text('Analytics stream', style: AppType.heading()),
               ),
               _StatePill(enabled: status.enabled),
             ],
@@ -70,10 +66,7 @@ class _TrackingStreamCardState extends State<TrackingStreamCard> {
             const SizedBox(height: 6),
             Text(
               reason,
-              style: terminalTextStyle(
-                height: 1.4,
-                color: AppPalette.textSecondary,
-              ),
+              style: AppType.body(height: 1.4, color: AppPalette.textSecondary),
             ),
           ],
           const SizedBox(height: 6),
@@ -113,7 +106,7 @@ class _StatePill extends StatelessWidget {
       ),
       child: Text(
         enabled ? 'Reporting' : 'Off',
-        style: terminalTextStyle(fontWeight: AppFont.medium, color: ink),
+        style: AppType.caption(fontWeight: AppFont.medium, color: ink),
       ),
     );
   }
@@ -140,13 +133,14 @@ class _Row extends StatelessWidget {
             width: 72,
             child: Text(
               label,
-              style: terminalTextStyle(color: AppPalette.textFaint),
+              style: AppType.body(color: AppPalette.textFaint),
             ),
           ),
           Expanded(
             child: SelectableText(
               value,
-              style: terminalTextStyle(
+              style: AppType.monoLabel(
+                fontWeight: AppFont.regular,
                 height: 1.4,
                 color: muted
                     ? AppPalette.textSecondary

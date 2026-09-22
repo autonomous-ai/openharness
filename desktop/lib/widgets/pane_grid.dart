@@ -639,7 +639,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                             TextSpan(text: action),
                           ],
                         ),
-                        style: boxMonoStyle(color: kBoxFaint),
+                        style: kBoxFaintStyle,
                       ),
                   ],
                 ),
@@ -1696,10 +1696,7 @@ class _FileDropZoneState extends State<_FileDropZone> {
                       ),
                       child: Text(
                         'Drop to attach',
-                        style: terminalTextStyle(
-                          color: AppColors.text,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        style: grid.AppType.label(color: AppColors.text),
                       ),
                     ),
                   ),
@@ -1924,9 +1921,8 @@ class _SwapZone extends StatelessWidget {
                               ),
                               child: Text(
                                 'Swap with this pane',
-                                style: terminalTextStyle(
+                                style: grid.AppType.label(
                                   color: AppColors.text,
-                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ),
@@ -2018,7 +2014,7 @@ class _PaneHeader extends StatelessWidget {
                 child: Text(
                   title,
                   overflow: TextOverflow.ellipsis,
-                  style: terminalTextStyle(
+                  style: grid.AppType.monoLabel(
                     color: AppColors.text,
                     fontWeight: FontWeight.w600,
                   ),
@@ -2088,7 +2084,7 @@ class _PaneStatus extends StatelessWidget {
                       child: Text(
                         message,
                         textAlign: TextAlign.center,
-                        style: terminalTextStyle(color: AppColors.mutedStrong),
+                        style: grid.AppType.body(color: AppColors.mutedStrong),
                       ),
                     ),
                   ),
@@ -2159,10 +2155,7 @@ class _DropZone extends StatelessWidget {
                             paneId == null
                                 ? 'Open ${candidate.first?.name ?? 'agent'} here'
                                 : 'Show ${candidate.first?.name ?? 'agent'} in this pane',
-                            style: terminalTextStyle(
-                              color: AppColors.text,
-                              fontWeight: FontWeight.w600,
-                            ),
+                            style: grid.AppType.label(color: AppColors.text),
                           ),
                         ),
                       ),
@@ -2194,7 +2187,7 @@ class _AddSlot extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               'Drop here for a new pane',
-              style: terminalTextStyle(color: AppColors.mutedStrong),
+              style: grid.AppType.body(color: AppColors.mutedStrong),
             ),
           ],
         ),
@@ -2253,7 +2246,7 @@ class _EmptyGrid extends StatelessWidget {
             children: [
               Text(
                 'Select an agent, or drag one in from the left.',
-                style: terminalTextStyle(color: AppColors.mutedStrong),
+                style: grid.AppType.body(color: AppColors.mutedStrong),
               ),
               // Selecting and dragging both need an agent to already exist. On a
               // first launch none does, so the two sentences around this button
@@ -2279,7 +2272,7 @@ class _EmptyGrid extends StatelessWidget {
               Text(
                 'Press ${shortcutHintFor(ShortcutAction.showShortcuts)} for '
                 'keyboard shortcuts',
-                style: terminalTextStyle(color: grid.AppPalette.textFaint),
+                style: grid.AppType.body(color: grid.AppPalette.textFaint),
               ),
             ],
           ),

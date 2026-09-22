@@ -1,26 +1,25 @@
 import 'dart:math' as math;
 
-import 'package:harness/terminal/terminal_text.dart';
-
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../theme/app_theme.dart';
 
-/// Menus share the terminal typography. Compact and roomy variants only
-/// change padding and icon spacing.
+/// A row names a choice, so it is set in [AppType.mono] like every other
+/// label; its detail line is prose, in [AppType.caption]. Compact and roomy variants only change padding and icon
+/// spacing.
 @immutable
 class AppMenuRowMetrics {
   const AppMenuRowMetrics({required this.iconSize, required this.padding});
 
-  double get fontSize => terminalFontStore.size;
-  double get noteSize => terminalFontStore.size;
+  double get fontSize => AppType.bodySize;
+  double get noteSize => AppType.captionSize;
   final double iconSize;
   final EdgeInsets padding;
 
   /// Round line metrics up before adding padding, so panels reserve enough
-  /// room at every supported terminal size. The extra two pixels are the row
-  /// border; app_select_field_test checks the result against actual layout.
+  /// room for the line. The extra two pixels are the row border;
+  /// app_select_field_test checks the result against actual layout.
   double get extent =>
       math.max(iconSize, (fontSize * 1.2).ceilToDouble()) +
       padding.vertical +
@@ -227,12 +226,12 @@ class _AppMenuItemState extends State<AppMenuItem> {
                         widget.label,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: terminalTextStyle(
+                        style: AppType.mono(
                           color: widget.danger ? error : AppPalette.textPrimary,
                           height: 1.2,
                           fontWeight: widget.selected
-                              ? AppFont.semibold
-                              : AppFont.medium,
+                              ? AppFont.medium
+                              : AppFont.regular,
                         ),
                       ),
                       if (widget.detail case final detail?) ...[
@@ -241,7 +240,7 @@ class _AppMenuItemState extends State<AppMenuItem> {
                           detail,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: terminalTextStyle(
+                          style: AppType.caption(
                             color: AppPalette.textSecondary,
                             height: 1.25,
                           ),
@@ -257,7 +256,7 @@ class _AppMenuItemState extends State<AppMenuItem> {
                       widget.note!,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: terminalTextStyle(
+                      style: AppType.mono(
                         color: AppPalette.textFaint,
                         height: 1.2,
                       ),
