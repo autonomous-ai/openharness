@@ -336,6 +336,8 @@ Machine:
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
   harness machines             list the machines on this account (this computer's is marked)
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
+  harness e2e plan             which coding tools have a new version out (the grid-switch e2e trigger)
+  harness e2e grid-switch      move a fresh agent subscription -> grid -> back home with its tool + MCP; leaves a review bundle
   harness remote               from a Harness terminal tile: open a terminal on another of your machines and move this tile to it
   harness version              print the installed version (v${VERSION})
   harness update [--force]     update to the latest build now (it also self-updates in the background;
@@ -6340,6 +6342,19 @@ switch (cmd) {
       output: process.stdout,
       error: (line) => console.error(line),
     }).then((code) => { process.exitCode = code }).catch(onError)
+    break
+  case 'e2e':
+    // The grid-switch e2e: a fresh agent moved subscription -> grid -> back home with the person's
+    // tool + MCP, leaving a review bundle. Env-driven (see src/e2e/runGridSwitchTrace.ts); the
+    // relay-side reviewer (opencode `e2e-watchdog`) lives with the relay, in autonomous-grid-cli.
+    if (args[0] === 'grid-switch') {
+      import('./e2e/runGridSwitchTrace.js')
+        .then(({ runGridSwitch }) => runGridSwitch())
+        .then((r) => { process.exitCode = r.error || r.stuck ? 1 : 0 })
+        .catch(onError)
+    } else if (args[0] === 'plan') {
+      import('./e2e/plan.js').then(({ planCommand }) => planCommand(flags.includes('--json'))).catch(onError)
+    } else { console.error(`Unknown command: e2e ${args[0] ?? ''} (grid-switch | plan)`); usage(1) }
     break
   case 'machines':
     if (!args[0]) machinesListCommand(flags.includes('--json')).catch(onError)
