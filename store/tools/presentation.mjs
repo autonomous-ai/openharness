@@ -50,17 +50,12 @@ if (process.argv.includes('--categories-only')) process.exit(0);
 
 const inventory = [
   '<!-- store-catalog:start -->',
-  '### Coding and beyond', '',
-  `Start with a coding agent you already use. Explore ${agents.length} domain-specific harnesses when your`,
-  'next idea takes you further.', '',
+  `### ${agents.length} harnesses in the Store`, '',
   '| Category | Agents and harnesses |', '|---|---|',
   `| **Coding** | [${engines.map(([,name]) => name).join(', ')}](docs/engines.md)${codingHarnesses.length ? ', ' + codingHarnesses.map(harnessLink).join(', ') : ''} |`,
   ...craftGroups.map(c => `| ${c.name} | ${c.entries.map(harnessLink).join(', ')} |`), '',
-  `These are the ${agents.length} harnesses currently listed in the Store catalog. They combine upstream`,
-  'open-source tools and original workflows, with instructions, setup, checks, and live views for each craft.', '',
-  `The ${viewers.length} [shared viewers](store/viewers/) cover CAD, 3D models, documents, games, film, video,`,
-  'MuJoCo, web pages, isolated web previews, and studios. Viewer packages install alongside the',
-  'harnesses that need them. Experimental packages marked unlisted are not included above.',
+  `Upstream open-source tools and original workflows. ${viewers.length} [shared viewers](store/viewers/) install alongside`,
+  'the harnesses that need them. Unlisted experiments are not shown.',
   '<!-- store-catalog:end -->',
 ].join('\n');
 let readme = read('README.md');
