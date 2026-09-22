@@ -29,6 +29,12 @@ This mode **excludes AppKit input delivery, physical keyboard latency, GPU
 presentation, network latency and native titlebar paint completion**. A fully
 opened frame includes any route fade; the first frame is reported separately.
 The reported display maximum is metadata, not an asserted refresh rate.
+The driver also records the preceding frame, dispatch offset from its vsync,
+waiting time until the requested frame starts building, and build-start-to-raster
+time. A preceding busy frame can change the input's position within a refresh
+interval; inspect these components before attributing elapsed-time differences
+to CPU work. Wall-clock phase timestamps are correlated using the engine's
+paired monotonic and wall-clock raster-finish timestamps.
 Use manual mode for visual/interaction QA, not timing claims. See the
 [September 22 results](../../../docs/performance/2026-09-22-desktop-latency.md).
 

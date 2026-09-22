@@ -133,7 +133,7 @@ Future<void> runFlutterDispatchBenchmark(
   ];
   for (final (operation, key, matches) in operations) {
     for (var sample = -5; sample < 40; sample++) {
-      await _frame();
+      final previousFrame = await _frame();
       final began = DateTime.now().microsecondsSinceEpoch;
       _key(key);
       final dispatched = DateTime.now().microsecondsSinceEpoch;
@@ -157,6 +157,7 @@ Future<void> runFlutterDispatchBenchmark(
         'phase': sample < 0 ? 'warmup' : 'measured',
         'startedWallMicros': began,
         'dispatchMicros': dispatched - began,
+        'previousFrame': previousFrame,
         'firstFrame': firstFrame,
         'readyFrame': readyFrame,
       });
@@ -187,7 +188,7 @@ Future<void> runFlutterDispatchBenchmark(
   // Cmd+T creates a blank tab; Escape does not close that tab. Validate both
   // its first welcome frame and the Cmd+W return to the retained workspace.
   for (var sample = -5; sample < 40; sample++) {
-    await _frame();
+    final previousFrame = await _frame();
     final previousTab = app.activeSwarmId;
     final previousCount = app.swarms.length;
     final began = DateTime.now().microsecondsSinceEpoch;
@@ -205,6 +206,7 @@ Future<void> runFlutterDispatchBenchmark(
       'phase': sample < 0 ? 'warmup' : 'measured',
       'startedWallMicros': began,
       'dispatchMicros': dispatched - began,
+      'previousFrame': previousFrame,
       'firstFrame': frame,
       'readyFrame': frame,
     });
@@ -224,7 +226,7 @@ Future<void> runFlutterDispatchBenchmark(
   for (final operation in ['tab', 'focus', 'zoom']) {
     for (var sample = -5; sample < 40; sample++) {
       if (operation == 'focus') app.focusPaneByIndex(0);
-      await _frame();
+      final previousFrame = await _frame();
       final previousTab = app.activeSwarmId;
       final began = DateTime.now().microsecondsSinceEpoch;
       if (operation == 'tab') {
@@ -252,6 +254,7 @@ Future<void> runFlutterDispatchBenchmark(
         'phase': sample < 0 ? 'warmup' : 'measured',
         'startedWallMicros': began,
         'dispatchMicros': dispatched - began,
+        'previousFrame': previousFrame,
         'firstFrame': frame,
         'readyFrame': frame,
       });
@@ -271,9 +274,10 @@ Future<void> runFlutterDispatchBenchmark(
     await Future<void>.delayed(const Duration(milliseconds: 100));
   }
   for (final row in rows) {
+    final previous = timings[row['previousFrame']];
     final first = timings[row['firstFrame']];
     final ready = timings[row['readyFrame']];
-    if (first == null || ready == null) {
+    if (previous == null || first == null || ready == null) {
       throw StateError('Missing exact frame timings');
     }
     final began = row['startedWallMicros'] as int;
@@ -285,6 +289,20 @@ Future<void> runFlutterDispatchBenchmark(
         began;
     row['buildMicros'] = first.buildDuration.inMicroseconds;
     row['rasterMicros'] = first.rasterDuration.inMicroseconds;
+    // The preceding frame can move dispatch within the refresh interval.
+    // Preserve that phase and split waiting from work on the requested frame.
+    int wallTime(ui.FrameTiming timing, ui.FramePhase phase) =>
+        timing.timestampInMicroseconds(ui.FramePhase.rasterFinishWallTime) -
+        timing.timestampInMicroseconds(ui.FramePhase.rasterFinish) +
+        timing.timestampInMicroseconds(phase);
+    row['previousBuildMicros'] = previous.buildDuration.inMicroseconds;
+    row['dispatchAfterPreviousVsyncMicros'] =
+        began - wallTime(previous, ui.FramePhase.vsyncStart);
+    row['waitForBuildMicros'] =
+        wallTime(first, ui.FramePhase.buildStart) - began;
+    row['buildStartToRasterMicros'] =
+        first.timestampInMicroseconds(ui.FramePhase.rasterFinish) -
+        first.timestampInMicroseconds(ui.FramePhase.buildStart);
     if ((row['firstRasterMicros'] as int) < 0) {
       throw StateError('Invalid frame timestamp');
     }
@@ -306,6 +324,10 @@ Future<void> runFlutterDispatchBenchmark(
               'readyRasterMicros',
               'buildMicros',
               'rasterMicros',
+              'previousBuildMicros',
+              'dispatchAfterPreviousVsyncMicros',
+              'waitForBuildMicros',
+              'buildStartToRasterMicros',
             ])
               metric: _distribution([
                 for (final row in rows)
