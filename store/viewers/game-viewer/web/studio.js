@@ -103,8 +103,12 @@ const playtest = createPlaytest({
   request,
   toast,
   lock(value) {
+    const wasLocked = momentLock;
     momentLock = value;
     controls();
+    // Resume keyboard play after a rewind or note, once the iframe is interactive.
+    if (wasLocked && !value && mode === "play" && !paused)
+      frames.get(active)?.frame.contentWindow?.focus();
   },
   focus: () => frames.get(active)?.frame.contentWindow?.focus(),
   async resume() {
@@ -235,7 +239,11 @@ $("play").onclick = () => {
   setMode("play");
   playtest.render();
 };
-$("pause").onclick = () => setPaused(!paused);
+$("pause").onclick = () => {
+  setPaused(!paused);
+  if (!paused && mode === "play")
+    frames.get(active)?.frame.contentWindow?.focus();
+};
 $("restart").onclick = () => {
   command("restart");
   setPaused(false);
