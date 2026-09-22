@@ -50,6 +50,7 @@ import '../store/store_screen.dart' show openStoreAgent;
 import 'dial_status.dart';
 import 'harness_placement.dart';
 import 'desk_sync.dart';
+import 'machine_profile.dart';
 import 'pane_layout_store.dart';
 import 'terminal_pane.dart';
 import 'swarm.dart';
@@ -665,6 +666,14 @@ class AppNotifier extends ChangeNotifier {
   /// Swarms own arrangements; a shared pane owns one live terminal controller.
   final List<Swarm> swarms = [Swarm(id: 'swarm-1')];
 
+  /// null shows every machine's tabs. A machine id shows only tabs whose
+  /// agents all live on that computer. The account desk is not rewritten:
+  /// the other computers' tabs stay, they are just not drawn here.
+  String? _machineProfileId;
+  String? get machineProfileId => _machineProfileId;
+  List<Swarm> get profileSwarms =>
+      swarmsForMachineProfile(swarms, _machineProfileId);
+
   // ── the desk: the account's tabs, the same on every computer ─────────────
   //
   // `desk_sync.dart` has the shape and the rules; this is the window's half.
@@ -1027,13 +1036,36 @@ class AppNotifier extends ChangeNotifier {
   /// Command-number follows the current visual tab order, retaining each tab's
   /// focused pane. A missing position is a no-op, never a pane selection.
   void selectSwarmByIndex(int index) {
-    if (index < 0 || index >= swarms.length) return;
-    selectSwarm(swarms[index].id);
+    final view = profileSwarms;
+    if (index < 0 || index >= view.length) return;
+    selectSwarm(view[index].id);
   }
 
   void stepSwarm(int delta) {
-    final index = swarms.indexOf(activeSwarm);
-    selectSwarm(swarms[(index + delta) % swarms.length].id);
+    final view = profileSwarms;
+    if (view.isEmpty) return;
+    final index = view.indexWhere((swarm) => swarm.id == activeSwarmId);
+    final next = index < 0 ? 0 : (index + delta) % view.length;
+    selectSwarm(view[next].id);
+  }
+
+  /// Show every machine, or only [machineId]. An empty value is every machine.
+  /// The hidden tabs stay on the account desk.
+  void setMachineProfile(String? machineId) {
+    final next = machineId == null || machineId.isEmpty ? null : machineId;
+    if (next == _machineProfileId) return;
+    _machineProfileId = next;
+    unawaited(_paneLayout?.saveMachineProfile(next));
+    final view = profileSwarms;
+    if (view.isEmpty) {
+      newSwarm();
+      return;
+    }
+    if (view.every((swarm) => swarm.id != _activeSwarmId)) {
+      selectSwarm(view.first.id);
+      return;
+    }
+    notifyListeners();
   }
 
   void renameSwarm(String id, String name) {
@@ -1048,10 +1080,23 @@ class AppNotifier extends ChangeNotifier {
   }
 
   void reorderSwarm(String id, int destination) {
-    final index = swarms.indexWhere((s) => s.id == id);
-    if (index < 0) return;
-    final swarm = swarms.removeAt(index);
-    swarms.insert(destination.clamp(0, swarms.length), swarm);
+    final view = List<Swarm>.of(profileSwarms);
+    final from = view.indexWhere((swarm) => swarm.id == id);
+    if (from < 0) return;
+    final moved = view.removeAt(from);
+    view.insert(destination.clamp(0, view.length), moved);
+    if (view.length == swarms.length) {
+      swarms
+        ..clear()
+        ..addAll(view);
+    } else {
+      var next = 0;
+      for (var i = 0; i < swarms.length; i++) {
+        if (swarmMatchesMachineProfile(swarms[i], _machineProfileId)) {
+          swarms[i] = view[next++];
+        }
+      }
+    }
     _persistLayout();
     notifyListeners();
   }
@@ -9149,6 +9194,12 @@ class AppNotifier extends ChangeNotifier {
       // instead is nobody's arrival here — see [paneFocusByUser].
       _paneFocusByUser = false;
     }
+    final visible = profileSwarms;
+    if (visible.isNotEmpty && visible.every((s) => s.id != _activeSwarmId)) {
+      _activeSwarmId = visible.first.id;
+      selectedMachineId = focusedPane?.machineId;
+      _paneFocusByUser = false;
+    }
 
     // Streams nobody shows any more.
     for (final pane in released.toSet()) {
@@ -9211,8 +9262,12 @@ class AppNotifier extends ChangeNotifier {
     final initialSwarm = activeSwarm;
     final revision = _layoutRevision;
     final authRevision = _authRevision;
+    final savedProfile = await store.loadMachineProfile();
     final saved = await store.loadSwarms();
     if (!_authWorkCurrent(authRevision) || revision != _layoutRevision) return;
+    _machineProfileId = savedProfile == null || savedProfile.isEmpty
+        ? null
+        : savedProfile;
     if (saved != null &&
         allPanes.isEmpty &&
         swarms.length == 1 &&

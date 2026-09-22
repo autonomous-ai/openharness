@@ -7,6 +7,7 @@ import '../state/app_state.dart';
 import '../widgets/harness_customize_pane.dart';
 import 'sections/about_section.dart';
 import 'sections/account_section.dart';
+import 'sections/profiles_section.dart';
 import 'sections/debug_section.dart';
 import 'sections/devices_section.dart';
 import 'sections/shortcuts_section.dart';
@@ -184,6 +185,7 @@ class _SettingsBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final screen = switch (section) {
       SettingsSection.account => AccountSection(notifier: notifier),
+      SettingsSection.profiles => ProfilesSection(notifier: notifier),
       SettingsSection.usage => const UsageSection(),
       SettingsSection.customize => throw StateError(
         'Customization opens over the workspace.',

@@ -32,6 +32,11 @@ class PaneLayoutStore {
   /// bytes of dead JSON costs less than a file this build has to migrate.
   static const _presetsKey = 'terminal_pane_presets';
 
+  /// Which computer this window is showing. Absent or empty is every machine.
+  /// A separate key from the desk: the desk stays the account's full tab list,
+  /// and this is only the window's choice of which of those tabs to draw.
+  static const machineProfileKey = 'machine_profile_v1';
+
   /// The ceiling on tiles, enforced on the way IN as well as out: a file written
   /// by a future build that allows more must not make this one try to open
   /// terminals it has nowhere to put.
@@ -174,6 +179,24 @@ class PaneLayoutStore {
     // listener must start a fresh drain rather than join an already-ended one.
     _swarmSave = null;
     completion.complete();
+  }
+
+  Future<String?> loadMachineProfile() async {
+    try {
+      final raw = await _storage.read(machineProfileKey);
+      if (raw == null || raw.isEmpty) return null;
+      return raw;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> saveMachineProfile(String? machineId) async {
+    try {
+      await _storage.write(machineProfileKey, machineId ?? '');
+    } catch (_) {
+      // The choice still applies for this run.
+    }
   }
 
   Future<void> save(List<PaneLayoutEntry> entries) async {
