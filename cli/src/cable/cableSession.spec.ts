@@ -143,6 +143,9 @@ describe('cable session', () => {
     const welcome = port.sent[0]
     expect(welcome).toMatchObject({ t: 'welcome', app: 'harness', machine: { name: 'MacBook Pro' } })
     expect(welcome.bind).toMatch(/^[0-9a-f]{64}$/)
+    // The computer's clock, for a device that shows the time (the CoreS3).
+    expect(Math.abs((welcome.now as number) - Date.now())).toBeLessThan(5000)
+    expect(welcome.tzOffsetMin).toBe(-new Date().getTimezoneOffset())
     // Streamed one per message: a hundred agents do not fit in one 8 KB frame, and the dial must not have
     // to reassemble anything.
     expect(port.sent.find((m) => m.t === 'agent')).toMatchObject({ t: 'agent', id: 'a1', name: 'Fix login screen', engine: 'claude' })
@@ -335,6 +338,19 @@ describe('cable session', () => {
     port.sent.length = 0
     port.say({ t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'aa:bb' })
     await settle()
+    expect(port.types()).not.toContain('fw.offer')
+    await session.stop()
+  })
+
+  it('never offers the dial\'s image to a CoreS3', async () => {
+    const image = Buffer.alloc(2048, 9)
+    const host = makeHost({
+      firmwareFor: async () => ({ version: '9.9.9', image, sha256: 'x'.repeat(64) }),
+    })
+    const { session, port } = await connect(host)
+    port.say({ t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'cc:dd', hw: 'm5stack-cores3' })
+    await settle()
+    expect(port.types()).toContain('welcome')
     expect(port.types()).not.toContain('fw.offer')
     await session.stop()
   })

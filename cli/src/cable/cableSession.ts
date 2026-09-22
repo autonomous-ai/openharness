@@ -729,6 +729,10 @@ export class CableSession {
           // matters after a dial reboot that lands mid-session on a remote selection.
           selected: this.host.selectedMachine(),
           voiceLang: this.host.voiceLang(),
+          // The computer's clock and UTC offset, for a device with a clock face and no network time of
+          // its own (the CoreS3 keeps them in its RTC). The dial ignores both.
+          now: Date.now(),
+          tzOffsetMin: -new Date().getTimezoneOffset(),
           ...(bind ? { bind } : {}),
         })
         // Log a dial that is new OR that came back running something else. The version half of that test
@@ -756,7 +760,8 @@ export class CableSession {
         // Offered on every greeting, but only ONCE per version per session: accepting makes the dial erase
         // a flash slot before it answers, so a cadence of retries would spend erase cycles on the user's
         // hardware every fifteen seconds, and nothing about the next greeting changes what went wrong.
-        await this.maybeOfferFirmware(str('fw') ?? '')
+        // Never to a CoreS3: the images on offer are the dial's, and a CoreS3 declines them anyway.
+        if (!(hw ?? '').startsWith('m5stack')) await this.maybeOfferFirmware(str('fw') ?? '')
         return
       }
       case 'pong':
