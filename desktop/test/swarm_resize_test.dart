@@ -120,7 +120,7 @@ void main() {
       app.adoptSessionForTest(terminal('a1', frames));
       await mountWide(tester, app);
       final before = tester.getSize(find.byKey(left.cellKey)).width;
-      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> resize panes',

@@ -23,7 +23,7 @@ class WorkspaceQuickStart extends StatelessWidget {
     final next = learning.next;
     final (command, label) = switch (next) {
       WorkspaceLesson.agent => ('swarm.new', 'Open your first agent'),
-      WorkspaceLesson.pane => ('agent.add', 'Add a second agent to this tab'),
+      WorkspaceLesson.pane => ('agent.open', 'Add a second agent to this tab'),
       WorkspaceLesson.zoom => ('pane.zoom', 'Zoom the focused pane'),
       WorkspaceLesson.commands => (
         'navigation.commands',

@@ -126,7 +126,7 @@ class _MachineRailState extends State<MachineRail> {
       return KeyEventResult.handled;
     }
     // Everything else — including ⌘ chords — goes up to the app's own bindings,
-    // so ⌘P and ⌘N still work with the cursor parked in here.
+    // so ⌘O and ⌘N still work with the cursor parked in here.
     return KeyEventResult.ignored;
   }
 

@@ -1,98 +1,31 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
-import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
-import '../shortcuts/shortcuts_list.dart';
-import '../shortcuts/keymap.dart';
-import '../shortcuts/keymap_settings.dart';
-import '../shortcuts/keyboard_practice.dart';
+import '../shortcuts/app_keymap.dart';
+import '../shortcuts/shortcuts_browser.dart';
 
-/// The ⌘/ sheet — [ShortcutsList] in a dialog.
-///
-/// The list itself is shared with Settings ▸ Keyboard shortcuts, so the two can
-/// never disagree about what a key does.
 Future<void> showShortcutsSheet(BuildContext context) {
+  final keymap = KeymapTheme.of(context, listen: false);
   return showAppDialog<void>(
     context: context,
-    builder: (context) => const _ShortcutsSheet(),
-  );
-}
-
-class _ShortcutsSheet extends StatefulWidget {
-  const _ShortcutsSheet();
-
-  @override
-  State<_ShortcutsSheet> createState() => _ShortcutsSheetState();
-}
-
-class _ShortcutsSheetState extends State<_ShortcutsSheet> {
-  KeymapContext _contextKind = KeymapContext.workspace;
-
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    return Dialog(
-      // No backgroundColor, no shape: `dialogTheme` supplies both, at
-      // AppGlass.surfaceFill and AppCard.radius (12). The rim this used to
-      // carry is gone with them — §1 allows exactly one border in the app and
-      // it belongs to the menu panel, not to a dialog.
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 420),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 17, 18, 4),
-              child: Text(
-                'Keyboard shortcuts',
-                style: terminalTextStyle(
-                  color: grid.AppPalette.textPrimary,
-                  fontWeight: grid.AppFont.semibold,
-                ),
-              ),
-            ),
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(18, 8, 18, 16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    KeymapSettings(
-                      contextKind: _contextKind,
-                      onContextChanged: (value) =>
-                          setState(() => _contextKind = value),
-                    ),
-                    TextButton(
-                      onPressed: () => showKeyboardPractice(context),
-                      child: const Text('Practice these shortcuts'),
-                    ),
-                    ShortcutsList(contextKind: _contextKind),
-                  ],
-                ),
-              ),
-            ),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(18, 12, 18, 12),
-              decoration: BoxDecoration(
-                border: Border(top: BorderSide(color: grid.AppGlass.hair)),
-              ),
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  style: TextButton.styleFrom(
-                    foregroundColor: grid.AppPalette.textSecondary,
-                  ),
-                  child: const Text('Close'),
-                ),
-              ),
-            ),
-          ],
+    builder: (context) {
+      final sheet = Dialog(
+        insetPadding: const EdgeInsets.all(24),
+        clipBehavior: Clip.antiAlias,
+        child: SizedBox(
+          width: 1040,
+          height: math.min(800, MediaQuery.sizeOf(context).height - 48),
+          child: ShortcutsBrowser(
+            autofocus: true,
+            onClose: () => Navigator.of(context).pop(),
+          ),
         ),
-      ),
-    );
-  }
+      );
+      return keymap == null
+          ? sheet
+          : KeymapProvider(keymap: keymap, child: sheet);
+    },
+  );
 }

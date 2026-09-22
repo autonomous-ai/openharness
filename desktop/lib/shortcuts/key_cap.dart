@@ -29,7 +29,9 @@ class KeyCap extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final iconSize = MediaQuery.textScalerOf(context).scale(14);
+    TerminalFontScope.watch(context);
+    final iconSize = MediaQuery.textScalerOf(context)
+        .scale(terminalFontStore.size);
     final minEdge = math.max(height, iconSize + 8);
     return Container(
       // A minimum, not a fixed height: large text and a multi-stroke custom
@@ -89,6 +91,7 @@ class KeyChordView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    TerminalFontScope.watch(context);
     return Wrap(
       spacing: 4,
       runSpacing: 4,

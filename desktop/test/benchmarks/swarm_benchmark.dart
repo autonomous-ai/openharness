@@ -145,7 +145,7 @@ void main() {
         await tester.pump();
       });
       final retarget = await timed(() async {
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyO, cmd: true);
         await tester.pump();
         await key(tester, LogicalKeyboardKey.keyO, cmd: true);
         await tester.pump();

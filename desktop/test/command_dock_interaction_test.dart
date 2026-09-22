@@ -489,7 +489,7 @@ void main() {
       await configured.mount(tester, app, map);
       tester.view.physicalSize = size;
       await tester.pump();
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
       final results = tester.widget<SwarmSearchResults>(
         find.byType(SwarmSearchResults),
       );
@@ -542,7 +542,7 @@ void main() {
         tester.view.physicalSize = size;
         await tester.pump();
         final paneBounds = tester.getRect(find.byKey(pane.cellKey));
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyO, cmd: true);
         final input = find.byKey(const ValueKey('swarm-search-input'));
         final preview = find.byKey(const ValueKey('swarm-search-preview'));
         expect(find.text('· Feature work'), findsNothing);

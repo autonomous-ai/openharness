@@ -234,7 +234,7 @@ class WorkspaceStartGuide extends StatelessWidget {
                     child: Align(
                       alignment: Alignment.center,
                       child: callout(
-                        'agent.add',
+                        'agent.open',
                         'New Pane',
                         'Add a harness beside your work.',
                       ),

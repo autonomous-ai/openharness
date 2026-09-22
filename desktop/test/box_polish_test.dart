@@ -63,7 +63,7 @@ void main() {
         tester.view.physicalSize = size;
         await tester.pump();
         final before = tester.getRect(find.byKey(pane.cellKey));
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await chord(tester, LogicalKeyboardKey.keyO);
         void aligned(Finder panel) {
           final rect = tester.getRect(panel);
           expect(rect.left, before.left);
@@ -109,7 +109,7 @@ void main() {
     tester.platformDispatcher.textScaleFactorTestValue = 1.7;
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     await tester.pump();
-    await chord(tester, LogicalKeyboardKey.keyP);
+    await chord(tester, LogicalKeyboardKey.keyO);
 
     void checkGuide() {
       final guide = find.byType(BoxHintStrip);
@@ -161,7 +161,7 @@ void main() {
       final frames = <TerminalBinaryFrame>[];
       app.adoptSessionForTest(terminal('a69', frames));
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyO);
       final field = find.byKey(const ValueKey('swarm-search-input'));
       final preview = find.byKey(const ValueKey('swarm-search-preview'));
       await tester.enterText(field, 'Agent 1');
@@ -358,7 +358,7 @@ void main() {
         tester.platformDispatcher.textScaleFactorTestValue = scale;
         addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
         await tester.pump();
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await chord(tester, LogicalKeyboardKey.keyO);
         final list = find.byKey(const ValueKey('swarm-search-result-list'));
         final row = find
             .descendant(of: list, matching: find.byType(ListTile))

@@ -217,13 +217,13 @@ class SwarmSearchKeys extends StatelessWidget {
             else if (search == null || search.allowsCommands)
               'navigation.commands': () {
                 editing.value = const TextEditingValue(
-                  text: '> ',
-                  selection: TextSelection.collapsed(offset: 2),
+                  text: '>',
+                  selection: TextSelection.collapsed(offset: 1),
                 );
                 if (search == null) {
                   onOpen?.call();
                 } else {
-                  search.setQuery('> ');
+                  search.setQuery('>');
                   onRefocus?.call();
                 }
               },
@@ -1178,7 +1178,7 @@ class SwarmSearchHints extends StatelessWidget {
                 BoxHint(
                   '>',
                   'commands',
-                  onTap: onQuery == null ? null : () => onQuery!('> '),
+                  onTap: onQuery == null ? null : () => onQuery!('>'),
                 ),
               BoxHint(
                 '@',

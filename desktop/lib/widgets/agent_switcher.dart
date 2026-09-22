@@ -13,7 +13,7 @@ import 'engine_identity.dart';
 
 export '../core/fuzzy_match.dart' show subsequenceSpread;
 
-/// ⌘P — go to an agent by name, on any machine.
+/// ⌘O — go to an agent by name, on any machine.
 ///
 /// THE KEY THAT WAS MISSING, and it was missing for the main verb of the
 /// product. Before this, a hand that never touched the mouse could reach an
@@ -34,7 +34,7 @@ export '../core/fuzzy_match.dart' show subsequenceSpread;
 /// once, walks on the arrow keys, commits on Enter. That palette proved the
 /// pattern works in this app; this one adds a field in front of it.
 
-/// Guards a second ⌘P while the switcher is already up — the same stacking
+/// Guards a second ⌘O while the switcher is already up — the same stacking
 /// failure `showLayoutPalette` documents, where every press laid another
 /// barrier over the last and the window appeared to fade to black.
 bool _switcherOpen = false;
@@ -65,7 +65,7 @@ class SwitcherEntry {
 
   /// Already has a tile. Shown, not hidden: "where is it" and "is it open" are
   /// different questions, and a switcher that omitted the open ones would make
-  /// ⌘P useless for the very agents being worked on.
+  /// ⌘O useless for the very agents being worked on.
   final bool onGrid;
 
   /// What the filter reads — the agent's name and its machine's, so a query can

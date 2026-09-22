@@ -1111,7 +1111,7 @@ void main() {
     await tester.pump();
     expect(find.text('Link this machine'), findsNothing);
 
-    await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+    await chord(tester, LogicalKeyboardKey.keyP);
     await tester.enterText(
       find.byKey(const ValueKey('harness-start-search')),
       '> link machine',
@@ -1194,7 +1194,7 @@ void main() {
     await tester.pump();
     expect(find.text('Link this machine'), findsNothing);
 
-    await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+    await chord(tester, LogicalKeyboardKey.keyP);
     await tester.enterText(
       find.byKey(const ValueKey('harness-start-search')),
       '> link machine',

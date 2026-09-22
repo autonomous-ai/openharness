@@ -129,12 +129,13 @@ private extension SwarmTabStrip {
         "Native tab uses the terminal face and size")
       try checkTitlebar(storeButton.font?.pointSize == size && storeButton.font?.familyName == "Menlo",
         "Native store action uses the terminal face and size")
-      try checkTitlebar(tab.menu?.font.pointSize == size,
-        "Native tab menu follows the terminal font")
+      let menuFont = NSFont.menuFont(ofSize: 0)
+      try checkTitlebar(tab.menu?.font == menuFont,
+        "Native tab menu keeps the OS default font")
       let history = SwarmHistoryEntry(["id": "font", "title": "Project", "machineName": "Machine"])!
       let font = history.menuTitle().attribute(.font, at: 0, effectiveRange: nil) as! NSFont
-      try checkTitlebar(font.pointSize == size && font.familyName == "Menlo",
-        "Native history uses the terminal face and size")
+      try checkTitlebar(font == menuFont,
+        "Native history keeps the OS default font")
       let item = NSMenuItem()
       let row = SwarmHistoryMenuRow(item: item, entry: history, width: 400)
       try checkTitlebar(row.machineFrame.minY >= 0 && row.machineFrame.maxY <= row.bounds.height,
@@ -510,8 +511,8 @@ private extension SwarmTitlebar {
       "The main-menu dispatcher retains the actual Edit submenu and its targets")
     try checkTitlebar(newSwarm.keyEquivalent == "t" && newSwarm.toolTip == nil,
       "Native shortcuts display in the menu without duplicate hover hints")
-    try checkTitlebar(addHarness.keyEquivalent == "p" && addHarness.keyEquivalentModifierMask == [.command],
-      "The exported keymap keeps New Pane on Command-P")
+    try checkTitlebar(addHarness.keyEquivalent == "o" && addHarness.keyEquivalentModifierMask == [.command],
+      "The exported keymap keeps Open Harness on Command-O")
     for (action, key) in [("splitRight", "r"), ("splitDown", "d")] {
       let split = agent.items.first(where: { $0.representedObject as? String == action })!
       try checkTitlebar(split.keyEquivalent == key && split.keyEquivalentModifierMask == [.command],
@@ -553,8 +554,9 @@ private extension SwarmTitlebar {
     try checkTitlebar(strip.newButton.accessibilityLabel() == "New Tab", "The plus announces New Tab")
     try checkTitlebar(main.defersToInput(event("n", 45, .command)) && main.defersToInput(event("t", 17, .command)),
       "Command-N and Command-T reach creation and New Tab")
-    try checkTitlebar(main.defersToInput(event("p", 35, .command)), "Command-P reaches New Pane")
-    try checkTitlebar(main.defersToInput(event("p", 35, [.command, .shift])), "Command-Shift-P reaches command search")
+    try checkTitlebar(main.defersToInput(event("p", 35, .command)), "Command-P reaches commands")
+    try checkTitlebar(!main.defersToInput(event("p", 35, [.command, .shift])), "Command-Shift-P is unbound")
+    try checkTitlebar(main.defersToInput(event("o", 31, .command)), "Command-O reaches Open Harness")
     flutterKeyContext = "picker"
     syncMenuKeys()
     try checkTitlebar(!main.performKeyEquivalent(with: event("\u{f701}", 125)), "Result arrows are owned by the shared picker")
@@ -681,11 +683,12 @@ private extension SwarmTitlebar {
     try checkTitlebar(settings.title == "Settings…" && settings.representedObject as? String == "settings", "Settings stays in the application menu")
     let agent = main.item(withTitle: "File")!.submenu!
     let addHarness = agent.items.first(where: { $0.representedObject as? String == "addAgent" })!
-    try checkTitlebar(addHarness.title == "New Pane…" && addHarness.keyEquivalent == "p" && addHarness.keyEquivalentModifierMask == [.command],
-      "New Pane advertises Command-P")
+    try checkTitlebar(addHarness.title == "Open Harness…" && addHarness.keyEquivalent == "o" && addHarness.keyEquivalentModifierMask == [.command],
+      "Open Harness advertises Command-O")
     try checkTitlebar(agent.items.contains { $0.title == "New Terminal" && $0.keyEquivalent == "t" && $0.keyEquivalentModifierMask == [.command, .shift] && $0.representedObject as? String == "newTerminal" },
       "New Terminal has its Command-Shift-T menu action")
     let historyMenu = main.item(withTitle: "History")!.submenu!
+    try checkTitlebar(agent.items.contains { $0.title == "Clone Harness" && $0.representedObject as? String == "cloneAgent" }, "Clone Harness preserves its action")
     try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["new", "addAgent", "newTerminal", "cloneAgent", "renameActive", "closeActive", "separator", "splitRight", "splitDown", "zoomPane", "closePane"], "File groups tab, terminal and pane actions")
     for (action, title, key) in [("splitRight", "Split Right…", "r"), ("splitDown", "Split Down…", "d")] {
       let split = agent.items.first(where: { $0.representedObject as? String == action })!
@@ -704,7 +707,7 @@ private extension SwarmTitlebar {
     try checkTitlebar(agent.items.contains { $0.title == "Rename Tab…" && $0.representedObject as? String == "renameActive" }, "Rename Tab preserves its command")
     try checkTitlebar(agent.items.contains { $0.title == "Close Tab" && $0.representedObject as? String == "closeActive" }, "Close Tab preserves its command")
     let commands = edit.submenu!.items.first(where: { $0.representedObject as? String == "commands" })!
-    try checkTitlebar(commands.keyEquivalent == "p" && commands.keyEquivalentModifierMask == [.command, .shift], "Command search keeps its native menu owner")
+    try checkTitlebar(commands.keyEquivalent == "p" && commands.keyEquivalentModifierMask == [.command], "Command search keeps its native menu owner")
     try checkTitlebar(edit.submenu!.items.allSatisfy { $0.representedObject as? String != "jump" }, "Edit has no Navigate action")
     try checkTitlebar(agent.items.first?.title == "New Tab" && agent.items.first?.keyEquivalent == "t", "New Tab opens the chooser with Command-T")
     let reopen = historyMenu.items.first(where: { $0.representedObject as? String == "reopen" })!

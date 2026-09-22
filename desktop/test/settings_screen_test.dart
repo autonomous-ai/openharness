@@ -19,9 +19,8 @@ import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/settings/settings_nav.dart';
 import 'package:harness/settings/settings_section.dart';
 import 'package:harness/settings/sections/shortcuts_section.dart';
-import 'package:harness/shared/widgets/app_select_field.dart';
 import 'package:harness/shared/theme/app_theme.dart';
-import 'package:harness/shortcuts/keymap.dart';
+import 'package:harness/shortcuts/keyboard_practice.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/harness_customize_pane.dart';
 
@@ -249,7 +248,7 @@ void main() {
   });
 
   testWidgets(
-    'shortcut help can be paged and its context changed by keyboard',
+    'shortcut help can be searched, paged and practiced by keyboard',
     (tester) async {
       await openSettings(tester);
       await tester.enterText(
@@ -258,49 +257,42 @@ void main() {
       );
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
-      // Search -> matching section -> shortcut context. No pointer is needed
-      // to leave the search and reach the section's first control.
-      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-      await tester.pump();
-      expect(
-        FocusManager.instance.primaryFocus?.context
-            ?.findAncestorWidgetOfExactType<AppSelectField<KeymapContext>>(),
-        isNotNull,
-      );
+      final search = find.byKey(const ValueKey('shortcuts-search'));
+      for (
+        var i = 0;
+        i < 4 && !tester.widget<TextField>(search).focusNode!.hasFocus;
+        i++
+      ) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+      }
+      expect(tester.widget<TextField>(search).focusNode!.hasFocus, isTrue);
       final scroll = tester.state<ScrollableState>(
         find
             .descendant(
               of: find.byType(ShortcutsSection),
               matching: find.byType(Scrollable),
             )
-            .first,
+            .last,
       );
       await tester.sendKeyEvent(LogicalKeyboardKey.pageDown);
       await tester.pumpAndSettle();
       expect(scroll.position.pixels, greaterThan(0));
       await tester.sendKeyEvent(LogicalKeyboardKey.pageUp);
       await tester.pumpAndSettle();
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-      await tester.pumpAndSettle();
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pumpAndSettle();
-      expect(find.byType(SettingsScreen), findsOneWidget);
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-      await tester.pumpAndSettle();
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.enterText(search, 'Clone');
+      await tester.pump();
+      expect(find.text('Clone Harness'), findsOneWidget);
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
-      expect(
-        tester
-            .widget<AppSelectField<KeymapContext>>(
-              find.byType(AppSelectField<KeymapContext>),
-            )
-            .value,
-        KeymapContext.picker,
-      );
+      expect(find.byType(KeyboardPractice), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byType(SettingsScreen), findsOneWidget);
+      expect(tester.widget<TextField>(search).focusNode!.hasFocus, isTrue);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(find.byType(SettingsScreen), findsNothing);

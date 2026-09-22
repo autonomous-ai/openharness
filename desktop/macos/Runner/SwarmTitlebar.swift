@@ -2,7 +2,7 @@ import Cocoa
 import FlutterMacOS
 import ImageIO
 
-/// The native chrome uses the same typography payload as Flutter's terminal.
+/// In-app titlebar controls use the terminal typography. AppKit menus keep OS defaults.
 enum HarnessTypography {
   private static var families = [".AppleSystemUIFontMonospaced"]
   private(set) static var size: CGFloat = 13
@@ -18,13 +18,6 @@ enum HarnessTypography {
       size = CGFloat(value.doubleValue)
     }
     return families != previousFamilies || size != previousSize
-  }
-
-  static func apply(to menu: NSMenu) {
-    menu.font = font()
-    for item in menu.items {
-      if let submenu = item.submenu { apply(to: submenu) }
-    }
   }
 
   static func font(weight: NSFont.Weight = .regular) -> NSFont {
@@ -80,7 +73,6 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         HarnessTypography.update(state)
         self.configure(palette: state["palette"] as? [String: Any])
         self.strip.updateTypography()
-        if let main = NSApp.mainMenu { HarnessTypography.apply(to: main) }
         result(true)
       case "update":
         let state = call.arguments as? [String: Any] ?? [:]
@@ -90,13 +82,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         self.canClosePane = state["canClosePane"] as? Bool == true
         self.canGoBack = state["canGoBack"] as? Bool == true
         self.canGoForward = state["canGoForward"] as? Bool == true
-        let fontChanged = HarnessTypography.update(state)
-        if fontChanged {
-          self.rebuildHistoryMenu()
-          self.rebuildModelsMenu()
-          self.rebuildMachinesMenu()
-          if let main = NSApp.mainMenu { HarnessTypography.apply(to: main) }
-        }
+        HarnessTypography.update(state)
         self.updateHistory(state["history"] as? [[String: Any]] ?? [], closed: state["closedHistory"] as? [[String: Any]] ?? [])
         self.strip.update(state)
         self.window?.backgroundColor = self.strip.palette.tabBar
@@ -300,15 +286,14 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     }
     if let file = main.item(withTitle: "File") { main.removeItem(file) }
     let file = NSMenu(title: "File")
-    file.font = HarnessTypography.font()
     add(file, "New Tab", "t", "new")
-    add(file, "New Pane…", "p", "addAgent")
+    add(file, "Open Harness…", "o", "addAgent")
     // ⌘⇧T, as in a terminal app. It used to be Reopen Last Closed (History menu), which keeps its
     // row and loses its default chord — the Dart keymap (`swarm.reopen`) is where both are decided,
     // and applyMenuKeys rewrites every equivalent here from it.
     add(file, "New Terminal", "t", "newTerminal", [.command, .shift])
     // ⌘⇧N: another agent like the focused pane's, fresh conversation (Dart: `agent.clone`).
-    add(file, "Clone Agent", "n", "cloneAgent", [.command, .shift])
+    add(file, "Clone Harness", "n", "cloneAgent", [.command, .shift])
     add(file, "Rename Tab…", "r", "renameActive", [.command, .shift])
     add(file, "Close Tab", "w", "closeActive")
     file.addItem(.separator())
@@ -325,7 +310,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // Native menu hints mirror Flutter; the shared picker owns all editing.
     if let edit = main.item(withTitle: "Edit")?.submenu {
       edit.addItem(.separator())
-      add(edit, "Search Commands…", "p", "commands", [.command, .shift])
+      add(edit, "Search Commands…", "p", "commands")
     }
     if let view = main.item(withTitle: "View")?.submenu {
       view.addItem(.separator())
@@ -338,11 +323,9 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     rebuildMachinesMenu()
     install(machinesMenu, at: main.items.firstIndex(where: { $0.title == "Window" }) ?? main.numberOfItems)
     installTerminalFindMenu(main)
-    HarnessTypography.apply(to: main)
   }
 
   func menuWillOpen(_ menu: NSMenu) {
-    menu.font = HarnessTypography.font()
     syncMenuKeys()
     if menu === historyMenu {
       for item in menu.items {
@@ -369,7 +352,6 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func rebuildMachinesMenu() {
-    machinesMenu.font = HarnessTypography.font()
     machinesMenu.removeAllItems()
     machinesMenu.minimumWidth = 0
     let labels = machines.map { machine -> (name: String, owner: String, presence: String, status: String, count: String) in
@@ -418,7 +400,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       let paragraph = NSMutableParagraphStyle()
       paragraph.tabStops = [NSTextTab(textAlignment: .right, location: trailingEdge)]
       let label = NSMutableAttributedString(string: parts.name,
-        attributes: [.font: HarnessTypography.font(), .paragraphStyle: paragraph])
+        attributes: [.font: NSFont.menuFont(ofSize: 0), .paragraphStyle: paragraph])
       // After the name: the node presence ("Online"). Trailing (tab-aligned
       // right): the agent count, or the link/offline status when there is no
       // count. The two are independent slots, so a machine can read
@@ -426,12 +408,11 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       let afterName = parts.owner + (parts.presence.isEmpty ? "" : "  " + parts.presence)
       let trailing = parts.count.isEmpty ? parts.status : parts.count
       label.append(NSAttributedString(string: afterName + "\t" + trailing,
-        attributes: [.font: HarnessTypography.font(), .paragraphStyle: paragraph,
+        attributes: [.font: NSFont.menuFont(ofSize: 0), .paragraphStyle: paragraph,
           .foregroundColor: NSColor.secondaryLabelColor]))
       item.attributedTitle = label
       item.image = NSImage(systemSymbolName: machine.shared ? "person.2" : machine.local ? "laptopcomputer" : "desktopcomputer", accessibilityDescription: machine.shared ? "Shared machine" : nil)
       let submenu = NSMenu(title: machine.name)
-      submenu.font = HarnessTypography.font()
       for agent in machine.agents {
         let child = NSMenuItem(title: agent.title + (machine.shared ? " · View only" : ""), action: #selector(machineAgentAction(_:)), keyEquivalent: "")
         child.target = self
@@ -552,7 +533,6 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   private var localSections: [MenuGridSection] = []
 
   private func rebuildModelsMenu() {
-    modelsMenu.font = HarnessTypography.font()
     modelsMenu.removeAllItems()
     func label(_ title: String, in menu: NSMenu) {
       let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
@@ -641,7 +621,6 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     run.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + "runLocalModel")
     if machines.filter({ !$0.shared }).count > 1 {
       let pick = NSMenu(title: run.title)
-      pick.font = HarnessTypography.font()
       for machine in machines where !machine.shared {
         let item = NSMenuItem(title: machine.local ? "\(machine.name) (this computer)" : machine.name,
           action: #selector(runLocalModelAction(_:)), keyEquivalent: "")
@@ -671,7 +650,6 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func rebuildHistoryMenu() {
-    historyMenu.font = HarnessTypography.font()
     historyMenu.removeAllItems()
     historyMenu.minimumWidth = 0
     let visited = Array(history.prefix(15))
@@ -747,7 +725,6 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     guard let edit = main.items.first(where: { $0.title == "Edit" })?.submenu,
           let find = edit.items.first(where: { $0.title == "Find" }) else { return }
     let menu = NSMenu(title: "Find")
-    menu.font = HarnessTypography.font()
     for (title, key, action, modifiers) in [
       ("Find in Terminal…", "f", "findTerminal", NSEvent.ModifierFlags.command),
       ("Find Next", "g", "findNext", NSEvent.ModifierFlags.command),
@@ -909,12 +886,12 @@ private struct SwarmSubscriptionEntry: Equatable {
 /// follows starts something instead. Without it the action read as one more model, which is the
 /// mistake the in-app menu made before it grew this block.
 private final class SwarmMenuCaptionView: NSView {
-  private static var font: NSFont { HarnessTypography.font() }
+  private static var font: NSFont { NSFont.menuFont(ofSize: 0) }
   private let caption: NSTextField
 
   init(text: String, width: CGFloat) {
     caption = NSTextField(labelWithString: text)
-    super.init(frame: NSRect(x: 0, y: 0, width: width, height: max(24, ceil(HarnessTypography.size * 1.35) + 6)))
+    super.init(frame: NSRect(x: 0, y: 0, width: width, height: max(24, ceil(NSFont.menuFont(ofSize: 0).pointSize * 1.35) + 6)))
     autoresizingMask = [.width]
     caption.font = Self.font
     caption.textColor = .secondaryLabelColor
@@ -958,12 +935,12 @@ private final class SwarmMenuCaptionView: NSView {
 /// both are done here: the fill follows `isHighlighted`, and the mouse dispatches the item's own
 /// target/action the way the menu would have.
 private final class SwarmMenuButtonView: NSView {
-  private static var font: NSFont { HarnessTypography.font() }
+  private static var font: NSFont { NSFont.menuFont(ofSize: 0) }
   private let label: NSTextField
 
   init(title: String, width: CGFloat) {
     label = NSTextField(labelWithString: title)
-    super.init(frame: NSRect(x: 0, y: 0, width: width, height: max(34, ceil(HarnessTypography.size * 1.35) + 12)))
+    super.init(frame: NSRect(x: 0, y: 0, width: width, height: max(34, ceil(NSFont.menuFont(ofSize: 0).pointSize * 1.35) + 12)))
     autoresizingMask = [.width]
     label.font = Self.font
     label.textColor = .labelColor
@@ -1024,7 +1001,7 @@ private final class SwarmMenuButtonView: NSView {
 /// Read-only account information, with aligned trailing balances. There is no
 /// action or submenu to suggest another step just to read the remaining usage.
 private final class SwarmSubscriptionView: NSView {
-  private static var rowFont: NSFont { HarnessTypography.font() }
+  private static var rowFont: NSFont { NSFont.menuFont(ofSize: 0) }
   let identity = NSTextField(labelWithString: "")
   let balance = NSTextField(labelWithString: "")
   private let icon = NSImageView()
@@ -1056,7 +1033,7 @@ private final class SwarmSubscriptionView: NSView {
   /// which AppKit greys wholesale, so a served model looked unavailable beside the accounts above.
   init(title primary: String, account: String, status: String, icon: NSImage?, width: CGFloat,
        accessibility: String, tint: NSColor? = nil) {
-    super.init(frame: NSRect(x: 0, y: 0, width: width, height: max(26, ceil(HarnessTypography.size * 1.35) + 8)))
+    super.init(frame: NSRect(x: 0, y: 0, width: width, height: max(26, ceil(NSFont.menuFont(ofSize: 0).pointSize * 1.35) + 8)))
     autoresizingMask = [.width]
     self.icon.image = icon
     self.icon.imageScaling = .scaleProportionallyDown
@@ -1110,7 +1087,7 @@ private final class SwarmHistoryMenuRow: NSView {
   var highlighted = false { didSet { needsDisplay = true } }
   var machineFrame: NSRect {
     let width = ceil(SwarmMenuText.width(entry.menuMachine))
-    let font = HarnessTypography.font()
+    let font = NSFont.menuFont(ofSize: 0)
     let height = ceil(font.ascender - font.descender + font.leading)
     return NSRect(x: bounds.width - 18 - width, y: (bounds.height - height) / 2, width: width, height: height)
   }
@@ -1118,7 +1095,7 @@ private final class SwarmHistoryMenuRow: NSView {
   init(item: NSMenuItem, entry: SwarmHistoryEntry, width: CGFloat) {
     self.item = item
     self.entry = entry
-    super.init(frame: NSRect(x: 0, y: 0, width: width, height: max(24, ceil(HarnessTypography.size * 1.35) + 6)))
+    super.init(frame: NSRect(x: 0, y: 0, width: width, height: max(24, ceil(NSFont.menuFont(ofSize: 0).pointSize * 1.35) + 6)))
     autoresizingMask = [.width]
     setAccessibilityElement(true)
     setAccessibilityRole(.menuItem)
@@ -1140,7 +1117,7 @@ private final class SwarmHistoryMenuRow: NSView {
     }
     let color = !item.isEnabled ? NSColor.disabledControlTextColor
       : selected ? .selectedMenuItemTextColor : .labelColor
-    let attributes: [NSAttributedString.Key: Any] = [.font: HarnessTypography.font(), .foregroundColor: color]
+    let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.menuFont(ofSize: 0), .foregroundColor: color]
     if item.state == .on {
       let mark = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)!
       let tinted = mark.copy() as! NSImage
@@ -1184,7 +1161,7 @@ private final class SwarmHistoryMenuRow: NSView {
 /// Keep native menu columns aligned without reserving a fixed, empty span.
 private enum SwarmMenuText {
   static func width(_ text: String) -> CGFloat {
-    (text as NSString).size(withAttributes: [.font: HarnessTypography.font()]).width
+    (text as NSString).size(withAttributes: [.font: NSFont.menuFont(ofSize: 0)]).width
   }
 
   static func fitted(_ text: String, width limit: CGFloat) -> String {
@@ -1216,11 +1193,11 @@ private struct SwarmHistoryEntry: Equatable {
   let engine: String?
   let iconAsset: String?
   let canReopen: Bool
-  var menuName: String { SwarmMenuText.fitted(title, width: (machineName.isEmpty ? 330 : 250) * HarnessTypography.size / 13) }
-  var menuMachine: String { SwarmMenuText.fitted(machineName, width: 140 * HarnessTypography.size / 13) }
+  var menuName: String { SwarmMenuText.fitted(title, width: machineName.isEmpty ? 330 : 250) }
+  var menuMachine: String { SwarmMenuText.fitted(machineName, width: 140) }
 
   func menuTitle(trailingEdge: CGFloat? = nil) -> NSAttributedString {
-    let font = HarnessTypography.font()
+    let font = NSFont.menuFont(ofSize: 0)
     let name = menuName
     let machine = menuMachine
     let paragraph = NSMutableParagraphStyle()
@@ -1579,7 +1556,6 @@ private final class SwarmTabStrip: NSView {
     storeButton.font = HarnessTypography.font(weight: .medium)
     for tab in tabs {
       tab.labelFont = HarnessTypography.font()
-      if let menu = tab.menu { HarnessTypography.apply(to: menu) }
     }
     needsLayout = true
   }
@@ -1604,7 +1580,6 @@ private final class SwarmTabStrip: NSView {
       let tab = previous[id] ?? SwarmTabButton(id: id)
       tab.palette = palette
       tab.labelFont = HarnessTypography.font()
-      tab.menu?.font = HarnessTypography.font()
       tab.name = row["name"] as? String ?? "New Tab"
       let count = row["agentCount"] as? Int ?? 0
       // The Harness Store tab holds no agents; without its own mark it would wear New Tab's plus.
@@ -1812,7 +1787,6 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     closeButton.action = #selector(closeSwarm)
     addSubview(closeButton)
     let menu = NSMenu()
-    menu.font = HarnessTypography.font()
     for (title, action) in [("Rename Tab…", #selector(renameSwarm)), ("Close Tab", #selector(closeSwarm))] {
       let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
       item.target = self

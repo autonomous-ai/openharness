@@ -35,6 +35,7 @@ class KeyboardLesson {
       .join(' / ');
   String get result => switch (command) {
     'swarm.new' => '[work]  [new tab]\nFind a harness, or create one',
+    'agent.open' ||
     'agent.add' => '[agent 1] │ [agent 2]\nBoth agents share this tab.',
     'agent.new' => 'agent    Claude Code\nmachine  dev\nproject  ~/work/payments\ntask     (optional)\nCreate is selected. Up/Down + Enter edits an argument. Permissions and profiles are inside Agent.',
     'pane.zoom' => '[agent 2 — full workspace]\nPress the same key to restore the other panes.',
@@ -42,7 +43,7 @@ class KeyboardLesson {
       '[agent 1]\nThe second view closes. Its agent keeps running.',
     'swarm.close' =>
       '[previous tab]\nThe view closes. Its agents keep running.',
-    'navigation.commands' => '> rename\nRename Harness\nRename Tab',
+    'navigation.commands' => '>rename\nRename Harness\nRename Tab',
     'terminal.find' => 'find > timeout\n1/3 matches in this terminal’s output',
     'picker.complete' => 'project  ~/work/payments\nTab completes the current argument; Enter accepts it.',
     'picker.complete_back' =>
@@ -103,7 +104,7 @@ class KeyboardLesson {
 List<KeyboardLesson> keyboardLessons(AppKeymap keymap) {
   const essentials = [
     'swarm.new',
-    'agent.add',
+    'agent.open',
     'agent.new',
     'pane.zoom',
     'navigation.commands',
@@ -190,18 +191,28 @@ List<KeyboardLesson> keyboardLessons(AppKeymap keymap) {
   ];
 }
 
-Future<void> showKeyboardPractice(BuildContext context, {AppKeymap? keymap}) =>
-    showTerminalPrompt<void>(
-      context,
-      keymap: keymap,
-      builder: (context) => KeyboardPractice(
-        keymap: keymap ?? KeymapTheme.of(context, listen: false),
-        storage: kUnderTest ? null : HarnessFileStore.shared,
-      ),
-    );
+Future<void> showKeyboardPractice(
+  BuildContext context, {
+  AppKeymap? keymap,
+  KeyboardLesson? initialLesson,
+}) => showTerminalPrompt<void>(
+  context,
+  keymap: keymap,
+  builder: (context) => KeyboardPractice(
+    keymap: keymap ?? KeymapTheme.of(context, listen: false),
+    initialLesson: initialLesson,
+    storage: kUnderTest ? null : HarnessFileStore.shared,
+  ),
+);
 
 class KeyboardPractice extends StatefulWidget {
-  const KeyboardPractice({super.key, this.keymap, this.storage});
+  const KeyboardPractice({
+    super.key,
+    this.keymap,
+    this.storage,
+    this.initialLesson,
+  });
+  final KeyboardLesson? initialLesson;
   final AppKeymap? keymap;
   final LocalKeyValueStore? storage;
   @override
@@ -242,6 +253,8 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
   void initState() {
     super.initState();
     map.addListener(_keysChanged);
+    _lesson = widget.initialLesson;
+    if (_lesson != null) _requestFocus();
     unawaited(_load());
   }
 

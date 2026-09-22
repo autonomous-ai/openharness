@@ -1,6 +1,10 @@
 /// Built-in backgrounds for empty Harness pages. Wallpaper never covers agents.
 enum HarnessBackground {
-  plain('Default'),
+  plain('Blank'),
+  renaissance('Renaissance notebook', 'renaissance-notebook.png'),
+  connections('Atlas of connections', 'atlas-of-connections.png'),
+  terminalWorkshop('Terminal workshop', 'terminal-workshop.png'),
+  terminalStars('Terminal star atlas', 'terminal-star-atlas.png'),
   aurora('Aurora'),
   lake('Lake', 'swarm-welcome-dusk.jpg'),
   silk('Silk', 'swarm-welcome-abstract.jpg'),
@@ -12,6 +16,16 @@ enum HarnessBackground {
   final String? fileName;
   String? get asset =>
       fileName == null ? null : 'assets/swarm-wallpapers/$fileName';
+
+  /// Curated wallpapers leave the welcome text's center clear. Older choices
+  /// remain readable so existing preferences still restore without migration.
+  static const gallery = [
+    plain,
+    renaissance,
+    connections,
+    terminalWorkshop,
+    terminalStars,
+  ];
 
   static HarnessBackground fromId(String? id) =>
       values.where((value) => value.name == id).firstOrNull ?? plain;
