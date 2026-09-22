@@ -72,6 +72,7 @@ import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, engineBin, enginePathOve
 import { isTerminalEngine, type AgentEngine } from './engines/types.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, commandSupportsFlagInInteractiveShell, namedAgentArgs, permissionModeFlags } from './lib/engineLaunch.js'
+import { workspaceMissing } from './lib/workspaceCheck.js'
 import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, gridEnvVarNames, type GridLaunchMachine, type GridWebSearchStatus } from './lib/gridLaunch.js'
 import { HERMES_SYSTEM_MANAGED_DIR } from './lib/gridWebMcp.js'
 import { writeGridConfigDir } from './lib/gridConfigDir.js'
@@ -4048,6 +4049,10 @@ async function runForeground(session: AuthSession): Promise<void> {
         return inventory.ok && inventory.panes.some((pane) => pane.tmuxPane === runtime.paneId)
       },
       buildLaunch: async (entry, opts) => {
+        // A folder that went away with the reboot (an unmounted volume, a workspace deleted while the
+        // daemon was down) is a named failure on the tile, not a pane that prints an error and exits.
+        const missing = workspaceMissing(entry.cwd)
+        if (missing) return { error: missing.error, detail: missing.detail }
         // Mirrors `agent_create`: the same grid env/argv (and the same vendor variables cleared), or
         // the same Codex profile with its hooks installed; the install check runs inside the pane's
         // own shell.
@@ -4765,6 +4770,10 @@ async function runForeground(session: AuthSession): Promise<void> {
         detail: 'the sqlite3 CLI is not on PATH, and a resumed opencode session keeps its model unless its store is rewritten — install sqlite3 and retry',
       }
     }
+    // The replacement enters the row's folder before it execs: a folder that is gone is refused here,
+    // with the other refusals, before the pane is touched or its control taken.
+    const missing = workspaceMissing(session.cwd)
+    if (missing) return missing
     // Mid-turn is the one state where restarting costs real work: the conversation comes back but
     // whatever the engine was doing does not. The app is told which agents these are so the user can
     // move them once they are done, rather than being asked to choose between losing a turn and losing
@@ -4926,6 +4935,10 @@ async function runForeground(session: AuthSession): Promise<void> {
     const current = () => operationCurrent() && sameRestartTarget(target)
     const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The agent changed or stopped during restart.' } as const
     if (!current()) return changed
+    // Both branches below `cd` into the row's folder before they exec, and both have already killed
+    // (or respawned over) the old process by the time that `cd` fails. Ask first, over a live agent.
+    const missing = workspaceMissing(session.cwd)
+    if (missing) return missing
     const pane = session.tmuxPane
     const engine = session.engine
     const runtime: TmuxRuntimeRef = { backend: 'tmux', paneId: pane }

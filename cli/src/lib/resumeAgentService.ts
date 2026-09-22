@@ -1,5 +1,4 @@
 /** Exact-resume lifecycle shared by the daemon and its isolated acceptance tests. */
-import { statSync } from 'node:fs'
 import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'
 import { registry as liveRegistry, validTranscriptPath, type RegisteredSession } from './registry.js'
@@ -11,6 +10,7 @@ import { listTmuxPanes } from './tmuxAgentDiscovery.js'
 import { enginePathOverride } from './engineBin.js'
 import { engineInstallRecipe } from './engineInstall.js'
 import { buildEngineLaunchArgv } from './engineLaunch.js'
+import { workspaceMissing } from './workspaceCheck.js'
 import { buildHarnessSessionLabel } from './harnessSessionLabel.js'
 import { createAndRegisterPane, type CreateAgentPaneDeps } from './createAgentPane.js'
 import type { LaunchOverrides, LaunchOverridesResult } from './launchOverrides.js'
@@ -111,9 +111,9 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
       if (saved.grid && !saved.gridLaunch) return { ok: false, error: 'GRID_CREDENTIAL_REQUIRED', detail: 'The saved provider configuration is unavailable.' }
       if (saved.dsh && !installedDsh(saved.dsh)) return { ok: false, error: 'INVALID_DSH', detail: 'Install this harness from the Harness Store before resuming it.' }
-      try {
-        if (!saved.cwd || !statSync(saved.cwd).isDirectory()) return { ok: false, error: 'CWD_NOT_FOUND', detail: 'The saved project folder is no longer available.' }
-      } catch { return { ok: false, error: 'CWD_NOT_FOUND', detail: 'The saved project folder is no longer available.' } }
+      if (!saved.cwd) return { ok: false, error: 'CWD_NOT_FOUND', detail: 'The saved project folder is no longer available.' }
+      const missing = workspaceMissing(saved.cwd)
+      if (missing) return missing
       if (resumeSessionId && (!saved.transcriptPath || !validTranscriptPath(saved.engine, saved.transcriptPath, saved.codexHome ?? undefined))) {
         return { ok: false, error: 'RESUME_UNAVAILABLE', detail: 'The saved conversation file is unavailable. Start a new conversation separately.' }
       }
