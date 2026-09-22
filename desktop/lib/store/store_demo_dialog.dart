@@ -8,6 +8,7 @@ import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../terminal/terminal_text.dart';
 
 Future<void> showStoreDemo(
   BuildContext context, {
@@ -118,7 +119,8 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
       if (!mounted) return;
       await controller.loadHtmlString(storeDemoHtml(widget.video));
       if (mounted) setState(() {});
-    } catch (_) {
+    } catch (error) {
+      debugPrint('Store recording player could not start: $error');
       if (mounted) setState(() => _failed = true);
     }
   }
@@ -139,7 +141,7 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
     WidgetsBinding.instance.removeObserver(this);
     _pause();
     // Native views can outlive the Flutter route; remove the media on every close path.
-    _controller?.loadHtmlString('').ignore();
+    _controller?.loadHtmlString('<!doctype html><html></html>').ignore();
     super.dispose();
   }
 
@@ -170,6 +172,7 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    TerminalFontScope.watch(context);
     final size = MediaQuery.sizeOf(context);
     final width = (size.width - 48).clamp(0.0, 1080.0);
     final height = (size.height - 48).clamp(0.0, 820.0);
@@ -189,10 +192,7 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
                   Expanded(
                     child: Text(
                       '${widget.name} · Recorded session',
-                      style: const TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w600,
-                      ),
+                      style: grid.AppType.heading(),
                     ),
                   ),
                   IconButton(
@@ -225,10 +225,7 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
                                     ? 'This recording could not play here.'
                                     : 'Watch this recording in your browser.',
                                 textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                ),
+                                style: grid.AppType.body(color: Colors.white),
                               ),
                               const SizedBox(height: 16),
                               FilledButton(
@@ -266,10 +263,7 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
                       constraints: BoxConstraints(
                         maxWidth: (width - 32).clamp(0.0, 740.0),
                       ),
-                      child: Text(
-                        widget.caption!,
-                        style: const TextStyle(fontSize: 13),
-                      ),
+                      child: Text(widget.caption!, style: grid.AppType.body()),
                     ),
                   TextButton.icon(
                     key: const ValueKey('store-demo-browser'),

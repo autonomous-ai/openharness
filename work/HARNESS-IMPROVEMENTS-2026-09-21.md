@@ -866,3 +866,54 @@ its printed `playgrounds-*/` directory, `playground-cli.txt`, its printed `playg
 `mujoco-linked-tests.txt`, `hands-on-browser-final.txt`, `final-store-conformance.txt`, and `hands-on/`
 under the local evidence root. The preserved-link CLI results are in
 `playground-cli-preserved-links.txt` and its printed evidence directory.
+
+## Delivery follow-up: recorded examples on the harness detail pages
+
+The eight upgraded harnesses now lead their Store detail pages with the project shown in the
+recording, its complete screenshot and a **Watch real session** action. **Try this prompt** retains
+the exact example text. Existing examples remain available. Jev Sheets explicitly identifies its
+fictional support tickets and offline practice answers. Recorded prompts and captions are kept in
+`store/hands-on.json`; `node store/tools/hands-on.mjs --sync-store` updates the first Store example,
+and `--check` verifies the metadata and committed media together.
+
+An optional bounded HTTPS `video` field passes through the publisher, CLI schema and desktop
+catalog. The detail page loads pictures only until someone chooses to watch. The native player
+fits the complete frame, uses local HTML with a restrictive content policy, offers a browser
+fallback, and pauses and removes its media on every route close. Native testing caught an actual
+cleanup error: WebView rejects an empty HTML string. Closing now replaces the source with a valid
+empty document. The player follows the desktop type scale, and bundled harness taglines now match
+the changed catalog descriptions.
+
+Restored the interrupted session into a durable worktree and integrated `main` at `8fdebad8`.
+Validation on macOS with Flutter 3.47.2 / Dart 3.13:
+
+- CLI typecheck and the complete CLI suite pass: **3,935 tests**, with 63 opt-in tests skipped.
+- The directly affected desktop suites pass **96 tests**: catalog parsing, detail-page actions,
+  narrow layouts, bundled identity, Store pages and exact prompt handoff into New Harness.
+- The native `store_recordings_native_test.dart` passes against the actual GitHub-hosted MP4s:
+  all eight decode and advance time with native controls; close removes the media, reopening
+  works, Escape cleans up, and a missing video gives the browser fallback. The Blender dialog
+  was visually inspected in the native app. This verifies recorded-video playback, not a fresh
+  live-model run of every harness.
+- Flutter analysis has no errors or warnings; 13 informational lints are in unchanged files.
+- The complete desktop suite was exercised. Its remaining known failure is the missing bundled
+  cover for `autonomous/harness-monitor` in `store_discover_test.dart`. The listed-package set,
+  cover mapping, source records and assertion are identical on `main`; independently comparing
+  those inputs confirms the same missing cover before these changes. Copy assertions affected by
+  the new taglines were updated and pass in the focused suite.
+- The eight-experience generator check and 59-entry catalog validation pass.
+
+Repeat native playback from a published commit with:
+
+```sh
+cd desktop
+FLUTTER_TEST=1 flutter test -d macos --no-pub \
+  --dart-define=STORE_DEMO_CHECKOUT=/absolute/path/to/openharness \
+  --dart-define=STORE_DEMO_REF=main \
+  integration_test/store_recordings_native_test.dart
+```
+
+Current logs and the per-recording native dimensions, duration and playback state are in
+`.scratch/harness-detail-evidence/` in the resumed worktree. The native fixture uses no Harness
+account or user state. Catalog metadata publishes after merge; embedded playback ships in the
+next desktop release, while older clients retain the new screenshots and prompts.

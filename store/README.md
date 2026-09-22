@@ -160,7 +160,6 @@ examples, preserving the others. `--check` verifies the pairs and local assets. 
 starting prompts remain separate from the actual projects shown; the Jev Sheets recording is
 explicitly labeled offline practice with fictional rows.
 
-
 **In a repository of its own**: add `store/registry/<owner>/<name>.json` in a pull request.
 
 ```json

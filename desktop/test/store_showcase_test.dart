@@ -143,6 +143,7 @@ void main() {
       'file:///tmp/a.mp4',
       'http://example.com/a.mp4',
       'javascript:alert(1)',
+      'https://',
       'https://${'x' * 2048}',
     ]) {
       expect(

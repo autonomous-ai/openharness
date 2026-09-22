@@ -52,6 +52,7 @@ class StoreExample {
           videoUri != null &&
               videoUri.scheme == 'https' &&
               videoUri.hasAuthority &&
+              videoUri.host.isNotEmpty &&
               (video as String).length <= 2048
           ? video.trim()
           : null,
