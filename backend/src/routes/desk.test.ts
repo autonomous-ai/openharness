@@ -8,7 +8,7 @@ vi.mock('../lib/prisma.js', () => ({ prisma: mocks.prisma }))
 vi.mock('../lib/bus.js', () => ({ publishDeskChanged: mocks.changed }))
 vi.mock('../lib/ssoAuth.js', async original => ({ ...await original<typeof import('../lib/ssoAuth.js')>(), authenticateAccessToken: mocks.auth }))
 import { deskRoutes } from './desk.js'
-import { applyDeskOp, applyDeskOps, parseTabs, DESK_MAX_TABS, type DeskTab } from '../lib/desk.js'
+import { applyDeskOp, applyDeskOps, deskTabSchema, parseTabs, DESK_MAX_TABS, type DeskLayout, type DeskTab } from '../lib/desk.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
 
@@ -58,6 +58,19 @@ describe('desk ops — the merge rule', () => {
     ])
     expect(replayed.changed).toBe(false)
     expect(replayed.tabs.map(t => t.id)).toEqual(['b'])
+  })
+
+  it('carries a tab\'s layout as one value: replaced whole, idempotent, dropped for a tab that is gone', () => {
+    const layout: DeskLayout = { presets: { '2': 'rows' }, sizes: { '2:manual': [[0, 0, 0.3, 1], [0.3, 0, 1, 1]] } }
+    let r = applyDeskOp([tab('a')], { op: 'tab.layout', id: 'a', layout })
+    expect(r.changed).toBe(true)
+    expect(r.tabs[0].layout).toEqual(layout)
+    expect(applyDeskOp(r.tabs, { op: 'tab.layout', id: 'a', layout }).changed).toBe(false)
+    r = applyDeskOp(r.tabs, { op: 'tab.layout', id: 'a', layout: { presets: { '2': 'columns' } } })
+    expect(r.tabs[0].layout).toEqual({ presets: { '2': 'columns' } })          // replaced, not merged
+    expect(applyDeskOp(r.tabs, { op: 'tab.layout', id: 'gone', layout }).changed).toBe(false)
+    expect(deskTabSchema.safeParse({ ...tab('a'), layout }).success).toBe(true)
+    expect(deskTabSchema.safeParse({ ...tab('a'), layout: { sizes: { k: [[0, 0, 2, 1], [0, 0, 1, 1]] } } }).success).toBe(false)
   })
 
   it('seeds a computer\'s own tabs once, by id, and never past the cap', () => {

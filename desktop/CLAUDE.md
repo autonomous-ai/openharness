@@ -245,6 +245,14 @@ its headless debug timings do not establish native display or network latency.
 - `lib/theme/app_theme.dart` (`AppColors`, `AppTheme.terminalLight/terminalDark`) is a set of
   adapters over those tokens. Nothing here is `const` on purpose — freezing a colour is how light mode
   silently breaks. Do not add a parallel palette.
+- **Type** is `AppType` (`lib/shared/theme/app_type.dart`): one size scale (display 28, title 20,
+  heading 15, label/mono 13, monoLabel 12, caption/monoMeta 11) across two faces. The terminal's
+  face leads — headings, labels, buttons, rows, fields, tabs, shortcuts and anything copied are
+  mono — and the system sans is kept for prose alone (`body`, `caption`), which is what stops a
+  screen reading as a wall of mono. Sizes are fixed: `terminalTextStyle` (the terminal's own size,
+  ⌘+/⌘−) is only for the grid, its composer and find field, and the empty tab's welcome page (it
+  stands where a terminal will), and `terminalTextScaleOf` only for their geometry — UI boxes use `appTextScaleOf`. Native tabs get the terminal face at
+  `AppType.chromeSize`; native menus keep the system menu font.
 - `ThemeModeStore` and `TerminalFontStore` are `ValueNotifier` singletons (they must resolve above the
   provider scope and before sign-in).
 
@@ -536,11 +544,15 @@ its headless debug timings do not establish native display or network latency.
   ▸ Keyboard shortcuts, group cards reflowed across the pane, plus the recessed "the terminal keeps"
   card built from `kTerminalOwnedKeys`). Same rows behind both, so they cannot disagree; keycaps come
   from `shortcuts/key_cap.dart`. Every shortcut is ⌘-based — Ctrl belongs to the shell/tmux, ⌥ is a
-  Meta prefix for the pty (⌥⏎ only — `MetaEnterInputHandler` in
-  `lib/terminal/terminal_input.dart` turns it into `ESC` + Return so the engine's prompt breaks the
-  line instead of submitting; ⌥ stays the compose key everywhere else, and the composer answers the
-  same chord by writing the newline itself), and ⌘C/⌘V/⌘A are owned by xterm — with one pinned
-  exception, `⌃⇥`/`⌃⇧⇥` for the panes, which the terminal is made to let past.
+  Meta prefix for the pty (⌥⏎ and ⌥⌫ only — `AltAsMetaInputHandler` in
+  `lib/terminal/terminal_input.dart` turns them into `ESC` + Return and `ESC` + `\x7f`, so the
+  engine's prompt breaks the line instead of submitting and kills the word behind the cursor
+  instead of hearing nothing; ⌥ stays the compose key everywhere else), and ⌘C/⌘V/⌘A are owned by
+  xterm — with two pinned exceptions: `⌃⇥`/`⌃⇧⇥` for the panes, which the terminal is made to let
+  past, and ⌘⌫, which `TerminalPanel._onTerminalKey` takes back off the app and sends to the pty as
+  `^U` because a ⌘ chord never reaches xterm's input handler at all. The composer answers all four
+  line-editing chords too: it writes ⌥⏎'s newline itself, binds `^W`/`^U`, and lets Flutter's own
+  macOS text-editing shortcuts serve ⌥⌫ and ⌘⌫.
 - `lib/flash/` flashes the ESP32-S3 dial through the CLI runner; `SerialPortLease` pauses daemon
   supervision while the port is held so `harness start` cannot steal it mid-write.
 - `lib/update/desktop_updater.dart` self-updates from the GCS manifest (sha256-verified, strictly

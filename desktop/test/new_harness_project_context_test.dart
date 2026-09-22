@@ -455,7 +455,6 @@ void main() {
         ('agent', NewHarnessField.agent),
         ('machine', NewHarnessField.machine),
         ('project', NewHarnessField.projectMenu),
-        ('task', NewHarnessField.task),
       ]) {
         await openLaunchRow(tester, name);
         await tester.pump();

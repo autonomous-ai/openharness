@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../../analytics/analytics_log.dart';
 import '../../logging/log_file.dart';
@@ -53,6 +54,7 @@ class _Body extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final payload = entry.payload;
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -67,11 +69,9 @@ class _Body extends StatelessWidget {
               Expanded(
                 child: Text(
                   '${entry.name} · ${trackedOutcome(entry)}',
-                  style: TextStyle(
+                  style: AppType.monoLabel(
+                    fontWeight: AppFont.regular,
                     color: AppPalette.textSecondary,
-                    fontSize: 12.5,
-                    fontFamily: AppFont.mono,
-                    fontFamilyFallback: AppFont.monoFallback,
                   ),
                 ),
               ),
@@ -158,8 +158,7 @@ class _Caption extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 5),
       child: Text(
         text,
-        style: TextStyle(
-          fontSize: 11.5,
+        style: AppType.caption(
           fontWeight: AppFont.medium,
           color: AppPalette.textFaint,
         ),
@@ -188,11 +187,9 @@ class _Block extends StatelessWidget {
       ),
       child: SelectableText(
         text,
-        style: TextStyle(
-          fontSize: 12,
+        style: AppType.monoLabel(
+          fontWeight: AppFont.regular,
           height: 1.45,
-          fontFamily: AppFont.mono,
-          fontFamilyFallback: AppFont.monoFallback,
           color: danger ? debugDangerInk(context) : AppPalette.textPrimary,
         ),
       ),

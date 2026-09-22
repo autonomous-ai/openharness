@@ -92,7 +92,7 @@ class LoginScreen extends StatelessWidget {
                         Text(
                           'Your agents, wherever they run',
                           textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.titleLarge,
+                          style: grid.AppType.title(),
                         ),
                         const SizedBox(height: 8),
                         Text(

@@ -103,7 +103,7 @@ class _UsagePageState extends State<UsagePage> {
             PhoneHeader(
               title: 'Usage',
               subtitle: Text(
-                'What your agent accounts have spent',
+                'What your harness accounts have spent',
                 style: TextStyle(color: AppPalette.textSecondary, fontSize: 13),
               ),
             ),
@@ -204,7 +204,7 @@ class _EmptyUsage extends StatelessWidget {
         message: usage.stale
             ? 'The machines you linked did not answer this time. Pull down to try again.'
             : 'Link a machine and connect to it — usage is read on the machine '
-                  'your agents run on, not on this phone.',
+                  'your harnesses run on, not on this phone.',
       );
     }
     final signedOut = [

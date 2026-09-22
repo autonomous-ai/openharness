@@ -119,6 +119,29 @@ private extension SwarmTabStrip {
     try checkTitlebar(tabs[0] === tab && tab.icon === engineIcon, "Closing back to one agent restores the cached engine icon")
   }
 
+  func checkSharedTypography() throws {
+    defer { HarnessTypography.update(["fontFamily": ".AppleSystemUIFontMonospaced", "fontSize": 12]) }
+    let menuFont = NSFont.menuFont(ofSize: 0)
+    for size in [CGFloat(12), 14] {
+      update(["tabs": [["id": "font-tab", "name": "Typography"]], "activeId": "font-tab",
+        "enabled": true, "fontFamily": "Menlo", "fontSize": size])
+      let tab = tabs[0]
+      try checkTitlebar(tab.labelFont.pointSize == size && tab.labelFont.familyName == "Menlo",
+        "Native tab uses the terminal face at the chrome size Flutter sends")
+      try checkTitlebar(storeButton.font?.pointSize == size && storeButton.font?.familyName == "Menlo",
+        "Native store action uses the terminal face at the chrome size")
+      try checkTitlebar(tab.menu?.font.familyName == menuFont.familyName && tab.menu?.font.pointSize == menuFont.pointSize,
+        "Native tab menu keeps the system menu font")
+      let history = SwarmHistoryEntry(["id": "font", "title": "Project", "machineName": "Machine"])!
+      let font = history.menuTitle().attribute(.font, at: 0, effectiveRange: nil) as! NSFont
+      try checkTitlebar(font == menuFont, "Native history keeps the system menu font")
+      let item = NSMenuItem()
+      let row = SwarmHistoryMenuRow(item: item, entry: history, width: 400)
+      try checkTitlebar(row.machineFrame.minY >= 0 && row.machineFrame.maxY <= row.bounds.height,
+        "Native history text fits its row")
+    }
+  }
+
   func checkStartupPalette(_ expected: SwarmNativePalette) throws {
     try checkTitlebar(palette == expected && newButton.contentTintColor == expected.accent && notificationButton.contentTintColor == expected.accent &&
       newButton.contentTintColor == expected.accent,
@@ -654,7 +677,7 @@ private extension SwarmTitlebar {
     try checkTitlebar(window.firstResponder === window.contentInput,
       "Adding toolbar buttons does not take initial keyboard focus from the workspace")
     try checkTitlebar(main.items.map(\.title) == ["Harness", "File", "Edit", "View", "History", "Models", "Machines", "Window", "Help"], "File leads the standard macOS menus, with Machines after Models")
-    let settings = appItem.submenu!.items[0]
+    let settings = appItem.submenu!.items.first { $0.representedObject as? String == "settings" }!
     try checkTitlebar(settings.title == "Settings…" && settings.representedObject as? String == "settings", "Settings stays in the application menu")
     let agent = main.item(withTitle: "File")!.submenu!
     let addHarness = agent.items.first(where: { $0.representedObject as? String == "addAgent" })!
@@ -663,7 +686,7 @@ private extension SwarmTitlebar {
     try checkTitlebar(agent.items.contains { $0.title == "New Terminal" && $0.keyEquivalent == "t" && $0.keyEquivalentModifierMask == [.command, .shift] && $0.representedObject as? String == "newTerminal" },
       "New Terminal has its Command-Shift-T menu action")
     let historyMenu = main.item(withTitle: "History")!.submenu!
-    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["new", "addAgent", "newTerminal", "renameActive", "closeActive", "separator", "splitRight", "splitDown", "zoomPane", "closePane"], "File groups tab, terminal and pane actions")
+    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["new", "addAgent", "newTerminal", "cloneAgent", "renameActive", "closeActive", "separator", "splitRight", "splitDown", "zoomPane", "closePane"], "File groups tab, terminal and pane actions")
     for (action, title, key) in [("splitRight", "Split Right…", "r"), ("splitDown", "Split Down…", "d")] {
       let split = agent.items.first(where: { $0.representedObject as? String == action })!
       try checkTitlebar(split.title == title && split.keyEquivalent == key && split.keyEquivalentModifierMask == [.command],
@@ -1152,6 +1175,7 @@ do {
   let strip = SwarmTabStrip(frame: NSRect(x: 0, y: 0, width: 900, height: 52))
   try strip.runChecks()
   try strip.checkAgentIdentity()
+  try strip.checkSharedTypography()
   try checkTitlebar(titlebarCheckApp.windows.isEmpty, "Checks never open an application window")
   if CommandLine.arguments.contains("--window-layout") {
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 700),

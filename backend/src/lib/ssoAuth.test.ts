@@ -10,7 +10,7 @@ vi.mock('../services/UserService.js', () => ({
   isProvisionalUserEmail: (email: string) => email.endsWith('@pending.harness.invalid'),
 }))
 
-import { authenticateAccessToken, fetchSsoProfile, SsoAuthError } from './ssoAuth.js'
+import { authenticateAccessToken, clearSsoProfileCache, fetchSsoProfile, SsoAuthError } from './ssoAuth.js'
 
 function response(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -54,10 +54,102 @@ describe('SSO profile authentication', () => {
   })
 })
 
+describe('which endpoint proves a token', () => {
+  afterEach(() => clearSsoProfileCache())
+  const ok = () => response(200, { status: 1, data: { id: 'external-1', email: 'user@example.com' } })
+  const calledUrls = (mock: ReturnType<typeof vi.fn<typeof fetch>>) => mock.mock.calls.map(([url]) => String(url))
+
+  it('asks the identity endpoint, which costs the storefront no customer or cart read', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => ok())
+
+    await expect(fetchSsoProfile('token', fetchMock)).resolves.toEqual({ id: 'external-1', email: 'user@example.com' })
+
+    expect(calledUrls(fetchMock)).toEqual(['https://apiv2.autonomous.ai/api/v1/me/identity'])
+  })
+
+  it('falls back to the profile endpoint while the identity endpoint is not deployed', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(404, { message: 'page not found' }))
+      .mockResolvedValueOnce(ok())
+
+    await expect(fetchSsoProfile('token', fetchMock)).resolves.toEqual({ id: 'external-1', email: 'user@example.com' })
+
+    expect(calledUrls(fetchMock)).toEqual([
+      'https://apiv2.autonomous.ai/api/v1/me/identity',
+      'https://apiv2.autonomous.ai/api/v1/me/profile',
+    ])
+  })
+
+  it('falls back when the identity endpoint is failing, so the new route is not a new way to be down', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(502, { message: 'bad gateway' }))
+      .mockResolvedValueOnce(ok())
+
+    await expect(fetchSsoProfile('token', fetchMock)).resolves.toEqual({ id: 'external-1', email: 'user@example.com' })
+
+    expect(calledUrls(fetchMock)).toEqual([
+      'https://apiv2.autonomous.ai/api/v1/me/identity',
+      'https://apiv2.autonomous.ai/api/v1/me/profile',
+    ])
+  })
+
+  it('falls back when the identity endpoint cannot be reached', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockRejectedValueOnce(new Error('timeout'))
+      .mockResolvedValueOnce(ok())
+
+    await expect(fetchSsoProfile('token', fetchMock)).resolves.toEqual({ id: 'external-1', email: 'user@example.com' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('remembers that the identity endpoint is not deployed instead of asking it before every validation', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (url) =>
+      String(url).endsWith('/me/identity') ? response(404, { message: 'page not found' }) : ok())
+
+    await fetchSsoProfile('token-1', fetchMock)
+    await fetchSsoProfile('token-2', fetchMock)
+
+    expect(calledUrls(fetchMock)).toEqual([
+      'https://apiv2.autonomous.ai/api/v1/me/identity',
+      'https://apiv2.autonomous.ai/api/v1/me/profile',
+      'https://apiv2.autonomous.ai/api/v1/me/profile',
+    ])
+  })
+
+  it('does not let one failing answer stop it asking the identity endpoint next time', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(502, { message: 'bad gateway' }))
+      .mockImplementation(async () => ok())
+
+    await fetchSsoProfile('token-1', fetchMock)
+    await fetchSsoProfile('token-2', fetchMock)
+
+    expect(calledUrls(fetchMock)[2]).toBe('https://apiv2.autonomous.ai/api/v1/me/identity')
+  })
+
+  it('takes the identity endpoint at its word when it rejects the token', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => response(401, { message: 'Invalid or expired JWT' }))
+
+    await expect(fetchSsoProfile('expired', fetchMock)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('asks the staging identity endpoint for a staging sign-in', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => ok())
+
+    await fetchSsoProfile('token', 'stag', fetchMock)
+
+    expect(calledUrls(fetchMock)).toEqual(['https://apiv2.staging.autonomousdev.xyz/api/v1/me/identity'])
+  })
+})
+
 describe('authenticated user resolution', () => {
   afterEach(() => {
     vi.clearAllMocks()
     vi.unstubAllGlobals()
+    clearSsoProfileCache()
   })
 
   function profileFetch(id: string, email: string): void {
@@ -140,5 +232,26 @@ describe('authenticated user resolution', () => {
       requiredEnv: 'stag',
     })
     expect(upsertFromSso).not.toHaveBeenCalled()
+  })
+
+  it('asks the profile service once for a token used on back-to-back requests', async () => {
+    profileFetch('prod-sub-1', 'owner@example.com')
+    const existing = { id: 'u1', email: 'owner@example.com', externalId: 'prod-sub-1', role: 'user', autonomousEnv: 'prod' }
+    findByEmail.mockResolvedValue(existing)
+    upsertFromSso.mockResolvedValue(existing)
+
+    await expect(authenticateAccessToken('a.e30.c', 'prod')).resolves.toMatchObject({ sub: 'u1' })
+    await expect(authenticateAccessToken('a.e30.c', 'prod')).resolves.toMatchObject({ sub: 'u1' })
+
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('asks the profile service again for a token it rejected', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async () => response(401, { message: 'Invalid or expired JWT' })))
+
+    await expect(authenticateAccessToken('a.e30.c', 'prod')).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+    await expect(authenticateAccessToken('a.e30.c', 'prod')).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 })

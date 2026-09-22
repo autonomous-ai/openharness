@@ -3,18 +3,18 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/permission_modes.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../state/new_harness.dart';
-import '../state/harness_placement.dart';
 import 'box_chrome.dart';
 import 'pane_menu.dart';
 import 'terminal_prompt.dart';
 
-enum _LaunchChoice { agent, machine, project, task, placement, create }
+enum _LaunchChoice { agent, machine, project, branch, worktree, create }
 
 /// A launch menu and focused completion prompts with shared arrow navigation.
 /// Create is selected initially; arrows and Enter edit a displayed default.
@@ -62,19 +62,17 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
   int get _pinnedCount => _profilePicker && box.supportsProfiles ? 2 : 0;
   bool get _hasInput => !_launching;
   _LaunchChoice _launchChoice = _LaunchChoice.create;
-  String get _agentSummary => box.detectingAgent
-      ? 'Detecting installed agents…'
-      : [
-          box.agentLabel,
-          if (box.hasModes && box.mode != kDefaultPermissionMode) box.modeLabel,
-          if (box.profileLabel case final profile?) 'profile $profile',
-        ].join(' · ');
+  String get _agentSummary => [
+    box.agentLabel,
+    if (box.hasModes && box.mode != kDefaultPermissionMode) box.modeLabel,
+    if (box.profileLabel case final profile?) 'profile $profile',
+  ].join(' · ');
   List<_LaunchChoice> get _launchChoices => [
     _LaunchChoice.agent,
     _LaunchChoice.machine,
     _LaunchChoice.project,
-    _LaunchChoice.task,
-    if (box.split == null) _LaunchChoice.placement,
+    if (box.isGitProject) _LaunchChoice.branch,
+    if (box.canUseWorktree || box.gitError != null) _LaunchChoice.worktree,
     _LaunchChoice.create,
   ];
   String get _launchCreateLabel => box.checking
@@ -98,24 +96,13 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
         box.focusField(NewHarnessField.machine);
       case _LaunchChoice.project:
         box.focusField(NewHarnessField.projectMenu);
-      case _LaunchChoice.task:
-        _editTask();
-      case _LaunchChoice.placement:
-        _togglePlacement();
+      case _LaunchChoice.branch:
+        box.focusField(NewHarnessField.branch);
+      case _LaunchChoice.worktree:
+        box.gitError != null ? box.retryGitProject() : box.toggleWorktree();
       case _LaunchChoice.create:
         unawaited(_finish(box.create()));
     }
-    _requestFocus();
-  }
-
-  void _togglePlacement() {
-    if (box.locked || box.split != null) return;
-    _selectLaunchChoice(_LaunchChoice.placement);
-    box.changePlacement(
-      box.placement == HarnessPlacement.newTab
-          ? HarnessPlacement.currentTab
-          : HarnessPlacement.newTab,
-    );
     _requestFocus();
   }
 
@@ -144,6 +131,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
       selection: TextSelection.collapsed(offset: box.query.length),
     );
     box.addListener(_changed);
+    terminalFontStore.addListener(_fontChanged);
     HardwareKeyboard.instance.addHandler(_watchAlt);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -157,6 +145,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     _closeSettingsMenu?.call();
     HardwareKeyboard.instance.removeHandler(_watchAlt);
     box.removeListener(_changed);
+    terminalFontStore.removeListener(_fontChanged);
     _text.dispose();
     _focus.dispose();
     _launchFocus.dispose();
@@ -217,12 +206,16 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     box.options,
     box.cursor,
     box.busy,
-    box.detectingAgent,
     box.checking,
     box.listing,
     box.status,
     box.error,
     box.task,
+    box.worktree,
+    box.canUseWorktree,
+    box.checkingGit,
+    box.gitError,
+    box.branchLabel,
     box.placement,
     box.query.trim().isEmpty,
     box.matchCount,
@@ -292,8 +285,8 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
               (_launching
                   ? _launchChoice == _LaunchChoice.create
                         ? _summaryText()
-                        : _launchChoice == _LaunchChoice.placement
-                        ? 'Open in ${box.placement!.title}. Enter to switch.'
+                        : _launchChoice == _LaunchChoice.worktree
+                        ? 'Worktree ${box.worktree ? 'on' : 'off'}. Enter to toggle.'
                         : '${_launchChoice.name}. Enter to edit.'
                   : box.field == NewHarnessField.task
                   // No row to read here: read what Return will do instead.
@@ -351,6 +344,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     NewHarnessField.profile => 'Codex profile',
     NewHarnessField.agent => 'Agent',
     NewHarnessField.machine => 'Machine',
+    NewHarnessField.branch => 'Branch',
     NewHarnessField.project => 'Project',
   };
 
@@ -368,8 +362,23 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     }
   }
 
-  void _moreOptions() {
-    if (!box.locked && !_composing) widget.onNeedsForm();
+  bool _openingOptions = false;
+  Future<void> _moreOptions() async {
+    if (box.locked || _composing || _openingOptions) return;
+    _openingOptions = true;
+    try {
+      await box.waitForGitProject();
+      if (!mounted || box.locked) return;
+      if (box.gitError != null) {
+        box.warn(
+          'Could not check Git on ${box.machineLabel}. Retry Worktree before opening advanced options.',
+        );
+        return;
+      }
+      widget.onNeedsForm();
+    } finally {
+      _openingOptions = false;
+    }
   }
 
   Future<void> _agentSettings(
@@ -559,6 +568,8 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     _requestFocus();
   }
 
+  void _fontChanged() => setState(() {});
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -569,7 +580,9 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
             box.field == NewHarnessField.projectName ||
             box.field == NewHarnessField.projectRepository ||
             _projectMenu)
-        ? scale.scale(13) * 1.35 + scale.scale(12) * 1.35 + 10
+        ? scale.scale(grid.AppType.monoSize) * 1.35 +
+              scale.scale(grid.AppType.monoSize) * 1.35 +
+              10
         : boxRowHeight(scale);
     final input = Semantics(
       label: '${_fieldName(box.field)}. ${box.hint}',
@@ -662,6 +675,12 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     );
     final extra = CallbackShortcuts(
       bindings: {
+        if (_launching)
+          const SingleActivator(LogicalKeyboardKey.space): () {
+            if (_launchChoice == _LaunchChoice.worktree) {
+              _activateLaunchChoice(_LaunchChoice.worktree);
+            }
+          },
         // ⌥↵ is the pane's own chord for "break the line"; it is not a command.
         const SingleActivator(LogicalKeyboardKey.enter, alt: true): _newline,
         if (KeymapTheme.of(context) == null) ...{
@@ -760,7 +779,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
             NewHarnessField.mode => 'Permissions',
             _ => _fieldName(box.field),
           }.padRight(8)} ',
-          style: boxMonoStyle(size: 12, color: grid.AppPalette.swarmAccent),
+          style: boxMonoStyle(color: grid.AppPalette.swarmAccent),
         ),
         suffixIconConstraints: const BoxConstraints(minHeight: 38),
         suffixIcon: !onTask && box.query.trim().isNotEmpty && box.matchCount > 0
@@ -823,7 +842,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
               Expanded(
                 child: Text(
                   'Projects on ${box.machineLabel}',
-                  style: boxMonoStyle(size: 12, color: kBoxFaint),
+                  style: boxMonoStyle(color: kBoxFaint),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -835,10 +854,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                     : () => box.focusField(NewHarnessField.machine),
                 child: Text(
                   'Change Machine',
-                  style: boxMonoStyle(
-                    size: 12,
-                    color: grid.AppPalette.swarmAccent,
-                  ),
+                  style: boxMonoStyle(color: grid.AppPalette.swarmAccent),
                 ),
               ),
             ],
@@ -849,25 +865,30 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Text(
-                  box.checking
-                      ? 'pending harness'
-                      : _agentPicker
-                      ? 'Choose an agent'
-                      : _machinePicker
-                      ? 'Choose a machine'
-                      : _profilePicker
-                      ? 'Codex profile on ${box.machineLabel}'
-                      : box.field == NewHarnessField.mode
-                      ? 'Permissions for ${box.agentSettingsLabel}'
-                      : 'New Harness',
-                  style: boxMonoStyle(size: 12, color: kBoxFaint),
+              if (!_launching)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Text(
+                    box.checking
+                        ? 'pending harness'
+                        : _agentPicker
+                        ? 'Choose an agent'
+                        : _machinePicker
+                        ? 'Choose a machine'
+                        : box.field == NewHarnessField.branch
+                        ? 'Choose a branch'
+                        : _profilePicker
+                        ? 'Codex profile on ${box.machineLabel}'
+                        : box.field == NewHarnessField.mode
+                        ? 'Permissions for ${box.agentSettingsLabel}'
+                        : 'New Harness',
+                    style: boxMonoStyle(color: kBoxFaint),
+                  ),
                 ),
-              ),
-              if (!_agentPicker && !_machinePicker) ...[
-                const SizedBox(height: 8),
+              if (!_agentPicker &&
+                  !_machinePicker &&
+                  box.field != NewHarnessField.branch) ...[
+                if (!_launching) const SizedBox(height: 8),
                 _segment(
                   NewHarnessField.agent,
                   _launching
@@ -884,22 +905,30 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                   _ => box.needsProject ? 'Choose a project' : box.projectLabel,
                 }),
               ],
-              if (_launching)
-                _default(
-                  'task',
-                  box.task.trim().isEmpty
-                      ? box.taskAvailability
-                      : box.task.trim().replaceAll(RegExp(r'\s+'), ' '),
-                  muted: !box.takesTask,
-                  onTap: _editTask,
-                ),
-              if (_launching && box.split == null)
-                _default(
-                  'placement',
-                  box.placement!.title,
-                  onTap: _togglePlacement,
-                ),
               if (_launching) ...[
+                if (box.isGitProject)
+                  _segment(NewHarnessField.branch, box.branchLabel),
+                if (box.isGitProject || box.checkingGit || box.gitError != null)
+                  _default(
+                    'worktree',
+                    box.checkingGit
+                        ? 'Checking…'
+                        : box.gitError != null
+                        ? 'Retry'
+                        : box.worktree
+                        ? '[x]'
+                        : '[ ]',
+                    enabled: box.canUseWorktree || box.gitError != null,
+                    tooltip: box.gitError != null
+                        ? 'Could not check Git on ${box.machineLabel}. Retry.'
+                        : box.canUseWorktree
+                        ? 'Start in a new Git worktree and branch from the selected branch. Uncommitted changes stay in the original folder.'
+                        : 'Choose an existing Git project to use a worktree.',
+                    onTap: () {
+                      _selectLaunchChoice(_LaunchChoice.worktree);
+                      _activateLaunchChoice(_LaunchChoice.worktree);
+                    },
+                  ),
                 const SizedBox(height: 8),
                 _default(
                   'create',
@@ -936,37 +965,41 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
     required VoidCallback onTap,
     bool active = false,
     bool risky = false,
-    bool muted = false,
     bool action = false,
+    bool enabled = true,
+    String? tooltip,
   }) {
     final choice = _launching
         ? _LaunchChoice.values.where((item) => item.name == name).firstOrNull
         : null;
     final highlighted = choice != null && choice == _launchChoice;
-    final disabled = name == 'create'
-        ? box.busy || box.detectingAgent
-        : box.locked;
-    final fieldLabel = name == 'placement'
-        ? 'Open in'
-        : '${name[0].toUpperCase()}${name.substring(1)}';
+    final disabled = !enabled || (name == 'create' ? box.busy : box.locked);
+    final fieldLabel = '${name[0].toUpperCase()}${name.substring(1)}';
+    final checkbox =
+        name == 'worktree' && !box.checkingGit && box.gitError == null;
     return MouseRegion(
       onHover: (event) {
-        if (choice != null && _pointer.moved(event)) {
+        if (!disabled && choice != null && _pointer.moved(event)) {
           _selectLaunchChoice(choice);
         }
       },
       child: Semantics(
-        button: true,
+        button: !checkbox,
+        checked: checkbox ? box.worktree : null,
         enabled: !disabled,
         selected: highlighted || active,
-        label: action ? label : '$fieldLabel, $label',
+        label: checkbox
+            ? fieldLabel
+            : action
+            ? label
+            : '$fieldLabel, $label',
         excludeSemantics: true,
         child: BoxRowHighlight(
           terminal: true,
           highlighted: highlighted,
           accent: grid.AppPalette.swarmAccent,
           child: Tooltip(
-            message: label,
+            message: tooltip ?? label,
             child: InkWell(
               key: ValueKey('new-harness-field-$name'),
               onTap: disabled ? null : onTap,
@@ -979,7 +1012,6 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                       Text(
                         '${fieldLabel.padRight(8)} ',
                         style: boxMonoStyle(
-                          size: 12,
                           color: active
                               ? grid.AppPalette.swarmAccent
                               : kBoxFaint,
@@ -991,10 +1023,9 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: boxMonoStyle(
-                          size: 12,
                           color: risky
                               ? grid.AppPalette.warn
-                              : muted || disabled
+                              : disabled
                               ? kBoxFaint
                               : Colors.white,
                           weight: active || action
@@ -1020,6 +1051,8 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
       ? 'Choose a project before starting ${box.agentLabel}.'
       : 'Return starts ${box.agentLabel} on ${box.machineLabel} in '
             '${box.projectLabel}'
+            '${box.isGitProject ? ', from ${box.branchLabel}' : ''}'
+            '${box.worktree ? ', in a new Git worktree' : ''}'
             '${box.hasModes ? ', ${box.modeLabel.toLowerCase()}' : ''}'
             '${box.profileLabel == null ? '' : ', profile ${box.profileLabel}'}'
             '${box.task.trim().isEmpty ? '' : ', and sends what you typed as its first message'}.';
@@ -1079,7 +1112,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                                 box.tildePath(folder),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: boxMonoStyle(size: 12, color: kBoxFaint),
+                                style: boxMonoStyle(color: kBoxFaint),
                               ),
                             ),
                           ],
@@ -1097,7 +1130,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                               padding: const EdgeInsets.only(left: 8),
                               child: Text(
                                 _keys['picker.accept'] ?? '↵',
-                                style: boxMonoStyle(size: 12, color: kBoxFaint),
+                                style: boxMonoStyle(color: kBoxFaint),
                               ),
                             ),
                         ],
@@ -1130,7 +1163,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                   : 'recent · ${recents.length}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: boxMonoStyle(size: 12, color: kBoxFaint),
+              style: boxMonoStyle(color: kBoxFaint),
             ),
           ),
           if (recents.isNotEmpty)
@@ -1179,7 +1212,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
             box.query.trim().isEmpty
                 ? 'Clone to ${box.machineLabel}:~/harnesses/<repository>'
                 : 'Paste a GitHub repository URL, or try openai/codex',
-            style: boxMonoStyle(size: 12, color: kBoxFaint),
+            style: boxMonoStyle(color: kBoxFaint),
           ),
         ),
       );
@@ -1192,7 +1225,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
           heightFactor: 1,
           child: Text(
             "${box.machineLabel}:~/harnesses/<name>",
-            style: boxMonoStyle(size: 12, color: kBoxFaint),
+            style: boxMonoStyle(color: kBoxFaint),
           ),
         ),
       );
@@ -1215,7 +1248,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                 : 'Nothing matches “${box.query.trim()}” in '
                       '${_fieldName(box.field)}. Escape goes back.',
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 13, color: kBoxFaint),
+            style: boxMonoStyle(color: kBoxFaint),
           ),
         ),
       );
@@ -1230,7 +1263,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               child: Text(
                 'No agents match “${box.query.trim()}”.',
-                style: boxMonoStyle(size: 12, color: kBoxFaint),
+                style: boxMonoStyle(color: kBoxFaint),
               ),
             ),
           ),
@@ -1358,7 +1391,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                         option.detail,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: boxMonoStyle(size: 12, color: kBoxFaint),
+                        style: boxMonoStyle(color: kBoxFaint),
                       ),
                   ],
                 )
@@ -1388,7 +1421,6 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: boxMonoStyle(
-                            size: 12,
                             color: option.risky
                                 ? grid.AppPalette.warn
                                 : kBoxFaint,
@@ -1432,7 +1464,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                 Text(
                   _keys['picker.accept'] ?? '↵',
                   key: const ValueKey('new-harness-row-action'),
-                  style: boxMonoStyle(size: 12, color: kBoxFaint),
+                  style: boxMonoStyle(color: kBoxFaint),
                 ),
               if (_agentPicker)
                 SizedBox(
@@ -1492,13 +1524,13 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                   _ => 'use project',
                 }
               : _launching && _launchChoice != _LaunchChoice.create
-              ? _launchChoice == _LaunchChoice.placement
-                    ? 'switch'
+              ? _launchChoice == _LaunchChoice.worktree
+                    ? 'toggle'
                     : 'edit ${_launchChoice.name}'
               : _launching && box.needsProject
               ? 'choose project'
               : box.returnCreates
-              ? box.createLabel.toLowerCase()
+              ? 'start'
               : box.selected?.id == NewHarnessController.storeId
               ? 'open store'
               : box.selected?.id == NewHarnessController.permissionsId
@@ -1525,16 +1557,12 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
                     box.field == NewHarnessField.projectName
               ? 'use project'
               : 'choose',
-          onTap: box.detectingAgent && box.returnCreates ? null : _enter,
+          onTap: _enter,
         ),
         if (_launching &&
             !box.checking &&
             _launchChoice != _LaunchChoice.create)
-          BoxHint(
-            key('picker.add_here', '⌘↵'),
-            box.createLabel.toLowerCase(),
-            onTap: _createNow,
-          ),
+          BoxHint(key('picker.add_here', '⌘↵'), 'start', onTap: _createNow),
         if (!box.checking &&
             !_launching &&
             !_projectMenu &&
@@ -1582,22 +1610,24 @@ class _AgentSettingsButtonState extends State<_AgentSettingsButton> {
   bool _focused = false;
 
   @override
-  Widget build(BuildContext context) => Focus(
-    onFocusChange: (focused) => setState(() => _focused = focused),
-    child: Opacity(
-      opacity: widget.visible || _focused ? 1 : 0,
-      alwaysIncludeSemantics: true,
-      child: IconButton(
-        tooltip: widget.label,
-        onPressed: widget.onPressed,
-        icon: const Icon(LucideIcons.settings, size: 14, color: kBoxFaint),
-        style: IconButton.styleFrom(
-          padding: EdgeInsets.zero,
-          minimumSize: const Size(28, 28),
-          maximumSize: const Size(28, 28),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  Widget build(BuildContext context) {
+    return Focus(
+      onFocusChange: (focused) => setState(() => _focused = focused),
+      child: Opacity(
+        opacity: widget.visible || _focused ? 1 : 0,
+        alwaysIncludeSemantics: true,
+        child: IconButton(
+          tooltip: widget.label,
+          onPressed: widget.onPressed,
+          icon: const Icon(LucideIcons.settings, size: 14, color: kBoxFaint),
+          style: IconButton.styleFrom(
+            padding: EdgeInsets.zero,
+            minimumSize: const Size(28, 28),
+            maximumSize: const Size(28, 28),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

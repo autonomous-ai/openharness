@@ -168,7 +168,9 @@ class SkeletonText extends StatelessWidget {
     AppTheme.watch(context);
     final height = lineHeight(context, style, strutStyle: strutStyle);
     final fontSize =
-        style.fontSize ?? DefaultTextStyle.of(context).style.fontSize ?? 14;
+        style.fontSize ??
+        DefaultTextStyle.of(context).style.fontSize ??
+        AppControl.fontSize;
     final bar = barHeight ?? (fontSize * 0.72).roundToDouble().clamp(6.0, 16.0);
     Widget line = Skeleton.text(width: width, height: bar);
     if (width == null) {

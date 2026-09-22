@@ -398,7 +398,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
             children: [
               // No machine under the title any more: the MACHINE rows below say it, and are where it
               // is changed.
-              const PhoneHeader(title: 'New agent'),
+              const PhoneHeader(title: 'New Harness'),
               Expanded(
                 child: ListView(
                   padding: const EdgeInsets.only(bottom: 16),
@@ -629,7 +629,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                   width: double.infinity,
                   child: FilledButton(
                     onPressed: ready ? () => unawaited(_create()) : null,
-                    child: Text(_creating ? 'Starting…' : 'Create agent'),
+                    child: Text(_creating ? 'Starting…' : 'Create Harness'),
                   ),
                 ),
               ),

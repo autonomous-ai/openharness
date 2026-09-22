@@ -8,44 +8,41 @@ import 'package:harness_mobile/shared/widgets/empty_state.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'agent_index.dart';
+import 'phone_destination.dart';
 import 'phone_navigation.dart';
-import 'phone_search_folder_header.dart';
-import 'phone_search_groups.dart';
-import 'phone_search_index.dart';
-import 'phone_search_order.dart';
+import 'phone_search_commands.dart';
+import 'phone_search_controller.dart';
 import 'phone_search_rank.dart';
 import 'phone_search_row.dart';
-import 'phone_section_label.dart';
+import 'resume_agent.dart';
 
-/// What [query] reaches, drawn: the Recent list before a word is typed, then
-/// matching agents under their folders.
+/// What the query reaches, drawn.
 ///
 /// ⚠️ Public because two screens draw it: [PhoneSearchPage], and the terminal's
-/// own in-place search (see `terminal_search.dart`), which expands out of the
-/// header bar rather than pushing a route. Both hand it the query and nothing
-/// else, so the two cannot return different rows — or walk a different pager —
-/// for the same words.
+/// own in-place search (see `terminal_search.dart`), which fades up over the
+/// terminal rather than pushing a route. Both hand it one
+/// [PhoneSearchController], so the two cannot return different rows — or walk a
+/// different pager — for the same words.
 ///
-/// A word that matches no agent is looked for in what the agents were last
-/// asked and answered — [AppNotifier.sessionPreviews], the desktop's own store.
-/// Keystrokes only ever read it, so typing stays instant and costs no data;
-/// opening the search just moves the agents offered first to the front of its
-/// background reads.
+/// ⚠️ **One flat ranked list, no folder headers.** The desktop has none either,
+/// and grouping fought the ranking it sat on: a folder whose best row was third
+/// dragged its other two up past better matches, and a header over every
+/// single-agent folder halved how many rows fit on a phone. Each row names its
+/// own project and machine instead, which is what the desktop's detail line is.
 ///
 /// Opening it also re-reaches every machine on the account
-/// ([AppNotifier.reachAllMachines]) and pins the rows where they are drawn
-/// ([PhoneSearchOrder]) — the list fills out, and never reorders while it is
-/// being read.
+/// ([AppNotifier.reachAllMachines]), so the one screen that claims to search
+/// every agent stops quietly missing whole machines of them.
 class PhoneSearchResults extends StatefulWidget {
   const PhoneSearchResults({
     super.key,
     required this.notifier,
-    required this.query,
+    required this.controller,
     this.onOpen,
   });
 
   final AppNotifier notifier;
-  final String query;
+  final PhoneSearchController controller;
 
   /// Called the moment a row is tapped, before anything opens.
   ///
@@ -60,14 +57,26 @@ class PhoneSearchResults extends StatefulWidget {
 }
 
 class _PhoneSearchResultsState extends State<PhoneSearchResults> {
+  /// The row whose agent is being brought back, if any — see [_open].
+  ///
+  /// One at a time: the resume is a round trip to the machine, and a list that
+  /// let a second tap start another would leave two agents restarting for one
+  /// person who only meant to open one.
+  String? _resuming;
+
+  /// ⚠️ **Three sources, and they answer different questions.**
+  ///
+  /// The controller says WHICH rows and in what order. The other two are what
+  /// the rows SAY: `working` replacing an age, a quote appearing as its preview
+  /// lands, an attention rim as an agent stops to ask something. The controller
+  /// deliberately stays quiet through all of that — its catalog is cached, and a
+  /// turn event changes no row's place — so without these the list would hold a
+  /// minutes-old age while the terminal behind it streamed.
   late final Listenable _changes = Listenable.merge([
+    widget.controller,
     widget.notifier,
     widget.notifier.sessionPreviews,
   ]);
-
-  /// Holds the rows where they were first drawn — see [PhoneSearchOrder]. Owned
-  /// by the State, so it lives exactly as long as one search.
-  final _order = PhoneSearchOrder();
 
   @override
   void initState() {
@@ -75,10 +84,9 @@ class _PhoneSearchResultsState extends State<PhoneSearchResults> {
     final notifier = widget.notifier;
     // ⚠️ **Opening the search is what re-reaches the fleet.** Until here the app
     // has only the machines that happened to answer at launch, and a machine the
-    // account reported down was never even dialled — so the one screen that
-    // claims to search EVERY agent was the one screen quietly missing whole
-    // machines of them. Asked on the way in, not awaited: what is already known
-    // draws immediately, and each machine adds its agents as it answers.
+    // account reported down was never even dialled. Asked on the way in, not
+    // awaited: what is already known draws immediately, and each machine adds
+    // its agents as it answers.
     unawaited(notifier.reachAllMachines());
     notifier.sessionPreviews.warm([
       for (final entry in recentAgents(agentIndex(notifier)))
@@ -91,122 +99,139 @@ class _PhoneSearchResultsState extends State<PhoneSearchResults> {
     listenable: _changes,
     builder: (context, _) {
       AppTheme.watch(context);
-      final all = _order.arrange(phoneSearchIndex(widget.notifier));
-      if (all.isEmpty) {
-        return const EmptyState(
-          icon: LucideIcons.laptopMinimal300,
-          title: 'Nothing to search yet',
-          message: 'Link a machine and its agents will be findable from here.',
-        );
-      }
-      final query = widget.query.trim();
-      if (query.isEmpty) return _recentList(all);
-      final rows = rankPhoneSearch(all, query);
-      if (rows.isEmpty) {
-        return EmptyState.noMatches(
-          compact: false,
-          message: 'Nothing matches “$query”.',
-        );
-      }
-      return _groupedList(phoneSearchGroups(rows), phoneSearchTerms(query));
+      final search = widget.controller;
+      final rows = search.rows;
+      if (rows.isEmpty) return _empty(search);
+      final terms = phoneSearchTerms(search.matchQuery);
+      final now = DateTime.now();
+      final previews = widget.notifier.sessionPreviews;
+      return ListView.builder(
+        // The keyboard is up and the finger is already on the glass; dragging
+        // the list is how somebody reaches a result without putting it away
+        // first.
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: EdgeInsets.fromLTRB(
+          16,
+          4,
+          16,
+          MediaQuery.paddingOf(context).bottom + 16,
+        ),
+        itemCount: rows.length,
+        itemBuilder: (context, index) {
+          final row = rows[index];
+          return PhoneSearchRow(
+            row: row,
+            terms: terms,
+            now: now,
+            openable: search.canSubmit(row) && _resuming == null,
+            resuming: _resuming == row.id,
+            // A row that is here for something said in its conversation quotes
+            // it in place of its detail: nothing else on the row would explain
+            // why it matched.
+            quote: phoneContentSnippet(row, terms, previews),
+            onTap: () => _tap(row),
+          );
+        },
+      );
     },
   );
 
-  /// Every agent in one run, the one that had moved last WHEN THE SEARCH OPENED
-  /// on top — and still on top a minute later, whatever has moved since. See
-  /// [PhoneSearchOrder].
-  ///
-  /// No folder headers here. Before a word is typed the question is "which one
-  /// was I just on", and grouping answers a different one: a folder with one
-  /// fresh agent and one stale one drags the stale one up past fresher agents
-  /// elsewhere, and a header over every single-agent folder halves how many
-  /// rows fit on the screen. Each row names its own folder and machine instead.
-  Widget _recentList(List<PhoneSearchResult> rows) {
-    final now = DateTime.now();
-    return _ResultsList(
-      children: [
-        const PhoneSectionLabel(
-          'Recent',
-          padding: EdgeInsets.fromLTRB(10, 14, 10, 4),
-        ),
-        for (final row in rows)
-          PhoneSearchRow(
-            row: row,
-            terms: const [],
-            now: now,
-            place: PhoneRowContext.placed,
-            onTap: () => _open(rows, row),
-          ),
-      ],
+  Widget _empty(PhoneSearchController search) {
+    if (search.total == 0 && search.matchQuery.trim().isEmpty) {
+      return const EmptyState(
+        icon: LucideIcons.laptopMinimal300,
+        title: 'Nothing to search yet',
+        message: 'Link a machine and its harnesses will be findable from here.',
+      );
+    }
+    return EmptyState.noMatches(
+      compact: false,
+      message: 'Nothing matches “${search.matchQuery.trim()}”.',
     );
   }
 
-  /// Matching agents under their folders, best match first — see
-  /// [phoneSearchGroups] for why grouping never buries it.
-  Widget _groupedList(List<PhoneSearchGroup> groups, List<String> terms) {
-    final drawn = phoneSearchGroupedRows(groups);
-    final now = DateTime.now();
-    return _ResultsList(
-      children: [
-        for (final group in groups) ...[
-          PhoneSearchFolderHeader(group: group),
-          for (final row in group.rows)
-            PhoneSearchRow(
-              row: row,
-              terms: terms,
-              now: now,
-              onTap: () => _open(drawn, row),
-            ),
-        ],
-      ],
-    );
+  /// A tap goes to the controller first, which absorbs the ones that only move
+  /// the search: a `?` row taking its mode, a project or machine narrowing it.
+  /// What comes back is something to actually open.
+  void _tap(PhoneDestination row) {
+    final opened = widget.controller.submit(row);
+    if (opened == null) return;
+    if (opened.isCommand) {
+      widget.onOpen?.call();
+      _run(opened);
+      return;
+    }
+    final entry = opened.entry;
+    if (entry == null) return;
+    if (entry.agent.isStopped) {
+      unawaited(_resumeThenOpen(opened.id, entry));
+      return;
+    }
+    _openAgent(entry);
   }
 
-  /// Opens the agent as a pager over the OTHER rows on screen.
+  /// Bring a stopped agent back, then open it — the desktop's
+  /// `_resumeStoppedDestination` followed by its activation.
   ///
-  /// The neighbours are the rows as drawn, not the Agents tab's list: swiping
-  /// walks exactly what the query returned, in the order the person was looking
-  /// at when they tapped. Handing it the unfiltered index instead would swipe
-  /// into agents the query had just excluded.
-  ///
-  /// ⚠️ [drawn] is the order ON SCREEN — for the grouped list, not the ranked
-  /// rows. Grouping pulls a folder's rows together, so the ranked list can hold
-  /// a different agent at any given index than the screen does.
-  void _open(List<PhoneSearchResult> drawn, PhoneSearchResult row) {
+  /// ⚠️ **Awaited before the terminal is pushed, not alongside it.** A stopped
+  /// agent has no terminal to attach to, so opening first would land on a screen
+  /// with nothing on it and no reason given. The row says `Stopped`, then spins,
+  /// then the terminal arrives.
+  Future<void> _resumeThenOpen(String id, AgentEntry entry) async {
+    setState(() => _resuming = id);
+    final error = await resumeAgentForOpen(widget.notifier, entry);
+    if (!mounted) return;
+    setState(() => _resuming = null);
+    if (error != null) {
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(SnackBar(content: Text(error)));
+      return;
+    }
+    // ⚠️ Re-read from the catalog rather than reusing `entry`. The resume
+    // replaced the agent in its machine's list (`_upsertAgent`), so the entry
+    // captured before the await names a terminal that is still the old one.
+    final resumed = widget.controller.rows
+        .where((row) => row.id == id)
+        .firstOrNull
+        ?.entry;
+    _openAgent(resumed ?? entry);
+  }
+
+  void _openAgent(AgentEntry entry) {
     widget.onOpen?.call();
-    final entry = row.entry;
-    if (entry == null || !entry.agent.terminalAvailable) return;
-    // ⚠️ Built from [phoneSearchAgentEntries] rather than by unwrapping each
-    // row here. A `?result.entry` collapse would silently SHORTEN this list if
-    // an agent row ever arrived without its entry, and the pager walks it by
-    // index — a shorter list than the one on screen sends a swipe to the wrong
-    // agent, with nothing on screen to explain why.
+    // The neighbours are the rows as drawn, not the Agents tab's list: swiping
+    // walks exactly what the query returned, in the order the person was
+    // looking at when they tapped.
     openAgentPager(
       context,
       widget.notifier,
-      phoneSearchAgentEntries(drawn),
+      phoneSearchAgentEntries(widget.controller.rows),
       entry,
     );
   }
+
+  void _run(PhoneDestination row) {
+    final id = row.commandId;
+    if (id == null) return;
+    for (final command in widget.controller.commands?.call() ??
+        const <PhoneCommand>[]) {
+      if (command.id != id) continue;
+      unawaited(Future.sync(command.run));
+      return;
+    }
+  }
 }
 
-/// The scrolling list both layouts share.
-class _ResultsList extends StatelessWidget {
-  const _ResultsList({required this.children});
-
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) => ListView(
-    // The keyboard is up and the finger is already on the glass; dragging the
-    // list is how somebody reaches a result without putting it away first.
-    keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-    padding: EdgeInsets.fromLTRB(
-      16,
-      0,
-      16,
-      MediaQuery.paddingOf(context).bottom + 16,
-    ),
-    children: children,
-  );
-}
+/// The agent rows among [rows], in the order they are drawn — what a pager
+/// opened from one of them swipes along.
+///
+/// ⚠️ **One entry out, one agent row in.** [PhoneDestination.entry] is null on
+/// every other kind, so unwrapping it at the call site invites a null-collapse
+/// that quietly drops a row. The pager walks this list BY INDEX against the rows
+/// on screen: a list one shorter than the one somebody tapped sends the next
+/// swipe to a different agent than the one beside it.
+List<AgentEntry> phoneSearchAgentEntries(List<PhoneDestination> rows) => [
+  for (final row in rows)
+    if (row.isAgent && row.entry != null) row.entry!,
+];

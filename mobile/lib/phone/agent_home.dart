@@ -444,7 +444,7 @@ class _AgentHomeState extends State<AgentHome> {
         AgentLoadStatus.needsLink => false,
       };
     });
-    return loadingAgents ? 'Loading your agents…' : null;
+    return loadingAgents ? 'Loading your harnesses…' : null;
   }
 
   /// The entry naming [agent], if it is in [entries] and can actually be opened.
@@ -903,7 +903,7 @@ class _AgentHomeEmpty extends StatelessWidget {
       backgroundColor: AppPalette.windowBg,
       floatingActionButton: PhoneFab(
         icon: LucideIcons.plus300,
-        tooltip: 'New agent',
+        tooltip: 'New Harness',
         // The first machine that can host one. Which machine is the form's first question, and it
         // is changed there.
         onPressed: () =>
@@ -915,15 +915,15 @@ class _AgentHomeEmpty extends StatelessWidget {
           children: [
             PhoneHeader(
               large: true,
-              title: 'Agents',
+              title: 'Harnesses',
               trailing: [PhoneSearchButton(notifier: notifier)],
             ),
             const Expanded(
               child: EmptyState(
                 icon: LucideIcons.squareTerminal300,
-                title: 'No agents yet',
+                title: 'No harnesses yet',
                 message:
-                    'Tap + to start one, or launch an agent from Harness on a '
+                    'Tap + to start one, or launch a harness from Harness on a '
                     'machine and it will appear here.',
               ),
             ),

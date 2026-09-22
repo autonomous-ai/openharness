@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/harness_catalog.dart';
 import '../core/models.dart';
@@ -932,6 +933,7 @@ class EngineMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     final identity = engineIdentity(engine, displayName: displayName);
     final mark = identity.asset != null
         ? Image.asset(
@@ -1001,6 +1003,7 @@ class _InitialMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     return SizedBox.square(
       dimension: size,
       child: Center(

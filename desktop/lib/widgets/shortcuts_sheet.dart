@@ -46,11 +46,7 @@ class _ShortcutsSheetState extends State<_ShortcutsSheet> {
               padding: const EdgeInsets.fromLTRB(18, 17, 18, 4),
               child: Text(
                 'Keyboard shortcuts',
-                style: TextStyle(
-                  color: grid.AppPalette.textPrimary,
-                  fontSize: 15,
-                  fontWeight: grid.AppFont.semibold,
-                ),
+                style: grid.AppType.heading(color: grid.AppPalette.textPrimary),
               ),
             ),
             Flexible(

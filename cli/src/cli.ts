@@ -72,6 +72,7 @@ import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, engineBin, enginePathOve
 import { isTerminalEngine, type AgentEngine } from './engines/types.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, commandSupportsFlagInInteractiveShell, namedAgentArgs, permissionModeFlags } from './lib/engineLaunch.js'
+import { workspaceMissing } from './lib/workspaceCheck.js'
 import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, gridEnvVarNames, type GridLaunchMachine, type GridWebSearchStatus } from './lib/gridLaunch.js'
 import { HERMES_SYSTEM_MANAGED_DIR } from './lib/gridWebMcp.js'
 import { writeGridConfigDir } from './lib/gridConfigDir.js'
@@ -100,6 +101,7 @@ import { preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.j
 import { materializeWorkspace } from './dsh/materialize.js'
 import { dshLaunch } from './dsh/launch.js'
 import { DshViewerManager } from './dsh/viewer.js'
+import { ViewerLedger } from './dsh/viewerLedger.js'
 import { DshVerdictWatcher, type DshVerdict } from './dsh/verdict.js'
 import { dshCommand, dshUsage } from './dsh/command.js'
 import type { AgentDshContext } from './lib/agentFrame.js'
@@ -150,7 +152,7 @@ import { RemoteRelayPool } from './lib/remoteRelay.js'
 import { TERMINAL_BINARY_VERSION } from './lib/terminalBinary.js'
 import { foldTranscript, lastTurnTextFromRawLines, lineToEvents, newTurnState, type LiveEvent, type TurnState } from './lib/normalize.js'
 import { AskQuestionController, pollsQuestions, QuestionWatcher } from './lib/askQuestion.js'
-import { CommanderMirror, type CommanderMirrorOpts } from './lib/commander.js'
+import { CommanderMirror, SUBAGENT_IDLE_MS, type CommanderMirrorOpts } from './lib/commander.js'
 import {
   setSummaryPoolDeviceConnected,
   shutdownSummaryPool,
@@ -336,6 +338,7 @@ Machine:
   harness login                sign in with SSO and save this computer's session
   harness login --force        stop the daemon and sign in with a different SSO account
   harness login --json         emit machine-readable NDJSON instead of opening a browser (for GUI clients)
+  harness login --entry-point=desktop   record which surface started the sign-in (GUI clients; default cli)
   harness auth status --json   print {loggedIn,...} for this computer's saved session
   harness start                start the adapter using the saved SSO session
   harness start -f             run the adapter in the FOREGROUND (for a supervisor; logs to stdout)
@@ -642,9 +645,12 @@ async function loginCommand(
   foreground: boolean,
   force: boolean,
   json: boolean,
-  opts: { chained?: boolean } = {},
+  opts: { chained?: boolean; entryPoint?: string } = {},
 ): Promise<SignInOutcome> {
   if (foreground) throw new Error('`harness login` does not run the adapter. Use `harness start -f`.')
+  // Which surface asked to sign in. A person in a terminal is `cli`; the desktop app runs this same
+  // command and says so with `--entry-point=desktop`. Analytics only — it names no privilege.
+  const entryPoint = opts.entryPoint ?? 'cli'
   const emit = (line: Record<string, unknown>): void => { if (json) console.log(JSON.stringify(line)) }
   const succeed = async (alreadySignedIn: boolean, installing?: Promise<GridInstallResult>): Promise<SignInOutcome> => {
     // `chained` is `harness grid login`, which runs the hand-off itself and reports it as its own
@@ -685,7 +691,7 @@ async function loginCommand(
     }
     return await succeed(true)
   }
-  if (!force) return await browserSignIn(json, emit, () => succeed(false))
+  if (!force) return await browserSignIn(json, emit, () => succeed(false), entryPoint)
   // A forced login may intentionally switch SSO accounts. The old daemon must not keep streaming
   // under its existing socket while this process replaces the durable session — and no NEW daemon
   // may come up on the old session in the meantime. The desktop app re-runs `harness start` whenever
@@ -705,7 +711,7 @@ async function loginCommand(
   try {
     return await withSpawnLock('login', async () => {
       await stopDaemonProcess()
-      return await browserSignIn(json, emit, () => succeed(false, installing))
+      return await browserSignIn(json, emit, () => succeed(false, installing), entryPoint)
     }, {
       onWaiting: (owner) => console.error(`  the daemon is ${describeSpawnLockOwner(owner)} — waiting for it to finish…`),
     })
@@ -738,6 +744,7 @@ async function browserSignIn(
   json: boolean,
   emit: (line: Record<string, unknown>) => void,
   succeed: () => Promise<SignInOutcome>,
+  entryPoint: string,
 ): Promise<SignInOutcome> {
   const callback = createServer()
   await new Promise<void>((resolve, reject) => {
@@ -755,6 +762,7 @@ async function browserSignIn(
       start = await postJson<{ authorizeUrl?: string; tx?: string }>('/api/auth/authorize-native', {
         redirectUri,
         autonomousEnv: env.AUTONOMOUS_ENV,
+        entryPoint,
       })
       if (!start.authorizeUrl || !start.tx) throw new Error('Backend did not return an SSO authorize URL')
     } catch (err) {
@@ -1601,6 +1609,11 @@ async function runForeground(session: AuthSession): Promise<void> {
     const session = registry.byAgent(agentId)
     if (session && registry.terminalAvailable(agentId)) syncSession(session)
   }
+  // Viewers an earlier daemon started and never stopped (crash, force quit, SIGKILL) are still running
+  // and still polling; stop them BEFORE this daemon starts its own, or they accumulate a generation per
+  // restart. Only pids whose live start time matches what that daemon recorded are touched.
+  const viewerLedger = new ViewerLedger({ log: (line) => console.log(line) })
+  viewerLedger.reapOrphans()
   const dshViewers = new DshViewerManager({
     onUrl: (agentId, url) => {
       dshFrameFor(agentId).viewerUrl = url
@@ -1608,6 +1621,7 @@ async function runForeground(session: AuthSession): Promise<void> {
       syncCompanion(agentId)
     },
     log: (line) => console.log(line),
+    ledger: viewerLedger,
   })
   const dshVerdicts = new DshVerdictWatcher({
     onChange: (agentId, verdict) => {
@@ -2375,6 +2389,25 @@ async function runForeground(session: AuthSession): Promise<void> {
     ...summarizer,
     nameFor: (sessionId) => { const s = registry.bySession(sessionId); return s ? projectDisplayName(s) : undefined },
     agentIdFor: (sessionId) => registry.bySession(sessionId)?.agentId,
+    // An Orchestrator specialist's turn end, or the Director's while specialists are still out, is not
+    // announced: the person asked to hear from the main agent once, not from every sub-agent.
+    isSubagent: (sessionId) => {
+      const agentId = registry.bySession(sessionId)?.agentId
+      if (!agentId) return false
+      const role = backend.orchestratorRoleOf(agentId)
+      return role?.role === 'worker' || (role?.role === 'director' && role.busy)
+    },
+    // A claude sub-agent still at work is one whose transcript is still growing:
+    // `<session>/subagents/agent-<id>.jsonl` beside the parent's (the same file enrichSubagentStats
+    // reads). Written in the last SUBAGENT_IDLE_MS = alive; the held turn end waits for it.
+    subagentActive: (sessionId, agentId) => {
+      const transcriptPath = registry.bySession(sessionId)?.transcriptPath
+      if (!transcriptPath) return false
+      try {
+        const at = statSync(join(transcriptPath.replace(/\.jsonl$/, ''), 'subagents', `agent-${agentId}.jsonl`)).mtimeMs
+        return Date.now() - at < SUBAGENT_IDLE_MS
+      } catch { return false }
+    },
     readLastTurn: async (sessionId) => {
       const s = registry.bySession(sessionId)
       if (!s) return null
@@ -3783,6 +3816,10 @@ async function runForeground(session: AuthSession): Promise<void> {
     backend,
     relayPool,
     autonomousEnv: readAuthSession()?.autonomousEnv ?? session.autonomousEnv,
+    // A window from before it introduced itself still gets named on the far side's "took control"
+    // banner: the relay knows it is this machine's desktop. Same source as `describeClient` above.
+    // Cut to the wire's limit here rather than let the far daemon drop the whole claim over a long name.
+    localClient: () => ({ kind: 'desktop', name: terminalHintMachineName().slice(0, 64), machineId: backend.machineId }),
   })
   // Install both CLI hooks with the port the local server actually bound.
   if (!env.DISABLE_HOOK_INSTALL) {
@@ -4019,6 +4056,10 @@ async function runForeground(session: AuthSession): Promise<void> {
         return inventory.ok && inventory.panes.some((pane) => pane.tmuxPane === runtime.paneId)
       },
       buildLaunch: async (entry, opts) => {
+        // A folder that went away with the reboot (an unmounted volume, a workspace deleted while the
+        // daemon was down) is a named failure on the tile, not a pane that prints an error and exits.
+        const missing = workspaceMissing(entry.cwd)
+        if (missing) return { error: missing.error, detail: missing.detail }
         // Mirrors `agent_create`: the same grid env/argv (and the same vendor variables cleared), or
         // the same Codex profile with its hooks installed; the install check runs inside the pane's
         // own shell.
@@ -4736,6 +4777,10 @@ async function runForeground(session: AuthSession): Promise<void> {
         detail: 'the sqlite3 CLI is not on PATH, and a resumed opencode session keeps its model unless its store is rewritten — install sqlite3 and retry',
       }
     }
+    // The replacement enters the row's folder before it execs: a folder that is gone is refused here,
+    // with the other refusals, before the pane is touched or its control taken.
+    const missing = workspaceMissing(session.cwd)
+    if (missing) return missing
     // Mid-turn is the one state where restarting costs real work: the conversation comes back but
     // whatever the engine was doing does not. The app is told which agents these are so the user can
     // move them once they are done, rather than being asked to choose between losing a turn and losing
@@ -4897,6 +4942,10 @@ async function runForeground(session: AuthSession): Promise<void> {
     const current = () => operationCurrent() && sameRestartTarget(target)
     const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The agent changed or stopped during restart.' } as const
     if (!current()) return changed
+    // Both branches below `cd` into the row's folder before they exec, and both have already killed
+    // (or respawned over) the old process by the time that `cd` fails. Ask first, over a live agent.
+    const missing = workspaceMissing(session.cwd)
+    if (missing) return missing
     const pane = session.tmuxPane
     const engine = session.engine
     const runtime: TmuxRuntimeRef = { backend: 'tmux', paneId: pane }
@@ -5312,8 +5361,11 @@ async function runForeground(session: AuthSession): Promise<void> {
     // Both of these are LOCAL-ONLY on purpose (backend.sendLocal, not backend.send): they describe a hand
     // at this desk, not a change in what the machine is doing, and the cloud web audience may be sitting
     // at another computer entirely.
-    // A notification tap, which asks for a tile of its OWN — see CableHost.openAgent.
-    opened: (machineId, agentId) => backend.sendLocal({ type: 'dial_open', payload: { machineId, agentId } }),
+    // A notification tap, which asks for a tile of its OWN — see CableHost.openAgent. `reason` rides
+    // along only when the dial gave one ('question'): the window then brings the agent forward rather
+    // than opening a tab, and an older window that does not know the field opens one as before.
+    opened: (machineId, agentId, reason) =>
+      backend.sendLocal({ type: 'dial_open', payload: { machineId, agentId, ...(reason ? { reason } : {}) } }),
     forked: (machineId, agentId, sourceAgentId) => backend.sendLocal({ type: 'dial_forked', payload: { machineId, agentId, sourceAgentId } }),
     // The dial's Fork: the same path the window's `agent_fork` takes, then `forked` above lands on it.
     forkAgent: async (agentId) => {
@@ -5406,10 +5458,10 @@ async function runForeground(session: AuthSession): Promise<void> {
     if (event.kind === 'processing') void cable.turnStarted(event.agentId, event.text)
     else if (event.kind === 'done') void cable.turnDone(event.agentId)
     else if (event.kind === 'summary') {
-      // Quiet when the window already has this agent on screen. The tile still
-      // updates — the recap is what it draws — only the beep and the drawer
-      // entry are withheld, because they exist for a turn nobody is watching.
-      void cable.summary(event.agentId, event.recap || event.text, event.text, openPaneAgents.has(event.agentId))
+      // Quiet when the window already has this agent on screen; silent when the
+      // turn was a sub-agent's. The tile still updates — the recap is what it
+      // draws — only the beep and the drawer entry are withheld.
+      void cable.summary(event.agentId, event.recap || event.text, event.text, openPaneAgents.has(event.agentId), event.subagent)
     }
     else void cable.turnError(event.agentId, event.text)
   }
@@ -5432,10 +5484,11 @@ async function runForeground(session: AuthSession): Promise<void> {
     if (event.kind === 'processing') void cable.turnStarted(event.agentId, event.text)
     else if (event.kind === 'done') void cable.turnDone(event.agentId)
     else if (event.kind === 'summary') {
-      // Quiet when the window already has this agent on screen. The tile still
+      // Quiet when the window already has this agent on screen; silent when the
+      // turn was a sub-agent's (decided on its own machine). The tile still
       // updates — the recap is what it draws — only the beep and the drawer
-      // entry are withheld, because they exist for a turn nobody is watching.
-      void cable.summary(event.agentId, event.recap || event.text, event.text, openPaneAgents.has(event.agentId))
+      // entry are withheld.
+      void cable.summary(event.agentId, event.recap || event.text, event.text, openPaneAgents.has(event.agentId), event.subagent === true)
     }
     else void cable.turnError(event.agentId, event.text)
   })
@@ -6328,6 +6381,10 @@ const [, , cmd, ...rest] = process.argv
 const flags = rest.filter((a) => a.startsWith('-'))
 const args = rest.filter((a) => !a.startsWith('-'))
 const foreground = flags.includes('--foreground') || flags.includes('-f')
+/** `--entry-point=<key>`: one token, so a build of this CLI that predates the flag drops it with
+ *  every other unknown flag instead of mistaking `<key>` for a subcommand word. */
+const entryPointFlag = (): string | undefined =>
+  flags.find((f) => f.startsWith('--entry-point='))?.slice('--entry-point='.length) || undefined
 const repair = flags.includes('--repair')
 
 /** `argv` with the first occurrence of `token` removed, order otherwise untouched — how a subcommand
@@ -6354,7 +6411,7 @@ switch (cmd) {
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login':
-    loginCommand(foreground, flags.includes('--force'), flags.includes('--json')).catch(onError)
+    loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), { entryPoint: entryPointFlag() }).catch(onError)
     break
   case 'auth':
     if (args[0] !== 'status') { console.error('Unknown command: auth ' + (args[0] ?? '')); usage(1) }

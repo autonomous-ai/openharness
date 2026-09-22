@@ -138,6 +138,15 @@ export function runDshCommand(script: string, opts: DshCommandOptions): Promise<
 export function killProcessGroup(child: ChildProcess, graceMs = 3_000): void {
   const pid = child.pid
   if (!pid) return
+  const timer = killPidGroup(pid, graceMs)
+  child.once('exit', () => clearTimeout(timer))
+}
+
+/** The same, for a group this process did not spawn (a viewer left over from an earlier daemon —
+ *  see viewerLedger.ts): nothing to wait on, so the SIGKILL follow-up fires unconditionally. */
+export function killPidGroup(pid: number, graceMs = 3_000): NodeJS.Timeout {
+  // pid 1 would make `-pid` "every process in my session"; nothing this daemon reaps is init.
+  if (!Number.isInteger(pid) || pid <= 1) return setTimeout(() => {}, 0)
   const signalGroup = (signal: NodeJS.Signals): void => {
     try { process.kill(-pid, signal) } catch { /* already gone */ }
     try { process.kill(pid, signal) } catch { /* already gone */ }
@@ -145,5 +154,5 @@ export function killProcessGroup(child: ChildProcess, graceMs = 3_000): void {
   signalGroup('SIGTERM')
   const timer = setTimeout(() => signalGroup('SIGKILL'), graceMs)
   timer.unref?.()
-  child.once('exit', () => clearTimeout(timer))
+  return timer
 }

@@ -10,6 +10,7 @@ import 'package:harness_mobile/terminal/terminal_session.dart'
     show TerminalSessionStatus;
 
 import 'agent_pane_prune.dart';
+import 'phone_search_catalog.dart' show phoneAgentId;
 import 'agent_swipe_list.dart';
 import 'terminal_page.dart';
 import 'voice_input_controller.dart';
@@ -167,6 +168,19 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
         widget.notifier.api.transcribeVoice(wav, lang: lang),
   );
 
+  /// Tell the search this agent was reached.
+  ///
+  /// ⚠️ **Landing on an agent is the event, not searching for one.** The desktop
+  /// records every pane it focuses, however you got there, and ranks its box off
+  /// that — so within a day its list is "the agents you actually work in". The
+  /// phone's first port only recorded agents opened THROUGH the search, which
+  /// meant the history stayed nearly empty no matter how much the app was used,
+  /// and the box kept falling through to its last-resort ordering. A swipe
+  /// between agents is this app's focus change; this is where it belongs.
+  void _rememberVisit(AgentRef agent) => widget.notifier.searchHistory.remember(
+    phoneAgentId(agent.machineId, agent.agentId),
+  );
+
   @override
   void initState() {
     super.initState();
@@ -178,6 +192,7 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
     _attached.add(_current);
     // What a relaunch reopens — kept up to date on every swipe, and cleared only by leaving.
     widget.notifier.lastOpenedAgent.remember(_current);
+    _rememberVisit(_current);
     final neighbours = widget.neighbours;
     if (neighbours == null || neighbours.isEmpty) return;
     // The snapshot is fixed for as long as this pager lives, so the opening page is the only index
@@ -359,6 +374,7 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
     // and finds none.
     _attached.add(arrived);
     widget.notifier.lastOpenedAgent.remember(arrived);
+    _rememberVisit(arrived);
     // ⚠️ A second dismissal, and not a redundant one. The [ScrollStartNotification] above catches
     // the finger, which is the usual way here and the one that matters for how it looks — but a page
     // reached any other way never raised that notification, and the incoming terminal would claim

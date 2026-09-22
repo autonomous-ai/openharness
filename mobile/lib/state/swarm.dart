@@ -8,10 +8,27 @@ import 'terminal_pane.dart';
 /// Shared agents reuse the same pane/session across swarms, so the daemon has
 /// exactly one controller and switching tabs cannot take over our own stream.
 class Swarm {
-  Swarm({required this.id, String name = 'New Harness'})
-    : name = const {'New swarm', 'New tab', 'New Agent'}.contains(name)
-          ? 'New Harness'
+  Swarm({required this.id, String name = defaultName})
+    : name = const {
+            'New swarm',
+            'New tab',
+            'New Tab',
+            'New Harness',
+            'New Agent',
+          }.contains(name)
+          ? defaultName
           : name;
+
+  /// What an untouched tab is called, and the desktop's own word for it
+  /// (`desktop/lib/state/swarm.dart`).
+  ///
+  /// ⚠️ **"New Harness" is in the legacy set above, not here, and the two are
+  /// not the same thing.** A *harness* is one agent — what the desktop's menus
+  /// stop, fork and rename. A *tab* is the box several of them sit in. The
+  /// default was 'New Harness' until 2026-09-15, which read as though opening a
+  /// tab opened an agent; a layout saved then still carries the name, and it
+  /// has to come back as the same fresh tab.
+  static const defaultName = 'Untitled Tab';
 
   final String id;
   String name;
@@ -28,7 +45,7 @@ class Swarm {
   final Map<int, int> pinnedSlots = {};
 
   bool get isEmptyStarter =>
-      name == 'New Harness' && panes.isEmpty && presets.isEmpty;
+      name == defaultName && panes.isEmpty && presets.isEmpty;
 
   PaneArrangement? get manualLayout => paneSizes['${panes.length}:manual'];
 
@@ -183,7 +200,7 @@ class ClosedSwarm extends ClosedWork {
 
   bool replacesUntouchedWelcome(Swarm swarm) =>
       swarm.id == replacementId &&
-      swarm.name == 'New Harness' &&
+      swarm.name == Swarm.defaultName &&
       swarm.panes.isEmpty &&
       swarm.presets.isEmpty;
 }

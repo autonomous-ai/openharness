@@ -83,13 +83,13 @@ class _Body extends StatelessWidget {
         : [
             _StatCard(
               icon: LucideIcons.bot300,
-              label: 'Agents spawned',
+              label: 'Harnesses spawned',
               value: formatStatCount(summary.agentsSpawned),
             ),
             const SizedBox(height: kStatCardGap),
             _StatCard(
               icon: LucideIcons.clock300,
-              label: 'Time agents worked',
+              label: 'Time harnesses worked',
               value: formatWorkedTime(summary.timeWorked),
             ),
             const SizedBox(height: kStatCardGap),
@@ -210,7 +210,7 @@ class _EmptyState extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'Start your first agent and this page begins counting.',
+            'Start your first harness and this page begins counting.',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: AppPalette.textSecondary,

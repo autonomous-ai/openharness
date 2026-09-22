@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:ui' show FontFeature, ImageFilter;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -125,7 +125,6 @@ abstract final class _D {
   static const fieldInk = Color(0xFFF4F4F6);
   static const hint = Color(0xFF6E6E76);
   static const caret = Color(0xFFE6E6EA);
-  static const fieldSize = 22.0;
 
   /// The rows.
   static const sep = Color(0x14FFFFFF); // rgba(255,255,255,.08)
@@ -577,17 +576,11 @@ class _TaskPaletteState extends State<_TaskPalette> {
             // Read-only rather than disabled while the router thinks: a disabled field drops the focus,
             // and the focus is what Esc is listening on.
             readOnly: working || _stage == _Stage.sent,
-            style: const TextStyle(
-              color: _D.fieldInk,
-              fontSize: _D.fieldSize,
-              height: 1.35,
-              letterSpacing: -0.22, // -.01em at 22px
-            ),
+            style: grid.AppType.mono(color: _D.fieldInk, height: 1.35),
             cursorColor: _D.caret,
             cursorWidth: 2,
-            cursorHeight: _D.fieldSize * 1.05,
             cursorRadius: Radius.zero,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               filled: false,
               isDense: true,
               isCollapsed: true,
@@ -598,11 +591,7 @@ class _TaskPaletteState extends State<_TaskPalette> {
               focusedBorder: InputBorder.none,
               disabledBorder: InputBorder.none,
               hintText: 'Describe the work…',
-              hintStyle: TextStyle(
-                color: _D.hint,
-                fontSize: _D.fieldSize,
-                height: 1.35,
-              ),
+              hintStyle: grid.AppType.mono(color: _D.hint, height: 1.35),
             ),
           ),
         ),
@@ -634,11 +623,7 @@ class _TaskPaletteState extends State<_TaskPalette> {
               child: Center(
                 child: Text(
                   '${_elapsed}s',
-                  style: const TextStyle(
-                    color: _D.hint,
-                    fontSize: 11.5,
-                    fontFeatures: [FontFeature.tabularFigures()],
-                  ),
+                  style: grid.AppType.monoMeta(color: _D.hint),
                 ),
               ),
             ),
@@ -660,9 +645,9 @@ class _TaskPaletteState extends State<_TaskPalette> {
             padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
             child: Text(
               _note,
-              style: const TextStyle(
+              style: grid.AppType.monoLabel(
+                fontWeight: FontWeight.w400,
                 color: _D.questionInk,
-                fontSize: 12,
                 height: 1.45,
               ),
             ),
@@ -674,20 +659,13 @@ class _TaskPaletteState extends State<_TaskPalette> {
         // it replaces: the eye is already on the row, and a lit row answers "who" as well as "done".
         final taker = _named(_committed);
         return _panel([
-          const Padding(
+          Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 6),
             child: Row(
               children: [
                 Icon(Icons.check, size: 14, color: _D.green),
                 SizedBox(width: 8),
-                Text(
-                  'on it',
-                  style: TextStyle(
-                    color: _D.green,
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
+                Text('on it', style: grid.AppType.monoLabel(color: _D.green)),
               ],
             ),
           ),
@@ -750,12 +728,12 @@ class _TaskPaletteState extends State<_TaskPalette> {
     final reason = (answer?.reason ?? '').trim();
     final weighed = answer?.weighed ?? 0;
     final machines = answer?.machines ?? 0;
-    const base = TextStyle(color: _D.questionInk, fontSize: 12, height: 1.45);
-    const mark = TextStyle(
-      color: _D.questionMark,
-      fontSize: 12,
-      fontWeight: FontWeight.w500,
+    final base = grid.AppType.monoLabel(
+      fontWeight: FontWeight.w400,
+      color: _D.questionInk,
+      height: 1.45,
     );
+    final mark = grid.AppType.monoLabel(color: _D.questionMark);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
       child: Column(
@@ -795,9 +773,8 @@ class _TaskPaletteState extends State<_TaskPalette> {
                 '“$reason”',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: grid.AppType.monoMeta(
                   color: _D.machineDim,
-                  fontSize: 11.5,
                   fontStyle: FontStyle.italic,
                 ),
               ),
@@ -862,10 +839,8 @@ class _TaskPaletteState extends State<_TaskPalette> {
                 candidate.name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
+                style: grid.AppType.monoLabel(
                   color: taken ? const Color(0xFFDFFBE9) : _D.engineInk,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
                 ),
               ),
             ),
@@ -876,9 +851,8 @@ class _TaskPaletteState extends State<_TaskPalette> {
                 candidate.machine,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
+                style: grid.AppType.monoMeta(
                   color: taken ? const Color(0xFF9FD9B6) : _D.machineInk,
-                  fontSize: 12.5,
                 ),
               ),
             ),
@@ -888,10 +862,8 @@ class _TaskPaletteState extends State<_TaskPalette> {
                 candidate.recent,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
+                style: grid.AppType.monoMeta(
                   color: taken ? const Color(0xFFDFFBE9) : _D.nameInk,
-                  fontFamily: grid.AppFont.mono,
-                  fontSize: 13,
                 ),
               ),
             ),
@@ -903,11 +875,8 @@ class _TaskPaletteState extends State<_TaskPalette> {
               child: Text(
                 fit > 0 ? fit.toStringAsFixed(2) : '',
                 textAlign: TextAlign.right,
-                style: TextStyle(
+                style: grid.AppType.monoMeta(
                   color: leader || taken ? _D.green : _D.lowFit,
-                  fontFamily: grid.AppFont.mono,
-                  fontSize: 12,
-                  fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
             ),

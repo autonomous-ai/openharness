@@ -62,11 +62,9 @@ class _DebugLogTileState extends State<DebugLogTile> {
                           entry.message,
                           maxLines: 3,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 12.5,
+                          style: AppType.monoLabel(
+                            fontWeight: AppFont.regular,
                             height: 1.35,
-                            fontFamily: AppFont.mono,
-                            fontFamilyFallback: AppFont.monoFallback,
                             color: AppPalette.textPrimary,
                           ),
                         ),
@@ -95,11 +93,9 @@ class _DebugLogTileState extends State<DebugLogTile> {
                         entry.error!,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
+                        style: AppType.monoLabel(
+                          fontWeight: AppFont.regular,
                           height: 1.35,
-                          fontFamily: AppFont.mono,
-                          fontFamilyFallback: AppFont.monoFallback,
                           color: debugDangerInk(context),
                         ),
                       ),
@@ -172,12 +168,7 @@ class _Meta extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final style = TextStyle(
-      fontSize: 11,
-      fontFamily: AppFont.mono,
-      fontFamilyFallback: AppFont.monoFallback,
-      color: AppPalette.textFaint,
-    );
+    final style = AppType.monoMeta(color: AppPalette.textFaint);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [

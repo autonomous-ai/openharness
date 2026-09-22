@@ -126,6 +126,9 @@ void main() {
         addTearDown(map.dispose);
         await configured.mount(tester, app, map);
         await key(tester, entry, cmd: true);
+        if (entry == LogicalKeyboardKey.keyT) {
+          await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+        }
         final tabs = app.swarms.length;
         final input = find.byKey(const ValueKey('swarm-search-input'));
         final field = tester.widget<TextField>(input);

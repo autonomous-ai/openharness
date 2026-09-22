@@ -63,6 +63,15 @@ export function projectFolderName(label: string, at: Date, withSeconds = false):
   return `${slug}-${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}-${time}`
 }
 
+/** `claude-0922-1136`: the harness and the local time, short enough to read as a branch. The
+ *  worktree's folder is named the same and nobody needs to see it. Mirrors `worktreeName` in
+ *  desktop/lib/core/git_worktree.dart. */
+export function worktreeName(label: string, at: Date): string {
+  const slug = label.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+    .slice(0, 40).replace(/-+$/, '') || 'harness'
+  return `${slug}-${pad(at.getMonth() + 1)}${pad(at.getDate())}-${pad(at.getHours())}${pad(at.getMinutes())}`
+}
+
 /** The folder for a project somebody named: their words with spaces as dashes and nothing a path or
  *  a shell reads specially. Null when nothing usable is left. Mirrors `projectFolderSlug` in
  *  desktop/lib/core/project_folder.dart. */

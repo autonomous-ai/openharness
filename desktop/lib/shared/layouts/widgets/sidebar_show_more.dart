@@ -146,14 +146,7 @@ class _SidebarShowMoreState extends State<SidebarShowMore> {
                   color: hot ? AppSurface.hoverFill : Colors.transparent,
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Text(
-                  'Show more',
-                  style: TextStyle(
-                    color: ink,
-                    fontSize: 12.5,
-                    fontWeight: AppFont.medium,
-                  ),
-                ),
+                child: Text('Show more', style: AppType.label(color: ink)),
               ),
             ),
           ),

@@ -115,7 +115,7 @@ class _DebugSectionState extends State<DebugSection> {
                     const SizedBox(height: 10),
                     TextField(
                       controller: _search,
-                      style: const TextStyle(fontSize: 13),
+                      style: kFieldTextStyle,
                       decoration:
                           labeledFieldDecoration(
                             'Search messages, categories, errors',

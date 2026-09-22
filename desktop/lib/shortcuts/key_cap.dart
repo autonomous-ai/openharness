@@ -62,9 +62,8 @@ class KeyCap extends StatelessWidget {
               )
             : Text(
                 label,
-                style: TextStyle(
+                style: grid.AppType.monoMeta(
                   color: grid.AppPalette.textPrimary,
-                  fontSize: 11.5,
                   height: 1,
                   // Tabular so ⌘1 – ⌘9 and ⌘W keep the same cap width.
                   fontFeatures: const [FontFeature.tabularFigures()],
@@ -100,10 +99,7 @@ class KeyChordView extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 2),
               child: Text(
                 'or',
-                style: TextStyle(
-                  color: grid.AppPalette.textFaint,
-                  fontSize: 10.5,
-                ),
+                style: grid.AppType.caption(color: grid.AppPalette.textFaint),
               ),
             ),
           for (final key in chords[i]) KeyCap(key),

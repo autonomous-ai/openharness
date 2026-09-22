@@ -1,4 +1,4 @@
-// Five tiles and up: the grid.
+// Six tiles and up: the automatic grid.
 //
 // The shape is not ceil(sqrt(n)) — it is "as many columns as the WIDTH can
 // carry at 40 usable terminal columns", because a tile narrower than that shows
@@ -39,6 +39,10 @@ Future<void> _pump(WidgetTester tester, int n, Size size) async {
   await tester.pump();
 }
 
+bool hasScrollableContent(WidgetTester tester) => tester
+    .stateList<ScrollableState>(find.byType(Scrollable))
+    .any((state) => state.position.maxScrollExtent > 0);
+
 void main() {
   test('machine starters can contain more than nine agents', () {
     expect(PaneLayoutStore.maxPanes, 9);
@@ -65,20 +69,19 @@ void main() {
       // beat nine unusable ones in view.
       await _pump(tester, 9, const Size(1750, 420));
       expect(tester.takeException(), isNull);
-      expect(find.byType(SingleChildScrollView), findsWidgets);
+      expect(hasScrollableContent(tester), isTrue);
     },
   );
 
   testWidgets('a window with the room does not scroll', (tester) async {
     await _pump(tester, 6, const Size(1750, 900));
-    expect(find.byType(SingleChildScrollView), findsNothing);
+    expect(hasScrollableContent(tester), isFalse);
   });
 
   testWidgets('four tiles keep the shape they were tuned to', (tester) async {
-    // 2×2, not a lattice. Three tiles are two over one with the bottom SPANNING,
-    // and no uniform grid can say that — so the hand-tuned shapes stay.
+    // Four panes keep equal quadrants as the defaults on either side change.
     await _pump(tester, 4, const Size(1750, 900));
     expect(tester.takeException(), isNull);
-    expect(find.byType(SingleChildScrollView), findsNothing);
+    expect(hasScrollableContent(tester), isFalse);
   });
 }

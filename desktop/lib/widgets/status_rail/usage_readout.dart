@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:harness/terminal/terminal_text.dart';
 
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/widgets/skeleton.dart';
@@ -107,10 +108,8 @@ class _ProviderFigures extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = TextStyle(
-      color: grid.AppPalette.textSecondary,
-      fontSize: 11.5,
-    );
+    TerminalFontScope.watch(context);
+    final style = terminalTextStyle(color: grid.AppPalette.textSecondary);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -151,6 +150,7 @@ class _AccountFigure extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
     // ⚠️ ONE window, not every window this account reports — see
     // [ProviderUsage.railWindow]. Claude answers with three and Codex with one,
     // so printing them all made one account three figures wide and the other
@@ -224,17 +224,20 @@ class _UsageSkeleton extends StatelessWidget {
   const _UsageSkeleton();
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(
-      horizontal: RailHoverTarget.gap,
-      vertical: 4,
-    ),
-    child: SkeletonText(
-      // Measured against what lands here — one figure per account, an engine
-      // mark and a countdown each. A placeholder wider than its answer is the
-      // jump a skeleton exists to prevent, in the other direction.
-      style: TextStyle(fontSize: 11.5, fontWeight: grid.AppFont.medium),
-      width: 84,
-    ),
-  );
+  Widget build(BuildContext context) {
+    TerminalFontScope.watch(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: RailHoverTarget.gap,
+        vertical: 4,
+      ),
+      child: SkeletonText(
+        // Measured against what lands here — one figure per account, an engine
+        // mark and a countdown each. A placeholder wider than its answer is the
+        // jump a skeleton exists to prevent, in the other direction.
+        style: terminalTextStyle(fontWeight: grid.AppFont.medium),
+        width: 84,
+      ),
+    );
+  }
 }

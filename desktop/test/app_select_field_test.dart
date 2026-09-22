@@ -200,8 +200,8 @@ void main() {
     // 1. the tick, 2. the heavier label. (3. the accent wash is painted by an
     // `Ink` and is checked by eye, not here.)
     expect(find.byIcon(LucideIcons.check300), findsOneWidget);
-    expect(labelIn('Menlo').style?.fontWeight, grid.AppFont.semibold);
-    expect(labelIn('Helvetica Neue').style?.fontWeight, grid.AppFont.medium);
+    expect(labelIn('Menlo').style?.fontWeight, grid.AppFont.medium);
+    expect(labelIn('Helvetica Neue').style?.fontWeight, grid.AppFont.regular);
   });
 
   testWidgets('a note reads as an aside, not as part of the name', (
@@ -239,7 +239,7 @@ void main() {
       find.descendant(of: row, matching: find.text('System')),
     );
     expect(note.style?.color, isNot(label.style?.color));
-    expect(note.style!.fontSize!, lessThan(label.style!.fontSize!));
+    expect(note.style!.fontSize!, equals(label.style!.fontSize!));
   });
 
   testWidgets('a row mark gets its own slot, so labels never shift', (
@@ -335,8 +335,7 @@ void main() {
   testWidgets('the picker uses the roomy row, a context menu keeps compact', (
     tester,
   ) async {
-    // Two sizes exist on purpose (see AppMenuRowMetrics). This is the line
-    // between them: a picker's list is read down, a ⋯ menu is glanced at.
+    // Both variants use the terminal font; only spacing and icon size differ.
     await tester.pumpWidget(
       _host(
         Column(
@@ -369,7 +368,7 @@ void main() {
     expect(pickerRow.metrics, AppMenuRowMetrics.roomy);
     expect(
       AppMenuRowMetrics.roomy.fontSize,
-      greaterThan(AppMenuRowMetrics.compact.fontSize),
+      equals(AppMenuRowMetrics.compact.fontSize),
     );
     expect(
       AppMenuRowMetrics.roomy.iconSize,

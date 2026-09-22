@@ -28,7 +28,7 @@ class DebugToolbar extends StatelessWidget {
         Expanded(
           child: Text(
             '$total ${total == 1 ? 'entry' : 'entries'}',
-            style: TextStyle(fontSize: 12.5, color: AppPalette.textSecondary),
+            style: AppType.body(color: AppPalette.textSecondary),
           ),
         ),
         const _ExportLogsPill(),
@@ -133,14 +133,7 @@ class DebugPillLabel extends StatelessWidget {
       children: [
         Icon(icon, size: 13, color: ink),
         const SizedBox(width: 6),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: AppFont.medium,
-            color: ink,
-          ),
-        ),
+        Text(label, style: AppType.label(color: ink)),
       ],
     );
   }

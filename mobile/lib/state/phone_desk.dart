@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -20,9 +21,10 @@ import 'desk_sync.dart';
 /// attaches the agents either side of the one on screen ahead of a swipe. A
 /// projection of THAT would add every agent a thumb passes to whatever tab the
 /// phone happened to be in, on every computer the person owns. So nothing here
-/// is derived from `swarms`: the tabs are read, and the only writes are the two
-/// a person makes by hand on the phone — [adopt] for an agent created here, and
-/// [drop] for one deleted here.
+/// is derived from `swarms`: the tabs are read, and every write is one a person
+/// made by hand on the phone — [adopt] for an agent created here, [drop] for one
+/// deleted here, and [createTabFor]/[addToTab] for the two `+`s on the tabs
+/// panel.
 ///
 /// What is NOT on the desk stays per device, as it does on a window: which tab
 /// is open ([activeTabId]) is this phone's own, and so is the agent within it.
@@ -196,7 +198,7 @@ class PhoneDesk {
     onChanged();
   }
 
-  // ── the two writes a phone makes ─────────────────────────────────────────
+  // ── the writes a phone makes ─────────────────────────────────────────────
 
   /// An agent created ON THIS PHONE joins the tab the phone is in, the way one
   /// created in a window joins that window's tab.
@@ -206,9 +208,100 @@ class PhoneDesk {
   /// reachable here through search. Nothing to do when the phone is not in a tab
   /// (the desk is empty, or the person is in the group for agents no tab holds):
   /// the agent is then exactly where it would have been anyway.
-  void adopt(AgentRef agent) {
+  ///
+  /// [name] is the agent's own, and it is used only by [openNextAgentInNewTab]
+  /// — a tab made for one agent is named after it, which is what a window does
+  /// with a tab it opens.
+  void adopt(AgentRef agent, {String? name}) {
+    if (!_state.enabled) return;
+    final wanted = _newTabForNextAgent;
+    _newTabForNextAgent = false;
+    final pane = DeskPaneRef(
+      machineId: agent.machineId,
+      agentId: agent.agentId,
+    );
+    if (wanted) {
+      createTabFor(agent, name: name);
+      return;
+    }
     final tabId = _activeTabId;
-    if (!_state.enabled || tabId == null) return;
+    if (tabId == null) return;
+    final tab = _state.synced.where((t) => t.id == tabId).firstOrNull;
+    if (tab == null) return;
+    if (tab.panes.contains(pane)) return;
+    _queue([
+      {'op': 'pane.add', 'tabId': tabId, ...pane.toJson()},
+    ]);
+  }
+
+  /// A new tab holding [agent] alone, and the phone is in it from here.
+  ///
+  /// ⚠️ **Two ops, one write.** `tab.create` and the `pane.add` into it go in a
+  /// single queue: they are applied optimistically in that order, sent in that
+  /// order, and a desk that took the first but refused the second would leave a
+  /// tab nobody asked for on every computer the person owns.
+  ///
+  /// ⚠️ **`nameIsCustom: false`.** The name is the agent's, not one a person
+  /// typed, so a window is free to re-derive it when the tab holds something
+  /// else later — the same as a tab opened on a desktop.
+  ///
+  /// Returns the tab's id, or null where there is no desk to write to.
+  String? createTabFor(AgentRef agent, {String? name}) {
+    if (!_state.enabled) return null;
+    final id = _newTabId();
+    final pane = DeskPaneRef(
+      machineId: agent.machineId,
+      agentId: agent.agentId,
+    );
+    _queue([
+      {
+        'op': 'tab.create',
+        'id': id,
+        'name': (name == null || name.trim().isEmpty) ? 'New tab' : name.trim(),
+        'nameIsCustom': false,
+        'index': _state.synced.length,
+      },
+      {'op': 'pane.add', 'tabId': id, ...pane.toJson()},
+    ]);
+    // In it, because the person made it to be in it. Written directly rather
+    // than through [select] so this does not notify twice — [_queue] already
+    // has.
+    _activeTabId = id;
+    return id;
+  }
+
+  /// A tab renamed by hand on this phone.
+  ///
+  /// ⚠️ **`nameIsCustom: true`, and that is not the same field twice.** A tab
+  /// carries the name of whatever is in it until somebody says otherwise: a
+  /// window re-derives it as panes come and go, and [createTabFor] leaves that
+  /// free. A name typed by a person is the exception every computer has to
+  /// honour, and this flag is how they know — without it the next pane added on
+  /// a desktop would quietly take the name back.
+  ///
+  /// A blank name is not a rename; it is a tap on Save with nothing typed, and
+  /// the tab keeps what it had.
+  void renameTab(String tabId, String name) {
+    if (!_state.enabled) return;
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+    final tab = _state.synced.where((t) => t.id == tabId).firstOrNull;
+    if (tab == null || (tab.name == trimmed && tab.nameIsCustom)) return;
+    _queue([
+      {
+        'op': 'tab.rename',
+        'id': tabId,
+        'name': trimmed,
+        'nameIsCustom': true,
+      },
+    ]);
+  }
+
+  /// An agent that already exists joins a tab the person picked — which need
+  /// not be the tab the phone is in. Silent where the tab has it already: the
+  /// panel offers agents a tab lacks, but the desk can have moved underneath.
+  void addToTab(String tabId, AgentRef agent) {
+    if (!_state.enabled) return;
     final tab = _state.synced.where((t) => t.id == tabId).firstOrNull;
     if (tab == null) return;
     final pane = DeskPaneRef(
@@ -218,6 +311,33 @@ class PhoneDesk {
     if (tab.panes.contains(pane)) return;
     _queue([
       {'op': 'pane.add', 'tabId': tabId, ...pane.toJson()},
+    ]);
+  }
+
+  /// The next agent made on this phone opens a TAB of its own instead of
+  /// joining the one the phone is in — the `+` on the tab row, which asks for
+  /// a new agent and then has nowhere to put it until the machine answers with
+  /// one.
+  ///
+  /// ⚠️ **Disarmed by the very next [adopt], whether or not it was this one.**
+  /// An intent that outlived a cancelled form would put somebody's next agent —
+  /// made minutes later from the terminal's own `+` — in a tab of its own.
+  /// [forgetNewTabIntent] is the cancel path; between the two, the flag cannot
+  /// survive the screen that set it.
+  void openNextAgentInNewTab() => _newTabForNextAgent = true;
+
+  /// The form closed without making anything — see [openNextAgentInNewTab].
+  void forgetNewTabIntent() => _newTabForNextAgent = false;
+
+  bool _newTabForNextAgent = false;
+
+  /// The desk's ids are 32 hex characters (backend `lib/desk.ts`), and a tab
+  /// made here has to look like one made anywhere else.
+  String _newTabId() {
+    const hex = '0123456789abcdef';
+    final random = Random();
+    return String.fromCharCodes([
+      for (var i = 0; i < 32; i++) hex.codeUnitAt(random.nextInt(16)),
     ]);
   }
 
@@ -313,6 +433,7 @@ class PhoneDesk {
     pause();
     _joining = null;
     _activeTabId = null;
+    _newTabForNextAgent = false;
     _state.reset();
   }
 

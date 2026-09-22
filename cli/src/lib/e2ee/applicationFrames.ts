@@ -14,6 +14,6 @@ import { VIEWER_DOWN_TYPES } from '../viewerWire.js'
 const FLEET_REQUESTS = new Set(['grid_fleet_capabilities', 'grid_fleet_run', 'grid_fleet_cancel'])
 const FLEET_RESULTS = new Set([...FLEET_REQUESTS].map(type => `${type}_result`))
 export const encryptDownFrame = (type: string): boolean =>
-  isEncryptedDownType(type) || FLEET_REQUESTS.has(type) || SHARE_REQUEST_TYPES.has(type) || VIEWER_DOWN_TYPES.has(type)
+  isEncryptedDownType(type) || type === 'git_project_info' || FLEET_REQUESTS.has(type) || SHARE_REQUEST_TYPES.has(type) || VIEWER_DOWN_TYPES.has(type)
 export const encryptRpcResult = (type: string): boolean =>
-  ENCRYPTED_RPC_RESULT_TYPES.has(type) || FLEET_RESULTS.has(type) || SHARE_RESULT_TYPES.has(type)
+  ENCRYPTED_RPC_RESULT_TYPES.has(type) || type === 'git_project_info_result' || FLEET_RESULTS.has(type) || SHARE_RESULT_TYPES.has(type)

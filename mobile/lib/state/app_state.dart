@@ -21,9 +21,11 @@ import '../core/viewer_mode.dart';
 import '../core/config.dart';
 import '../core/agent_preference.dart';
 import '../core/engine_availability.dart';
+import '../core/device_name.dart';
 import '../core/local_hostname.dart';
 import '../core/local_git_projects.dart';
 import '../core/last_opened_agent.dart';
+import '../core/phone_search_history.dart';
 import '../core/machine_cache.dart';
 import '../core/test_run.dart';
 import '../core/models.dart';
@@ -55,6 +57,7 @@ import 'pane_arrangement.dart';
 import 'pending_question.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
+import '../phone/phone_name_store.dart';
 
 enum AppStatus {
   bootstrapping,
@@ -321,6 +324,20 @@ class RailRow {
   int get hashCode => Object.hash(machineId, agentId);
 }
 
+/// What every `agents_list` asks for.
+///
+/// ⚠️ **`includeStopped` is not optional polish — without it the fleet is
+/// silently incomplete.** The daemon answers a plain `agents_list` with
+/// `registry.advertised()`, which is live agents only, and adds saved-but-
+/// stopped work only when asked (`cli/src/backendSocket.ts`, `agents_list`).
+/// This app did not ask, so a machine with nine stopped harnesses reported
+/// none of them and the phone showed a different fleet than the desktop on the
+/// same account — for the search, the Agents tab and every count drawn off them.
+///
+/// The daemon ignores the flag for the hardware dial (`sessionRole == 'device'`);
+/// this app pairs as `'web'`, so it is honoured here.
+const kAgentsListPayload = {'includeStopped': true};
+
 class AppNotifier extends ChangeNotifier {
   final AuthSession session;
   AppConfig config;
@@ -547,6 +564,34 @@ class AppNotifier extends ChangeNotifier {
   /// The tab the screen has worked out it is showing — see [PhoneDesk.note].
   void noteDeskTab(String? tabId) => _desk.note(tabId);
 
+  /// Whether the desk can be WRITTEN to — what the two `+`s on the tabs panel
+  /// are drawn on. False before the first read answers, and on a backend with
+  /// no desk at all: a `+` there would queue ops nothing will ever take.
+  bool get deskWritable => _desk.enabled;
+
+  /// An agent that already exists joins the tab the person picked — the `+` at
+  /// the foot of a tab's list. See [PhoneDesk.addToTab].
+  void addAgentToDeskTab(String tabId, AgentRef agent) =>
+      _desk.addToTab(tabId, agent);
+
+  /// A tab renamed by hand, from a double tap on its name in the tabs panel.
+  /// See [PhoneDesk.renameTab].
+  void renameDeskTab(String tabId, String name) =>
+      _desk.renameTab(tabId, name);
+
+  /// An agent that already exists opens a tab of its own — the `+` on the tab
+  /// row. See [PhoneDesk.createTabFor].
+  String? createDeskTabFor(AgentRef agent, {String? name}) =>
+      _desk.createTabFor(agent, name: name);
+
+  /// The next agent made on this phone gets a tab of its own — armed by the `+`
+  /// on the tab row before the new-agent form opens, and spent (or forgotten)
+  /// by the time that form closes. See [PhoneDesk.openNextAgentInNewTab].
+  void openNextAgentInNewDeskTab() => _desk.openNextAgentInNewTab();
+
+  /// That form closed without making anything.
+  void forgetNewDeskTabIntent() => _desk.forgetNewTabIntent();
+
   /// Read the desk now, and wait for it — what a sign-in and the app coming
   /// back to the foreground both start without waiting.
   @visibleForTesting
@@ -610,7 +655,7 @@ class AppNotifier extends ChangeNotifier {
     // An unused starter has no work to recover. This also covers empty pages
     // restored from builds that did not mark them as drafts.
     if (entry is ClosedSwarm &&
-        entry.name == 'New Harness' &&
+        entry.name == Swarm.defaultName &&
         entry.panes.isEmpty &&
         entry.presets.isEmpty) {
       return;
@@ -629,7 +674,7 @@ class AppNotifier extends ChangeNotifier {
   bool get canOpenNewTab =>
       swarms.length < maxSwarms || swarms.any((swarm) => swarm.isEmptyStarter);
 
-  // A New Harness remains temporary until it has content or a custom name.
+  // An untitled tab remains temporary until it has content or a custom name.
   // The return destination is session-local; abandoned drafts are never saved.
   final _draftSwarmReturns = <String, String>{};
 
@@ -638,14 +683,14 @@ class AppNotifier extends ChangeNotifier {
     final swarm = swarms.where((swarm) => swarm.id == id).firstOrNull;
     return swarm != null &&
         swarm.panes.isEmpty &&
-        swarm.name == 'New Harness' &&
+        swarm.name == Swarm.defaultName &&
         swarm.presets.isEmpty;
   }
 
-  void newSwarm({String name = 'New Harness', bool draft = false}) {
+  void newSwarm({String name = Swarm.defaultName, bool draft = false}) {
     // Every New Tab entry point reuses the existing start page, including
     // when another tab is selected or the tab limit has been reached.
-    if (name == 'New Harness') {
+    if (name == Swarm.defaultName) {
       final starter = activeSwarm.isEmptyStarter
           ? activeSwarm
           : swarms.where((swarm) => swarm.isEmptyStarter).firstOrNull;
@@ -688,7 +733,7 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Cancel an untouched New Harness without closing a session or recording
+  /// Cancel an untouched new tab without closing a session or recording
   /// Recently Closed. A sole workspace remains the app's starting screen.
   bool cancelSwarmDraft(String id) {
     final returnId = _draftSwarmReturns[id];
@@ -696,7 +741,7 @@ class AppNotifier extends ChangeNotifier {
     if (returnId == null ||
         target == null ||
         target.panes.isNotEmpty ||
-        target.name != 'New Harness' ||
+        target.name != Swarm.defaultName ||
         target.presets.isNotEmpty ||
         swarms.length == 1) {
       return false;
@@ -795,7 +840,7 @@ class AppNotifier extends ChangeNotifier {
     // welcome tabs, evicting the real work from recently closed history.
     if (swarms.length == 1 &&
         swarms.single.panes.isEmpty &&
-        swarms.single.name == 'New Harness' &&
+        swarms.single.name == Swarm.defaultName &&
         swarms.single.presets.isEmpty) {
       return;
     }
@@ -1202,6 +1247,7 @@ class AppNotifier extends ChangeNotifier {
        agentPreference = AgentPreference(paneLayoutStore?.storage),
        projectHistory = ProjectHistory(paneLayoutStore?.storage),
        lastOpenedAgent = LastOpenedAgent(paneLayoutStore?.storage),
+       searchHistory = PhoneSearchHistory(paneLayoutStore?.storage),
        // On the same terms as the stores above: a layout store means this is a
        // real app with a real Harness home to cache into, and its absence means
        // a test, which must not read or write one.
@@ -1273,6 +1319,15 @@ class AppNotifier extends ChangeNotifier {
 
   /// The agent the phone's terminal had open, kept across launches — see [LastOpenedAgent].
   final LastOpenedAgent lastOpenedAgent;
+
+  /// The agents and commands reached from the search, most recent first — what
+  /// ranks the box before a word is typed. See [PhoneSearchHistory].
+  ///
+  /// ⚠️ **On the app, not on the search screen.** It has to outlive one opening
+  /// of the box: a history built per page would load the last run's visits and
+  /// then forget every visit made since, which is exactly the half that matters
+  /// while somebody is switching between two agents.
+  final PhoneSearchHistory searchHistory;
 
   /// Last run's machine list, used to start dialling before this run's
   /// `/api/machines` answers — see [MachineCache] and [_warmStartMachines].
@@ -3112,6 +3167,7 @@ class AppNotifier extends ChangeNotifier {
     try {
       final response = await connection.request(
         'agents_list',
+        payload: kAgentsListPayload,
         timeout: const Duration(seconds: 10),
       );
       final agents = (response['agents'] as List<dynamic>? ?? [])
@@ -3818,7 +3874,11 @@ class AppNotifier extends ChangeNotifier {
       );
       final response = await StartupTrace.time(
         'agents.list',
-        () => connection.request('agents_list', timeout: remaining),
+        () => connection.request(
+          'agents_list',
+          payload: kAgentsListPayload,
+          timeout: remaining,
+        ),
       );
       if (!_machineWorkCurrent(machine, revision)) return;
       final rawAgents = response['agents'] as List<dynamic>? ?? [];
@@ -4423,7 +4483,9 @@ class AppNotifier extends ChangeNotifier {
   /// Machines tab's pull-to-refresh, the screen whose job is listing them.
   ///
   /// Nothing on screen waits for this: each machine publishes as it answers,
-  /// and the rows already drawn keep their places (`PhoneSearchOrder`).
+  /// and the rows already drawn keep their places — the search ranks on the
+  /// visit history and the name, neither of which a late-answering machine
+  /// moves. See [PhoneSearchHistory] and `rankPhoneDestinations`.
   Future<void> reachAllMachines() async {
     // No transport yet — before sign-in, or in a test with no fake connection.
     // The same guard [_canFetchPreview] uses, and for the same reason: `_conn`
@@ -4843,7 +4905,7 @@ class AppNotifier extends ChangeNotifier {
     // Created HERE, so it joins the tab this phone is in — the way an agent
     // created in a window joins that window's tab. See [PhoneDesk.adopt] for
     // what happens when the phone is in no tab.
-    _desk.adopt((machineId: machineId, agentId: agent.id));
+    _desk.adopt((machineId: machineId, agentId: agent.id), name: agent.name);
     await assignAgentToPane(
       null,
       machineId,
@@ -4957,6 +5019,32 @@ class AppNotifier extends ChangeNotifier {
   /// confirmed, so this upserts from the reply directly — idempotent on `agent.id`, same as
   /// [createAgent], and safe even if the CLI's own `agent_synced` push for the restart arrives
   /// separately (fire-and-forget on the CLI side, unordered relative to this reply).
+  /// Bring a stopped agent back, so something can be opened on it.
+  ///
+  /// The desktop's `resumeAgent`: a thin guard over [restartAgent], which is the
+  /// same `agent_restart` RPC. Split out because the two have different
+  /// preconditions — restart is "this agent is misbehaving, relaunch it", resume
+  /// is "this agent is not running, it should be".
+  ///
+  /// An agent that already has a terminal succeeds without touching the machine:
+  /// the caller's job is "make it openable", and it is.
+  Future<RestartAgentResult> resumeAgent(String machineId, String agentId) {
+    final agent = stateOf(
+      machineId,
+    )?.agents.where((agent) => agent.id == agentId).firstOrNull;
+    if (agent?.terminalAvailable == true) {
+      return Future.value(const RestartAgentResult());
+    }
+    if (agent?.isStopped != true) {
+      return Future.value(
+        const RestartAgentResult(
+          error: 'That harness is no longer available. Search again.',
+        ),
+      );
+    }
+    return restartAgent(machineId, agentId);
+  }
+
   Future<RestartAgentResult> restartAgent(
     String machineId,
     String agentId,
@@ -5564,7 +5652,7 @@ class AppNotifier extends ChangeNotifier {
       target.arranged = split.after;
       target.arrangedKey = key;
     }
-    if (firstAgent && target.name == 'New Harness') {
+    if (firstAgent && target.name == Swarm.defaultName) {
       final name = agent.name.trim();
       if (name.isNotEmpty) {
         target.name = name.length > 80 ? name.substring(0, 80) : name;
@@ -5614,24 +5702,27 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// How this phone introduces itself on `terminal_open`, so a desktop it
+  /// displaces can say "(this phone) took control": the name given it in
+  /// Settings, else the OS's, else its model — `core/device_name.dart` has the
+  /// order and why `Platform.localHostname` ("localhost" on iOS) is not it.
+  TerminalClientDescriptor phoneClientDescriptor() {
+    final user = currentUser;
+    return TerminalClientDescriptor(
+      kind: 'phone',
+      name: composePhoneName(
+        override: phoneNameStore.value,
+        device: NativeDeviceInfo.cached,
+        userName: user == null || user.isLocalSession ? null : user.name,
+      ),
+    );
+  }
+
   /// Open the stream for a tile that already knows what it wants.
   ///
   /// Separate from [assignAgentToPane] because a restored tile takes this path
   /// on its own, later, when its machine finally answers — the intent was
   /// settled at launch, and nothing about the selection should move again then.
-  /// How this phone introduces itself on `terminal_open`, so a desktop it
-  /// displaces can say "(this phone) took control". The OS's device name when
-  /// it will give one, else just "Phone".
-  TerminalClientDescriptor phoneClientDescriptor() {
-    final name = localHostnameOrNull() ?? 'Phone';
-    return TerminalClientDescriptor(
-      kind: 'phone',
-      name: name.length > TerminalClientDescriptor.nameMax
-          ? name.substring(0, TerminalClientDescriptor.nameMax)
-          : name,
-    );
-  }
-
   /// ⚠️ **Every session built here CLAIMS the terminal** — [takeControl] is
   /// true unless the caller is a guess about where the thumb goes next
   /// ([warmAgentPane]), and nothing else opens a stream.
@@ -6110,7 +6201,7 @@ class AppNotifier extends ChangeNotifier {
       final swarm = swarms.where((swarm) => swarm.id == id).firstOrNull;
       return swarm == null ||
           swarm.panes.isNotEmpty ||
-          swarm.name != 'New Harness' ||
+          swarm.name != Swarm.defaultName ||
           swarm.presets.isNotEmpty;
     });
     _layoutRevision++;
@@ -6164,7 +6255,7 @@ class AppNotifier extends ChangeNotifier {
                   0,
                   (raw['name'] as String).length.clamp(0, 80),
                 )
-              : 'New Harness',
+              : Swarm.defaultName,
         );
         for (final item in (raw['panes'] as List).take(maxPanes)) {
           final entry = PaneLayoutEntry.fromJson(item);

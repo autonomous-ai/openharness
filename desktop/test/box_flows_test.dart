@@ -99,6 +99,7 @@ void main() {
     final app = createApp();
     seedMixedAgents(app);
     app.machineStates['m']!.localOnly = true;
+    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
     app.adoptSessionForTest(terminal('a0', []));
     addTearDown(app.dispose);
     final previous = FileSelectorPlatform.instance;
@@ -208,6 +209,7 @@ void main() {
     addTearDown(app.dispose);
     await mount(tester, app);
     await chord(tester, LogicalKeyboardKey.keyT);
+    await chord(tester, LogicalKeyboardKey.keyO);
     final start = find.byKey(const ValueKey('swarm-search-input'));
     await tester.tap(start);
     await tester.pump();
@@ -416,6 +418,7 @@ void main() {
         // Explicit text in search starts the requested task using the source's
         // defaults, without touching another context's draft.
         await chord(tester, LogicalKeyboardKey.keyT);
+        await chord(tester, LogicalKeyboardKey.keyO);
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
           'Implement a new redirect',
@@ -427,6 +430,7 @@ void main() {
         expect(creation.machineId, 'm');
         expect(creation.project.folder, sourceAgent.project!.cwd);
         await cancel();
+        await chord(tester, LogicalKeyboardKey.keyW);
         app.focusPane(other.id);
         expect((await resume()).task, 'Update feature documentation');
         await cancel();

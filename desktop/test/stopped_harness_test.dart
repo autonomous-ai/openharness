@@ -302,6 +302,9 @@ void main() {
         final originalTab = app.activeSwarmId;
         await mount(tester, app);
         await chord(tester, key);
+        if (key == LogicalKeyboardKey.keyT) {
+          await chord(tester, LogicalKeyboardKey.keyO);
+        }
         await tester.pump();
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
@@ -341,6 +344,7 @@ void main() {
   ) async {
     await mount(tester, app);
     await chord(tester, LogicalKeyboardKey.keyT);
+    await chord(tester, LogicalKeyboardKey.keyO);
     await tester.pump();
     await tester.enterText(
       find.byKey(const ValueKey('swarm-search-input')),

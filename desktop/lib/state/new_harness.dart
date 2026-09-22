@@ -12,6 +12,7 @@ import '../core/dsh_catalog.dart';
 import '../core/harness_catalog.dart';
 import '../core/first_task.dart';
 import '../core/fuzzy_match.dart';
+import '../core/git_worktree.dart';
 import '../core/permission_modes.dart';
 import '../core/project_folder.dart';
 import '../core/repository_clone.dart';
@@ -36,6 +37,7 @@ enum NewHarnessField {
   task,
   agent,
   machine,
+  branch,
   projectMenu,
   project,
   projectName,
@@ -100,6 +102,9 @@ class NewHarnessDraft {
     required this.project,
     required this.task,
     required this.permissionMode,
+    this.worktree,
+    this.branchRef,
+    this.gitProject,
     this.profile,
     this.profileChosen = false,
     this.attempt,
@@ -109,6 +114,9 @@ class NewHarnessDraft {
   });
 
   final String machineId, engine, task, permissionMode;
+  final bool? worktree;
+  final String? branchRef;
+  final GitProjectInfo? gitProject;
   final NewHarnessProject project;
   final LocalCodexProfile? profile;
   final bool profileChosen;
@@ -120,7 +128,13 @@ class NewHarnessDraft {
   final Map<String, NewHarnessProject> projectsByMachine;
 
   ProjectFolderRequest? get projectFolderRequest =>
-      project.folder != null || isTerminalEngine(engine)
+      (worktree == true || worktree == null && gitProject?.isGit == true) &&
+          project.folder != null &&
+          !isTerminalEngine(engine)
+      ? ProjectFolderRequest.worktree(project.folder!, branchRef: branchRef)
+      : branchRef != null && project.folder != null && !isTerminalEngine(engine)
+      ? ProjectFolderRequest.branch(project.folder!, branchRef!)
+      : project.folder != null || isTerminalEngine(engine)
       ? null
       : project.repository != null
       ? ProjectFolderRequest.remote(project.repository!)
@@ -189,7 +203,6 @@ class NewHarnessController extends ChangeNotifier {
     this.split,
     HarnessPlacement? placement,
     this.offersStore = false,
-    this.firstRun = false,
     String? home,
   }) : placement =
            placement ?? (split == null ? HarnessPlacement.currentTab : null),
@@ -216,6 +229,9 @@ class NewHarnessController extends ChangeNotifier {
         ? _generatedProject()
         : const NewHarnessProject.fresh();
     if (task != null) this.task = task;
+    _worktree = draft?.worktree;
+    _branchRef = draft?.branchRef;
+    _gitProject = draft?.gitProject ?? const GitProjectInfo();
     if (draft != null) {
       _projectsByMachine.addAll(draft.projectsByMachine);
       _project = draft.project;
@@ -236,8 +252,8 @@ class NewHarnessController extends ChangeNotifier {
           ? NewHarnessProject.fresh(projectName)
           : _generatedProject();
     }
-    // A missing destination is the only required question. A carried task is
-    // shown in the launch summary and remains editable, including after Escape.
+    // A missing project is the only required question. Carried tasks remain
+    // part of the draft for Store examples and advanced options.
     field = needsProject && !checking
         ? NewHarnessField.projectMenu
         : NewHarnessField.launch;
@@ -256,11 +272,7 @@ class NewHarnessController extends ChangeNotifier {
     );
     // What the machine has is asked when the box opens, as the form does: an
     // engine installed in a terminal a minute ago is otherwise still "missing".
-    if (firstRun) {
-      unawaited(_detectInitialAgent(allowSelection: engine == null));
-    } else {
-      unawaited(app.probeEngines(_machineId, force: true));
-    }
+    unawaited(app.probeEngines(_machineId, force: true));
     unawaited(app.probeDsh(_machineId, force: true));
     unawaited(_ensureHome(_machineId));
     unawaited(_refreshGeneratedProject());
@@ -269,7 +281,7 @@ class NewHarnessController extends ChangeNotifier {
   final AppNotifier app;
   final String? swarmId;
   final PaneSplitRequest? split;
-  HarnessPlacement? placement;
+  final HarnessPlacement? placement;
   final String _targetId;
   final bool _usesNewTabPage;
   HarnessPlacement? get effectivePlacement =>
@@ -277,17 +289,8 @@ class NewHarnessController extends ChangeNotifier {
       ? HarnessPlacement.currentTab
       : placement;
 
-  void changePlacement(HarnessPlacement value) {
-    if (locked || split != null || placement == value) return;
-    placement = value;
-    notifyListeners();
-  }
-
-  final bool firstRun;
   final bool _autoProject;
   final DateTime Function() _now;
-  bool detectingAgent = false;
-  bool _agentEdited = false;
   final String? _home;
 
   late String _engine;
@@ -300,6 +303,102 @@ class NewHarnessController extends ChangeNotifier {
   String get engine => _engine;
   String get machineId => _machineId;
   NewHarnessProject get project => _project;
+  bool? _worktree;
+  String? _branchRef;
+  GitProjectInfo _gitProject = const GitProjectInfo();
+  (String, String?, bool)? _gitKey;
+  Future<void>? _gitFuture;
+  int _gitRevision = 0;
+  bool checkingGit = false;
+  Future<void> waitForGitProject() async {
+    while (checkingGit && !_disposed) {
+      await _gitFuture;
+    }
+  }
+
+  bool get isGitProject => _gitProject.isGit && !isTerminal;
+  bool get canUseWorktree => isGitProject && !checkingGit;
+  bool get worktree => isGitProject && _worktree != false;
+  String? get branchRef => _branchRef;
+  String? get gitError => _gitProject.error;
+  String get branchLabel =>
+      _gitProject.branches
+          .where((branch) => branch.ref == _branchRef)
+          .firstOrNull
+          ?.name ??
+      _branchRef?.replaceFirst(RegExp(r'^refs/(heads|remotes)/'), '') ??
+      _gitProject.branch ??
+      'Detached HEAD';
+
+  void toggleWorktree() {
+    if (locked || !canUseWorktree) return;
+    _worktree = !worktree;
+    error = null;
+    _refresh();
+  }
+
+  void retryGitProject() {
+    if (locked || checkingGit || _project.folder == null || isTerminal) return;
+    error = null;
+    _gitFuture = _readGitProject(_gitKey!);
+    notifyListeners();
+  }
+
+  void _syncGitProject() {
+    final key = (_machineId, _project.folder, isTerminal);
+    if (_gitKey == key) return;
+    if (_gitKey != null) {
+      _worktree = null;
+      _branchRef = null;
+      _gitProject = const GitProjectInfo();
+    }
+    _gitKey = key;
+    _gitRevision++;
+    checkingGit = false;
+    _gitFuture = null;
+    if (key.$2 != null && !key.$3 && !checking) {
+      _gitFuture = _readGitProject(key);
+    }
+  }
+
+  Future<void> _readGitProject((String, String?, bool) key) async {
+    checkingGit = true;
+    final revision = ++_gitRevision;
+    GitProjectInfo info;
+    try {
+      info = GitProjectInfo.fromJson(await app.readGitProject(key.$1, key.$2!));
+    } catch (_) {
+      info = const GitProjectInfo(error: 'UNAVAILABLE');
+    }
+    if (_disposed || _gitKey != key || revision != _gitRevision) return;
+    checkingGit = false;
+    // A worktree is a temporary folder, so the launcher shows its repository.
+    // With Worktree off its branch stays chosen and Start reopens that
+    // worktree; otherwise new work starts from the repository's own branch.
+    if (info.mainFolder case final main? when _project.folder == key.$2) {
+      if (_worktree == false && _branchRef == null && info.branch != null) {
+        _branchRef = 'refs/heads/${info.branch}';
+      }
+      _project = NewHarnessProject.folder(main);
+      _gitKey = (key.$1, main, key.$3);
+      info = GitProjectInfo(
+        isGit: true,
+        branch: info.mainBranch,
+        branches: info.branches,
+      );
+    }
+    _gitProject = info;
+    // Keep an explicit branch choice; a removed branch fails at Start.
+    if (_branchRef == null &&
+        info.branch != null &&
+        info.branches.any(
+          (branch) => branch.ref == 'refs/heads/${info.branch}',
+        )) {
+      _branchRef = 'refs/heads/${info.branch}';
+    }
+    _refresh();
+  }
+
   LocalCodexProfile? _profile;
   bool _profileChosen = false;
   String? get profileLabel =>
@@ -313,6 +412,9 @@ class NewHarnessController extends ChangeNotifier {
     project: _project,
     task: task,
     permissionMode: _mode,
+    worktree: _worktree,
+    branchRef: _branchRef,
+    gitProject: _gitProject,
     profile: _profile,
     profileChosen: _profileChosen,
     attempt: _attempt,
@@ -325,8 +427,11 @@ class NewHarnessController extends ChangeNotifier {
   );
 
   /// The same preparation intent is used by the prompt and advanced options.
-  ProjectFolderRequest? get projectFolderRequest =>
-      _project.folder != null || isTerminal
+  ProjectFolderRequest? get projectFolderRequest => worktree
+      ? ProjectFolderRequest.worktree(_project.folder!, branchRef: _branchRef)
+      : !isTerminal && _project.folder != null && _branchRef != null
+      ? ProjectFolderRequest.branch(_project.folder!, _branchRef!)
+      : _project.folder != null || isTerminal
       ? null
       : _project.repository != null
       ? ProjectFolderRequest.remote(_project.repository!)
@@ -365,9 +470,6 @@ class NewHarnessController extends ChangeNotifier {
       ? _mode
       : kDefaultPermissionMode;
   bool get takesTask => takesFirstTask(_base);
-  String get taskAvailability => takesTask
-      ? 'Add a task (optional)'
-      : 'Enter a task in $agentLabel after launch';
   bool get taskTooLong => task.trim().length > kFirstTaskMaxLength;
   List<PermissionMode> get _modes =>
       isTerminal ? const [] : permissionModesOf(_base);
@@ -429,11 +531,12 @@ class NewHarnessController extends ChangeNotifier {
     NewHarnessField.agent,
     NewHarnessField.machine,
     NewHarnessField.projectMenu,
-    if (takesTask) NewHarnessField.task,
+    if (isGitProject) NewHarnessField.branch,
   ];
   bool _supportsField(NewHarnessField value) =>
       fields.contains(value) ||
       value == NewHarnessField.launch ||
+      (value == NewHarnessField.task && takesTask) ||
       value == NewHarnessField.project ||
       value == NewHarnessField.projectName ||
       value == NewHarnessField.projectRepository ||
@@ -481,30 +584,7 @@ class NewHarnessController extends ChangeNotifier {
 
   // ---- what the line says -------------------------------------------------
 
-  String get createLabel => 'Start';
-
-  Future<void> _detectInitialAgent({required bool allowSelection}) async {
-    detectingAgent = true;
-    final machineId = _machineId;
-    await Future.wait([
-      app.agentPreference.load(),
-      app.probeEngines(machineId, force: true),
-    ]);
-    if (_disposed) return;
-    detectingAgent = false;
-    if (allowSelection && !_agentEdited && machineId == _machineId) {
-      final installed = [
-        for (final identity in allEngines)
-          if (_machine?.engines[identity.id]?.installed == true) identity.id,
-      ];
-      final preferred = app.agentPreference.value;
-      final chosen = installed.contains(preferred)
-          ? preferred
-          : installed.firstOrNull ?? (_known(preferred) ? preferred : null);
-      if (chosen != null) _selectEngine(chosen);
-    }
-    _refresh();
-  }
+  String get createLabel => 'Start Harness';
 
   String get agentLabel => labelOf(_engine);
   String labelOf(String id) => currentHarnessName(
@@ -554,6 +634,7 @@ class NewHarnessController extends ChangeNotifier {
     NewHarnessField.task => 'What should this agent work on? (optional)',
     NewHarnessField.agent => 'Choose an agent',
     NewHarnessField.machine => 'Choose a machine',
+    NewHarnessField.branch => 'Search branches',
     NewHarnessField.project => 'Enter a folder path, or press Enter to browse',
     NewHarnessField.projectName => 'Type a project name',
     NewHarnessField.projectRepository => 'Paste a GitHub repository URL',
@@ -568,11 +649,6 @@ class NewHarnessController extends ChangeNotifier {
 
   void focusField(NewHarnessField next) {
     if (locked || field == next || !_supportsField(next)) return;
-    // Discovery may finish while somebody edits. Never change their choice
-    // or the rows they are navigating underneath their fingers.
-    if (next == NewHarnessField.agent || next == NewHarnessField.machine) {
-      _agentEdited = true;
-    }
     if (next == NewHarnessField.machine) {
       _machineOrigin = (
         field: field,
@@ -714,6 +790,7 @@ class NewHarnessController extends ChangeNotifier {
     NewHarnessField.launch || NewHarnessField.task => false,
     NewHarnessField.agent => option.id == _engine,
     NewHarnessField.machine => option.id == _machineId,
+    NewHarnessField.branch => option.id == _branchRef,
     NewHarnessField.project ||
     NewHarnessField.projectMenu ||
     NewHarnessField.projectName ||
@@ -933,6 +1010,8 @@ class NewHarnessController extends ChangeNotifier {
         _selectEngine(option.id);
       case NewHarnessField.machine:
         _selectMachine(option.id);
+      case NewHarnessField.branch:
+        _branchRef = option.id;
       case NewHarnessField.project:
       case NewHarnessField.projectMenu:
       case NewHarnessField.projectName:
@@ -1402,6 +1481,7 @@ class NewHarnessController extends ChangeNotifier {
 
   void _refresh({bool resetCursor = false, String? agentSelection}) {
     if (_disposed) return;
+    _syncGitProject();
     _seen = _signature();
     final current = resetCursor ? null : selected?.id;
     // An agent picked from another field may have no task or no modes.
@@ -1418,6 +1498,18 @@ class NewHarnessController extends ChangeNotifier {
       NewHarnessField.task ||
       NewHarnessField.agent => const [],
       NewHarnessField.machine => _machineOptions(),
+      NewHarnessField.branch => _ranked([
+        for (final branch in _gitProject.branches)
+          NewHarnessOption(
+            id: branch.ref,
+            title: branch.name,
+            detail: branch.remote ? 'Remote' : '',
+            enabled: worktree || !branch.remote,
+            why: branch.remote
+                ? 'Turn Worktree on to start from a remote branch.'
+                : null,
+          ),
+      ]),
       NewHarnessField.projectMenu => _projectMenu(),
       NewHarnessField.project ||
       NewHarnessField.projectName => _projectOptions(),
@@ -1669,6 +1761,8 @@ class NewHarnessController extends ChangeNotifier {
   Iterable<String> _recentProjectFolders() sync* {
     final machine = _machine;
     final seen = <String>{};
+    // Worktrees Start made are temporary: their repository is the project.
+    final worktrees = _expand('~/harnesses/worktrees');
     for (final folder in [
       ?_project.folder,
       ...app.projectHistory.recent(_machineId),
@@ -1680,7 +1774,8 @@ class NewHarnessController extends ChangeNotifier {
     ]) {
       if (!p.isAbsolute(folder) ||
           folder.length > 4096 ||
-          RegExp(r'[\x00-\x1f\x7f]').hasMatch(folder)) {
+          RegExp(r'[\x00-\x1f\x7f]').hasMatch(folder) ||
+          folder != _project.folder && p.isWithin(worktrees, folder)) {
         continue;
       }
       if (seen.add(p.normalize(folder))) yield folder;
@@ -1974,12 +2069,33 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   Future<NewHarnessOutcome> create() async {
-    if (busy || linkingProfile || detectingAgent) {
+    if (busy || linkingProfile) {
       return NewHarnessOutcome.failed;
     }
     if (needsProject && !checking) {
       focusField(NewHarnessField.projectMenu);
       return _fail('Choose a project, or create a new one.');
+    }
+    if (!checking) {
+      _syncGitProject();
+      if (gitError != null) retryGitProject();
+      if (checkingGit) {
+        busy = true;
+        status = 'Checking project…';
+        notifyListeners();
+        await _gitFuture;
+        if (_disposed) return NewHarnessOutcome.failed;
+        busy = false;
+        status = null;
+      }
+      if (gitError != null) {
+        return _fail(
+          'Could not check Git on $machineLabel. Check the connection and Harness CLI, then retry.',
+        );
+      }
+      if (!worktree && _branchRef?.startsWith('refs/remotes/') == true) {
+        return _fail('Choose a local branch, or turn Worktree on.');
+      }
     }
     // Shortened by the person, never cut by us: a machine refuses one longer.
     if (takesTask && taskTooLong && !checking) {
@@ -2070,6 +2186,11 @@ class NewHarnessController extends ChangeNotifier {
       // goes into it rather than making a second one beside it.
       if (!checking && attempt.preparedFolder != null) {
         _project = NewHarnessProject.folder(attempt.preparedFolder!);
+        _gitKey = (_machineId, _project.folder, isTerminal);
+        _worktree = false;
+        _branchRef = null;
+        _gitProject = const GitProjectInfo();
+        _gitFuture = _readGitProject(_gitKey!);
       }
       return _fail(failure);
     }
