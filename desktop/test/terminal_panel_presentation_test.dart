@@ -136,7 +136,13 @@ void main() {
       revision.value = 4;
       await tester.pump();
       expect(
-        find.text('codex-0922-1136'),
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Semantics &&
+              (widget.properties.label ?? '').contains(
+                'Worktree: codex-0922-1136',
+              ),
+        ),
         findsOneWidget,
         reason: 'Once the branch moved on, the folder says where it lives.',
       );

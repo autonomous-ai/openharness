@@ -820,8 +820,10 @@ class AgentProject {
         .where((part) => part.isNotEmpty)
         .lastOrNull;
     if (folder == null) return null;
-    return branch != null && worktreeFolderName(branch!) == folder
-        ? null
+    if (branch != null && worktreeFolderName(branch!) == folder) return null;
+    // Older builds named the folder `<repository>-…`; the project says that.
+    return folder.startsWith('$name-') && folder.length > name.length + 1
+        ? folder.substring(name.length + 1)
         : folder;
   }
 
