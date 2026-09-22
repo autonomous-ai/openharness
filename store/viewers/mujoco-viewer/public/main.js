@@ -1121,6 +1121,8 @@ function wire() {
   layout()
   // Existing transport, model and actuator actions return to the original simulation first.
   for (const id of ['transport', 'modes']) $(id).addEventListener('pointerdown', () => experiments?.leave(), true)
+  // Native button activation from Enter/Space does not send pointerdown.
+  for (const id of ['transport', 'modes']) $(id).addEventListener('click', () => experiments?.leave(), true)
   $('btn-experiment').addEventListener('click', () => {
     touch(); togglePanel(true); panel.showTab('experiment'); experiments.open()
   })
@@ -1189,12 +1191,13 @@ function wire() {
 
   addEventListener('keydown', (e) => {
     const target = e.target
-    if (target instanceof HTMLSelectElement || (target instanceof HTMLInputElement && target.type !== 'range' && target.type !== 'checkbox')) return
+    // Keep native focus navigation, range adjustment and button activation intact.
+    // Transport shortcuts belong to the scene, not to a focused form control.
+    if (e.key === 'Tab' || target.closest?.('input, select, textarea, [contenteditable="true"]')) return
+    if ([' ', 'Enter'].includes(e.key) && target.closest?.('button, a[href], [role="button"]')) return
     if (!$('help').hidden && e.key === 'Escape') { $('help').hidden = true; return }
     if (e.metaKey || e.ctrlKey || e.altKey) return
     if (experiments?.active && [' ', 'ArrowRight', 'ArrowLeft', 'Backspace', 'Delete', 'Enter', 's', 'r', 'v'].includes(e.key)) experiments.leave()
-    // Tab belongs to normal focus navigation while the experiment form is open.
-    if (panel.tab === 'experiment' && !$('panel').hidden && e.key === 'Tab') return
     const key = e.key
     const handled = () => { e.preventDefault(); touch() }
     if (key === ' ') { handled(); if (state.mode !== 'video') { state.playing = !state.playing; renderTransport() } else { const v = $('video'); v.paused ? v.play() : v.pause() } }
@@ -1202,7 +1205,6 @@ function wire() {
     else if (key === 'ArrowLeft') { if (state.mode === 'replay') { handled(); state.playing = false; showFrame(Math.ceil(state.cursor) - 1) } }
     else if (key === 'Backspace' || key === 'Delete') { handled(); $('btn-reset').click() }
     else if (key === 'Enter') { if (state.mode === 'replay') { handled(); simulateFrom(state.cursor) } }
-    else if (key === 'Tab') { handled(); togglePanel() }
     else if (key === 'Escape') { handled(); closeMenus(); if (stage.cameraMode.kind !== 'free') { stage.setCameraMode({ kind: 'free' }, engine); renderCameraChip(); renderChip() } else select(-1) }
     else if (key === '-' || key === '_') { handled(); stepSpeed(1) }
     else if (key === '=' || key === '+') { handled(); stepSpeed(-1) }
@@ -1214,6 +1216,7 @@ function wire() {
       const lower = key.toLowerCase()
       const toggles = { c: 'contactpoint', f: 'contactforce', j: 'joint', u: 'actuator', v: null, m: 'com', i: 'inertia', t: 'transparent', w: 'wireframe', h: 'shadows', e: 'reflections', k: 'skybox' }
       if (lower === 's') { handled(); setMode('sim') }
+      else if (lower === 'n') { handled(); togglePanel() }
       else if (lower === 'r') { handled(); setMode('replay') }
       else if (lower === 'v') { handled(); setMode('video') }
       else if (lower === 'b') { handled(); const order = ['none', 'body', 'site', 'world']; setVis('frame', order[(order.indexOf(vis.frame) + 1) % order.length]); toast(`Frames: ${vis.frame}`, 1200) }
