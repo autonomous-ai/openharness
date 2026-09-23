@@ -47,7 +47,25 @@ class AltAsMetaInputHandler implements TerminalInputHandler {
   }
 }
 
-/// The handler every pane's [Terminal] is built with — xterm's default behaviour, plus ⌥⏎ and ⌥⌫.
+/// Preserves Shift+Enter as CSI-u instead of losing Shift in the default keytab.
+/// Prompts can then distinguish a newline from the plain Return used to submit.
+class ShiftEnterInputHandler implements TerminalInputHandler {
+  const ShiftEnterInputHandler(this._inner);
+
+  final TerminalInputHandler _inner;
+
+  @override
+  String? call(TerminalKeyboardEvent event) {
+    final isEnter =
+        event.key == TerminalKey.enter || event.key == TerminalKey.numpadEnter;
+    if (isEnter && event.shift && !event.alt && !event.ctrl) {
+      return '\x1b[13;2u';
+    }
+    return _inner(event);
+  }
+}
+
+/// The handler every pane's [Terminal] uses, including ⇧⏎, ⌥⏎ and ⌥⌫.
 const TerminalInputHandler harnessInputHandler = AltAsMetaInputHandler(
-  defaultInputHandler,
+  ShiftEnterInputHandler(defaultInputHandler),
 );

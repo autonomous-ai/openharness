@@ -106,6 +106,37 @@ String _typed(List<TerminalBinaryFrame> wire) => utf8.decode([
 ]);
 
 void main() {
+  for (final platform in TerminalTargetPlatform.values) {
+    for (final key in [TerminalKey.enter, TerminalKey.numpadEnter]) {
+      test('Shift+$key preserves its modifier on $platform', () {
+        final out = <String>[];
+        final terminal = Terminal(
+          platform: platform,
+          inputHandler: harnessInputHandler,
+        )..onOutput = out.add;
+
+        terminal.keyInput(key, shift: true);
+        terminal.write('\x1b[20h'); // LNM must not turn this into a submit.
+        terminal.keyInput(key, shift: true);
+
+        expect(out, ['\x1b[13;2u', '\x1b[13;2u']);
+      });
+    }
+  }
+
+  test('Ctrl+Shift+Enter keeps the default keytab behavior', () {
+    final out = <String>[];
+    final baseline = <String>[];
+    final terminal = _pane()..onOutput = out.add;
+    final unmodified = Terminal(platform: TerminalTargetPlatform.macos)
+      ..onOutput = baseline.add;
+
+    terminal.keyInput(TerminalKey.enter, ctrl: true, shift: true);
+    unmodified.keyInput(TerminalKey.enter, ctrl: true, shift: true);
+
+    expect(out, baseline);
+  });
+
   test('⌥⏎ reaches the engine as a Meta-prefixed Return, not a submit', () {
     final out = <String>[];
     final terminal = _pane()..onOutput = out.add;
@@ -220,6 +251,38 @@ void main() {
   // `_isPrintableText` deferral to the macOS IME, the ⌘ and ⌃⇥ escapes, `TerminalPanel._onTerminalKey`,
   // then the session's input batcher — and assert the bytes that would leave for the daemon. That is
   // the whole distance between the key and the engine's prompt.
+
+  for (final key in [
+    LogicalKeyboardKey.enter,
+    LogicalKeyboardKey.numpadEnter,
+  ]) {
+    testWidgets('Shift+$key leaves a live macOS pane as CSI-u', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      final wire = <TerminalBinaryFrame>[];
+      final app = _localNotifier();
+      final session = await _liveSession(wire);
+      await tester.pumpWidget(_host(app, session));
+      await tester.pump();
+
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.shiftLeft,
+        platform: 'macos',
+      );
+      await tester.sendKeyDownEvent(key, character: '\r', platform: 'macos');
+      await tester.sendKeyRepeatEvent(key, character: '\r', platform: 'macos');
+      await tester.sendKeyUpEvent(key, platform: 'macos');
+      await tester.sendKeyUpEvent(
+        LogicalKeyboardKey.shiftLeft,
+        platform: 'macos',
+      );
+      await tester.pump(const Duration(milliseconds: 30));
+
+      debugDefaultTargetPlatformOverride = null;
+      expect(_typed(wire), '\x1b[13;2u\x1b[13;2u');
+      session.dispose();
+      app.dispose();
+    });
+  }
 
   testWidgets('⌥⏎ leaves a live pane as ESC + Return', (tester) async {
     final wire = <TerminalBinaryFrame>[];
