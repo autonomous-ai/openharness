@@ -321,7 +321,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('native tabs take the terminal face at the chrome size', (
+  testWidgets('the native tabs are told nothing about the terminal font', (
     tester,
   ) async {
     final updates = <Map<dynamic, dynamic>>[];
@@ -346,8 +346,10 @@ void main() {
     await mount(tester, app, map, native: true);
     selectFont(22, TerminalFontChoice.monaco);
     await tester.pumpAndSettle();
-    expect(updates.last['fontFamily'], 'Monaco');
-    expect(updates.last['fontSize'], grid.AppType.chromeSize);
+    // They are named in the system face, so the payload carries no font at all.
+    expect(updates.last.containsKey('fontFamily'), isFalse);
+    expect(updates.last.containsKey('fontSize'), isFalse);
+    expect(updates.last.containsKey('fontFallbacks'), isFalse);
     await tester.pumpWidget(const SizedBox());
   });
 }
