@@ -210,6 +210,7 @@ function filesFor(trial) {
     description,
     context: trial.context,
     demo: false,
+    offline: !!trial.offline || trial.summary.providers.includes('mock'),
     columns: [
       { id: 'original', header: trial.original.header },
       { id: 'candidate', header: trial.candidate.header }
@@ -298,7 +299,7 @@ function filesFor(trial) {
     'comparison.csv':
       lines.map((line) => line.map(csv).join(',')).join('\r\n') + '\r\n',
     'review.md': report.join('\n'),
-    'README.md': `# Question Lab trial\n\n${description}\n\nThis folder contains the exact sampled text and metadata. Keep it wherever you would keep the original data. No API keys are included.\n\n- trial.json: exact questions sent, raw answers, per-call provider/model/usage, frozen rows and your notes.\n- comparison.csv: answers and preferences, safe to open as a spreadsheet.\n- review.md: readable review.\n- sheet.json: the frozen sample with both headers. Copy it into a separate Jev Sheets workspace to ask the questions again. Live runs can produce different answers. With no key, the viewer explicitly uses its offline stand-in.\n- column.json: the candidate column definition; an agent can add it to the original sheet.json after you decide.\n- checksums.json: SHA-256 hashes of the files in this packet.\n\nA trial does not overwrite the source file. “Try on whole sheet” adds a separate runtime column; like other pane-added columns, it lasts until reset or viewer restart. Ask your agent to retain a chosen header in sheet.json. Kept trials survive restart.\n\nSelected ${trial.rows.length} of ${trial.population} rows using ${trial.selection.method}. ${mock ? 'OFFLINE STAND-IN / INCOMPLETE: these results are not model validation or research findings.' : 'No automatic claim of accuracy is made.'}\n`
+    'README.md': `# Question Lab trial\n\n${description}\n\nThis folder contains the exact sampled text and metadata. Keep it wherever you would keep the original data. No API keys are included.\n\n- trial.json: exact questions sent, raw answers, per-call provider/model/usage, frozen rows and your notes.\n- comparison.csv: answers and preferences, safe to open as a spreadsheet.\n- review.md: readable review.\n- sheet.json: the frozen sample with both headers. Copy it into a separate Jev Sheets workspace to ask the questions again. Live runs can produce different answers. With no key, the viewer explicitly uses its offline stand-in.\n- column.json: the candidate column definition; an agent can add it to the original sheet.json after you decide.\n- checksums.json: SHA-256 hashes of the files in this packet.\n\nKeeping a trial does not change the source file. “Use on whole sheet” saves the chosen wording as a separate question in the original sheet.json, preserving the original question and data. Repeated use of the same kept trial does not duplicate the question. The chosen wording and kept trial survive restart; answers are recomputed in a new viewer session.\n\nSelected ${trial.rows.length} of ${trial.population} rows using ${trial.selection.method}. ${mock ? 'OFFLINE STAND-IN / INCOMPLETE: these results are not model validation or research findings.' : 'No automatic claim of accuracy is made.'}\n`
   }
 }
 
@@ -325,6 +326,7 @@ export function createQuestionLab({
       column = now.columns.find((c) => c.id === trial.original.id)
     return (
       !!now.invalid ||
+      !!now.offline !== !!trial.offline ||
       now.dataSha !== trial.datasetSha ||
       !column ||
       columnKey(column) !== columnKey(trial.original)
@@ -410,6 +412,7 @@ export function createQuestionLab({
         try {
           const result = await evaluatePair({
             state: rowState(row),
+            key: trial.offline ? '' : undefined,
             questions,
             mock,
             salt: 1,
@@ -543,6 +546,7 @@ export function createQuestionLab({
           title: now.title,
           source: now.source,
           context: now.context,
+          offline: !!now.offline,
           original: clone(column),
           rows,
           datasetSha: now.dataSha,

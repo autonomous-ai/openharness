@@ -17,6 +17,7 @@ import { writeFileSync, renameSync, readFileSync, existsSync, rmSync } from 'nod
 import { extname } from 'node:path'
 import { questionForColumn } from './questions.mjs'
 import { createQuestionLab, trialHash } from './question-lab.mjs'
+import { keepTrialColumn } from './kept-column.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const MARKER = 'sheet.json'
@@ -34,7 +35,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
   // Every `let` lives here, above the first call that could touch it.
   let server = null, watcher = null
   let sourceWatcher = null, sourceFile = null, sourceInfo = null, sourceError = null, sourceTimer = null // the person's own file, if sheet.json names one
-  let sheet = normalizeSheet({ rows: [] }), configError = null, jevError = null
+  let sheet = normalizeSheet({ rows: [] }), configError = null, jevError = null, lastGoodConfig = null
   let rows = [], rowById = new Map(), columns = []
   let cells = new Map()      // row id -> Map(column id -> cell)
   let cache = new Map()      // column key -> Map(row state -> answer)
@@ -51,7 +52,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
   const rng = mulberry32(20260919)
   // Which live route is active (typesafe, cloudflare, openrouter), or null for the offline stand-in.
   // Asked each time, because a key can arrive in the credentials file while the viewer runs.
-  const liveRoute = () => resolveCredentials()?.provider ?? null
+  const liveRoute = () => sheet.offline ? null : resolveCredentials()?.provider ?? null
   const picker = createPicker()
   const colById = (id) => columns.find((c) => c.id === id)
   const mock = sheetMock(colById)
@@ -186,7 +187,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     }
   }
   function lightView() {
-    return { rev, running, reviewBelow, reviewOnly, sort, filter, order, error: configError, jevError, client: liveRoute() ?? 'mock', ghost: ghostView(), ...tally() }
+    return { rev, running, reviewBelow, reviewOnly, sort, filter, order, error: configError, jevError, offline: sheet.offline, client: liveRoute() ?? 'mock', ghost: ghostView(), ...tally() }
   }
   function fullState() {
     const cellsOut = {}
@@ -204,7 +205,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
       concurrency: sheet.concurrency, limits: LIMITS,
       questionLabToken: lab.token,
       suggestions: sheet.suggestions.length ? sheet.suggestions : FALLBACK_SUGGESTIONS,
-      columns: columns.map((c) => ({ id: c.id, header: c.header, name: c.name, type: c.type, options: c.options, descriptions: c.descriptions, levels: c.levels, bare: !!c.bare, source: c.source, kind: describeColumn(c) })),
+      columns: columns.map((c) => ({ id: c.id, header: c.header, name: c.name, type: c.type, options: c.options, descriptions: c.descriptions, levels: c.levels, bare: !!c.bare, source: c.source, questionTrial: c.questionTrial, kind: describeColumn(c) })),
       rows: rows.map((r, i) => ({ id: r.id, n: i + 1, text: r.text, meta: r.meta, group: r.group, edited: !!r.edited, labelled: !!r.truth })),
       cells: cellsOut,
       ...lightView(),
@@ -231,7 +232,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     const accLine = columns.filter((c) => colStats[c.id].acc != null).map((c) => `${c.name} ${pct(colStats[c.id].acc)}`).join(', ')
     const findings = []
     if (configError) findings.push({ severity: 'error', kind: 'sheet', ref: MARKER, message: configError })
-    if (jevError) findings.push({ severity: 'warning', kind: 'jev', message: jevError })
+    if (jevError) findings.push({ severity: 'error', kind: 'jev', message: jevError })
     const report = []
     for (const c of columns) {
       const s = colStats[c.id]
@@ -250,15 +251,15 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     if (g) findings.push({ severity: 'info', kind: 'confidence', message: `Average confidence by row group: ${g}.` })
     const full = stats.cellsTotal > 0 && stats.cellsFilled === stats.cellsTotal
     return {
-      ready: !configError && full,
-      summary: clean(configError ? `sheet.json needs a fix: ${configError}` : `${sheet.title}: ${stats.rows} rows x ${stats.columns} Jev columns, ${stats.cellsFilled}/${stats.cellsTotal} cells, ${stats.flagged} under ${reviewBelow}${accLine ? `. Right: ${accLine}` : ''}`).slice(0, 200),
+      ready: !configError && !jevError && full,
+      summary: clean(configError ? `sheet.json needs a fix: ${configError}` : jevError ? `Answers unavailable: ${jevError}` : `${sheet.offline ? 'Offline practice · ' : ''}${sheet.title}: ${stats.rows} rows x ${stats.columns} Jev columns, ${stats.cellsFilled}/${stats.cellsTotal} cells, ${stats.flagged} under ${reviewBelow}${accLine ? `. Right: ${accLine}` : ''}`).slice(0, 200),
       findings, artifact: MARKER, answersFile: ANSWERS,
       phases: [
         { id: 'load', name: 'Sheet loaded', state: configError ? 'failed' : 'done' },
-        { id: 'fill', name: 'Cells filled', state: full ? 'done' : stats.cellsTotal ? 'active' : 'pending' },
+        { id: 'fill', name: jevError ? 'Answers unavailable' : full ? 'Cells filled' : 'Filling cells', state: jevError ? 'failed' : full ? 'done' : stats.cellsTotal ? 'active' : 'pending' },
         { id: 'review', name: 'Review', state: !full ? 'pending' : stats.flagged ? 'active' : 'done' },
       ],
-      sheet: { client: liveRoute() ?? 'mock', loadedAt, source: sourceInfo?.name ?? null, reviewBelow, rows: stats.rows, cellsFilled: stats.cellsFilled, cellsTotal: stats.cellsTotal, flagged: stats.flagged, costUsd: stats.costUsd, groups, columns: report },
+      sheet: { client: liveRoute() ?? 'mock', offline: sheet.offline, loadedAt, source: sourceInfo?.name ?? null, reviewBelow, rows: stats.rows, cellsFilled: stats.cellsFilled, cellsTotal: stats.cellsTotal, flagged: stats.flagged, costUsd: stats.costUsd, groups, columns: report },
     }
   }
   function shown(col, a) {
@@ -327,7 +328,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
       // so the wave is visible. `tick` and `drain` skip the pacing.
       if (!fast && !liveRoute() && paceMs > 0) await sleep(paceMs * (0.7 + 0.6 * rng()))
       const questions = Object.fromEntries(need.map((c) => [c.id, questionFor(c)]))
-      const res = await evaluate({ state, questions, salt: 1, mock, model: process.env.JEV_MODEL || 'jev-latest' })
+      const res = await evaluate({ state, questions, key: sheet.offline ? '' : undefined, salt: 1, mock, model: process.env.JEV_MODEL || 'jev-latest' })
       if (stopped || myEpoch !== epoch || rowById.get(row.id) !== row || JSON.stringify(rowState(row)) !== key) return
       const real = Number(res.usage?.input_tokens)
       const tokens = Number.isFinite(real) && real > 0 ? real : Math.ceil((key.length + JSON.stringify(toWire(questions)).length) / 4)
@@ -347,10 +348,12 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
       burst.cells += n; burst.ms = now - burst.startedAt; burst.rate = burst.cells / Math.max(0.03, burst.ms / 1000)
       if (!hasMissing(row)) todo.delete(row.id)
     } catch (e) {
+      if (stopped || myEpoch !== epoch) return
       counters.errors++
       jevError = clean(e?.message ?? e)
       row.retryAt = Date.now() + 5000 // leave the cell waiting, show the error, try again in a while (see pump)
       pushView()
+      verdictSoon()
     } finally {
       inflight.delete(row)
     }
@@ -437,7 +440,16 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     const problems = [sourceError, ...next.errors].filter(Boolean).slice(0, 3).join('; ')
     if (!next.rows.length && rows.length && !fresh) { configError = `${MARKER}: ${problems || 'needs at least one row with text'}. Showing the last good sheet`; pushView(); verdictSoon(); return }
     configError = problems ? `${MARKER}: ${problems}` : null
+    const modeChanged = sheet.offline !== next.offline
     sheet = next
+    if (modeChanged) {
+      cache = new Map()
+      patches = []
+      jevError = null
+      counters = { calls: 0, cacheHits: 0, tokens: 0, costUsd: 0, errors: 0, computed: 0 }
+      burst = { active: false, startedAt: 0, cells: 0, rate: 0, ms: 0 }
+    }
+    lastGoodConfig = raw
     loadedAt = new Date().toISOString()
     epoch++
     rows = next.rows.map((r) => ({ ...r, edited: false, retryAt: 0 }))
@@ -480,7 +492,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
       if (!cur.source && !existsSync(join(workspace, SAMPLE_BACKUP))) writeFileSync(join(workspace, SAMPLE_BACKUP), JSON.stringify(cur, null, 2) + '\n')
     } catch { /* no sample worth keeping */ }
     const title = file.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim() || 'My file'
-    const next = { title, description: `Rows from ${file}, the person's own file.`, source: file, textLabel: got.info.textColumn, demo: false, concurrency: 16, columns: [], suggestions: OWN_SUGGESTIONS }
+    const next = { title, description: `Rows from ${file}, the person's own file.`, source: file, textLabel: got.info.textColumn, offline: sheet.offline, demo: false, concurrency: 16, columns: [], suggestions: OWN_SUGGESTIONS }
     writeMarker(next)
     filter = null; sort = null; reviewOnly = false
     applySheet(next, true)
@@ -493,6 +505,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
       try { sample = JSON.parse(readFileSync(f, 'utf8')); if (sample && !sample.source) break; sample = null } catch { sample = null }
     }
     if (!sample) return { ok: false, error: 'the made-up sample is not on this machine' }
+    sample.offline = sheet.offline
     writeMarker(sample)
     filter = null; sort = null; reviewOnly = false
     applySheet(sample, true)
@@ -505,7 +518,7 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
     burst = { active: false, startedAt: 0, cells: 0, rate: 0, ms: 0 }
     patches = []
     ghost = { ...ghost, phase: 'idle', header: '', pausedUntil: 0, nextAt: Date.now() + 5000, cursor: 0 }
-    applySheet(watcher.get(), true)
+    applySheet(lastGoodConfig ?? watcher.get(), true)
     if (watcher.error()) { configError = `${watcher.error()}. Showing the last good sheet`; pushView() } // still broken on disk
   }
 
@@ -580,7 +593,6 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
 
   // Question Lab owns only frozen trials; adding a tested header uses the existing sheet/cache.
   let labSnapshotRev = -1, labData = null
-  const labApplied = new Map()
   function labSnapshot(withConfidence = false) {
     if (labSnapshotRev !== rev) {
       const frozenRows = rows.map((r, i) => ({ id: r.id, n: i + 1, text: r.text, meta: { ...r.meta } }))
@@ -591,20 +603,15 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
       const cell = cellOf(row.id, col.id)
       return cell ? [[row.id, cell.conf]] : []
     }))])) : null
-    return { ...labData, title: sheet.title, source: sourceInfo?.name || null, context: sheet.context, columns, order, confidences, invalid: !!configError }
+    return { ...labData, offline: sheet.offline, title: sheet.title, source: sourceInfo?.name || null, context: sheet.context, columns, order, confidences, invalid: !!configError }
   }
   const lab = createQuestionLab({ workspace, snapshot: labSnapshot,
+    // Switching a project to practice also prevents any remaining trial work from making live calls.
+    evaluatePair: (options) => evaluate({ ...options, key: sheet.offline || options.key === '' ? '' : undefined }),
     notify: (data) => server?.broadcast(data, 'trial'),
     apply: (trial) => {
-      const prior = labApplied.get(trial.id)
-      if (prior && columns.includes(prior.column)) return { ...prior.result, alreadyApplied: true }
-      if (columns.length >= LIMITS.maxColumns) return { ok: false, error: 'This sheet has 12 columns. Remove one before trying another.' }
-      // The original stays visible, including when both versions have the same name.
-      const parsed = parseHeader(trial.candidate.header)
-      let id = parsed.column.id, suffix = 2
-      while (colById(id)) id = `${parsed.column.id.slice(0, 24)}_v${suffix++}`
-      const col = { ...parsed.column, id, source: 'pane', addedAt: Date.now() }
-      columns.push(col)
+      const saved = keepTrialColumn(workspace, trial, columns)
+      const col = { ...parseHeader(trial.candidate.header).column, id: saved.id }
       // Reuse only answers from this exact question/data and the currently connected route/model.
       const route = liveRoute() || 'mock', model = process.env.JEV_MODEL || 'jev-latest'
       let reused = 0
@@ -613,10 +620,9 @@ export async function startSheetsViewer({ workspace, port = 0, autostart = true,
         cacheFor(col).set(JSON.stringify(rowState(row)), { answer: row.candidate.answer, latencyMs: row.provenance.latencyMs, tokens: 0 })
         reused++
       }
-      const result = { id, rows: rows.length, reused, persisted: false }
-      labApplied.set(trial.id, { column: col, result })
-      touch(); refill(); changed()
-      return result
+      touch()
+      applySheet(saved.raw, false)
+      return { id: saved.id, rows: rows.length, reused, persisted: true, alreadyApplied: saved.alreadyApplied }
     }
   })
 

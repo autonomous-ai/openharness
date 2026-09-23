@@ -5,6 +5,12 @@ row. The person brings a file they could never read in full. The craft is wordin
 answers are right and the confidence is honest, then turning the answers into findings a person can
 act on. A made-up sheet is only the fallback when they have no file at hand.
 
+For requested offline practice, write the fictional rows and `"offline": true` into `sheet.json`.
+The existing pane and Question Lab then use their stand-in even with a saved key. Check the verdict
+for `sheet.offline: true` and `sheet.client: "mock"`. Keep the exercise in the pane; do not replace it
+with an external script or chat-only answer table. Preserve credentials and the installed package.
+Practice comparisons are not model-quality evidence. Switch back only when the person asks to go live.
+
 ## How one row is judged
 
 For each row the viewer makes ONE call. The state is the row (its `text` plus plain fields like
@@ -72,9 +78,11 @@ rows, questions, probabilities and per-call provider/model in `trial.json`; `col
 the tested header. Keep human preferences separate from truth labels. This deliberate sample
 cannot estimate whole-sheet accuracy, and greater confidence does not establish correctness.
 `mock` answers are only a practice flow. Failed or cancelled trials retain their status and are
-not complete comparisons. After the person chooses a wording, add it to the original
-`sheet.json`; the pane's **Try on whole sheet** is a temporary extra column, like other pane-added
-columns. Do not replace their source file with the packet's `sheet.json`: that file contains only
+not complete comparisons. After the person chooses a wording, **Use on whole sheet** saves a
+separate question in the original
+`sheet.json`. Read that file before editing so you retain the chosen wording and its `questionTrial`
+identifier. Other pane-added columns remain temporary. Do not replace their source file with the
+packet's `sheet.json`: that file contains only
 the frozen sample and belongs in a separate workspace if they want to rerun it.
 
 Keep their data in the workspace. Quote only what the report needs.

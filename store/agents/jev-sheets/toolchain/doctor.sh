@@ -7,7 +7,7 @@ if ! node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 18 ? 0
 fi
 echo "ok   node $(node -v)"
 cd "$(dirname "$0")/.."
-for file in viewer/questions.mjs viewer/question-lab.mjs viewer/question-lab-ui.mjs viewer/trial-zip.mjs; do
+for file in viewer/questions.mjs viewer/question-lab.mjs viewer/question-lab-ui.mjs viewer/trial-zip.mjs viewer/kept-column.mjs; do
   node --check "$file"
 done
 echo "ok   Question Lab modules"
