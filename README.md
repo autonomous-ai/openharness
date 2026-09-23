@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>The ultimate harness for coding agents and beyond.</b><br>
-  Claude Code at the office. Codex on the Mac mini at home. Hermes on your cloud server. One command center.<br>
+  Claude Code at work. Codex at home. Hermes in the cloud. One command center.<br>
   Start with code. Then follow your curiosity and build across disciplines: CAD, circuits, robots, games and music.
 </p>
 
