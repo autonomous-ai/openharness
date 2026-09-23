@@ -143,10 +143,9 @@ private extension SwarmTabStrip {
   }
 
   func checkStartupPalette(_ expected: SwarmNativePalette) throws {
-    try checkTitlebar(palette == expected && newButton.contentTintColor == expected.accent && notificationButton.contentTintColor == expected.accent &&
-      newButton.contentTintColor == expected.accent,
+    try checkTitlebar(palette == expected && newButton.contentTintColor == expected.accent && sessionsButton.contentTintColor == expected.accent,
       "Initial search and new-swarm colors use the saved palette")
-    try checkTitlebar(tabs.isEmpty && !actionsEnabled && !newButton.isEnabled && !notificationButton.isEnabled,
+    try checkTitlebar(tabs.isEmpty && !actionsEnabled && !newButton.isEnabled && !sessionsButton.isEnabled,
       "Initial palette setup does not create or enable workspace controls")
   }
 
@@ -262,27 +261,48 @@ private extension SwarmTabStrip {
     update(state([["id": "swarm-0", "name": "Renamed tab"]], active: "swarm-0"))
     try checkTitlebar(newButton.toolTip == "New Tab ⌘T" && storeButton.toolTip == "Harness Store ⌘S",
       "Titlebar actions expose their keyboard alternatives")
-    try checkTitlebar(notificationButton.frame.maxX <= scroll.frame.minX,
-      "The bell is before the tabs beside the traffic lights")
+    try checkTitlebar(scroll.frame.minX == 0,
+      "The tabs start beside the traffic lights without a separate bell")
     try checkTitlebar(scroll.frame.maxX <= newButton.frame.minX && newButton.frame.maxX <= storeButton.frame.minX,
       "New Tab follows the tabs while the Store stays on the right")
     try checkTitlebar(storeButton.title == "Harness Store" && storeButton.accessibilityLabel() == "Harness Store",
       "The Store action has a visible and accessible name")
+    try checkTitlebar(newButton.frame.maxX < sessionsButton.frame.minX && sessionsButton.frame.maxX < storeButton.frame.minX && storeButton.frame.maxX <= bounds.width,
+      "Harnesses sits to the left of the Store without overlapping its hit target")
+    try checkTitlebar(sessionsButton.accessibilityLabel() == "Harnesses", "Harnesses has an accessible name")
     try checkTitlebar(!subviews.contains(where: { $0 is NSTextField }), "The titlebar has no competing text editor")
     events.removeAll()
     newButton.performClick(nil)
-    notificationButton.performClick(nil)
+    sessionsButton.performClick(nil)
     storeButton.performClick(nil)
-    try checkTitlebar(events == ["new", "notifications", "store"],
-      "The tab, notification and Store buttons dispatch once")
-    try checkTitlebar(notificationButton.hasAttention, "The bell represents pending agent attention")
+    try checkTitlebar(events == ["new", "sessions", "store"],
+      "The tab, Harnesses and Store buttons dispatch once")
+    try checkTitlebar(sessionsButton.attention > 0 && sessionsButton.toolTip?.contains("input") == true, "Harnesses represents pending agent attention")
+    let originalAttention = sessionsButton.attention
+    sessionsButton.attention = 0
+    let quietPixels = sessionsButton.renderedPixels()
+    try checkTitlebar(sessionsButton.attentionLabel == nil,
+      "Running harnesses without questions have no notification badge")
+    for count in [1, 6, 42, 100] {
+      sessionsButton.attention = count
+      let label = sessionsButton.attentionLabel!
+      let width = (label as NSString).size(withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold)]).width
+      let badge = sessionsButton.badgeFrame(textWidth: width)
+      try checkTitlebar(sessionsButton.bounds.contains(badge) && badge.maxX == sessionsButton.bounds.maxX &&
+        (sessionsButton.isFlipped ? badge.minY == sessionsButton.bounds.minY : badge.maxY == sessionsButton.bounds.maxY),
+        "The attention badge stays in the top-right corner and fits at count \(count)")
+      try checkTitlebar(sessionsButton.renderedPixels() != quietPixels,
+        "Pending questions visibly add a count badge at \(count)")
+    }
+    try checkTitlebar(sessionsButton.attentionLabel == "99+", "Large attention counts stay compact")
+    sessionsButton.attention = originalAttention
     let oldButton = newButton
     var themedState = state([["id": "swarm-0", "name": "Renamed tab"]], active: "swarm-0")
     themedState["palette"] = ["workspace": Int64(0xff252d43), "search": Int64(0xff262f46)]
     update(themedState)
     try checkTitlebar(newButton === oldButton && tabs[0] === original,
       "Palette changes retain native control identity")
-    try checkTitlebar(newButton.contentTintColor == palette.accent && notificationButton.contentTintColor == palette.accent,
+    try checkTitlebar(newButton.contentTintColor == palette.accent && sessionsButton.contentTintColor == palette.accent,
       "Both toolbar icons receive the coordinated palette")
     events.removeAll()
     try original.checkEnabled(true)
@@ -293,12 +313,12 @@ private extension SwarmTabStrip {
     events.removeAll()
     update(state([["id": "swarm-0", "name": "Renamed tab"]], active: "swarm-0", enabled: false))
     try original.checkEnabled(false)
-    try checkTitlebar(!newButton.isEnabled && !notificationButton.isEnabled && !storeButton.isEnabled, "Titlebar actions disable with a modal")
+    try checkTitlebar(!newButton.isEnabled && !sessionsButton.isEnabled && !storeButton.isEnabled, "Titlebar actions disable with a modal")
     try checkTitlebar(actionPixels != storeButton.renderedPixels(),
       "The Store visibly dims when a workspace modal disables it")
     original.clickBothActions()
     newButton.performClick(nil)
-    notificationButton.performClick(nil)
+    sessionsButton.performClick(nil)
     storeButton.performClick(nil)
     try checkTitlebar(events.isEmpty, "Disabled controls emit no actions")
     try checkDragOperations()
@@ -372,7 +392,7 @@ private extension SwarmTabStrip {
     messenger.finishNextReply()
     try checkTitlebar(window.firstResponder === window.contentInput,
       "The latest acknowledged tab action restores content focus")
-    for (button, method) in [(notificationButton, "notifications")] {
+    for (button, method) in [(sessionsButton, "sessions")] {
       window.makeFirstResponder(button)
       let before = messenger.calls.count
       button.performClick(nil)
@@ -382,7 +402,7 @@ private extension SwarmTabStrip {
         "The toolbar waits for Flutter's destination focus tree")
       messenger.finishNextReply()
       try checkTitlebar(window.firstResponder === window.contentInput,
-        "Notification control returns keyboard ownership to Flutter")
+        "Harnesses returns keyboard ownership to Flutter")
     }
     messenger.holdReplies = false
   }
@@ -877,7 +897,7 @@ private extension SwarmTitlebar {
           let attention = menu.items.first(where: { $0.representedObject as? String == "notifications" }) else {
       throw TitlebarCheckFailure(message: "View menu exposes agents needing input")
     }
-    try checkTitlebar(attention.title == "Agents Needing Input…", "Native command names its destination")
+    try checkTitlebar(attention.title == "Harnesses Needing Input…", "Native command names its destination")
     try checkTitlebar(attention.keyEquivalent == "i" && attention.keyEquivalentModifierMask == [.command, .shift], "Native attention shortcut matches Flutter")
     try checkTitlebar(attention.target === self && attention.action == #selector(menuAction(_:)), "Native attention command uses the guarded channel handler")
     actionsEnabled = false
@@ -1144,7 +1164,7 @@ do {
   try checkTitlebar(swarmRow.menuTitle().string == "My swarm", "Empty swarm rows have no invented machine label")
   let sharedSwarm = SwarmHistoryEntry(["id": "shared", "title": "Workshop", "swarm": true, "machineName": "2 machines"])!
   try checkTitlebar(sharedSwarm.menuTitle().string == "Workshop\t2 machines", "Swarm machine counts use the same trailing column as agent machines")
-  for button in [SwarmIconButton(), SwarmNotificationButton(), SwarmCloseButton()] {
+  for button in [SwarmIconButton(), SwarmSessionsButton(), SwarmCloseButton()] {
     button.frame = NSRect(x: 0, y: 0, width: 28, height: 28)
     button.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
     button.isBordered = false

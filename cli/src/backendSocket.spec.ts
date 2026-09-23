@@ -9,6 +9,7 @@ import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { decodeTerminalLocal, TerminalBinaryKind } from './lib/terminalBinary.js'
 import { registry, type RegisteredSession } from './lib/registry.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
+import { AgentStopError } from './lib/stopAgentService.js'
 import * as mediaPreview from './lib/mediaPreview.js'
 import * as gitProject from './lib/gitProject.js'
 import * as projectFolder from './lib/projectFolder.js'
@@ -17,6 +18,25 @@ import * as storeCatalog from './dsh/catalog.js'
 import { randomUUID } from 'node:crypto'
 import { fakeGridAnswers, installFakeGrid, type FakeGrid } from './lib/__fixtures__/fakeGrid.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
+
+describe('confirmed harness pause replies', () => {
+  it.each(['unsupported', 'unconfirmed', 'confirmed'] as const)('%s stop never sends a false success', async state => {
+    const socket = new BackendSocket('fixture')
+    const frames: any[] = []
+    socket.registerLocalClient('local:pause', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    if (state !== 'unsupported') socket.onDeleteAgent = async () => {
+      if (state === 'unconfirmed') throw new AgentStopError('The process could not be verified.')
+    }
+    await (socket as any).dispatchDown({ type: 'agent_delete', payload: { requestId: 'pause', agentId: 'fixture' } }, 'local:pause')
+    const reply = frames.find(frame => frame.type === 'agent_delete_result')?.payload
+    expect(reply).toMatchObject(state === 'confirmed' ? { deleted: true } : {
+      error: state === 'unsupported' ? 'UNSUPPORTED' : 'STOP_UNCONFIRMED',
+    })
+    if (state !== 'confirmed') expect(reply.deleted).toBeUndefined()
+    if (state === 'unconfirmed') expect(reply.detail).toBe('The process could not be verified.')
+    await socket.stop()
+  })
+})
 
 describe('viewer forwarding authentication', () => {
   it('requires encryption and a web-role session remotely, while permitting trusted local clients', async () => {

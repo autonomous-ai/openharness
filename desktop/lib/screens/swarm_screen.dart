@@ -25,6 +25,7 @@ import '../shortcuts/keymap_host.dart';
 import '../shortcuts/keymap_native.dart';
 import '../shortcuts/keymap_settings.dart';
 import '../state/app_state.dart';
+import '../state/harness_sessions.dart';
 import '../state/harness_placement.dart';
 import '../state/new_harness.dart';
 import '../state/pane_arrangement.dart';
@@ -32,7 +33,6 @@ import '../terminal/terminal_viewport.dart';
 import '../terminal/terminal_text.dart';
 import '../usage/models_menu_controller.dart';
 import '../state/swarm_catalog.dart';
-import '../state/swarm_attention.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
 import '../state/swarm.dart';
@@ -55,13 +55,14 @@ import '../widgets/box_chrome.dart';
 import '../widgets/new_harness_box.dart';
 import '../widgets/open_harness_intent.dart';
 import '../widgets/pane_grid.dart';
+import '../widgets/pane_minimize.dart';
+import '../widgets/harness_session_manager.dart';
 import '../widgets/remote_folder_picker.dart';
 import '../widgets/shortcuts_sheet.dart';
 import '../widgets/harness_customize_pane.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../widgets/swarm_dialogs.dart';
 import '../widgets/swarm_search_input.dart';
-import '../widgets/swarm_attention.dart';
 import '../widgets/swarm_switcher.dart';
 import '../widgets/swarm_wallpaper.dart';
 import '../widgets/swarm_icon.dart';
@@ -121,7 +122,8 @@ typedef _NewHarnessContext = ({
 TextStyle get _boxCaption =>
     grid.AppType.monoLabel(color: kBoxFaint, fontWeight: FontWeight.w400);
 
-class _SwarmScreenState extends State<SwarmScreen> {
+class _SwarmScreenState extends State<SwarmScreen>
+    with SingleTickerProviderStateMixin {
   static const _channel = MethodChannel('harness/swarm_tabs');
   late final bool _native =
       widget.nativeTabs ?? (Platform.isMacOS && !kUnderTest);
@@ -130,6 +132,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
       SwarmProjectStore(storage: kUnderTest ? null : HarnessFileStore.shared);
   StreamSubscription<SpokenTaskRequest>? _spokenTasks;
   final _shellFocus = FocusNode(debugLabel: 'Swarm shell');
+  final _sessionsButton = GlobalKey();
+  OverlayEntry? _sessionsOverlay;
+  VoidCallback? _unregisterSessions;
+  late final _minimize = PaneMinimizeController(vsync: this);
+  bool _closingPane = false;
+  OverlayEntry? _minimizeOverlay;
   final _startSearchFocus = FocusNode(debugLabel: 'Start page search');
   final _commandFocus = FocusNode(debugLabel: 'Ask Harness');
   bool _commandBarOpen = false;
@@ -257,11 +265,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final current = ModalRoute.isCurrentOf(context) ?? true;
     if (_routeIsCurrent == current) return;
     _routeIsCurrent = current;
-    if (!current && (_search != null || _commandBarOpen)) {
+    if (!current &&
+        (_search != null || _commandBarOpen || _sessionsOverlay != null)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && !_routeIsCurrent) {
           _closeSearch(restoreFocus: false);
           _closeCommandBar(restoreFocus: false);
+          _closeSessions(restoreFocus: false);
         }
       });
     }
@@ -270,6 +280,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   @override
   void dispose() {
+    _unregisterSessions?.call();
+    _sessionsOverlay?.remove();
+    _sessionsOverlay?.dispose();
+    _minimizeOverlay?.remove();
+    _minimizeOverlay?.dispose();
+    _minimizeOverlay = null;
+    _minimize.dispose();
     _keymap.removeListener(_keymapChanged);
     _defaultKeymap.dispose();
     grid.AppTheme.palette.removeListener(_paletteChanged);
@@ -357,6 +374,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       mounted && _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen;
 
   void _runShortcut(String id) {
+    if (_sessionsOverlay != null) _closeSessions();
     if (id != 'navigation.command_bar') _closeCommandBar();
     if (id == 'agent.new' && _search != null) {
       final target = _search!.targetId;
@@ -478,7 +496,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _dialog(() => showKeyboardPractice(context, keymap: _keymap));
 
   int get _attention =>
-      app.machineStates.values.fold(0, (n, m) => n + m.blockedAgents.length);
+      harnessSessions(app).where((row) => row.needsInput).length;
 
   void _restoreEmptyFocus() {
     if (!mounted ||
@@ -574,6 +592,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
           },
       ],
       'attention': _attention,
+      'sessionsOpen': _sessionsOverlay != null,
+      'runningSessions': harnessSessions(app)
+          .where((row) => row.running)
+          .length,
       'history': [
         for (final entry in _navigation.menuDestinations(app))
           {
@@ -834,6 +856,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     final args = call.arguments is Map ? call.arguments as Map : const {};
+    if (call.method == 'sessions') {
+      _toggleSessions();
+      await WidgetsBinding.instance.endOfFrame;
+      return;
+    }
     if (call.method == 'modelsOpened') {
       await _modelsMenu?.refresh();
       return;
@@ -1056,7 +1083,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           }
         }
       case 'closePane':
-        if (app.focusedPaneId != null) await app.closePane(app.focusedPaneId!);
+        if (app.focusedPane case final pane?) unawaited(_closePane(pane));
       case 'findTerminal':
         app.focusedPane?.session?.find(TerminalFindAction.open);
       case 'findNext':
@@ -1889,6 +1916,168 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.openStore();
   }
 
+  void _toggleSessions({SessionFilter? filter}) {
+    if (_sessionsOverlay != null) {
+      _closeSessions(restoreFocus: filter == null);
+      if (filter == null) return;
+    }
+    if (_newHarness?.requestDismiss() == false) return;
+    _closeNewHarness(restoreFocus: false);
+    _closeSearch(restoreFocus: false);
+    _closeCommandBar(restoreFocus: false);
+    dismissTransientMenus();
+    _preparePaneFocus();
+    final overlay = Overlay.of(context);
+    _sessionsOverlay = OverlayEntry(
+      builder: (context) => LayoutBuilder(
+        builder: (context, constraints) => Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _closeSessions,
+                child: const SizedBox.expand(),
+              ),
+            ),
+            Positioned(
+              top: (_native ? 0.0 : _tabBarHeight) + 8,
+              right: 10,
+              width: (constraints.maxWidth - 20).clamp(0, 640),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight:
+                      (constraints.maxHeight -
+                              (_native ? 0 : _tabBarHeight) -
+                              20)
+                          .clamp(0, 620),
+                ),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: .35),
+                        blurRadius: 36,
+                        offset: const Offset(0, 12),
+                      ),
+                    ],
+                    border: Border.all(
+                      color: grid.AppPalette.textPrimary.withValues(alpha: .12),
+                    ),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(1),
+                    child: HarnessSessionManager(
+                      app: app,
+                      initialFilter: filter ?? SessionFilter.all,
+                      recent: _navigation.recent,
+                      onClose: _closeSessions,
+                      onOpen: (row) async {
+                        final destination = swarmDestinations(app)
+                            .where((item) => item.id == row.id)
+                            .firstOrNull;
+                        if (destination == null) return false;
+                        final opened = await activateSwarmDestination(
+                          app,
+                          destination,
+                          destinationSwarmId: app.activeSwarmId,
+                        );
+                        return opened;
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    overlay.insert(_sessionsOverlay!);
+    _unregisterSessions = registerTransientMenu(_closeSessions);
+    if (_native) _syncNative();
+    setState(() {});
+  }
+
+  void _closeSessions({bool restoreFocus = true}) {
+    if (_sessionsOverlay == null) return;
+    _unregisterSessions?.call();
+    _unregisterSessions = null;
+    _sessionsOverlay?.remove();
+    _sessionsOverlay?.dispose();
+    _sessionsOverlay = null;
+    if (!mounted) return;
+    if (_native) _syncNative();
+    setState(() {});
+    if (restoreFocus) {
+      _shellFocus.requestFocus();
+      final pane = app.focusedPane;
+      if (pane != null) app.focusPane(pane.id, reveal: true);
+    }
+  }
+
+  Future<void> _closePane(TerminalPane pane) async {
+    if (_closingPane ||
+        pane.isWeb ||
+        pane.agentId == null ||
+        MediaQuery.disableAnimationsOf(context) ||
+        !_minimize.capture(pane)) {
+      await app.closePane(pane.id);
+      return;
+    }
+    _closingPane = true;
+    final tab = app.activeSwarmId;
+    final overlay = Overlay.of(context);
+    final box = overlay.context.findRenderObject() as RenderBox;
+    final origin = box.localToGlobal(Offset.zero);
+    _minimizeOverlay = OverlayEntry(
+      builder: (_) => Positioned.fromRect(
+        rect: _minimize.source.shift(-origin),
+        child: PaneMinimizeSnapshot(controller: _minimize),
+      ),
+    );
+    overlay.insert(_minimizeOverlay!);
+    // Close logically before the first await: the next keystroke belongs to
+    // the remaining pane, even while the captured pixels are still moving.
+    final closed = app.closePane(pane.id);
+    try {
+      Offset? target;
+      if (_native) {
+        final anchor = await _channel.invokeMapMethod<String, dynamic>(
+          'sessionsAnchor',
+        );
+        if (anchor?['reduceMotion'] == true) return;
+        if (anchor?['x'] is num && anchor?['y'] is num) {
+          target = Offset(
+            (anchor!['x'] as num).toDouble(),
+            (anchor['y'] as num).toDouble(),
+          );
+        }
+      } else {
+        final button = _sessionsButton.currentContext?.findRenderObject();
+        if (button is RenderBox && button.hasSize) {
+          target = button.localToGlobal(button.size.center(Offset.zero));
+        }
+      }
+      if (!mounted || app.activeSwarmId != tab) return;
+      if (target != null) await _minimize.animate(target);
+      if (_native && mounted && app.activeSwarmId == tab) {
+        unawaited(_channel.invokeMethod<void>('sessionMinimized'));
+      }
+    } on TickerCanceled {
+      // Disposing the window cancels motion, never the agent process.
+    } on MissingPluginException {
+      // The pane is already closed; only the optional animation is skipped.
+    } finally {
+      _closingPane = false;
+      _minimizeOverlay?.remove();
+      _minimizeOverlay?.dispose();
+      _minimizeOverlay = null;
+      if (mounted) _minimize.reset();
+      await closed;
+    }
+  }
+
   void _openSearch({
     bool adding = false,
     PaneSplitRequest? split,
@@ -2270,14 +2459,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (project != null) await _projects.add(project);
   });
   Future<void> _notifications() async {
-    final target = app.activeSwarmId;
-    SwarmAttentionEntry? selected;
-    await _dialog(() async {
-      selected = await showSwarmAttention(context, app, _navigation);
-    });
-    if (!mounted || selected == null) return;
-    _preparePaneFocus();
-    await activateSwarmAttention(app, selected!, destinationSwarmId: target);
+    _toggleSessions(filter: SessionFilter.needsInput);
   }
 
   Future<void> _openSpokenTask(SpokenTaskRequest request) async {
@@ -2368,8 +2550,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     ShortcutAction.showAttention: _notifications,
     ShortcutAction.addAgent: _addAgent,
     ShortcutAction.closePane: () {
-      if (app.focusedPaneId != null) {
-        app.closePane(app.focusedPaneId!);
+      if (app.focusedPane case final pane?) {
+        unawaited(_closePane(pane));
       }
     },
     ShortcutAction.newAgent: _newAgent,
@@ -2723,7 +2905,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
   );
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
+  Widget build(BuildContext context) => PaneMinimizeScope(
+    controller: _minimize,
+    close: _closePane,
+    child: _buildWorkspace(context),
+  );
+
+  Widget _buildWorkspace(BuildContext context) => ListenableBuilder(
     listenable: Listenable.merge([app, _projects, _learning]),
     builder: (context, _) {
       grid.AppTheme.watch(context);
@@ -3071,21 +3259,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
         color: grid.AppPalette.swarmTabBar,
         child: Row(
           children: [
-            IconButton(
-              key: const ValueKey('swarm-notifications-button'),
-              onPressed: _notifications,
-              icon: Badge(
-                isLabelVisible: _attention > 0,
-                child: Icon(
-                  Icons.notifications_none,
-                  size: 20,
-                  semanticLabel: _attention > 0
-                      ? '$_attention agents need input'
-                      : 'Notifications',
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
             Expanded(
               child: LayoutBuilder(
                 builder: (context, constraints) {
@@ -3217,6 +3390,34 @@ class _SwarmScreenState extends State<SwarmScreen> {
               tooltip: 'New Tab ${_keymap.hint('swarm.new') ?? ''}'.trim(),
               icon: const Icon(Icons.add, size: 18, semanticLabel: 'New Tab'),
             ),
+            IconButton(
+              key: _sessionsButton,
+              tooltip: 'Harnesses',
+              onPressed: _toggleSessions,
+              isSelected: _sessionsOverlay != null,
+              icon: Badge(
+                isLabelVisible: _attention > 0,
+                backgroundColor: const Color(0xffcf4038),
+                textColor: Colors.white,
+                largeSize: 13,
+                alignment: Alignment.topRight,
+                label: Text(
+                  _attention > 99 ? '99+' : '$_attention',
+                  semanticsLabel:
+                      '$_attention ${_attention == 1 ? 'harness needs' : 'harnesses need'} input',
+                  style: const TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                child: const Icon(
+                  Icons.terminal_rounded,
+                  size: 20,
+                  semanticLabel: 'Harnesses',
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
             Tooltip(
               message: 'Harness Store ${_keymap.hint('app.store') ?? ''}'
                   .trim(),

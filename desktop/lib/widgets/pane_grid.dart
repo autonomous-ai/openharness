@@ -35,6 +35,7 @@ import 'web_pane_panel.dart';
 import 'pane_resize_handle.dart';
 import 'box_chrome.dart';
 import 'pane_split_edges.dart';
+import 'pane_minimize.dart';
 
 /// Terminal views arranged by the chosen preset. Swarms keep each view under
 /// one stable parent as its rectangle, visibility and keyboard focus change.
@@ -1172,11 +1173,14 @@ class _PaneCell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        if (visible) pane.lastViewSize = constraints.biggest;
-        return _build(context);
-      },
+    return PaneMinimizeSurface(
+      paneId: pane.id,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (visible) pane.lastViewSize = constraints.biggest;
+          return _build(context);
+        },
+      ),
     );
   }
 
@@ -1338,7 +1342,15 @@ class _PaneContent extends StatelessWidget {
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
     final machine = notifier.stateOf(pane.machineId);
-    void close() => notifier.closePane(pane.id);
+    void close() {
+      final minimize = PaneMinimizeScope.maybeOf(context);
+      if (minimize != null) {
+        minimize.close(pane);
+      } else {
+        notifier.closePane(pane.id);
+      }
+    }
+
     if (pane.sharedHarness case final grant?) {
       return SharedHarnessPanel(
         key: ValueKey('shared-pane-${pane.id}'),

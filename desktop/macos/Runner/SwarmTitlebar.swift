@@ -94,6 +94,17 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         let state = call.arguments as? [String: Any] ?? [:]
         self.updateMachines(state["machines"] as? [[String: Any]] ?? [])
         result(nil)
+      case "sessionsAnchor":
+        guard let content = self.window?.contentViewController?.view else { result(nil); return }
+        let rect = self.strip.sessionsButton.convert(self.strip.sessionsButton.bounds, to: content)
+        result([
+          "x": rect.midX,
+          "y": content.isFlipped ? rect.midY : content.bounds.height - rect.midY,
+          "reduceMotion": NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+        ])
+      case "sessionMinimized":
+        self.strip.sessionsButton.receiveSession()
+        result(nil)
       case "modelsState":
         let state = call.arguments as? [String: Any] ?? [:]
         self.updateModels(
@@ -134,7 +145,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["select", "close", "new", "rename", "commands", "notifications", "store", "addAgent", "newAgent", "newTerminal", "cloneAgent", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
+    guard ["select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "addAgent", "newAgent", "newTerminal", "cloneAgent", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -318,7 +329,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     }
     if let view = main.item(withTitle: "View")?.submenu {
       view.addItem(.separator())
-      add(view, "Agents Needing Input…", "i", "notifications", [.command, .shift])
+      add(view, "Harnesses Needing Input…", "i", "notifications", [.command, .shift])
     }
     modelsMenu.autoenablesItems = false
     modelsMenu.delegate = self
@@ -1438,14 +1449,50 @@ private final class SwarmStoreButton: SwarmIconButton {
   }
 }
 
-private final class SwarmNotificationButton: SwarmIconButton {
-  var hasAttention = false { didSet { needsDisplay = true } }
+private final class SwarmSessionsButton: SwarmIconButton {
+  var running = 0 { didSet { needsDisplay = true } }
+  var attention = 0 { didSet { needsDisplay = true } }
+  var expanded = false { didSet { needsDisplay = true } }
+
+  var attentionLabel: String? {
+    attention > 0 ? (attention > 99 ? "99+" : String(attention)) : nil
+  }
+
+  func badgeFrame(textWidth: CGFloat) -> NSRect {
+    let width = max(12, ceil(textWidth) + 5)
+    return NSRect(x: bounds.maxX - width,
+      y: isFlipped ? bounds.minY : bounds.maxY - 12, width: width, height: 12)
+  }
+
   override func draw(_ dirtyRect: NSRect) {
-    super.draw(dirtyRect)
-    if hasAttention {
-      NSColor.systemOrange.setFill()
-      NSBezierPath(ovalIn: NSRect(x: bounds.midX + 4, y: bounds.midY + 5, width: 5, height: 5)).fill()
+    if expanded {
+      NSColor.white.withAlphaComponent(0.08).setFill()
+      NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 7, yRadius: 7).fill()
     }
+    super.draw(dirtyRect)
+    if let label = attentionLabel {
+      let attributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold),
+        .foregroundColor: NSColor.white,
+      ]
+      let text = label as NSString
+      let size = text.size(withAttributes: attributes)
+      let badge = badgeFrame(textWidth: size.width)
+      NSColor.systemRed.withAlphaComponent(isEnabled ? 1 : 0.45).setFill()
+      NSBezierPath(roundedRect: badge, xRadius: 6, yRadius: 6).fill()
+      text.draw(at: NSPoint(x: badge.midX - size.width / 2, y: badge.midY - size.height / 2),
+        withAttributes: attributes)
+    }
+  }
+
+  func receiveSession() {
+    guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+    wantsLayer = true
+    let pulse = CAKeyframeAnimation(keyPath: "transform.scale")
+    pulse.values = [1, 1.18, 1]
+    pulse.keyTimes = [0, 0.4, 1]
+    pulse.duration = 0.24
+    layer?.add(pulse, forKey: "session-arrived")
   }
 }
 
@@ -1471,8 +1518,8 @@ private final class SwarmTabStrip: NSView {
   private let scroll = SwarmStripScrollView()
   private let document = NSView()
   fileprivate let newButton = SwarmIconButton()
-  fileprivate let notificationButton = SwarmNotificationButton()
   fileprivate let storeButton = SwarmStoreButton(title: "Harness Store", target: nil, action: nil)
+  fileprivate let sessionsButton = SwarmSessionsButton()
   private var tabs: [SwarmTabButton] = []
   private let icons = SwarmHistoryIcons()
   private var activeId = ""
@@ -1520,8 +1567,9 @@ private final class SwarmTabStrip: NSView {
     button(newButton, "plus", "New Tab", #selector(newSwarm))
     newButton.setAccessibilityLabel("New Tab")
     newButton.isEnabled = false
-    button(notificationButton, "bell", "Notifications", #selector(openNotifications))
-    notificationButton.isEnabled = false
+    button(sessionsButton, "terminal", "Harnesses", #selector(openSessions))
+    sessionsButton.isEnabled = false
+    sessionsButton.toolTip = "Harnesses"
     newButton.toolTip = "New Tab ⌘T"
     storeButton.isBordered = false
     storeButton.palette = palette
@@ -1533,7 +1581,7 @@ private final class SwarmTabStrip: NSView {
     storeButton.toolTip = "Harness Store ⌘S"
     storeButton.setAccessibilityLabel("Harness Store")
     addSubview(storeButton)
-    setAccessibilityChildren([notificationButton, scroll, newButton, storeButton])
+    setAccessibilityChildren([scroll, newButton, sessionsButton, storeButton])
     registerForDraggedTypes([swarmPasteboardType])
   }
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -1542,8 +1590,8 @@ private final class SwarmTabStrip: NSView {
     let nextPalette = SwarmNativePalette(values)
     guard nextPalette != palette else { return }
     palette = nextPalette
-    notificationButton.contentTintColor = palette.accent
     newButton.contentTintColor = palette.accent
+    sessionsButton.contentTintColor = palette.accent
     storeButton.palette = palette
     for tab in tabs { tab.palette = palette }
     needsDisplay = true
@@ -1624,11 +1672,17 @@ private final class SwarmTabStrip: NSView {
     // Moving frames alone leaves AppKit's child traversal in insertion order.
     document.setAccessibilityChildren(tabs)
     newButton.isEnabled = actionsEnabled
-    notificationButton.isEnabled = actionsEnabled
     storeButton.isEnabled = actionsEnabled
+    sessionsButton.isEnabled = actionsEnabled
+    sessionsButton.running = state["runningSessions"] as? Int ?? 0
+    sessionsButton.expanded = state["sessionsOpen"] as? Bool == true
+    let expandedState = sessionsButton.expanded ? "Expanded" : "Collapsed"
+    sessionsButton.toolTip = sessionsButton.running > 0 ? "Harnesses · \(sessionsButton.running) running" : "Harnesses"
     let attention = state["attention"] as? Int ?? 0
-    notificationButton.hasAttention = attention > 0
-    notificationButton.setAccessibilityLabel(attention > 0 ? "\(attention) agents need input" : "Notifications")
+    sessionsButton.attention = attention
+    let attentionState = "\(attention) \(attention == 1 ? "needs" : "need") input"
+    sessionsButton.setAccessibilityValue(attention > 0 ? "\(expandedState), \(attentionState)" : expandedState)
+    if attention > 0 { sessionsButton.toolTip = "Harnesses · \(attentionState)" }
     needsLayout = true
     layoutSubtreeIfNeeded()
     if ids != previousOrder {
@@ -1650,7 +1704,7 @@ private final class SwarmTabStrip: NSView {
     let activeWasVisible = active.map { scroll.documentVisibleRect.intersects($0.frame) } ?? false
     let previousScrollSize = scroll.frame.size
     let previousDocumentSize = document.frame.size
-    let leading: CGFloat = 36
+    let leading: CGFloat = 0
     let spacious = bounds.width >= 480
     let trailing: CGFloat = spacious ? 12 : 8
     let storeWidth = storeButton.preferredWidth
@@ -1659,7 +1713,7 @@ private final class SwarmTabStrip: NSView {
     // where a full strip can still be dragged and double-clicked to zoom
     // (owner, 2026-09-15); tabs shrink and then scroll instead of taking it.
     let grip: CGFloat = spacious ? 84 : 44
-    let available = max(32, bounds.width - leading - trailing - (newButton.isHidden ? 0 : 36) - grip - storeWidth - 8)
+    let available = max(32, bounds.width - leading - trailing - (newButton.isHidden ? 0 : 36) - grip - storeWidth - 44)
     // As in Chrome, tabs keep shrinking until they are only their mark, so thirty tabs still sit in
     // one strip with nothing hidden; only past that does the strip scroll (the wheel scrolls it).
     let width = min(220, max(min(SwarmTabButton.minimumWidth, available), available / CGFloat(max(1, tabs.count))))
@@ -1673,9 +1727,9 @@ private final class SwarmTabStrip: NSView {
       tab.contentCenterY = bounds.midY
     }
     let buttonY = (bounds.height - 28) / 2
-    notificationButton.frame = NSRect(x: 0, y: buttonY, width: 28, height: 28)
     newButton.frame = NSRect(x: leading + occupied + 4, y: buttonY, width: 28, height: 28)
     storeButton.frame = NSRect(x: bounds.width - trailing - storeWidth, y: buttonY, width: storeWidth, height: 28)
+    sessionsButton.frame = NSRect(x: storeButton.frame.minX - 36, y: buttonY, width: 28, height: 28)
     let geometryChanged = scroll.frame.size != previousScrollSize || document.frame.size != previousDocumentSize
     if let active, revealActiveAfterLayout || (activeWasVisible && (geometryChanged || tabOrderChanged)) {
       document.scrollToVisible(active.frame)
@@ -1713,11 +1767,11 @@ private final class SwarmTabStrip: NSView {
   @objc private func newSwarm() {
     if actionsEnabled && newButton.isEnabled { emit?("new", nil) }
   }
-  @objc private func openNotifications() {
-    if actionsEnabled { emit?("notifications", nil) }
-  }
   @objc private func openStore() {
     if actionsEnabled { emit?("store", nil) }
+  }
+  @objc private func openSessions() {
+    if actionsEnabled { emit?("sessions", nil) }
   }
 
   private func draggedTab(_ sender: NSDraggingInfo) -> SwarmTabButton? {

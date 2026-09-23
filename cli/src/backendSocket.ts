@@ -26,6 +26,7 @@ import { env } from './config/env.js'
 import { AuthSessionManager, AuthSessionError } from './lib/authSession.js'
 import { VERSION } from './version.js'
 import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
+import { AgentStopError } from './lib/stopAgentService.js'
 import { ENGINES, PROCESS_ENGINES, isTerminalEngine, type AgentEngine, type ProcessEngine } from './engines/types.js'
 import { listDir } from './lib/fsBrowse.js'
 import { linkCodexProfile, listCodexProfiles } from './lib/codexProfiles.js'
@@ -2298,7 +2299,13 @@ export class BackendSocket {
         case 'agent_delete': {
           const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
           if (!target) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
-          await this.onDeleteAgent?.(target)
+          if (!this.onDeleteAgent) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+          try { await this.onDeleteAgent(target) }
+          catch (error) {
+            if (!(error instanceof AgentStopError)) throw error
+            reply(type, requestId, { error: error.code, detail: error.message })
+            return
+          }
           reply(type, requestId, { deleted: true })
           return
         }
