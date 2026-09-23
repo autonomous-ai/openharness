@@ -138,7 +138,49 @@ class PaneLayoutStore {
     }
   }
 
-  Future<void> saveSwarms(List<Swarm> swarms, String activeId) {
+  /// Migrate only explicit navigation history from earlier builds. Discovery
+  /// alone never earns a place in the monitor.
+  Future<List<(String, String)>> loadMonitorHarnesses(
+    Map<String, dynamic>? layout,
+  ) async {
+    final result = <(String, String)>[];
+    final known = layout?['monitorHarnesses'];
+    if (known is List) {
+      for (final entry in known.take(4096)) {
+        if (entry is List &&
+            entry.length == 2 &&
+            entry[0] is String &&
+            entry[1] is String &&
+            (entry[0] as String).length <= 256 &&
+            (entry[1] as String).length <= 256) {
+          result.add((entry[0] as String, entry[1] as String));
+        }
+      }
+    } else {
+      try {
+        final raw = await storage.read('swarm_recent_v1');
+        final recent = raw == null ? null : jsonDecode(raw);
+        if (recent is List) {
+          for (final id in recent.take(64)) {
+            if (id is! String || !id.startsWith('agent:') || id.length > 520) {
+              continue;
+            }
+            final parts = id.substring(6).split('\u0000');
+            if (parts.length == 2) result.add((parts[0], parts[1]));
+          }
+        }
+      } catch (_) {
+        /* A missing history is an empty history. */
+      }
+    }
+    return result;
+  }
+
+  Future<void> saveSwarms(
+    List<Swarm> swarms,
+    String activeId, {
+    Iterable<(String, String)> monitorHarnesses = const [],
+  }) {
     // Capture each request before yielding, but keep only the latest snapshot
     // while a write is pending. Holding a navigation key must not queue a full
     // state-file rewrite for every intermediate focus or tab selection.
@@ -147,6 +189,9 @@ class PaneLayoutStore {
         'version': 1,
         'activeId': activeId,
         'swarms': swarms.map((s) => s.toJson()).toList(),
+        'monitorHarnesses': [
+          for (final (machine, agent) in monitorHarnesses) [machine, agent],
+        ],
       });
     } catch (_) {
       return Future<void>.value();

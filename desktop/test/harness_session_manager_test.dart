@@ -51,6 +51,8 @@ void main() {
   setUp(() {
     connection = RestartConnection();
     app = createApp(connectionForTest: (_) => connection);
+    app.rememberOpenedHarness('m', 'a0');
+    app.rememberOpenedHarness('m', 'saved');
     app.machineStates['m']!
       ..machine = const Machine(
         machineId: 'm',
@@ -67,7 +69,7 @@ void main() {
       find.byKey(ValueKey('session-toggle:${agentDestinationId('m', id)}'));
   Future<void> open(WidgetTester tester) async {
     await mount(tester, app);
-    await tester.tap(find.byTooltip('Harnesses'));
+    await tester.tap(find.byTooltip('Harness Monitor'));
     await tester.pumpAndSettle();
   }
 
@@ -119,6 +121,9 @@ void main() {
   );
 
   test('recent follows real activity before navigation recency', () {
+    for (final id in ['older', 'newer', 'unknown']) {
+      app.rememberOpenedHarness('m', id);
+    }
     app.machineStates['m']!.agents = [
       Agent.fromJson({'id': 'older', 'updatedAt': '2026-09-21T10:00:00Z'}),
       Agent.fromJson({'id': 'newer', 'updatedAt': '2026-09-22T10:00:00Z'}),
@@ -133,7 +138,51 @@ void main() {
     );
   });
 
+  testWidgets(
+    'displays remote cached tokens beneath context and leaves missing usage empty',
+    (tester) async {
+      app.machineStates['m']!.agents = [
+        Agent.fromJson({
+          'id': 'a0',
+          'name': 'Measured harness',
+          'engine': 'claude',
+          'sessionId': 'conversation',
+          'terminal': {'available': true},
+          'tokenUsage': {
+            'totalTokens': 1234567,
+            'updatedAt': '2026-09-22T16:00:00Z',
+          },
+          'outputStats': {
+            'linesAdded': 124,
+            'linesRemoved': 38,
+            'pullRequestsCreated': 2,
+            'updatedAt': '2026-09-22T16:00:00Z',
+          },
+        }),
+        _paused,
+      ];
+      await open(tester);
+      expect(find.text('1.2M tokens'), findsOneWidget);
+      expect(find.text('+124 −38'), findsOneWidget);
+      expect(find.text('2 PRs'), findsOneWidget);
+      expect(find.text('0 tokens'), findsNothing);
+      expect(
+        find.byKey(
+          ValueKey('session-tokens:${agentDestinationId('m', 'saved')}'),
+        ),
+        findsNothing,
+      );
+      expect(
+        tester.getTopLeft(find.text('1.2M tokens')).dy,
+        greaterThan(tester.getTopLeft(find.text('iMac — Office').first).dy),
+      );
+      expect(connection.requests, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   test('attention filters live questions, retains missing agents, excludes paused history', () {
+    app.rememberOpenedHarness('m', 'missing');
     app.machineStates['m']!.blockedAgents.addAll({
       'a0': question('a0'),
       'saved': question('saved'),
@@ -165,13 +214,13 @@ void main() {
       await app.addAgentToSwarm('m', 'a0');
       app.machineStates['m']!.blockedAgents['a0'] = question('a0');
       await mount(tester, app);
-      await tester.tap(find.byTooltip('Harnesses'));
+      await tester.tap(find.byTooltip('Harness Monitor'));
       await tester.pump(const Duration(milliseconds: 300));
       expect(
         find.byKey(const ValueKey('swarm-notifications-button')),
         findsNothing,
       );
-      final managerIcon = tester.getRect(find.byTooltip('Harnesses'));
+      final managerIcon = tester.getRect(find.byTooltip('Harness Monitor'));
       expect(
         managerIcon.right,
         lessThan(
@@ -308,7 +357,7 @@ void main() {
     (tester) async {
       await open(tester);
       expect(find.byType(HarnessSessionManager), findsOneWidget);
-      expect(find.text('Harnesses'), findsOneWidget);
+      expect(find.text('Harness Monitor'), findsOneWidget);
       expect(find.text('Running 1'), findsOneWidget);
       expect(find.text('Paused 1'), findsOneWidget);
       expect(find.text('Ready'), findsNothing);
@@ -448,7 +497,7 @@ void main() {
       await tester.pump();
       connection.stopReplies.single.complete({'deleted': true});
       await tester.pump();
-      await tester.tap(find.byTooltip('Harnesses'));
+      await tester.tap(find.byTooltip('Harness Monitor'));
       await tester.pump();
       expect(toggle('a0'), findsNothing);
       expect(find.byTooltip('Pausing…'), findsOneWidget);
@@ -477,6 +526,7 @@ void main() {
               terminalAvailable: true,
             ),
           );
+      app.rememberOpenedHarness('m', 'unsupported');
       await open(tester);
       expect(
         tester.widget<IconButton>(toggle('unsupported')).onPressed,
@@ -717,7 +767,7 @@ void main() {
       expect(app.panes, [sibling]);
       expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
       expect(connection.stops, isEmpty);
-      await tester.tap(find.byTooltip('Harnesses'));
+      await tester.tap(find.byTooltip('Harness Monitor'));
       await tester.pumpAndSettle();
       expect(find.text(_running.name), findsOneWidget);
     },
@@ -762,6 +812,12 @@ void main() {
     app.notifyListeners();
     await tester.pumpAndSettle();
     expect(updates.last['attention'], 1);
+    app.machineStates['m']!.blockedAgents['hidden-worker'] = question(
+      'hidden-worker',
+    );
+    app.notifyListeners();
+    await tester.pumpAndSettle();
+    expect(updates.last['attention'], 1);
     app.machineStates['m']!.blockedAgents.clear();
     app.notifyListeners();
     await tester.pumpAndSettle();
@@ -771,6 +827,25 @@ void main() {
   testWidgets('session manager fits the minimum Mac window and scaled text', (
     tester,
   ) async {
+    app.machineStates['m']!.agents = [
+      Agent.fromJson({
+        'id': 'a0',
+        'name': 'A long harness name that must leave room for the activity timestamp',
+        'engine': 'claude',
+        'sessionId': 'conversation',
+        'terminal': {'available': true},
+        'updatedAt': DateTime.now()
+            .subtract(const Duration(minutes: 8))
+            .toIso8601String(),
+        'tokenUsage': {'totalTokens': 1234567},
+        'outputStats': {
+          'linesAdded': 124,
+          'linesRemoved': 38,
+          'pullRequestsCreated': 2,
+        },
+      }),
+      _paused,
+    ];
     await open(tester);
     tester.view.physicalSize = const Size(880, 560);
     await tester.pumpAndSettle();
@@ -825,6 +900,9 @@ void main() {
           ),
         ),
       ]);
+      for (final agent in app.machineStates['m']!.agents) {
+        app.rememberOpenedHarness('m', agent.id);
+      }
       final now = DateTime.now();
       final ages = {
         'a0': 5,
@@ -850,6 +928,23 @@ void main() {
             'updatedAt': now
                 .subtract(Duration(minutes: ages[agent.id]!))
                 .toIso8601String(),
+            if (agent.id == 'a0' || agent.id == 'review')
+              'outputStats': {
+                'linesAdded': agent.id == 'a0' ? 124 : 832,
+                'linesRemoved': agent.id == 'a0' ? 38 : 156,
+                'pullRequestsCreated': agent.id == 'a0' ? 1 : 2,
+                'updatedAt': now.toIso8601String(),
+              },
+            if (agent.id != 'docs')
+              'tokenUsage': {
+                'totalTokens': switch (agent.id) {
+                  'a0' => 48750,
+                  'review' => 1234567,
+                  'api' => 32410,
+                  _ => 215400,
+                },
+                'updatedAt': now.toIso8601String(),
+              },
           }),
       ];
       app.machineStates['m']!.blockedAgents['api'] = question('api');

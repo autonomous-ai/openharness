@@ -39,6 +39,7 @@ import '../state/swarm.dart';
 import '../state/terminal_pane.dart';
 import '../widgets/transient_menus.dart';
 import '../widgets/layout_palette.dart';
+import '../widgets/move_pane_palette.dart';
 import '../widgets/engine_identity.dart';
 import '../store/store_mark.dart';
 import '../store/store_screen.dart';
@@ -588,11 +589,6 @@ class _SwarmScreenState extends State<SwarmScreen>
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
       'activeId': app.activeSwarmId,
       'palette': grid.AppTheme.palette.value.nativeColors,
-      // The tabs wear the terminal's face at the chrome size, not its size:
-      // ⌘+ and ⌘− zoom the terminal alone.
-      'fontFamily': grid.AppType.monoFamily,
-      'fontSize': grid.AppType.chromeSize,
-      'fontFallbacks': grid.AppType.monoFallback,
       'canReopen': app.canReopenLastClosed,
       'canFind': _canFindTerminal,
       'canClosePane': app.focusedPane != null,
@@ -1041,6 +1037,10 @@ class _SwarmScreenState extends State<SwarmScreen>
         unawaited(_splitAgent(PaneResizeAxis.x));
       case 'splitDown':
         unawaited(_splitAgent(PaneResizeAxis.y));
+      case 'movePaneToTab':
+        if (app.focusedPaneId != null) {
+          _dialog(() => showMovePanePalette(context, app));
+        }
       case 'zoomPane':
         app.toggleZoomPane();
       case 'pinPane':
@@ -2610,6 +2610,10 @@ class _SwarmScreenState extends State<SwarmScreen>
     ShortcutAction.reload: app.retryMachines,
     ShortcutAction.showLayout: () =>
         _dialog(() => showLayoutPalette(context, app)),
+    ShortcutAction.movePaneToTab: () {
+      if (app.focusedPaneId == null) return;
+      _dialog(() => showMovePanePalette(context, app));
+    },
     ShortcutAction.pinPane: () {
       if (app.focusedPaneId != null) {
         app.togglePinPane(app.focusedPaneId!);
@@ -3442,7 +3446,7 @@ class _SwarmScreenState extends State<SwarmScreen>
             ),
             IconButton(
               key: _sessionsButton,
-              tooltip: 'Harnesses',
+              tooltip: 'Harness Monitor',
               onPressed: _toggleSessions,
               isSelected: _sessionsOverlay != null,
               icon: Badge(
@@ -3461,10 +3465,12 @@ class _SwarmScreenState extends State<SwarmScreen>
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                child: const Icon(
-                  Icons.terminal_rounded,
-                  size: 20,
-                  semanticLabel: 'Harnesses',
+                child: Image.asset(
+                  'assets/harnesses.png',
+                  width: 24,
+                  height: 24,
+                  filterQuality: FilterQuality.high,
+                  semanticLabel: 'Harness Monitor',
                 ),
               ),
             ),

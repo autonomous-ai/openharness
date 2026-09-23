@@ -1,0 +1,8 @@
+{
+  "elapsedMicros": 240066496,
+  "outputBytes": 67942080,
+  "skippedBursts": 0,
+  "packetBytesPerTerminal": 930,
+  "terminals": 16,
+  "boundary": "Cumulative redraw after the full-scrollback sweep, spanning foreground and hidden samples; includes the diagnostic counter timer"
+}

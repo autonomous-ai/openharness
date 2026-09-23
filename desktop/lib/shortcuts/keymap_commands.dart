@@ -209,6 +209,14 @@ final harnessCommands = <HarnessCommand>[
     repeatable: true,
   ),
   const HarnessCommand(
+    'pane.move_to_tab',
+    'Move the pane to another tab',
+    ShortcutGroup.panes,
+    action: ShortcutAction.movePaneToTab,
+    nativeAction: 'movePaneToTab',
+    keywords: ['send', 'tab', 'another'],
+  ),
+  const HarnessCommand(
     'pane.zoom',
     'Zoom or restore the focused pane',
     ShortcutGroup.panes,

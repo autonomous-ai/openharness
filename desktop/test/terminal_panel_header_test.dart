@@ -14,6 +14,25 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'support/real_fonts.dart';
 
+class _PrNotifier extends AppNotifier {
+  _PrNotifier()
+    : super(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      );
+  @override
+  Future<Map<String, dynamic>> readAgentPullRequest(
+    String machineId,
+    String agentId,
+  ) async => {
+    'status': 'found',
+    'number': 260,
+    'state': 'Draft',
+    'url': 'https://github.com/autonomous-ai/openharness/pull/260',
+  };
+}
+
 void main() {
   setUpAll(loadRealFonts);
   TerminalSession sessionNamed(String name) {
@@ -30,17 +49,24 @@ void main() {
     return session;
   }
 
-  Future<void> pump(WidgetTester tester, TerminalSession session) async {
+  Future<void> pump(
+    WidgetTester tester,
+    TerminalSession session, {
+    double width = 900,
+    bool withPr = false,
+  }) async {
     // Wider than the pane, and stated: the default test window is 800px, and a
     // `SizedBox(width: 900)` inside it is silently clamped to 800.
     tester.view.physicalSize = const Size(1200, 800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
-    final notifier = AppNotifier(
-      config: AppConfig.dev,
-      authSession: AuthSession(),
-      configStore: null,
-    );
+    final notifier = withPr
+        ? _PrNotifier()
+        : AppNotifier(
+            config: AppConfig.dev,
+            authSession: AuthSession(),
+            configStore: null,
+          );
     notifier.machineStates['local'] =
         MachineState(
             const Machine(
@@ -66,7 +92,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: SizedBox(
-            width: 900,
+            width: width,
             height: 320,
             child: TerminalPanel(
               notifier: notifier,
@@ -78,6 +104,22 @@ void main() {
       ),
     );
     await tester.pump();
+  }
+
+  for (final width in [420.0, 600.0, 720.0, 900.0]) {
+    testWidgets('PR badge remains visible at pane width $width', (
+      tester,
+    ) async {
+      final session = sessionNamed('Desktop');
+      addTearDown(session.dispose);
+      await pump(tester, session, width: width, withPr: true);
+      expect(
+        find.text(width < 588 ? '#260 · Draft' : 'PR #260 · Draft'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    });
   }
 
   // Each shape describes the path topology, not an assumed speed: direct link, intermediate hop,

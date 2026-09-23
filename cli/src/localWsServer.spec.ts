@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import type { Frame, LocalClientSink } from './backendSocket.js'
-import { attachLocalWsServer, type LocalWsBackend, type LocalWsServer } from './localWsServer.js'
+import { attachLocalWsServer, type LocalWsBackend, type LocalWsServer, type LocalWsServerOptions } from './localWsServer.js'
 import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 
 const machineId = 'machine-123'
@@ -59,14 +59,27 @@ describe('local CLI WebSocket', () => {
     server = null
   })
 
-  async function start(backend: FakeBackend): Promise<string> {
+  async function start(backend: FakeBackend, extra: Partial<LocalWsServerOptions> = {}): Promise<string> {
     server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
-    local = attachLocalWsServer(server, { machineId, backend })
+    local = attachLocalWsServer(server, { machineId, backend, ...extra })
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as AddressInfo).port
     return `ws://127.0.0.1:${port}/api/local-ws`
   }
 
+  it('consumes validated preparation UI acknowledgements locally', async () => {
+    const backend = new FakeBackend(), opened = vi.fn()
+    const ws = new WebSocket(await start(backend, { onDevicePrepareOpened: opened }))
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    ws.send(JSON.stringify({ type: 'device_prepare_opened', payload: { operationId: 'invalid', agentId: 'a' } }))
+    ws.send(JSON.stringify({ type: 'device_prepare_opened', payload: { operationId: 'a'.repeat(64), agentId: 'agent1' } }))
+    await vi.waitFor(() => expect(opened).toHaveBeenCalledExactlyOnceWith('a'.repeat(64), 'agent1'))
+    expect(backend.frames).toEqual([])
+    ws.close()
+  })
   it('accepts loopback, selects the exact machine, and routes JSON plus HTRL binary', async () => {
     const backend = new FakeBackend()
     const url = await start(backend)

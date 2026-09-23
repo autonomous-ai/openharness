@@ -36,6 +36,9 @@ enum ShortcutAction {
   movePaneUp,
   movePaneDown,
 
+  /// Send the focused pane to another tab, terminal and all.
+  movePaneToTab,
+
   /// The agent this window was on before the current one — tmux's `prefix ;`.
   lastPane,
 
@@ -212,6 +215,16 @@ const List<AppShortcut> kAppShortcuts = [
       shift: true,
     ),
     label: 'Move this pane right',
+    group: ShortcutGroup.panes,
+  ),
+  AppShortcut(
+    action: ShortcutAction.movePaneToTab,
+    activator: SingleActivator(
+      LogicalKeyboardKey.keyM,
+      meta: true,
+      shift: true,
+    ),
+    label: 'Move this pane to another tab',
     group: ShortcutGroup.panes,
   ),
 

@@ -2,38 +2,6 @@ import Cocoa
 import FlutterMacOS
 import ImageIO
 
-/// The title bar's tabs and Store action wear the terminal's face at the chrome size Flutter
-/// sends (`AppType.chromeSize`), never the terminal's own size: ⌘+ and ⌘− zoom the terminal alone.
-/// Menus are not chrome — they use the system menu font, like every other Mac app's.
-enum HarnessTypography {
-  private static var families = [".AppleSystemUIFontMonospaced"]
-  private(set) static var size: CGFloat = 12
-
-  @discardableResult
-  static func update(_ state: [String: Any]) -> Bool {
-    let previousFamilies = families
-    let previousSize = size
-    if let family = state["fontFamily"] as? String {
-      families = [family] + (state["fontFallbacks"] as? [String] ?? [])
-    }
-    if let value = state["fontSize"] as? NSNumber, value.doubleValue.isFinite, value.doubleValue >= 9, value.doubleValue <= 22 {
-      size = CGFloat(value.doubleValue)
-    }
-    return families != previousFamilies || size != previousSize
-  }
-
-  /// The tab label's face. [size] defaults to the chrome size; the ⌘1 badge asks one point less.
-  static func font(weight: NSFont.Weight = .regular, size: CGFloat? = nil) -> NSFont {
-    let size = size ?? self.size
-    let base = families.first == ".AppleSystemUIFontMonospaced"
-      ? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
-      : families.compactMap { NSFont(name: $0, size: size) }.first
-        ?? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
-    return weight == .bold || weight == .semibold
-      ? NSFontManager.shared.convert(base, toHaveTrait: .boldFontMask) : base
-  }
-}
-
 /// Real AppKit controls in the title bar, beside the system traffic lights.
 /// https://developer.apple.com/documentation/appkit/nstitlebaraccessoryviewcontroller/layoutattribute
 final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
@@ -48,6 +16,8 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   private var canFind = false
   private var canClosePane = false
   private let historyMenu = NSMenu(title: "History")
+  private var historyMenuNeedsRebuild = false
+  private var historyMenuIsOpen = false
   private var canGoBack = false
   private var canGoForward = false
   private var history: [SwarmHistoryEntry] = []
@@ -74,9 +44,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       switch call.method {
       case "configure":
         let state = call.arguments as? [String: Any] ?? [:]
-        HarnessTypography.update(state)
         self.configure(palette: state["palette"] as? [String: Any])
-        self.strip.updateTypography()
         result(true)
       case "update":
         let state = call.arguments as? [String: Any] ?? [:]
@@ -155,7 +123,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "addAgent", "newAgent", "newTerminal", "cloneAgent", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
+    guard ["select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "addAgent", "newAgent", "newTerminal", "cloneAgent", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -257,8 +225,15 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // AppKit owns height; only width is configurable for a right accessory.
     let trafficLightEdge = window.standardWindowButton(.zoomButton).map {
       $0.convert($0.bounds, to: nil).maxX
-    } ?? 76
-    let leading = max(88, trafficLightEdge + 16)
+    } ?? 69
+    // 10 after the buttons, which is where a Mac app puts its first control:
+    // the cluster ends at 69 on macOS 26, Safari's sidebar button and Chrome's
+    // first tab both start around 79. This was `max(88, edge + 16)` while the
+    // notifications bell still sat in front of the tabs; with the bell gone
+    // that left the first tab at 88, a good ten points adrift of every other
+    // window on the screen. The floor stays for a window with no buttons to
+    // measure — the `?? 69` above is the same fallback read from the other end.
+    let leading = max(76, trafficLightEdge + 10)
     strip.setFrameSize(NSSize(width: max(200, window.frame.width - leading), height: strip.frame.height))
     strip.needsLayout = true
   }
@@ -295,7 +270,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         "cloneAgent": "plus.square.on.square",
         "renameActive": "pencil", "closeActive": "xmark",
         "splitRight": "rectangle.split.2x1", "splitDown": "rectangle.split.1x2",
-        "zoomPane": "viewfinder", "closePane": "xmark",
+        "zoomPane": "viewfinder", "movePaneToTab": "arrow.right.square", "closePane": "xmark",
         "commands": "command", "notifications": "bell",
       ]
       if let symbol = symbols[action] {
@@ -325,6 +300,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     add(file, "Split Right", "r", "splitRight")
     add(file, "Split Down", "d", "splitDown")
     add(file, "Zoom Pane", "", "zoomPane")
+    add(file, "Move Pane to Tab", "m", "movePaneToTab", [.command, .shift])
     add(file, "Close Pane", "w", "closePane", [.command, .shift])
     install(file, at: 1)
 
@@ -351,6 +327,10 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   func menuWillOpen(_ menu: NSMenu) {
+    if menu === historyMenu {
+      historyMenuIsOpen = true
+      if historyMenuNeedsRebuild { rebuildHistoryMenu() }
+    }
     syncMenuKeys()
     if menu === historyMenu {
       for item in menu.items {
@@ -364,6 +344,10 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // The native menu opens from its cache. Network/credential reads happen
     // asynchronously in Dart and never hold up AppKit's menu tracking.
     channel.invokeMethod("modelsOpened", arguments: nil)
+  }
+
+  func menuDidClose(_ menu: NSMenu) {
+    if menu === historyMenu { historyMenuIsOpen = false }
   }
 
   private func updateMachines(_ rows: [[String: Any]]) {
@@ -658,10 +642,14 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     guard entries != history || closedEntries != closedHistory else { return }
     history = entries
     closedHistory = closedEntries
-    rebuildHistoryMenu()
+    // Navigation updates the models immediately for action validation. Keep the
+    // installed shortcut items, but defer hidden row construction and sizing.
+    historyMenuNeedsRebuild = true
+    if historyMenuIsOpen { rebuildHistoryMenu() }
   }
 
   private func rebuildHistoryMenu() {
+    historyMenuNeedsRebuild = false
     historyMenu.removeAllItems()
     historyMenu.minimumWidth = 0
     let visited = Array(history.prefix(15))
@@ -779,7 +767,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     return actionsEnabled && (action != "reopen" || canReopen) &&
       (action != "historyBack" || canGoBack) && (action != "historyForward" || canGoForward) &&
       (action != "closePane" || canClosePane) &&
-      (!["findTerminal", "findNext", "findPrevious", "splitRight", "splitDown", "zoomPane", "pinPane"].contains(action) || canFind)
+      (!["findTerminal", "findNext", "findPrevious", "splitRight", "splitDown", "zoomPane", "pinPane", "movePaneToTab"].contains(action) || canFind)
   }
 
   @objc private func menuAction(_ sender: NSMenuItem) {
@@ -967,6 +955,18 @@ private final class SwarmSubscriptionView: NSView {
     return metered ? min(576, base + meterWidth + 12) : base
   }
 
+  /// The orange a nearly-spent account is written in, legible in both appearances.
+  ///
+  /// `.systemOrange` is tuned to be *seen*, not to be *read*: on the light menu
+  /// it measures 1.86:1 against the panel, where text wants 4.5:1. It is only
+  /// right on the dark one, where it reaches 6.44:1. The light side takes the
+  /// same hue carried down to #A85400 (4.52:1). Measured with tool/contrast.py.
+  static let lowInk = NSColor(name: "harnessLowInk") { appearance in
+    appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+      ? .systemOrange
+      : NSColor(srgbRed: 168 / 255, green: 84 / 255, blue: 0, alpha: 1)
+  }
+
   /// What the trailing figures need to share a column — the widest of them.
   static func balanceColumn(_ entries: [SwarmSubscriptionEntry]) -> CGFloat {
     entries.map { textWidth($0.balance) }.max() ?? 0
@@ -978,8 +978,8 @@ private final class SwarmSubscriptionView: NSView {
       status: entry.balance, icon: nil, width: width,
       accessibility: entry.accessibilityLabel + (current ? ", current" : ""),
       tint: nil, meter: entry.remaining.map { $0 / 100 },
-      meterTint: entry.isLow ? .systemOrange : .controlAccentColor,
-      balanceTint: entry.isLow ? .systemOrange : .secondaryLabelColor,
+      meterTint: entry.isLow ? Self.lowInk : .controlAccentColor,
+      balanceTint: entry.isLow ? Self.lowInk : .secondaryLabelColor,
       showsTick: current, balanceColumn: balanceColumn)
   }
 
@@ -1212,7 +1212,7 @@ private struct SwarmHistoryEntry: Equatable {
 }
 
 /// Reuse the same bundled engine artwork as pane headers. Each menu mark is
-/// decoded once to at most 32 pixels, rather than retaining a full-size bitmap
+/// decoded once at twice its display size, rather than retaining a full-size bitmap
 /// or reopening assets on every history/focus update.
 private final class SwarmHistoryIcons {
   /// The Flutter assets this opens: engine and harness artwork, and the app
@@ -1220,7 +1220,7 @@ private final class SwarmHistoryIcons {
   /// lib/store/store_mark.dart). Any other path draws the engine's initial,
   /// which is how the store tab once read "S".
   static func opens(_ asset: String) -> Bool {
-    !asset.contains("..") && (asset == "assets/app_icon.png" || asset == "assets/store/polymath.png"
+    !asset.contains("..") && (asset == "assets/app_icon.png" || asset == "assets/harnesses.png" || asset == "assets/store/polymath.png"
       || asset.hasPrefix("assets/engine-icons/") && asset.hasSuffix(".png"))
   }
 
@@ -1239,11 +1239,11 @@ private final class SwarmHistoryIcons {
     cache.countLimit = 32
   }
 
-  func image(engine: String?, asset: String?) -> NSImage {
+  func image(engine: String?, asset: String?, pointSize: CGFloat = 16) -> NSImage {
     let id = engine?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-    let key = "\(id):\(asset ?? "")" as NSString
+    let key = "\(id):\(asset ?? ""):\(pointSize)" as NSString
     if let image = cache.object(forKey: key) { return image }
-    let size = NSSize(width: 16, height: 16)
+    let size = NSSize(width: pointSize, height: pointSize)
     let image: NSImage
     if let asset, SwarmHistoryIcons.opens(asset),
        let url = assetURL(asset),
@@ -1251,15 +1251,15 @@ private final class SwarmHistoryIcons {
        let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
          kCGImageSourceCreateThumbnailFromImageAlways: true,
          kCGImageSourceCreateThumbnailWithTransform: true,
-         kCGImageSourceThumbnailMaxPixelSize: 32,
+         kCGImageSourceThumbnailMaxPixelSize: Int(ceil(pointSize * 2)),
          kCGImageSourceShouldCacheImmediately: true,
        ] as CFDictionary) {
       let bitmap = NSImage(cgImage: thumbnail, size: .zero)
-      let scale = 16 / CGFloat(max(thumbnail.width, thumbnail.height))
+      let scale = pointSize / CGFloat(max(thumbnail.width, thumbnail.height))
       let width = CGFloat(thumbnail.width) * scale
       let height = CGFloat(thumbnail.height) * scale
       image = NSImage(size: size, flipped: false) { _ in
-        bitmap.draw(in: NSRect(x: (16 - width) / 2, y: (16 - height) / 2, width: width, height: height))
+        bitmap.draw(in: NSRect(x: (pointSize - width) / 2, y: (pointSize - height) / 2, width: width, height: height))
         return true
       }
     } else if id == "store", let appIcon = NSApp.applicationIconImage {
@@ -1273,13 +1273,13 @@ private final class SwarmHistoryIcons {
       image = NSImage(size: size, flipped: false) { _ in
         NSColor(srgbRed: 204.0 / 255, green: 124.0 / 255, blue: 94.0 / 255, alpha: 1).setStroke()
         let path = NSBezierPath()
-        path.lineWidth = 16 * 0.098
+        path.lineWidth = pointSize * 0.098
         path.lineCapStyle = .round
         for i in 0..<4 {
           let angle = CGFloat(i) * .pi / 4
-          let dx = 16 * 0.39 * cos(angle), dy = 16 * 0.39 * sin(angle)
-          path.move(to: NSPoint(x: 8 - dx, y: 8 - dy))
-          path.line(to: NSPoint(x: 8 + dx, y: 8 + dy))
+          let dx = pointSize * 0.39 * cos(angle), dy = pointSize * 0.39 * sin(angle)
+          path.move(to: NSPoint(x: pointSize / 2 - dx, y: pointSize / 2 - dy))
+          path.line(to: NSPoint(x: pointSize / 2 + dx, y: pointSize / 2 + dy))
         }
         path.stroke()
         return true
@@ -1291,12 +1291,12 @@ private final class SwarmHistoryIcons {
         let name = id.split(separator: "/").last.map(String.init) ?? id
         let initial = String(name.first ?? "A").uppercased() as NSString
         let attributes: [NSAttributedString.Key: Any] = [
-          // Raster artwork for a fixed 16px fallback icon, not a UI text label.
-          .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold),
+          // Raster artwork for a fallback icon, not a UI text label.
+          .font: NSFont.monospacedSystemFont(ofSize: pointSize * 11 / 16, weight: .bold),
           .foregroundColor: NSColor.black,
         ]
         let bounds = initial.size(withAttributes: attributes)
-        initial.draw(at: NSPoint(x: (16 - bounds.width) / 2, y: (16 - bounds.height) / 2), withAttributes: attributes)
+        initial.draw(at: NSPoint(x: (pointSize - bounds.width) / 2, y: (pointSize - bounds.height) / 2), withAttributes: attributes)
         return true
       }
       image.isTemplate = true
@@ -1383,7 +1383,7 @@ private final class SwarmStoreButton: SwarmIconButton {
   var palette = SwarmNativePalette() { didSet { needsDisplay = true } }
   var preferredWidth: CGFloat {
     ceil((title as NSString).size(withAttributes: [
-      .font: font ?? HarnessTypography.font(weight: .medium),
+      .font: font ?? SwarmTabStrip.uiFont(weight: .medium),
     ]).width) + 48
   }
 
@@ -1402,7 +1402,7 @@ private final class SwarmStoreButton: SwarmIconButton {
       from: .zero, operation: .sourceOver, fraction: isEnabled ? 1 : 0.45,
       respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
     let attributes: [NSAttributedString.Key: Any] = [
-      .font: font ?? HarnessTypography.font(weight: .medium),
+      .font: font ?? SwarmTabStrip.uiFont(weight: .medium),
       .foregroundColor: palette.accent.withAlphaComponent(isEnabled ? 1 : 0.45),
     ]
     let text = title as NSString
@@ -1475,6 +1475,16 @@ private final class SwarmStripScrollView: NSScrollView {
 }
 
 private final class SwarmTabStrip: NSView {
+  /// The title bar's own face: the system one, at the system size.
+  ///
+  /// The tabs wore the terminal's face until 2026-09-23. It reads as a terminal
+  /// costume on furniture that is not the terminal — no other Mac window names
+  /// its tabs in mono — and the workspace's own chrome, a pane header and the
+  /// command box, carries that face where it belongs (owner).
+  static func uiFont(weight: NSFont.Weight = .regular) -> NSFont {
+    NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: weight)
+  }
+
   private(set) var palette = SwarmNativePalette()
   var emit: ((String, Any?) -> Void)?
   private let scroll = SwarmStripScrollView()
@@ -1529,14 +1539,16 @@ private final class SwarmTabStrip: NSView {
     button(newButton, "plus", "New Tab", #selector(newSwarm))
     newButton.setAccessibilityLabel("New Tab")
     newButton.isEnabled = false
-    button(sessionsButton, "terminal", "Harnesses", #selector(openSessions))
+    button(sessionsButton, "terminal", "Harness Monitor", #selector(openSessions))
+    sessionsButton.image = icons.image(engine: "harnesses", asset: "assets/harnesses.png", pointSize: 24)
+    sessionsButton.symbolConfiguration = nil
     sessionsButton.isEnabled = false
-    sessionsButton.toolTip = "Harnesses"
+    sessionsButton.toolTip = "Harness Monitor"
     newButton.toolTip = "New Tab ⌘T"
     storeButton.isBordered = false
     storeButton.palette = palette
     storeButton.image = icons.image(engine: "store", asset: "assets/store/polymath.png")
-    storeButton.font = HarnessTypography.font(weight: .medium)
+    storeButton.font = SwarmTabStrip.uiFont(weight: .medium)
     storeButton.target = self
     storeButton.action = #selector(openStore)
     storeButton.isEnabled = false
@@ -1577,20 +1589,10 @@ private final class SwarmTabStrip: NSView {
     }
   }
 
-  func updateTypography() {
-    storeButton.font = HarnessTypography.font(weight: .medium)
-    for tab in tabs {
-      tab.labelFont = HarnessTypography.font()
-    }
-    needsLayout = true
-  }
-
   func update(_ state: [String: Any]) {
     // Workspace teardown clears its controls without changing appearance.
     if let palette = state["palette"] as? [String: Any] { updatePalette(palette) }
     actionsEnabled = state["enabled"] as? Bool == true
-    HarnessTypography.update(state)
-    storeButton.font = HarnessTypography.font(weight: .medium)
     let rows = state["tabs"] as? [[String: Any]] ?? []
     let nextActiveId = state["activeId"] as? String ?? ""
     revealActiveAfterLayout = revealActiveAfterLayout || nextActiveId != activeId
@@ -1604,7 +1606,6 @@ private final class SwarmTabStrip: NSView {
       guard let id = row["id"] as? String else { return nil }
       let tab = previous[id] ?? SwarmTabButton(id: id)
       tab.palette = palette
-      tab.labelFont = HarnessTypography.font()
       tab.name = row["name"] as? String ?? "New Tab"
       let count = row["agentCount"] as? Int ?? 0
       // The Harness Store tab holds no agents; without its own mark it would wear New Tab's plus.
@@ -1639,7 +1640,7 @@ private final class SwarmTabStrip: NSView {
     sessionsButton.running = state["runningSessions"] as? Int ?? 0
     sessionsButton.expanded = state["sessionsOpen"] as? Bool == true
     let expandedState = sessionsButton.expanded ? "Expanded" : "Collapsed"
-    sessionsButton.toolTip = sessionsButton.running > 0 ? "Harnesses · \(sessionsButton.running) running" : "Harnesses"
+    sessionsButton.toolTip = sessionsButton.running > 0 ? "Harness Monitor · \(sessionsButton.running) running" : "Harness Monitor"
     let attention = state["attention"] as? Int ?? 0
     // What the badge COUNTS is `unread` — harnesses carrying news nobody has looked at, which
     // includes the ones that simply finished. `attention` is the narrower "blocked, waiting on a
@@ -1652,8 +1653,8 @@ private final class SwarmTabStrip: NSView {
     sessionsButton.setAccessibilityValue(unread > 0 ? "\(expandedState), \(unreadState)" : expandedState)
     if unread > 0 {
       sessionsButton.toolTip = attention > 0
-        ? "Harnesses · \(unreadState) · \(attentionState)"
-        : "Harnesses · \(unreadState)"
+        ? "Harness Monitor · \(unreadState) · \(attentionState)"
+        : "Harness Monitor · \(unreadState)"
     }
     needsLayout = true
     layoutSubtreeIfNeeded()
@@ -1788,12 +1789,16 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     get { iconView.image }
     set { iconView.image = newValue }
   }
-  var labelFont = HarnessTypography.font() {
+  /// A tab is named in the system face, like every other Mac window's tabs —
+  /// Safari's, Ghostty's, Finder's. The terminal's face belongs to the terminal
+  /// and to the chrome drawn around it inside the window (owner, 2026-09-23).
+  var labelFont = SwarmTabStrip.uiFont() {
     didSet { if oldValue != labelFont { invalidateLabel() } }
   }
-  /// The ⌘1 badge: the tab's face one point under its label, so the name leads.
+  /// The ⌘1 badge: monospaced digits, so 1 and 9 take the same room and the
+  /// badges down a strip of tabs line up.
   private var badgeFont: NSFont {
-    HarnessTypography.font(size: max(9, labelFont.pointSize - 1))
+    NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
   }
   private var cachedLabel: NSAttributedString?
   var actionsEnabled = true {

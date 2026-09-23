@@ -1,3 +1,5 @@
+import type { AutonomousDeviceStore } from './store.js'
+import { DEVICE_STORE_CAPABILITIES, DeviceStoreError } from './storeContract.js'
 import { createHash, randomUUID } from 'node:crypto'
 
 export type AutonomousDeviceFrame = Record<string, unknown> & { type: string }
@@ -7,11 +9,12 @@ export interface AutonomousDeviceReceipt {
   agentId: string; machineId: string; serverInstanceId: string; turnId: string | null
   error: { code: string; message: string } | null; at: number
 }
-export interface AutonomousDeviceAgent { agentId: string; name: string; engine: string; state: string }
+export interface AutonomousDeviceAgent { agentId: string; name: string; engine: string; state: string; packageId?: string | null; workspace?: string | null; runtime?: string }
 
 const AGENT_RECAP_MAX_CHARS = 200
 export interface AutonomousDeviceDelivery { deliveryId: string; sessionId: string; state: ReceiptState; reason?: string }
 export interface AutonomousDeviceServiceOptions {
+  store?: AutonomousDeviceStore
   machineId: string; serverInstanceId?: string; now?: () => number
   agents: () => AutonomousDeviceAgent[]
   requestAppFocus?: (agentId: string, expiresAt: number, focusRevision: string) => boolean
@@ -226,6 +229,7 @@ export class AutonomousDeviceService {
     this.update(entry, event.state, event.reason)
   }
   revoke(deviceId: string): void {
+    this.options.store?.revoke(deviceId)
     for (const [key, entry] of this.entries) if (entry.deviceId === deviceId) {
       this.options.cancelDelivery(entry.receipt.deliveryId)
       this.deliveries.delete(entry.receipt.deliveryId)
@@ -282,13 +286,15 @@ export class AutonomousDeviceService {
       this.event(p.kind === 'summary' ? 'turn.summary' : p.kind === 'tool' ? 'turn.tool' : 'agent.error', agentId, full ? { ...p, fullText: full } : p)
     }
   }
+  get capabilities(): string[] { return [...AUTONOMOUS_DEVICE_CAPABILITIES, ...(this.options.store ? DEVICE_STORE_CAPABILITIES : [])] }
   async request(deviceId: string, req: Record<string, unknown>): Promise<AutonomousDeviceFrame> {
     const type = typeof req.type === 'string' ? req.type : 'invalid'
     const response = (data: Record<string, unknown>): AutonomousDeviceFrame => ({ type: `${type}_result`, requestId: req.requestId, ...data })
     let reserved: Entry | undefined
     try {
       if (!UUID.test(String(req.requestId))) fail('INVALID_REQUEST', 'requestId must be a UUIDv4')
-      if (!AUTONOMOUS_DEVICE_CAPABILITIES.includes(type)) fail('UNSUPPORTED_CAPABILITY', 'Operation is not supported')
+      if (!this.capabilities.includes(type)) fail('UNSUPPORTED_CAPABILITY', 'Operation is not supported')
+      if ((DEVICE_STORE_CAPABILITIES as readonly string[]).includes(type)) return response(await this.options.store!.request(deviceId, req))
       const allowed = ['type', 'requestId', ...(['agents.list', 'focus.get', 'focus.ensure'].includes(type) ? [] : type === 'receipt.get' ? ['idempotencyKey'] : type === 'focus.step' ? ['direction', 'idempotencyKey', 'focusRevision'] : type === 'scroll' ? ['phase', 'dy', 'velocity'] : ['machineId', 'agentId']),
         ...(MUTATIONS.has(type) ? ['idempotencyKey'] : []), ...(type === 'turn.send' ? ['text', 'focusRevision'] : type === 'question.answer' ? ['questionRequestId', 'answers', 'focusRevision'] : type === 'recap' ? ['n'] : [])]
       if (Object.keys(req).some(k => !allowed.includes(k))) fail('INVALID_REQUEST', 'Unknown request field')
@@ -364,7 +370,7 @@ export class AutonomousDeviceService {
         reserved.receipt.error = { code: 'INTERNAL', message: 'Reserved operation could not be confirmed' }
         return response({ status: 'accepted', receipt: structuredClone(reserved.receipt) })
       }
-      return response({ error: { code: e instanceof RequestError ? e.code : 'INTERNAL', message: e instanceof RequestError ? e.message : 'Request failed' } })
+      return response({ error: { code: e instanceof RequestError || e instanceof DeviceStoreError ? e.code : 'INTERNAL', message: e instanceof RequestError || e instanceof DeviceStoreError ? e.message : 'Request failed' } })
     }
   }
 }

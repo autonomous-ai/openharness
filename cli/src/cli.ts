@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
 import { mutateDsh } from './dsh/service.js'
 import { HarnessShareOwner } from './sharing/owner.js'
 import { HarnessGrantStore } from './sharing/grants.js'
@@ -215,6 +216,7 @@ import {
 import { probeGatewayRuntime } from './lib/gatewayRuntime.js'
 import { probeGridAssignment, sameGridAssignment } from './lib/gridAssignment.js'
 import { agentFrame, type AgentFrame } from './lib/agentFrame.js'
+import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { SessionInputController } from './lib/sessionInput.js'
 import { adaptSlashCommand } from './lib/goalCommand.js'
 import { RuntimeProfileManager, parseRuntimeProfile } from './lib/runtimeProfile.js'
@@ -1192,6 +1194,7 @@ let dshFrameContextRef: ((s: RegisteredSession) => AgentDshContext | null) | nul
 
 function projectFrame(s: RegisteredSession, selectedModel: string | null): Promise<AgentFrame> {
   return agentFrame(s, {
+    tokenUsage: agentTokenUsage.get(s),
     selectedModel,
     terminalAvailable: registry.terminalAvailable(s.agentId),
     dsh: dshFrameContextRef?.(s) ?? null,
@@ -1572,6 +1575,19 @@ async function runForeground(session: AuthSession): Promise<void> {
     backendRef?.send({ type: 'agent_renamed', payload: { agentId: s.agentId, name, engine: s.engine } })
     if (opts.device !== false) backendRef?.sendCommander({ type: 'agent_renamed', payload: { agentId: s.agentId, name, engine: s.engine } })
   }
+  agentTokenUsage.onChanged = (target) => {
+    const current = registry.resolve(target.agentId)
+    if (current?.sessionId === target.sessionId && current.engine === target.engine) {
+      if (registry.terminalAvailable(current.agentId)) syncSession(current, { device: false })
+      return
+    }
+    try {
+      const saved = stoppedAgents.get(target.agentId)
+      if (saved?.sessionId === target.sessionId && saved.engine === target.engine) {
+        void backendRef?.publishStoppedAgent(saved).catch(() => {})
+      }
+    } catch { /* A concurrently removed archive has nothing to update. */ }
+  }
   // New process observations, session bindings, runtime-profile changes, reconnects and periodic
   // reconciliation refresh web and device from the same authoritative snapshot. Device agent_synced is
   // idempotent and can upsert a sessionless tile, so re-announcing at bind is both safe and necessary.
@@ -1700,6 +1716,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     }
   }
   let autonomousDeviceDirect: AutonomousDeviceDirect | undefined
+  let deviceStoreRef: ReturnType<typeof createDeviceStore> | undefined
   let autonomousDeviceService: AutonomousDeviceService | undefined
   let appVoiceFocus: { machineId: string; agentId: string; connId: string } | undefined
   let backendRef: BackendSocket | undefined
@@ -2552,6 +2569,8 @@ async function runForeground(session: AuthSession): Promise<void> {
 
   emitSessionEvents = (sessionId: string, events: ReturnType<CursorNormalizer['ingest']>, opts?: { resumed?: boolean; replay?: boolean }): void => {
     if (!events.length || !registry.bySession(sessionId)?.active) return
+    const usageSession = registry.bySession(sessionId)
+    if (usageSession?.engine === 'opencode') agentTokenUsage.changed(usageSession)
     for (const event of events) {
       const agentId = agentIdFor(sessionId)
       const frame = correlateAgentEvent(event, sessionId, agentId)
@@ -3651,6 +3670,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     shareRelay,
     // The window and the dial are one desk: opening an agent in the app brings the dial to it, switching
     // the dial's machine first when the app moved to another one.
+    onDevicePrepareOpened: (operationId, agentId) => deviceStoreRef?.acknowledgeReveal(operationId, agentId),
     onAppFocusState: (machineId, agentId, connId, expectedRevision) => {
       // A delayed automatic selection cannot replace a newer explicit user choice.
       if (expectedRevision && autonomousDeviceService?.focusSnapshot().focusRevision !== expectedRevision) return false
@@ -3889,6 +3909,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     if (!registry.has(evt.sessionId)) return null // scope to terminal-registered sessions
     const session = registry.bySession(evt.sessionId)
     if (!session || session.engine !== evt.engine) return null
+    agentTokenUsage.changed(session)
     runtimeProfiles.ingest(session, evt.text)
     let events
     if (session.engine === 'codex') {
@@ -5442,7 +5463,14 @@ async function runForeground(session: AuthSession): Promise<void> {
   const cable = new CableSession(cableHost, new DialLog(env.HARNESS_LOGS_DIR))
   cableRef = cable
 
+  const deviceStore = createDeviceStore({ dataDir: env.ADAPTER_DATA_DIR, machineId: backend.machineId,
+    create: input => backend.onCreateAgent!(input),
+    reveal: (operationId, agentId) => { backend.sendFirstLocal({ type: 'device_prepare_open', payload: { operationId, machineId: backend.machineId, agentId } }) },
+  })
+  deviceStoreRef = deviceStore
+  deviceStore.startUiDelivery()
   autonomousDeviceService = new AutonomousDeviceService({
+    store: deviceStore,
     machineId: backend.machineId,
     requestAppFocus: (agentId, expiresAt, focusRevision) => backend.sendFirstLocal({
       type: 'device_focus', payload: { machineId: backend.machineId, agentId, expiresAt, focusRevision },
@@ -5452,8 +5480,13 @@ async function runForeground(session: AuthSession): Promise<void> {
     stepFocus: (direction, currentAgentId) => backend.hasLocalClient() ? cableHost.stepFocus(direction, currentAgentId) : Promise.resolve('no_app'),
     // The dial's touchpad stroke, borrowed the same way: `dial_scroll` to the window's focused terminal.
     scroll: (phase, dy, velocity) => { if (!backend.hasLocalClient()) return false; cableHost.scrolled(phase, dy, velocity); return true },
-    agents: () => registry.advertised().map(s => ({ agentId: s.agentId, name: projectDisplayName(s), engine: s.engine,
-      state: turnStartedAt.has(s.sessionId) ? 'running' : 'idle' })),
+    agents: () => {
+      const evidence = new Map(deviceStoreAgents(backend.machineId).map(a => [a.agentId, a]))
+      return registry.advertised().map(s => ({ agentId: s.agentId, name: projectDisplayName(s), engine: s.engine,
+        packageId: evidence.get(s.agentId)?.packageId ?? null, workspace: evidence.get(s.agentId)?.workspace ?? s.cwd,
+        runtime: evidence.get(s.agentId)?.runtime ?? 'unavailable',
+        state: turnStartedAt.has(s.sessionId) ? 'running' : 'idle' }))
+    },
     submit: submitAgent,
     cancelDelivery: id => input.cancelDelivery(id),
     stop: id => cancelAgent(id, true),

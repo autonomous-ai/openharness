@@ -211,6 +211,47 @@ final _automaticHarnessName = RegExp(
 bool isAutomaticHarnessName(String name) =>
     _automaticHarnessName.hasMatch(name);
 
+/// Only measurements confirmed by this harness's own tool receipts.
+class AgentOutputStats {
+  const AgentOutputStats({
+    this.linesAdded,
+    this.linesRemoved,
+    this.pullRequestsCreated,
+    this.updatedAt,
+  });
+  final int? linesAdded, linesRemoved, pullRequestsCreated;
+  final DateTime? updatedAt;
+  bool get hasEdits => linesAdded != null && linesRemoved != null;
+  bool get isEmpty => !hasEdits && pullRequestsCreated == null;
+  static AgentOutputStats? fromJson(Object? value) {
+    if (value is! Map) return null;
+    int? count(Object? n) =>
+        n is int && n >= 0 && n <= 9007199254740991 ? n : null;
+    final added = count(value['linesAdded']),
+        removed = count(value['linesRemoved']);
+    final stats = AgentOutputStats(
+      linesAdded: removed == null ? null : added,
+      linesRemoved: added == null ? null : removed,
+      pullRequestsCreated: count(value['pullRequestsCreated']),
+      updatedAt: value['updatedAt'] is String
+          ? DateTime.tryParse(value['updatedAt'] as String)
+          : null,
+    );
+    return stats.isEmpty ? null : stats;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is AgentOutputStats &&
+      linesAdded == other.linesAdded &&
+      linesRemoved == other.linesRemoved &&
+      pullRequestsCreated == other.pullRequestsCreated &&
+      updatedAt == other.updatedAt;
+  @override
+  int get hashCode =>
+      Object.hash(linesAdded, linesRemoved, pullRequestsCreated, updatedAt);
+}
+
 class Agent {
   final String id;
   final String? sessionId;
@@ -241,6 +282,13 @@ class Agent {
 
   /// The CLI's transcript/hook activity time, not its registry refresh time.
   final DateTime? lastActivityAt;
+
+  /// Cached conversation usage reported by this agent's owning machine.
+  final int? tokensUsed;
+  final DateTime? tokensUpdatedAt;
+  final AgentOutputStats? outputStats;
+  bool get hasMonitorStats =>
+      tokensUsed != null || (outputStats != null && !outputStats!.isEmpty);
   final String status;
   final String launchState;
   final String? launchError;
@@ -311,6 +359,9 @@ class Agent {
     this.parentAgentId,
     this.project,
     this.lastActivityAt,
+    this.tokensUsed,
+    this.tokensUpdatedAt,
+    this.outputStats,
     this.status = 'active',
     this.launchState = 'ready',
     this.launchError,
@@ -389,6 +440,9 @@ class Agent {
       _ => 'ready',
     };
     final grid = j['grid'] as Map<String, dynamic>?;
+    final usage = j['tokenUsage'];
+    final total = usage is Map ? usage['totalTokens'] : null;
+    final validTokens = total is int && total >= 0 && total <= 9007199254740991;
     return Agent(
       id: j['id'] as String,
       sessionId: _safeLabel(j['sessionId']),
@@ -405,6 +459,12 @@ class Agent {
       lastActivityAt: j['updatedAt'] is String
           ? DateTime.tryParse(j['updatedAt'] as String)
           : null,
+      tokensUsed: validTokens ? total : null,
+      tokensUpdatedAt:
+          validTokens && usage is Map && usage['updatedAt'] is String
+          ? DateTime.tryParse(usage['updatedAt'] as String)
+          : null,
+      outputStats: AgentOutputStats.fromJson(j['outputStats']),
       status: (j['status'] as String?) ?? 'active',
       launchState: launchState,
       launchError: launchState == 'failed' ? _safeLabel(launch['error']) : null,
@@ -447,6 +507,9 @@ class Agent {
         parentAgentId: parentAgentId,
         project: project,
         lastActivityAt: lastActivityAt,
+        tokensUsed: tokensUsed,
+        tokensUpdatedAt: tokensUpdatedAt,
+        outputStats: outputStats,
         status: status ?? this.status,
         launchState: launchState,
         launchError: launchError,

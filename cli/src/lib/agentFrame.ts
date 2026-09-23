@@ -18,8 +18,10 @@
  * makes the shape testable without a registry, which is the whole reason the drift went unnoticed.
  */
 
-import { stat } from 'node:fs/promises'
 import { agentProject, type AgentProject } from './agentProject.js'
+import { transcriptActivityAt } from './transcriptActivity.js'
+import type { AgentTokenUsage } from './agentTokenUsage.js'
+import type { AgentOutputStats } from './agentOutputStats.js'
 import type { GridAssignment } from './gridAssignment.js'
 import type { GridWebSearchStatus } from './gridLaunch.js'
 import { projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './registry.js'
@@ -56,6 +58,9 @@ export type AgentFrame = {
   launch: NonNullable<RegisteredSession['launch']>
   createdAt: string
   updatedAt: string
+  /** Cached usage from this conversation's owning machine; null means unreported, never zero. */
+  tokenUsage: AgentTokenUsage | null
+  outputStats: (AgentOutputStats & { updatedAt: string }) | null
   tmuxPane: string | null
   terminal: { available: boolean; primary: string; runtimes: RegisteredSession['runtimes'] }
   engine: RegisteredSession['engine']
@@ -109,21 +114,22 @@ export interface AgentFrameContext {
   selectedModel: string | null
   /** `registry.terminalAvailable(agentId)` — the caller already holds the registry. */
   terminalAvailable: boolean
+  tokenUsage?: AgentTokenUsage | null
   /** The DSH companions' state for this agent; absent when the caller has none to give. */
   dsh?: AgentDshContext | null
 }
 
 /**
- * When the conversation last moved, in epoch ms: the transcript's mtime, else the last time the engine
+ * When the conversation last moved, in epoch ms: dated work in the transcript, else the last time the engine
  * reported in (a hook, or a session bind — the agent's creation at the latest).
  *
  * ⚠️ Never the registry's `updatedAt`. That is bookkeeping: discovery rewrites it on every pass
  * (`updateRuntimes`), so falling back to it stamped every agent without a readable transcript "now"
- * — and a client sorting by recency put exactly those agents above the ones just used.
+ * — and a client sorting by recency put exactly those agents above the ones just used. File mtime is
+ * bookkeeping too: an idle transcript can be rewritten without a new conversation event.
  */
 export async function lastActivityAt(s: RegisteredSession): Promise<number> {
-  const st = s.transcriptPath ? await stat(s.transcriptPath).catch(() => null) : null
-  return st?.mtimeMs ?? s.lastHookAt
+  return await transcriptActivityAt(s.transcriptPath, s.engine) ?? s.lastHookAt
 }
 
 function frameTitle(s: RegisteredSession): string | null {
@@ -137,7 +143,7 @@ function frameTitle(s: RegisteredSession): string | null {
  */
 export async function agentFrame(
   s: RegisteredSession,
-  { selectedModel, terminalAvailable, dsh }: AgentFrameContext,
+  { selectedModel, terminalAvailable, dsh, tokenUsage }: AgentFrameContext,
 ): Promise<AgentFrame> {
   return {
     id: s.agentId,
@@ -149,6 +155,9 @@ export async function agentFrame(
     launch: s.launch ?? { state: 'ready' },
     createdAt: new Date(s.registeredAt).toISOString(),
     updatedAt: new Date(await lastActivityAt(s)).toISOString(),
+    tokenUsage: tokenUsage?.totalTokens != null
+      ? { totalTokens: tokenUsage.totalTokens, updatedAt: tokenUsage.updatedAt } : null,
+    outputStats: tokenUsage?.output ? { ...tokenUsage.output, updatedAt: tokenUsage.updatedAt } : null,
     tmuxPane: s.tmuxPane || null,
     terminal: { available: terminalAvailable, primary: s.primaryRuntimeKey, runtimes: s.runtimes },
     engine: s.engine,

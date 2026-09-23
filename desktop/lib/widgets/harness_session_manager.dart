@@ -10,6 +10,8 @@ import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
 import '../state/harness_sessions.dart';
 import '../state/swarm_navigation.dart';
+import '../core/models.dart';
+import '../usage/ledger/usage_overview.dart' show formatTokens;
 import 'engine_identity.dart';
 import '../notify/alert_sounds.dart';
 
@@ -196,6 +198,11 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
               26,
         ) +
         (showingQuestions ? scale.scale(AppType.monoMetaSize) * 1.4 + 6 : 0);
+    double heightFor(HarnessSession row) =>
+        rowHeight +
+        (row.agent.hasMonitorStats
+            ? scale.scale(AppType.monoMetaSize) * 1.4 + 6
+            : 0);
     return FocusScope(
       child: CallbackShortcuts(
         bindings: {
@@ -245,10 +252,14 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
               // Materialize a distant row, then use its real bounds. Question
               // text, errors, row padding and enlarged type all affect height.
               _scroll.jumpTo(
-                (6 + next * (rowHeight + 2)).clamp(
-                  0,
-                  _scroll.position.maxScrollExtent,
-                ),
+                (6 +
+                        rows
+                            .take(next)
+                            .fold<double>(
+                              0,
+                              (height, row) => height + heightFor(row) + 2,
+                            ))
+                    .clamp(0, _scroll.position.maxScrollExtent),
               );
               WidgetsBinding.instance.addPostFrameCallback((_) => reveal());
             }
@@ -267,10 +278,10 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                   child: Row(
                     children: [
                       Expanded(
-                        child: Text('Harnesses', style: AppType.heading()),
+                        child: Text('Harness Monitor', style: AppType.heading()),
                       ),
                       IconButton(
-                        tooltip: 'Close harnesses',
+                        tooltip: 'Close Harness Monitor',
                         onPressed: widget.onClose,
                         icon: const Icon(LucideIcons.x, size: 16),
                       ),
@@ -455,17 +466,15 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                               ),
                               const SizedBox(height: 12),
                               Text(
-                                all.isEmpty
-                                    ? 'Your harnesses live here'
-                                    : showingQuestions &&
-                                          _search.text.trim().isEmpty
+                                showingQuestions && _search.text.trim().isEmpty
                                     ? 'No harnesses need your input'
+                                    : all.isEmpty
+                                    ? 'Your harnesses live here'
                                     : 'No matching harnesses',
                                 style: AppType.label(height: 1.3),
                               ),
                               if (!showingQuestions ||
-                                  _search.text.trim().isNotEmpty ||
-                                  all.isEmpty) ...[
+                                  _search.text.trim().isNotEmpty) ...[
                                 const SizedBox(height: 6),
                                 Text(
                                   all.isEmpty
@@ -515,7 +524,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                                   () => GlobalKey(),
                                 ),
                                 row: row,
-                                height: rowHeight,
+                                height: heightFor(row),
                                 now: now,
                                 showQuestion: showingQuestions,
                                 unread: widget.app.agentUnread.kindFor(
@@ -647,6 +656,14 @@ class _SessionRow extends StatelessWidget {
                         row.project?.shownBranch,
                         row.question?.prompt,
                         activity,
+                        if (row.agent.tokensUsed case final count?)
+                          '$count tokens used',
+                        if (row.agent.outputStats case final stats?) ...[
+                          if (stats.hasEdits)
+                            '${stats.linesAdded} lines added, ${stats.linesRemoved} lines removed in recorded edits',
+                          if (stats.pullRequestsCreated case final count?)
+                            '$count pull requests created',
+                        ],
                         busy ? pendingLabel : row.status,
                       ].whereType<String>().join(', '),
                       onTap: canOpen ? onOpen : null,
@@ -681,6 +698,26 @@ class _SessionRow extends StatelessWidget {
                                             ),
                                           ),
                                         ),
+                                        if (row.lastActiveAt != null)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              left: 8,
+                                            ),
+                                            child: Tooltip(
+                                              message:
+                                                  'Last active ${row.lastActiveAt!.toLocal()}',
+                                              child: Text(
+                                                '· ${harnessActivityAge(row.lastActiveAt, now)}',
+                                                key: ValueKey(
+                                                  'session-age:${row.id}',
+                                                ),
+                                                style: AppType.monoMeta(
+                                                  color:
+                                                      AppPalette.textSecondary,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
                                         if (attention != null && !busy)
                                           Padding(
                                             padding: const EdgeInsets.only(
@@ -722,20 +759,15 @@ class _SessionRow extends StatelessWidget {
                                             ),
                                           ],
                                         ],
-                                        const SizedBox(width: 12),
-                                        detail(
-                                          LucideIcons.clock3,
-                                          harnessActivityAge(
-                                            row.lastActiveAt,
-                                            now,
-                                          ),
-                                          AppPalette.textSecondary,
-                                          tooltip: row.lastActiveAt == null
-                                              ? activity
-                                              : 'Last active ${row.lastActiveAt!.toLocal()}',
-                                        ),
                                       ],
                                     ),
+                                    if (row.agent.hasMonitorStats) ...[
+                                      const SizedBox(height: 6),
+                                      _MonitorStats(
+                                        agent: row.agent,
+                                        id: row.id,
+                                      ),
+                                    ],
                                     if (showQuestion)
                                       if (row.question
                                           case final question?) ...[
@@ -880,4 +912,86 @@ abstract final class _UnreadMark {
   /// Finished. Green because it is the one colour nobody reads as "act now",
   /// which is exactly the difference being drawn.
   static const doneTint = Color(0xff6fbf8b);
+}
+
+class _MonitorStats extends StatelessWidget {
+  const _MonitorStats({required this.agent, required this.id});
+  final Agent agent;
+  final String id;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = AppType.monoMeta(
+      color: AppPalette.textSecondary,
+      height: 1.3,
+    );
+    String measured(DateTime? time) =>
+        time == null ? '' : '\nUpdated ${time.toLocal()}';
+    final stats = agent.outputStats;
+    final items = <Widget>[
+      if (agent.tokensUsed case final count?)
+        Tooltip(
+          message:
+              '$count tokens · input, output and cached input${measured(agent.tokensUpdatedAt)}',
+          child: Text(
+            '${formatTokens(count)} tokens',
+            key: ValueKey('session-tokens:$id'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          ),
+        ),
+      if (stats != null && stats.hasEdits)
+        Tooltip(
+          message:
+              '${stats.linesAdded} lines added · ${stats.linesRemoved} removed\n'
+              'Recorded edits by this harness, including repeated edits. Not the current branch diff.'
+              '${measured(stats.updatedAt)}',
+          child: Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: '+${formatTokens(stats.linesAdded!)}',
+                  style: const TextStyle(color: Color(0xff8dbb79)),
+                ),
+                const TextSpan(text: ' '),
+                TextSpan(
+                  text: '−${formatTokens(stats.linesRemoved!)}',
+                  style: const TextStyle(color: Color(0xffd28f87)),
+                ),
+              ],
+            ),
+            key: ValueKey('session-edits:$id'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          ),
+        ),
+      if (stats?.pullRequestsCreated case final count?)
+        Tooltip(
+          message:
+              '$count ${count == 1 ? 'pull request' : 'pull requests'} created by this harness\n'
+              'Confirmed creation receipts. Cached; not a live GitHub status.${measured(stats?.updatedAt)}',
+          child: Text(
+            '$count ${count == 1 ? 'PR' : 'PRs'}',
+            key: ValueKey('session-prs:$id'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          ),
+        ),
+    ];
+    return Row(
+      children: [
+        for (var i = 0; i < items.length; i++) ...[
+          if (i > 0)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Text('·', style: style),
+            ),
+          Flexible(child: items[i]),
+        ],
+      ],
+    );
+  }
 }

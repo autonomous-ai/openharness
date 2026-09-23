@@ -708,6 +708,23 @@ class AppNotifier extends ChangeNotifier {
   // terminal streams and nothing else — its web panes are unloaded until it is shown again.
   static const maxClosedSwarms = 24;
   final List<ClosedWork> _closedHistory = [];
+  // The monitor follows user-visible panes, never the daemon's entire process
+  // inventory. Keep identities after a pane is minimized, paused or closed.
+  final _monitorHarnesses = <(String, String)>{};
+  bool hasOpenedHarness(String machineId, String agentId) =>
+      _monitorHarnesses.contains((machineId, agentId));
+
+  /// Record pane intent, never daemon discovery. Saved with the existing layout.
+  void rememberOpenedHarness(String machineId, String agentId) {
+    if (machineId.isEmpty || agentId.isEmpty) return;
+    final identity = (machineId, agentId);
+    _monitorHarnesses.remove(identity);
+    _monitorHarnesses.add(identity);
+    if (_monitorHarnesses.length > 4096) {
+      _monitorHarnesses.remove(_monitorHarnesses.first);
+    }
+  }
+
   int _nextClosedHistoryId = 1;
   List<ClosedWork> get closedHistory =>
       List.unmodifiable(_closedHistory.reversed);
@@ -753,6 +770,15 @@ class AppNotifier extends ChangeNotifier {
   }
 
   void _rememberClosed(ClosedWork entry) {
+    if (entry is ClosedAgent) {
+      rememberOpenedHarness(entry.machineId, entry.agentId);
+    } else if (entry is ClosedSwarm) {
+      for (final pane in entry.panes) {
+        if (pane.agentId case final id?) {
+          rememberOpenedHarness(pane.machineId, id);
+        }
+      }
+    }
     // An unused starter has no work to recover. This also covers empty pages
     // restored from builds that did not mark them as drafts.
     if (entry is ClosedSwarm &&
@@ -2969,6 +2995,7 @@ class AppNotifier extends ChangeNotifier {
     expandedMachines.clear();
     selectedMachineId = null;
     _closedHistory.clear();
+    _monitorHarnesses.clear();
     _draftSwarmReturns.clear();
     _localMismatchReported.clear();
     _dismissedLinkPrompts.clear();
@@ -3151,6 +3178,7 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || signingIn || signingOut || signOutError != null) return;
     final revision = _invalidateAuthWork();
     _closedHistory.clear();
+    _monitorHarnesses.clear();
     _lastError = null;
     status = AppStatus.bootstrapping;
     signingIn = true;
@@ -3311,6 +3339,7 @@ class AppNotifier extends ChangeNotifier {
     _lastError = null;
     pendingAuthorizeUrl = null;
     _closedHistory.clear();
+    _monitorHarnesses.clear();
     status = AppStatus.unauthenticated;
     currentUser = null;
     analyticsAccount.clear();
@@ -4093,6 +4122,9 @@ class AppNotifier extends ChangeNotifier {
           prev.parentAgentId != agent.parentAgentId ||
           prev.project != agent.project ||
           prev.lastActivityAt != agent.lastActivityAt ||
+          prev.tokensUsed != agent.tokensUsed ||
+          prev.outputStats != agent.outputStats ||
+          prev.tokensUpdatedAt != agent.tokensUpdatedAt ||
           prev.launchState != agent.launchState ||
           prev.launchError != agent.launchError ||
           prev.launchDetail != agent.launchDetail ||
@@ -6178,6 +6210,14 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// PR lookup runs on the agent's machine using that machine's GitHub access.
+  Future<Map<String, dynamic>> readAgentPullRequest(String machineId, String agentId) async {
+    try {
+      return await _conn(machineId).request('git_pull_request',
+        payload: {'agentId': agentId}, timeout: const Duration(seconds: 30));
+    } catch (_) { return {'status': 'unavailable'}; }
+  }
+
   /// Reads source material only on the machine that owns the selected path.
   Future<Map<String, dynamic>> readProjectPreview(
     String machineId,
@@ -8048,6 +8088,64 @@ class AppNotifier extends ChangeNotifier {
     });
   }
 
+  final _preparationOpens = <String, Future<bool>>{};
+  final _revealedPreparations = <String>{};
+
+  /// Reveal a prepared agent before its engine is ready, so login/trust stays
+  /// interactive. This only opens UI; task delivery belongs to the device.
+  Future<bool> revealPreparedAgent(
+    String machineId,
+    String agentId,
+    String operationId,
+  ) async {
+    final key = '$_authRevision/$machineId/$operationId';
+    if (_revealedPreparations.contains(key)) return true;
+    final agentKey = '$_authRevision/$machineId/$agentId';
+    final pending = _preparationOpens[agentKey];
+    if (pending != null) {
+      final opened = await pending;
+      if (opened) _revealedPreparations.add(key);
+      return opened;
+    }
+    final opening = _openPreparedAgent(machineId, agentId);
+    _preparationOpens[agentKey] = opening;
+    try {
+      final opened = await opening;
+      if (opened) _revealedPreparations.add(key);
+      return opened;
+    } finally {
+      _preparationOpens.remove(agentKey);
+    }
+  }
+
+  Future<bool> _openPreparedAgent(String machineId, String agentId) async {
+    final revision = _authRevision;
+    final machine = machineStates[machineId];
+    if (_disposed || machine == null || !await _awaitAgent(machine, agentId)) {
+      return false;
+    }
+    if (_disposed || revision != _authRevision || !identical(machineStates[machineId], machine)) {
+      return false;
+    }
+    await openAgentFromDial(machineId, agentId);
+    if (_disposed || revision != _authRevision || !identical(machineStates[machineId], machine) ||
+        !allPanes.any(
+          (p) => p.machineId == machineId && p.agentId == agentId,
+        )) {
+      return false;
+    }
+    // Reuse the generic package viewer path, including a late viewerUrl/error.
+    final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+    if (agent != null) {
+      _dismissedViewers.remove(_viewerKey(machineId, agentId));
+      _syncViewerPane(machine, agent);
+      activeSwarm.zoomedPaneId = null;
+      _persistLayout();
+      notifyListeners();
+    }
+    return true;
+  }
+
   /// Enable-time fallback: preserve the user's current choice and acknowledge it.
   /// Selection records focus before waiting for terminal attachment, so a later
   /// user click is never overwritten by completion of an asynchronous open.
@@ -8767,6 +8865,114 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Move a pane to another tab, terminal and all.
+  ///
+  /// The tile is the SAME [TerminalPane] on the other side — never a fresh one
+  /// — which is what keeps the terminal attached: the session hangs off the
+  /// pane ([TerminalPane.session]), the cell is a `GlobalKey`, and
+  /// `TerminalPanel` is built to survive a change of tab without remounting.
+  /// Closing here and opening there would tear the session down and ask the
+  /// daemon to open it again, losing the viewport and the scrollback.
+  ///
+  /// Refuses rather than half-moves: an unknown pane or tab, the tab it is
+  /// already on, and a destination at [maxPanes] all leave everything as it
+  /// was, the last one with the same message [assignAgentToPane] gives.
+  ///
+  /// A destination already showing this agent takes the move as a plain close
+  /// here — one membership per tab, the rule [assignAgentToPane] keeps.
+  bool movePaneToSwarm(int paneId, String swarmId, {bool follow = true}) {
+    final source = activeSwarm;
+    final pane = source.panes.where((p) => p.id == paneId).firstOrNull;
+    final target = swarms.where((swarm) => swarm.id == swarmId).firstOrNull;
+    if (pane == null || target == null || target.id == source.id) return false;
+    final twin = pane.agentId == null
+        ? null
+        : target.panes
+              .where(
+                (p) =>
+                    p.machineId == pane.machineId && p.agentId == pane.agentId,
+              )
+              .firstOrNull;
+    if (twin == null && target.panes.length >= maxPanes) {
+      _lastError =
+          'That tab holds $maxPanes agents. Close one there to move this in.';
+      _lastErrorRetryable = false;
+      notifyListeners();
+      return false;
+    }
+    source.remove(pane);
+    // The tab left behind re-tiles. `Swarm.remove` keeps the shape by carrying
+    // the manual layout down a tile — right when a pane CLOSES, because the
+    // split was drawn around the tiles that remain. A tile that left for
+    // another tab is not that: what is left here is a different set, and
+    // holding the old proportions leaves it visibly lopsided. A layout chosen
+    // outright in the Layout palette still stands; only the dragged sizes go.
+    source.paneSizes.removeWhere(
+      (key, _) => key.startsWith('${source.panes.length}:'),
+    );
+    source.arranged = null;
+    source.arrangedKey = null;
+    // A harness's viewer lives beside its terminal, so it travels with it —
+    // the same rule `closePane` keeps when the terminal goes.
+    final viewers = <TerminalPane>[];
+    if (!pane.isWeb && pane.agentId != null) {
+      for (final viewer in source.panes.toList()) {
+        if (viewer.isWeb &&
+            viewer.machineId == pane.machineId &&
+            viewer.ownerAgentId == pane.agentId) {
+          source.remove(viewer);
+          viewers.add(viewer);
+        }
+      }
+    }
+    if (twin == null) {
+      final firstAgent = target.panes.every((pane) => pane.agentId == null);
+      target.panes.add(pane);
+      // A tab that had no harness in it takes this one's name, the way it
+      // would for a harness opened into it.
+      if (firstAgent && !target.nameIsCustom && pane.agentId != null) {
+        final agent = machineStates[pane.machineId]?.agents
+            .where((agent) => agent.id == pane.agentId)
+            .firstOrNull;
+        target.titleMachineId = pane.machineId;
+        target.titleAgentId = pane.agentId;
+        target.name = agent == null || agent.displayName == kUntitledPane
+            ? Swarm.defaultName
+            : agent.displayName;
+      }
+      for (final viewer in viewers) {
+        if (target.panes.length >= maxPanes) break;
+        target.panes.add(viewer);
+      }
+      // The destination reflows for a tile it has never held, exactly as it
+      // would for a new one: remembered shapes for the old count cannot decide
+      // where this lands.
+      target.presets.remove(target.panes.length);
+      target.paneSizes.removeWhere(
+        (key, _) => key.startsWith('${target.panes.length}:'),
+      );
+      target.arranged = null;
+      target.arrangedKey = null;
+      if (target.focusedPaneId != pane.id) {
+        target.previousPaneId = target.focusedPaneId;
+        target.focusedPaneId = pane.id;
+      }
+      if (target.zoomedPaneId != null) target.zoomedPaneId = pane.id;
+    }
+    _settlePins();
+    if (follow) {
+      _activeSwarmId = target.id;
+      railFocused = false;
+      _noteNavigation();
+      _paneFocusRequest++;
+    }
+    selectedMachineId = focusedPane?.machineId;
+    _persistLayout();
+    _announceAppFocus();
+    notifyListeners();
+    return true;
+  }
+
   Future<void> closePane(int paneId, {bool persist = true}) async {
     final pane = panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return;
@@ -9303,6 +9509,11 @@ class AppNotifier extends ChangeNotifier {
   }
 
   void _persistLayout() {
+    for (final pane in allPanes) {
+      if (pane.agentId case final id?) {
+        rememberOpenedHarness(pane.machineId, id);
+      }
+    }
     _draftSwarmReturns.removeWhere((id, _) {
       final swarm = swarms.where((swarm) => swarm.id == id).firstOrNull;
       return swarm == null ||
@@ -9324,6 +9535,7 @@ class AppNotifier extends ChangeNotifier {
         saved.any((swarm) => swarm.id == savedActive)
             ? savedActive!
             : saved.last.id,
+        monitorHarnesses: _monitorHarnesses,
       ),
     );
   }
@@ -9342,7 +9554,15 @@ class AppNotifier extends ChangeNotifier {
     final revision = _layoutRevision;
     final authRevision = _authRevision;
     final saved = await store.loadSwarms();
-    if (!_authWorkCurrent(authRevision) || revision != _layoutRevision) return;
+    final known = await store.loadMonitorHarnesses(saved);
+    if (!_authWorkCurrent(authRevision)) return;
+    for (final (machine, agent) in known) {
+      rememberOpenedHarness(machine, agent);
+    }
+    if (revision != _layoutRevision) {
+      _persistLayout();
+      return;
+    }
     if (saved != null &&
         allPanes.isEmpty &&
         swarms.length == 1 &&
@@ -9797,6 +10017,33 @@ class AppNotifier extends ChangeNotifier {
           unawaited(_deskFetch());
         }
         break;
+      case 'device_prepare_open':
+        final operationId = payload['operationId'];
+        final prepareAgentId = payload['agentId'];
+        final prepareMachineId = payload['machineId'];
+        if (operationId is String &&
+            RegExp(r'^[a-f0-9]{64}$').hasMatch(operationId) &&
+            prepareAgentId is String &&
+            prepareAgentId.isNotEmpty &&
+            prepareMachineId == machineId) {
+          unawaited(() async {
+            try {
+              if (await revealPreparedAgent(
+                machineId,
+                prepareAgentId,
+                operationId,
+              )) {
+                await _pool?[machineId]?.sendTerminalFrame(
+                  'device_prepare_opened',
+                  {'operationId': operationId, 'agentId': prepareAgentId},
+                );
+              }
+            } catch (error) {
+              appLog.warn('device', 'Could not reveal prepared agent: $error');
+            }
+          }());
+        }
+        break;
       case 'dial_open':
         // A notification was tapped on the dial. Unlike `dial_focus` this asks for a tile of its own —
         // see openAgentFromDial for why a finished turn is not a replacement for what is on screen.
@@ -10091,6 +10338,7 @@ class AppNotifier extends ChangeNotifier {
     _stopMachineRecovery();
     if (signingIn) cliLogin.cancel();
     _closedHistory.clear();
+    _monitorHarnesses.clear();
     _daemonSupervisionTimer?.cancel();
     _updateCheckTimer?.cancel();
     _environmentRecheckTimer?.cancel();
