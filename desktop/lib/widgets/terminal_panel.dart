@@ -2064,11 +2064,26 @@ class _TerminalHeader extends StatelessWidget {
                   ConstrainedBox(
                     constraints: BoxConstraints(maxWidth: rightWidth),
                     child: PaneHeaderActions(
-                      trailing: !narrow && rightWidth >= actionsWidth + 180 && agent != null && project?.shownBranch != null
-                          ? ConstrainedBox(constraints: const BoxConstraints(maxWidth: 180), child: PullRequestBadge(
-                              identity: (session.machineId, agent.id, project?.cwd, project?.shownBranch),
-                              read: () => notifier.readAgentPullRequest(session.machineId, agent.id),
-                            ))
+                      trailing:
+                          !narrow &&
+                              rightWidth >= actionsWidth + 180 &&
+                              agent != null &&
+                              project?.shownBranch != null
+                          ? ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 180),
+                              child: PullRequestBadge(
+                                identity: (
+                                  session.machineId,
+                                  agent.id,
+                                  project?.cwd,
+                                  project?.shownBranch,
+                                ),
+                                read: () => notifier.readAgentPullRequest(
+                                  session.machineId,
+                                  agent.id,
+                                ),
+                              ),
+                            )
                           : null,
                       compact: narrow,
                       // Where this agent runs, with the controls rather than beside the name — the

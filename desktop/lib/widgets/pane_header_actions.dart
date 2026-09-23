@@ -219,8 +219,15 @@ class PaneHeaderActions extends StatelessWidget {
         controls,
       ],
     );
-    return trailing == null ? layers : Row(mainAxisSize: MainAxisSize.min,
-      children: [Flexible(child: layers), trailing!]);
+    return trailing == null
+        ? layers
+        : Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(child: layers),
+              trailing!,
+            ],
+          );
   }
 }
 

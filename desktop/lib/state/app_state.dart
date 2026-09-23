@@ -6166,7 +6166,7 @@ class AppNotifier extends ChangeNotifier {
   Future<Map<String, dynamic>> readAgentPullRequest(String machineId, String agentId) async {
     try {
       return await _conn(machineId).request('git_pull_request',
-        payload: {'agentId': agentId}, timeout: const Duration(seconds: 12));
+        payload: {'agentId': agentId}, timeout: const Duration(seconds: 30));
     } catch (_) { return {'status': 'unavailable'}; }
   }
 

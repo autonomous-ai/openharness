@@ -1,5 +1,7 @@
 import 'dart:ui' show PointerDeviceKind;
+
 import 'package:harness/widgets/pane_header_actions.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -16,13 +18,39 @@ void main() {
       body: PullRequestBadge(identity: id, read: read, open: open),
     ),
   );
-  testWidgets('PR remains clickable when hovering reveals header controls', (tester) async {
+  testWidgets('PR remains clickable when hovering reveals header controls', (
+    tester,
+  ) async {
     var opened = false;
-    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SizedBox(width: 500,
-      child: PaneHeaderHover(child: PaneHeaderActions(zoomed: false, onZoom: () {},
-        details: const Text('branch-name'), trailing: PullRequestBadge(identity: 'branch',
-          read: () async => {'status': 'found', 'number': 12, 'state': 'Open', 'url': 'https://github.com/acme/repo/pull/12'},
-          open: (_) async { opened = true; return true; })))))));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 500,
+            child: PaneHeaderHover(
+              child: PaneHeaderActions(
+                zoomed: false,
+                onZoom: () {},
+                details: const Text('branch-name'),
+                trailing: PullRequestBadge(
+                  identity: 'branch',
+                  read: () async => {
+                    'status': 'found',
+                    'number': 12,
+                    'state': 'Open',
+                    'url': 'https://github.com/acme/repo/pull/12',
+                  },
+                  open: (_) async {
+                    opened = true;
+                    return true;
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
     await tester.pump();
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);

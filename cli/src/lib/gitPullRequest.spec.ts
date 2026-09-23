@@ -5,7 +5,7 @@ function fixture(rows: unknown = [row()]) {
   let branch = 'feature'
   const run = vi.fn(async (cmd: string, args: string[]) => cmd === 'git'
     ? args[0] === 'symbolic-ref' ? branch : 'git@github.com:acme/repo.git'
-    : JSON.stringify(rows))
+    : JSON.stringify(args.at(-1)?.includes('/pulls?') ? rows : { full_name: 'acme/repo' }))
   return { run, read: createPullRequestReader(run), branch: (b: string) => { branch = b } }
 }
 describe('worktree PR status', () => {
@@ -25,10 +25,20 @@ describe('worktree PR status', () => {
   it('coalesces lookups and invalidates when the checked-out branch changes', async () => {
     const f = fixture()
     await Promise.all([f.read('/worktree'), f.read('/worktree')])
-    expect(f.run.mock.calls.filter(([cmd]) => cmd === 'gh')).toHaveLength(1)
+    expect(f.run.mock.calls.filter(([cmd, args]) => cmd === 'gh' && args.at(-1)?.includes('/pulls?'))).toHaveLength(1)
     f.branch('another')
     await f.read('/worktree')
-    expect(f.run.mock.calls.filter(([cmd]) => cmd === 'gh')).toHaveLength(2)
+    expect(f.run.mock.calls.filter(([cmd, args]) => cmd === 'gh' && args.at(-1)?.includes('/pulls?'))).toHaveLength(2)
+  })
+  it('uses canonical repository identity after an origin rename', async () => {
+    const calls: string[][] = []
+    const read = createPullRequestReader(async (cmd, args) => {
+      if (cmd === 'git') return args[0] === 'symbolic-ref' ? 'feature' : 'https://github.com/acme/old-name.git'
+      calls.push(args)
+      return JSON.stringify(args.at(-1)?.includes('/pulls?') ? [row()] : { full_name: 'acme/repo' })
+    })
+    expect(await read('/worktree')).toMatchObject({ status: 'found', url: 'https://github.com/acme/repo/pull/12' })
+    expect(calls[1].at(-1)).toContain('repos/acme/repo/pulls?')
   })
   it('does not execute anything for invalid paths', async () => {
     const f = fixture()

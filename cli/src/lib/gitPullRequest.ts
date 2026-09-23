@@ -33,14 +33,19 @@ export function createPullRequestReader(execute: Run = run, now = Date.now) {
       if (previous && previous.until > now()) return previous.value
       const value = (async (): Promise<PullRequestResult> => {
         try {
-          const query = new URLSearchParams({ state: 'all', head: `${repo.split('/')[0]}:${branch}`, sort: 'updated', direction: 'desc', per_page: '100' })
-          const rows: unknown = JSON.parse(await execute('gh', ['api', '--hostname', 'github.com', `repos/${repo}/pulls?${query}`], cwd))
+          // GitHub redirects renamed repositories; compare against its canonical identity,
+          // not a stale origin spelling (for example autonomous-harness → openharness).
+          const metadata = JSON.parse(await execute('gh', ['api', '--hostname', 'github.com', '--jq', '{full_name}', `repos/${repo}`], cwd))
+          const canonical = typeof metadata?.full_name === 'string' ? metadata.full_name : ''
+          if (!canonical || githubRepository(`https://github.com/${canonical}`) !== canonical) return { status: 'unavailable' }
+          const query = new URLSearchParams({ state: 'all', head: `${canonical.split('/')[0]}:${branch}`, sort: 'updated', direction: 'desc', per_page: '100' })
+          const rows: unknown = JSON.parse(await execute('gh', ['api', '--hostname', 'github.com', '--jq', 'map({number,html_url,state,draft,merged_at,head:{ref:.head.ref,repo:{full_name:.head.repo.full_name}}})', `repos/${canonical}/pulls?${query}`], cwd))
           if (!Array.isArray(rows)) return { status: 'unavailable' }
-          const matches = rows.filter(p => p?.head?.ref === branch && p?.head?.repo?.full_name?.toLowerCase() === repo.toLowerCase())
+          const matches = rows.filter(p => p?.head?.ref === branch && p?.head?.repo?.full_name?.toLowerCase() === canonical.toLowerCase())
           const pr = matches.find(p => p.state === 'open') ?? matches[0]
           if (!pr) return { status: 'none' }
           if (!Number.isSafeInteger(pr.number) || pr.number <= 0 || !['open', 'closed'].includes(pr.state)
-            || pr.html_url !== `https://github.com/${repo}/pull/${pr.number}`) return { status: 'unavailable' }
+            || pr.html_url !== `https://github.com/${canonical}/pull/${pr.number}`) return { status: 'unavailable' }
           return { status: 'found', number: pr.number, url: pr.html_url,
             state: pr.merged_at ? 'Merged' : pr.state === 'closed' ? 'Closed' : pr.draft ? 'Draft' : 'Open' }
         } catch { return { status: 'unavailable' } }
