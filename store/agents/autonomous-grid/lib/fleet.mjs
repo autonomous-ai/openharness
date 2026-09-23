@@ -51,7 +51,9 @@ export function validateConfig(raw) {
   // The controller is explicit, so editing the order of an inventory cannot redirect fleet reads.
   const controller = raw.controller || machines.find(m => m.transport === 'local')?.id || machines[0].id;
   if (!ids.has(controller)) throw new Error('controller must name a configured machine.');
-  return { spec: 1, mode: raw.mode, grid: raw.grid, controller, machines, preferences: { goal: text(raw.preferences?.goal, 500) || DEFAULT_CONFIG.preferences.goal, keepFreeMemoryGb: number(raw.preferences?.keepFreeMemoryGb) ?? 4, allowAutomaticChanges: raw.preferences?.allowAutomaticChanges === true } };
+  // The account's own grid, as Harness named it — what "my grid" means. Recorded, never chosen here.
+  const personalGrid = typeof raw.personalGrid === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,239}$/.test(raw.personalGrid) ? raw.personalGrid : null;
+  return { spec: 1, mode: raw.mode, grid: raw.grid, personalGrid, controller, machines, preferences: { goal: text(raw.preferences?.goal, 500) || DEFAULT_CONFIG.preferences.goal, keepFreeMemoryGb: number(raw.preferences?.keepFreeMemoryGb) ?? 4, allowAutomaticChanges: raw.preferences?.allowAutomaticChanges === true } };
 }
 export async function readConfig(workspace) { return validateConfig(await readJson(join(workspace, 'grid-fleet.json'), DEFAULT_CONFIG)); }
 

@@ -52,7 +52,7 @@ export function mergeMachines(config, found) {
 }
 
 /** Resolve a fresh workspace without changing Grid's global mode/default or starting a service. */
-export async function initializeWorkspace(workspace, { runJson = gridJson, select = gridSelect, discover = discoverMachines, profilePath = defaultsPath(), email = signedInEmail } = {}) {
+export async function initializeWorkspace(workspace, { runJson = gridJson, select = gridSelect, discover = discoverMachines, profilePath = defaultsPath(), email = signedInEmail, env = process.env } = {}) {
   let config = await readConfig(workspace), source = 'workspace', message = '', candidates = [];
   const controller = () => config.machines.find(m => m.id === config.controller);
   const read = (mode, args) => runJson(controller(), mode, args, { timeoutMs: 5000 }).catch(() => ({ ok: false }));
@@ -79,7 +79,11 @@ export async function initializeWorkspace(workspace, { runJson = gridJson, selec
         if (engines.ok && Array.isArray(engines.value)) { config.grid = active; source = 'Grid selection'; }
       }
       const remote = listings.find(l => l.mode === 'remote')?.result;
-      const own = config.grid ? null : pickPrivateGrid(await email(), remote?.value);
+      // Harness names the account's grid (HARNESS_PRIVATE_GRID, from the backend that minted it);
+      // the name rule is the fallback for a daemon that predates it. Recorded either way, so the
+      // agent reads "my grid" from grid-fleet.json instead of working it out or asking.
+      config.personalGrid = env.HARNESS_PRIVATE_GRID?.trim() || pickPrivateGrid(await email(), remote?.value);
+      const own = config.grid ? null : config.personalGrid;
       if (own) {
         const engines = await read('remote', ['engines', own]);
         if (engines.ok && Array.isArray(engines.value)) {
@@ -106,6 +110,8 @@ export async function initializeWorkspace(workspace, { runJson = gridJson, selec
       if (config.grid) message = `Connected this workspace to ${config.mode} grid ${config.grid}.`;
     }
   }
+  // A remembered or already-selected fleet skipped the lookup above; the account's grid is still recorded.
+  if (!config.personalGrid && env.HARNESS_PRIVATE_GRID?.trim()) config.personalGrid = env.HARNESS_PRIVATE_GRID.trim();
   config = mergeMachines(config, await discover().catch(() => []));
   await atomicJson(join(workspace,'grid-fleet.json'),config);
   const connection = { source, mode:config.mode, grid:config.grid, message, candidates, observedAt:now() };
