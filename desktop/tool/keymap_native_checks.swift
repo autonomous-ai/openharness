@@ -30,6 +30,7 @@ for (key, command) in [
   ("cmd+o", "agent.open"), ("cmd+p", "navigation.commands"),
   ("cmd+r", "pane.split_right"), ("cmd+d", "pane.split_down"),
   ("cmd+n", "agent.new"),
+  ("cmd+m", "machines.list"),
   ("cmd+h", "pane.focus_left"), ("cmd+j", "pane.focus_below"),
   ("cmd+k", "pane.focus_above"), ("cmd+l", "pane.focus_right"),
 ] {
@@ -43,6 +44,10 @@ try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+b")) == nil,
 try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+p")) == nil,
   "The viewer bridge does not take the command palette chord")
 for context in HarnessNativeKeymap.contexts {
+  try checkKeymap(defaults.match([stroke("cmd+m")], context: context).binding?.command == "machines.list",
+    "Command-M opens Machines from \(context)")
+  try checkKeymap(defaults.match([stroke("cmd+u")], context: context).binding == nil,
+    "The former Machines shortcut is unbound")
   try checkKeymap(defaults.match([stroke("cmd+shift+p")], context: context).binding == nil,
     "The former commands shortcut is unbound")
   try checkKeymap(defaults.match([stroke("cmd+shift+n")], context: context).binding?.command == "agent.clone",

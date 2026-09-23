@@ -40,6 +40,7 @@ class _DeleteMachinePrompt extends StatefulWidget {
 
 class _DeleteMachinePromptState extends State<_DeleteMachinePrompt> {
   final _cancel = FocusNode(debugLabel: 'Cancel machine deletion');
+  final _promptFocus = FocusNode(debugLabel: 'Machine deletion');
   final _announcer = BoxAnnouncer();
   bool _deleting = false;
   String? _error;
@@ -65,6 +66,7 @@ class _DeleteMachinePromptState extends State<_DeleteMachinePrompt> {
   @override
   void dispose() {
     _cancel.dispose();
+    _promptFocus.dispose();
     super.dispose();
   }
 
@@ -76,6 +78,9 @@ class _DeleteMachinePromptState extends State<_DeleteMachinePrompt> {
       _deleting = true;
       _error = null;
     });
+    // The focused Delete button is removed while waiting. Keep keyboard input
+    // on this prompt so Escape can close it without reaching the panel behind.
+    _promptFocus.requestFocus();
     unawaited(_finish(widget.notifier.deleteMachine(widget.machineId)));
   }
 
@@ -100,6 +105,7 @@ class _DeleteMachinePromptState extends State<_DeleteMachinePrompt> {
     return ListenableBuilder(
       listenable: terminalFontStore,
       builder: (context, _) => TerminalPromptKeys(
+        focusNode: _promptFocus,
         cancel: _close,
         child: TerminalPrompt(
           child: Column(
