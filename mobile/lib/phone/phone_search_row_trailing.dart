@@ -39,34 +39,37 @@ class PhoneSearchTrailing extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     if (resuming) return const _Spinner();
-    final badge = _badge;
+    final badge = phoneSearchBadge(row, openable: openable);
     return badge == null ? const SizedBox.shrink() : _Badge(badge);
   }
+}
 
-  String? get _badge {
-    final machine = row.machine;
-    return switch (row.kind) {
-      // Saved work, not a dead row: the tap resumes it and opens it. Said
-      // plainly because the wait that follows is a second or two of nothing.
-      // Stopped work with no conversation to reopen says so in the desktop's
-      // words, rather than the `No terminal` of a live agent that lost its pane.
-      PhoneDestinationKind.agent => switch (row.entry?.agent) {
-        final agent? when agent.isStopped =>
-          openable ? 'Stopped' : 'Resume unavailable',
-        _ => openable ? null : 'No terminal',
-      },
-      PhoneDestinationKind.machine => switch (machine == null
-          ? null
-          : phoneMachineStatusOf(machine)) {
-        PhoneMachineStatus.offline => 'Offline',
-        PhoneMachineStatus.needsPassword => 'Unlock',
-        _ => null,
-      },
-      // A group says its size in its own detail line ("Project · 3 harnesses"),
-      // and a command has nothing to be fresh about.
+/// The word a result ends in, or null for a row a tap simply opens — see
+/// [PhoneSearchTrailing]. Shared with the terminal sheet's rows
+/// (`sheet_search_row.dart`), which say the same thing in their own type.
+String? phoneSearchBadge(PhoneDestination row, {required bool openable}) {
+  final machine = row.machine;
+  return switch (row.kind) {
+    // Saved work, not a dead row: the tap resumes it and opens it. Said
+    // plainly because the wait that follows is a second or two of nothing.
+    // Stopped work with no conversation to reopen says so in the desktop's
+    // words, rather than the `No terminal` of a live agent that lost its pane.
+    PhoneDestinationKind.agent => switch (row.entry?.agent) {
+      final agent? when agent.isStopped =>
+        openable ? 'Stopped' : 'Resume unavailable',
+      _ => openable ? null : 'No terminal',
+    },
+    PhoneDestinationKind.machine => switch (machine == null
+        ? null
+        : phoneMachineStatusOf(machine)) {
+      PhoneMachineStatus.offline => 'Offline',
+      PhoneMachineStatus.needsPassword => 'Unlock',
       _ => null,
-    };
-  }
+    },
+    // A group says its size in its own detail line ("Project · 3 harnesses"),
+    // and a command has nothing to be fresh about.
+    _ => null,
+  };
 }
 
 /// The wait between tapping stopped work and its terminal arriving. Sized to

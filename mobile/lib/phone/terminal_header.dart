@@ -101,8 +101,7 @@ class TerminalHeader extends StatelessWidget {
 
 /// The engine mark with the session's state notched into its corner.
 ///
-/// The header draws it beside the agent's name, and the tabs popup on each of
-/// its cards — an agent reads the same wherever it is offered.
+/// The header draws it beside the agent's name.
 class BadgedEngineMark extends StatelessWidget {
   const BadgedEngineMark({
     super.key,

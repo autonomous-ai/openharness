@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/core/last_opened_agent.dart' show AgentRef;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/empty_state.dart';
 import 'package:harness_mobile/state/app_state.dart';
@@ -15,6 +16,8 @@ import 'phone_search_controller.dart';
 import 'phone_search_rank.dart';
 import 'phone_search_row.dart';
 import 'resume_agent.dart';
+import 'sheet_list.dart';
+import 'sheet_search_row.dart';
 
 /// What the query reaches, drawn.
 ///
@@ -39,6 +42,8 @@ class PhoneSearchResults extends StatefulWidget {
     required this.notifier,
     required this.controller,
     this.onOpen,
+    this.grouped = false,
+    this.showing,
   });
 
   final AppNotifier notifier;
@@ -51,6 +56,16 @@ class PhoneSearchResults extends StatefulWidget {
   /// is covering is about to be replaced underneath it — this is what puts the
   /// search away first. Null on [PhoneSearchPage], where the pop does it.
   final VoidCallback? onOpen;
+
+  /// Draws the rows as one inset group of [SheetSearchRow]s — the terminal
+  /// sheet's list, whose tabs are drawn the same way — rather than the page's
+  /// flat list in the terminal's face. What is listed, and what a tap does, is
+  /// the same either way.
+  final bool grouped;
+
+  /// The agent the terminal sheet was opened over, whose row wears the check
+  /// in the grouped list. Unread by the flat one.
+  final AgentRef? showing;
 
   @override
   State<PhoneSearchResults> createState() => _PhoneSearchResultsState();
@@ -101,6 +116,7 @@ class _PhoneSearchResultsState extends State<PhoneSearchResults> {
       AppTheme.watch(context);
       final search = widget.controller;
       final rows = search.rows;
+      if (widget.grouped) return _grouped(search, rows);
       if (rows.isEmpty) return _empty(search);
       final terms = phoneSearchTerms(search.matchQuery);
       final now = DateTime.now();
@@ -137,16 +153,64 @@ class _PhoneSearchResultsState extends State<PhoneSearchResults> {
     },
   );
 
-  Widget _empty(PhoneSearchController search) {
+  /// The rows as the terminal sheet lists them — see [grouped].
+  Widget _grouped(PhoneSearchController search, List<PhoneDestination> rows) {
+    final bottom = MediaQuery.paddingOf(context).bottom + 16;
+    if (rows.isEmpty) {
+      // ⚠️ **In a list, though it is one thing.** The sheet can be left a
+      // couple of rows' height above the keyboard, and the empty state is
+      // taller than that — laid out bare, it would overflow the sheet.
+      return ListView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: EdgeInsets.fromLTRB(kSheetInset, 8, kSheetInset, bottom),
+        children: [_empty(search, compact: true)],
+      );
+    }
+    final terms = phoneSearchTerms(search.matchQuery);
+    final previews = widget.notifier.sessionPreviews;
+    final showing = widget.showing;
+    return ListView.builder(
+      // As in the flat list: dragging is how a result is reached with the
+      // keyboard still up.
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      // No top padding: the caption or the chips over the list end in the gap
+      // a group keeps from what labels it.
+      padding: EdgeInsets.fromLTRB(kSheetInset, 0, kSheetInset, bottom),
+      itemCount: rows.length,
+      itemBuilder: (context, index) {
+        final row = rows[index];
+        final entry = row.entry;
+        return SheetSearchRow(
+          row: row,
+          terms: terms,
+          openable: search.canSubmit(row),
+          resuming: _resuming == row.id,
+          busy: _resuming != null,
+          quote: phoneContentSnippet(row, terms, previews),
+          onScreen:
+              showing != null &&
+              entry != null &&
+              entry.machineId == showing.machineId &&
+              entry.agent.id == showing.agentId,
+          first: index == 0,
+          last: index == rows.length - 1,
+          onTap: () => _tap(row),
+        );
+      },
+    );
+  }
+
+  Widget _empty(PhoneSearchController search, {bool compact = false}) {
     if (search.total == 0 && search.matchQuery.trim().isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: LucideIcons.laptopMinimal300,
         title: 'Nothing to search yet',
         message: 'Link a machine and its harnesses will be findable from here.',
+        compact: compact,
       );
     }
     return EmptyState.noMatches(
-      compact: false,
+      compact: compact,
       message: 'Nothing matches “${search.matchQuery.trim()}”.',
     );
   }

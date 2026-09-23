@@ -4,8 +4,8 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/app_icon_button.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
-/// One mark in the terminal header's trailing row — the tabs grid, `⋮`,
-/// and the Take control button's neighbours.
+/// One mark in the terminal header's trailing row — `⋮`, beside the Take
+/// control button.
 ///
 /// Its own file because [gap] is an invariant with arithmetic behind it and
 /// a test that checks it (`terminal_header_action_test.dart`); a private class

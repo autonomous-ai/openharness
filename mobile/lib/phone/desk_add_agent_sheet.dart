@@ -104,9 +104,9 @@ class _AddAgentSheet extends StatelessWidget {
               ),
             ),
           ),
-          // The same half-screen the tabs panel keeps, for the same reason: the
-          // sheet must not stand up and sit down as one account's three agents
-          // give way to another's dozen.
+          // One height, as the tabs panel keeps one, and for the same reason:
+          // the sheet must not stand up and sit down as one account's three
+          // agents give way to another's dozen.
           SizedBox(
             height: MediaQuery.sizeOf(context).height * 0.5,
             child: ListView.separated(
