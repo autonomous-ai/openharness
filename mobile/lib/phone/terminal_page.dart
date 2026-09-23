@@ -408,6 +408,23 @@ class _TerminalPageState extends State<TerminalPage>
   /// the notifier declined without ever changing a status.
   _Reclaim? _reclaiming;
 
+  /// The header's status as of its last build, for the mark on the actions sheet.
+  ///
+  /// The sheet is a route of its own, so this page's `setState` never reaches it: the mark there
+  /// listens to this instead, and shows the dot the header is showing for as long as the sheet is
+  /// up — a reconnect that starts under it included — rather than the moment it opened.
+  ///
+  /// ⚠️ Moved AFTER the frame, never during the build that works it out: the sheet listening to it
+  /// would otherwise be marked dirty in the middle of this page's build. See
+  /// [_publishActionsStatus].
+  final ValueNotifier<PhoneSummary> _actionsStatus = ValueNotifier((
+    label: '',
+    tone: PhoneTone.quiet,
+  ));
+
+  /// The status the end of this frame hands to [_actionsStatus]; null while none is waiting.
+  PhoneSummary? _nextActionsStatus;
+
   /// The skeleton's one identity across the two places the body draws it.
   ///
   /// ⚠️ **Two places, one skeleton.** It stands in for the panel while there is no session, and
@@ -627,8 +644,28 @@ class _TerminalPageState extends State<TerminalPage>
     _searchHoldTimer?.cancel();
     _chrome.dispose();
     _searchOpen.dispose();
+    // A sheet still open over a page that is going keeps the last dot it was given; its listener
+    // comes off when it closes, which a disposed notifier allows.
+    _actionsStatus.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  /// Hands [status] to the actions sheet's mark once this frame is done — see [_actionsStatus].
+  ///
+  /// The last build of a frame is the one handed over, and nothing is scheduled while the status
+  /// stands still.
+  void _publishActionsStatus(PhoneSummary status) {
+    final waiting = _nextActionsStatus != null;
+    if (!waiting && status == _actionsStatus.value) return;
+    _nextActionsStatus = status;
+    if (waiting) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final next = _nextActionsStatus;
+      _nextActionsStatus = null;
+      if (!mounted || next == null) return;
+      _actionsStatus.value = next;
+    });
   }
 
   /// Opens the account-wide agent list.
@@ -1119,6 +1156,9 @@ class _TerminalPageState extends State<TerminalPage>
       takerName: takerName,
       reconnecting: reconnecting,
     );
+    // The actions sheet draws the same dot beside the agent's name, and is not rebuilt by this
+    // page — see [_actionsStatus].
+    _publishActionsStatus(headerStatus);
     // Read this page's own buffer for a dialog, and raise the keyboard when one
     // appears. Must run on every build: the session arrives a frame or two
     // after the page, and the engine with the agent.
@@ -1471,6 +1511,7 @@ class _TerminalPageState extends State<TerminalPage>
                                         machineName:
                                             machine?.machine.displayName ?? '',
                                         agent: agent,
+                                        status: headerStatus,
                                       ),
                                     ),
                                 ],
@@ -1575,26 +1616,50 @@ class _TerminalPageState extends State<TerminalPage>
     });
   }
 
-  void _showActions({required String machineName, required Agent agent}) {
+  void _showActions({
+    required String machineName,
+    required Agent agent,
+    required PhoneSummary status,
+  }) {
+    // Set here, where no build is running, so the sheet opens on the dot the header shows now
+    // rather than on whatever the last frame handed over. See [_actionsStatus].
+    _actionsStatus.value = status;
     final agentName = agent.name;
     showPhoneSheet(
       context,
       title: '$agentName · $machineName',
-      // The agent, then where it runs — machine, folder with its parent, branch — one line each
-      // behind its icon. The header has no room for the path.
+      // The agent, then where it runs — the machine, then the folder with its parent beside the
+      // branch — each behind its icon. The header has no room for the path.
       titleParts: [agentName],
+      // The engine mark carrying the header's own dot: the sheet's anchor, and the same picture of
+      // this agent the header draws above it. The ring is the sheet's ground, which the dot is
+      // notched out of.
+      titleLeading: ValueListenableBuilder<PhoneSummary>(
+        valueListenable: _actionsStatus,
+        builder: (context, status, _) {
+          AppTheme.watch(context);
+          return BadgedEngineMark(
+            agent: agent,
+            status: status,
+            ring: AppPalette.panelBg,
+            size: 40,
+          );
+        },
+      ),
       titleDetail: AgentPlaceLines(
         machineName: machineName,
         project: agent.project,
       ),
-      // Two groups: what acts on THIS agent, and the screens the app itself has. Each of those is a
-      // door rather than a list of its own — the lists belong on the pages behind them, where they
-      // have room for every row and do not push the rest of this sheet down.
+      // Three cards: what acts on THIS agent, the screens the app itself has, and — alone at the
+      // end — the one act that cannot be undone. No caption over the first: the name above it
+      // already says which harness its rows act on, which is also why they no longer repeat
+      // "Harness" in their labels.
+      //
+      // Each screen is a door rather than a list of its own — the lists belong on the pages behind
+      // them, where they have room for every row and do not push the rest of this sheet down. The
+      // chevron is what tells a door from an action.
       sections: [
-        PhoneSheetSection(
-          caption: 'Harness',
-          actions: [..._agentActions(agent)],
-        ),
+        PhoneSheetSection(actions: _agentActions(agent)),
         PhoneSheetSection(
           caption: 'App',
           actions: [
@@ -1607,11 +1672,13 @@ class _TerminalPageState extends State<TerminalPage>
             PhoneSheetAction(
               icon: LucideIcons.squareTerminal300,
               label: 'Harnesses',
+              chevron: true,
               onTap: () => unawaited(_openAgentList()),
             ),
             PhoneSheetAction(
               icon: LucideIcons.laptopMinimal300,
               label: 'Machines',
+              chevron: true,
               onTap: () => Navigator.of(context).push(
                 phoneRoute(
                   (_) => MachinesTab(notifier: widget.notifier, large: false),
@@ -1621,6 +1688,7 @@ class _TerminalPageState extends State<TerminalPage>
             PhoneSheetAction(
               icon: LucideIcons.settings300,
               label: 'Settings',
+              chevron: true,
               onTap: () => Navigator.of(context).push(
                 phoneRoute(
                   (_) => SettingsPage(notifier: widget.notifier, large: false),
@@ -1629,10 +1697,12 @@ class _TerminalPageState extends State<TerminalPage>
             ),
           ],
         ),
+        PhoneSheetSection(actions: [_stopAction(agent)]),
       ],
     );
   }
 
+  /// What acts on this agent and can be taken back — the first card of its sheet.
   List<PhoneSheetAction> _agentActions(Agent agent) => [
     // Where this agent runs, above the actions that act ON it: the desktop
     // keeps it in the pane header, and this sheet is the phone's pane header.
@@ -1653,6 +1723,9 @@ class _TerminalPageState extends State<TerminalPage>
               agent.engine,
               displayName: agent.engineDisplayName,
             ).label,
+        // A picker of its own, so it ends on the chevron a Settings row with a
+        // value does.
+        chevron: true,
         onTap: () => unawaited(
           showAgentModelSheet(
             context,
@@ -1664,7 +1737,7 @@ class _TerminalPageState extends State<TerminalPage>
       ),
     PhoneSheetAction(
       icon: LucideIcons.pencil300,
-      label: 'Rename Harness…',
+      label: 'Rename…',
       onTap: () => showAgentRenameDialog(
         context,
         widget.notifier,
@@ -1675,32 +1748,36 @@ class _TerminalPageState extends State<TerminalPage>
     ),
     PhoneSheetAction(
       icon: LucideIcons.refreshCw300,
-      label: 'Restart Harness',
+      label: 'Restart',
       onTap: () => unawaited(_restart()),
     ),
-    // Last, and alone in red: the two above are recoverable and this one is
-    // not, so it does not sit where a thumb lands on the way to them.
-    //
-    // ⚠️ Nothing here pops this page. Deleting detaches the pane, and the
-    // `_hadPane` branch above leaves on its own when that happens — the same
-    // path a delete from the list, or from the desktop, already takes. A pop
-    // here would be a second one, and the parked pages in this pager share
-    // the route.
-    PhoneSheetAction(
-      icon: LucideIcons.trash2300,
-      label: 'Stop Harness…',
-      destructive: true,
-      onTap: () => unawaited(
-        confirmDeleteAgent(
-          context,
-          widget.notifier,
-          widget.machineId,
-          widget.agentId,
-          agent.name,
-        ),
+  ];
+
+  /// Stopping the agent: the last card of its sheet, alone.
+  ///
+  /// Alone and in red because everything above it is recoverable and this is not, so it does not
+  /// sit where a thumb lands on the way to them. The label keeps "Harness" where the others dropped
+  /// it: a bare "Stop" in a terminal reads as stopping the reply that is running, and the list's
+  /// own sheet and the desktop say it this way too.
+  ///
+  /// ⚠️ Nothing here pops this page. Deleting detaches the pane, and the `_hadPane` branch above
+  /// leaves on its own when that happens — the same path a delete from the list, or from the
+  /// desktop, already takes. A pop here would be a second one, and the parked pages in this pager
+  /// share the route.
+  PhoneSheetAction _stopAction(Agent agent) => PhoneSheetAction(
+    icon: LucideIcons.trash2300,
+    label: 'Stop Harness…',
+    destructive: true,
+    onTap: () => unawaited(
+      confirmDeleteAgent(
+        context,
+        widget.notifier,
+        widget.machineId,
+        widget.agentId,
+        agent.name,
       ),
     ),
-  ];
+  );
 
   /// Asks for the terminal this pane is only watching, or reopens the stream it lost — the band's
   /// button, and the header's.
