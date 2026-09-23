@@ -81,3 +81,13 @@ export async function drainAllSockets(graceMs = 4_000): Promise<void> {
     }
   }
 }
+
+const UPGRADE_STATUS_TEXT: Record<number, string> = {
+  400: 'Bad Request', 401: 'Unauthorized', 402: 'Payment Required', 403: 'Forbidden', 404: 'Not Found', 409: 'Conflict',
+  429: 'Too Many Requests', 503: 'Service Unavailable',
+}
+
+/** Reason phrase for a refused upgrade. Clients key off the number; this is for whoever reads a capture. */
+export function upgradeStatusText(status: number): string {
+  return UPGRADE_STATUS_TEXT[status] ?? 'Service Unavailable'
+}

@@ -594,6 +594,12 @@ class AppNotifier extends ChangeNotifier {
   UpdateInfo? availableUpdate;
   bool isCheckingForUpdate = false;
   bool isInstallingUpdate = false;
+
+  /// How much of the new build has arrived, 0..1, while it is downloading;
+  /// null before the first byte and again once the bytes are in — verifying and
+  /// unpacking have no counter, so the bar goes back to indeterminate rather
+  /// than sitting at a 100% that has not finished anything.
+  double? updateDownloadFraction;
   String? updateError;
   final Set<String> _offlinePollsInFlight = {};
   final Map<String, Object> _offlineRecoveryInFlight = {};
@@ -1641,6 +1647,13 @@ class AppNotifier extends ChangeNotifier {
 
   String get autonomousEnv => _autonomousEnv;
   bool get hasAvailableUpdate => availableUpdate != null;
+
+  /// [updateDownloadFraction] as whole percent, for the one word the banner,
+  /// the dialog and Settings all show.
+  int? get updateDownloadPercent {
+    final fraction = updateDownloadFraction;
+    return fraction == null ? null : (fraction * 100).clamp(0, 100).floor();
+  }
 
   static const offlineRetryInterval = Duration(seconds: 5);
   static const localDaemonReconnectDelay = Duration(seconds: 1);
@@ -3362,11 +3375,30 @@ class AppNotifier extends ChangeNotifier {
     // responses cannot change the installation or the offer a failure retains.
     availableUpdate = info;
     isInstallingUpdate = true;
+    updateDownloadFraction = null;
     updateError = null;
     notifyListeners();
     try {
       final updater = _updater;
-      final staged = await updater.downloadAndStage(info);
+      // One notify per whole percent. Dio reports every chunk, and each notify
+      // rebuilds the whole app shell (the banner lives in its ListenableBuilder),
+      // so a 45 MB build would repaint thousands of times for a bar 200px wide.
+      var shown = -1;
+      final staged = await updater.downloadAndStage(
+        info,
+        onProgress: (received, total) {
+          if (_disposed || total <= 0) return;
+          final fraction = (received / total).clamp(0.0, 1.0);
+          // The bytes are all in: verifying and unpacking follow, and neither
+          // can be measured, so stop claiming a number for them.
+          final next = fraction >= 1 ? null : fraction;
+          final percent = next == null ? 100 : (next * 100).floor();
+          if (percent == shown) return;
+          shown = percent;
+          updateDownloadFraction = next;
+          notifyListeners();
+        },
+      );
       if (staged == null) {
         updateError = 'Could not download and verify Harness ${info.version}.';
         return false;
@@ -3383,6 +3415,7 @@ class AppNotifier extends ChangeNotifier {
       return false;
     } finally {
       isInstallingUpdate = false;
+      updateDownloadFraction = null;
       if (!_disposed) notifyListeners();
     }
   }

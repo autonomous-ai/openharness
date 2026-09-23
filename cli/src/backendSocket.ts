@@ -753,6 +753,10 @@ export class BackendSocket {
   /** Which grid this machine's agents can be pointed at — for `harness status` and the models RPC. */
   gridName(): string | null { return this.harnessGridName }
 
+  /** The account's private grid, resolved the way the models RPC resolves it — for a harness
+   *  workspace that must be told which grid is "yours" rather than work it out or ask. */
+  privateGridName(): Promise<string | null> { return this.resolveGridName() }
+
   /**
    * The account's private grid: the backend's word when it gave one, else what this machine can
    * work out for itself (`lib/gridDerive.ts`). A backend that predates `machine_meta.gridName`

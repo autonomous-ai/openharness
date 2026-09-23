@@ -21,8 +21,12 @@ class AutonomousDeviceCliException implements Exception {
     'CODE_MISMATCH' => 'That code did not match. Generate a new code on your Autonomous robot, then try again.',
     'RATE_LIMITED' => 'Too many pairing attempts. Wait five minutes, then generate a new code on your Autonomous robot and try again.',
     'EXPIRED' => 'The pairing code expired. Generate a new code on your Autonomous robot, then try again.',
+    'LOCAL_NETWORK_BLOCKED' => 'Harness can’t see your local network, so it can’t find Autonomous robots. Allow Harness in System Settings › Privacy & Security › Local Network, then refresh.',
     _ => message,
   };
+
+  /// macOS refused the daemon's multicast: no robot can be found until the user allows it.
+  bool get localNetworkBlocked => code == 'LOCAL_NETWORK_BLOCKED';
   bool get unsupported =>
       const {'NOT_FOUND', 'UNSUPPORTED', 'UNKNOWN_COMMAND'}.contains(code);
   @override

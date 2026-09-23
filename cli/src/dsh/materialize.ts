@@ -15,6 +15,7 @@
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { basename, join, relative } from 'node:path'
 import type { InstalledDsh } from './installed.js'
+import { dshAccountEnv, type DshAccount } from './launch.js'
 import { dshSkillsDirFor } from './manifest.js'
 import { runDshCommand } from './shell.js'
 
@@ -150,7 +151,7 @@ function dshBaseEngine(dsh: InstalledDsh): NonNullable<InstalledDsh['manifest'][
   return dsh.manifest.engine ?? 'claude'
 }
 
-export async function materializeWorkspace(dsh: InstalledDsh, workspace: string): Promise<MaterializeResult> {
+export async function materializeWorkspace(dsh: InstalledDsh, workspace: string, account: DshAccount = {}): Promise<MaterializeResult> {
   const result: MaterializeResult = { created: [], kept: [], warnings: [], initLines: [] }
   if (dsh.manifest.kind === 'viewer') {
     result.warnings.push(`${dsh.id} is a viewer package; it has no workspace to lay out`)
@@ -168,7 +169,7 @@ export async function materializeWorkspace(dsh: InstalledDsh, workspace: string)
     // install directory first; anything else is a shell line and runs as written.
     const init = await runDshCommand(resolveDshCommand(dsh, ws.init), {
       cwd: workspace,
-      env: { HARNESS_DSH: dsh.id, HARNESS_DSH_DIR: dsh.realDir, HARNESS_WORKSPACE: workspace },
+      env: { HARNESS_DSH: dsh.id, HARNESS_DSH_DIR: dsh.realDir, HARNESS_WORKSPACE: workspace, ...dshAccountEnv(account) },
       onLine: (line) => result.initLines.push(line),
       timeoutMs: 5 * 60_000,
     })

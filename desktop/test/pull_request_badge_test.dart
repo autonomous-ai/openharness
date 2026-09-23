@@ -18,10 +18,9 @@ void main() {
       body: PullRequestBadge(identity: id, read: read, open: open),
     ),
   );
-  testWidgets('PR remains clickable when hovering reveals header controls', (
+  testWidgets('PR and branch hide together while hovering reveals controls', (
     tester,
   ) async {
-    var opened = false;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -40,10 +39,6 @@ void main() {
                     'state': 'Open',
                     'url': 'https://github.com/acme/repo/pull/12',
                   },
-                  open: (_) async {
-                    opened = true;
-                    return true;
-                  },
                 ),
               ),
             ),
@@ -56,8 +51,22 @@ void main() {
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(find.text('PR #12 · Open')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('PR #12 · Open'));
-    expect(opened, isTrue);
+    final details = find.byKey(const ValueKey('pane-header-details'));
+    expect(tester.widget<AnimatedOpacity>(details).opacity, 0);
+    expect(
+      find.descendant(of: details, matching: find.text('branch-name')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: details, matching: find.text('PR #12 · Open')),
+      findsOneWidget,
+    );
+    expect(find.text('PR #12 · Open').hitTestable(), findsNothing);
+    expect(find.byTooltip('Zoom Pane').hitTestable(), findsOneWidget);
+    await mouse.moveTo(const Offset(700, 500));
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedOpacity>(details).opacity, 1);
+    expect(find.text('PR #12 · Open').hitTestable(), findsOneWidget);
     await mouse.removePointer();
     await tester.pumpWidget(const SizedBox());
   });
@@ -85,9 +94,7 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     });
   }
-  testWidgets('none is hidden but failures are not called no PR', (
-    tester,
-  ) async {
+  testWidgets('empty lookups and failures stay hidden', (tester) async {
     await tester.pumpWidget(frame('one', () async => {'status': 'none'}));
     await tester.pump();
     expect(find.byType(TextButton), findsNothing);
@@ -95,7 +102,30 @@ void main() {
       frame('two', () async => throw Exception('offline')),
     );
     await tester.pump();
-    expect(find.text('PR unavailable'), findsOneWidget);
+    expect(find.byType(TextButton), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('unavailable stays hidden and recovers on the next refresh', (
+    tester,
+  ) async {
+    var calls = 0;
+    await tester.pumpWidget(
+      frame('branch', () async {
+        calls++;
+        if (calls == 1) return {'status': 'unavailable'};
+        return {
+          'status': 'found',
+          'number': 12,
+          'state': 'Open',
+          'url': 'https://github.com/acme/repo/pull/12',
+        };
+      }),
+    );
+    await tester.pump();
+    expect(find.byType(TextButton), findsNothing);
+    await tester.pump(const Duration(seconds: 60));
+    await tester.pump();
+    expect(find.text('PR #12 · Open'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
   testWidgets(

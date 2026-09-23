@@ -4,6 +4,7 @@ const db = vi.hoisted(() => ({
   userPresenceUpsert: vi.fn(),
   machinePresenceUpsert: vi.fn(),
   agentPresenceUpsert: vi.fn(),
+  devicePresenceUpsert: vi.fn(),
 }))
 
 vi.mock('./prisma.js', () => ({
@@ -11,10 +12,11 @@ vi.mock('./prisma.js', () => ({
     userDailyPresence: { upsert: db.userPresenceUpsert },
     machineDailyPresence: { upsert: db.machinePresenceUpsert },
     agentDailyPresence: { upsert: db.agentPresenceUpsert },
+    userDailyDevicePresence: { upsert: db.devicePresenceUpsert },
   },
 }))
 
-import { presenceWriteDue, recordTurnStarted, touchMachineOnlineDay, touchUserOnlineDay } from './dailyTracking.js'
+import { presenceWriteDue, recordTurnStarted, touchDeviceOnlineDay, touchMachineOnlineDay, touchUserOnlineDay } from './dailyTracking.js'
 import { utcDayStart } from '../types/analytics.js'
 
 describe('touchUserOnlineDay', () => {
@@ -46,6 +48,38 @@ describe('touchUserOnlineDay', () => {
     const call = db.userPresenceUpsert.mock.calls[0][0]
     expect(call.update).toEqual({ lastSeenAt: now })
     expect(call.create.connections).toBe(0)
+  })
+})
+
+describe('touchDeviceOnlineDay', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    db.devicePresenceUpsert.mockResolvedValue({})
+  })
+
+  it('a connect upserts the (user, device, UTC day) row, bumps connections and stamps the country', async () => {
+    const now = new Date('2026-09-23T10:15:30.000Z')
+    await touchDeviceOnlineDay('user-1', 'device-a', now, { isNewConnection: true, countryCode: 'VN' })
+
+    const call = db.devicePresenceUpsert.mock.calls[0][0]
+    expect(call.where).toEqual({
+      userId_deviceId_dayUtc: { userId: 'user-1', deviceId: 'device-a', dayUtc: utcDayStart(now) },
+    })
+    expect(call.create).toEqual({
+      userId: 'user-1', deviceId: 'device-a', dayUtc: utcDayStart(now),
+      connections: 1, firstSeenAt: now, lastSeenAt: now, countryCode: 'VN',
+    })
+    expect(call.update).toEqual({ lastSeenAt: now, connections: { increment: 1 }, countryCode: 'VN' })
+  })
+
+  it('a refresh on an open socket only moves lastSeenAt — and a row it creates after midnight counts no connection', async () => {
+    const now = new Date('2026-09-23T00:05:00.000Z')
+    await touchDeviceOnlineDay('user-1', 'device-a', now, { isNewConnection: false })
+
+    const call = db.devicePresenceUpsert.mock.calls[0][0]
+    expect(call.update).toEqual({ lastSeenAt: now })
+    expect(call.create.connections).toBe(0)
+    expect(call.create.countryCode).toBeUndefined()
   })
 })
 

@@ -19,6 +19,13 @@ const _metadataUrlOverride = String.fromEnvironment(
   'DESKTOP_UPDATE_METADATA_URL',
 );
 
+/// Lets a DEBUG build check and install, so the update band and its percentage
+/// can be exercised without cutting a release. Off unless asked for
+/// (`--dart-define=DESKTOP_UPDATE_FORCE=true`), and pointless on its own: pair
+/// it with [_metadataUrlOverride] pointing at a scratch manifest, or the debug
+/// build will poll the real one and offer to replace itself with a release.
+const _forceUpdateChecks = bool.fromEnvironment('DESKTOP_UPDATE_FORCE');
+
 /// The macOS build every Mac can run, rendered on Skia: what an Intel Mac installs, what every install
 /// from before the Intel/Apple Silicon split polls on either CPU, and what the website download
 /// serves. Must match the `intel` row of scripts/publish-macos-variant.sh — RELEASE.md, "Two macOS
@@ -202,7 +209,7 @@ class DesktopUpdater {
            ),
        _launchDetached = launchDetached ?? _defaultLaunchDetached,
        _metadataUrlForInstance = metadataUrl ?? _metadataUrl,
-       _releaseMode = releaseMode ?? kReleaseMode,
+       _releaseMode = releaseMode ?? (kReleaseMode || _forceUpdateChecks),
        _isLinux = isLinux ?? Platform.isLinux,
        _architecture = architecture ?? _currentArchitecture();
 
@@ -326,13 +333,25 @@ class DesktopUpdater {
   /// single AppImage file), so the sha256 check already covers everything there is: it is made
   /// executable and staged as-is, with nothing to unpack or recheck.
   /// Returns null (and cleans up anything partially written) on any verification failure.
-  Future<StagedUpdate?> downloadAndStage(UpdateInfo info) async {
+  /// [onProgress] reports the DOWNLOAD only — bytes received out of
+  /// [UpdateInfo.size]. The manifest's size is the denominator rather than the
+  /// response's, because a CDN that omits `Content-Length` leaves Dio reporting
+  /// `-1` and the manifest is the authority the hash is checked against anyway.
+  /// Verifying and unpacking afterwards have no counter, so a caller showing a
+  /// percentage stops at 100 and keeps saying "installing" until this returns.
+  Future<StagedUpdate?> downloadAndStage(
+    UpdateInfo info, {
+    void Function(int received, int total)? onProgress,
+  }) async {
     if (!_enabled) return null;
     Directory? stagingDir;
     try {
       final response = await _dio.get<List<int>>(
         info.url,
         options: Options(responseType: ResponseType.bytes),
+        onReceiveProgress: onProgress == null
+            ? null
+            : (received, _) => onProgress(received, info.size),
       );
       final bytes = response.data;
       if (bytes == null || bytes.length != info.size) {

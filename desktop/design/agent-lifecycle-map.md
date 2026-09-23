@@ -121,7 +121,7 @@ Evidence: [`notify.mjs`](../../cli/hook/notify.mjs),
 | `agent_deleted` | Remove the row/view from the receiving client's live inventory. The `retained` flag tells desktop to reload the stopped catalog. | None. It is not itself a kill command or proof that the engine exited; terminal unavailability can also produce it. |
 | `agent_renamed` | Update the Harness display name. | None; name/title mutation happened separately. |
 
-Natural engine exit sends `agent_synced` with `status: stopped` and no terminal route for the original identity. The separate shell is announced as a Terminal. Devices receive a deletion for the engine because they list live agents. Explicit Stop still sends `agent_deleted` with `retained: true`, so desktop closes its live views and refreshes the saved catalog.
+Natural engine exit ends the identity that ran the engine exactly as an explicit Stop does: `agent_deleted` with `retained: true`, so the desktop closes its live views and refreshes the saved catalog, followed by `agent_synced` with `status: stopped` and no terminal route for that identity. The separate shell is announced as a Terminal of its own, and the person opens it from the harness list if they want a view of it — a tile left pointing at the ended identity used to sit on "terminal unavailable" forever (#262). Devices receive the same deletion, because they list live agents.
 
 ## Cmd-P/T contract
 

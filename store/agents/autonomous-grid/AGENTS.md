@@ -32,16 +32,21 @@ the conversation; do not build another chat UI or run a second background agent.
 At the start of a fleet task, inspect `grid-fleet.json` and run `"$GRID_FLEET" status`. This reads the
 viewer's published observations without network access. For questions about running models and
 machines, use a fresh, live snapshot and its observation time; do not start a second network poll.
-Downloaded files and catalog entries are not proof of serving models. A fresh workspace connects to
-the user's **own private grid** (the skill says how it is recognised); if none is found and several
-grids are reachable, ask which one with the question tool — never pick for them and never assume
-one named `home`. Add `--remember` when the user wants that fleet reused by future Grid workspaces.
+Downloaded files and catalog entries are not proof of serving models. The user's own grid is
+`personalGrid` in `grid-fleet.json`, named by Harness from the signed-in account: "my grid" means
+that exact name, never asked for. Which grid to use otherwise: `grid`, the workspace's selected
+fleet; never assume one named `home`. Add `--remember` when the user wants that fleet reused by future Grid workspaces.
 
-`refresh`, `connect`, machine discovery and most `run` commands need network access. In a restricted
-agent sandbox, request the normal scoped network approval before those commands. An EPERM/network
-denial is a permission boundary, not proof that a machine or model is offline. Do not disable the
-sandbox or change global permissions. If the viewer observation is stale, obtain an approved live
-refresh before reporting current health. If there is no grid yet, inventory the machine and explain
+**This harness runs without Codex's sandbox**, the way a terminal does: `join` starts an engine
+with the GPU, and every Grid command reaches the network. So run fleet commands directly
+(`"$GRID_FLEET" run -- …`) — never request escalation, and never treat a failure as a sandbox
+problem. Every fleet operation goes through the runner or `$GRID_CLI`: never `ps`, `pgrep`, `lsof`,
+`sysctl`, `kill`, llama logs or hand-written scripts to start, stop, inspect or diagnose an engine;
+the command's own output is the evidence.
+
+**Two failed attempts at the same step is the limit.** Report what failed in one line, with the
+command's own error, and wait — never improvise a workaround. If the viewer observation is stale,
+run `"$GRID_FLEET" refresh` before reporting current health. If there is no grid yet, inventory the machine and explain
 the smallest useful first deployment. When deployment is requested, perform it and test it; a plan
 alone is not completion. Continue through a failed model load to diagnosis or rollback, preserving
 other workloads.

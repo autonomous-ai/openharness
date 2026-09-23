@@ -623,13 +623,24 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel> {
         rows.add(
           Padding(
             padding: const EdgeInsets.only(bottom: 2),
-            child: ModelPickerRow(
-              title: model.id,
-              subtitle: model.node,
-              selected: widget.currentModel == model.id,
-              avatar: ModelAvatar(label: model.id),
-              note: null,
-              onTap: () => widget.close(_Choice.model(model)),
+            child: Tooltip(
+              message: [
+                'Where this agent runs',
+                ?widget.subtitleFor(model),
+              ].join('\n'),
+              child: ModelPickerRow(
+                title: model.id,
+                subtitle: model.node,
+                // The web-search sentence for the CURRENT model only — a fact
+                // about this agent's launch, not about the model. Dropped when
+                // the panel replaced the old row list, which lost it silently;
+                // the tests that caught it are the reason it is back.
+                hint: widget.subtitleFor(model),
+                selected: widget.currentModel == model.id,
+                avatar: ModelAvatar(label: model.id),
+                note: null,
+                onTap: () => widget.close(_Choice.model(model)),
+              ),
             ),
           ),
         );

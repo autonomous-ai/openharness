@@ -375,6 +375,23 @@ gh workflow run release-desktop.yml -f version=1.3.0 -f metadata_path=harness/de
 flutter run -d macos --dart-define=DESKTOP_UPDATE_METADATA_URL=https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/metadata-test.json
 ```
 
+A debug build does not check at all (`canCheck` wants release mode), so the line above only does
+something in a release build. To exercise the band, its percentage and the install itself while
+developing, add `--dart-define=DESKTOP_UPDATE_FORCE=true` — and always with a scratch manifest, or
+the debug build will offer to replace itself with the current public release:
+
+```bash
+flutter run -d macos \
+  --dart-define=DESKTOP_UPDATE_FORCE=true \
+  --dart-define=DESKTOP_UPDATE_METADATA_URL=http://127.0.0.1:8899/metadata.json
+```
+
+A local origin is enough for that manifest: serve a zip of any `Harness.app` (its
+`CFBundleShortVersionString` must match the version the manifest advertises, which the staging step
+verifies) with its real `size` and `sha256`, and write the body slowly if you want to read the
+percentage rather than watch it jump to 100. `applyStaged` replaces the bundle it is running from,
+so run a COPY of the build rather than the one `flutter run` owns.
+
 ## Internal builds — an unlisted link, not a release
 
 `../.github/workflows/desktop-internal-build.yml` builds any branch the way a release would — both macOS

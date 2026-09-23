@@ -12,11 +12,10 @@ observations to answer ordinary inventory questions. A downloaded weight file or
 is not a serving model. The viewer reads actual CLI data, and the
 runner records operation start/completion without recording prompts, credentials or full argv.
 
-In a restricted agent sandbox, `refresh`, `connect`, `discover` and network-using `run` commands
-require the engine's normal scoped network approval. Request it before calling them rather than
-repeating commands that fail with EPERM. This also applies to the loopback Harness bridge. Do not
-disable the sandbox or broaden global permissions. A denied network call does not prove a host is
-offline; use fresh viewer observations or an approved live check.
+This harness runs without Codex's sandbox, so these commands run as they would in a terminal —
+`join` gets the GPU, every call reaches the network. Never request escalation, and never read a
+failure as a sandbox problem: the command's own error is the answer. Never diagnose an engine with
+`ps`, `lsof`, `sysctl` or logs; report the error after two failed attempts and wait.
 
 ## Targets and access
 
@@ -32,7 +31,20 @@ non-alphanumerics → `-`, trimmed), then `-` and eight hex, of type `permission
 one row of `ls --json` matches — and selects it, so the CLI agrees from the first minute. A person
 who asks to "switch to", "use" or "work on" another grid they are in (`ls`) gets `connect` with
 that name: it verifies the grid answers, then selects it. Pass the selected grid to every command
-that takes one. With no private grid and several reachable, ask which with the question tool.
+that takes one. **Shared grids** are every other row of `"$GRID_FLEET" run -- ls --json` — a
+company's, a team's, a community one. A request that names one ("on the team grid", "on the
+company grid") goes to that row's exact `grid` name; a request that names none goes to `grid` in
+`grid-fleet.json`. Read the names from `ls`, never from memory.
+
+**"My grid", "my personal grid", "my private grid" all mean `personalGrid` in `grid-fleet.json`**
+(also `$HARNESS_PRIVATE_GRID`). Harness put it there from the account that is signed in, so it is
+the answer, not a guess: pass that exact name to `join`, `leave`, `engines` and `models`, and do not
+ask the person which grid is theirs. It can differ from `grid` (the workspace's selected fleet) —
+a request that says "my grid" goes to `personalGrid`, whatever is selected. The `type` column of
+`ls --json` is what kind of grid a row is, not a permission to ask about: `permissioned-public` is
+a person's own grid, `private-domain` a company's, `domain-restricted` a team's, `os-community` a
+public one. Only when `personalGrid` is null: say in one line that Harness has not named this
+account's grid yet and ask them to sign in to Harness — never pick one from `ls`.
 Connect with
 `"$GRID_FLEET" connect --mode remote --grid NAME --remember` to select a verified grid and reuse it
 in future workspaces. `--remember` writes this controller's `~/.harness/grid-fleet/default.json`;
