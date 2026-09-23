@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, before, describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { workspaceFileUrl } from '../pane/files.mjs'
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..')
 const VIEWER = join(PKG, 'viewer.mjs')
@@ -149,6 +150,7 @@ describe('files', () => {
     assert.equal(head.body, '')
     assert.ok(Number(head.headers['content-length']) > 1000)
     assert.equal(head.headers['content-type'], 'text/javascript; charset=utf-8')
+    assert.equal((await v.get('/files.mjs')).headers['content-type'], 'text/javascript; charset=utf-8')
   })
 
   test('3Dmol.js from this package, cached, and nothing else under /vendor/', async () => {
@@ -190,12 +192,38 @@ describe('files', () => {
     assert.equal(json.headers['cache-control'], 'no-store')
     assert.equal((await v.get('/out/blob.bin')).headers['content-type'], 'application/octet-stream')
     const download = await v.get('/out/a%22b.sdf?download')
-    assert.equal(download.headers['content-disposition'], 'attachment; filename="ab.sdf"')
+    assert.equal(download.headers['content-disposition'], `attachment; filename="ab.sdf"; filename*=UTF-8''a%22b.sdf`)
     assert.equal(download.headers['content-type'], 'chemical/x-mdl-sdfile')
     assert.equal((await v.get('/out')).status, 404)
     assert.equal((await v.get('/out/missing.sdf')).status, 404)
     const outside = await v.get('/%2e%2e/%2e%2e/etc/hosts')
     assert.deepEqual([outside.status, JSON.parse(outside.body)], [404, { error: 'not found' }])
+  })
+
+  test('pane URLs load and download exact filenames containing URL punctuation', async () => {
+    for (const name of ['candidate #1', 'candidate ?2', 'candidate %3', 'α "lead" & analogue']) {
+      const folder = 'out/series #1'
+      for (const extension of ['.sdf', '.conformers.sdf', '.svg']) {
+        const path = `${folder}/${name}${extension}`
+        const content = `${name}${extension}\nexact workspace bytes`
+        put(v.ws, path, content)
+        const source = workspaceFileUrl(path, { v: 123 })
+        const url = new URL(source, `http://127.0.0.1:${v.port}`)
+        assert.equal(url.hash, '')
+        assert.equal(url.searchParams.get('v'), '123')
+        const loaded = await v.get(url.pathname + url.search)
+        assert.equal(loaded.status, 200, path)
+        assert.equal(loaded.body, content, path)
+        const saved = await v.get(workspaceFileUrl(path, { download: 1 }))
+        assert.equal(saved.status, 200, path)
+        assert.equal(saved.body, content, path)
+        assert.match(saved.headers['content-disposition'], /^attachment;/)
+        if (name.startsWith('α')) {
+          const encodedName = saved.headers['content-disposition'].split("filename*=UTF-8''")[1]
+          assert.equal(decodeURIComponent(encodedName), name + extension)
+        }
+      }
+    }
   })
 
   test('a malformed URL is an error answer, not a dead pane', async () => {
@@ -227,6 +255,15 @@ describe('/api/mol', () => {
   let v
   before(async () => { v = await viewer() })
   after(() => v.stop())
+
+  test('MOL exports retain Unicode and quoted molecule names', async () => {
+    const name = 'α "lead" #1'
+    put(v.ws, `out/${name}.sdf`, 'molecule\nM  END\n$$$$\n')
+    const mol = await v.get('/api/mol?path=' + encodeURIComponent(`out/${name}.sdf`))
+    assert.equal(mol.status, 200)
+    assert.equal(mol.body, 'molecule\nM  END\n')
+    assert.equal(decodeURIComponent(mol.headers['content-disposition'].split("filename*=UTF-8''")[1]), name + '.mol')
+  })
 
   test('the first record as a MOL file, named for the molecule', async () => {
     put(v.ws, 'out/x.conformers.sdf', 'x\n  RDKit\n\n  0  0\nM  END\n> <energy>\n1\n\n$$$$\nsecond\nM  END\n')
