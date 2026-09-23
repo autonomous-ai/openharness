@@ -1,7 +1,110 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/state/app_state.dart';
 
 void main() {
+  test(
+    'cached output stats survive renames and participate in roster equality',
+    () {
+      final raw = <String, dynamic>{
+        'id': 'a',
+        'name': 'Work',
+        'outputStats': {
+          'linesAdded': 124,
+          'linesRemoved': 38,
+          'pullRequestsCreated': 2,
+          'updatedAt': '2026-09-23T00:00:00Z',
+        },
+      };
+      final agent = Agent.fromJson(raw);
+      expect(agent.outputStats?.linesAdded, 124);
+      expect(agent.copyWith(name: 'Renamed').outputStats, agent.outputStats);
+      expect(agent.hasMonitorStats, isTrue);
+      expect(AppNotifier.agentsEqual([agent], [Agent.fromJson(raw)]), isTrue);
+      expect(
+        AppNotifier.agentsEqual(
+          [agent],
+          [
+            Agent.fromJson({
+              ...raw,
+              'outputStats': {
+                'linesAdded': 125,
+                'linesRemoved': 38,
+                'pullRequestsCreated': 2,
+              },
+            }),
+          ],
+        ),
+        isFalse,
+      );
+      for (final invalid in [-1, 1.5, '12', 9007199254740992]) {
+        final parsed = Agent.fromJson({
+          'id': 'a',
+          'outputStats': {
+            'linesAdded': invalid,
+            'linesRemoved': 38,
+            'pullRequestsCreated': invalid,
+          },
+        });
+        expect(parsed.outputStats, isNull);
+        expect(parsed.hasMonitorStats, isFalse);
+      }
+    },
+  );
+  test('cached token usage survives rename/pause and participates in roster updates', () {
+    final agent = Agent.fromJson({
+      'id': 'remote-harness',
+      'tokenUsage': {
+        'totalTokens': 1234567,
+        'updatedAt': '2026-09-22T16:00:00Z',
+      },
+    });
+    expect(agent.tokensUsed, 1234567);
+    expect(agent.tokensUpdatedAt, DateTime.utc(2026, 9, 22, 16));
+    expect(
+      agent.copyWith(name: 'Renamed', status: 'stopped').tokensUsed,
+      1234567,
+    );
+    expect(
+      AppNotifier.agentsEqual(
+        [agent],
+        [
+          Agent.fromJson({
+            'id': agent.id,
+            'tokenUsage': {
+              'totalTokens': 2345678,
+              'updatedAt': '2026-09-22T16:00:00Z',
+            },
+          }),
+        ],
+      ),
+      isFalse,
+    );
+    for (final value in [
+      null,
+      -1,
+      1.5,
+      '12',
+      double.infinity,
+      9007199254740992,
+    ]) {
+      expect(
+        Agent.fromJson({
+          'id': 'legacy',
+          'tokenUsage': {'totalTokens': value},
+        }).tokensUsed,
+        isNull,
+      );
+    }
+    expect(Agent.fromJson({'id': 'legacy'}).tokensUsed, isNull);
+    expect(
+      Agent.fromJson({
+        'id': 'new',
+        'tokenUsage': {'totalTokens': 0},
+      }).tokensUsed,
+      0,
+    );
+  });
   _dshTests();
   _cloneTests();
   test('uses explicit terminal availability from a new CLI', () {
