@@ -98,6 +98,10 @@ PhoneDestination _agent(
   final agent = entry.agent;
   final project = entry.project;
   final offline = entry.machine.nodeOnline == false;
+  // The desktop's name for it ([Agent.displayName]); the CLI's own stays
+  // searchable beside it, so typing what the terminal's title bar says still
+  // finds the row.
+  final renamed = agent.displayName != agent.name;
   final detail = _harnessDetail(
     label,
     project,
@@ -108,7 +112,7 @@ PhoneDestination _agent(
   return PhoneDestination(
     id: phoneAgentId(entry.machineId, agent.id),
     kind: PhoneDestinationKind.agent,
-    title: agent.name,
+    title: agent.displayName,
     detail: detail.text,
     detailBranchOffset: detail.branchOffset,
     promptContext: PhonePromptContext(
@@ -132,6 +136,7 @@ PhoneDestination _agent(
     // whose folder or recap happens to mention fab.
     searchFields: [
       agent.title,
+      if (renamed) agent.name,
       label,
       entry.machineName,
       project?.name,
@@ -144,7 +149,7 @@ PhoneDestination _agent(
       agent.selectedModel,
       agent.dshName,
     ],
-    titleFields: agent.title == null ? 1 : 2,
+    titleFields: 1 + (agent.title == null ? 0 : 1) + (renamed ? 1 : 0),
   );
 }
 

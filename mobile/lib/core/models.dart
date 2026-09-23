@@ -1,6 +1,8 @@
 /// Data models mirroring the backend/web types.
 library;
 
+import 'agent_output_stats.dart';
+
 enum MachineAuthMode { managed, remote, self, provider }
 
 enum ConnectionStatus { disconnected, connecting, connected, reconnecting }
@@ -119,6 +121,17 @@ class Machine {
 }
 
 /// Data-plane agent (RPC agents_list).
+/// What an agent with no name of its own is called — display only, never sent to a CLI as a rename.
+const kUntitledPane = 'Untitled Pane';
+
+final _automaticHarnessName = RegExp(
+  r'^(?:(?:harness|agent)-[1-9]\d*|.+ harness \d{1,2}-\d{1,2} \d{1,2}:\d{2}(?::\d{2})?)$',
+);
+
+/// Whether [name] is one the CLI made up rather than one somebody chose — the desktop's rule.
+bool isAutomaticHarnessName(String name) =>
+    _automaticHarnessName.hasMatch(name);
+
 class Agent {
   final String id;
   final String? sessionId;
@@ -166,6 +179,14 @@ class Agent {
   final bool terminalAvailable;
   final String? terminalUnavailableReason;
 
+  /// The conversation's token count as its machine last measured it — input, output and cached
+  /// input together. Null from a daemon that does not report usage.
+  final int? tokensUsed;
+  final DateTime? tokensUpdatedAt;
+
+  /// What the harness has produced — see [AgentOutputStats].
+  final AgentOutputStats? outputStats;
+
   const Agent({
     required this.id,
     this.sessionId,
@@ -188,6 +209,9 @@ class Agent {
     this.launchDetail,
     this.terminalAvailable = false,
     this.terminalUnavailableReason,
+    this.tokensUsed,
+    this.tokensUpdatedAt,
+    this.outputStats,
   });
 
   factory Agent.fromJson(Map<String, dynamic> j) {
@@ -215,6 +239,10 @@ class Agent {
       _ => 'ready',
     };
     final grid = j['grid'];
+    // The desktop's reading of `tokenUsage`: the total alone, and nothing at all for a value no
+    // JavaScript number could have held.
+    final usage = j['tokenUsage'];
+    final tokens = usage is Map ? wireCount(usage['totalTokens']) : null;
     return Agent(
       id: j['id'] as String,
       sessionId: _safeLabel(j['sessionId']),
@@ -244,6 +272,11 @@ class Agent {
           ? null
           : _safeLabel(terminalMap['reason']) ??
                 'terminal unavailable (no verified terminal pane)',
+      tokensUsed: tokens,
+      tokensUpdatedAt: tokens != null && usage is Map
+          ? _safeTime(usage['updatedAt'])
+          : null,
+      outputStats: AgentOutputStats.fromJson(j['outputStats']),
     );
   }
 
@@ -269,6 +302,9 @@ class Agent {
     launchDetail: launchDetail,
     terminalAvailable: terminalAvailable,
     terminalUnavailableReason: terminalUnavailableReason,
+    tokensUsed: tokensUsed,
+    tokensUpdatedAt: tokensUpdatedAt,
+    outputStats: outputStats,
   );
 
   /// Saved work the daemon is no longer running, as the desktop's [Agent] reads
@@ -284,6 +320,21 @@ class Agent {
   /// (`resumeStoppedAgent.ts`): exact resume exists for Claude Code and Codex only, and only once the
   /// engine has saved a session. An agent stopped before its first prompt never got one, and the
   /// machine answers RESUME_UNAVAILABLE for it however many times it is asked.
+  /// Whether a row has anything to put on its stats line — see [AgentOutputStats].
+  bool get hasMonitorStats =>
+      tokensUsed != null || (outputStats != null && !outputStats!.isEmpty);
+
+  /// The name a row draws — the desktop's `displayName`, so an agent reads the same on both.
+  ///
+  /// A name the CLI made up (`harness-3`, `Claude harness 9-23 13:52`) says only when it was
+  /// started; the agent's own title says what it is about, and with neither the desktop writes
+  /// [kUntitledPane]. A name somebody chose is always kept.
+  String get displayName {
+    if (!isAutomaticHarnessName(name)) return name;
+    final own = title?.trim();
+    return own != null && own.isNotEmpty ? own : kUntitledPane;
+  }
+
   bool get canResumeConversation =>
       (engine == 'claude' || engine == 'codex') &&
       sessionId?.isNotEmpty == true;

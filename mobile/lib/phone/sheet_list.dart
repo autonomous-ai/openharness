@@ -6,7 +6,6 @@ import 'package:harness_mobile/widgets/engine_identity.dart';
 
 import 'phone_prompt_context.dart';
 import 'phone_status.dart';
-import 'search_result_text.dart';
 import 'status_pill.dart';
 
 // The pieces the terminal's search sheet lists with: iOS's inset-grouped list
@@ -481,68 +480,6 @@ class SheetRowSpinner extends StatelessWidget {
         strokeWidth: 1.6,
         color: AppPalette.textFaint,
       ),
-    );
-  }
-}
-
-/// Where an agent is, as one line under its name:
-/// `folder · ⑂ branch · machine`.
-///
-/// One line, ellipsed from its end, rather than [AgentContextLine]'s two
-/// halves — the row has a tile and a status beside it, and halves this narrow
-/// cut both the folder and the machine to a word each.
-class SheetPlaceLine extends StatelessWidget {
-  const SheetPlaceLine({
-    super.key,
-    required this.machine,
-    this.folder,
-    this.branch,
-    this.note,
-    this.matches = const [],
-  });
-
-  final String machine;
-  final String? folder;
-  final String? branch;
-
-  /// Said first, ahead of the place — `Offline`, for an agent whose machine is.
-  final String? note;
-
-  /// What the query reached, so the part of the line that earned the row its
-  /// place is set in bold. Empty in the tabs, where nothing was searched.
-  final Iterable<PhoneFieldMatch> matches;
-
-  static const _separator = ' · ';
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final before = [
-      note,
-      folder,
-    ].whereType<String>().where((part) => part.isNotEmpty).join(_separator);
-    final branch = this.branch;
-    final hasBranch = branch != null && branch.isNotEmpty;
-    final text = [
-      before,
-      if (hasBranch) branch,
-      machine,
-    ].where((part) => part.isNotEmpty).join(_separator);
-    return SearchResultText(
-      text,
-      matches: matches,
-      style: sheetRowSubtitleStyle(),
-      // Drawn rather than written, because `main` alone reads as a folder.
-      inlineIcon: hasBranch
-          ? Icon(
-              LucideIcons.gitBranch300,
-              size: 12,
-              color: AppPalette.textFaint,
-            )
-          : null,
-      iconOffset: hasBranch && before.isNotEmpty
-          ? before.length + _separator.length
-          : 0,
     );
   }
 }
