@@ -81,9 +81,8 @@ class ModelAvatar extends StatelessWidget {
           child ??
           Text(
             initialOf(label),
-            style: AppType.body(
-              color: ink,
-            ).copyWith(fontWeight: FontWeight.w600, fontSize: 13),
+            style: AppType.body(color: ink)
+                .copyWith(fontWeight: FontWeight.w600, fontSize: 13),
           ),
     );
   }
@@ -111,21 +110,54 @@ class ModelPickerSearch extends StatelessWidget {
       border: Border.all(color: AppColors.border),
     ),
     child: Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Icon(Icons.search, size: 16, color: AppColors.mutedStrong),
         const SizedBox(width: 9),
         Expanded(
-          child: TextField(
-            controller: controller,
-            onChanged: onChanged,
-            autofocus: true,
-            style: AppType.body(color: AppColors.text),
-            cursorColor: AppColors.text,
-            decoration: InputDecoration(
-              isCollapsed: true,
-              border: InputBorder.none,
-              hintText: 'Search models or machines',
-              hintStyle: AppType.body(color: AppColors.muted),
+          // The nudge, and it is a nudge on purpose. The icon centres correctly in this row; the
+          // text does not, because the decorator gives the field more height than the letters use
+          // and hands the slack to the bottom. Several principled fixes were tried first — even
+          // leading distribution, a pinned line height, sizing the box from its padding — and each
+          // moved the number without closing the gap; the last one only made the box taller. What
+          // is left is a measured offset, stated as one, rather than another theory dressed as a
+          // layout rule. Half of it lands on the glyphs, which is why it is twice what the eye
+          // asked for.
+          child: Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: TextField(
+              controller: controller,
+              onChanged: onChanged,
+              autofocus: true,
+              // The LINE box centres correctly on its own; the glyphs inside it do not. The app's
+              // sans face has a lopsided ascent and descent, and the default leading distribution
+              // hands that asymmetry straight to the text — so the hint sat visibly high in a box a
+              // widget test measures as perfectly centred, because a test measures the line box and
+              // an eye sees the letters. Splitting the leading evenly is what puts them in the
+              // middle of it.
+              style: AppType.body(color: AppColors.text)
+                  .copyWith(leadingDistribution: TextLeadingDistribution.even),
+              textAlignVertical: TextAlignVertical.center,
+              cursorColor: AppColors.text,
+              decoration: InputDecoration(
+                isCollapsed: true,
+                // ⚠️ EVERY border state, and `filled: false`. The app's theme gives fields a 1.5px
+                // accent `focusedBorder` and a fill of their own, and `border:` overrides neither —
+                // so a field that autofocuses the moment the panel opens drew a second, brighter box
+                // INSIDE the one around it. The box is this container's; the caret is the focus.
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                disabledBorder: InputBorder.none,
+                errorBorder: InputBorder.none,
+                focusedErrorBorder: InputBorder.none,
+                filled: false,
+                contentPadding: EdgeInsets.zero,
+                hintText: 'Search models or machines',
+                hintStyle: AppType.body(
+                  color: AppColors.muted,
+                ).copyWith(leadingDistribution: TextLeadingDistribution.even),
+              ),
             ),
           ),
         ),
@@ -139,11 +171,7 @@ class ModelPickerSearch extends StatelessWidget {
 /// The count is on the right and quiet. It answers "is the thing I want even here" before the eye
 /// walks the list, which matters most in the section a search has just emptied.
 class ModelPickerSectionHeader extends StatelessWidget {
-  const ModelPickerSectionHeader({
-    super.key,
-    required this.label,
-    this.count,
-  });
+  const ModelPickerSectionHeader({super.key, required this.label, this.count});
 
   final String label;
   final int? count;
@@ -221,9 +249,8 @@ class ModelPickerRow extends StatelessWidget {
                 title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: AppType.body(
-                  color: AppColors.text,
-                ).copyWith(fontWeight: FontWeight.w600, fontSize: 13.5),
+                style: AppType.body(color: AppColors.text)
+                    .copyWith(fontWeight: FontWeight.w600, fontSize: 13.5),
               ),
               if (subtitle.isNotEmpty) ...[
                 const SizedBox(height: 2),
@@ -358,10 +385,8 @@ class ModelPickerFooter extends StatelessWidget {
                   const SizedBox(width: 8),
                   Text(
                     actionLabel,
-                    style: AppType.body(color: AppColors.text).copyWith(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    style: AppType.body(color: AppColors.text)
+                        .copyWith(fontSize: 12.5, fontWeight: FontWeight.w600),
                   ),
                 ],
               ),

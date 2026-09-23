@@ -563,6 +563,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // independently, so the trailing column stepped in or out at each section break.
     let allModels = localSections.flatMap { $0.models }
     let metered = subscriptions.contains { $0.remaining != nil }
+    let balanceColumn = SwarmSubscriptionView.balanceColumn(subscriptions)
     let rowWidth = max(
       subscriptions.map { SwarmSubscriptionView.preferredWidth($0, metered: metered) }.max() ?? 352,
       allModels.map { SwarmSubscriptionView.preferredWidth(title: $0.0, account: "", status: $0.1) }.max() ?? 352)
@@ -572,7 +573,8 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       // to a Local model is on none of them, and then no row is ticked — which is the truth, not a
       // gap: the menu would otherwise claim an account the agent is not spending.
       item.view = SwarmSubscriptionView(entry: entry, width: rowWidth,
-        current: entry.engine != nil && entry.engine == currentEngine)
+        current: entry.engine != nil && entry.engine == currentEngine,
+        balanceColumn: balanceColumn)
       item.isEnabled = false
       modelsMenu.addItem(item)
     }
@@ -944,14 +946,20 @@ private final class SwarmSubscriptionView: NSView {
     return metered ? min(576, base + meterWidth + 12) : base
   }
 
-  convenience init(entry: SwarmSubscriptionEntry, width: CGFloat, current: Bool) {
+  /// What the trailing figures need to share a column — the widest of them.
+  static func balanceColumn(_ entries: [SwarmSubscriptionEntry]) -> CGFloat {
+    entries.map { textWidth($0.balance) }.max() ?? 0
+  }
+
+  convenience init(entry: SwarmSubscriptionEntry, width: CGFloat, current: Bool,
+                   balanceColumn: CGFloat) {
     self.init(title: entry.title, account: entry.account.isEmpty ? "" : "···" + entry.account,
       status: entry.balance, icon: nil, width: width,
       accessibility: entry.accessibilityLabel + (current ? ", current" : ""),
       tint: nil, meter: entry.remaining.map { $0 / 100 },
       meterTint: entry.isLow ? .systemOrange : .controlAccentColor,
       balanceTint: entry.isLow ? .systemOrange : .secondaryLabelColor,
-      showsTick: current)
+      showsTick: current, balanceColumn: balanceColumn)
   }
 
   /// Every row in this menu is built here, subscription or local. Sharing the construction is what
@@ -961,7 +969,7 @@ private final class SwarmSubscriptionView: NSView {
   init(title primary: String, account: String, status: String, icon: NSImage?, width: CGFloat,
        accessibility: String, tint: NSColor? = nil, meter: Double? = nil,
        meterTint: NSColor = .controlAccentColor, balanceTint: NSColor = .secondaryLabelColor,
-       showsTick: Bool = false) {
+       showsTick: Bool = false, balanceColumn: CGFloat = 0) {
     super.init(frame: NSRect(x: 0, y: 0, width: width, height: 26))
     autoresizingMask = [.width]
     self.icon.image = icon
@@ -988,6 +996,7 @@ private final class SwarmSubscriptionView: NSView {
     self.meter.fraction = CGFloat(meter ?? 0)
     self.meter.tint = meterTint
     self.hasMeter = meter != nil
+    self.balanceColumn = balanceColumn
     tick.image = showsTick
       ? NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
       : nil
@@ -1007,13 +1016,22 @@ private final class SwarmSubscriptionView: NSView {
 
   private var hasMeter = false
 
+  /// The width every row's trailing figure is laid out in, so the meters beside them start at one
+  /// x rather than each one floating off the width of its own text.
+  ///
+  /// Sizing the figure to itself right-aligns the TEXT correctly — every row shares a right edge —
+  /// but it moves that column's LEFT edge per row, and the meter hangs off that. `7% left` is
+  /// narrower than `78% left`, so one bar began further right than the other and the two read as
+  /// different lengths. Zero means "size to my own text", for rows with no meter to align.
+  private var balanceColumn: CGFloat = 0
+
   override func layout() {
     super.layout()
     icon.frame = NSRect(x: 16, y: (bounds.height - 16) / 2, width: 16, height: 16)
     let height = ceil(Self.rowFont.ascender - Self.rowFont.descender + Self.rowFont.leading)
     // The tick's column is reserved whether or not this row draws one — see [tickWidth].
     tick.frame = NSRect(x: bounds.width - 16 - 13, y: (bounds.height - 13) / 2, width: 13, height: 13)
-    let balanceWidth = Self.textWidth(balance.stringValue)
+    let balanceWidth = max(balanceColumn, Self.textWidth(balance.stringValue))
     balance.frame = NSRect(x: bounds.width - 16 - Self.tickWidth - balanceWidth,
       y: (bounds.height - height) / 2, width: balanceWidth, height: height)
     if hasMeter {
