@@ -2,8 +2,6 @@
   "schema": 1,
   "complete": false,
   "missingTrials": [
-    "home-relay-1.json",
-    "home-p2p-1.json",
     "home-relay-2.json",
     "home-p2p-2.json",
     "home-turn-2.json",
@@ -49,6 +47,20 @@
       "sha256": "327e1543fdc60cd78ef2c17e1609f756db0f0b7a4e87dd878cbd0e353aec56a8",
       "sourceSha256": "327e1543fdc60cd78ef2c17e1609f756db0f0b7a4e87dd878cbd0e353aec56a8",
       "redactions": []
+    },
+    {
+      "file": "home-relay-1.json",
+      "sha256": "051a31be5f95f6ce00f15a1c737fee56541709eca4d6e80c64d561d90f5e181b",
+      "sourceSha256": "051a31be5f95f6ce00f15a1c737fee56541709eca4d6e80c64d561d90f5e181b",
+      "redactions": []
+    },
+    {
+      "file": "home-p2p-1.json",
+      "sha256": "df5c2903d7ac65ed16d4787e7c80b4b8a8ed9d0735439a267ec357988735ebb4",
+      "sourceSha256": "a14d4142c40527b4c24065735f808569bc7bf3406660f125a5a28e7aaf033e99",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ]
     }
   ]
 }

@@ -80,6 +80,11 @@ pair evidence. It remains a historical observation in the
 [core-experience report](2026-09-23-core-experiences.md), not a verified direct-P2P
 baseline for this comparison.
 
+Calibration runs and their sanitized negotiation traces are retained in the
+[diagnostic ledger](2026-09-23-transport-data/diagnostics/ledger.json). They use
+five measured echoes per workload when a route is available; they are excluded
+from the repeated-series latency distributions.
+
 ## Reproduction and artifacts
 
 See the [probe and serial runner instructions](../../cli/scripts/benchmark-terminal-latency.md).
