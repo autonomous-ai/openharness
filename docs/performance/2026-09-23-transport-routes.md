@@ -1,5 +1,10 @@
 # Remote terminal latency by verified transport
 
+**Follow-up:** [Three additional Home iMac P2P trials](2026-09-23-home-p2p-rerun.md)
+at 22:40–22:42 UTC on September 23 also could not establish a direct path. Home
+P2P availability is now 0/6 across both series. The original comparison below
+retains its original attempts and observations.
+
 Verified Office terminal echo medians were **14.6 ms over direct P2P**, **109.8 ms
 through Cloudflare TURN**, and **401.4 ms through the Harness WebSocket relay**.
 Direct-only negotiation succeeded in one of three Office trials and none of three
