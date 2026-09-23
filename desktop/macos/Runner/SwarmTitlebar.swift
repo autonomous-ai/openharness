@@ -1209,7 +1209,7 @@ private final class SwarmHistoryIcons {
   /// lib/store/store_mark.dart). Any other path draws the engine's initial,
   /// which is how the store tab once read "S".
   static func opens(_ asset: String) -> Bool {
-    !asset.contains("..") && (asset == "assets/app_icon.png" || asset == "assets/harnesses.png" || asset == "assets/store/polymath.png"
+    !asset.contains("..") && (asset == "assets/app_icon.png" || asset == "assets/harnesses.png" || asset == "assets/models.png" || asset == "assets/store/polymath.png"
       || asset.hasPrefix("assets/engine-icons/") && asset.hasSuffix(".png"))
   }
 
@@ -1545,10 +1545,11 @@ private final class SwarmTabStrip: NSView {
     storeButton.toolTip = "Harness Store ⌘S"
     storeButton.setAccessibilityLabel("Harness Store")
     addSubview(storeButton)
-    button(modelsButton, "cpu", "Models", #selector(openModels))
-    modelsButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 17, weight: .regular)
+    button(modelsButton, "brain", "AI Models", #selector(openModels))
+    modelsButton.image = icons.image(engine: "models", asset: "assets/models.png", pointSize: 20)
+    modelsButton.symbolConfiguration = nil
     modelsButton.isEnabled = false
-    modelsButton.toolTip = "Models"
+    modelsButton.toolTip = "AI Models"
     setAccessibilityChildren([scroll, newButton, sessionsButton, modelsButton, storeButton])
     registerForDraggedTypes([swarmPasteboardType])
   }
@@ -1633,7 +1634,7 @@ private final class SwarmTabStrip: NSView {
     storeButton.isEnabled = actionsEnabled
     modelsButton.isEnabled = actionsEnabled
     let modelReady = state["localModelReady"] as? Bool == true
-    modelsButton.toolTip = modelReady ? "Models · Your local model is running" : "Models"
+    modelsButton.toolTip = modelReady ? "AI Models · Your local model is running" : "AI Models"
     modelsButton.setAccessibilityValue(state["modelsOpen"] as? Bool == true ? "Expanded" : "Collapsed")
     sessionsButton.isEnabled = actionsEnabled
     sessionsButton.running = state["runningSessions"] as? Int ?? 0

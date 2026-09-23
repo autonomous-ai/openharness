@@ -699,8 +699,9 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel> {
       subtitle: account.isEmpty ? '' : 'key ···$account',
       selected: widget.currentModel == null,
       avatar: ModelAvatar(
-        label: widget.engineLabel ?? '',
-        child: EngineMark(engine: widget.engineLabel, size: 17),
+        label:
+            (widget.subscription?['title'] as String?) ??
+            engineIdentity(widget.engineLabel).label,
       ),
       // Absent rather than "unknown": a row that cannot say how much is left says nothing, which
       // reads as "no figure" instead of as a figure that happens to be missing.

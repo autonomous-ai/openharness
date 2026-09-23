@@ -15,6 +15,7 @@ import '../core/project_folder.dart';
 import '../core/test_run.dart';
 import '../logging/debug_surface.dart';
 import '../models/models_panel.dart';
+import '../models/model_mark.dart';
 import '../settings/settings_screen.dart';
 import '../settings/settings_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -2050,20 +2051,32 @@ class _SwarmScreenState extends State<SwarmScreen>
             Positioned(
               top: (_native ? 0.0 : _tabBarHeight) + 8,
               right: 10,
-              width: (constraints.maxWidth - 20).clamp(0, 560),
+              width: (constraints.maxWidth - 20).clamp(0, 640),
               child: ConstrainedBox(
                 constraints: BoxConstraints(
                   maxHeight:
                       (constraints.maxHeight -
                               (_native ? 0 : _tabBarHeight) -
                               20)
-                          .clamp(0, 720),
+                          .clamp(0, 620),
                 ),
-                child: ModelsPanel(
-                  controller: app.modelManager,
-                  subscriptions: _modelsMenu!,
-                  onClose: _closeModels,
-                  onManage: () => unawaited(_openModelManager()),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: .35),
+                        blurRadius: 36,
+                        offset: const Offset(0, 12),
+                      ),
+                    ],
+                  ),
+                  child: ModelsPanel(
+                    controller: app.modelManager,
+                    subscriptions: _modelsMenu!,
+                    onClose: _closeModels,
+                    onManage: () => unawaited(_openModelManager()),
+                  ),
                 ),
               ),
             ),
@@ -3638,14 +3651,10 @@ class _SwarmScreenState extends State<SwarmScreen>
             const SizedBox(width: 6),
             IconButton(
               key: const ValueKey('swarm-models-button'),
-              tooltip: 'Models',
+              tooltip: 'AI Models',
               onPressed: _toggleModels,
               isSelected: _modelsOverlay != null,
-              icon: const Icon(
-                Icons.memory_rounded,
-                size: 20,
-                semanticLabel: 'Models',
-              ),
+              icon: const ModelMark(size: 20, semanticLabel: 'AI Models'),
             ),
             const SizedBox(width: 6),
             Tooltip(

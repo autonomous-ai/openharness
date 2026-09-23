@@ -13,6 +13,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../models/model_mark.dart';
 import '../shared/theme/app_type.dart';
 import '../theme/app_theme.dart';
 
@@ -23,74 +24,24 @@ const double kModelPickerWidth = 376;
 /// The avatar's side, and the gutter its column occupies on every row.
 const double kModelAvatarSize = 34;
 
-/// One tile per model, lettered and tinted.
-///
-/// The tint is DERIVED from the id rather than assigned, so the same model wears the same colour
-/// in every section and on every machine — the point of a coloured tile is that it is recognisable
-/// before it is read, which an arbitrary per-list colour would defeat.
+/// The same model artwork used in Models, with a brain fallback for unknown names.
 class ModelAvatar extends StatelessWidget {
   const ModelAvatar({super.key, required this.label, this.child});
 
-  /// What the tile is lettered with. The first letter or digit of the model's id.
   final String label;
-
-  /// Drawn instead of the letter — a subscription's own logo.
   final Widget? child;
 
-  /// The tints, in the order [_tintFor] walks them. Low-alpha so they read as a surface rather
-  /// than as a badge, with the letter carrying the saturated version of the same hue.
-  static const _tints = <(Color, Color)>[
-    (Color(0xFF6D5BD0), Color(0xFFC3B9F5)), // violet
-    (Color(0xFF2F5BEA), Color(0xFFAFC4FA)), // blue
-    (Color(0xFF1F8A5B), Color(0xFFA9E2C7)), // green
-    (Color(0xFFC77A16), Color(0xFFF2D19B)), // amber
-    (Color(0xFFB84A6A), Color(0xFFF1B3C4)), // rose
-    (Color(0xFF1B8A99), Color(0xFFA6DFE6)), // teal
-  ];
-
-  static (Color, Color) _tintFor(String seed) {
-    if (seed.isEmpty) return _tints.first;
-    var hash = 0;
-    for (final unit in seed.codeUnits) {
-      hash = (hash * 31 + unit) & 0x7FFFFFFF;
-    }
-    return _tints[hash % _tints.length];
-  }
-
-  /// The one character a model is lettered with: its first letter or digit, so `Qwen/Qwen3.8` and
-  /// `qwen3.8` letter the same and a leading slash or dash letters as nothing.
-  static String initialOf(String id) {
-    for (final rune in id.runes) {
-      final ch = String.fromCharCode(rune);
-      if (RegExp(r'[A-Za-z0-9]').hasMatch(ch)) return ch.toUpperCase();
-    }
-    return '?';
-  }
-
   @override
-  Widget build(BuildContext context) {
-    final (fill, ink) = _tintFor(label);
-    final light = Theme.of(context).brightness == Brightness.light;
-    final foreground = light ? Color.lerp(fill, Colors.black, .25)! : ink;
-    return Container(
-      width: kModelAvatarSize,
-      height: kModelAvatarSize,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: child != null
-            ? AppColors.surface
-            : fill.withValues(alpha: light ? .12 : .30),
-        borderRadius: BorderRadius.circular(9),
-      ),
-      child:
-          child ??
-          Text(
-            initialOf(label),
-            style: AppType.body(color: foreground)
-                .copyWith(fontWeight: FontWeight.w600, fontSize: 13),
-          ),
-    );
-  }
+  Widget build(BuildContext context) => Container(
+    width: kModelAvatarSize,
+    height: kModelAvatarSize,
+    alignment: Alignment.center,
+    decoration: BoxDecoration(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(9),
+    ),
+    child: child ?? ModelMark(model: label),
+  );
 }
 
 /// The field that narrows the list. Its own widget so the panel can keep the query and rebuild

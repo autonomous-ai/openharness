@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/models/model_manager_controller.dart';
 import 'package:harness/models/models_panel.dart';
@@ -56,6 +57,10 @@ void main() {
     await (FontLoader(
       'MaterialIcons',
     )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
+    await (FontLoader('packages/lucide_icons_flutter/Lucide')..addFont(
+          rootBundle.load('packages/lucide_icons_flutter/assets/lucide.ttf'),
+        ))
+        .load();
   });
 
   testWidgets(
@@ -78,7 +83,7 @@ void main() {
           home: Scaffold(
             body: Center(
               child: SizedBox(
-                width: 560,
+                width: 640,
                 child: ModelsPanel(
                   controller: controller,
                   subscriptions: subscriptions,
@@ -101,9 +106,7 @@ void main() {
       await tester.tap(find.text('Running 0'));
       await tester.pump();
       expect(find.text('No models running'), findsOneWidget);
-      await tester.tap(find.text('Downloaded 0'));
-      await tester.pump();
-      expect(find.text('No models downloaded'), findsOneWidget);
+      expect(find.textContaining('Downloaded'), findsNothing);
       await tester.enterText(
         find.byKey(const ValueKey('models-search')),
         'missing',
@@ -124,6 +127,7 @@ void main() {
       await tester.pump();
       expect(find.byTooltip('Clear search'), findsNothing);
       expect(find.text('No matching models'), findsNothing);
+      expect(field.focusNode!.hasFocus, isTrue);
       await tester.tap(find.text('All 0'));
       app.inventory = const GridModels(
         gridName: 'home',
@@ -139,11 +143,12 @@ void main() {
       app.localInventory = modelInventory();
       await controller.refresh(force: true);
       await tester.pump();
-      await tester.tap(find.text('Downloaded 1'));
-      await tester.pump();
       expect(find.text('gemma-4-12B'), findsOneWidget);
-      expect(find.text('Qwen3.8-27B'), findsNothing);
-      await tester.tap(find.text('All 5'));
+      expect(find.text('Qwen3.8-27B'), findsOneWidget);
+      expect(find.text('7.3 GB'), findsOneWidget);
+      expect(find.text('16.2 GB'), findsOneWidget);
+      expect(find.textContaining(' on disk'), findsNothing);
+      expect(find.textContaining(' download'), findsNothing);
       await tester.enterText(
         find.byKey(const ValueKey('models-search')),
         'shared',
@@ -159,7 +164,7 @@ void main() {
       expect(find.text('Models are unavailable. Try again.'), findsOneWidget);
       expect(
         tester
-            .widget<TextButton>(
+            .widget<IconButton>(
               find.byKey(const ValueKey('model-action-gemma')),
             )
             .onPressed,
@@ -177,7 +182,7 @@ void main() {
     variant: TargetPlatformVariant.only(TargetPlatform.macOS),
   );
 
-  testWidgets('Start and Stop show pending status before the acknowledgement', (
+  testWidgets('play and pause show pending status before the acknowledgement', (
     tester,
   ) async {
     tester.view.devicePixelRatio = 1;
@@ -202,7 +207,7 @@ void main() {
           home: Scaffold(
             body: Center(
               child: SizedBox(
-                width: 560,
+                width: 640,
                 child: ModelsPanel(
                   controller: controller,
                   subscriptions: subscriptions,
@@ -214,12 +219,31 @@ void main() {
           ),
         ),
       );
-      await tester.tap(find.byKey(const ValueKey('model-action-qwen')));
+      final control = find.byKey(const ValueKey('model-action-qwen'));
+      expect(
+        find.descendant(
+          of: control,
+          matching: find.byIcon(running ? LucideIcons.pause : LucideIcons.play),
+        ),
+        findsOneWidget,
+      );
+      expect(tester.getSize(control), const Size(40, 40));
+      expect(
+        find.byTooltip(
+          running
+              ? 'Pause Qwen3.8-27B and free memory. The download is kept.'
+              : 'Start Qwen3.8-27B',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(control);
       await tester.pump();
       expect(find.text(running ? 'Stopping' : 'Starting'), findsOneWidget);
+      expect(control, findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
       expect(
         tester
-            .widget<TextButton>(
+            .widget<IconButton>(
               find.byKey(const ValueKey('model-action-gemma')),
             )
             .onPressed,
@@ -236,7 +260,7 @@ void main() {
       await tester.pump();
       expect(
         find.text(
-          'Running · 17.6 tok/s · 42 requests / ${seconds == 60 ? '1m' : '65s'}',
+          '16.2 GB · 17.6 tok/s · 42 requests / ${seconds == 60 ? '1m' : '65s'}',
         ),
         findsOneWidget,
       );
@@ -244,7 +268,7 @@ void main() {
     (app.localInventory['models'] as List).first['requests'] = 1;
     await controller.refresh();
     await tester.pump();
-    expect(find.text('Running · 17.6 tok/s · 1 request / 65s'), findsOneWidget);
+    expect(find.text('16.2 GB · 17.6 tok/s · 1 request / 65s'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -310,7 +334,7 @@ void main() {
         tester.view.devicePixelRatio = 1;
         tester.view.physicalSize = narrow
             ? const Size(360, 500)
-            : const Size(620, 780);
+            : const Size(700, 780);
         addTearDown(tester.view.reset);
         final previous = grid.AppTheme.brightness.value;
         grid.AppTheme.brightness.value = brightness;
@@ -349,7 +373,7 @@ void main() {
                   child: Padding(
                     padding: const EdgeInsets.all(14),
                     child: SizedBox(
-                      width: 560,
+                      width: 640,
                       child: ModelsPanel(
                         controller: controller,
                         subscriptions: subscriptions,
@@ -363,18 +387,28 @@ void main() {
             ),
           ),
         );
-        await tester.runAsync(
-          () => precacheImage(
-            const AssetImage('assets/engine-icons/codex.png'),
-            tester.element(find.byType(ModelsPanel)),
-          ),
-        );
+        await tester.runAsync(() async {
+          for (final asset in [
+            'assets/model-icons/qwen.png',
+            'assets/model-icons/gemma.png',
+            'assets/model-icons/openai.png',
+          ]) {
+            await precacheImage(
+              AssetImage(asset),
+              tester.element(find.byType(ModelsPanel)),
+            );
+          }
+        });
         await tester.pump(const Duration(milliseconds: 300));
         expect(tester.takeException(), isNull);
         expect(find.text('Models'), findsOneWidget);
         expect(find.text('Chat'), findsNothing);
         expect(find.text('Use'), findsNothing);
+        expect(find.widgetWithText(TextButton, 'Start'), findsNothing);
+        expect(find.widgetWithText(TextButton, 'Stop'), findsNothing);
         expect(find.text('Set up local model'), findsNothing);
+        expect(find.textContaining('Downloaded'), findsNothing);
+        expect(find.textContaining('Running ·'), findsNothing);
         if (scenario == 'downloading') {
           expect(find.text('Downloading · 42%'), findsOneWidget);
           expect(
@@ -387,9 +421,9 @@ void main() {
           );
         }
         if (scenario == 'ready') {
-          expect(find.widgetWithText(TextButton, 'Stop'), findsOneWidget);
+          expect(find.byIcon(LucideIcons.pause), findsOneWidget);
           expect(
-            find.text('Running · 17.6 tok/s · 42 requests / 24h'),
+            find.text('16.2 GB · 17.6 tok/s · 42 requests / 24h'),
             findsOneWidget,
           );
         }
@@ -506,6 +540,10 @@ void main() {
       for (final asset in [
         'assets/engine-icons/codex.png',
         'assets/harnesses.png',
+        'assets/models.png',
+        'assets/model-icons/qwen.png',
+        'assets/model-icons/gemma.png',
+        'assets/model-icons/openai.png',
         'assets/store/polymath.png',
       ]) {
         await precacheImage(
@@ -518,7 +556,7 @@ void main() {
     final panel = tester.getRect(find.byType(ModelsPanel));
     expect(panel.right, 1190);
     expect(panel.top, greaterThan(tester.getRect(button).bottom));
-    expect(panel.width, 560);
+    expect(panel.width, 640);
     expect(
       tester.getRect(find.byTooltip('Harness Monitor')).right,
       lessThan(tester.getRect(button).left),

@@ -1,19 +1,21 @@
 # Models: discover, start, select
 
-The Models popover opens beside Harness Monitor. It silently checks this computer and lists all
+A single violet brain opens the Models popover beside Harness Monitor. It silently checks this computer and lists all
 compatible chat models from Grid's paginated hardware-fit catalog, including supported multimodal
 chat models. One fitted version per model keeps the list simple. A completed fitting download is
-preferred to another download; an existing locally managed deployment remains restartable after Stop.
+preferred to another download; an existing locally managed deployment remains restartable after Pause.
 
-The interface follows Harness Monitor: search, All / Running / Downloaded filters, plain rows,
-and a second line for state and relevant facts. Running models come first, then downloaded models,
+The interface follows Harness Monitor: search, All / Running filters, plain rows,
+and a second line for size and live metrics. Each model uses its own logo, with the brain as a
+fallback. Typography, search, filter chips, and icon controls use the same scale as Harness Monitor.
+Play/pause tooltips explain the memory and download behavior. Running models come first, then downloaded models,
 then compatible choices. A useful smaller download leads the available choices. There is no hidden
 model list, setup card, Chat button, or Use action.
 
-- **Start** checks the machine again, downloads if necessary, installs the existing Grid engine,
+- **Play** checks the machine again, downloads if necessary, installs the existing Grid engine,
   loads the model, and tests a real reply. Progress stays on its row. Repeated clicks join the
   same operation; the panel and conversation do not own its lifetime.
-- **Stop** targets the exact Grid-managed local engine and keeps the download. External endpoints
+- **Pause** unloads the exact Grid-managed local engine and keeps the download. External endpoints
   and other computers are not stopped by these controls.
 - **Select** a running model in an existing session's visible model picker. Starting a model never
   creates a session, sends a conversation message, or changes the current session's model.
@@ -21,8 +23,8 @@ model list, setup card, Chat button, or Use action.
   package is bundled and a local manager is prepared without moving the workspace. Setup no
   longer depends on a seeded chat task or an LLM account.
 
-Before starting, rows show download size; downloaded models show disk size. Running models show
-observed decode throughput and completed requests over Grid's actual reporting window where those
+Rows show size in GB without download or state labels. Running models also show observed decode
+throughput and completed requests over Grid's actual reporting window where those
 metrics can be attributed to the model. Machine memory is labelled at the machine level. No engine
 or system memory figure is presented as a model's RAM footprint, and absent telemetry stays absent.
 

@@ -2,6 +2,26 @@
 
 Tested on macOS with Flutter 3.47.2 and Node 22.23.1. Base: `b5edd10a`.
 
+## Monitor styling follow-up
+
+Models now uses Harness Monitor's panel width, type scale, search and filter styling,
+unboxed 22 px row marks, and 40 px play/pause controls. A single brain identifies Models in
+both toolbars and the introduction. Model rows and the session picker use provider artwork,
+with the brain as the fallback. Idle rows show only size in GB; running rows add available
+throughput and request counts. All / Running filters remain. Play retains the existing
+download/start operation; pause unloads the model and keeps its download.
+Accessible action names and tooltips describe those effects; active operations replace
+the control with a spinner and keep their progress in the row.
+
+The focused panel/controller/picker suite passed 97 tests (one existing skip).
+Model modules retain 100% executable line coverage: panel 335/335, mark 17/17,
+controller 254/254, and lifecycle values 43/43. Changed Dart files analyze cleanly,
+and the macOS review build passes. Updated captures cover first run, downloading,
+running, errors, both themes, and a 360 px window at 1.7× text. Native computer-use
+retesting verified the brain entry, branded rows, size-only idle copy, running telemetry,
+play/pause, All / Running, and search/clear. The broader journeys below were also exercised
+on the original implementation.
+
 ## Automated checks
 
 | Check | Result |
@@ -9,8 +29,8 @@ Tested on macOS with Flutter 3.47.2 and Node 22.23.1. Base: `b5edd10a`.
 | Full CLI suite | 4,218 passed, 63 skipped |
 | Local-model lifecycle, bundled installer, Grid subprocess gate | 100 passed |
 | New CLI lifecycle + installer coverage | 277/277 lines; 393/393 statements; 344/344 branches; 75/75 functions |
-| Focused Flutter controller, popover, picker, native menu, terminal presentation | 94 passed, 1 existing skip |
-| New Flutter model modules | 605/605 executable lines |
+| Focused Flutter marks, controller, popover, picker, native menu, terminal presentation | 97 passed, 1 existing skip |
+| New Flutter model modules | 649/649 executable lines |
 | Full desktop suite | 2,981 passed, 12 skipped, 17 baseline failures |
 | Model Manager operation/viewer tests | 43 passed |
 | CLI typecheck and release bundle | Passed |
@@ -20,7 +40,7 @@ Tested on macOS with Flutter 3.47.2 and Node 22.23.1. Base: `b5edd10a`.
 
 The CLI coverage gate covers `cli/src/lib/localModels.ts` and `cli/src/dsh/builtins.ts`.
 Flutter coverage covers `local_model.dart` (43/43), `model_manager_controller.dart` (254/254),
-and `models_panel.dart` (308/308). These are scope-specific measurements, not 100% repository
+`models_panel.dart` (335/335), and `model_mark.dart` (17/17). These are scope-specific measurements, not 100% repository
 coverage or a claim that every hardware/model combination has been exercised.
 
 The subprocess integration test uses the real process runner, a temporary Grid executable,
@@ -40,13 +60,13 @@ responses in `desktop/tool/models_review.dart`; this did not download or stop re
 | --- | --- |
 | Toolbar Models icon and native Models → Open Models | Anchored popover; workspace stays in place |
 | First-run Explore models | Opens the same list; invitation dismissed after discovery |
-| All / Running / Downloaded | Correct counts, rows, and empty states |
+| All / Running | Correct counts, rows, and empty states |
 | Search, no results, clear search | Filters immediately; one click restores the list |
 | Start a missing model | Checking/download/start/test progress followed by Running |
 | Start a downloaded model | Reaches Running without another download |
 | Close and reopen during setup | Operation finishes; completed state survives panel closure |
 | Start while another model runs | Clear instruction to stop the existing model |
-| Stop | Stopping, then Downloaded; file remains available |
+| Pause | Progress, then size-only idle row; file remains available |
 | Interrupted download and Start again | Recoverable row error; successful retry clears it |
 | Unavailable inventory and Try again | Actions disabled; reconnection restores them |
 | Session OpenAI → local model → OpenAI | Header and selected row follow the explicit choice |
@@ -101,7 +121,7 @@ npm run bundle
 From `desktop/`:
 
 ```sh
-flutter test --coverage test/model_manager_controller_test.dart test/models_panel_test.dart test/grid_model_picker_test.dart test/models_menu_test.dart test/terminal_panel_presentation_test.dart
+flutter test --coverage test/model_mark_test.dart test/model_manager_controller_test.dart test/models_panel_test.dart test/grid_model_picker_test.dart test/models_menu_test.dart test/terminal_panel_presentation_test.dart
 flutter test --concurrency=4
 flutter analyze
 flutter build macos --debug
