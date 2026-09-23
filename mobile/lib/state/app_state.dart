@@ -4705,6 +4705,38 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// The Git choices [path] offers, read ON the machine that owns it.
+  ///
+  /// ⚠️ **The phone never looks at a repository itself, and could not.** The
+  /// folder is on somebody's laptop; `git` runs there. The desktop has a local
+  /// branch of this same call for its own machine — see `readGitProject` there
+  /// — and this is the half that is always remote.
+  ///
+  /// Answers `{isGit, branch, branches: [...], defaultRef, root, ...}`, parsed
+  /// by [GitProjectInfo.fromJson], or `{error}` — which the form draws as "no
+  /// Git choices here" rather than as a failure, because a folder that is not a
+  /// repository answers the same way.
+  ///
+  /// A short timeout on purpose: this runs while somebody is looking at a form
+  /// they have already half filled in, and a machine that cannot answer in six
+  /// seconds should leave the rest of the form working.
+  Future<Map<String, dynamic>> readGitProject(
+    String machineId,
+    String path,
+  ) async {
+    final machine = machineStates[machineId];
+    if (machine == null) return {'error': 'UNAVAILABLE'};
+    try {
+      return await _conn(machineId).request(
+        'git_project_info',
+        payload: {'path': path},
+        timeout: const Duration(seconds: 6),
+      );
+    } catch (_) {
+      return {'error': 'UNAVAILABLE'};
+    }
+  }
+
   /// Every Codex profile folder the CLI on [machineId] can offer, merged with [observedPaths]
   /// (Codex homes already known from this same machine's other Codex agents). Runs entirely on that
   /// machine — this app never touches a filesystem itself, which is what makes it work for a remote

@@ -11,17 +11,89 @@
 /// screen it was typed on rather than after a round trip.
 class ProjectFolderRequest {
   /// Let the machine make a fresh project folder of its own.
-  const ProjectFolderRequest.newProject() : repository = null;
+  const ProjectFolderRequest.newProject()
+    : repository = null,
+      gitSource = null,
+      branchRef = null,
+      branchName = null,
+      existingBranch = false,
+      placeholder = false,
+      createsWorktree = false;
 
   /// Let the machine clone [value] and work in the checkout.
-  const ProjectFolderRequest.remote(GitHubRepository value) : repository = value;
+  const ProjectFolderRequest.remote(GitHubRepository value)
+    : repository = value,
+      gitSource = null,
+      branchRef = null,
+      branchName = null,
+      existingBranch = false,
+      placeholder = false,
+      createsWorktree = false;
+
+  /// A new worktree of the repository at [source], on [branchName]: created
+  /// from [branchRef], or with [existingBranch] that local branch checked out
+  /// as it is. Without a name the machine makes one up.
+  ///
+  /// ⚠️ [placeholder] says the name was MADE UP here rather than typed, so the
+  /// machine may replace it with the session's own name once the engine reports
+  /// one. A name a person typed is theirs and is never replaced.
+  const ProjectFolderRequest.worktree(
+    String source, {
+    this.branchRef,
+    this.branchName,
+    this.existingBranch = false,
+    this.placeholder = false,
+  }) : gitSource = source,
+       createsWorktree = true,
+       repository = null;
+
+  /// The folder at [source] itself on [ref], or with [newBranch] on that new
+  /// branch, made where the folder is now.
+  ///
+  /// ⚠️ [ref] then names the NEW branch, so a daemon too old to make one
+  /// refuses the request rather than quietly starting the harness on the old
+  /// branch — which is the one outcome nobody could see had happened.
+  const ProjectFolderRequest.branch(
+    String source,
+    String ref, {
+    String? newBranch,
+  }) : gitSource = source,
+       branchRef = ref,
+       branchName = newBranch,
+       existingBranch = false,
+       placeholder = false,
+       createsWorktree = false,
+       repository = null;
 
   final GitHubRepository? repository;
 
+  /// The existing checkout a branch or worktree is taken from. Null for the two
+  /// sources that have no repository yet.
+  final String? gitSource;
+
+  /// What to start from, and what to call the branch that starts there.
+  final String? branchRef, branchName;
+
+  final bool createsWorktree, existingBranch, placeholder;
+
   /// ⚠️ Sent INSTEAD of `cwd`, never beside it — see `AppNotifier.createAgent`. The two answer the
   /// same question, and a machine given both would have to guess which one was meant.
+  ///
+  /// The keys are the desktop's, byte for byte (`core/project_folder.dart`
+  /// there): the same CLI parses both, and a phone inventing its own spelling
+  /// would be a second dialect to keep in step.
   Map<String, String> get payload => {
-    'projectSource': repository == null ? 'new' : 'remote',
+    'projectSource': gitSource != null
+        ? (createsWorktree ? 'worktree' : 'branch')
+        : repository == null
+        ? 'new'
+        : 'remote',
+    'gitSource': ?gitSource,
+    'branchRef': ?branchRef,
+    // A daemon that predates these names the worktree's branch itself.
+    'branchName': ?branchName,
+    if (existingBranch) 'branchMode': 'existing',
+    if (placeholder) 'branchMode': 'placeholder',
     if (repository != null) 'repositoryUrl': repository!.url,
   };
 }

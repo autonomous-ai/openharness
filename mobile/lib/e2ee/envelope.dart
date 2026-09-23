@@ -35,6 +35,15 @@ const Set<String> encryptedDownTypes = {
   'agent_read_file',
   'fs_list_dir',
   'project_preview',
+  // The branches of a folder on that machine, for the New Harness form
+  // (`AppNotifier.readGitProject`).
+  //
+  // ⚠️ **Not in the CLI's `ENCRYPTED_DOWN_TYPES`, and still required.** The
+  // machine's real rule is `encryptDownFrame` in `cli/src/lib/e2ee/
+  // applicationFrames.ts`, which is that set OR a handful of types named
+  // outright beside it — this one among them. Sent in the clear it came back
+  // `E2EE_REQUIRED`, which on this screen read as a folder with no branches.
+  'git_project_info',
   'codex_profiles_list',
   'codex_profile_link',
   // Asks the machine to read its OWN agent accounts' usage (cli/src/lib/accountUsage.ts). Missing
