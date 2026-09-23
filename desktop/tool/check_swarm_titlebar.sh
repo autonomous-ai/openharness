@@ -17,13 +17,17 @@ fi
 check_dir="$(mktemp -d "${TMPDIR:-/tmp}/harness-v2-titlebar.XXXXXX")"
 trap 'rm -rf "$check_dir"' EXIT
 check_source="$desktop_dir/tool/swarm_titlebar_checks.swift"
+optimization=(-Onone)
+if [[ "${2:-}" == "--history-performance" ]]; then
+  optimization=(-O)
+fi
 if [[ "${2:-}" == "--window-zoom" ]]; then
   check_source="$desktop_dir/tool/window_zoom_checks.swift"
 fi
 cat "$desktop_dir/macos/Runner/HarnessKeymap.swift" \
   "$desktop_dir/macos/Runner/SwarmTitlebar.swift" \
   "$check_source" > "$check_dir/main.swift"
-xcrun swiftc -swift-version 5 -module-cache-path "$check_dir/module-cache" \
+xcrun swiftc -swift-version 5 "${optimization[@]}" -module-cache-path "$check_dir/module-cache" \
   -F "$framework_dir" -framework FlutterMacOS \
   -Xlinker -rpath -Xlinker "$framework_dir" \
   "$check_dir/main.swift" -o "$check_dir/check-titlebar"

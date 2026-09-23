@@ -440,7 +440,11 @@ Future<void> runCoreBenchmark(
         'metadata': metadata,
         'terminals': fixtureCount,
         'visible': fixtureCount < 4 ? fixtureCount : 4,
-        'initialScrollbackRows': 1000,
+        'seedLinesPerTerminal': metadata['seedLinesPerTerminal'],
+        'retainedBufferLines': [
+          for (final pane in app.allPanes)
+            pane.session!.terminal.buffer.lines.length,
+        ],
         'samplesPerOperationPerLoad': samples,
         'warmups': 5,
         'inputCommitsVerified': inputs.length,

@@ -17,7 +17,9 @@ printed temporary root selects `terminals`, `samples`, `hold`, and a fresh JSON
 bundle to repeat without changing its compiled production code. Existing results
 are never overwritten. `active-run.json` identifies the latest invocation. The core mode
 supports 1, 16, or 48 retained terminals, with up to four visible and 1,000
-initial scrollback rows each. It visits every retained tab before measuring,
+seeded lines each. Set `seedLines: 10000` to exercise full scrollback buffers;
+wrapping and the production buffer limit affect retained physical rows, whose
+counts are recorded in the result. It visits every retained tab before measuring,
 then repeats at idle and while every terminal receives an eight-row ANSI redraw
 at 20 Hz. Actual bytes, duration, and skipped output bursts are retained.
 
@@ -60,9 +62,34 @@ its background cost cannot establish that the connected product has zero timers
 or zero wakeups. Record other app activity and host contention; these are real
 workstation measurements, not results from an otherwise isolated machine.
 
+To sample sustained redraw cost separately, set `holdOutput: true` with `hold`
+in `run-config.json`. After the timing sweep the same 20 Hz workload continues;
+`.resource-load` records achieved bytes and skipped bursts every ten seconds.
+That diagnostic timer exists only for this active-output resource mode. Use a
+fresh process with `holdOutput: false` for idle measurements.
+
 For actual loopback/direct/TURN/relay terminal round trips, use the separate
 [real terminal probe](../../../cli/scripts/benchmark-terminal-latency.md). Never
 add independently measured p95 values and label the sum end-to-end latency.
+
+Pool a published data directory with `python3 tool/native_benchmark/summarize_results.py
+/path/to/data`. It computes nearest-rank percentiles from individual measured
+observations and lists contributing files, excluding warmups. Failed runs must
+be reviewed separately; it does not silently discard them.
+
+The native History-menu component has a separate optimized Swift probe:
+
+```sh
+HARNESS_TITLEBAR_PERF_OUTPUT=/private/tmp/history-before.json \
+HARNESS_PERF_REVISION=YOUR_REVISION \
+bash tool/check_swarm_titlebar.sh /path/to/flutter --history-performance
+```
+
+This measures changing 64 recent and 24 closed entries, both while the menu is
+closed and immediately before opening it. It records all 20 warmups and 200
+measured updates per operation, including autorelease cleanup. The application
+is prohibited from displaying windows. This is native component CPU time, not
+an end-to-end shortcut latency or display-presentation measurement.
 
 ## Framework-dispatch comparison and manual feature checks
 

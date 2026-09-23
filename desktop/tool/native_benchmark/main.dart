@@ -103,7 +103,11 @@ Future<void> _output(TerminalSession session, List<int> bytes) =>
       ),
     );
 
-Future<AppNotifier> _fixture(int count, Directory stateDirectory) async {
+Future<AppNotifier> _fixture(
+  int count,
+  Directory stateDirectory, {
+  int seedLines = 1000,
+}) async {
   final app = AppNotifier(
     config: const AppConfig(
       apiBaseUrl: 'http://127.0.0.1:1',
@@ -190,7 +194,7 @@ Future<AppNotifier> _fixture(int count, Directory stateDirectory) async {
         seq: 0,
         bytes: utf8.encode(
           List.generate(
-            1000,
+            seedLines,
             (row) =>
                 '\x1b[32m$row\x1b[0m  retained terminal output with project context\r\n',
           ).join(),
@@ -293,6 +297,8 @@ Future<void> _run() async {
   var count = int.parse(env['HARNESS_BENCH_TERMINALS'] ?? '16');
   var observations = int.parse(env['HARNESS_BENCH_SAMPLES'] ?? '120');
   var hold = env['HARNESS_BENCH_HOLD'] == '1';
+  var holdOutput = false;
+  var seedLines = 1000;
   if (_coreDriven) {
     final root = File(output).parent;
     final config = File('${root.path}/run-config.json');
@@ -302,6 +308,8 @@ Future<void> _run() async {
       count = values['terminals'] as int;
       observations = values['samples'] as int;
       hold = values['hold'] as bool;
+      holdOutput = values['holdOutput'] == true;
+      seedLines = values['seedLines'] as int? ?? 1000;
       final name = values['output'] as String;
       if (!RegExp(r'^[a-zA-Z0-9_-]+\.json$').hasMatch(name)) {
         throw StateError('Core output must be a simple JSON filename');
@@ -324,6 +332,12 @@ Future<void> _run() async {
   if (![1, 16, 48].contains(count) || observations < 1 || observations > 500) {
     throw StateError('Invalid fixture size');
   }
+  if (holdOutput && !hold) {
+    throw StateError('Continuous resource workload requires hold');
+  }
+  if (![1000, 10000].contains(seedLines)) {
+    throw StateError('Seed lines must be 1000 or 10000');
+  }
   final binding = WidgetsFlutterBinding.ensureInitialized();
   binding.addTimingsCallback((values) {
     for (final value in values) {
@@ -338,11 +352,13 @@ Future<void> _run() async {
   }
   metadata!['pid'] = pid;
   metadata['sourceRevision'] = env['HARNESS_BENCH_REVISION'] ?? 'unspecified';
+  metadata['seedLinesPerTerminal'] = seedLines;
   final app = await _fixture(
     count,
     Directory(
       '${File(output).parent.path}/state-$count-${DateTime.now().microsecondsSinceEpoch}',
     ),
+    seedLines: seedLines,
   );
   final projects = SwarmProjectStore();
   // Production defaults to this path; FLUTTER_TEST otherwise selects a legacy
@@ -398,6 +414,7 @@ Future<void> _run() async {
       });
     }
 
+    var coreSucceeded = false;
     try {
       await runCoreBenchmark(
         app,
@@ -412,6 +429,7 @@ Future<void> _run() async {
           'skippedBursts': _skippedBursts,
         },
       );
+      coreSucceeded = true;
     } catch (error) {
       stderr.writeln('Core benchmark failed: $error');
       await File('$output.failure').writeAsString(
@@ -423,7 +441,23 @@ Future<void> _run() async {
         }),
       );
     } finally {
-      await setOutput(false);
+      await setOutput(coreSucceeded && hold && holdOutput);
+      if (coreSucceeded && holdOutput) {
+        final began = DateTime.now().microsecondsSinceEpoch;
+        final bytesBefore = _outputBytes;
+        final skippedBefore = _skippedBursts;
+        Timer.periodic(const Duration(seconds: 10), (_) {
+          File('$output.resource-load').writeAsStringSync(
+            jsonEncode({
+              'elapsedMicros': DateTime.now().microsecondsSinceEpoch - began,
+              'outputBytes': _outputBytes - bytesBefore,
+              'skippedBursts': _skippedBursts - skippedBefore,
+              'packetBytesPerTerminal': packet.length,
+              'terminals': count,
+            }),
+          );
+        });
+      }
       if (!hold) {
         await _host.invokeMethod<void>('finish');
       }
