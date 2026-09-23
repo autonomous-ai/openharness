@@ -48,22 +48,27 @@ Code, keys and keystrokes are sealed on your machine. The relay forwards bytes i
 A native app, not Electron. Close it and your agents keep working.
 
 We measure the workflows developers repeat, including their slow tails. Release
-build on an M2 Max; 120 observations per action, with one retained terminal:
+build on an M2 Max; 120 observations per action, with 16 retained terminals and
+four visible:
 
 | Developer action | Idle median | Idle p95 | p95 during output |
 |---|---:|---:|---:|
-| Type → terminal echo | 11.6 ms | 17.5 ms | 50.9 ms |
-| ⌘N input-ready new harness | 11.0 ms | 18.8 ms | 14.2 ms |
-| ⌘O open anything | 10.9 ms | 16.0 ms | 14.3 ms |
-| Filter the session picker | 7.6 ms | 11.5 ms | 13.2 ms |
-| Select a session → first input echo | 16.3 ms | 19.7 ms | 20.7 ms |
-| ⌘T new tab | 9.9 ms | 14.6 ms | 15.4 ms |
-| Find → completed search results | 8.8 ms | 12.2 ms | 13.5 ms |
-| Scroll one viewport | 23.6 ms | 38.4 ms | 62.2 ms |
+| Type → terminal echo | 11.2 ms | 18.5 ms | 74.2 ms |
+| ⌘N input-ready new harness | 10.6 ms | 15.0 ms | 14.4 ms |
+| ⌘O open anything | 12.3 ms | 16.1 ms | 16.9 ms |
+| Filter the session picker | 10.0 ms | 13.6 ms | 14.9 ms |
+| Select a session → first input echo | 26.1 ms | 31.1 ms | 35.9 ms |
+| ⌘T new tab | 13.2 ms | 18.1 ms | 18.0 ms |
+| Next tab → first input echo | 27.2 ms | 34.2 ms | 42.6 ms |
+| Focus pane → first input echo | 23.9 ms | 30.6 ms | 37.3 ms |
+| Zoom a pane | 55.3 ms | 100.9 ms | 326.0 ms |
+| Type Find query → results | 10.1 ms | 13.1 ms | 14.0 ms |
+| Scroll one viewport | 40.9 ms | 83.2 ms | 139.6 ms |
 
 Framework input to completed Flutter raster, with verified focus and results.
 Output is an eight-row ANSI redraw at 20 Hz. These use synthetic sessions;
 physical keyboard, network and display-presentation time are excluded.
+Output-heavy typing, zoom and scrolling remain the main latency targets.
 
 Real terminal round trips are measured separately, through disposable PTYs on
 actual machines. Each row includes 600 echoes per workload across three runs:
@@ -77,11 +82,21 @@ actual machines. Each row includes 600 echoes per workload across three runs:
 The route matters. These round trips exclude UI rendering; adding independent
 p95 values would not produce an end-to-end p95.
 
-The one-terminal desktop fixture used **213 MiB** median physical memory and
-**0.08% of one CPU core** while foreground-idle. Hidden, it used **217 MiB** and
-**0.08%**, with about **12 interrupt wakeups/s**. These are 30-second process
-samples, excluding daemons and agents; they do not establish zero background
+Idle resource use with 1,000 seeded lines per retained terminal:
+
+| Retained terminals | Foreground / hidden CPU | Foreground / hidden footprint |
+|---|---:|---:|
+| 1 | 0.08% / 0.08% | 213 / 217 MiB |
+| 16 | 0.09% / 0.10% | 304 / 306 MiB |
+| 48 | 0.10% / 0.08% | 559 / 559 MiB |
+
+Thirty-second process snapshots; 100% CPU means one core. Memory is median
+physical footprint, excluding daemons and agents. Hidden fixtures still recorded
+12–14 interrupt wakeups/s; these measurements do not establish zero background
 work in a connected app.
+
+With 16 full 10,000-line buffers and ongoing output, the fixture used about
+957 / 960 MiB and 1.28% / 1.79% of one core in foreground / hidden samples.
 
 [Full results, workload definitions, limits and raw observations](docs/performance/2026-09-23-core-experiences.md).
 

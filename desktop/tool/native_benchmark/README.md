@@ -155,9 +155,8 @@ bundle location: only the release identity in `/Applications` or the current
 user's `Applications` folder is exempt. Development copies, legacy previews
 and other benchmark processes still stop preflight. Initial native focus uses
 the same Flutter controller as the production titlebar. Nine Python isolation
-checks include the actual production config and this renamed-build regression. See the
-[handoff](../../../docs/harness-v2-handoff.md) and
-[failed calibration notes](../../../docs/harness-v2-performance.md#native-calibration-remains-unmeasured-2026-09-13).
+checks include the actual production config and this renamed-build regression. The [current accepted measurements](../../../docs/performance/2026-09-23-core-experiences.md)
+use a separate framework-dispatch boundary.
 Foreground/key-window guards remain intact; no p50/p95/p99 result has been accepted.
 
 This macOS fixture measures AppKit-queued input through the production Swarm
