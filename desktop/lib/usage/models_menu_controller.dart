@@ -95,11 +95,16 @@ class ModelsMenuController extends ChangeNotifier {
         windows.every((w) => w.usedPercent.isFinite);
     final String status;
     final details = <String>[];
+    // The figure behind the sentence, for a meter the words alone cannot draw. Null whenever the
+    // sentence is not a figure ("Usage unavailable", "Checking usage…"), so a caller cannot mistake
+    // "we could not read it" for "nothing left".
+    double? remainingPercent;
     if (valid) {
       // Show the limit that will stop work first. Weekly-only summaries can
       // look healthy while a shorter window is already exhausted.
       final limiting = reading.tightest!;
       status = '${_remaining(limiting)} remaining';
+      remainingPercent = (100 - limiting.usedPercent).clamp(0, 100).toDouble();
       details.add('Limiting window: ${limiting.label}');
       for (final window in windows) {
         final reset = window.resetsInLabel(now: now);
@@ -126,6 +131,7 @@ class ModelsMenuController extends ChangeNotifier {
       'title': provider,
       'account': _accountLabel(reading),
       'status': status,
+      'remainingPercent': remainingPercent,
       'details': details,
       'engine': reading.provider.engineId,
       'iconAsset': engineIdentity(reading.provider.engineId).asset,

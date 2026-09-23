@@ -9,7 +9,10 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/theme/app_theme.dart';
 import 'package:harness/widgets/grid_model_picker.dart';
+import 'package:harness/widgets/model_picker_chrome.dart';
+import 'package:harness/widgets/pane_menu.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 /// A connection that answers the picker's one RPC immediately. Without it the menu waits out the
@@ -567,11 +570,12 @@ void main() {
   });
 
   testWidgets(
-    'the current row is marked by a highlight, not by a tick column',
+    'the current row is marked by a highlight, and nothing else is',
     (tester) async {
-      // The tick reserved a fixed column at the start of EVERY row to keep labels aligned, which cost
-      // every row that indent for one row's sake. Filling the current row instead says the same thing
-      // and gives the space back.
+      // A tick was tried twice and dropped twice: it costs a column on every row to say what the
+      // fill already says. What actually lit two rows at once was FOCUS — the menu focuses its
+      // first row as it opens so Enter has a target, and an InkWell paints focus with a fill.
+      // Focus paints nothing now, so the fill means exactly one thing.
       build(
         models: [
           {'id': 'Qwen3.6-35B-A3B-UD-Q5_K_XL', 'node': 'macbook-m1max'},
@@ -954,5 +958,266 @@ void main() {
         expect(find.text('qwen/qwen3.6-35b-a3b'), findsOneWidget);
       },
     );
+  });
+
+  // ── two rows highlighted at once ──────────────────────────────────────────────────────────────
+  //
+  // The subscription row and a model row appeared equally chosen. Neither was wrong about itself:
+  // one was SELECTED and the other was merely under the pointer, and both were painted the same
+  // fill, so the menu said "you are here" twice.
+
+  testWidgets('hover is its own colour, weaker than the selected fill', (tester) async {
+    build(models: [{'id': 'Qwen-Test', 'node': 'macbook'}]);
+    await open(tester, currentModel: 'Qwen-Test');
+
+    // The ROW items specifically — the menu also holds a button, which is its own shape and has no
+    // business wearing a row's hover.
+    final wells = tester
+        .widgetList<InkWell>(
+          find.ancestor(of: find.byType(PaneMenuRow), matching: find.byType(InkWell)),
+        )
+        .toList();
+    expect(wells, isNotEmpty);
+    for (final well in wells) {
+      // Stated, not inherited: the Material default sat close enough to the selected fill to be
+      // indistinguishable, which is the whole of the reported bug.
+      expect(well.hoverColor, AppColors.rowHover);
+      // An ink ripple is a THIRD fill on the same rectangle and it lingers past the tap.
+      expect(well.splashColor, Colors.transparent);
+      expect(well.highlightColor, Colors.transparent);
+      // The one that lit the top row before the pointer had moved: the menu focuses its first row
+      // on open, and an InkWell paints focus with a fill unless told otherwise.
+      expect(well.focusColor, Colors.transparent);
+    }
+    expect(AppColors.rowHover, isNot(AppColors.selected));
+    expect(AppColors.rowHover.a, lessThan(AppColors.selected.a));
+  });
+
+  testWidgets('exactly one row wears the selected fill', (tester) async {
+    build(models: [
+      {'id': 'Qwen-Test', 'node': 'macbook'},
+      {'id': 'DeepSeek-Test', 'node': 'zeus'},
+    ]);
+    await open(tester, currentModel: 'Qwen-Test');
+
+    BoxDecoration? fillOf(String text) => tester
+        .widget<Container>(find.ancestor(of: find.text(text), matching: find.byType(Container)).first)
+        .decoration as BoxDecoration?;
+    expect(fillOf('Qwen-Test')?.color, AppColors.selected);
+    expect(fillOf('DeepSeek-Test')?.color, isNull);
+    expect(fillOf('Anthropic')?.color, isNull);
+    expect(find.byIcon(Icons.check), findsNothing);
+  });
+
+  testWidgets('the subscription row is the selected one when no model is set', (tester) async {
+    build(models: [{'id': 'Qwen-Test', 'node': 'macbook'}]);
+    await open(tester);
+
+    BoxDecoration? fillOf(String text) => tester
+        .widget<Container>(find.ancestor(of: find.text(text), matching: find.byType(Container)).first)
+        .decoration as BoxDecoration?;
+    expect(fillOf('Anthropic')?.color, AppColors.selected);
+    expect(fillOf('Qwen-Test')?.color, isNull);
+    expect(find.byIcon(Icons.check), findsNothing);
+  });
+
+  // ── the metadata columns ──────────────────────────────────────────────────────────────────────
+  //
+  // Every trailing field was a `Flexible`, whose flex is ONE — so the row's spare width was split
+  // evenly between the title and each field beside it. A subscription row with two fields put them
+  // a third and two thirds across; a model row with one put it halfway. Three columns, three
+  // offsets, one menu.
+
+  testWidgets('trailing metadata shares one right edge, whatever the row', (tester) async {
+    build(models: [
+      {'id': 'Qwen-Test', 'node': 'a'},
+      {'id': 'DeepSeek-V4-Flash-0731-Vision', 'node': 'firmware-engineer-daniel'},
+    ]);
+    await open(tester, currentModel: 'Qwen-Test');
+
+    final short = tester.getRect(find.text('a')).right;
+    final long = tester.getRect(find.text('firmware-engineer-daniel')).right;
+    // Node names of wildly different lengths, one right edge.
+    expect((short - long).abs(), lessThan(0.5));
+
+    // And the subscription row's own trailing field lands on that same edge, though its row is
+    // built from different parts.
+    final subscription = tester.getRect(find.textContaining('usage')).right;
+    expect((subscription - short).abs(), lessThan(0.5));
+  });
+
+  testWidgets('a long machine name ellipsizes rather than crowding out the model id', (tester) async {
+    build(models: [
+      {'id': 'Qwen-Test', 'node': 'a-machine-name-far-longer-than-any-column-should-ever-be-allowed-to-grow'},
+    ]);
+    await open(tester, currentModel: 'Qwen-Test');
+
+    final node = tester.getRect(
+      find.text('a-machine-name-far-longer-than-any-column-should-ever-be-allowed-to-grow'),
+    );
+    expect(node.width, lessThanOrEqualTo(kPaneMenuMetaMaxWidth + 0.5));
+    // The row is named after its model, so that is the text that keeps its width.
+    expect(tester.getRect(find.text('Qwen-Test')).width, greaterThan(0));
+    expect(tester.takeException(), isNull);
+  });
+
+  // ── the selection has to land before the machine confirms it ──────────────────────────────────
+  //
+  // Picking a model RESPAWNS the pane, so `agent.gridModel` — what `currentModel` carries — only
+  // changes once the daemon has done the work. The menu reopened with the tick still on the row
+  // the person had just left, which reads as the click having done nothing.
+
+  testWidgets('a fresh currentModel while the menu is open does not crash the frame', (tester) async {
+    // The first attempt at this redrew the overlay from `didUpdateWidget`, which runs mid-build:
+    // "setState() or markNeedsBuild() called during build" across the whole window.
+    build(models: [
+      {'id': 'Qwen-Test', 'node': 'macbook'},
+      {'id': 'DeepSeek-Test', 'node': 'zeus'},
+    ]);
+
+    Widget app(String? current) => MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: GridModelPicker(
+            notifier: notifier,
+            machineId: 'local',
+            engineLabel: 'claude',
+            currentModel: current,
+          ),
+        ),
+      ),
+    );
+
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(app(null));
+    await tester.tap(find.text('Model'));
+    await tester.pumpAndSettle();
+    expect(find.text('Qwen-Test'), findsOneWidget);
+
+    // The daemon's frame lands while the menu is still open.
+    await tester.pumpWidget(app('Qwen-Test'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
+  /// Open the picker as a rebuildable host, so a test can change `currentModel` under it the way
+  /// the daemon's frames do.
+  Future<void Function(String?)> openLive(
+    WidgetTester tester, {
+    String? currentModel,
+    ValueChanged<GridModel>? onSelected,
+    VoidCallback? onOwnLogin,
+  }) async {
+    var current = currentModel;
+    late StateSetter setHost;
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: StatefulBuilder(
+              builder: (context, setState) {
+                setHost = setState;
+                return GridModelPicker(
+                  notifier: notifier,
+                  machineId: 'local',
+                  engineLabel: 'claude',
+                  currentModel: current,
+                  onSelected: onSelected,
+                  onUseOwnLogin: onOwnLogin,
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Model'));
+    await tester.pumpAndSettle();
+    return (String? next) => setHost(() => current = next);
+  }
+
+  bool ticked(WidgetTester tester, String title) => tester
+      .widgetList<ModelPickerRow>(find.byType(ModelPickerRow))
+      .any((r) => r.title == title && r.selected);
+
+  testWidgets('the tick stays on the picked model through the respawn', (tester) async {
+    // A retarget restarts the pane, and a restarting pane reports NO model for a moment. Taking
+    // that null as the answer put the tick back on Subscription mid-move, and the row the person
+    // clicked only claimed it once the respawn finished — the flicker between two answers.
+    build(models: [
+      {'id': 'gemma-4-31B-it', 'node': '3d-artist-diego'},
+    ]);
+    final report = await openLive(tester, currentModel: 'Qwen-Old');
+
+    await tester.tap(find.text('gemma-4-31B-it'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Model'));
+    await tester.pumpAndSettle();
+    expect(ticked(tester, 'gemma-4-31B-it'), isTrue);
+
+    // The pane goes down: no model at all.
+    report(null);
+    await tester.pumpAndSettle();
+    expect(ticked(tester, 'gemma-4-31B-it'), isTrue, reason: 'a restarting pane is not an answer');
+    expect(ticked(tester, 'Anthropic'), isFalse);
+
+    // And comes back up on what was asked for.
+    report('gemma-4-31B-it');
+    await tester.pumpAndSettle();
+    expect(ticked(tester, 'gemma-4-31B-it'), isTrue);
+  });
+
+  testWidgets('a model the menu did not ask for wins over the guess', (tester) async {
+    build(models: [
+      {'id': 'gemma-4-31B-it', 'node': '3d-artist-diego'},
+      {'id': 'Qwen-Test', 'node': 'macbook'},
+    ]);
+    // Starts on the engine's own login, so the report below is a real CHANGE. A daemon that
+    // re-sends the value it already held is not a new answer, and the guess then waits out its
+    // own timer rather than being contradicted.
+    final report = await openLive(tester, currentModel: null);
+
+    await tester.tap(find.text('gemma-4-31B-it'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Model'));
+    await tester.pumpAndSettle();
+    expect(ticked(tester, 'gemma-4-31B-it'), isTrue);
+
+    // The machine says the agent ended up somewhere else. What it says beats what this menu hoped.
+    report('Qwen-Test');
+    await tester.pumpAndSettle();
+    expect(ticked(tester, 'Qwen-Test'), isTrue);
+    expect(ticked(tester, 'gemma-4-31B-it'), isFalse);
+  });
+
+  testWidgets('choosing the own login is confirmed BY a null, not broken by one', (tester) async {
+    build(models: [
+      {'id': 'gemma-4-31B-it', 'node': '3d-artist-diego'},
+    ]);
+    final report = await openLive(tester, currentModel: 'gemma-4-31B-it');
+
+    await tester.tap(find.text('Anthropic'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Model'));
+    await tester.pumpAndSettle();
+    expect(ticked(tester, 'Anthropic'), isTrue);
+
+    report(null);
+    await tester.pumpAndSettle();
+    expect(ticked(tester, 'Anthropic'), isTrue);
+    expect(ticked(tester, 'gemma-4-31B-it'), isFalse);
+
+    // And the guess is RELEASED by that confirmation, not merely agreed with: the next thing the
+    // machine says has to land. A guess that only ever expired on its clock would hold the tick on
+    // Subscription for another half minute after the agent had moved on.
+    report('gemma-4-31B-it');
+    await tester.pumpAndSettle();
+    expect(ticked(tester, 'gemma-4-31B-it'), isTrue);
+    expect(ticked(tester, 'Anthropic'), isFalse);
   });
 }
