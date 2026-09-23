@@ -1047,6 +1047,37 @@ describe('agent identity: the process owns the agent, the session is bound to it
     expect(reloaded.unbound()).toHaveLength(1)
   })
 
+  // A row that does not leave `starting` reads as "Starting" on the desk while its engine is working,
+  // and the state is written from six places that cannot see each other. Each one says so, and a
+  // settled row says nothing — so a log from a machine where it sticks names the pair doing it.
+  it('names every launch change by the door it came through, and is silent when nothing changed', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const lines: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((message: unknown) => {
+      if (typeof message === 'string' && message.startsWith('[launch]')) lines.push(message)
+    })
+    try {
+      const pending = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%7' }], cwd: '/tmp/demo' })!
+      registry.openProcessAgent({ engine: 'claude', tmuxPane: '%7', cwd: '/tmp/demo', processIdentity: processIdentity(707) })
+      registry.setLaunch(pending.agentId, { state: 'ready' })            // already ready — silent
+      registry.setLaunch(pending.agentId, { state: 'failed', error: 'START_TIMEOUT' })
+      const id = pending.agentId.slice(0, 8)
+      expect(lines).toEqual([
+        `[launch] ${id} starting → ready · openProcessAgent re-observed`,
+        `[launch] ${id} ready → failed · setLaunch (START_TIMEOUT)`,
+      ])
+
+      // A bind ends the launch without naming it: the rebuilt row carries none.
+      lines.length = 0
+      registry.setLaunch(pending.agentId, { state: 'starting' })
+      registerProcess(registry, { launcherId: pending.agentId, sessionId: 's1', transcriptPath: transcript('s1'), tmuxPane: '%7', cwd: '/tmp/demo' })
+      expect(lines.filter(line => line.includes('→ none'))).toHaveLength(1)
+    } finally {
+      log.mockRestore()
+    }
+  })
+
   it('opens a route-only pending agent and adopts the engine process without changing agentId', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()

@@ -1063,7 +1063,11 @@ class Registry {
       if (!existing.sessionId || !existing.cwd) existing.cwd = input.cwd ?? existing.cwd
       existing.processIdentity = processIdentity
       existing.active = true
-      if (existing.launch && !existing.resumeOnly) existing.launch = { state: 'ready' }
+      if (existing.launch && !existing.resumeOnly) {
+        const before = existing.launch
+        existing.launch = { state: 'ready' }
+        this.traceLaunch(existing.agentId, before, existing.launch, 'openProcessAgent re-observed')
+      }
       // Only a successful read speaks: an undefined probe (ps failed, /proc unreadable) keeps whatever
       // the last good one said rather than silently downgrading a gateway agent to a vendor one.
       if (input.gateway !== undefined) existing.gateway = input.gateway
@@ -1459,6 +1463,10 @@ class Registry {
     }
     entry.tmuxPane = tmuxProjection(entry.runtimes)
     entry.primaryRuntimeKey = selectedRuntimeKey(entry.runtimes, input.primaryRuntimeKey || existing?.primaryRuntimeKey)
+    // A bind REBUILDS the row, and the rebuild carries no `launch` unless the row is resume-only:
+    // an engine reporting for duty is the end of any launch. Traced like the setters, because this
+    // is the one that changes the state without naming it.
+    this.traceLaunch(agentId, existing?.launch, entry.launch, `register ${engine} (${isNew ? 'new session' : 're-register'})`)
     if (rebound) this.sessionIndex.delete(rebound)
     this.index(entry)
     this.save()
@@ -1542,6 +1550,7 @@ class Registry {
     this.drop(entry)
     entry.engine = engine
     entry.terminalHost = true
+    this.traceLaunch(entry.agentId, entry.launch, { state: 'ready' }, `adoptEngine ${engine}`)
     entry.launch = { state: 'ready' }
     entry.active = true
     if (validProcessIdentity(processIdentity)) entry.processIdentity = processIdentity
@@ -1583,6 +1592,7 @@ class Registry {
     entry.engine = 'terminal'
     entry.terminalHost = true
     entry.processIdentity = null
+    this.traceLaunch(entry.agentId, entry.launch, { state: 'ready' }, 'releaseEngine')
     entry.launch = { state: 'ready' }
     entry.active = true
     entry.gateway = null
@@ -1622,12 +1632,30 @@ class Registry {
     return true
   }
 
+  /**
+   * Every change of a row's launch state, named by the door it came through.
+   *
+   * `launch` is what a desk reads as "Starting", and a row that does not leave that state looks stuck
+   * on a harness that is working — measured once at 9 minutes on a restored opencode agent whose
+   * engine the log had already confirmed up. The state is written from six places and no two of them
+   * see each other, so the only way to say which one is fighting which is to have each say so. Rare
+   * in a settled daemon (create, restore, an engine exiting); a row that oscillates prints the pair
+   * that is doing it, once per pass.
+   */
+  private traceLaunch(agentId: string, before: AgentLaunch | undefined, after: AgentLaunch | undefined, where: string): void {
+    const name = (launch: AgentLaunch | undefined): string => launch ? launch.state : 'none'
+    if (name(before) === name(after)) return
+    console.log(`[launch] ${agentId.slice(0, 8)} ${name(before)} → ${name(after)} · ${where}`)
+  }
+
   setLaunch(agentId: string, launch: AgentLaunch): RegisteredSession | null {
     const entry = this.agents.get(agentId)
     if (!entry) return null
+    const before = entry.launch
     entry.launch = normalizedLaunch(launch)
     entry.active = launch.state !== 'failed'
     entry.updatedAt = Date.now()
+    this.traceLaunch(agentId, before, entry.launch, `setLaunch${launch.state === 'failed' ? ` (${launch.error})` : ''}`)
     this.save()
     return entry
   }
