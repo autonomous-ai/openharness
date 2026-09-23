@@ -119,6 +119,16 @@ class _DeskTabsPanelState extends State<DeskTabsPanel> {
   bool _canAddTo(DeskGroup group) =>
       group.id != null && widget.notifier.deskWritable;
 
+  /// Whether [group] is the leftover one — the agents no tab holds.
+  ///
+  /// It takes a row of its own rather than [_canAddTo]'s. There is nothing to
+  /// add an agent TO: a harness already somewhere would have to be taken out of
+  /// its tab to land here, which is not what a `+` at the foot of a list reads
+  /// as. What it CAN do is start one that belongs to no tab, which is exactly
+  /// what this group is.
+  bool _canStartUntabbed(DeskGroup group) =>
+      group.id == null && _hostMachineId != null;
+
   /// Every agent this phone could put in a tab: the ones it can actually open,
   /// which is the same test [deskGroups] makes of the ones already in them.
   List<AgentEntry> get _openable => [
@@ -223,6 +233,23 @@ class _DeskTabsPanelState extends State<DeskTabsPanel> {
     );
   }
 
+  /// The row at the foot of the leftover group: a harness that belongs to no
+  /// tab, the way every harness did before the desk existed.
+  ///
+  /// ⚠️ **The phone is taken OUT of its tab first, and that is the whole of
+  /// what makes the new harness untabbed.** An agent made here joins whatever
+  /// tab the phone is in ([PhoneDesk.adopt]); without this it would land in the
+  /// tab the person was reading a moment ago, and the group they asked from
+  /// would still be empty.
+  void _startUntabbed() {
+    final host = _hostMachineId;
+    if (host == null) return;
+    final notifier = widget.notifier;
+    notifier.selectDeskTab(null);
+    widget.onClose();
+    unawaited(openNewAgent(context, notifier, host));
+  }
+
   /// The `+` at the foot of a tab's list: another agent in the tab being read.
   ///
   /// The panel stays open on the way back — this is a list being filled, and
@@ -268,7 +295,8 @@ class _DeskTabsPanelState extends State<DeskTabsPanel> {
     final group = _groupIn(groups);
     final showing = widget.showing;
     final canAdd = _canAddTo(group);
-    final count = group.entries.length + (canAdd ? 1 : 0);
+    final canStart = _canStartUntabbed(group);
+    final count = group.entries.length + (canAdd || canStart ? 1 : 0);
     final padding = EdgeInsets.fromLTRB(
       kSheetInset,
       0,
@@ -314,6 +342,12 @@ class _DeskTabsPanelState extends State<DeskTabsPanel> {
                         first: true,
                         last: true,
                         onTap: () => _addAgentTo(group),
+                      )
+                    else if (canStart)
+                      _NewHarnessRow(
+                        first: true,
+                        last: true,
+                        onTap: _startUntabbed,
                       ),
                   ],
                 )
@@ -329,12 +363,18 @@ class _DeskTabsPanelState extends State<DeskTabsPanel> {
                     // of the tab's agents is itself the sentence "into this
                     // list".
                     if (index == group.entries.length) {
-                      return _AddAgentRow(
-                        tabName: group.name,
-                        first: index == 0,
-                        last: true,
-                        onTap: () => _addAgentTo(group),
-                      );
+                      return canStart
+                          ? _NewHarnessRow(
+                              first: index == 0,
+                              last: true,
+                              onTap: _startUntabbed,
+                            )
+                          : _AddAgentRow(
+                              tabName: group.name,
+                              first: index == 0,
+                              last: true,
+                              onTap: () => _addAgentTo(group),
+                            );
                     }
                     final entry = group.entries[index];
                     return DeskAgentRow(
@@ -454,6 +494,50 @@ class _AddAgentRow extends StatelessWidget {
       ),
       // It adds here rather than going anywhere.
       chevron: false,
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onTap();
+      },
+    );
+  }
+}
+
+/// The row at the foot of the leftover group: start a harness that no tab owns.
+///
+/// ⚠️ **"New harness", not "Add harness" — a different verb for a different
+/// act.** The row above it in a real tab PUTS something that exists into that
+/// tab; this one makes something that did not exist, and there is nothing for
+/// it to be put into. Sharing the words would have made the leftover group look
+/// like a tab you can file work under, which is the one thing it is not.
+class _NewHarnessRow extends StatelessWidget {
+  const _NewHarnessRow({
+    required this.first,
+    required this.last,
+    required this.onTap,
+  });
+
+  final bool first, last;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final accent = AppPalette.accentOnSurface;
+    return SheetRow(
+      first: first,
+      last: last,
+      semanticsLabel: 'New harness, in no tab',
+      leading: SheetTile(
+        child: Icon(LucideIcons.plus, size: 18, color: accent),
+      ),
+      title: Text(
+        'New harness',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: sheetRowTitleStyle().copyWith(color: accent),
+      ),
+      // It opens the New Harness form, so it keeps the chevron the rows that
+      // go somewhere wear.
       onTap: () {
         HapticFeedback.selectionClick();
         onTap();
