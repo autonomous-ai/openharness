@@ -6151,8 +6151,23 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Where the app is. Injected so a test can say so without a real lifecycle.
-  AppLifecycleState? Function() lifecycle =
-      () => WidgetsBinding.instance.lifecycleState;
+  ///
+  /// ⚠️ Tolerant of there being NO binding. This is read from `focusPane`, which
+  /// plain `test()` files exercise in their dozens — and `WidgetsBinding
+  /// .instance` THROWS when the binding has not been initialised rather than
+  /// answering null. Reading it unguarded took out some fifty tests across the
+  /// suite that have nothing to do with notifications.
+  ///
+  /// Unknown is treated as "not in front", which errs toward announcing news
+  /// rather than swallowing it — the direction this feature cannot afford to
+  /// get wrong.
+  AppLifecycleState? Function() lifecycle = () {
+    try {
+      return WidgetsBinding.instance.lifecycleState;
+    } catch (_) {
+      return null;
+    }
+  };
 
   void _raiseAlert(MachineState machine, String agentId, AlertKind kind) {
     // Nothing at all for the agent on screen in front of you. A sound, a banner
