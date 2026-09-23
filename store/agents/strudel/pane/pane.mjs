@@ -116,6 +116,10 @@ function renderMixer() {
     s.classList.toggle('on', S.soloed.has(v.key))
     m.title = `Mute ${v.name}${i < 9 ? ` (${i + 1})` : ''}`
     s.title = `Solo ${v.name}${i < 9 ? ` (⇧${i + 1})` : ''}`
+    m.setAttribute('aria-label', `Mute ${v.name}`)
+    s.setAttribute('aria-label', `Solo ${v.name}`)
+    m.setAttribute('aria-pressed', String(S.muted.has(v.key)))
+    s.setAttribute('aria-pressed', String(S.soloed.has(v.key)))
     row.classList.toggle('silent', !audible(i) || !!v.muted)
     row.classList.toggle('codemuted', !!v.muted)
     return row
