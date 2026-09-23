@@ -16,6 +16,7 @@ import 'desk_tab_rename_dialog.dart';
 import 'desk_tab_strip.dart';
 import 'phone_navigation.dart';
 import 'phone_status.dart';
+import 'sheet_agent_lines.dart';
 import 'sheet_list.dart';
 
 /// The account's tabs, and the agents inside the one being read — what the
@@ -425,7 +426,6 @@ class DeskAgentRow extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final agent = entry.agent;
-    final project = entry.project;
     return SheetRow(
       first: first,
       last: last,
@@ -436,17 +436,17 @@ class DeskAgentRow extends StatelessWidget {
         engine: agent.engine,
         displayName: agent.engineDisplayName,
       ),
-      title: Text(
-        agent.name,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: sheetRowTitleStyle(),
+      title: SheetAgentTitle(
+        entry: entry,
+        now: DateTime.now(),
+        name: Text(
+          agent.displayName,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: sheetRowTitleStyle(),
+        ),
       ),
-      subtitle: SheetPlaceLine(
-        machine: entry.machineName,
-        folder: project?.folder,
-        branch: project?.branchLabel,
-      ),
+      subtitle: SheetAgentMeta(entry: entry),
       trailing: SheetAgentStatus(summary: entry.summary, onScreen: onScreen),
       chevron: !onScreen,
     );

@@ -307,6 +307,12 @@ class PhoneSearchController extends ChangeNotifier {
             recent: history?.recent ?? const <String>[],
             previews: notifier.sessionPreviews,
           );
+    matchCount = rows.length;
+    // ⚠️ **Not with nothing typed.** That list is the desktop's Harness Monitor
+    // order ([rankPhoneDestinations]), where paused work sits among the rest by
+    // when it last moved — moving it to the bottom here is the phone's list
+    // disagreeing with the laptop's again.
+    if (_listsMonitorOrder) return;
     // Keep the match order, but put rows a tap can open first. An agent whose
     // terminal has gone must not bury the ones that answer.
     final open = <PhoneDestination>[];
@@ -317,6 +323,14 @@ class PhoneSearchController extends ChangeNotifier {
     rows = [...open, ...shut];
     matchCount = rows.length;
   }
+
+  /// Whether [rows] are agents with nothing typed — the list that follows the
+  /// desktop's monitor.
+  bool get _listsMonitorOrder =>
+      !isCommandMode &&
+      !isProjectMode &&
+      !isMachineMode &&
+      matchQuery.trim().isEmpty;
 
   /// With nothing typed, the commands run lately lead, newest first; the rest
   /// keep their order. Once something is typed, the match decides.

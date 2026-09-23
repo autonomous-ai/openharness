@@ -1,6 +1,7 @@
 import 'package:harness_mobile/core/fuzzy_match.dart';
 import 'package:harness_mobile/state/session_preview.dart';
 
+import 'agent_index.dart' show compareMonitorOrder;
 import 'phone_destination.dart';
 
 final _words = RegExp(r'\s+');
@@ -178,6 +179,7 @@ List<PhoneDestination> rankPhoneDestinations(
       ? 0
       : 1;
   ranked.sort((a, b) {
+    if (needle.isEmpty) return _monitorOrder(a, b);
     var order = (a.content ? 1 : 0).compareTo(b.content ? 1 : 0);
     if (order == 0) order = a.score.compareTo(b.score);
     if (order == 0 && needle.isEmpty) {
@@ -192,6 +194,26 @@ List<PhoneDestination> rankPhoneDestinations(
     return order == 0 ? a.entry.id.compareTo(b.entry.id) : order;
   });
   return [for (final row in ranked) row.entry];
+}
+
+/// With nothing typed, the list the field opens on: the agents in the desktop's Harness Monitor
+/// order ([compareMonitorOrder]), and whatever is not an agent after them in [all]'s order.
+///
+/// ⚠️ **Not the typed ranking with an empty query, which is what it was.** That put the agents THIS
+/// phone had visited first, then its own guess — so the field opened on a list that matched nothing
+/// on the laptop beside it, and the agent at the top of the desktop's monitor could be halfway down
+/// the phone's. Somebody moving between the two reads the same list on both now. Once a word is
+/// typed the match decides, as it always has.
+int _monitorOrder(
+  ({PhoneDestination entry, int score, bool content, int index}) a,
+  ({PhoneDestination entry, int score, bool content, int index}) b,
+) {
+  final left = a.entry.entry;
+  final right = b.entry.entry;
+  if (left != null && right != null) return compareMonitorOrder(left, right);
+  if (left != null) return -1;
+  if (right != null) return 1;
+  return a.index.compareTo(b.index);
 }
 
 /// The line of [row]'s session content worth quoting under its name: the one

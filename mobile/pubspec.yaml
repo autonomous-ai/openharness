@@ -19,6 +19,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # `compareNatural` — the desktop's name order, so `harness 9` sorts before `harness 10` on both.
+  collection: ^1.19.1
 
   cupertino_icons: ^1.0.8
   lucide_icons_flutter: ^3.1.15
