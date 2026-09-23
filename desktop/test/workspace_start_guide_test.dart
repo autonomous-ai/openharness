@@ -23,7 +23,6 @@ import 'package:harness/widgets/harness_customize_pane.dart';
 import 'package:harness/settings/appearance/wallpaper_section.dart';
 import 'package:harness/widgets/workspace_start_guide.dart';
 import 'package:harness/widgets/workspace_welcome.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import 'package:xterm/xterm.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
@@ -126,13 +125,6 @@ Future<void> _mount(
 void main() {
   setUp(() {
     newHarnessOpensInBox = true;
-    PackageInfo.setMockInitialValues(
-      appName: 'Harness',
-      packageName: 'ai.autonomous.harness',
-      version: '1.1.25',
-      buildNumber: '1',
-      buildSignature: '',
-    );
   });
   tearDown(() => newHarnessOpensInBox = false);
 
@@ -144,7 +136,7 @@ void main() {
     await _mount(tester, app);
     final search = find.byKey(const ValueKey('swarm-search-input'));
     expect(find.byType(WorkspaceWelcome), findsOneWidget);
-    expect(find.text('version 1.1.25'), findsOneWidget);
+    expect(find.text('Follow your curiosity.'), findsOneWidget);
     expect(find.byType(NewHarnessBox), findsNothing);
     expect(search, findsNothing);
     await key(tester, LogicalKeyboardKey.keyN, cmd: true);
@@ -154,7 +146,7 @@ void main() {
     await key(tester, LogicalKeyboardKey.keyT, cmd: true);
     final tab = app.activeSwarmId;
     expect(find.byType(WorkspaceWelcome), findsOneWidget);
-    expect(find.text('version 1.1.25'), findsOneWidget);
+    expect(find.text('Follow your curiosity.'), findsOneWidget);
     expect(search, findsNothing);
     await tester.tap(find.byKey(const ValueKey('welcome-agent.open')));
     await tester.pump();

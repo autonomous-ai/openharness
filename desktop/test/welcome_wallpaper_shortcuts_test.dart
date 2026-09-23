@@ -16,7 +16,6 @@ import 'package:harness/shortcuts/shortcuts_browser.dart';
 import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/widgets/shortcuts_sheet.dart';
 import 'package:harness/widgets/workspace_welcome.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import 'package:xterm/xterm.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
@@ -43,13 +42,6 @@ void main() {
     savedFont = terminalFontStore.value;
     savedAppearance = appearancePrefsStore.value;
     appearancePrefsStore.value = const AppearancePrefs();
-    PackageInfo.setMockInitialValues(
-      appName: 'Harness',
-      packageName: 'ai.autonomous.harness',
-      version: '1.1.25',
-      buildNumber: '25',
-      buildSignature: '',
-    );
   });
   tearDown(() {
     grid.AppTheme.brightness.value = savedBrightness;
