@@ -824,6 +824,7 @@ private extension SwarmTitlebar {
       ["id": "closed-\($0)", "title": "Closed Swarm \($0)", "detail": "3 agents", "swarm": true, "canReopen": true]
     }
     updateHistory(recentRows, closed: closedRows)
+    menuWillOpen(historyMenu)
     let recentItems = historyMenu.items.filter { $0.action == #selector(historyAction(_:)) }
     let closedItems = historyMenu.items.filter { $0.action == #selector(closedHistoryAction(_:)) }
     try checkTitlebar(recentItems.count == 15 && closedItems.count == 10, "Chrome-style direct History sections remain bounded")

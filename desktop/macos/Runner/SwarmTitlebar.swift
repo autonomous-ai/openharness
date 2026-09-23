@@ -48,6 +48,8 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   private var canFind = false
   private var canClosePane = false
   private let historyMenu = NSMenu(title: "History")
+  private var historyMenuNeedsRebuild = false
+  private var historyMenuIsOpen = false
   private var canGoBack = false
   private var canGoForward = false
   private var history: [SwarmHistoryEntry] = []
@@ -342,6 +344,10 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   func menuWillOpen(_ menu: NSMenu) {
+    if menu === historyMenu {
+      historyMenuIsOpen = true
+      if historyMenuNeedsRebuild { rebuildHistoryMenu() }
+    }
     syncMenuKeys()
     if menu === historyMenu {
       for item in menu.items {
@@ -355,6 +361,10 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // The native menu opens from its cache. Network/credential reads happen
     // asynchronously in Dart and never hold up AppKit's menu tracking.
     channel.invokeMethod("modelsOpened", arguments: nil)
+  }
+
+  func menuDidClose(_ menu: NSMenu) {
+    if menu === historyMenu { historyMenuIsOpen = false }
   }
 
   private func updateMachines(_ rows: [[String: Any]]) {
@@ -649,10 +659,14 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     guard entries != history || closedEntries != closedHistory else { return }
     history = entries
     closedHistory = closedEntries
-    rebuildHistoryMenu()
+    // Navigation updates the models immediately for action validation. Keep the
+    // installed shortcut items, but defer hidden row construction and sizing.
+    historyMenuNeedsRebuild = true
+    if historyMenuIsOpen { rebuildHistoryMenu() }
   }
 
   private func rebuildHistoryMenu() {
+    historyMenuNeedsRebuild = false
     historyMenu.removeAllItems()
     historyMenu.minimumWidth = 0
     let visited = Array(history.prefix(15))
