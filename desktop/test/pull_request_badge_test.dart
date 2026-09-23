@@ -94,9 +94,7 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     });
   }
-  testWidgets('none is hidden but failures are not called no PR', (
-    tester,
-  ) async {
+  testWidgets('empty lookups and failures stay hidden', (tester) async {
     await tester.pumpWidget(frame('one', () async => {'status': 'none'}));
     await tester.pump();
     expect(find.byType(TextButton), findsNothing);
@@ -104,7 +102,30 @@ void main() {
       frame('two', () async => throw Exception('offline')),
     );
     await tester.pump();
-    expect(find.text('PR unavailable'), findsOneWidget);
+    expect(find.byType(TextButton), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('unavailable stays hidden and recovers on the next refresh', (
+    tester,
+  ) async {
+    var calls = 0;
+    await tester.pumpWidget(
+      frame('branch', () async {
+        calls++;
+        if (calls == 1) return {'status': 'unavailable'};
+        return {
+          'status': 'found',
+          'number': 12,
+          'state': 'Open',
+          'url': 'https://github.com/acme/repo/pull/12',
+        };
+      }),
+    );
+    await tester.pump();
+    expect(find.byType(TextButton), findsNothing);
+    await tester.pump(const Duration(seconds: 60));
+    await tester.pump();
+    expect(find.text('PR #12 · Open'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
   testWidgets(

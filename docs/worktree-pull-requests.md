@@ -11,8 +11,8 @@ including linked worktrees. It uses the existing `gh` installation and GitHub si
 machine, via a bounded read-only subprocess (no interactive login). Both request and response are
 encrypted when relayed to another machine. Device/admin operations are not exposed.
 
-A successful empty lookup hides the badge. Missing CLI support, `gh`, authentication, network or
-repository access shows `PR unavailable`, with an explanation; it must not be treated as no PR.
+Only a validated PR result shows a badge. Loading, empty lookups and unavailable results stay hidden.
+The API still distinguishes an unavailable lookup from a successful lookup with no PR.
 The widget refreshes once a minute and discards replies from previous agent/branch identities.
 CLI requests share a bounded 60-second cache. An open PR wins over an older closed/merged PR for
 the same branch; otherwise the most recently updated matching PR is shown.
