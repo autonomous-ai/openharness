@@ -20,6 +20,7 @@ import 'package:harness/update/desktop_updater.dart';
 import 'package:harness/update/manual_update_check.dart';
 import 'package:harness/widgets/update_notice.dart';
 import 'package:harness/widgets/bootstrapping_screen.dart';
+import 'package:harness/widgets/terminal_progress.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -564,8 +565,8 @@ void main() {
     // LoginScreen. Keep this on the real RootShell so notifier wiring remains
     // covered as well as the standalone screen's presentation tests.
     expect(find.byType(BootstrappingScreen), findsOneWidget);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
-    expect(find.text('Getting Harness ready'), findsOneWidget);
+    expect(find.byType(TerminalProgressLine), findsOneWidget);
+    expect(find.text(r'$ harness start'), findsOneWidget);
     expect(find.text('Opening Harness…'), findsOneWidget);
     expect(find.text('Sign in'), findsNothing);
   });
@@ -581,7 +582,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Checking this computer'), findsOneWidget);
+    expect(find.text(r'$ harness doctor'), findsOneWidget);
     expect(find.textContaining('read-only'), findsOneWidget);
     expect(find.text('ENVIRONMENT SETUP'), findsNothing);
     expect(find.text('Pre-flight check'), findsNothing);
@@ -610,7 +611,10 @@ void main() {
       await tester.pump();
 
       expect(app.status, AppStatus.checkingEnvironment);
-      expect(find.text('Environment ready'), findsOneWidget);
+      expect(
+        find.text('all checks passed · opening your workspace'),
+        findsOneWidget,
+      );
       expect(find.text('Continue to sign in'), findsNothing);
       expect(find.text('ENVIRONMENT SETUP'), findsNothing);
 
@@ -865,14 +869,14 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(TerminalProgressLine), findsOneWidget);
     expect(find.text('Sign in'), findsNothing);
 
     app.status = AppStatus.unauthenticated;
     app.notifyListeners();
     await tester.pump();
 
-    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byType(TerminalProgressLine), findsNothing);
     expect(find.text('Sign in'), findsOneWidget);
   });
 
