@@ -172,6 +172,20 @@ Security reports go through [SECURITY.md](SECURITY.md).
    the diff readable. Harness catalog changes publish automatically after merge. App, CLI, and
    firmware releases have their own schedules.
 
+Before committing, review the files and changes you are about to submit:
+
+```bash
+git status --short
+git diff --check
+git diff
+git diff --cached --check
+git diff --cached
+```
+
+The diff commands cover both unstaged and staged changes; `--check` reports whitespace errors
+and conflict markers. Review new, untracked files separately because they do not appear in the
+diff until staged. Keep the PR focused on the intended change.
+
 ## Conventions across this repository
 
 - **Specs are numbered.** Every normative statement has a stable id, so a failure can point at a
