@@ -14,6 +14,7 @@ class FakeAutonomousDeviceCli extends AutonomousDeviceCli {
   int statusCalls = 0;
   Completer<void>? statusWait;
   String? pairFailure;
+  bool networkBlocked = false;
   List<Map<String, dynamic>> discovered = [
     {'id': 'device-1', 'name': 'Kitchen', 'host': '192.168.1.2', 'port': 5000},
   ];
@@ -33,7 +34,16 @@ class FakeAutonomousDeviceCli extends AutonomousDeviceCli {
   @override
   Future<Map<String, dynamic>> list() async => {'devices': devices};
   @override
-  Future<Map<String, dynamic>> discover() async => {'devices': discovered};
+  Future<Map<String, dynamic>> discover() async {
+    if (networkBlocked) {
+      throw const AutonomousDeviceCliException(
+        'LOCAL_NETWORK_BLOCKED',
+        'Harness is not allowed to use the local network.',
+      );
+    }
+    return {'devices': discovered};
+  }
+
   @override
   Future<Map<String, dynamic>> pair({
     required String code,
@@ -116,6 +126,32 @@ void main() {
       expect(find.text('Pair an Autonomous robot'), findsNothing);
       expect(find.text('Computer address'), findsNothing);
       expect(find.text('Cancel pairing'), findsNothing);
+    },
+  );
+  testWidgets(
+    'a blocked local network says where to allow it and keeps paired robots listed',
+    (tester) async {
+      final cli = FakeAutonomousDeviceCli()
+        ..networkBlocked = true
+        ..devices = [
+          {
+            'id': 'fingerprint-1',
+            'fingerprint': 'fingerprint-1',
+            'label': 'Desk lamp',
+            'online': false,
+          },
+        ];
+      await open(tester, cli);
+      final notice = find.byKey(const Key('autonomous-device-network-blocked'));
+      expect(notice, findsOneWidget);
+      expect(find.text('Allow Harness on your local network'), findsOneWidget);
+      expect(find.text('Desk lamp'), findsOneWidget);
+      expect(find.textContaining('No Autonomous robots found'), findsNothing);
+
+      cli.networkBlocked = false;
+      await refresh(tester);
+      expect(notice, findsNothing);
+      expect(find.text('Desk lamp'), findsOneWidget);
     },
   );
   testWidgets('pairing controls align with the title and explain persistence', (
