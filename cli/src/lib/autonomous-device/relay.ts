@@ -1,6 +1,6 @@
 import { isWrapped } from '../e2ee/core.js'
 import type { E2eeManager } from '../e2ee/manager.js'
-import { AUTONOMOUS_DEVICE_CAPABILITIES, type AutonomousDeviceService, type AutonomousDeviceFrame } from './service.js'
+import { type AutonomousDeviceService, type AutonomousDeviceFrame } from './service.js'
 
 type Frame = Record<string, unknown>
 /** Application RPC over the existing relay E2EE session. No socket, identity, PAKE or trust of its own. */
@@ -30,7 +30,7 @@ export class AutonomousDeviceRelay {
       const current = this.clients.get(connId)
       this.clients.set(connId, current?.identity === identity ? current : { identity, tokens: 20, at: Date.now(), active: 0 })
       const resume = req.resume as { serverInstanceId?: unknown; cursor?: unknown } | undefined
-      reply({ type: 'hello_result', requestId: req.requestId, proto: 1, machineId: this.machineId, serverInstanceId: this.service.serverInstanceId, capabilities: AUTONOMOUS_DEVICE_CAPABILITIES, ...this.service.resume(resume) })
+      reply({ type: 'hello_result', requestId: req.requestId, proto: 1, machineId: this.machineId, serverInstanceId: this.service.serverInstanceId, capabilities: this.service.capabilities, ...this.service.resume(resume) })
       this.service.replay(resume, event => this.sendEvent(connId, identity, event))
       this.onReady?.()
       return
