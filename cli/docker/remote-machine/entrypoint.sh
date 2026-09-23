@@ -2,7 +2,7 @@
 # Keep the box alive, and bring the daemon up when — and only when — it has a session to come up with.
 #
 # The container is a BOX, not a daemon supervisor. `harness start` self-daemonizes on a real machine
-# and does the same here, so pid 1 is this script rather than the adapter: that way a `harness stop`
+# and does the same here, so the adapter is not what holds the box open: that way a `harness stop`
 # from a test, or a daemon that exits on its own, does not take the whole container down and strand
 # the SSO session and computer id that the next step needs.
 #
@@ -24,6 +24,7 @@ else
 fi
 
 echo "[entrypoint] ready; holding the container open"
-# `exec` so this becomes pid 1 and a `docker stop` reaches it as SIGTERM rather than waiting out the
-# 10s grace period on a shell that is ignoring it.
+# `exec` so tini's one child is tail itself, and the SIGTERM tini forwards on `docker stop` ends it at
+# once rather than waiting out the 10s grace period on a shell that is ignoring it. Reaping is tini's
+# job (pid 1, see the Dockerfile's ENTRYPOINT) — tail never waits on anything.
 exec tail -f /dev/null

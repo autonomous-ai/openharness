@@ -11,6 +11,7 @@ import {
   engineProcessMatch,
   engineProcessMatchScore,
   LSTART_MARKER_RE,
+  liveProcessRows,
   parseProcessRow,
   resumeSessionId,
   sendLiteralToTmux,
@@ -28,6 +29,21 @@ const ownership = (cursor: string[] = [], grok: string[] = []): AgentCommandOwne
 })
 
 describe('tmux process primitives', () => {
+  it('drops a zombie from the process table — it keeps the identity of the engine it no longer is', () => {
+    // The row the remote-machine rig showed for a stopped agent's Claude, orphaned to a pid 1 that
+    // never reaped: same pid, comm and start time as the saved identity, so resume thought it alive.
+    const zombie = parseProcessRow('78206     1 claude          Tue Sep 22 08:23:44 2026 [claude] <defunct>')!
+    const bsdZombie = parseProcessRow('78207     1 (claude)        Tue Sep 22 08:23:44 2026 <defunct>')!
+    const live = parseProcessRow('3998  3992 node            Mon Sep 21 08:15:25 2026 node /home/node/.npm-global/bin/codex')!
+    // Only a TRAILING marker is a corpse; an argument that mentions the word is a running process.
+    const mentions = parseProcessRow('4000  3992 grep            Mon Sep 21 08:15:25 2026 grep <defunct> log.txt')!
+    // Pids that do not exist here, so on Linux the /proc check cannot vouch for a live process either.
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    expect(liveProcessRows([zombie, live, bsdZombie, mentions])).toEqual([live, mentions])
+    vi.restoreAllMocks()
+  })
+
+
   it('parses a process whose comm field contains spaces', () => {
     expect(parseProcessRow('4242 100 ⌘ Greeting Thu Jul 30 11:00:03 2026 cmd -r abcdef12-3456-7890-abcd-ef1234567890')).toEqual({
       pid: 4242,

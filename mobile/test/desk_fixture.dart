@@ -1,6 +1,7 @@
 import 'package:harness_mobile/api/api_client.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
+import 'package:harness_mobile/core/local_key_value_store.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/desk_sync.dart';
 import 'package:harness_mobile/state/phone_desk.dart';
@@ -60,8 +61,9 @@ Future<AppNotifier> deskApp(
   PagerConn conn, {
   List<DeskTab> tabs = const [],
   bool opensTerminals = true,
+  LocalKeyValueStore? storage,
 }) async {
-  final app = pagerApp(conn);
+  final app = pagerApp(conn, storage: storage);
   app.api = DeskApi(tabs: tabs);
   if (!opensTerminals) {
     app.stateOf('m')!.terminalCapabilityAvailable = false;

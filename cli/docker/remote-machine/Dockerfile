@@ -50,9 +50,11 @@ ENV LC_ALL=C.UTF-8
 #   from the host can ever reach a loopback bind. socat bridges exactly that gap, on the container
 #   side, for the duration of a sign-in. Doing it here rather than teaching the CLI to bind 0.0.0.0
 #   keeps a real computer's SSO callback on its own loopback, where it belongs.
+# tini: pid 1. Every engine a stopped agent leaves behind is orphaned to pid 1, and only a real init
+#   reaps it — see the ENTRYPOINT below.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-       tmux procps git curl ca-certificates less socat \
+       tmux procps git curl ca-certificates less socat tini \
   && rm -rf /var/lib/apt/lists/*
 
 # The engine under test. Pinned by the build so a rebuild is reproducible; bump it deliberately.
@@ -124,4 +126,10 @@ USER node
 WORKDIR /home/node
 VOLUME ["/home/node/.harness"]
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# ⚠️ **tini is pid 1, not the entrypoint, and a real computer's init is what it stands in for.** The
+# entrypoint used to `exec tail -f /dev/null` as pid 1, and tail never calls wait(): every engine
+# orphaned when its agent stopped stayed a zombie for the life of the box — with the pid, name and
+# start time of the engine it had been. The daemon's identity check read that as the engine still
+# running, and refused to resume the agent ("The previous process is still running"). tini reaps
+# them, and forwards `docker stop`'s SIGTERM to the entrypoint as tail's pid-1 role did.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]

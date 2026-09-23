@@ -272,13 +272,21 @@ class Agent {
   );
 
   /// Saved work the daemon is no longer running, as the desktop's [Agent] reads
-  /// it. Its conversation is on disk; `agent_restart` brings it back.
+  /// it. Its conversation is on disk; `agent_resume` brings it back.
   ///
   /// ⚠️ **Only ever set on a machine the app asked `includeStopped: true` of.**
   /// The daemon's plain `agents_list` answers with `registry.advertised()` —
   /// live agents only — so a client that does not ask sees a fleet with its
   /// stopped work silently missing, which is exactly what this app did.
   bool get isStopped => status == 'stopped';
+
+  /// Whether a resume has a conversation to reopen — the desktop's rule, and the daemon's
+  /// (`resumeStoppedAgent.ts`): exact resume exists for Claude Code and Codex only, and only once the
+  /// engine has saved a session. An agent stopped before its first prompt never got one, and the
+  /// machine answers RESUME_UNAVAILABLE for it however many times it is asked.
+  bool get canResumeConversation =>
+      (engine == 'claude' || engine == 'codex') &&
+      sessionId?.isNotEmpty == true;
 
   static String? _safeEngine(Object? raw) {
     if (raw is! String || raw.isEmpty || raw.length > 64) return null;

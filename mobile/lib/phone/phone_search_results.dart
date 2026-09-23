@@ -123,8 +123,9 @@ class _PhoneSearchResultsState extends State<PhoneSearchResults> {
             row: row,
             terms: terms,
             now: now,
-            openable: search.canSubmit(row) && _resuming == null,
+            openable: search.canSubmit(row),
             resuming: _resuming == row.id,
+            busy: _resuming != null,
             // A row that is here for something said in its conversation quotes
             // it in place of its detail: nothing else on the row would explain
             // why it matched.

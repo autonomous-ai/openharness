@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'agent_index.dart';
@@ -31,26 +32,40 @@ Future<String?> resumeAgentForOpen(
   AppNotifier notifier,
   AgentEntry entry,
 ) async {
-  final result = await notifier.resumeAgent(entry.machineId, entry.agent.id);
-  if (result.error case final error?) return error;
-  if (_openable(notifier, entry)) return null;
-
-  final ready = Completer<bool>();
+  final stopped = entry.agent;
+  final ready = Completer<void>();
   void check() {
-    if (ready.isCompleted) return;
-    if (_openable(notifier, entry)) ready.complete(true);
+    if (!ready.isCompleted && _resumedTerminal(notifier, entry, stopped)) {
+      ready.complete();
+    }
   }
 
   notifier.addListener(check);
   Timer? timeout;
   try {
-    timeout = Timer(_terminalWait, () {
-      if (!ready.isCompleted) ready.complete(false);
-    });
-    // Checked once more after subscribing: the agent can land between the test
-    // above and the listener going on, and nothing would fire again.
+    // ⚠️ **Raced, as the desktop's `_resumeStoppedDestination` races them.** The daemon pushes the
+    // resumed agent (`agent_synced`) as soon as its pane is up, and the reply can trail it — or be
+    // lost to a dropped socket after the resume has in fact happened. Whichever says "there is a
+    // terminal" first opens it; only a reply naming a failure, before any terminal, is an error.
+    final reply = notifier.resumeAgent(entry.machineId, stopped.id);
     check();
-    if (await ready.future) return null;
+    final error = await Future.any([
+      reply.then((result) => result.error),
+      ready.future.then((_) => null),
+    ]);
+    if (ready.isCompleted) return null;
+    if (error != null) return error;
+    // Confirmed; the pty follows it.
+    final arrived = Completer<bool>();
+    timeout = Timer(_terminalWait, () {
+      if (!arrived.isCompleted) arrived.complete(false);
+    });
+    unawaited(
+      ready.future.then((_) {
+        if (!arrived.isCompleted) arrived.complete(true);
+      }),
+    );
+    if (await arrived.future) return null;
   } finally {
     timeout?.cancel();
     notifier.removeListener(check);
@@ -58,11 +73,17 @@ Future<String?> resumeAgentForOpen(
   return 'Resumed, but its terminal has not come back yet. Try again in a moment.';
 }
 
-bool _openable(AppNotifier notifier, AgentEntry entry) =>
-    notifier
-        .stateOf(entry.machineId)
-        ?.agents
-        .where((agent) => agent.id == entry.agent.id)
-        .firstOrNull
-        ?.terminalAvailable ??
-    false;
+/// Whether [stopped] is back with a terminal — the SAME conversation, the desktop's test: a
+/// different session id is the daemon having started something else, not the work that was tapped.
+bool _resumedTerminal(AppNotifier notifier, AgentEntry entry, Agent stopped) {
+  final current = notifier
+      .stateOf(entry.machineId)
+      ?.agents
+      .where((agent) => agent.id == stopped.id)
+      .firstOrNull;
+  return current != null &&
+      current.terminalAvailable &&
+      !current.isStopped &&
+      current.launchState != 'failed' &&
+      current.sessionId == stopped.sessionId;
+}

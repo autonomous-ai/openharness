@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -29,12 +31,16 @@ Agent _agent(
   int? minutesAgo,
   bool terminal = true,
   bool stopped = false,
+  // Stopped work that a resume can reopen has a saved conversation; `resumable: false` is the
+  // agent stopped before its engine ever saved one.
+  bool resumable = true,
   String? gridModel,
   String? dshName,
 }) => Agent(
   id: id,
   name: 'work · $id',
   title: title,
+  sessionId: resumable ? 'session-$id' : null,
   status: stopped ? 'stopped' : 'active',
   engine: 'codex',
   gridModel: gridModel,
@@ -139,10 +145,13 @@ class _StoppedConn extends WsConn {
         onStatus: (_) {},
       );
 
-  /// What `agents_list` answers with; replaced by a restart.
+  /// What `agents_list` answers with; replaced by a resume.
   List<Map<String, dynamic>> agents;
   final payloads = <Map<String, dynamic>>[];
-  final restarted = <String>[];
+  final resumed = <String>[];
+
+  /// Holds each resume reply until completed — a machine still bringing the agent back.
+  Completer<void>? hold;
 
   @override
   Future<void> waitUntilReady({required Duration timeout}) async {}
@@ -157,13 +166,17 @@ class _StoppedConn extends WsConn {
       payloads.add(payload);
       return {'agents': agents};
     }
-    if (type == 'agent_restart') {
+    // The daemon's receipt shape (`backendSocket.ts`): the id the phone sent, the outcome, and the
+    // agent as it now is.
+    if (type == 'agent_resume') {
       final id = payload['agentId'] as String;
-      restarted.add(id);
+      resumed.add(id);
+      await hold?.future;
       final agent = {
         'id': id,
         'name': 'work · $id',
         'engine': 'claude',
+        'sessionId': 'session-$id',
         'status': 'active',
         'terminal': {'available': true},
       };
@@ -171,7 +184,12 @@ class _StoppedConn extends WsConn {
         for (final row in agents)
           if (row['id'] == id) agent else row,
       ];
-      return {'agent': agent, 'resumed': true};
+      return {
+        'creationId': payload['creationId'],
+        'state': 'created',
+        'agent': agent,
+        'resumed': true,
+      };
     }
     throw StateError('unexpected $type');
   }
@@ -673,7 +691,11 @@ void main() {
   group('stopped work', () {
     test('every agents_list asks for it', () async {
       final conn = _StoppedConn([
-        {'id': 'live', 'name': 'work · live', 'terminal': {'available': true}},
+        {
+          'id': 'live',
+          'name': 'work · live',
+          'terminal': {'available': true},
+        },
       ]);
       final app = _app([_machine('box', [])], conn: conn);
       addTearDown(app.dispose);
@@ -713,12 +735,13 @@ void main() {
       expect(_agentIds(_rank(app, '')).first, 'saved');
     });
 
-    test('opening it restarts it, and waits for the terminal', () async {
+    test('opening it resumes it, and waits for the terminal', () async {
       final conn = _StoppedConn([
         {
           'id': 'saved',
           'name': 'work · saved',
           'engine': 'claude',
+          'sessionId': 'session-saved',
           'status': 'stopped',
           'terminal': {'available': false},
         },
@@ -731,7 +754,7 @@ void main() {
       expect(entry.agent.terminalAvailable, isFalse);
 
       expect(await resumeAgentForOpen(app, entry), isNull);
-      expect(conn.restarted, ['saved']);
+      expect(conn.resumed, ['saved']);
       // ⚠️ The point of the wait: it returns only once there is a terminal to
       // open. The pager filters its pages to agents that have one, so handing
       // it an agent still without would have opened a different agent than the
@@ -753,9 +776,72 @@ void main() {
       expect(await resumeAgentForOpen(app, entry), isNotNull);
     });
 
-    testWidgets('it is drawn as saved work, not as a dead row', (
+    testWidgets('a resume in flight does not relabel the other rows', (
       tester,
     ) async {
+      final conn = _StoppedConn([
+        {
+          'id': 'live',
+          'name': 'work · live',
+          'terminal': {'available': true},
+        },
+        {
+          'id': 'saved',
+          'name': 'work · saved',
+          'engine': 'claude',
+          'sessionId': 'session-saved',
+          'status': 'stopped',
+          'terminal': {'available': false},
+        },
+      ])..hold = Completer<void>();
+      final app = _app([
+        _machine('box', [
+          _agent('live', minutesAgo: 30),
+          _agent('saved', minutesAgo: 1, stopped: true),
+        ]),
+      ], conn: conn);
+      addTearDown(app.dispose);
+      await tester.pumpWidget(
+        MaterialApp(home: PhoneSearchPage(notifier: app)),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('Stopped'));
+      await tester.pump();
+
+      // Taps wait for the resume, but the live agent still HAS its terminal — `No terminal` over it
+      // was a claim about the agent that the in-flight resume had nothing to do with.
+      expect(conn.resumed, ['saved']);
+      expect(find.text('No terminal'), findsNothing);
+      // The list's own notify debounce, so no timer outlives the test.
+      await tester.pump(const Duration(milliseconds: 100));
+    });
+
+    testWidgets('with no saved conversation it says so, and takes no tap', (
+      tester,
+    ) async {
+      final app = _app([
+        _machine('box', [
+          _agent('live', minutesAgo: 30),
+          _agent('blank', minutesAgo: 1, stopped: true, resumable: false),
+        ]),
+      ]);
+      addTearDown(app.dispose);
+      await tester.pumpWidget(
+        MaterialApp(home: PhoneSearchPage(notifier: app)),
+      );
+      await tester.pump();
+
+      // The desktop's word for it. `Stopped` promised a resume the machine can only refuse.
+      expect(find.text('Resume unavailable'), findsOneWidget);
+      expect(find.text('Stopped'), findsNothing);
+      final blank = _agentRows(app)
+          .firstWhere((row) => row.entry!.agent.id == 'blank');
+      expect(blank.entry!.isOpenable, isFalse);
+      await tester.pump(const Duration(milliseconds: 100));
+    });
+
+    testWidgets('it is drawn as saved work, not as a dead row', (tester) async {
       final app = _app([
         _machine('box', [
           _agent('live', minutesAgo: 30),
@@ -796,19 +882,21 @@ void main() {
       final app = _app([machine]);
       addTearDown(app.dispose);
       final cache = PhoneSearchCatalogCache();
-      expect(
-        _agentIds(_rank(app, '', cache: cache)),
-        ['first', 'second', 'third'],
-      );
+      expect(_agentIds(_rank(app, '', cache: cache)), [
+        'first',
+        'second',
+        'third',
+      ]);
 
       // What a turn event does: the oldest agent is suddenly the most recently
       // active. The catalog is keyed on the SHAPE of the fleet, which a turn
       // does not change — so the list it is sitting in never hears about it.
       machine.agentActivityAt['third'] = DateTime.now();
-      expect(
-        _agentIds(_rank(app, '', cache: cache)),
-        ['first', 'second', 'third'],
-      );
+      expect(_agentIds(_rank(app, '', cache: cache)), [
+        'first',
+        'second',
+        'third',
+      ]);
     });
 
     test('an agent that starts working stays where it is', () {
@@ -840,10 +928,11 @@ void main() {
 
       // Once something HAS been reached for, the history outranks all of that:
       // the agent visited leads even though its conversation is the stalest.
-      expect(
-        _agentIds(_rank(app, '', recent: ['agent:box\u0000alpha'])),
-        ['alpha', 'delta', 'bravo'],
-      );
+      expect(_agentIds(_rank(app, '', recent: ['agent:box\u0000alpha'])), [
+        'alpha',
+        'delta',
+        'bravo',
+      ]);
     });
 
     test('the agent the search was opened from is not buried', () {
@@ -935,9 +1024,7 @@ void main() {
     );
   });
 
-  testWidgets('the list does not reshuffle under a finger', (
-    tester,
-  ) async {
+  testWidgets('the list does not reshuffle under a finger', (tester) async {
     final machine = _machine('box', [
       _agent('3188', minutesAgo: 4),
       _agent('2312', minutesAgo: 30),

@@ -157,6 +157,7 @@ class _AgentHomeState extends State<AgentHome> {
     widget.openAgent?.removeListener(_onAgentRequested);
     _loadingDeadline?.cancel();
     _restoreDeadline?.cancel();
+    _terminalWait?.cancel();
     super.dispose();
   }
 
@@ -266,6 +267,37 @@ class _AgentHomeState extends State<AgentHome> {
     };
   }
 
+  /// How long the remembered agent gets to have its terminal verified, once its machine has listed
+  /// it — see [_pendingEntryFor].
+  ///
+  /// 10s: the daemon's reconciler sweeps once as it starts and then every five seconds at its floor
+  /// (`TMUX_REAP_INTERVAL_MS`), so a pane that is really there is reported inside two sweeps. Past
+  /// that the agent genuinely has no terminal — a pane that was closed, a machine that reaped it —
+  /// and the screen stops holding out for one.
+  static const _terminalWaitTimeout = Duration(seconds: 10);
+  Timer? _terminalWait;
+  bool _terminalWaitGaveUp = false;
+
+  /// Whether the remembered agent is listed with its terminal still unverified, and the screen is
+  /// still willing to wait for it.
+  ///
+  /// ⚠️ Arms [_terminalWait] on the first frame that waits, and is called from `build` — a timer,
+  /// not a rebuild, so it changes nothing in the frame it is created in. It cannot be armed with
+  /// [_restoreDeadline] instead: that one starts when the record is read, while this wait only
+  /// begins once a machine has listed the agent, which may be seconds later.
+  bool _terminalStillComing(
+    List<AgentEntry> entries,
+    ({String machineId, String agentId}) agent,
+  ) {
+    if (_terminalWaitGaveUp) return false;
+    if (_pendingEntryFor(entries, agent) == null) return false;
+    _terminalWait ??= Timer(_terminalWaitTimeout, () {
+      if (!mounted) return;
+      setState(() => _terminalWaitGaveUp = true);
+    });
+    return true;
+  }
+
   /// The machine list's own word on whether the machine is up — the REST status, not the socket.
   static bool _accountSaysOnline(String? status) =>
       switch (status?.trim().toLowerCase()) {
@@ -277,6 +309,20 @@ class _AgentHomeState extends State<AgentHome> {
   /// build so the wait draws as "Connecting…", never as the empty state.
   bool _waitingForRestore = false;
 
+  /// Whether that wait is for the agent's own terminal rather than for its machine — see
+  /// [_terminalStillComing]. Only the message differs; saying "Connecting to your machine…" over a
+  /// machine that has already answered names the wrong thing to be patient with.
+  bool _waitingForTerminal = false;
+
+  /// What to tell somebody while the screen holds out for the agent it means to reopen.
+  String? _restoreMessage() {
+    if (_waitingForTerminal) return 'Reopening your harness…';
+    // Every other machine may be up and loaded while the one holding the remembered agent is still
+    // dialling — without this the wait would draw as "No agents yet".
+    if (_waitingForRestore) return 'Connecting to your machine…';
+    return null;
+  }
+
   /// The agent to draw, given what the account can currently reach.
   ///
   /// In order:
@@ -287,6 +333,7 @@ class _AgentHomeState extends State<AgentHome> {
   ///  - nothing openable at all → null, and the empty state says so.
   AgentEntry? _target(List<AgentEntry> entries) {
     _waitingForRestore = false;
+    _waitingForTerminal = false;
     // Picked by hand elsewhere — see [AgentHome.openAgent]. Until it is in the list, the screen keeps
     // what it has rather than blanking.
     final requested = _requestedAgent;
@@ -316,6 +363,14 @@ class _AgentHomeState extends State<AgentHome> {
     if (opened != null) {
       final live = _entryFor(entries, opened);
       if (live != null) return live;
+      // ⚠️ **Unopenable for a moment is not gone — see [_pendingEntryFor].** Returned so `chosen`
+      // goes on naming the agent the pager was built for: the key and the snapshot below are left
+      // exactly as they are, and the terminal on screen reattaches by itself once the pane is
+      // verified (`_attachPendingPanes`). Falling through instead moved somebody off the terminal
+      // they were reading, onto an unrelated agent, for a flag that flips back a second later.
+      // A real deletion still takes the pager away, through [_dropPagerIfShownAgentWasDeleted].
+      final pending = _pendingEntryFor(entries, opened);
+      if (pending != null) return pending;
     }
     final showing = _showing;
     if (showing != null) {
@@ -327,11 +382,21 @@ class _AgentHomeState extends State<AgentHome> {
       // later there was no going back to it. Only before any pager is up, only while that machine
       // is genuinely on its way, and only until [_restoreDeadline] — an agent that was deleted, or a
       // machine that stays down, still falls through to the first agent below.
-      if (_neighboursFor == null &&
-          !_restoreGaveUp &&
-          _machineStillComing(showing.machineId)) {
-        _waitingForRestore = true;
-        return null;
+      if (_neighboursFor == null && !_restoreGaveUp) {
+        if (_machineStillComing(showing.machineId)) {
+          _waitingForRestore = true;
+          return null;
+        }
+        // ⚠️ **And the agent's own terminal is waited for after that, which is a different wait.**
+        // Its machine can be answering with a loaded list and the agent on it still be unopenable,
+        // for the seconds its pane takes to be verified — see [_terminalStillComing]. Without this
+        // the record lost its claim in exactly that window, and the launch settled for the first
+        // agent that happened to have been verified already.
+        if (_terminalStillComing(entries, showing)) {
+          _waitingForRestore = true;
+          _waitingForTerminal = true;
+          return null;
+        }
       }
     }
     return entries.where((entry) => entry.agent.terminalAvailable).firstOrNull;
@@ -460,6 +525,30 @@ class _AgentHomeState extends State<AgentHome> {
       )
       .firstOrNull;
 
+  /// The entry naming [agent] while it is LISTED but not attachable yet — the machine has it, its
+  /// terminal has simply not been verified in this instant. Null for an agent that is not there,
+  /// and for a stopped one, whose terminal is not coming back on its own.
+  ///
+  /// ⚠️ **"No terminal" is what an agent looks like while nobody has LOOKED at its pane, not what a
+  /// missing agent looks like.** The daemon clears every agent's availability as it loads its
+  /// registry (`cli/src/lib/registry.ts`) and fills it back in one agent at a time, as its terminal
+  /// reconciler observes each pane — so a restart leaves every agent on the machine reading
+  /// unopenable for a moment, and each `agent_synced` frame after it turns one of them back on.
+  /// Reading that as "gone" is what sent a launch, and a pager mid-session, to whichever agent
+  /// happened to be verified first: the oldest one on the machine.
+  AgentEntry? _pendingEntryFor(
+    List<AgentEntry> entries,
+    ({String machineId, String agentId}) agent,
+  ) => entries
+      .where(
+        (entry) =>
+            entry.machineId == agent.machineId &&
+            entry.agent.id == agent.agentId &&
+            !entry.agent.terminalAvailable &&
+            !entry.agent.isStopped,
+      )
+      .firstOrNull;
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: widget.notifier,
@@ -482,11 +571,7 @@ class _AgentHomeState extends State<AgentHome> {
         // cards promises the wrong thing and then never delivers it. [_AgentHomeLoading] says what
         // is happening in words instead, and hands over to the terminal's own "Attaching…" — the
         // two are built to read as one sequence.
-        final loading =
-            _loadingMessage() ??
-            // Every other machine may be up and loaded while the one holding the remembered agent
-            // is still dialling — without this the wait would draw as "No agents yet".
-            (_waitingForRestore ? 'Connecting to your machine…' : null);
+        final loading = _loadingMessage() ?? _restoreMessage();
         _traceLoading(loading);
         if (loading != null) return _AgentHomeLoading(message: loading);
         // ⚠️ **No machine is open → this is a MACHINE problem, so the machine screen is what the
@@ -533,6 +618,11 @@ class _AgentHomeState extends State<AgentHome> {
       // where they are, now with every agent of the tab beside them.
       final snapshot = _neighbours;
       if (snapshot != null &&
+          // ⚠️ **Not while the agent on screen is mid-verification.** Its tab's entries are the
+          // openable ones, so an agent whose pane is still being looked at is missing from them —
+          // the sets differ for that alone, and the retake would rebuild the pager around a list
+          // that no longer holds the agent it is showing, landing it on the list's first page.
+          _pendingEntryFor(entries, chosen) == null &&
           // ⚠️ **Only while the pager is STAYING where it is.** `target` is the
           // agent the pager opened on for as long as that agent is openable, so
           // anything else means the screen is being moved on purpose — a tab
@@ -658,7 +748,11 @@ class _AgentHomeState extends State<AgentHome> {
     if (machine == null ||
         phoneMachineStatusOf(machine) != PhoneMachineStatus.ready ||
         machine.agentLoadStatus != AgentLoadStatus.loaded ||
-        machine.agents.any((agent) => agent.id == showing.agentId)) {
+        // A STOPPED agent stays on its machine's list (a stop arrives as `agent_synced`, and is
+        // kept so it can be resumed) but there is nothing left on screen to show for it.
+        machine.agents.any(
+          (agent) => agent.id == showing.agentId && !agent.isStopped,
+        )) {
       return;
     }
     if (!entries.any((entry) => entry.agent.terminalAvailable)) return;

@@ -3,10 +3,12 @@ import 'dart:typed_data';
 
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
+import 'package:harness_mobile/core/local_key_value_store.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/agent_index.dart';
 import 'package:harness_mobile/phone/agent_swipe_list.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/state/pane_layout_store.dart';
 import 'package:harness_mobile/terminal/terminal_binary.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
 import 'package:harness_mobile/viewer/viewer_key_store.dart';
@@ -56,10 +58,14 @@ const pagerAgentIds = ['a', 'b', 'c', 'd'];
 
 /// One machine `m` running [pagerAgentIds], reached through [conn] — as a phone reaches it when
 /// [viewer], with no CLI and nothing written to disk.
+/// [storage] gives the app the preferences a real one keeps across launches —
+/// the agent to reopen among them. Left out, nothing is remembered anywhere,
+/// which is what a test that is not about a relaunch wants.
 AppNotifier pagerApp(
   PagerConn conn, {
   bool online = true,
   bool viewer = false,
+  LocalKeyValueStore? storage,
 }) {
   final session = AuthSession();
   final app = AppNotifier(
@@ -67,6 +73,9 @@ AppNotifier pagerApp(
     authSession: session,
     configStore: null,
     connectionForTest: (_) => conn,
+    paneLayoutStore: storage == null
+        ? null
+        : PaneLayoutStore(storage: storage),
     viewer: viewer
         ? ViewerServices(
             config: AppConfig.dev,

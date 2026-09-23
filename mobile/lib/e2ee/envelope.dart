@@ -9,9 +9,10 @@ import 'primitives.dart';
 
 const int e2eVersion = 1;
 
-/// Frames this client must send as ciphertext — core.ts `ENCRYPTED_DOWN_TYPES`. test/e2ee/ holds it
-/// to the CLI's own list, because a type missing here fails nowhere: the frame simply leaves in the
-/// clear, and for terminal_* the relay then drops it as TERMINAL_FRAME_REJECTED.
+/// Frames this client must send as ciphertext — core.ts `ENCRYPTED_DOWN_TYPES`.
+/// `test/encrypted_down_types_test.dart` holds it to the CLI's own list, because a type missing here
+/// fails nowhere on the phone: the frame simply leaves in the clear, and the machine refuses it with
+/// E2EE_REQUIRED (for terminal_* the relay drops it as TERMINAL_FRAME_REJECTED).
 const Set<String> encryptedDownTypes = {
   'message',
   'question_response',
@@ -23,6 +24,11 @@ const Set<String> encryptedDownTypes = {
   'agent_create_status',
   'agent_delete',
   'agent_restart',
+  // Reopens stopped work (`AppNotifier.resumeAgent`). Missing here, every tap on a Stopped row came
+  // back "Could not open this harness: E2EE_REQUIRED".
+  'agent_resume',
+  // Carries the fork's name and first task — what the person typed — like agent_create's prompt.
+  'agent_fork',
   'agent_recent',
   'agent_update',
   'agent_files',

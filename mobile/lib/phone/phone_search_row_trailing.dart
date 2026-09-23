@@ -46,13 +46,15 @@ class PhoneSearchTrailing extends StatelessWidget {
   String? get _badge {
     final machine = row.machine;
     return switch (row.kind) {
-      PhoneDestinationKind.agent => !openable
-          ? 'No terminal'
-          // Saved work, not a dead row: the tap restarts it and opens it. Said
-          // plainly because the wait that follows is a second or two of nothing.
-          : row.entry?.agent.isStopped == true
-          ? 'Stopped'
-          : null,
+      // Saved work, not a dead row: the tap resumes it and opens it. Said
+      // plainly because the wait that follows is a second or two of nothing.
+      // Stopped work with no conversation to reopen says so in the desktop's
+      // words, rather than the `No terminal` of a live agent that lost its pane.
+      PhoneDestinationKind.agent => switch (row.entry?.agent) {
+        final agent? when agent.isStopped =>
+          openable ? 'Stopped' : 'Resume unavailable',
+        _ => openable ? null : 'No terminal',
+      },
       PhoneDestinationKind.machine => switch (machine == null
           ? null
           : phoneMachineStatusOf(machine)) {

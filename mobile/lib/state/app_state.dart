@@ -85,16 +85,19 @@ class RestartAgentResult {
 
 /// One deliberate creation, retained by the form if its reply is lost. Reusing
 /// it checks the original request; opening New agent starts a fresh intent.
-class AgentCreationAttempt {
-  AgentCreationAttempt() {
-    final random = Random.secure();
-    _id = List.generate(
-      16,
-      (_) => random.nextInt(256),
-    ).map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
-  }
+/// The id a lifecycle request is checked by when its reply is lost — see `agent_create_status`.
+String _newReceiptId() {
+  final random = Random.secure();
+  return List.generate(
+    16,
+    (_) => random.nextInt(256),
+  ).map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+}
 
-  late final String _id;
+class AgentCreationAttempt {
+  AgentCreationAttempt() : _id = _newReceiptId();
+
+  final String _id;
   String? _machineId, _targetId;
   Map<String, dynamic>? _choices;
   PaneSplitRequest? _split;
@@ -5092,22 +5095,133 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// An agent that already has a terminal succeeds without touching the machine:
   /// the caller's job is "make it openable", and it is.
+  ///
+  /// ⚠️ **`agent_resume`, never `agent_restart`.** The daemon routes the two to different services
+  /// (`backendSocket.ts`): restart swaps the process inside a LIVE pane and refuses an agent with
+  /// none (`NO_ACTIVE_PROCESS`, `RESTART_UNSUPPORTED_BACKEND`) — which is every stopped agent — while
+  /// resume builds a pane and reopens the saved conversation by its session id. This used to send
+  /// restart, so tapping a Stopped row could only ever fail.
   Future<RestartAgentResult> resumeAgent(String machineId, String agentId) {
-    final agent = stateOf(
-      machineId,
-    )?.agents.where((agent) => agent.id == agentId).firstOrNull;
+    final machine = stateOf(machineId);
+    final agent = machine?.agents
+        .where((agent) => agent.id == agentId)
+        .firstOrNull;
     if (agent?.terminalAvailable == true) {
       return Future.value(const RestartAgentResult());
     }
-    if (agent?.isStopped != true) {
+    if (machine == null || agent == null || !agent.isStopped) {
       return Future.value(
         const RestartAgentResult(
           error: 'That harness is no longer available. Search again.',
         ),
       );
     }
-    return restartAgent(machineId, agentId);
+    // Refused here rather than round-tripped: the machine can only say RESUME_UNAVAILABLE.
+    if (!agent.canResumeConversation) {
+      return Future.value(
+        const RestartAgentResult(
+          error: 'This harness has no saved conversation to resume.',
+        ),
+      );
+    }
+    return _resumeWithReceipt(machine, agent);
   }
+
+  /// Resumes whose outcome the machine has not confirmed yet, by agent → the receipt id they were
+  /// sent with.
+  ///
+  /// ⚠️ **A lost reply is not a failed resume.** The daemon may be starting the conversation right
+  /// now, and a second `agent_resume` would start it twice. So the next tap on the same agent asks
+  /// `agent_create_status` about the SAME id instead, exactly as the desktop's restart attempt does;
+  /// only a confirmed outcome — started, refused, gone — clears the entry.
+  final Map<(String, String), String> _agentResumes = {};
+
+  Future<RestartAgentResult> _resumeWithReceipt(
+    MachineState machine,
+    Agent stopped,
+  ) async {
+    final key = (machine.machine.machineId, stopped.id);
+    final checking = _agentResumes[key];
+    final receipt = checking ?? _newReceiptId();
+    _agentResumes[key] = receipt;
+    RestartAgentResult settle(String error) {
+      _agentResumes.remove(key);
+      return RestartAgentResult(error: error);
+    }
+
+    const unconfirmed = RestartAgentResult(
+      error: 'The machine has not confirmed the resume yet. Tap the harness again to check.',
+    );
+    final Map<String, dynamic> result;
+    try {
+      result = await _conn(machine.machine.machineId).request(
+        checking == null ? 'agent_resume' : 'agent_create_status',
+        payload: {
+          'creationId': receipt,
+          if (checking == null) 'agentId': stopped.id,
+        },
+      );
+    } on WsRequestFailure catch (failure) {
+      // A refusal to a first send happened before anything launched; anything else — a timeout,
+      // INTERNAL, a status check the machine cannot answer — leaves the outcome unknown.
+      if (checking != null || failure.code == 'INTERNAL') return unconfirmed;
+      return settle(_resumeFailure(failure.code, failure.detail));
+    } catch (_) {
+      return unconfirmed;
+    }
+    if (result['creationId'] != receipt) return unconfirmed;
+    switch (result['state']) {
+      case 'created':
+        break;
+      case 'pending':
+        return const RestartAgentResult(
+          error: 'The machine is still resuming this harness. Tap it again in a moment.',
+        );
+      case 'unavailable':
+        return settle('That harness is no longer available. Search again.');
+      case 'failed':
+        final failure = result['failure'];
+        if (failure is! Map || failure['code'] is! String) return unconfirmed;
+        return settle(
+          _resumeFailure(failure['code'] as String, failure['detail']),
+        );
+      default:
+        return unconfirmed;
+    }
+    final raw = result['agent'];
+    if (raw is! Map || raw['id'] != stopped.id) return unconfirmed;
+    final Agent resumed;
+    try {
+      resumed = Agent.fromJson(Map<String, dynamic>.from(raw));
+    } catch (_) {
+      return unconfirmed;
+    }
+    // The desktop's bar for "resumed": the same conversation, started — not a fresh session the
+    // daemon fell back to, and not one still starting or already failed.
+    if (result['resumed'] == false ||
+        resumed.sessionId != stopped.sessionId ||
+        resumed.launchState != 'ready') {
+      return unconfirmed;
+    }
+    _agentResumes.remove(key);
+    if (_disposed || machineStates[machine.machine.machineId] != machine) {
+      return const RestartAgentResult();
+    }
+    _upsertAgent(machine, resumed);
+    notifyListeners();
+    return const RestartAgentResult();
+  }
+
+  /// The desktop's `_restartFailure` wording for a resume the machine refused.
+  String _resumeFailure(String code, Object? detail) =>
+      detail is String && detail.isNotEmpty
+      ? detail
+      : switch (code) {
+          'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
+            'Update the harness CLI on this machine to open saved harnesses.',
+          'AGENT_BUSY' => 'Another operation is changing this harness. Wait for it to finish, then retry.',
+          _ => 'Could not open this harness: $code',
+        };
 
   Future<RestartAgentResult> restartAgent(
     String machineId,
@@ -6681,14 +6795,23 @@ class AppNotifier extends ChangeNotifier {
         if (raw is Map) {
           try {
             final agent = Agent.fromJson(Map<String, dynamic>.from(raw));
+            _upsertAgent(machine, agent);
             if (agent.terminalAvailable) {
-              _upsertAgent(machine, agent);
               // A pane created before this agent's terminal was verified is still sitting on
               // "Attaching…" with no session — nothing else re-checks it once agentLoadStatus is
               // already `loaded`, so this push is the only signal that it can attach now.
               _attachPendingPanes(machine);
             } else {
-              await _removeAgent(machine, agent.id);
+              // ⚠️ **Kept, not removed — the desktop's rule.** This is how a STOP arrives
+              // (`publishStoppedAgent` pushes the agent with `status: 'stopped'`), and also how an
+              // agent looks for a moment while its pane is re-verified. Removing it here made
+              // stopped work vanish from the phone until the next full reload, so there was no row
+              // left to resume. `agent_deleted` is what removes an agent; this only lets go of the
+              // streams, which have no terminal behind them any more.
+              for (final pane in panesFor(machine.machine.machineId).toList()) {
+                if (pane.agentId != agent.id) continue;
+                await _detachSession(pane, sendClose: false);
+              }
             }
           } catch (_) {
             unawaited(_loadMachineData(machine, force: true));

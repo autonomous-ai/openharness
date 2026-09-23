@@ -30,6 +30,7 @@ class PhoneSearchRow extends StatefulWidget {
     required this.onTap,
     this.quote,
     this.resuming = false,
+    this.busy = false,
   });
 
   final PhoneDestination row;
@@ -51,6 +52,14 @@ class PhoneSearchRow extends StatefulWidget {
   /// edge spins instead of repeating `Stopped` at somebody already waiting.
   final bool resuming;
 
+  /// Whether another row's resume is still running, so this one takes no tap until it settles.
+  ///
+  /// ⚠️ **Not folded into [openable], which is what it used to be.** [openable] is also what dims
+  /// the row and names the reason on its trailing edge, so every other agent in the list read
+  /// `No terminal` for as long as one was resuming — a claim about their terminals that was never
+  /// true. Being briefly unable to take a tap is not a property of the agent.
+  final bool busy;
+
   /// The line of session content that explains a row nothing else on it would:
   /// see [phoneContentSnippet]. Replaces the identity line when there is one,
   /// because a row matched on something said in its conversation has nothing on
@@ -64,8 +73,10 @@ class PhoneSearchRow extends StatefulWidget {
 class _PhoneSearchRowState extends State<PhoneSearchRow> {
   bool _pressed = false;
 
+  bool get _tappable => widget.openable && !widget.busy;
+
   void _press(bool pressed) {
-    if (!widget.openable || _pressed == pressed) return;
+    if (!_tappable || _pressed == pressed) return;
     setState(() => _pressed = pressed);
   }
 
@@ -86,7 +97,7 @@ class _PhoneSearchRowState extends State<PhoneSearchRow> {
       onTapDown: (_) => _press(true),
       onTapUp: (_) => _press(false),
       onTapCancel: () => _press(false),
-      onTap: widget.openable ? _open : null,
+      onTap: _tappable ? _open : null,
       child: AnimatedContainer(
         duration: AppMotion.press,
         curve: AppMotion.curve,

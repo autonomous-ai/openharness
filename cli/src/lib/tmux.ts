@@ -180,6 +180,36 @@ function readProcField(pid: number, field: 'cmdline' | 'comm'): string | null {
 }
 
 /**
+ * The rows that are actually running: a zombie is dropped.
+ *
+ * ⚠️ **A zombie keeps its pid, its command name and its start time — everything an identity check
+ * compares — while being dead.** It stays in the table until its parent reaps it, and an orphan's
+ * parent is pid 1, which in a container is often something that never reaps (`tail -f /dev/null` in
+ * the remote-machine rig did not). `checkPidRuntime` then called the zombie of a stopped agent's
+ * engine "alive", and resume refused that agent for as long as the zombie lasted — forever — with
+ * "The previous process is still running". No consumer of the process table wants one: a zombie
+ * runs nothing, holds no conversation, and can be neither signalled nor attached to.
+ *
+ * `ps` renders one as `[comm] <defunct>` (procps) or `<defunct>` (BSD). On Linux the kernel's own
+ * state letter settles it, so an argv that merely ENDS in that word is never mistaken for a corpse.
+ */
+export function liveProcessRows(rows: ProcessRow[]): ProcessRow[] {
+  return rows.filter((row) => !isZombie(row))
+}
+
+function isZombie(row: ProcessRow): boolean {
+  if (!/(^|\s)<defunct>$/.test(row.args)) return false
+  if (process.platform !== 'linux') return true
+  // `pid (comm) S ...` — comm may hold spaces and parentheses, so the state is read after the LAST `)`.
+  const stat = readProcStat(row.pid)
+  return stat === null || stat.slice(stat.lastIndexOf(')') + 1).trimStart().startsWith('Z')
+}
+
+function readProcStat(pid: number): string | null {
+  try { return readFileSync(`/proc/${pid}/stat`, 'utf8') } catch { return null }
+}
+
+/**
  * A `ps` that is already running answers everyone who asks while it runs. The first reconcile pass
  * after a boot attaches a few agents at once and every attach validates its pane against the table,
  * as does each hook that arrives in the same burst — one table serves them all. There is no cache,
@@ -208,7 +238,7 @@ async function readProcessRows(): Promise<ProcessRow[] | null> {
       resolve(rows)
     })
   })
-  return rows ? repairMangledRows(rows) : null
+  return rows ? liveProcessRows(repairMangledRows(rows)) : null
 }
 
 function execText(command: string, args: string[], timeout: number): Promise<string | null> {
