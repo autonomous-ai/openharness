@@ -88,6 +88,13 @@ describe('device local management validation', () => {
       .toEqual({ status: 500, body: { error: { code: 'INTERNAL_ERROR', message: 'Autonomous device management request failed' } } })
   })
 
+  it('names a blocked local network so the app can say where to allow it', async () => {
+    const service = fixture()
+    service.discover.mockRejectedValue(Object.assign(new Error('Harness is not allowed to use the local network.'), { code: 'LOCAL_NETWORK_BLOCKED' }))
+    expect(await autonomousDeviceLocalRequest(service, 'GET', '/api/autonomous-device/discover'))
+      .toEqual({ status: 503, body: { error: { code: 'LOCAL_NETWORK_BLOCKED', message: 'Harness is not allowed to use the local network.' } } })
+  })
+
   it('routes all read-only and cancel operations', async () => {
     const service = fixture()
     for (const [method, path, name] of [
