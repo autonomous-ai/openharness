@@ -155,7 +155,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "addAgent", "newAgent", "newTerminal", "cloneAgent", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
+    guard ["select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "addAgent", "newAgent", "newTerminal", "cloneAgent", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -295,7 +295,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         "cloneAgent": "plus.square.on.square",
         "renameActive": "pencil", "closeActive": "xmark",
         "splitRight": "rectangle.split.2x1", "splitDown": "rectangle.split.1x2",
-        "zoomPane": "viewfinder", "closePane": "xmark",
+        "zoomPane": "viewfinder", "movePaneToTab": "arrow.right.square", "closePane": "xmark",
         "commands": "command", "notifications": "bell",
       ]
       if let symbol = symbols[action] {
@@ -325,6 +325,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     add(file, "Split Right", "r", "splitRight")
     add(file, "Split Down", "d", "splitDown")
     add(file, "Zoom Pane", "", "zoomPane")
+    add(file, "Move Pane to Tab", "m", "movePaneToTab", [.command, .shift])
     add(file, "Close Pane", "w", "closePane", [.command, .shift])
     install(file, at: 1)
 
@@ -779,7 +780,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     return actionsEnabled && (action != "reopen" || canReopen) &&
       (action != "historyBack" || canGoBack) && (action != "historyForward" || canGoForward) &&
       (action != "closePane" || canClosePane) &&
-      (!["findTerminal", "findNext", "findPrevious", "splitRight", "splitDown", "zoomPane", "pinPane"].contains(action) || canFind)
+      (!["findTerminal", "findNext", "findPrevious", "splitRight", "splitDown", "zoomPane", "pinPane", "movePaneToTab"].contains(action) || canFind)
   }
 
   @objc private func menuAction(_ sender: NSMenuItem) {

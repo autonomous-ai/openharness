@@ -708,7 +708,7 @@ private extension SwarmTitlebar {
       "New Terminal stays off the File menu; its chord lives in the keymap")
     let historyMenu = main.item(withTitle: "History")!.submenu!
     try checkTitlebar(agent.items.contains { $0.title == "Clone Harness" && $0.representedObject as? String == "cloneAgent" }, "Clone Harness preserves its action")
-    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["newAgent", "addAgent", "cloneAgent", "separator", "new", "renameActive", "closeActive", "separator", "splitRight", "splitDown", "zoomPane", "closePane"], "File groups harness, tab and pane actions, harnesses first")
+    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["newAgent", "addAgent", "cloneAgent", "separator", "new", "renameActive", "closeActive", "separator", "splitRight", "splitDown", "zoomPane", "movePaneToTab", "closePane"], "File groups harness, tab and pane actions, harnesses first")
     try checkTitlebar(agent.items.first?.title == "New Harness" && agent.items.first?.keyEquivalent == "n" && agent.items.first?.keyEquivalentModifierMask == [.command],
       "New Harness leads File on Command-N")
     for (action, title, key) in [("splitRight", "Split Right", "r"), ("splitDown", "Split Down", "d")] {
@@ -726,6 +726,14 @@ private extension SwarmTitlebar {
     try checkTitlebar(agent.items.filter { !$0.isSeparatorItem }.allSatisfy { $0.image != nil && $0.toolTip == nil },
       "Every File action has a native icon and no hover hint")
     try checkTitlebar(agent.items.contains { $0.title == "Rename Tab" && $0.representedObject as? String == "renameActive" }, "Rename Tab preserves its command")
+    let movePane = agent.items.first(where: { $0.representedObject as? String == "movePaneToTab" })!
+    try checkTitlebar(movePane.title == "Move Pane to Tab" && movePane.keyEquivalent == "m" && movePane.keyEquivalentModifierMask == [.command, .shift],
+      "Move Pane to Tab advertises Command-Shift-M")
+    actionsEnabled = true
+    canFind = false
+    try checkTitlebar(!validateMenuItem(movePane), "Move Pane to Tab needs a focused pane")
+    canFind = true
+    try checkTitlebar(validateMenuItem(movePane), "Move Pane to Tab is available with a focused pane")
     try checkTitlebar(agent.items.contains { $0.title == "Close Tab" && $0.representedObject as? String == "closeActive" }, "Close Tab preserves its command")
     let commands = edit.submenu!.items.first(where: { $0.representedObject as? String == "commands" })!
     try checkTitlebar(commands.keyEquivalent == "p" && commands.keyEquivalentModifierMask == [.command], "Command search keeps its native menu owner")
