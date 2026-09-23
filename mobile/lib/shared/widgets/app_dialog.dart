@@ -31,6 +31,16 @@ const double kDialogVeilBlur = 7;
 /// stays in the background while the active surface has the user's attention.
 const Color kDialogVeilTint = Color(0xE6000000);
 
+/// How dark the page goes behind a sheet — a step past the `black54` Material
+/// draws — with the page blurred at [kDialogVeilBlur] under it.
+///
+/// Far short of [kDialogVeilTint]: a sheet covers only part of the window and
+/// leaves the page above it in view, so the blur takes the page's text away and
+/// the tint only has to set the depth. One figure for the search sheet and for
+/// every `showPhoneSheet` sheet, so the sheets over a terminal all stand on the
+/// same veil.
+const double kSheetVeilOpacity = 0.64;
+
 /// The app's dialog barrier: a blur, then a tint, then whatever opened.
 ///
 /// Use it in place of `showDialog` wherever a panel should take the window's

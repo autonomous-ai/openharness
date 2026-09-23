@@ -517,12 +517,14 @@ class _PlaceLine extends StatelessWidget {
   }
 }
 
-/// Where an agent runs, as the `⋯` sheet shows it under the agent's name, one
-/// line each behind its icon: the machine, the folder with its parent —
-/// `~/…/autonomous-harness/mobile` — and the branch.
+/// Where an agent runs, as the `⋯` sheet shows it under the agent's name, each
+/// part behind its icon: the machine on a line of its own, then the folder with
+/// its parent — `~/…/autonomous-harness/mobile` — and the branch side by side,
+/// the pair the header draws together too.
 ///
 /// The header has room for the folder's own name alone; the sheet is where the
-/// rest of the path is read.
+/// rest of the path is read. The pair wraps rather than cutting either short: a
+/// path or branch too long to share the line moves the branch to one of its own.
 class AgentPlaceLines extends StatelessWidget {
   const AgentPlaceLines({
     super.key,
@@ -545,35 +547,47 @@ class AgentPlaceLines extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (machineName.isNotEmpty)
-          _line(LucideIcons.laptopMinimal300, machineName),
+          _line(_part(LucideIcons.laptopMinimal300, machineName)),
         if (project != null)
-          _line(LucideIcons.folder300, projectPathTrail(project.cwd)),
-        if (branch != null) _line(LucideIcons.gitBranch300, branch),
+          _line(
+            Wrap(
+              spacing: 14,
+              runSpacing: 2,
+              children: [
+                _part(LucideIcons.folder300, projectPathTrail(project.cwd)),
+                if (branch != null) _part(LucideIcons.gitBranch300, branch),
+              ],
+            ),
+          ),
       ],
     );
   }
 
-  Widget _line(IconData icon, String text) => Padding(
-    padding: const EdgeInsets.only(top: 2),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Nudged down to sit on the text's first line rather than its top.
-        Padding(
-          padding: const EdgeInsets.only(top: 2),
-          child: Icon(icon, size: 13, color: AppPalette.textFaint),
+  Widget _line(Widget child) =>
+      Padding(padding: const EdgeInsets.only(top: 2), child: child);
+
+  /// One part behind its icon, only as wide as its text — so the branch can sit
+  /// beside the folder — and wrapping to a second line, then cut with `…`, only
+  /// when it is longer than the line itself.
+  Widget _part(IconData icon, String text) => Row(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      // Nudged down to sit on the text's first line rather than its top.
+      Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Icon(icon, size: 13, color: AppPalette.textFaint),
+      ),
+      const SizedBox(width: 6),
+      Flexible(
+        child: Text(
+          text,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: AppPalette.textSecondary, fontSize: 13),
         ),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(
-            text,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(color: AppPalette.textSecondary, fontSize: 13),
-          ),
-        ),
-      ],
-    ),
+      ),
+    ],
   );
 }
 

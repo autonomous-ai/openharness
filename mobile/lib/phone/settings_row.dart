@@ -29,7 +29,10 @@ const double kSettingsRowHeight = 50;
 /// card's edge to be.
 ///
 /// Re-measure if the icon size or the icon pack changes; this number belongs to both.
-const double _chevronInk = 6.68;
+///
+/// Public because the rows of `showPhoneSheet` end on the same chevron, at the same 20pt, inside
+/// the same cards — one measurement, not two copies of it drifting apart.
+const double kChevronInk = 6.68;
 
 /// A row's own left padding, and the step a [SettingsRow.nested] child takes beyond it.
 ///
@@ -282,11 +285,11 @@ class SettingsRow extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.only(left: 4),
                       child: Transform.translate(
-                        // Nudged right by the blank the glyph brings with it — see [_chevronInk].
+                        // Nudged right by the blank the glyph brings with it — see [kChevronInk].
                         // Translate rather than a negative right padding, which `EdgeInsets`
                         // rejects: this has to move the ink WITHOUT giving the row a wider
                         // trailing box, or the chevron would simply take its padding back.
-                        offset: const Offset(_chevronInk, 0),
+                        offset: const Offset(kChevronInk, 0),
                         child: Icon(
                           LucideIcons.chevronRight300,
                           size: 20,
