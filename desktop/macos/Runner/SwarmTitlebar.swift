@@ -114,6 +114,15 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
           sections: state["sections"] as? [[String: Any]] ?? []
         )
         result(nil)
+      case "playAlert":
+        // A named macOS system sound. Every Mac has these, so no audio asset ships with the app,
+        // nothing has to be decoded, and the alert plays at whatever volume the person has set for
+        // alerts rather than at one this app decided. An unknown name is silence, not a crash.
+        let args = call.arguments as? [String: Any] ?? [:]
+        if let name = args["sound"] as? String, let sound = NSSound(named: name) {
+          sound.play()
+        }
+        result(nil)
       case "keymapState":
         guard let payload = call.arguments as? [String: Any],
               let map = HarnessNativeKeymap(payload) else {
