@@ -1786,6 +1786,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   var isHovered: Bool { hovered && actionsEnabled }
   private let closeButton = SwarmCloseButton()
   private let selectButton = SwarmSelectButton()
+  /// Whether the middle button went down on THIS tab — see otherMouseUp.
+  private var middleDown = false
   private let iconView = NSImageView()
   var icon: NSImage? {
     get { iconView.image }
@@ -1985,6 +1987,20 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   // The tab owns the full click sequence, including clicks on its padding.
   // Forwarding mouseUp lets AppKit also treat a rename as a titlebar zoom.
   override func mouseUp(with event: NSEvent) {}
+  // Middle-click closes the tab, as it does in every browser and in Ghostty —
+  // the one gesture people arrive with and find missing here. On the UP, and
+  // only when it went down on this same tab: a press that slid off is a press
+  // that changed its mind, and a tab that vanished under the button would be a
+  // click nobody could take back.
+  override func otherMouseDown(with event: NSEvent) {
+    middleDown = actionsEnabled && event.buttonNumber == 2
+  }
+  override func otherMouseUp(with event: NSEvent) {
+    defer { middleDown = false }
+    guard middleDown, event.buttonNumber == 2, actionsEnabled else { return }
+    guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+    emit?("close", ["id": swarmId])
+  }
   override func mouseDragged(with event: NSEvent) {
     guard actionsEnabled else { return }
     if hypot(event.locationInWindow.x - downPoint.x, event.locationInWindow.y - downPoint.y) < 5 { return }
