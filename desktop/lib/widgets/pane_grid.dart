@@ -1618,6 +1618,25 @@ class _PaneContent extends StatelessWidget {
         onClose: close,
       );
     }
+    // Nothing is attaching, and nothing will: this machine's CLI cannot open a
+    // terminal without taking it from whoever has it, so an open here waits for
+    // a person rather than happening behind one (`AttachIntent`). A spinner
+    // would promise something that is never coming.
+    if (!machine.terminalNoTakeoverAvailable) {
+      return _PaneStatus(
+        title: agentName,
+        icon: Icons.terminal,
+        message:
+            'Open this harness here. Another screen may be using its terminal; '
+            'opening takes it, because ${machine.machine.displayName} runs an '
+            'older Harness CLI.',
+        onClose: single && !swarmMode ? null : close,
+        actionLabel: 'Open here',
+        onAction: () {
+          notifier.selectAgent(pane.machineId, wantedAgentId).ignore();
+        },
+      );
+    }
     return _PaneStatus(
       title: agentName,
       icon: Icons.hourglass_empty,

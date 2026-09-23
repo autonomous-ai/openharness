@@ -168,6 +168,18 @@ current fleet name. An older daemon, or a taker that said nothing, reads as
 under its header. Retaking control introduces this app in turn, so the other
 side sees this machine's name.
 
+**Only a person at this window may take a terminal.** Every `terminal_open`
+this app sends says whether a hand on THIS Mac asked for it (`AttachIntent`):
+a click, a key, a menu item, the band's button. Everything else — a tab another
+Mac opened arriving over the desk, a reconnect, a machine answering its agent
+list, a push about an agent created elsewhere, the dial turning, `harness
+remote` handing a session over — opens with `takeover: false` and is answered
+as a WATCHER: real output, live, with the terminal left where it was and the
+band offering it. Where the machine's CLI is too old to understand that key
+(`features.noTakeover` absent) nothing opens by itself at all; the tile says so
+and offers "Open here". This is what stops two screens trading one terminal
+while somebody is typing in it.
+
 ## Creation
 
 Cmd-N opens a compact launch menu with inherited arguments:
