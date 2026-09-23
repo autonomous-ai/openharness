@@ -177,11 +177,61 @@ longer before sampling than the other fixtures.
 | core-48-background-idle | 0.08% | 558.5 / 564.0 MiB | 13.5 |
 | core-48-foreground-idle | 0.10% | 559.2 / 596.1 MiB | 16.0 |
 
-The idle samples include the fixture and benchmark bookkeeping, not daemon or
-agent memory. A background window still has measurable wakeups. The synthetic
+The **212.8 MiB** one-terminal foreground result is entirely the desktop fixture
+process. It includes the app, terminal parsing/rendering, scrollback, and benchmark
+bookkeeping. It contains no Claude Code, Codex, shell, tmux, or Harness daemon
+process memory. This process counter cannot separate the app shell from its
+in-process terminal renderer; that requires allocation profiling or controlled
+empty-app versus terminal fixtures. The independent 1/16/48-terminal snapshots
+are not a causal per-terminal allocation measurement.
+
+Future connected resource measurements must report these separately:
+
+| Resource owner | What belongs in the measurement |
+|---|---|
+| Desktop app | UI, terminal parsing/rendering, retained scrollback, in-process caches |
+| Harness daemon | Connection handling, encryption, terminal transport, registries and watchers |
+| Terminal infrastructure | tmux/PTY host and shells, counted once per process |
+| Agent CLI and its children | Claude Code, Codex, etc., with tool subprocesses attributed to their session |
+
+Sample all groups over the same interval and show both group usage and an
+explicitly defined total. Keep remote-machine processes on their own machine's
+scorecard. Record process exits, missing permissions, agent activity, and shared
+processes rather than silently counting them as zero or attributing them twice.
+Also measure the desktop's incremental retained memory as terminal count and
+scrollback grow, and memory after repeated open/close cycles and a long soak.
+
+A background window still has measurable wakeups. The synthetic
 fixture has no real connections, so these results do not support a claim of zero
 background work in the connected application. Raw samples include resident
 bytes, CPU deltas, disk I/O, and package-idle wakeups as well.
+
+## Performance priorities and missing measurements
+
+Prioritize frequent developer actions and their slow tails. Every latency result
+needs a verified usable outcome, a workload, a sample count, failure/timeout
+counts, and p50/p95/p99 with maxima. A fast frame with incorrect focus or a lost
+keystroke is a failure. Do not pool different transports or workload sizes.
+
+| Priority | Experience | Measurement boundary |
+|---|---|---|
+| 1 | Local and remote typing | Input to matching PTY echo; then separately input to visible echo. Compare verified direct P2P, Cloudflare TURN, and Harness WebSocket relay on the same target, idle and during output. |
+| 1 | Open, switch, create | Cmd+O selection, tab/pane switch, and Cmd+N submission to a usable terminal and first accepted input. Keep opening the creation UI separate from creating a session or starting an agent. |
+| 1 | Busy-terminal responsiveness | Typing, scrolling, search, resize, and zoom with sustained and bursty output; frame stalls, achieved throughput, queue growth, and correctness. |
+| 2 | App startup | Cold/warm process launch to first usable window, restored active session, and accepted input. First paint alone is insufficient. |
+| 2 | Recovery | Sleep/wake, connection loss, and route migration to resumed input/output; lost/duplicated bytes, stale state, and unsuccessful recoveries. |
+| 2 | Resource efficiency | The separate process groups above: CPU, physical footprint, wakeups, disk/network traffic, long-session growth, and idle versus output-heavy behavior. |
+
+Install time is outside this scorecard. Startup remains in scope. Agent/model
+time to first token must be kept separate from Harness's session and transport
+overhead; external model latency must not mask an app regression.
+
+To keep improvements, establish repeated baselines on a controlled runner before
+setting per-workflow regression budgets. Gate common paths on tail latency and
+correctness, retain raw observations and outliers, and require the same workload
+before claiming a speedup. Treat memory growth and hidden-window wakeups as
+regressions even when a shortcut median remains fast. Budgets are a next step,
+not a claim that these workstation snapshots already enforce an SLO.
 
 ## Native navigation work
 

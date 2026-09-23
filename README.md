@@ -82,16 +82,19 @@ actual machines. Each row includes 600 echoes per workload across three runs:
 The route matters. These round trips exclude UI rendering; adding independent
 p95 values would not produce an end-to-end p95.
 
-Idle resource use with 1,000 seeded lines per retained terminal:
+Desktop app resource use with 1,000 seeded lines per retained terminal:
 
-| Retained terminals | Foreground / hidden CPU | Foreground / hidden footprint |
+| Retained terminals | App foreground / hidden CPU | App foreground / hidden footprint |
 |---|---:|---:|
 | 1 | 0.08% / 0.08% | 213 / 217 MiB |
 | 16 | 0.09% / 0.10% | 304 / 306 MiB |
 | 48 | 0.10% / 0.08% | 559 / 559 MiB |
 
 Thirty-second process snapshots; 100% CPU means one core. Memory is median
-physical footprint, excluding daemons and agents. Hidden fixtures still recorded
+physical footprint of the **desktop app alone**, including its terminal renderer
+and scrollback. The 213 MiB one-terminal result contains no Claude Code, Codex,
+shell, tmux, or Harness daemon process memory. Those need separate process
+measurements; their usage was not measured in this fixture. Hidden fixtures still recorded
 12–14 interrupt wakeups/s; these measurements do not establish zero background
 work in a connected app.
 
