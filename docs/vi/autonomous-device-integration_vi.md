@@ -1,5 +1,10 @@
 # Autonomous device ↔ Mac trực tiếp
 
+## Khám phá Store và chuẩn bị agent (v1)
+
+Robot đã pair có thể negotiate capability Store và chuẩn bị agent, tách biệt với giao task. Xem [contract chung cho phía OS](autonomous-device-store_vi.md), gồm JSON schemas, recovery và ví dụ Blender. Các operation cũ giữ tương thích.
+
+
 Mac tự tìm Autonomous OS qua service Avahi `_autonomous._tcp` đang có, dùng bonjour-service
 browse ba giây. Không nhập IP, không backend relay hoặc credential cloud trên thiết bị. Giữ
 login/start của Harness Mac như cũ; daemon đang chạy vẫn pair/điều khiển khi backend offline.

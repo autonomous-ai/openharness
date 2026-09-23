@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
 import { mutateDsh } from './dsh/service.js'
 import { HarnessShareOwner } from './sharing/owner.js'
 import { HarnessGrantStore } from './sharing/grants.js'
@@ -5442,7 +5443,9 @@ async function runForeground(session: AuthSession): Promise<void> {
   const cable = new CableSession(cableHost, new DialLog(env.HARNESS_LOGS_DIR))
   cableRef = cable
 
+  const deviceStore = createDeviceStore({ dataDir: env.ADAPTER_DATA_DIR, machineId: backend.machineId, create: input => backend.onCreateAgent!(input) })
   autonomousDeviceService = new AutonomousDeviceService({
+    store: deviceStore,
     machineId: backend.machineId,
     requestAppFocus: (agentId, expiresAt, focusRevision) => backend.sendFirstLocal({
       type: 'device_focus', payload: { machineId: backend.machineId, agentId, expiresAt, focusRevision },
@@ -5452,8 +5455,13 @@ async function runForeground(session: AuthSession): Promise<void> {
     stepFocus: (direction, currentAgentId) => backend.hasLocalClient() ? cableHost.stepFocus(direction, currentAgentId) : Promise.resolve('no_app'),
     // The dial's touchpad stroke, borrowed the same way: `dial_scroll` to the window's focused terminal.
     scroll: (phase, dy, velocity) => { if (!backend.hasLocalClient()) return false; cableHost.scrolled(phase, dy, velocity); return true },
-    agents: () => registry.advertised().map(s => ({ agentId: s.agentId, name: projectDisplayName(s), engine: s.engine,
-      state: turnStartedAt.has(s.sessionId) ? 'running' : 'idle' })),
+    agents: () => {
+      const evidence = new Map(deviceStoreAgents(backend.machineId).map(a => [a.agentId, a]))
+      return registry.advertised().map(s => ({ agentId: s.agentId, name: projectDisplayName(s), engine: s.engine,
+        packageId: evidence.get(s.agentId)?.packageId ?? null, workspace: evidence.get(s.agentId)?.workspace ?? s.cwd,
+        runtime: evidence.get(s.agentId)?.runtime ?? 'unavailable',
+        state: turnStartedAt.has(s.sessionId) ? 'running' : 'idle' }))
+    },
     submit: submitAgent,
     cancelDelivery: id => input.cancelDelivery(id),
     stop: id => cancelAgent(id, true),
