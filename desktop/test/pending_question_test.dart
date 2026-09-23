@@ -10,6 +10,7 @@ import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/core/local_key_value_store.dart';
+import 'package:harness/notify/agent_alerts.dart';
 import 'package:harness/notify/alert_sounds.dart';
 import 'package:harness/state/pending_question.dart';
 
@@ -251,6 +252,13 @@ void main() {
           store: store(),
           channel: channel,
           now: () => clock,
+        ),
+        // Injected, and switched on. Left to the default this would read the app's own global
+        // store — the real file-backed one — so the banner assertions would pass or fail on a
+        // preference belonging to whoever ran the suite, and silently stop testing anything the
+        // day that default flipped. Which it has.
+        agentAlerts: AgentAlerts(
+          store: ScreenAlertStore(storage: _Memory())..value = true,
         ),
       );
       notifier.machines = [_machine];
