@@ -422,7 +422,8 @@ void main() {
       });
       pick('feature/pay');
       expect(box.opensWorktree, true);
-      expect(box.createLabel, 'Start in Worktree');
+      expect(box.opensWorktree, true);
+      expect(box.createLabel, 'Start Harness');
       expect(box.projectFolderRequest!.payload, {
         'projectSource': 'branch',
         'gitSource': '/repo',
@@ -466,7 +467,13 @@ void main() {
         'branchRef': 'refs/heads/main',
       });
       pick('feature/pay');
-      expect(box.createLabel, 'Start in Worktree');
+      expect(box.opensWorktree, true);
+      expect(
+        box.branchRowLabel,
+        'feature/pay · in its worktree',
+        reason: 'The row says where Start goes; the button never changes.',
+      );
+      expect(box.createLabel, 'Start Harness');
     },
   );
 
@@ -516,35 +523,6 @@ void main() {
     expect(branchNameFrom('a..b//c/.d.lock'), 'a.b/c/d');
     expect(branchNameFrom('-.lead'), 'lead');
     expect(branchNameFrom('~^:'), '');
-  });
-
-  test('Branch starts on the branch of the pane it was opened from', () async {
-    final connection = _Connection()..answers['/repo'] = rich;
-    final app = createApp(connectionForTest: (_) => connection);
-    addTearDown(app.dispose);
-    Future<NewHarnessController> from(String? branch) async {
-      final box = NewHarnessController(
-        app,
-        machineId: 'm',
-        engine: 'codex',
-        folder: '/repo',
-        branch: branch,
-      );
-      addTearDown(box.dispose);
-      await settle();
-      return box;
-    }
-
-    final feature = await from('feature');
-    expect(feature.branchRef, 'refs/heads/feature');
-    expect(feature.worktreePlan!.kind, WorktreeStart.existingBranch);
-    final pay = await from('feature/pay');
-    expect(pay.opensWorktree, true, reason: 'Another agent on that branch.');
-    expect(pay.createLabel, 'Start in Worktree');
-    final gone = await from('deleted-branch');
-    expect(gone.branchRef, 'refs/heads/main', reason: 'The default instead.');
-    final none = await from(null);
-    expect(none.branchRef, 'refs/heads/main');
   });
 
   test('Create branch cleans up a typed name', () async {

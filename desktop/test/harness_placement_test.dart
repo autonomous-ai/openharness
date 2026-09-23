@@ -993,4 +993,72 @@ void main() {
       },
     );
   }
+
+  testWidgets(
+    'Cmd-N starts from the default branch, not the pane\'s, which is one pick away',
+    (tester) async {
+      newHarnessOpensInBox = true;
+      addTearDown(() => newHarnessOpensInBox = false);
+      final app = createApp();
+      addTearDown(app.dispose);
+      app.gitProjectReaderForTest = (_, _) async => {
+        'isGit': true,
+        'root': '/work/project',
+        'branch': 'main',
+        'defaultRef': 'refs/remotes/origin/main',
+        'branches': [
+          {
+            'ref': 'refs/heads/main',
+            'name': 'main',
+            'worktree': '/work/project',
+          },
+          {
+            'ref': 'refs/heads/feature/pay',
+            'name': 'feature/pay',
+            'worktree': '/wt/pay',
+          },
+          {
+            'ref': 'refs/remotes/origin/main',
+            'name': 'origin/main',
+            'remote': true,
+          },
+        ],
+      };
+      // The focused agent works on a branch of its own, in its own worktree.
+      app.machineStates['m']!.agents[0] = Agent(
+        id: 'a0',
+        name: 'Payments',
+        engine: 'codex',
+        terminalAvailable: true,
+        project: const AgentProject(
+          name: 'project',
+          cwd: '/work/project',
+          root: '/work/project',
+          branch: 'feature/pay',
+        ),
+      );
+      app.adoptSessionForTest(terminal('a0', []));
+      await app.addAgentToSwarm('m', 'a0');
+      await mount(tester, app);
+      await chord(tester, LogicalKeyboardKey.keyN);
+      await tester.pump();
+      await tester.pump();
+      final box = tester
+          .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+          .controller;
+      expect(
+        box.engine,
+        'codex',
+        reason: 'The pane\'s agent, machine and folder carry over.',
+      );
+      expect(box.project.folder, '/work/project');
+      expect(box.branchRef, 'refs/heads/main', reason: 'New work, from main.');
+      expect(box.createLabel, 'Start Harness');
+      box.focusField(NewHarnessField.branch);
+      box.accept(box.options.firstWhere((row) => row.title == 'feature/pay'));
+      expect(box.opensWorktree, true);
+      expect(box.createLabel, 'Start Harness');
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }

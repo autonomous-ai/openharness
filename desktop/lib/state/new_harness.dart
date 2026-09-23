@@ -379,7 +379,6 @@ class NewHarnessController extends ChangeNotifier {
     required String machineId,
     String? engine,
     String? folder,
-    String? branch,
     String? projectName,
     bool autoProject = false,
     DateTime Function()? now,
@@ -392,7 +391,6 @@ class NewHarnessController extends ChangeNotifier {
     String? home,
     Random? random,
   }) : _random = random ?? Random(),
-       _paneBranch = branch,
        placement =
            placement ?? (split == null ? HarnessPlacement.currentTab : null),
        _targetId = swarmId ?? app.activeSwarmId,
@@ -496,9 +494,6 @@ class NewHarnessController extends ChangeNotifier {
   NewHarnessProject get project => _project;
   final Random _random;
 
-  /// The branch the pane New Harness was opened from is on: Branch starts
-  /// there, for that pane's project only.
-  String? _paneBranch;
   bool? _worktree;
   String? _branchRef, _branchName, _placeholder;
   GitProjectInfo _gitProject = const GitProjectInfo();
@@ -561,6 +556,8 @@ class NewHarnessController extends ChangeNotifier {
 
   /// The Branch row: what was picked, or the new branch typed there.
   String get branchRowLabel {
+    // Its worktree is where the harness starts, not the project folder.
+    if (opensWorktree) return '$branchLabel · in its worktree';
     final plan = worktreePlan;
     if (plan != null &&
         plan.kind == WorktreeStart.newBranch &&
@@ -623,7 +620,6 @@ class NewHarnessController extends ChangeNotifier {
       _branchRef = null;
       _branchName = null;
       _placeholder = null;
-      _paneBranch = null;
       _gitProject = const GitProjectInfo();
     }
     _gitKey = key;
@@ -663,12 +659,6 @@ class NewHarnessController extends ChangeNotifier {
       );
     }
     _gitProject = info;
-    // Another one of the pane it came from: on that pane's branch, if it is
-    // still a local branch here.
-    if (_branchRef == null &&
-        info.branches.any((b) => !b.remote && b.name == _paneBranch)) {
-      _branchRef = 'refs/heads/$_paneBranch';
-    }
     // A name made up before the branches were known may already be taken.
     if (_placeholder != null &&
         info.branches.any((branch) => branch.name == _placeholder)) {
@@ -870,8 +860,9 @@ class NewHarnessController extends ChangeNotifier {
 
   // ---- what the line says -------------------------------------------------
 
-  String get createLabel =>
-      opensWorktree ? 'Start in Worktree' : 'Start Harness';
+  /// The same on every New Harness: where Start goes is said by the Branch row,
+  /// not by a button that changes its name.
+  String get createLabel => 'Start Harness';
 
   String get agentLabel => labelOf(_engine);
   String labelOf(String id) => currentHarnessName(

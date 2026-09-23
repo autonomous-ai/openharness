@@ -53,8 +53,10 @@ in the repository's main checkout, so Cmd-N from a worktree pane starts beside
 it rather than inside it. Worktrees Start made are never offered as recent
 projects.
 
-**Branch** starts on the branch of the pane New Harness was opened from, and
-otherwise on the default branch (Worktree on) or the folder's own branch (off).
+**Branch** starts on the default branch with Worktree on, and on the folder's
+own branch with it off. It does not follow the pane New Harness was opened from:
+New Harness is new work, and another agent's branch is one pick away. The Start
+button reads **Start Harness** on every New Harness, whatever the rows say.
 The picker names local branches; a remote branch is listed only when no local
 branch has its name.
 
@@ -67,7 +69,7 @@ own: the default or current branch gets a new branch named after the session
 (`onboarding-experience`);
 another local branch is checked out as it is; a remote branch nobody has
 locally becomes a local branch of the same name tracking it; a branch that
-already has a worktree opens there, and Start reads **Start in Worktree**. The
+already has a worktree opens there, as the Branch row's tooltip says. The
 project folder's own branch cannot be checked out twice. Typing a name no
 branch has offers **Create branch**: a new branch in a new worktree, from the
 default branch. Spaces become `-` and anything Git refuses in a name is
@@ -84,8 +86,8 @@ A picked or created branch keeps its name. The worktree is checked out in
 repository's `.worktreeinclude` (gitignore syntax, e.g. `.env`) are copied in.
 
 With `[ ]`, **Branch** is the branch the folder itself is on; only local
-branches are selectable. A branch with a worktree of its own opens there
-(**Start in Worktree**). Typing a name no branch has offers **Create branch**:
+branches are selectable. A branch with a worktree of its own opens there.
+Typing a name no branch has offers **Create branch**:
 a new branch from the folder's branch, keeping its uncommitted changes.
 Switching or creating needs no harness working in the folder, and switching
 also needs nothing uncommitted. No changes are forced,
