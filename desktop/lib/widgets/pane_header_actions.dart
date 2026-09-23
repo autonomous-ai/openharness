@@ -58,7 +58,7 @@ class PaneHeaderActions extends StatelessWidget {
   /// layers keep their size so hovering never changes the title's width.
   final Widget? details;
 
-  /// A status link that stays interactive while hover reveals the controls.
+  /// Supplemental branch context, hidden with details when controls appear.
   final Widget? trailing;
 
   /// Where this agent runs, shown with the controls rather than beside the name.
@@ -202,7 +202,7 @@ class PaneHeaderActions extends StatelessWidget {
       ),
     );
     if (details == null) return controls;
-    final layers = Stack(
+    return Stack(
       alignment: Alignment.centerRight,
       children: [
         IgnorePointer(
@@ -213,21 +213,23 @@ class PaneHeaderActions extends StatelessWidget {
             duration: MediaQuery.disableAnimationsOf(context)
                 ? Duration.zero
                 : grid.AppMotion.hover,
-            child: ExcludeSemantics(excluding: visible, child: details!),
+            child: ExcludeSemantics(
+              excluding: visible,
+              child: trailing == null
+                  ? details!
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(child: details!),
+                        trailing!,
+                      ],
+                    ),
+            ),
           ),
         ),
         controls,
       ],
     );
-    return trailing == null
-        ? layers
-        : Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Flexible(child: layers),
-              trailing!,
-            ],
-          );
   }
 }
 
