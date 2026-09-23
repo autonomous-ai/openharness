@@ -433,6 +433,10 @@ class AppNotifier extends ChangeNotifier {
   /// a banner appearing does not rebuild the workspace.
   final AgentAlerts agentAlerts;
 
+  /// Which agents have news nobody has looked at. Marked on the same two
+  /// moments and NOT behind the banner or sound switches — see [AgentUnread].
+  final AgentUnread agentUnread;
+
   AppConfig config;
   late ApiClient api;
 
@@ -1547,8 +1551,10 @@ class AppNotifier extends ChangeNotifier {
     this.turnActivityTimeout = const Duration(seconds: 12),
     AlertSounds? alerts,
     AgentAlerts? agentAlerts,
+    AgentUnread? agentUnread,
   }) : alerts = alerts ?? AlertSounds(store: alertSoundStore),
        agentAlerts = agentAlerts ?? AgentAlerts(),
+       agentUnread = agentUnread ?? AgentUnread(),
        _paneLayout = paneLayoutStore,
        // Remembers "a dial has been seen here" on the same terms the pane
        // layout is remembered: with a layout store there is a state file, and
@@ -5843,6 +5849,9 @@ class AppNotifier extends ChangeNotifier {
   /// Put one agent's news on screen, named the way the window names it.
   void _raiseAlert(MachineState machine, String agentId, AlertKind kind) {
     final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+    // Before the banner and outside its switch: the mark is what the window can
+    // still say when somebody has turned the interrupting halves off.
+    agentUnread.mark(machine.machine.machineId, agentId, kind);
     agentAlerts.post(
       AgentAlert(
         machineId: machine.machine.machineId,
@@ -5865,6 +5874,7 @@ class AppNotifier extends ChangeNotifier {
   /// Only an agent with no view at all is placed, on the current Swarm, in the
   /// same order [placeFork] uses for the same reason.
   Future<void> revealAgentFromAlert(String machineId, String agentId) async {
+    markAgentSeen(machineId, agentId);
     agentAlerts.dismiss(
       AgentAlert(
         machineId: machineId,
@@ -5879,6 +5889,12 @@ class AppNotifier extends ChangeNotifier {
     await addAgentToSwarm(machineId, agentId, swarmId: activeSwarmId);
     revealAgentView(machineId, agentId);
   }
+
+  /// The person has gone to this agent — by clicking its row, its banner, or
+  /// anything else that puts it in front of them. Whatever it was carrying has
+  /// been seen.
+  void markAgentSeen(String machineId, String agentId) =>
+      agentUnread.clear(machineId, agentId);
 
   String? _eventAgentId(
     MachineState machine,
@@ -10162,6 +10178,8 @@ class AppNotifier extends ChangeNotifier {
         }
         break;
       case 'agent_deleted':
+        final goneId = _eventAgentId(machine, event, payload);
+        if (goneId != null) agentUnread.forget(machineId, goneId);
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
           await _removeAgent(machine, agentId);
@@ -10338,6 +10356,7 @@ class AppNotifier extends ChangeNotifier {
     sessionPreviews.dispose();
     // Its sweep timer would otherwise outlive the window it was drawing into.
     agentAlerts.dispose();
+    agentUnread.dispose();
     _disposed = true;
     _sharingDiscoveryTimer?.cancel();
     _stopMachineRecovery();

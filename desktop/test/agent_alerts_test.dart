@@ -43,8 +43,22 @@ void main() {
         at: clock,
       );
 
-  test('the banner is ON by default — it is the half that says WHICH agent', () {
-    expect(ScreenAlertStore(storage: _Memory()).value, isTrue);
+  test('the banner is OFF until somebody asks for it', () {
+    // Both channels are interruptions; neither is taken without being asked.
+    expect(ScreenAlertStore(storage: _Memory()).value, isFalse);
+  });
+
+  test('the choice survives a restart, and only a real "on" turns it on', () async {
+    final memory = _Memory();
+    await (ScreenAlertStore(storage: memory)).set(true);
+    final reopened = ScreenAlertStore(storage: memory);
+    await reopened.load();
+    expect(reopened.value, isTrue);
+
+    memory.values['app_screen_alerts'] = 'o';
+    final garbled = ScreenAlertStore(storage: memory);
+    await garbled.load();
+    expect(garbled.value, isFalse);
   });
 
   test('newest first, because that is the order they are read in', () {

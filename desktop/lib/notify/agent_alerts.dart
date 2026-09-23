@@ -142,3 +142,55 @@ class AgentAlerts extends ChangeNotifier {
     super.dispose();
   }
 }
+
+/// Which agents have news the person has not looked at yet.
+///
+/// Separate from [AgentAlerts] and from the sound, and NOT behind either of
+/// their switches, because it is not an interruption: a banner appears over the
+/// work and a sound reaches another room, while this is a mark that sits still
+/// until somebody goes looking. Somebody who turned the noisy halves off still
+/// wants the window to be able to say which agent moved while they were away.
+class AgentUnread extends ChangeNotifier {
+  final _unread = <String, AlertKind>{};
+
+  static String keyFor(String machineId, String agentId) =>
+      '$machineId/$agentId';
+
+  /// How many agents are carrying something unread. Agents, not events — the
+  /// number answers "how many should I look at", and an agent that finished
+  /// three turns is still one place to go.
+  int get count => _unread.length;
+
+  bool get isEmpty => _unread.isEmpty;
+
+  /// What this agent's mark says, or null when it has none.
+  AlertKind? kindFor(String machineId, String agentId) =>
+      _unread[keyFor(machineId, agentId)];
+
+  /// Record that an agent did something. The NEWEST kind wins: an agent that
+  /// finished and then asked a question is waiting on a person, and that is the
+  /// mark worth showing.
+  void mark(String machineId, String agentId, AlertKind kind) {
+    final key = keyFor(machineId, agentId);
+    if (_unread[key] == kind) return;
+    _unread[key] = kind;
+    notifyListeners();
+  }
+
+  /// The person went and looked. Silent when there was nothing to clear, so a
+  /// pane being focused for any other reason does not rebuild the window.
+  void clear(String machineId, String agentId) {
+    if (_unread.remove(keyFor(machineId, agentId)) == null) return;
+    notifyListeners();
+  }
+
+  /// An agent that no longer exists cannot be gone to. Called when one is
+  /// deleted, so its mark does not sit in the count forever.
+  void forget(String machineId, String agentId) => clear(machineId, agentId);
+
+  void clearAll() {
+    if (_unread.isEmpty) return;
+    _unread.clear();
+    notifyListeners();
+  }
+}
