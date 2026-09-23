@@ -6194,6 +6194,14 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// PR lookup runs on the agent's machine using that machine's GitHub access.
+  Future<Map<String, dynamic>> readAgentPullRequest(String machineId, String agentId) async {
+    try {
+      return await _conn(machineId).request('git_pull_request',
+        payload: {'agentId': agentId}, timeout: const Duration(seconds: 30));
+    } catch (_) { return {'status': 'unavailable'}; }
+  }
+
   /// Reads source material only on the machine that owns the selected path.
   Future<Map<String, dynamic>> readProjectPreview(
     String machineId,

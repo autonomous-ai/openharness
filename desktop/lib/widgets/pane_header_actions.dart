@@ -25,6 +25,7 @@ class PaneHeaderActions extends StatelessWidget {
     this.viewerVisible = false,
     this.viewerColor,
     this.details,
+    this.trailing,
     this.modelPicker,
     this.terminal = false,
     this.compact = false,
@@ -56,6 +57,9 @@ class PaneHeaderActions extends StatelessWidget {
   /// Folder, branch and machine share the controls' space while idle. Both
   /// layers keep their size so hovering never changes the title's width.
   final Widget? details;
+
+  /// A status link that stays interactive while hover reveals the controls.
+  final Widget? trailing;
 
   /// Where this agent runs, shown with the controls rather than beside the name.
   ///
@@ -198,7 +202,7 @@ class PaneHeaderActions extends StatelessWidget {
       ),
     );
     if (details == null) return controls;
-    return Stack(
+    final layers = Stack(
       alignment: Alignment.centerRight,
       children: [
         IgnorePointer(
@@ -215,6 +219,15 @@ class PaneHeaderActions extends StatelessWidget {
         controls,
       ],
     );
+    return trailing == null
+        ? layers
+        : Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(child: layers),
+              trailing!,
+            ],
+          );
   }
 }
 

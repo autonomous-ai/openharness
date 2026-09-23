@@ -1,3 +1,4 @@
+import 'pull_request_badge.dart';
 import '../shared/theme/prompt_style.dart';
 import 'prompt_context.dart';
 import '../sharing/share_harness_dialog.dart';
@@ -2063,6 +2064,27 @@ class _TerminalHeader extends StatelessWidget {
                   ConstrainedBox(
                     constraints: BoxConstraints(maxWidth: rightWidth),
                     child: PaneHeaderActions(
+                      trailing:
+                          !narrow &&
+                              rightWidth >= actionsWidth + 180 &&
+                              agent != null &&
+                              project?.shownBranch != null
+                          ? ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 180),
+                              child: PullRequestBadge(
+                                identity: (
+                                  session.machineId,
+                                  agent.id,
+                                  project?.cwd,
+                                  project?.shownBranch,
+                                ),
+                                read: () => notifier.readAgentPullRequest(
+                                  session.machineId,
+                                  agent.id,
+                                ),
+                              ),
+                            )
+                          : null,
                       compact: narrow,
                       // Where this agent runs, with the controls rather than beside the name — the
                       // header has room for one of the two, and this is the half you only read while
