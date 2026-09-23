@@ -4,6 +4,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'phone_destination.dart';
 import 'phone_search_row_trailing.dart';
+import 'sheet_agent_lines.dart';
 import 'search_result_text.dart';
 import 'sheet_list.dart';
 
@@ -68,11 +69,7 @@ class SheetSearchRow extends StatelessWidget {
       selected: onScreen,
       onTap: openable && !busy ? _open : null,
       leading: _tile(row),
-      title: SearchResultText(
-        _title(row),
-        matches: matches.where((match) => match.title),
-        style: sheetRowTitleStyle(),
-      ),
+      title: _heading(row, matches),
       subtitle: _subtitle(row, matches),
       trailing: _trailing(row),
       chevron: openable && !onScreen && !resuming,
@@ -103,6 +100,18 @@ class SheetSearchRow extends StatelessWidget {
     return glyph == null || glyph.isEmpty ? null : glyph;
   }
 
+  /// The name — for an agent, with the monitor's age and attention after it ([SheetAgentTitle]).
+  static Widget _heading(PhoneDestination row, List<PhoneFieldMatch> matches) {
+    final name = SearchResultText(
+      _title(row),
+      matches: matches.where((match) => match.title),
+      style: sheetRowTitleStyle(),
+    );
+    final entry = row.entry;
+    if (entry == null) return name;
+    return SheetAgentTitle(entry: entry, name: name, now: DateTime.now());
+  }
+
   /// The name as the row draws it. A `?` row's title carries its character at
   /// its head — `>  Commands` — and the tile beside it already says that.
   static String _title(PhoneDestination row) {
@@ -125,16 +134,8 @@ class SheetSearchRow extends StatelessWidget {
         style: sheetRowSubtitleStyle(),
       );
     }
-    final identity = row.promptContext;
-    if (identity != null) {
-      return SheetPlaceLine(
-        machine: identity.machine ?? row.machineLabel,
-        folder: identity.project,
-        branch: identity.branch,
-        note: identity.leading,
-        matches: details,
-      );
-    }
+    final entry = row.entry;
+    if (entry != null) return SheetAgentMeta(entry: entry, matches: details);
     if (row.detail.isEmpty) return null;
     return SearchResultText(
       row.detail,

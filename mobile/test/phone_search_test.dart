@@ -913,7 +913,7 @@ void main() {
       expect(_agentIds(_rank(app, '', cache: cache)), ['idle', 'busy']);
     });
 
-    test('the agents visited lead, in the order they were visited', () {
+    test('with nothing typed, the desktop monitor\'s order — visits do not move it', () {
       final app = _app([
         _machine('box', [
           _agent('alpha', minutesAgo: 90),
@@ -922,17 +922,77 @@ void main() {
         ]),
       ]);
       addTearDown(app.dispose);
-      // Untouched, the freshest conversation leads — the catalog's own order,
-      // which is what the desktop reaches for its name comparison instead of.
+      // The freshest conversation leads, as it does in the Harness Monitor.
       expect(_agentIds(_rank(app, '')), ['delta', 'bravo', 'alpha']);
 
-      // Once something HAS been reached for, the history outranks all of that:
-      // the agent visited leads even though its conversation is the stalest.
+      // ⚠️ This phone's own visits used to outrank that, so the field opened on
+      // a list the laptop beside it did not show. The monitor has no idea what
+      // the phone visited; neither does its order.
       expect(_agentIds(_rank(app, '', recent: ['agent:box\u0000alpha'])), [
-        'alpha',
         'delta',
         'bravo',
+        'alpha',
       ]);
+    });
+
+    test('paused work keeps its place by when it last moved', () {
+      final app = _app([
+        _machine('box', [
+          _agent('live', minutesAgo: 60),
+          _agent('paused', minutesAgo: 1, stopped: true),
+          _agent('blank', minutesAgo: 5, stopped: true, resumable: false),
+        ]),
+      ]);
+      addTearDown(app.dispose);
+      final search = PhoneSearchController(notifier: app);
+      addTearDown(search.dispose);
+
+      // `blank` cannot be opened, and still sits where the monitor has it.
+      expect(_agentIds(search.rows), ['paused', 'blank', 'live']);
+
+      // Once something is typed the match decides, and what a tap cannot open
+      // goes last, as it always has.
+      search.setQuery('work');
+      expect(_agentIds(search.rows).last, 'blank');
+    });
+
+    test('an agent is named as the desktop names it, and found by either', () {
+      final app = _app([
+        _machine('box', [
+          Agent(
+            id: 'titled',
+            name: 'Claude harness 9-23 13:52',
+            title: 'Logo update',
+            engine: 'claude',
+            updatedAt: _now,
+            terminalAvailable: true,
+          ),
+          Agent(
+            id: 'bare',
+            name: 'Terminal harness 9-23 11:35',
+            engine: 'terminal',
+            updatedAt: _now.subtract(const Duration(minutes: 5)),
+            terminalAvailable: true,
+          ),
+          Agent(
+            id: 'chosen',
+            name: 'api-server',
+            engine: 'codex',
+            updatedAt: _now.subtract(const Duration(minutes: 9)),
+            terminalAvailable: true,
+          ),
+        ]),
+      ]);
+      addTearDown(app.dispose);
+
+      expect([for (final row in _rank(app, '')) row.title], [
+        'Logo update',
+        kUntitledPane,
+        'api-server',
+      ]);
+      // The CLI's name is what the terminal's title bar shows, so it still
+      // finds the row.
+      expect(_agentIds(_rank(app, 'Terminal harness')).first, 'bare');
     });
 
     test('the agent the search was opened from is not buried', () {

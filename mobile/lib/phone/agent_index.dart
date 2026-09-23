@@ -1,3 +1,4 @@
+import 'package:collection/collection.dart' show compareNatural;
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
@@ -118,6 +119,31 @@ List<AgentEntry> recentAgents(List<AgentEntry> entries) => _stableSorted(
       _firstWhere(a.isOpenable, b.isOpenable) ??
       _newestFirst(a.lastActiveAt, b.lastActiveAt),
 );
+
+/// The order the desktop's Harness Monitor lists harnesses in, "Recent" — so a list the phone
+/// opens on reads top to bottom as the monitor on the laptop beside it does.
+///
+/// ⚠️ **The machine's own `updatedAt`, never [AgentEntry.lastActiveAt].** That one folds in turns
+/// THIS phone happened to see, which the desktop never saw — two lists sorted on two different
+/// clocks drift apart on exactly the agents somebody is watching. `updatedAt` reaches both apps in
+/// the same frames, so both sort on one clock. An agent with none sorts last, as it does there.
+///
+/// Then the desktop's tie-breaks: its own focus history (which a phone does not have, so it is
+/// skipped), the name as drawn in natural order, and finally the id so two rows never swap.
+int compareMonitorOrder(AgentEntry a, AgentEntry b) {
+  final activity = (b.agent.updatedAt?.millisecondsSinceEpoch ?? 0).compareTo(
+    a.agent.updatedAt?.millisecondsSinceEpoch ?? 0,
+  );
+  if (activity != 0) return activity;
+  final name = compareNatural(
+    a.agent.displayName.toLowerCase(),
+    b.agent.displayName.toLowerCase(),
+  );
+  if (name != 0) return name;
+  return '${a.machineId}/${a.agent.id}'.compareTo(
+    '${b.machineId}/${b.agent.id}',
+  );
+}
 
 /// -1 when only [a] holds, 1 when only [b] does, null on a tie — so comparators chain with `??`.
 int? _firstWhere(bool a, bool b) => a == b ? null : (a ? -1 : 1);
