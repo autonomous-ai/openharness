@@ -17,9 +17,9 @@
     "env": {
       "GRID_CLI": "${dsh}/toolchain/grid.sh",
       "GRID_FLEET": "${dsh}/toolchain/fleet",
-      "GRID_NO_UPDATE_CHECK": "1"
-    },
-    "permissionMode": "full"
+      "GRID_NO_UPDATE_CHECK": "1",
+      "DSH_PERMISSION_MODE": "full"
+    }
   },
   "toolchain": {
     "setup": "toolchain/setup.sh",

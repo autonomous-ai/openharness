@@ -100,7 +100,7 @@ import { prepareCodexResume } from './engines/codex/portableHistory.js'
 import { buildHarnessSessionLabel } from './lib/harnessSessionLabel.js'
 import { adoptLegacyHarnessSessions, listTmuxPanes } from './lib/tmuxAgentDiscovery.js'
 import { installedDsh } from './dsh/installed.js'
-import { dshVerdictPath, dshViewerName } from './dsh/manifest.js'
+import { dshPinnedPermissionMode, dshVerdictPath, dshViewerName } from './dsh/manifest.js'
 import { catalogEntry } from './dsh/catalog.js'
 import { removeDsh } from './dsh/install.js'
 import { preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.js'
@@ -4518,10 +4518,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     } catch {
       return { ok: false, error: 'CWD_NOT_FOUND' }
     }
-    // A harness can pin its permission mode (`agent.permissionMode`): the Grid harness starts model
+    // A harness can pin its permission mode (`dshPinnedPermissionMode`): the Grid harness starts model
     // servers, which Codex's sandbox would start without a GPU. Pinned before anything reads the mode,
     // and recorded on the row like a chosen one, so a relaunch keeps it.
-    const pinnedMode = dsh ? installedDsh(dsh)?.manifest.agent?.permissionMode : undefined
+    const pinnedDsh = dsh ? installedDsh(dsh) : null
+    const pinnedMode = pinnedDsh ? dshPinnedPermissionMode(pinnedDsh.manifest) : null
     if (pinnedMode && permissionModeFlags(engine, pinnedMode)) {
       permissionMode = pinnedMode
       bypassPermission = permissionModeApproves(pinnedMode)
