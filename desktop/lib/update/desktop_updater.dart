@@ -19,6 +19,13 @@ const _metadataUrlOverride = String.fromEnvironment(
   'DESKTOP_UPDATE_METADATA_URL',
 );
 
+/// Lets a DEBUG build check and install, so the update band and its percentage
+/// can be exercised without cutting a release. Off unless asked for
+/// (`--dart-define=DESKTOP_UPDATE_FORCE=true`), and pointless on its own: pair
+/// it with [_metadataUrlOverride] pointing at a scratch manifest, or the debug
+/// build will poll the real one and offer to replace itself with a release.
+const _forceUpdateChecks = bool.fromEnvironment('DESKTOP_UPDATE_FORCE');
+
 /// The macOS build every Mac can run, rendered on Skia: what an Intel Mac installs, what every install
 /// from before the Intel/Apple Silicon split polls on either CPU, and what the website download
 /// serves. Must match the `intel` row of scripts/publish-macos-variant.sh — RELEASE.md, "Two macOS
@@ -202,7 +209,7 @@ class DesktopUpdater {
            ),
        _launchDetached = launchDetached ?? _defaultLaunchDetached,
        _metadataUrlForInstance = metadataUrl ?? _metadataUrl,
-       _releaseMode = releaseMode ?? kReleaseMode,
+       _releaseMode = releaseMode ?? (kReleaseMode || _forceUpdateChecks),
        _isLinux = isLinux ?? Platform.isLinux,
        _architecture = architecture ?? _currentArchitecture();
 
