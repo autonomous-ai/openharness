@@ -61,6 +61,13 @@ function command(action, value) {
       location.origin,
     );
 }
+function focusGame() {
+  const frame = frames.get(active)?.frame;
+  // WebKit must focus the iframe element when keyboard input comes from a
+  // different native pane; focusing only its window can leave that pane active.
+  frame?.focus({ preventScroll: true });
+  frame?.contentWindow?.focus();
+}
 function request(action, value) {
   const entry = frames.get(active);
   if (!entry?.ready) return Promise.reject(new Error("The game is not ready"));
@@ -103,10 +110,14 @@ const playtest = createPlaytest({
   request,
   toast,
   lock(value) {
+    const wasLocked = momentLock;
     momentLock = value;
     controls();
+    // Resume keyboard play after a rewind or note, once the iframe is interactive.
+    if (wasLocked && !value && mode === "play" && !paused)
+      focusGame();
   },
-  focus: () => frames.get(active)?.frame.contentWindow?.focus(),
+  focus: focusGame,
   async resume() {
     if (mode !== "play") setMode("play");
     setPaused(false);
@@ -219,7 +230,7 @@ function setMode(value) {
         state?.project.controls ||
         "Click the game to use its controls"
       : "Drag to orbit · Scroll to look closer";
-  if (value === "play") frames.get(active)?.frame.contentWindow?.focus();
+  if (value === "play") focusGame();
 }
 function setPaused(value) {
   paused = value;
@@ -235,11 +246,15 @@ $("play").onclick = () => {
   setMode("play");
   playtest.render();
 };
-$("pause").onclick = () => setPaused(!paused);
+$("pause").onclick = () => {
+  setPaused(!paused);
+  if (!paused && mode === "play")
+    focusGame();
+};
 $("restart").onclick = () => {
   command("restart");
   setPaused(false);
-  if (mode === "play") frames.get(active)?.frame.contentWindow?.focus();
+  if (mode === "play") focusGame();
 };
 $("update").onclick = () => {
   followLatest = true;
