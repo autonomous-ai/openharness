@@ -9,6 +9,7 @@ import { placeholderBranch, sessionBranchSlug, worktreeFolderName } from './agen
 import { nameBranchAfterSession } from './branchNaming.js'
 import { prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
 import { parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
+import { engineSessionTitle, namingTitle } from './sessionTitle.js'
 
 const exec = promisify(execFile)
 // Real Git, several worktrees a test: slower than the default 5s under a full, parallel run.
@@ -140,6 +141,31 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     await git('config', 'branch.sunny-owl.remote', 'origin')
     expect(await nameBranchAfterSession(pushed, 'Anything')).toBeNull()
     expect(await current(pushed)).toBe('sunny-owl')
+  })
+
+  it('waits through Codex rename statuses before naming the worktree after its conversation', async () => {
+    const path = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-owl', branchMode: 'placeholder' })
+    const session = { engine: 'codex', sessionId: 'naming-test', codexHome: join(root, 'codex'), cwd: path }
+    await writeFile(join(path, 'src', 'value'), 'work in progress')
+    for (const status of ['Starting | quiet-owl', 'renaming... ⠹', 'renaming… ⠴']) {
+      const title = namingTitle(engineSessionTitle(session, status), session)
+      expect(await nameBranchAfterSession(path, title)).toBeNull()
+      expect(await current(path)).toBe('quiet-owl')
+      expect(await git('config', '--get', 'branch.quiet-owl.harness')).toBe('placeholder')
+    }
+
+    await mkdir(session.codexHome)
+    await writeFile(join(session.codexHome, 'session_index.jsonl'), JSON.stringify({
+      id: session.sessionId, thread_name: 'Discuss configurable harness agents',
+    }) + '\n')
+    const title = namingTitle(engineSessionTitle(session, 'renaming... ⠴'), session)
+    expect(await nameBranchAfterSession(path, title)).toBe('discuss-configurable-harness-agents')
+    expect(await current(path)).toBe('discuss-configurable-harness-agents')
+    expect(await git('config', '--get', 'branch.discuss-configurable-harness-agents.harness')).toBe('created')
+    expect(await git('rev-parse', 'discuss-configurable-harness-agents')).toBe(await git('rev-parse', 'feature'))
+    expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('work in progress')
+    expect(await nameBranchAfterSession(path, 'A later conversation title')).toBeNull()
+    expect(await current(path)).toBe('discuss-configurable-harness-agents')
   })
 
   it('checks out an existing branch as it is in a new worktree, once', async () => {
