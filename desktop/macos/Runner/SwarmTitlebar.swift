@@ -967,6 +967,18 @@ private final class SwarmSubscriptionView: NSView {
     return metered ? min(576, base + meterWidth + 12) : base
   }
 
+  /// The orange a nearly-spent account is written in, legible in both appearances.
+  ///
+  /// `.systemOrange` is tuned to be *seen*, not to be *read*: on the light menu
+  /// it measures 1.86:1 against the panel, where text wants 4.5:1. It is only
+  /// right on the dark one, where it reaches 6.44:1. The light side takes the
+  /// same hue carried down to #A85400 (4.52:1). Measured with tool/contrast.py.
+  static let lowInk = NSColor(name: "harnessLowInk") { appearance in
+    appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+      ? .systemOrange
+      : NSColor(srgbRed: 168 / 255, green: 84 / 255, blue: 0, alpha: 1)
+  }
+
   /// What the trailing figures need to share a column — the widest of them.
   static func balanceColumn(_ entries: [SwarmSubscriptionEntry]) -> CGFloat {
     entries.map { textWidth($0.balance) }.max() ?? 0
@@ -978,8 +990,8 @@ private final class SwarmSubscriptionView: NSView {
       status: entry.balance, icon: nil, width: width,
       accessibility: entry.accessibilityLabel + (current ? ", current" : ""),
       tint: nil, meter: entry.remaining.map { $0 / 100 },
-      meterTint: entry.isLow ? .systemOrange : .controlAccentColor,
-      balanceTint: entry.isLow ? .systemOrange : .secondaryLabelColor,
+      meterTint: entry.isLow ? Self.lowInk : .controlAccentColor,
+      balanceTint: entry.isLow ? Self.lowInk : .secondaryLabelColor,
       showsTick: current, balanceColumn: balanceColumn)
   }
 
