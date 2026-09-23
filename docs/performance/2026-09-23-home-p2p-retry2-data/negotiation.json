@@ -1,0 +1,56 @@
+{
+  "note": "Selected negotiation facts extracted from private logs. Machine identifiers and all other log content are omitted. Timeouts are connection setup observations, not terminal echo latencies.",
+  "trials": [
+    {
+      "trial": "home-p2p-1.json",
+      "reason": "negotiation_timeout",
+      "negotiationElapsedMs": 25001,
+      "answerReceived": true,
+      "localCandidateTypes": [
+        "host",
+        "srflx"
+      ],
+      "remoteCandidateTypes": [
+        "host",
+        "srflx"
+      ],
+      "iceState": "connecting",
+      "fallbackRoute": "relay",
+      "privateSourceLogSha256": "1515dadecb77245f43210f1c1918f79ccaa1866d1bff8e41e936aff4af0fe831"
+    },
+    {
+      "trial": "home-p2p-2.json",
+      "reason": "negotiation_timeout",
+      "negotiationElapsedMs": 25002,
+      "answerReceived": true,
+      "localCandidateTypes": [
+        "host",
+        "srflx"
+      ],
+      "remoteCandidateTypes": [
+        "host",
+        "srflx"
+      ],
+      "iceState": "connecting",
+      "fallbackRoute": "relay",
+      "privateSourceLogSha256": "5151fd350ed5d0d30195f3bee5c84eb51a142d138366cb7bc33dd5bd57155230"
+    },
+    {
+      "trial": "home-p2p-3.json",
+      "reason": "negotiation_timeout",
+      "negotiationElapsedMs": 25001,
+      "answerReceived": true,
+      "localCandidateTypes": [
+        "host",
+        "srflx"
+      ],
+      "remoteCandidateTypes": [
+        "host",
+        "srflx"
+      ],
+      "iceState": "connecting",
+      "fallbackRoute": "relay",
+      "privateSourceLogSha256": "cf58760a73467bf8a2da1ea780962a6c7aef7b45c7dfee874cd920f5c2216c66"
+    }
+  ]
+}

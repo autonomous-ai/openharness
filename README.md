@@ -77,25 +77,25 @@ p95**, or 11.1 ms p95 during output (600 echoes per workload).
 For remote machines, we compare all three routes on the **same target** and verify
 the nominated ICE pair and both binary wire directions. The original comparison
 used three attempts per route and 200 echoes per workload per successful trial.
-Home direct P2P includes three additional attempts from a later rerun:
+Home direct P2P includes six additional attempts from two later reruns:
 
 | Target / route | Idle median | Idle p95 | p95 during output | Trials completed |
 |---|---:|---:|---:|---:|
 | Office iMac · Direct P2P | 14.6 ms | 135.0 ms | 37.7 ms | 1/3 |
 | Office iMac · Cloudflare TURN | 109.8 ms | 163.8 ms | 175.9 ms | 3/3 |
 | Office iMac · Harness relay | 401.4 ms | 504.7 ms | 512.0 ms | 3/3 |
-| Home iMac · Direct P2P | Not established | — | — | 0/6 |
+| Home iMac · Direct P2P | Not established | — | — | 0/9 |
 | Home iMac · Cloudflare TURN | 108.5 ms | 167.8 ms | 180.2 ms | 3/3 |
 | Home iMac · Harness relay | 384.7 ms | 503.3 ms | 501.1 ms | 3/3 |
 
-Direct P2P was fast when it connected, but its availability varied. Home's three
+Direct P2P was fast when it connected, but its availability varied. Home's six
 fresh retries on September 23 also timed out during direct negotiation; all
 reached their terminals through the fallback relay. The missing P2P latency is
 an unavailable connection, not an untested route.
-[Home rerun, negotiation evidence and raw results](docs/performance/2026-09-23-home-p2p-rerun.md).
-Across both runs, all eight unavailable direct-only attempts reached working
-terminals through the fallback relay. All 5,200 measured echoes and 390 measured control requests
-completed, and all 21 test terminals were deleted.
+[Home reruns, negotiation evidence and raw results](docs/performance/2026-09-23-home-p2p-rerun.md).
+Across the three series, all 11 unavailable direct-only attempts reached working
+terminals through the fallback relay. All 5,200 measured echoes and 390 measured
+control requests completed, and all 24 test terminals were deleted.
 
 Remote trials use an isolated production transport client. These round trips
 exclude UI rendering; adding independent p95 values would not produce an
