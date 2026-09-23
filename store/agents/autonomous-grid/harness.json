@@ -18,7 +18,8 @@
       "GRID_CLI": "${dsh}/toolchain/grid.sh",
       "GRID_FLEET": "${dsh}/toolchain/fleet",
       "GRID_NO_UPDATE_CHECK": "1"
-    }
+    },
+    "permissionMode": "full"
   },
   "toolchain": {
     "setup": "toolchain/setup.sh",

@@ -14,12 +14,24 @@ export interface DshLaunch {
   args: string[]
 }
 
-export function dshLaunch(dsh: InstalledDsh, workspace: string): DshLaunch {
+/** Facts about the signed-in account a harness is told rather than left to guess or ask. */
+export interface DshAccount {
+  /** The account's private grid — what "my grid" means to the person. */
+  privateGrid?: string | null
+}
+
+/** [account] as `HARNESS_*` variables, for the workspace init and the agent alike. */
+export function dshAccountEnv(account: DshAccount): Record<string, string> {
+  return account.privateGrid ? { HARNESS_PRIVATE_GRID: account.privateGrid } : {}
+}
+
+export function dshLaunch(dsh: InstalledDsh, workspace: string, account: DshAccount = {}): DshLaunch {
   const vars = { dsh: dsh.realDir, workspace }
   const env: Record<string, string> = {
     HARNESS_DSH: dsh.id,
     HARNESS_DSH_DIR: dsh.realDir,
     HARNESS_WORKSPACE: workspace,
+    ...dshAccountEnv(account),
   }
   for (const [key, value] of Object.entries(dsh.manifest.agent?.env ?? {})) {
     if (key.startsWith('HARNESS_')) continue // ours; a manifest cannot rename itself

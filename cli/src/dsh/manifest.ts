@@ -74,6 +74,12 @@ export const DshManifestSchema = z.strictObject({
     skills: z.array(relativePath).max(32).optional(),
     env: z.record(z.string().regex(/^[A-Z_][A-Z0-9_]*$/, 'env keys are UPPER_SNAKE'), z.string().max(4096)).optional(),
     args: z.array(z.string().max(4096)).max(64).optional(),
+    /**
+     * A permission mode the harness always runs in (`PERMISSION_MODES`), whatever New Harness
+     * picked — for a harness whose job the engine's sandbox cannot do (starting a model server
+     * that needs the GPU). A mode the base engine lacks is ignored.
+     */
+    permissionMode: z.string().regex(/^[A-Za-z]{1,32}$/).optional(),
   }).optional(),
   toolchain: z.strictObject({
     setup: command.optional(),
