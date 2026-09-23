@@ -83,7 +83,7 @@ class _SwarmHistoryState extends State<_SwarmHistory> {
                     Spacer(),
                     Text(
                       'This session',
-                      style: grid.AppType.monoMeta(color: Colors.white54),
+                      style: boxMonoStyle(color: Colors.white54),
                     ),
                   ],
                 ),
@@ -696,7 +696,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                 : alreadyHere && search.placement == null
                 ? Text(
                     'Already added',
-                    style: grid.AppType.monoMeta(color: Colors.white54),
+                    style: boxMonoStyle(color: Colors.white54),
                   )
                 : highlighted
                 ? ConstrainedBox(
@@ -722,7 +722,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                 ? null
                 : Text(
                     row.shortcut!,
-                    style: grid.AppType.monoMeta(color: Colors.white60),
+                    style: boxMonoStyle(color: Colors.white60),
                   ),
             onTap: canSubmit ? () => _submit(row) : null,
           );
@@ -1035,7 +1035,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
             matches: matches.where((match) => !match.title),
             style: widget.terminal
                 ? boxMonoStyle(color: kBoxFaint)
-                : grid.AppType.monoMeta(color: Colors.white54),
+                : boxMonoStyle(color: Colors.white54),
           )
         : null;
     return widget.stacked
@@ -1096,10 +1096,7 @@ class SwarmSearchActionLabel extends StatelessWidget {
             if (!compact) const SizedBox(width: 8),
             if (_returnChord.hasMatch(hint)) ...[
               if (hint.length > 1)
-                Text(
-                  hint.substring(0, hint.length - 1),
-                  style: grid.AppType.monoMeta(),
-                ),
+                Text(hint.substring(0, hint.length - 1), style: boxMonoStyle()),
               const Icon(Icons.keyboard_return, size: 14),
             ] else
               ConstrainedBox(
@@ -1108,7 +1105,7 @@ class SwarmSearchActionLabel extends StatelessWidget {
                   hint.replaceAll('↵', 'Return').replaceAll('⇥', 'Tab'),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: grid.AppType.monoMeta(),
+                  style: boxMonoStyle(),
                 ),
               ),
           ],
@@ -1267,7 +1264,7 @@ class SwarmSearchCount extends StatelessWidget {
             key: const ValueKey('swarm-search-count'),
             style: terminal
                 ? boxMonoStyle(color: kBoxFaint)
-                : grid.AppType.monoMeta(color: Colors.white54),
+                : boxMonoStyle(color: Colors.white54),
           ),
         );
       },

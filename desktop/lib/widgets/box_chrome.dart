@@ -122,11 +122,12 @@ class CommandDock extends StatelessWidget {
 /// The terminal's own face AND size, not the UI's fixed 13pt: these boxes
 /// sit over the panes, and one that stayed small beside a zoomed terminal
 /// read as a different application.
-TextStyle boxMonoStyle({Color? color, FontWeight? weight}) => terminalTextStyle(
-  height: 1.35,
-  color: color ?? Colors.white,
-  fontWeight: weight,
-);
+TextStyle boxMonoStyle({Color? color, FontWeight? weight, double? height}) =>
+    terminalTextStyle(
+      height: height ?? 1.35,
+      color: color ?? Colors.white,
+      fontWeight: weight,
+    );
 
 class TerminalBox extends StatelessWidget {
   const TerminalBox({super.key, required this.child, this.docked = false});

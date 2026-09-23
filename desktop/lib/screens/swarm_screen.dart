@@ -2391,8 +2391,9 @@ class _SwarmScreenState extends State<SwarmScreen>
         style: terminalTextStyle(color: Colors.white, height: 1.35),
         child: FocusTraversalGroup(
           policy: OrderedTraversalPolicy(),
+          // Fills its frame, as fzf does: the list takes every row the box
+          // has rather than hugging its contents and leaving the rest dark.
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             children: [
               if (search.title != search.placement?.title)
                 Padding(
@@ -2443,7 +2444,7 @@ class _SwarmScreenState extends State<SwarmScreen>
                   ),
                 ),
               ),
-              Flexible(
+              Expanded(
                 child: ordered(
                   2,
                   SwarmSearchResults(

@@ -258,7 +258,7 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
   }
 }
 
-TextStyle get _muted => AppType.monoMeta(height: 1.5, color: Colors.white54);
+TextStyle get _muted => boxMonoStyle(height: 1.5, color: Colors.white54);
 TextStyle get _body => AppType.monoLabel(
   fontWeight: FontWeight.w400,
   height: 1.6,
@@ -375,7 +375,7 @@ class _AgentPreview extends StatelessWidget {
               ),
               if (dense) ...[
                 const SizedBox(width: 10),
-                Text(state, style: AppType.monoMeta(color: color)),
+                Text(state, style: boxMonoStyle(color: color)),
               ],
             ],
           ),
@@ -403,7 +403,7 @@ class _AgentPreview extends StatelessWidget {
                       color: color,
                     ),
                     const SizedBox(width: 5),
-                    Text(state, style: AppType.monoMeta(color: color)),
+                    Text(state, style: boxMonoStyle(color: color)),
                   ],
                 ),
               ),
