@@ -23,7 +23,7 @@ export function deviceStoreAgents(machineId: string): StoreAgent[] {
   return registry.list().map(s => ({ agentId: s.agentId, machineId, packageId: s.dsh ? installedDsh(s.dsh)?.id ?? s.dsh : null,
     engine: s.engine, workspace: canonicalPath(s.cwd), state: s.active ? 'active' : 'inactive',
     runtime: !registry.terminalAvailable(s.agentId) || s.launch?.state === 'failed' ? 'unavailable'
-      : s.launch?.state === 'starting' ? 'starting' : s.active ? (s.sessionId || s.engine === 'terminal' ? 'ready' : 'starting') : 'unavailable',
+      : s.launch?.state === 'starting' ? 'starting' : s.active ? (s.launch?.state === 'ready' || s.sessionId || s.engine === 'terminal' ? 'ready' : 'starting') : 'unavailable',
     ...(s.launch?.state === 'failed' ? { error: s.launch.detail ?? s.launch.error } : {}) }))
 }
 function trusted(entry: DshRegistryEntry | undefined): boolean {
@@ -53,9 +53,9 @@ export async function deviceStorePackages(): Promise<StorePackage[]> {
   })
 }
 
-export function createDeviceStore(options: { dataDir: string; machineId: string; create: NonNullable<BackendSocket['onCreateAgent']> }): AutonomousDeviceStore {
+export function createDeviceStore(options: { dataDir: string; machineId: string; create: NonNullable<BackendSocket['onCreateAgent']>; reveal?: (operationId: string, agentId: string) => void }): AutonomousDeviceStore {
   return new AutonomousDeviceStore({
-    directory: join(options.dataDir, 'device-preparations'), machineId: options.machineId,
+    directory: join(options.dataDir, 'device-preparations'), machineId: options.machineId, reveal: options.reveal,
     packages: deviceStorePackages,
     agents: () => deviceStoreAgents(options.machineId),
     install: async (id, progress) => {
