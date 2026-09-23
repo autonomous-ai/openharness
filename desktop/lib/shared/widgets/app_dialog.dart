@@ -1,16 +1,5 @@
-/// One way to open a dialog, so every dialog in the app stands on the same
-/// veil.
-///
-/// Material's `showDialog` can only TINT what is behind a dialog —
-/// `barrierColor` is a flat fill, and this app's background is terminals. Dimmed
-/// text is still text: at any alpha that keeps the window feeling alive, the
-/// lines behind a panel stay legible enough to read, and a reader's eye goes on
-/// picking words out of them instead of settling on the thing that just opened.
-///
-/// So the barrier is BUILT rather than coloured — a [BackdropFilter] under a
-/// tint, the pairing `task_palette.dart` already uses for its own veil. Blur
-/// destroys the letterforms; the tint then sets the depth. Together they make
-/// what is behind read as *behind*.
+/// Shared instant dialogs. An opaque-enough tint separates terminal text from
+/// the dialog without filtering live terminal pixels on every frame.
 library;
 
 import 'dart:ui' show ImageFilter;
@@ -18,20 +7,14 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// How far the app blurs what sits behind a dialog.
-///
-/// ⚠️ Bounded on purpose. A terminal is high-contrast text on a dark ground,
-/// and far enough past this the glyphs stop reading as letters at all and
-/// become a grey haze that looks like a rendering fault rather than depth. 7
-/// is where a line behind the panel is unmistakably gone while the window
-/// still reads as the window.
-const double kDialogVeilBlur = 7;
+/// Dialogs do not blur the live workspace by default.
+const double kDialogVeilBlur = 0;
 
 /// Shared dark backdrop for dialogs and centered pickers. Terminal output
 /// stays in the background while the active surface has the user's attention.
 const Color kDialogVeilTint = Color(0xE6000000);
 
-/// The app's dialog barrier: a blur, then a tint, then whatever opened.
+/// The app's dialog barrier: a flat tint and the active surface.
 ///
 /// Use it in place of `showDialog` wherever a panel should take the window's
 /// full attention. It keeps `showDialog`'s shape — the same `builder`,
@@ -50,7 +33,7 @@ Future<T?> showAppDialog<T>({
   String barrierLabel = 'Dismiss',
   Color veilTint = kDialogVeilTint,
   double veilBlur = kDialogVeilBlur,
-  Duration transitionDuration = const Duration(milliseconds: 140),
+  Duration transitionDuration = Duration.zero,
 }) => showGeneralDialog<T>(
   context: context,
   // The route's own barrier draws nothing: the veil below is the barrier.
@@ -60,17 +43,20 @@ Future<T?> showAppDialog<T>({
   // over a barrier it believes is there, including a tap on the dialog.
   barrierDismissible: false,
   barrierLabel: barrierLabel,
-  transitionDuration: transitionDuration,
+  transitionDuration: MediaQuery.disableAnimationsOf(context)
+      ? Duration.zero
+      : transitionDuration,
   pageBuilder: (context, _, _) => _AppDialogVeil(
     tint: veilTint,
     blur: veilBlur,
     dismissible: barrierDismissible,
     child: Builder(builder: builder),
   ),
-  transitionBuilder: (context, anim, _, child) => FadeTransition(
-    opacity: CurvedAnimation(parent: anim, curve: Curves.easeOut),
-    child: child,
-  ),
+  transitionBuilder: (context, anim, _, child) =>
+      transitionDuration == Duration.zero ||
+          MediaQuery.disableAnimationsOf(context)
+      ? child
+      : FadeTransition(opacity: anim, child: child),
 );
 
 /// The veil, and the dialog standing on it.

@@ -244,6 +244,17 @@ void main() {
               }
             }
             if (section == SettingsSection.shortcuts) {
+              // Rows outside the viewport are now built on demand.
+              await tester.scrollUntilVisible(
+                find.text('Workspace'),
+                200,
+                scrollable: find
+                    .descendant(
+                      of: find.byType(ListView),
+                      matching: find.byType(Scrollable),
+                    )
+                    .last,
+              );
               final label = tester.renderObject<RenderParagraph>(
                 find.text('Workspace'),
               );
