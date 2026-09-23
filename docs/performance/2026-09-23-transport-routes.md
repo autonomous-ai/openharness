@@ -35,6 +35,13 @@ Node event loop between client and transport. The installed local daemon
 measured data path. Compare these route trials to each other; they are not a
 before/after speedup relative to the earlier installed-daemon results.
 
+The client is an Apple M2 Max with 12 CPU cores and 64 GiB RAM, running macOS
+26.6.2 and Node 22.23.1. The measured werift dependency is 0.24.4. Both remote
+probes report Darwin/x86_64 and terminal protocol 3; their daemon build revisions
+are not inferred from the client's checkout. The workstation has other
+applications and sessions running. Remote host load and network conditions were
+not controlled or replayed. See the [environment record](2026-09-23-transport-data/diagnostics/environment.json).
+
 ## How a route is proven
 
 - **Direct P2P:** TURN credentials are removed from this isolated offer policy.

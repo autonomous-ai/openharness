@@ -2,10 +2,6 @@
   "schema": 1,
   "complete": false,
   "missingTrials": [
-    "office-relay-3.json",
-    "office-p2p-3.json",
-    "office-turn-3.json",
-    "home-p2p-3.json",
     "home-turn-3.json",
     "home-relay-3.json"
   ],
@@ -93,6 +89,34 @@
       "sha256": "878766a2647ba7e5990dffb6c95295ad739e2407fecf2e014523a8bda28db369",
       "sourceSha256": "878766a2647ba7e5990dffb6c95295ad739e2407fecf2e014523a8bda28db369",
       "redactions": []
+    },
+    {
+      "file": "office-relay-3.json",
+      "sha256": "0efd23f6fe9b2145973a3064f17deef8de9e1e3b58e464283f606245e5b4e3a1",
+      "sourceSha256": "0efd23f6fe9b2145973a3064f17deef8de9e1e3b58e464283f606245e5b4e3a1",
+      "redactions": []
+    },
+    {
+      "file": "office-p2p-3.json",
+      "sha256": "22e05779d97104c892aed553f569c48a597d4c05097051c68adb74b5b8562e9d",
+      "sourceSha256": "c89df4cd3ac84584c1373f9de1a547478dcf9be43314d9d021583f6d30110812",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ]
+    },
+    {
+      "file": "office-turn-3.json",
+      "sha256": "1be6437bc6f324924d3779c9c2accda5bfe59cc8d436e7eb76ef1ef4a1095b4e",
+      "sourceSha256": "1be6437bc6f324924d3779c9c2accda5bfe59cc8d436e7eb76ef1ef4a1095b4e",
+      "redactions": []
+    },
+    {
+      "file": "home-p2p-3.json",
+      "sha256": "4f1ec1409a1ffdabe11b038d493c5244644eb99023b2122a05003d8dc0464a3a",
+      "sourceSha256": "4f1d9637de9c2af79999a0569e284d376e4cd197509b47c0d9733a5494d0392f",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ]
     }
   ]
 }
