@@ -11,6 +11,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../shared/theme/app_type.dart';
 import '../theme/app_theme.dart';
@@ -115,48 +116,63 @@ class ModelPickerSearch extends StatelessWidget {
         Icon(Icons.search, size: 16, color: AppColors.mutedStrong),
         const SizedBox(width: 9),
         Expanded(
-          // The nudge, and it is a nudge on purpose. The icon centres correctly in this row; the
-          // text does not, because the decorator gives the field more height than the letters use
-          // and hands the slack to the bottom. Several principled fixes were tried first — even
-          // leading distribution, a pinned line height, sizing the box from its padding — and each
-          // moved the number without closing the gap; the last one only made the box taller. What
-          // is left is a measured offset, stated as one, rather than another theory dressed as a
-          // layout rule. Half of it lands on the glyphs, which is why it is twice what the eye
-          // asked for.
-          child: Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: TextField(
-              controller: controller,
-              onChanged: onChanged,
-              autofocus: true,
-              // The LINE box centres correctly on its own; the glyphs inside it do not. The app's
-              // sans face has a lopsided ascent and descent, and the default leading distribution
-              // hands that asymmetry straight to the text — so the hint sat visibly high in a box a
-              // widget test measures as perfectly centred, because a test measures the line box and
-              // an eye sees the letters. Splitting the leading evenly is what puts them in the
-              // middle of it.
-              style: AppType.body(color: AppColors.text)
-                  .copyWith(leadingDistribution: TextLeadingDistribution.even),
-              textAlignVertical: TextAlignVertical.center,
-              cursorColor: AppColors.text,
-              decoration: InputDecoration(
-                isCollapsed: true,
-                // ⚠️ EVERY border state, and `filled: false`. The app's theme gives fields a 1.5px
-                // accent `focusedBorder` and a fill of their own, and `border:` overrides neither —
-                // so a field that autofocuses the moment the panel opens drew a second, brighter box
-                // INSIDE the one around it. The box is this container's; the caret is the focus.
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                disabledBorder: InputBorder.none,
-                errorBorder: InputBorder.none,
-                focusedErrorBorder: InputBorder.none,
-                filled: false,
-                contentPadding: EdgeInsets.zero,
-                hintText: 'Search models or machines',
-                hintStyle: AppType.body(
-                  color: AppColors.muted,
+          // ⚠️ Arrow keys belong to the LIST, not to the text.
+          //
+          // A text field consumes up and down for cursor movement, and it is the first thing this
+          // panel focuses so a person can type straight away — which left the rows unreachable
+          // from the keyboard entirely: every arrow went into the field and Enter submitted
+          // nothing. `Shortcuts` nearest the focused node wins over the editing shortcuts the app
+          // installs at its root, so this is where that is taken back.
+          child: Shortcuts(
+            shortcuts: const <ShortcutActivator, Intent>{
+              SingleActivator(LogicalKeyboardKey.arrowDown): NextFocusIntent(),
+              SingleActivator(LogicalKeyboardKey.arrowUp):
+                  PreviousFocusIntent(),
+            },
+            // The nudge, and it is a nudge on purpose. The icon centres correctly in this row; the
+            // text does not, because the decorator gives the field more height than the letters use
+            // and hands the slack to the bottom. Several principled fixes were tried first — even
+            // leading distribution, a pinned line height, sizing the box from its padding — and each
+            // moved the number without closing the gap; the last one only made the box taller. What
+            // is left is a measured offset, stated as one, rather than another theory dressed as a
+            // layout rule. Half of it lands on the glyphs, which is why it is twice what the eye
+            // asked for.
+            child: Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: TextField(
+                controller: controller,
+                onChanged: onChanged,
+                autofocus: true,
+                // The LINE box centres correctly on its own; the glyphs inside it do not. The app's
+                // sans face has a lopsided ascent and descent, and the default leading distribution
+                // hands that asymmetry straight to the text — so the hint sat visibly high in a box a
+                // widget test measures as perfectly centred, because a test measures the line box and
+                // an eye sees the letters. Splitting the leading evenly is what puts them in the
+                // middle of it.
+                style: AppType.body(
+                  color: AppColors.text,
                 ).copyWith(leadingDistribution: TextLeadingDistribution.even),
+                textAlignVertical: TextAlignVertical.center,
+                cursorColor: AppColors.text,
+                decoration: InputDecoration(
+                  isCollapsed: true,
+                  // ⚠️ EVERY border state, and `filled: false`. The app's theme gives fields a 1.5px
+                  // accent `focusedBorder` and a fill of their own, and `border:` overrides neither —
+                  // so a field that autofocuses the moment the panel opens drew a second, brighter box
+                  // INSIDE the one around it. The box is this container's; the caret is the focus.
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  disabledBorder: InputBorder.none,
+                  errorBorder: InputBorder.none,
+                  focusedErrorBorder: InputBorder.none,
+                  filled: false,
+                  contentPadding: EdgeInsets.zero,
+                  hintText: 'Search models or machines',
+                  hintStyle: AppType.body(
+                    color: AppColors.muted,
+                  ).copyWith(leadingDistribution: TextLeadingDistribution.even),
+                ),
               ),
             ),
           ),
@@ -217,6 +233,7 @@ class ModelPickerRow extends StatelessWidget {
     this.trailing,
     this.meter,
     this.note,
+    this.hint,
   });
 
   final String title;
@@ -233,6 +250,12 @@ class ModelPickerRow extends StatelessWidget {
 
   /// The colour the meter runs in; ignored when [meter] is null.
   final Color? note;
+
+  /// A third line, under the subtitle, about THIS row's launch rather than
+  /// about the model — whether the agent can search the web on it. Only the
+  /// current row ever has one: the others are places the agent could go, about
+  /// which nothing is yet known.
+  final String? hint;
 
   @override
   Widget build(BuildContext context) {
@@ -261,10 +284,25 @@ class ModelPickerRow extends StatelessWidget {
                   style: AppType.mono(color: AppColors.mutedStrong),
                 ),
               ],
+              if (hint != null) ...[
+                const SizedBox(height: 2),
+                Text(
+                  hint!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppType.body(color: AppColors.muted)
+                      .copyWith(fontSize: 11.5),
+                ),
+              ],
             ],
           ),
         ),
-        if (trailing != null) ...[const SizedBox(width: 10), trailing!],
+        if (trailing != null) ...[
+          const SizedBox(width: 10),
+          // Flexible: a quota column that insisted on its full width overflowed the row at a
+          // large text size in a small window.
+          Flexible(child: trailing!),
+        ],
         // The tick's gutter, reserved on every row so a row becoming the chosen one does not
         // shuffle the column beside it.
         SizedBox(
@@ -357,38 +395,50 @@ class ModelPickerFooter extends StatelessWidget {
             style: AppType.body(color: AppColors.muted).copyWith(fontSize: 12),
           ),
         ),
-        MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: InkWell(
-            onTap: onAction,
-            mouseCursor: SystemMouseCursors.click,
-            borderRadius: BorderRadius.circular(9),
-            hoverColor: AppColors.rowHover,
-            focusColor: Colors.transparent,
-            splashColor: Colors.transparent,
-            highlightColor: Colors.transparent,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(9),
-                border: Border.all(color: AppColors.border),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.grid_view_rounded,
-                    size: 15,
-                    color: AppColors.textSoft,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    actionLabel,
-                    style: AppType.body(color: AppColors.text)
-                        .copyWith(fontSize: 12.5, fontWeight: FontWeight.w600),
-                  ),
-                ],
+        Flexible(
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: InkWell(
+              onTap: onAction,
+              mouseCursor: SystemMouseCursors.click,
+              borderRadius: BorderRadius.circular(9),
+              hoverColor: AppColors.rowHover,
+              focusColor: Colors.transparent,
+              splashColor: Colors.transparent,
+              highlightColor: Colors.transparent,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 9,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(9),
+                  border: Border.all(color: AppColors.border),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.grid_view_rounded,
+                      size: 15,
+                      color: AppColors.textSoft,
+                    ),
+                    const SizedBox(width: 8),
+                    // Flexible: at a large text size the summary and the action cannot both have
+                    // everything they want, and a fixed label overflowed a small window.
+                    Flexible(
+                      child: Text(
+                        actionLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppType.body(
+                          color: AppColors.text,
+                        ).copyWith(fontSize: 12.5, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
