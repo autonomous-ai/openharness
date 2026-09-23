@@ -81,6 +81,7 @@ icon size in thirty seconds instead of in an email twenty minutes later.
 | `1.0.0 (33)` | 2026-09-23 | TestFlight. Opens on the agent it was left on, even while the machine is still verifying terminals; a Stopped row resumes its saved conversation (`agent_resume`, sealed as E2EE) instead of failing, and stopped work with no conversation reads `Resume unavailable`; other rows no longer read `No terminal` during a resume; the app wears Logo Harness_4 |
 | `1.0.0 (34)` | 2026-09-23 | TestFlight. The search sheet opens on the desktop Harness Monitor's order (most recently active first) and names agents as the desktop does (`Untitled Pane` for a CLI-made name); rows show age, trouble, machine · folder · branch, and tokens / edits / PRs; New Harness asks the Git questions a window asks |
 | `1.0.0 (35)` | 2026-09-23 | TestFlight. New Harness touch-ups (`bubu/mobile-new-harness-touch`); the confirm dialog sits on the app's dialog veil |
+| `1.0.0 (36)` | 2026-09-23 | TestFlight. The mic becomes a morphing capsule: a live waveform and take timer while listening, and its own face for busy, sending, sent and retry; notices wrap to whole sentences and clear themselves |
 
 `pubspec.yaml` is therefore at `1.0.0+30`: the repo always holds the NEXT build number, so a release
 runs clean without anyone having to remember the last one.
