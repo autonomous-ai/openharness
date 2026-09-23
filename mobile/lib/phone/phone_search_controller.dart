@@ -143,6 +143,16 @@ class PhoneSearchController extends ChangeNotifier {
     return true;
   }
 
+  /// Back to an empty box: no query, and out of any project or machine chosen
+  /// on the way — what a search that was cancelled opens on next time.
+  void reset() {
+    if (query.isEmpty && _groupScope == null) return;
+    _groupScope = null;
+    query = '';
+    _filter();
+    notifyListeners();
+  }
+
   /// What a tap does: scope to a group, take a `?` row's mode, or hand the row
   /// back for the caller to open. Null when the tap was absorbed here.
   PhoneDestination? submit(PhoneDestination row) {

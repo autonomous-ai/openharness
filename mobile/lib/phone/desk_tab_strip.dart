@@ -7,17 +7,22 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'desk_groups.dart';
+import 'sheet_list.dart';
 
-/// The account's tabs as a row of names, with a bar under the one being shown.
+/// The account's tabs as a row of pills, the one being shown filled in.
 ///
 /// ```
-///  Desktop   Docker   Other
-/// ━━━━━━━
+///  (▓Desktop▓)  ( Docker )  ( Other )   (＋)
 /// ```
 ///
-/// It lives at the top of the tabs popup — see [showDeskTabsPopup] — and picks
-/// which tab's agents the row under it lists. Nothing here opens an agent: the
-/// name changes what is offered, the card below is what is chosen.
+/// It lives at the top of the tabs panel — see [DeskTabsPanel] — and picks
+/// which tab's agents the list under it holds. Nothing here opens an agent: the
+/// pill changes what is offered, the row below is what is chosen.
+///
+/// ⚠️ **Pills, not names over an underline.** The sheet around this is drawn
+/// the way iOS draws its own — a filled search bar, an inset-grouped list —
+/// and a bar under a word is Material's tab. A filled pill says "this one" at
+/// the weight of the list it picks, rather than in a 2pt line under it.
 ///
 /// ⚠️ **A tab with nothing this phone can open is drawn dim, but still picked.**
 /// Its agents are on a machine that is asleep or wants its password. Dropping it
@@ -45,7 +50,7 @@ class DeskTabStrip extends StatefulWidget {
   final List<DeskGroup> groups;
 
   /// [DeskGroup.id] of the tab whose agents are listed below. Null is a real
-  /// value: it is the leftover group, and it wears the bar like any other.
+  /// value: it is the leftover group, and it is filled in like any other.
   final String? selectedId;
 
   final void Function(DeskGroup group) onPick;
@@ -60,28 +65,26 @@ class DeskTabStrip extends StatefulWidget {
   /// to change.
   final void Function(DeskGroup group)? onRename;
 
-  /// The row's height, which the popup counts into its own.
-  ///
-  /// One 15pt line, the bar under it, and the air that keeps the names off the
-  /// drag handle above and the cards below.
-  static const double height = 40;
+  /// The row's height: a 32pt pill with 6pt either side of it, which a tap
+  /// still lands in — a pill is short for a thumb, the row around it is not.
+  static const double height = 44;
 
-  /// The popup's own side inset — the measure [showPhoneSheet] gives its rows,
-  /// so the first name starts on the same line as everything else in a sheet.
-  static const double sideInset = 20;
+  /// The sheet's one side inset — see [kSheetInset] — so the first pill starts
+  /// on the field's edge and the group's.
+  static const double sideInset = kSheetInset;
 
-  /// The gap between two names. Wide enough that two short tabs — `All`, `adu`
-  /// — read as two, narrow enough that four fit on a phone without scrolling.
-  static const double _gap = 22;
+  /// The gap between two pills: their outlines already part them, so this
+  /// only has to keep two of them from reading as one wide one.
+  static const double _gap = 8;
 
   @override
   State<DeskTabStrip> createState() => _DeskTabStripState();
 }
 
 class _DeskTabStripState extends State<DeskTabStrip> {
-  /// Rides whichever name is the selected one, so the row can be scrolled to
-  /// it without knowing how wide any of the others are — names keep their own
-  /// widths here, so there is no index-times-extent to jump to.
+  /// Rides whichever pill is the selected one, so the row can be scrolled to
+  /// it without knowing how wide any of the others are — pills keep their
+  /// names' own widths, so there is no index-times-extent to jump to.
   final _selected = GlobalKey();
 
   @override
@@ -105,12 +108,22 @@ class _DeskTabStripState extends State<DeskTabStrip> {
     }
   }
 
+  /// Scrolls the row until the selected name sits in its middle.
+  ///
+  /// ⚠️ **The row's own scroll, and nothing above it.** `Scrollable.ensureVisible`
+  /// walks every scrollable the name sits in, and this row sits inside the
+  /// terminal page now — inside the pager that swipes between agents (see
+  /// [DeskTabsPanel]). Centring a name there would drag the pager part of a
+  /// page sideways, off the agent on screen.
   void _reveal(Duration duration) {
     final context = _selected.currentContext;
     if (context == null || !mounted) return;
+    final name = context.findRenderObject();
+    final row = Scrollable.maybeOf(context);
+    if (name == null || !name.attached || row == null) return;
     unawaited(
-      Scrollable.ensureVisible(
-        context,
+      row.position.ensureVisible(
+        name,
         // Centred rather than merely brought inside the edge: a name flush
         // against the right-hand end reads as the last tab there is.
         alignment: 0.5,
@@ -144,17 +157,17 @@ class _DeskTabStripState extends State<DeskTabStrip> {
               padding: EdgeInsets.only(
                 left: sideInset,
                 // A full inset only where the row ends in nothing. Beside the
-                // `+`, the button's own margin is the gap, and a name stopping
+                // `+`, the button's own margin is the gap, and a pill stopping
                 // an inset short of it as well reads as a row that ran out
                 // rather than one that scrolls.
-                right: onAddTab == null ? sideInset : 4,
+                right: onAddTab == null ? sideInset : 0,
               ),
               itemCount: groups.length,
               separatorBuilder: (context, index) => const SizedBox(width: gap),
               itemBuilder: (context, index) {
                 final group = groups[index];
                 final selected = group.id == selectedId;
-                return _DeskTabName(
+                return _DeskTabPill(
                   key: selected ? _selected : null,
                   name: group.name,
                   selected: selected,
@@ -190,13 +203,13 @@ class _DeskTabStripState extends State<DeskTabStrip> {
   }
 }
 
-/// The `+` that opens a tab, at the right-hand end of the names.
+/// The `+` that opens a tab: a round pill of its own at the end of the row.
 ///
 /// ⚠️ **An icon alone, and it can be, because of where it stands.** The other
 /// `+` on this panel — the one that adds an agent to the tab being read — is a
-/// full-width row down in the list, carrying the words. Two bare `+`s would be
-/// a guess; a mark on the tab row and a labelled row in the agent list are two
-/// different things before either is read. See [showDeskTabsPopup].
+/// row down in the list, carrying the words. Two bare `+`s would be a guess; a
+/// pill among the tab pills and a labelled row in the agent list are two
+/// different things before either is read. See [DeskTabsPanel].
 class _AddTabButton extends StatelessWidget {
   const _AddTabButton({required this.onTap});
 
@@ -215,17 +228,27 @@ class _AddTabButton extends StatelessWidget {
           onTap();
         },
         child: Padding(
-          // A thumb's worth of row either side of a 20pt glyph, and the strip's
-          // own inset on the outside so it lines up with `⋯` in the header.
+          // The gap to the last pill on the inside and the strip's inset on the
+          // outside are both the button's: a 32pt circle is a small target,
+          // and the row around it is what the thumb actually lands in.
           padding: const EdgeInsets.only(
-            left: 10,
+            left: DeskTabStrip._gap,
             right: DeskTabStrip.sideInset,
           ),
           child: Center(
-            child: Icon(
-              LucideIcons.plus300,
-              size: 20,
-              color: AppPalette.textSecondary,
+            child: Container(
+              width: _DeskTabPill.height,
+              height: _DeskTabPill.height,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: AppGlass.hair),
+              ),
+              child: Icon(
+                LucideIcons.plus,
+                size: 16,
+                color: AppPalette.textSecondary,
+              ),
             ),
           ),
         ),
@@ -234,15 +257,10 @@ class _AddTabButton extends StatelessWidget {
   }
 }
 
-/// One name in the row, with the bar under it while it is the tab being shown.
-///
-/// ⚠️ **The bar is drawn in a [Stack] rather than under the text in a column.**
-/// It has to be exactly as wide as the name it belongs to, and a column in a
-/// horizontally scrolling list is laid out against an infinite width — there is
-/// no cross-axis measure for a `stretch`ed bar to take. Stacked, the text is
-/// the non-positioned child that sizes the whole thing, and the bar spans it.
-class _DeskTabName extends StatelessWidget {
-  const _DeskTabName({
+/// One tab in the row: an outlined pill, filled in while it is the tab being
+/// shown.
+class _DeskTabPill extends StatelessWidget {
+  const _DeskTabPill({
     super.key,
     required this.name,
     required this.selected,
@@ -260,67 +278,76 @@ class _DeskTabName extends StatelessWidget {
 
   final VoidCallback onTap;
 
-  /// A double tap on the name. Null on the groups that cannot be renamed, and
-  /// that is worth more than a dead callback would be: a name with no
+  /// A double tap on the pill. Null on the groups that cannot be renamed, and
+  /// that is worth more than a dead callback would be: a pill with no
   /// double-tap recognizer answers a SINGLE tap at once, while one that has to
   /// wait and see whether a second is coming answers it 300ms later. So the
   /// tabs that cannot be renamed keep the snappier tap.
   final VoidCallback? onRename;
 
-  static const double _barHeight = 2;
-  static const double _barGap = 5;
+  static const double height = 32;
+
+  /// The longest a name is drawn before it ellipsises. Far wider than any
+  /// name a tab is usually given — the row scrolls, and names keep their own
+  /// widths — but a name pasted in whole must not make one pill wider than
+  /// the phone.
+  static const double _maxLabelWidth = 220;
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final color = switch ((reachable, selected)) {
-      (false, _) => AppPalette.textFaint,
-      (true, true) => AppPalette.textPrimary,
-      (true, false) => AppPalette.textSecondary,
-    };
-    return GestureDetector(
-      // Opaque, so the whole height of the row either side of the name takes
-      // the tap — a 15pt word is a small thing to hit with a thumb.
-      behavior: HitTestBehavior.opaque,
-      onTap: _tapped,
-      onDoubleTap: onRename == null ? null : _renamed,
-      child: Center(
-        child: Stack(
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(bottom: _barGap + _barHeight),
+    // The tab being shown is filled in the ink the names are written in, with
+    // its name cut out of it in the sheet's own colour. One out of reach keeps
+    // that shape a step dimmer: it is still the tab you are in while you read
+    // why it is empty.
+    final fill = !selected
+        ? const Color(0x00000000)
+        : reachable
+        ? AppPalette.textPrimary
+        : AppPalette.textSecondary;
+    final ink = selected
+        ? sheetFill
+        : reachable
+        ? AppPalette.textSecondary
+        : AppPalette.textFaint;
+    return Semantics(
+      button: true,
+      selected: selected,
+      child: GestureDetector(
+        // Opaque, so the whole height of the row either side of the pill takes
+        // the tap — see [DeskTabStrip.height].
+        behavior: HitTestBehavior.opaque,
+        onTap: _tapped,
+        onDoubleTap: onRename == null ? null : _renamed,
+        child: Center(
+          child: AnimatedContainer(
+            duration: AppMotion.swap,
+            curve: AppMotion.curve,
+            height: height,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: fill,
+              borderRadius: BorderRadius.circular(height / 2),
+              border: Border.all(color: selected ? fill : AppGlass.hair),
+            ),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: _maxLabelWidth),
               child: Text(
                 name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: color,
-                  fontSize: 15,
-                  // The tab being shown is a weight heavier as well as darker,
-                  // which is what carries it to someone who cannot see the bar
-                  // — the same pairing [PhoneTabBar] uses below.
+                  color: ink,
+                  fontSize: 14.5,
+                  // The tab being shown is a weight heavier as well as filled,
+                  // which is what carries it to someone who cannot see the
+                  // fill — the same pairing [PhoneTabBar] uses below.
                   fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                  height: 1.2,
                 ),
               ),
             ),
-            if (selected)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: Container(
-                  height: _barHeight,
-                  decoration: BoxDecoration(
-                    // The bar keeps the primary ink even under a dim name: it
-                    // marks where you are, and a tab out of reach is still
-                    // where you are while you are reading it.
-                    color: AppPalette.textPrimary,
-                    borderRadius: BorderRadius.circular(_barHeight / 2),
-                  ),
-                ),
-              ),
-          ],
+          ),
         ),
       ),
     );
