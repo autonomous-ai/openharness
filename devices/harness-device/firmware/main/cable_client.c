@@ -405,7 +405,7 @@ static const char *str_of(const cJSON *o, const char *key)
 // (the window's default is "New swarm", but a blank one still has to be a row that can be picked).
 static void handle_swarms(const cJSON *p)
 {
-    static cable_swarm_t rows[SWARMS_MAX];   // static: 24 × ~76 B is too much for the reader task's stack
+    static cable_swarm_t rows[SWARMS_MAX];   // static: 24 × ~96 B is too much for the reader task's stack
     int n = 0;
     const cJSON *it = NULL;
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(p, "items")) {
