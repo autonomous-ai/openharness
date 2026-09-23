@@ -711,6 +711,9 @@ $('#gl').addEventListener('pointerleave', () => { viewport.setHover(null); $('#g
 
 window.addEventListener('keydown', (e) => {
   if (e.target.closest?.('input, select, textarea')) { if (e.key === 'Escape') e.target.blur(); return }
+  // Space activates the focused control. Do not turn Keep, Build or a toolbar
+  // button into the viewport's play/pause shortcut and suppress its native click.
+  if (e.key === ' ' && e.target.closest?.('button, a[href], [role="button"]')) return
   if ($('.menu') && e.key === 'Escape') { closeMenu(); return }
   if (!$('#help').hidden) { if (e.key === 'Escape' || e.key === '?') { hideHelp(); e.preventDefault() } return }
   const nav = viewport.nav
