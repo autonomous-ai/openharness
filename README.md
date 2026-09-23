@@ -142,9 +142,8 @@ flutter run -d macos
 
 </details>
 
-## Beyond code
-
-### Follow your curiosity. Build across disciplines.
+<a id="beyond-code"></a>
+## Beyond code: Build across disciplines
 
 > “World-class entrepreneurs are polymaths.” — [Peter Thiel](https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s)
 
