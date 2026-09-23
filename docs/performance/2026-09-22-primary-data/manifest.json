@@ -1,0 +1,81 @@
+{
+  "driverRevision": "37cd801cf6b99f9e52184869fbdc895d5b6234d8",
+  "quantileIndex": "ceil(n * percentile) - 1",
+  "acceptedComparison": "native-open-picker-comparison.json",
+  "acceptedMeasuredSamplesPerOperationPerRevision": 120,
+  "initialRejectedComparison": "rejected-new-tab-comparison.json",
+  "rejectedComparisonBaselineFiles": [
+    "native-primary-baseline-1.json",
+    "native-primary-baseline-2.json"
+  ],
+  "runsInDispatchOrder": [
+    {
+      "file": "native-primary-baseline-1.json",
+      "kind": "baseline",
+      "productionRevision": "d4eeec74c2a403c5af6fff37bb793c2683771bf0",
+      "firstDispatchWallMicros": 1790094245458076,
+      "observations": 450
+    },
+    {
+      "file": "rejected-new-tab-after-1.json",
+      "kind": "rejectedWelcomeRetentionAndPicker",
+      "productionRevisions": [
+        "6aa43136f95ce9a30ec7f3ef473afe49884e4c74",
+        "2644030ab46accf6a1606f394da5831dd60ddab7"
+      ],
+      "firstDispatchWallMicros": 1790094345267843,
+      "observations": 450
+    },
+    {
+      "file": "native-primary-baseline-2.json",
+      "kind": "baseline",
+      "productionRevision": "d4eeec74c2a403c5af6fff37bb793c2683771bf0",
+      "firstDispatchWallMicros": 1790094438894585,
+      "observations": 450
+    },
+    {
+      "file": "rejected-new-tab-after-2.json",
+      "kind": "rejectedWelcomeRetentionAndPicker",
+      "productionRevisions": [
+        "6aa43136f95ce9a30ec7f3ef473afe49884e4c74",
+        "2644030ab46accf6a1606f394da5831dd60ddab7"
+      ],
+      "firstDispatchWallMicros": 1790094533184739,
+      "observations": 450
+    },
+    {
+      "file": "native-open-picker-1.json",
+      "kind": "acceptedPicker",
+      "productionRevision": "2644030ab46accf6a1606f394da5831dd60ddab7",
+      "firstDispatchWallMicros": 1790094756704266,
+      "observations": 450
+    },
+    {
+      "file": "native-open-picker-2.json",
+      "kind": "acceptedPicker",
+      "productionRevision": "2644030ab46accf6a1606f394da5831dd60ddab7",
+      "firstDispatchWallMicros": 1790095004278610,
+      "observations": 450
+    },
+    {
+      "file": "native-primary-baseline-3.json",
+      "kind": "baseline",
+      "productionRevision": "d4eeec74c2a403c5af6fff37bb793c2683771bf0",
+      "firstDispatchWallMicros": 1790095069075749,
+      "observations": 450
+    },
+    {
+      "file": "native-open-picker-3.json",
+      "kind": "acceptedPicker",
+      "productionRevision": "2644030ab46accf6a1606f394da5831dd60ddab7",
+      "firstDispatchWallMicros": 1790095106250389,
+      "observations": 450
+    }
+  ],
+  "notes": [
+    "All eight completed native runs are preserved.",
+    "The final baseline/picker pair checks drift after unchanged controls varied.",
+    "The native rejected experiment combines welcome retention/action-map caching with the picker change; its debug experiment contains only welcome retention/action-map caching.",
+    "The accepted Release production copy differs from baseline only in lib/widgets/swarm_switcher.dart."
+  ]
+}

@@ -1,0 +1,528 @@
+{
+  "sourceLog": "/private/tmp/rapid-moose-final-benchmarks.log",
+  "observations": [
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_n",
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 9.386,
+        "p95Ms": 10.973,
+        "p99Ms": 14.329
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_o",
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 26.478,
+        "p95Ms": 31.671,
+        "p99Ms": 51.523
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_p",
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 23.523,
+        "p95Ms": 106.656,
+        "p99Ms": 187.467
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_comma",
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 28.841,
+        "p95Ms": 76.994,
+        "p99Ms": 152.318
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "cmd_slash",
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 31.171,
+        "p95Ms": 38.601,
+        "p99Ms": 103.468
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "command_dock",
+      "agents": 2000,
+      "reopen": {
+        "samples": 50,
+        "medianMs": 40.864,
+        "p95Ms": 82.637,
+        "p99Ms": 393.912
+      },
+      "broadQuery": {
+        "samples": 50,
+        "medianMs": 34.525,
+        "p95Ms": 41.158,
+        "p99Ms": 163.148
+      },
+      "queryGrowth": {
+        "samples": 50,
+        "medianMs": 10.154,
+        "p95Ms": 13.387,
+        "p99Ms": 13.887
+      },
+      "narrowQuery": {
+        "samples": 50,
+        "medianMs": 31.218,
+        "p95Ms": 84.263,
+        "p99Ms": 140.551
+      },
+      "arrow": {
+        "samples": 50,
+        "medianMs": 7.591,
+        "p95Ms": 14.005,
+        "p99Ms": 65.613
+      },
+      "cmdPThenCmdO": {
+        "samples": 50,
+        "medianMs": 3.616,
+        "p95Ms": 5.676,
+        "p99Ms": 6.452
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "command_dock",
+      "agents": 10000,
+      "reopen": {
+        "samples": 50,
+        "medianMs": 37.666,
+        "p95Ms": 128.854,
+        "p99Ms": 239.807
+      },
+      "broadQuery": {
+        "samples": 50,
+        "medianMs": 36.552,
+        "p95Ms": 41.065,
+        "p99Ms": 150.481
+      },
+      "queryGrowth": {
+        "samples": 50,
+        "medianMs": 19.485,
+        "p95Ms": 25.053,
+        "p99Ms": 134.9
+      },
+      "narrowQuery": {
+        "samples": 50,
+        "medianMs": 35.599,
+        "p95Ms": 44.892,
+        "p99Ms": 176.866
+      },
+      "arrow": {
+        "samples": 50,
+        "medianMs": 6.362,
+        "p95Ms": 8.613,
+        "p99Ms": 8.913
+      },
+      "cmdPThenCmdO": {
+        "samples": 50,
+        "medianMs": 2.302,
+        "p95Ms": 3.765,
+        "p99Ms": 3.851
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "operation": "terminal_output_decode_and_parse",
+      "content": "ASCII",
+      "bytesPerFrame": 16384,
+      "decodeAndParse": {
+        "samples": 100,
+        "medianMs": 0.603,
+        "p95Ms": 0.704,
+        "p99Ms": 0.919
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "operation": "terminal_output_decode_and_parse",
+      "content": "Unicode",
+      "bytesPerFrame": 16384,
+      "decodeAndParse": {
+        "samples": 100,
+        "medianMs": 0.383,
+        "p95Ms": 0.441,
+        "p99Ms": 0.741
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "operation": "jump_catalog",
+      "agents": 2000,
+      "build": {
+        "samples": 100,
+        "medianMs": 3.134,
+        "p95Ms": 3.748,
+        "p99Ms": 4.033
+      },
+      "query": {
+        "samples": 100,
+        "medianMs": 1.141,
+        "p95Ms": 1.365,
+        "p99Ms": 1.439
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "agents": 2000,
+      "machines": 8,
+      "search": {
+        "samples": 100,
+        "medianMs": 2.004,
+        "p95Ms": 2.189,
+        "p99Ms": 2.23
+      },
+      "projectGrouping": {
+        "samples": 100,
+        "medianMs": 0.649,
+        "p95Ms": 0.825,
+        "p99Ms": 0.883
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "operation": "add_agent_search",
+      "agents": 2000,
+      "machines": 8,
+      "projects": 50,
+      "entries": 2059,
+      "coldCatalog": {
+        "samples": 100,
+        "medianMs": 5.672,
+        "p95Ms": 6.866,
+        "p99Ms": 7.138
+      },
+      "unchangedCatalog": {
+        "samples": 100,
+        "medianMs": 0.001,
+        "p95Ms": 0.001,
+        "p99Ms": 0.001
+      },
+      "openAndDisposeController": {
+        "samples": 100,
+        "medianMs": 7.404,
+        "p95Ms": 8.655,
+        "p99Ms": 9.215
+      },
+      "queries": {
+        "agent": {
+          "samples": 100,
+          "medianMs": 1.604,
+          "p95Ms": 1.768,
+          "p99Ms": 1.936,
+          "results": 2000
+        },
+        "agent 12 machine 3": {
+          "samples": 100,
+          "medianMs": 1.402,
+          "p95Ms": 1.762,
+          "p99Ms": 2.203,
+          "results": 43
+        },
+        "agn12": {
+          "samples": 100,
+          "medianMs": 1.326,
+          "p95Ms": 1.629,
+          "p99Ms": 1.77,
+          "results": 168
+        },
+        "project 12 main": {
+          "samples": 100,
+          "medianMs": 1.997,
+          "p95Ms": 2.422,
+          "p99Ms": 2.584,
+          "results": 177
+        },
+        "no-such-agent": {
+          "samples": 100,
+          "medianMs": 1.218,
+          "p95Ms": 8.74,
+          "p99Ms": 14.574,
+          "results": 0
+        }
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "operation": "navigation_locations",
+      "discoveredAgents": 2000,
+      "swarms": 12,
+      "agentLocations": 50,
+      "entries": 62,
+      "coldCatalog": {
+        "samples": 100,
+        "medianMs": 0.26,
+        "p95Ms": 0.399,
+        "p99Ms": 0.677
+      },
+      "unchangedCatalog": {
+        "samples": 100,
+        "medianMs": 0.005,
+        "p95Ms": 0.008,
+        "p99Ms": 0.027
+      },
+      "openAndDisposeController": {
+        "samples": 100,
+        "medianMs": 0.296,
+        "p95Ms": 0.349,
+        "p99Ms": 0.529
+      },
+      "query": {
+        "samples": 100,
+        "medianMs": 0.04,
+        "p95Ms": 0.051,
+        "p99Ms": 0.064
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "operation": "native_history_snapshot",
+      "discoveredAgents": 2000,
+      "swarms": 12,
+      "entries": 60,
+      "changedFocus": {
+        "samples": 100,
+        "medianMs": 0.446,
+        "p95Ms": 0.533,
+        "p99Ms": 1.95
+      },
+      "unchanged": {
+        "samples": 100,
+        "medianMs": 0.016,
+        "p95Ms": 0.021,
+        "p99Ms": 0.082
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "chrome": "flutter_tabs",
+      "discoveredAgents": 70,
+      "swarms": 4,
+      "terminals": 16,
+      "scrollbackLinesPerTerminal": 1000,
+      "viewport": "1280x800",
+      "tabSwitchAndFrame": {
+        "samples": 60,
+        "medianMs": 24.341,
+        "p95Ms": 28.811,
+        "p99Ms": 31.169
+      },
+      "rebuildsPerSwitch": 1708,
+      "focusAndFrame": {
+        "samples": 60,
+        "medianMs": 12.043,
+        "p95Ms": 14.822,
+        "p99Ms": 17.1
+      },
+      "rebuildsPerFocus": 980,
+      "mostRebuiltWidgets": {
+        "_FocusInheritedScope": 93,
+        "Focus": 74,
+        "DefaultSelectionStyle": 62,
+        "IconTheme": 62,
+        "Positioned": 61,
+        "RawGestureDetector": 59,
+        "Actions": 43,
+        "_ActionsScope": 43,
+        "GestureDetector": 37,
+        "DefaultTextStyle": 34,
+        "Builder": 34,
+        "Material": 33
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "chrome": "flutter_tabs",
+      "discoveredAgents": 70,
+      "swarms": 12,
+      "terminals": 48,
+      "scrollbackLinesPerTerminal": 1000,
+      "viewport": "1280x800",
+      "tabSwitchAndFrame": {
+        "samples": 60,
+        "medianMs": 21.132,
+        "p95Ms": 37.928,
+        "p99Ms": 164.646
+      },
+      "rebuildsPerSwitch": 2364,
+      "focusAndFrame": {
+        "samples": 60,
+        "medianMs": 10.897,
+        "p95Ms": 15.225,
+        "p99Ms": 18.369
+      },
+      "rebuildsPerFocus": 1266,
+      "mostRebuiltWidgets": {
+        "_FocusInheritedScope": 117,
+        "Focus": 98,
+        "IconTheme": 94,
+        "DefaultSelectionStyle": 94,
+        "Positioned": 93,
+        "RawGestureDetector": 83,
+        "GestureDetector": 61,
+        "Actions": 59,
+        "_ActionsScope": 59,
+        "DefaultTextStyle": 50,
+        "Builder": 50,
+        "Material": 49
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "chrome": "native_bridge_stubbed",
+      "discoveredAgents": 2000,
+      "swarms": 4,
+      "terminals": 16,
+      "scrollbackLinesPerTerminal": 1000,
+      "viewport": "1280x800",
+      "tabSwitchAndFrame": {
+        "samples": 60,
+        "medianMs": 13.81,
+        "p95Ms": 16.75,
+        "p99Ms": 18.153
+      },
+      "rebuildsPerSwitch": 1307,
+      "focusAndFrame": {
+        "samples": 60,
+        "medianMs": 7.848,
+        "p95Ms": 9.306,
+        "p99Ms": 11.032
+      },
+      "rebuildsPerFocus": 579,
+      "mostRebuiltWidgets": {
+        "_FocusInheritedScope": 78,
+        "Positioned": 61,
+        "Focus": 59,
+        "RawGestureDetector": 43,
+        "DefaultSelectionStyle": 40,
+        "IconTheme": 40,
+        "Actions": 32,
+        "_ActionsScope": 32,
+        "Tooltip": 28,
+        "Container": 26,
+        "ExcludeFocus": 25,
+        "ValueListenableBuilder<PaneDragRef?>": 24
+      }
+    },
+    {
+      "kind": "headless_debug_cpu",
+      "chrome": "native_bridge_stubbed",
+      "discoveredAgents": 2000,
+      "swarms": 12,
+      "terminals": 48,
+      "scrollbackLinesPerTerminal": 1000,
+      "viewport": "1280x800",
+      "tabSwitchAndFrame": {
+        "samples": 60,
+        "medianMs": 15.978,
+        "p95Ms": 17.214,
+        "p99Ms": 19.089
+      },
+      "rebuildsPerSwitch": 1371,
+      "focusAndFrame": {
+        "samples": 60,
+        "medianMs": 8.074,
+        "p95Ms": 10.124,
+        "p99Ms": 11.168
+      },
+      "rebuildsPerFocus": 643,
+      "mostRebuiltWidgets": {
+        "Positioned": 93,
+        "_FocusInheritedScope": 78,
+        "Focus": 59,
+        "_PaneLayer": 48,
+        "RawGestureDetector": 43,
+        "DefaultSelectionStyle": 40,
+        "IconTheme": 40,
+        "Actions": 32,
+        "_ActionsScope": 32,
+        "Tooltip": 28,
+        "Container": 26,
+        "ExcludeFocus": 25
+      }
+    },
+    {
+      "kind": "headless_debug_warm_filesystem",
+      "operation": "settings",
+      "samples": 100,
+      "medianMs": 2.361,
+      "p95Ms": 2.779
+    },
+    {
+      "kind": "headless_debug_warm_filesystem",
+      "operation": "settings_and_keymap",
+      "samples": 100,
+      "medianMs": 3.357,
+      "p95Ms": 3.645
+    },
+    {
+      "kind": "headless_debug_event_loop",
+      "rows": 10000,
+      "coldQueryMs": 43.353,
+      "cachedTextQuery": {
+        "samples": 40,
+        "medianMs": 10.876,
+        "p95Ms": 22.134,
+        "p99Ms": 35.358
+      },
+      "liveRowUpdate": {
+        "samples": 40,
+        "medianMs": 3.615,
+        "p95Ms": 7.561,
+        "p99Ms": 14.778
+      },
+      "nextMatch": {
+        "samples": 40,
+        "medianMs": 0.006,
+        "p95Ms": 0.043,
+        "p99Ms": 0.507
+      }
+    },
+    {
+      "kind": "headless_fake_clock_timer_activity",
+      "retainedTerminals": 16,
+      "observationSeconds": 5,
+      "foreground": {
+        "timers": 1,
+        "callbacks": 10
+      },
+      "inactiveWindow": {
+        "timers": 0,
+        "callbacks": 0
+      },
+      "emptySwarm": {
+        "timers": 0,
+        "callbacks": 0
+      }
+    },
+    {
+      "kind": "headless_fake_clock_timer_activity",
+      "retainedTerminals": 48,
+      "observationSeconds": 5,
+      "foreground": {
+        "timers": 1,
+        "callbacks": 10
+      },
+      "inactiveWindow": {
+        "timers": 0,
+        "callbacks": 0
+      },
+      "emptySwarm": {
+        "timers": 0,
+        "callbacks": 0
+      }
+    }
+  ]
+}
