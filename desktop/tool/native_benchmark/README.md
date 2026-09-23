@@ -77,20 +77,6 @@ Pool a published data directory with `python3 tool/native_benchmark/summarize_re
 observations and lists contributing files, excluding warmups. Failed runs must
 be reviewed separately; it does not silently discard them.
 
-The native History-menu component has a separate optimized Swift probe:
-
-```sh
-HARNESS_TITLEBAR_PERF_OUTPUT=/private/tmp/history-before.json \
-HARNESS_PERF_REVISION=YOUR_REVISION \
-bash tool/check_swarm_titlebar.sh /path/to/flutter --history-performance
-```
-
-This measures changing 64 recent and 24 closed entries, both while the menu is
-closed and immediately before opening it. It records all 20 warmups and 200
-measured updates per operation, including autorelease cleanup. The application
-is prohibited from displaying windows. This is native component CPU time, not
-an end-to-end shortcut latency or display-presentation measurement.
-
 ## Framework-dispatch comparison and manual feature checks
 
 The fixture supports three separate modes:

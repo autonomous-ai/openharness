@@ -1135,62 +1135,6 @@ private extension NSWindow {
   }
 }
 
-private extension SwarmTitlebar {
-  // Native component CPU cost only; the process is prohibited from displaying
-  // windows. Same input and optimized Swift compilation on both revisions.
-  func benchmarkHistoryUpdates() throws {
-    let main = NSMenu()
-    for title in ["Harness", "File", "Edit", "View", "Window", "Help"] {
-      let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-      item.submenu = NSMenu(title: title)
-      main.addItem(item)
-    }
-    NSApp.mainMenu = main
-    configure()
-    actionsEnabled = true
-    var rows: [[String: Any]] = (0..<64).map { index in
-      ["id": "agent-\(index)", "title": "Developer task \(index)",
-       "machineName": "Fixture machine", "engine": "codex", "current": index == 0]
-    }
-    let closed: [[String: Any]] = (0..<24).map { index in
-      ["id": "closed-\(index)", "title": "Closed task \(index)",
-       "machineName": "Fixture machine", "engine": "claude", "canReopen": true]
-    }
-    var observations: [[String: Any]] = []
-    for operation in ["closed_history_update", "update_then_open_history"] {
-      for sample in -20..<200 {
-        rows[0]["current"] = sample % 2 == 0
-        rows[1]["current"] = sample % 2 != 0
-        let began = DispatchTime.now().uptimeNanoseconds
-        var updated: UInt64 = 0
-        autoreleasepool {
-          updateHistory(rows, closed: closed)
-          updated = DispatchTime.now().uptimeNanoseconds
-          if operation == "update_then_open_history" {
-            menuWillOpen(historyMenu)
-            let delegate: NSMenuDelegate = self
-            delegate.menuDidClose?(historyMenu)
-          }
-        }
-        observations.append(["operation": operation, "phase": sample < 0 ? "warmup" : "measured",
-          "updateMicroseconds": Double(updated - began) / 1000,
-          "totalMicroseconds": Double(DispatchTime.now().uptimeNanoseconds - began) / 1000])
-      }
-    }
-    let result: [String: Any] = ["success": true, "kind": "optimized_swift_native_history_cpu",
-      "boundary": "updateHistory and optional menuWillOpen including autorelease cleanup; excludes OS input, Flutter, display presentation",
-      "historyEntries": 64, "closedEntries": 24, "measuredSamplesPerOperation": 200,
-      "sourceRevision": ProcessInfo.processInfo.environment["HARNESS_PERF_REVISION"] ?? "unspecified",
-      "observations": observations]
-    let data = try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])
-    if let path = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_PERF_OUTPUT"] {
-      try data.write(to: URL(fileURLWithPath: path), options: [.withoutOverwriting])
-    } else {
-      print(String(data: data, encoding: .utf8)!)
-    }
-  }
-}
-
 let titlebarCheckApp = NSApplication.shared
 titlebarCheckApp.setActivationPolicy(.prohibited)
 titlebarCheckApp.appearance = NSAppearance(named: .darkAqua)
@@ -1257,14 +1201,7 @@ do {
   try strip.checkAgentIdentity()
   try strip.checkSharedTypography()
   try checkTitlebar(titlebarCheckApp.windows.isEmpty, "Checks never open an application window")
-  if CommandLine.arguments.contains("--history-performance") {
-    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 700),
-      styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-    window.isReleasedWhenClosed = false
-    let titlebar = SwarmTitlebar(window: window, messenger: TitlebarCheckMessenger())
-    try titlebar.benchmarkHistoryUpdates()
-    window.close()
-  } else if CommandLine.arguments.contains("--window-layout") {
+  if CommandLine.arguments.contains("--window-layout") {
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 700),
       styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false

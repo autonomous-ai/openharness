@@ -1,0 +1,2651 @@
+{
+  "boundary" : "updateHistory and optional menuWillOpen including autorelease cleanup; excludes OS input, Flutter, display presentation",
+  "closedEntries" : 24,
+  "historyEntries" : 64,
+  "kind" : "optimized_swift_native_history_cpu",
+  "measuredSamplesPerOperation" : 200,
+  "observations" : [
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 83.584000000000003,
+      "updateMicroseconds" : 83.209000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 64.790999999999997,
+      "updateMicroseconds" : 64.707999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 62.875,
+      "updateMicroseconds" : 62.832999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 62.25,
+      "updateMicroseconds" : 62.207999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 62.25,
+      "updateMicroseconds" : 62.207999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 62.375,
+      "updateMicroseconds" : 62.375
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 61.709000000000003,
+      "updateMicroseconds" : 61.667000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 63,
+      "updateMicroseconds" : 63
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 63.207999999999998,
+      "updateMicroseconds" : 63.167000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 62.709000000000003,
+      "updateMicroseconds" : 62.667000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 62.334000000000003,
+      "updateMicroseconds" : 62.292000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 62.084000000000003,
+      "updateMicroseconds" : 62.042000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 61.790999999999997,
+      "updateMicroseconds" : 61.75
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 61.542000000000002,
+      "updateMicroseconds" : 61.5
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 62.75,
+      "updateMicroseconds" : 62.707999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 62.207999999999998,
+      "updateMicroseconds" : 62.167000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 62.332999999999998,
+      "updateMicroseconds" : 62.292000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 61.5,
+      "updateMicroseconds" : 61.457999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 61.167000000000002,
+      "updateMicroseconds" : 61.125
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "warmup",
+      "totalMicroseconds" : 61.542000000000002,
+      "updateMicroseconds" : 61.5
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.459000000000003,
+      "updateMicroseconds" : 61.417000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61,
+      "updateMicroseconds" : 60.957999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.207999999999998,
+      "updateMicroseconds" : 61.207999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.290999999999997,
+      "updateMicroseconds" : 61.25
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.332999999999998,
+      "updateMicroseconds" : 61.332999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.5,
+      "updateMicroseconds" : 61.459000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.459000000000003,
+      "updateMicroseconds" : 61.417000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.5,
+      "updateMicroseconds" : 61.459000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.082999999999998,
+      "updateMicroseconds" : 61.042000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.375,
+      "updateMicroseconds" : 61.332999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.25,
+      "updateMicroseconds" : 61.209000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.375,
+      "updateMicroseconds" : 61.292000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.125,
+      "updateMicroseconds" : 61.082999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.542000000000002,
+      "updateMicroseconds" : 61.5
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.540999999999997,
+      "updateMicroseconds" : 61.5
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.167000000000002,
+      "updateMicroseconds" : 61.125
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.917000000000002,
+      "updateMicroseconds" : 61.875
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 62.75,
+      "updateMicroseconds" : 62.707999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.084000000000003,
+      "updateMicroseconds" : 61.042000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.25,
+      "updateMicroseconds" : 61.207999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.25,
+      "updateMicroseconds" : 61.207999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.165999999999997,
+      "updateMicroseconds" : 61.125
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 89.084000000000003,
+      "updateMicroseconds" : 88.375
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 64.790999999999997,
+      "updateMicroseconds" : 64.707999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 62.542000000000002,
+      "updateMicroseconds" : 62.5
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.459000000000003,
+      "updateMicroseconds" : 61.417000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.75,
+      "updateMicroseconds" : 61.709000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 62.125,
+      "updateMicroseconds" : 61.959000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 62.042000000000002,
+      "updateMicroseconds" : 62
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 62.167000000000002,
+      "updateMicroseconds" : 62.125
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 62.332999999999998,
+      "updateMicroseconds" : 62.332999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 62.332999999999998,
+      "updateMicroseconds" : 62.332999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 62.542000000000002,
+      "updateMicroseconds" : 62.5
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.709000000000003,
+      "updateMicroseconds" : 61.667000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.957999999999998,
+      "updateMicroseconds" : 61.875
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.792000000000002,
+      "updateMicroseconds" : 61.75
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.5,
+      "updateMicroseconds" : 61.457999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.542000000000002,
+      "updateMicroseconds" : 60.457999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.625,
+      "updateMicroseconds" : 60.582999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.792000000000002,
+      "updateMicroseconds" : 60.75
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.917000000000002,
+      "updateMicroseconds" : 60.832999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.832999999999998,
+      "updateMicroseconds" : 60.75
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.667000000000002,
+      "updateMicroseconds" : 60.582999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.415999999999997,
+      "updateMicroseconds" : 60.375
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.5,
+      "updateMicroseconds" : 60.459000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.332999999999998,
+      "updateMicroseconds" : 60.290999999999997
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.042000000000002,
+      "updateMicroseconds" : 60.042000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.457999999999998,
+      "updateMicroseconds" : 60.417000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.332999999999998,
+      "updateMicroseconds" : 61.167000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.417000000000002,
+      "updateMicroseconds" : 60.375
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.25,
+      "updateMicroseconds" : 61.207999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.875,
+      "updateMicroseconds" : 61.834000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.25,
+      "updateMicroseconds" : 61.167000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.082999999999998,
+      "updateMicroseconds" : 61
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.084000000000003,
+      "updateMicroseconds" : 61.042000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.75,
+      "updateMicroseconds" : 60.709000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.540999999999997,
+      "updateMicroseconds" : 61.5
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 63.875,
+      "updateMicroseconds" : 63.875
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.667000000000002,
+      "updateMicroseconds" : 60.625
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.125,
+      "updateMicroseconds" : 61.040999999999997
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.959000000000003,
+      "updateMicroseconds" : 60.917000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.667000000000002,
+      "updateMicroseconds" : 60.625
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.5,
+      "updateMicroseconds" : 60.459000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.709000000000003,
+      "updateMicroseconds" : 60.667000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.834000000000003,
+      "updateMicroseconds" : 60.834000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.665999999999997,
+      "updateMicroseconds" : 60.625
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.667000000000002,
+      "updateMicroseconds" : 60.625
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.207999999999998,
+      "updateMicroseconds" : 61.167000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.292000000000002,
+      "updateMicroseconds" : 61.25
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.292000000000002,
+      "updateMicroseconds" : 61.25
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.625,
+      "updateMicroseconds" : 61.625
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.082999999999998,
+      "updateMicroseconds" : 61.082999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.834000000000003,
+      "updateMicroseconds" : 60.792000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.792000000000002,
+      "updateMicroseconds" : 60.75
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.834000000000003,
+      "updateMicroseconds" : 60.792000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.75,
+      "updateMicroseconds" : 61.707999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.332999999999998,
+      "updateMicroseconds" : 61.207999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.959000000000003,
+      "updateMicroseconds" : 60.917000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.292000000000002,
+      "updateMicroseconds" : 61.25
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.375,
+      "updateMicroseconds" : 61.332999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.042000000000002,
+      "updateMicroseconds" : 61
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.540999999999997,
+      "updateMicroseconds" : 60.5
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.540999999999997,
+      "updateMicroseconds" : 60.5
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.667000000000002,
+      "updateMicroseconds" : 60.667000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.792000000000002,
+      "updateMicroseconds" : 60.75
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.957999999999998,
+      "updateMicroseconds" : 60.957999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.75,
+      "updateMicroseconds" : 60.709000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.5,
+      "updateMicroseconds" : 60.459000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.375,
+      "updateMicroseconds" : 61.334000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.209000000000003,
+      "updateMicroseconds" : 61.125
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.375,
+      "updateMicroseconds" : 61.332999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.540999999999997,
+      "updateMicroseconds" : 60.5
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.875,
+      "updateMicroseconds" : 60.834000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.167000000000002,
+      "updateMicroseconds" : 61.125
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.082999999999998,
+      "updateMicroseconds" : 61.042000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.709000000000003,
+      "updateMicroseconds" : 61.709000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.875,
+      "updateMicroseconds" : 60.875
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.417000000000002,
+      "updateMicroseconds" : 61.375
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.875,
+      "updateMicroseconds" : 61.834000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61,
+      "updateMicroseconds" : 60.959000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.082999999999998,
+      "updateMicroseconds" : 61.042000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 65.125,
+      "updateMicroseconds" : 64.875
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.5,
+      "updateMicroseconds" : 61.415999999999997
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.292000000000002,
+      "updateMicroseconds" : 61.209000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.875,
+      "updateMicroseconds" : 60.790999999999997
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.459000000000003,
+      "updateMicroseconds" : 61.417000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.082999999999998,
+      "updateMicroseconds" : 61
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61,
+      "updateMicroseconds" : 60.957999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.125,
+      "updateMicroseconds" : 61.084000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.457999999999998,
+      "updateMicroseconds" : 61.457999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.042000000000002,
+      "updateMicroseconds" : 61.042000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.375,
+      "updateMicroseconds" : 61.332999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.5,
+      "updateMicroseconds" : 61.459000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.959000000000003,
+      "updateMicroseconds" : 60.917000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.5,
+      "updateMicroseconds" : 61.457999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.667000000000002,
+      "updateMicroseconds" : 60.625
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.125,
+      "updateMicroseconds" : 61.082999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.917000000000002,
+      "updateMicroseconds" : 61.875
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.834000000000003,
+      "updateMicroseconds" : 60.792000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61,
+      "updateMicroseconds" : 60.957999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.375,
+      "updateMicroseconds" : 59.375
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 64.542000000000002,
+      "updateMicroseconds" : 64.542000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.082999999999998,
+      "updateMicroseconds" : 59
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 58.915999999999997,
+      "updateMicroseconds" : 58.915999999999997
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.459000000000003,
+      "updateMicroseconds" : 59.417000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 58.917000000000002,
+      "updateMicroseconds" : 58.875
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 66.042000000000002,
+      "updateMicroseconds" : 66
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 65.5,
+      "updateMicroseconds" : 65.457999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59,
+      "updateMicroseconds" : 58.959000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.292000000000002,
+      "updateMicroseconds" : 59.25
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.542000000000002,
+      "updateMicroseconds" : 61.542000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 62.082999999999998,
+      "updateMicroseconds" : 62.040999999999997
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 63.459000000000003,
+      "updateMicroseconds" : 63.417000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 58.707999999999998,
+      "updateMicroseconds" : 58.625
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 64.667000000000002,
+      "updateMicroseconds" : 64.667000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 58.875,
+      "updateMicroseconds" : 58.875
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.25,
+      "updateMicroseconds" : 59.25
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.292000000000002,
+      "updateMicroseconds" : 59.25
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.040999999999997,
+      "updateMicroseconds" : 59
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.25,
+      "updateMicroseconds" : 59.25
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 63.375,
+      "updateMicroseconds" : 63.334000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.917000000000002,
+      "updateMicroseconds" : 60.875
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.207999999999998,
+      "updateMicroseconds" : 61.125
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.417000000000002,
+      "updateMicroseconds" : 59.417000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.917000000000002,
+      "updateMicroseconds" : 59.917000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 63.792000000000002,
+      "updateMicroseconds" : 63.75
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.665999999999997,
+      "updateMicroseconds" : 61.625
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 64.457999999999998,
+      "updateMicroseconds" : 64.417000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 62.25,
+      "updateMicroseconds" : 62.25
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 62.417000000000002,
+      "updateMicroseconds" : 62.375
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.375,
+      "updateMicroseconds" : 61.375
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.042000000000002,
+      "updateMicroseconds" : 61.042000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.084000000000003,
+      "updateMicroseconds" : 61.042000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 67,
+      "updateMicroseconds" : 67
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.207999999999998,
+      "updateMicroseconds" : 59.165999999999997
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 58.792000000000002,
+      "updateMicroseconds" : 58.792000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.292000000000002,
+      "updateMicroseconds" : 59.292000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.125,
+      "updateMicroseconds" : 59.084000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.332999999999998,
+      "updateMicroseconds" : 59.332999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.25,
+      "updateMicroseconds" : 59.25
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.792000000000002,
+      "updateMicroseconds" : 59.75
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.457999999999998,
+      "updateMicroseconds" : 59.457999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.334000000000003,
+      "updateMicroseconds" : 59.292000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.292000000000002,
+      "updateMicroseconds" : 59.292000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 58.707999999999998,
+      "updateMicroseconds" : 58.707999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.417000000000002,
+      "updateMicroseconds" : 59.375
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.625,
+      "updateMicroseconds" : 59.582999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 58.875,
+      "updateMicroseconds" : 58.834000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 63.042000000000002,
+      "updateMicroseconds" : 63
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.040999999999997,
+      "updateMicroseconds" : 61
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.915999999999997,
+      "updateMicroseconds" : 60.875
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.707999999999998,
+      "updateMicroseconds" : 60.707999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.209000000000003,
+      "updateMicroseconds" : 61.167000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.665999999999997,
+      "updateMicroseconds" : 60.625
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 67.875,
+      "updateMicroseconds" : 67.875
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.375,
+      "updateMicroseconds" : 59.332999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 62.915999999999997,
+      "updateMicroseconds" : 62.875
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.540999999999997,
+      "updateMicroseconds" : 60.540999999999997
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.459000000000003,
+      "updateMicroseconds" : 59.459000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.5,
+      "updateMicroseconds" : 59.457999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.207999999999998,
+      "updateMicroseconds" : 59.207999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.292000000000002,
+      "updateMicroseconds" : 59.25
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.667000000000002,
+      "updateMicroseconds" : 59.667000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.167000000000002,
+      "updateMicroseconds" : 59.125
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 63.917000000000002,
+      "updateMicroseconds" : 63.917000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 66.665999999999997,
+      "updateMicroseconds" : 66.665999999999997
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.625,
+      "updateMicroseconds" : 61.582999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.417000000000002,
+      "updateMicroseconds" : 60.375
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61,
+      "updateMicroseconds" : 60.957999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.082999999999998,
+      "updateMicroseconds" : 61.040999999999997
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.957999999999998,
+      "updateMicroseconds" : 60.917000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.792000000000002,
+      "updateMicroseconds" : 60.75
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.209000000000003,
+      "updateMicroseconds" : 60.209000000000003
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.165999999999997,
+      "updateMicroseconds" : 61.125
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 61.042000000000002,
+      "updateMicroseconds" : 61
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.042000000000002,
+      "updateMicroseconds" : 60.042000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.832999999999998,
+      "updateMicroseconds" : 60.792000000000002
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 60.457999999999998,
+      "updateMicroseconds" : 60.457999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 64.082999999999998,
+      "updateMicroseconds" : 64.082999999999998
+    },
+    {
+      "operation" : "closed_history_update",
+      "phase" : "measured",
+      "totalMicroseconds" : 59.167000000000002,
+      "updateMicroseconds" : 59.125
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 7856.125,
+      "updateMicroseconds" : 59.957999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 4647.75,
+      "updateMicroseconds" : 66.832999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 5533.3329999999996,
+      "updateMicroseconds" : 65.790999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 4590.125,
+      "updateMicroseconds" : 69.707999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 5199.9579999999996,
+      "updateMicroseconds" : 71.375
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 4752.125,
+      "updateMicroseconds" : 72.709000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 4473.125,
+      "updateMicroseconds" : 69.292000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 4833.125,
+      "updateMicroseconds" : 65.915999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 4614.4589999999998,
+      "updateMicroseconds" : 75.042000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 5992.9160000000002,
+      "updateMicroseconds" : 69.5
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 5238.5829999999996,
+      "updateMicroseconds" : 70.915999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 4691.0410000000002,
+      "updateMicroseconds" : 69.875
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 4643.125,
+      "updateMicroseconds" : 63.457999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 4216.875,
+      "updateMicroseconds" : 64.375
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 4257.4160000000002,
+      "updateMicroseconds" : 64.082999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 4480.2079999999996,
+      "updateMicroseconds" : 65.625
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 4291.4589999999998,
+      "updateMicroseconds" : 68.292000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 4262.7079999999996,
+      "updateMicroseconds" : 64.375
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 4234.625,
+      "updateMicroseconds" : 65.625
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "warmup",
+      "totalMicroseconds" : 4251.9160000000002,
+      "updateMicroseconds" : 67.875
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 5189.5,
+      "updateMicroseconds" : 74.834000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 5018.125,
+      "updateMicroseconds" : 69.5
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4632.9579999999996,
+      "updateMicroseconds" : 73.25
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4431.5829999999996,
+      "updateMicroseconds" : 64.375
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4998.7089999999998,
+      "updateMicroseconds" : 72.375
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4892.1670000000004,
+      "updateMicroseconds" : 73.917000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 5043.875,
+      "updateMicroseconds" : 68.917000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4847.6670000000004,
+      "updateMicroseconds" : 71.125
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4612.4579999999996,
+      "updateMicroseconds" : 68.790999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4946.75,
+      "updateMicroseconds" : 77.709000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4616,
+      "updateMicroseconds" : 68.832999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4397.3329999999996,
+      "updateMicroseconds" : 67.792000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4375.2089999999998,
+      "updateMicroseconds" : 66.584000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4338.25,
+      "updateMicroseconds" : 66.042000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 5363.4579999999996,
+      "updateMicroseconds" : 65.915999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4394.4589999999998,
+      "updateMicroseconds" : 69
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4346,
+      "updateMicroseconds" : 72.625
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4332.0410000000002,
+      "updateMicroseconds" : 66.75
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4928.25,
+      "updateMicroseconds" : 67.790999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4494.2910000000002,
+      "updateMicroseconds" : 68.457999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4588.7910000000002,
+      "updateMicroseconds" : 64.290999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4347.0839999999998,
+      "updateMicroseconds" : 68.792000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4175.4579999999996,
+      "updateMicroseconds" : 70.582999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4203,
+      "updateMicroseconds" : 66.332999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4414.1660000000002,
+      "updateMicroseconds" : 64.790999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 5026.8339999999998,
+      "updateMicroseconds" : 74.209000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4928.7079999999996,
+      "updateMicroseconds" : 66.832999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4494.375,
+      "updateMicroseconds" : 73.625
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4996.6670000000004,
+      "updateMicroseconds" : 73.707999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4343.6670000000004,
+      "updateMicroseconds" : 70.584000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4346.5,
+      "updateMicroseconds" : 66.875
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4676.6670000000004,
+      "updateMicroseconds" : 66.959000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 6090.375,
+      "updateMicroseconds" : 67.5
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 5522.5829999999996,
+      "updateMicroseconds" : 70.25
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4823.125,
+      "updateMicroseconds" : 74.082999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4684.0420000000004,
+      "updateMicroseconds" : 66.792000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4786.8329999999996,
+      "updateMicroseconds" : 67.75
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 5169,
+      "updateMicroseconds" : 70.625
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 5339.7089999999998,
+      "updateMicroseconds" : 69.959000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4723.9170000000004,
+      "updateMicroseconds" : 72.334000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 5023.7079999999996,
+      "updateMicroseconds" : 68.375
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4996.75,
+      "updateMicroseconds" : 71.709000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4617.125,
+      "updateMicroseconds" : 78.875
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 5178.5829999999996,
+      "updateMicroseconds" : 69.125
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4615.375,
+      "updateMicroseconds" : 78.75
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4927.625,
+      "updateMicroseconds" : 66.790999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4610.5420000000004,
+      "updateMicroseconds" : 70.25
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4445.375,
+      "updateMicroseconds" : 70.957999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4738.5829999999996,
+      "updateMicroseconds" : 64.875
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4696.7920000000004,
+      "updateMicroseconds" : 69.75
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4379.4170000000004,
+      "updateMicroseconds" : 68.25
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4365.6660000000002,
+      "updateMicroseconds" : 67.457999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4384.7910000000002,
+      "updateMicroseconds" : 66.625
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4327.25,
+      "updateMicroseconds" : 69.415999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4236.625,
+      "updateMicroseconds" : 66.457999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4252.3329999999996,
+      "updateMicroseconds" : 64.875
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4217.875,
+      "updateMicroseconds" : 64.582999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4197.25,
+      "updateMicroseconds" : 68.957999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4168.1670000000004,
+      "updateMicroseconds" : 62.917000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4278.375,
+      "updateMicroseconds" : 69.834000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4751.5410000000002,
+      "updateMicroseconds" : 67.5
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4330.5,
+      "updateMicroseconds" : 68.959000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4332.625,
+      "updateMicroseconds" : 71.25
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4276.9579999999996,
+      "updateMicroseconds" : 64.457999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4151.6670000000004,
+      "updateMicroseconds" : 64.625
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4110.2079999999996,
+      "updateMicroseconds" : 62.667000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4080.8339999999998,
+      "updateMicroseconds" : 63.417000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4289.6660000000002,
+      "updateMicroseconds" : 64.75
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4202.9579999999996,
+      "updateMicroseconds" : 65.165999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4283.375,
+      "updateMicroseconds" : 61.207999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4378.875,
+      "updateMicroseconds" : 66.542000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4294.4170000000004,
+      "updateMicroseconds" : 68.332999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4155.6670000000004,
+      "updateMicroseconds" : 62.084000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4241.0829999999996,
+      "updateMicroseconds" : 62.042000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4304,
+      "updateMicroseconds" : 65.082999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4250.2920000000004,
+      "updateMicroseconds" : 64.625
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4082.2919999999999,
+      "updateMicroseconds" : 61.667000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4031.4580000000001,
+      "updateMicroseconds" : 61.25
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4125.3339999999998,
+      "updateMicroseconds" : 60.959000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4106.6660000000002,
+      "updateMicroseconds" : 65.290999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4088.4169999999999,
+      "updateMicroseconds" : 61.332999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4119.2079999999996,
+      "updateMicroseconds" : 62.292000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4061.7919999999999,
+      "updateMicroseconds" : 63.667000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4035.5,
+      "updateMicroseconds" : 61.5
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4034.0419999999999,
+      "updateMicroseconds" : 60.542000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4085.7080000000001,
+      "updateMicroseconds" : 60.457999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4057.25,
+      "updateMicroseconds" : 61.540999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4115.375,
+      "updateMicroseconds" : 61.292000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4150.75,
+      "updateMicroseconds" : 60.25
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4182.5,
+      "updateMicroseconds" : 62.042000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4207.7920000000004,
+      "updateMicroseconds" : 64.625
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4230.2920000000004,
+      "updateMicroseconds" : 62.375
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4223.2920000000004,
+      "updateMicroseconds" : 64.792000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4122.5839999999998,
+      "updateMicroseconds" : 62.417000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4184.7910000000002,
+      "updateMicroseconds" : 63.915999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4213.7079999999996,
+      "updateMicroseconds" : 62.332999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4155.2079999999996,
+      "updateMicroseconds" : 65.415999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4215.0839999999998,
+      "updateMicroseconds" : 64.167000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4208.7079999999996,
+      "updateMicroseconds" : 65.917000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4133.7920000000004,
+      "updateMicroseconds" : 62.875
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4198.25,
+      "updateMicroseconds" : 62.417000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4208.4579999999996,
+      "updateMicroseconds" : 63.957999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4195.0410000000002,
+      "updateMicroseconds" : 61.957999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4194.8339999999998,
+      "updateMicroseconds" : 63.167000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4216.0420000000004,
+      "updateMicroseconds" : 62.792000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4218.1670000000004,
+      "updateMicroseconds" : 63
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4195.6670000000004,
+      "updateMicroseconds" : 64.667000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4222.8329999999996,
+      "updateMicroseconds" : 64.875
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4106.125,
+      "updateMicroseconds" : 63.125
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4177.7910000000002,
+      "updateMicroseconds" : 61.75
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4233.4170000000004,
+      "updateMicroseconds" : 62.209000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4884.9579999999996,
+      "updateMicroseconds" : 64.707999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4630.6670000000004,
+      "updateMicroseconds" : 70.5
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4659.1670000000004,
+      "updateMicroseconds" : 68.167000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4825,
+      "updateMicroseconds" : 67.667000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4378.7079999999996,
+      "updateMicroseconds" : 70.082999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4322.8329999999996,
+      "updateMicroseconds" : 67.75
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4203.2089999999998,
+      "updateMicroseconds" : 66.417000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4175.625,
+      "updateMicroseconds" : 62.457999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4245.5829999999996,
+      "updateMicroseconds" : 63.75
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4345.4579999999996,
+      "updateMicroseconds" : 65.207999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4266.625,
+      "updateMicroseconds" : 65.332999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4253.7920000000004,
+      "updateMicroseconds" : 65.375
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4303.375,
+      "updateMicroseconds" : 72.709000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4273.3329999999996,
+      "updateMicroseconds" : 66.207999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4259.0420000000004,
+      "updateMicroseconds" : 66.292000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4255.9170000000004,
+      "updateMicroseconds" : 63.957999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4329.6660000000002,
+      "updateMicroseconds" : 66.625
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4249.9160000000002,
+      "updateMicroseconds" : 65.040999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4188.125,
+      "updateMicroseconds" : 64.292000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4212,
+      "updateMicroseconds" : 64.625
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4247.4589999999998,
+      "updateMicroseconds" : 67.084000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4244.7920000000004,
+      "updateMicroseconds" : 62.957999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4169.1660000000002,
+      "updateMicroseconds" : 63.790999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4173.1660000000002,
+      "updateMicroseconds" : 62.5
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4228.2920000000004,
+      "updateMicroseconds" : 63.917000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4244.25,
+      "updateMicroseconds" : 65.25
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 5580.3339999999998,
+      "updateMicroseconds" : 65.375
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4865.625,
+      "updateMicroseconds" : 134.459
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4726.5420000000004,
+      "updateMicroseconds" : 69.125
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4356.0839999999998,
+      "updateMicroseconds" : 64.417000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4359.4579999999996,
+      "updateMicroseconds" : 78.540999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4173.25,
+      "updateMicroseconds" : 65.207999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4193.0829999999996,
+      "updateMicroseconds" : 62.625
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4112.2920000000004,
+      "updateMicroseconds" : 64.832999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4105.125,
+      "updateMicroseconds" : 63.209000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4164.0839999999998,
+      "updateMicroseconds" : 64.625
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4010.875,
+      "updateMicroseconds" : 61.75
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4066.5,
+      "updateMicroseconds" : 61.457999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4054.2080000000001,
+      "updateMicroseconds" : 62.542000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4086.6669999999999,
+      "updateMicroseconds" : 61.292000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4080.6669999999999,
+      "updateMicroseconds" : 62.209000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4108.6670000000004,
+      "updateMicroseconds" : 63.375
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4028.875,
+      "updateMicroseconds" : 65.5
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4139.875,
+      "updateMicroseconds" : 61.5
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4207.8329999999996,
+      "updateMicroseconds" : 62.417000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4138.0420000000004,
+      "updateMicroseconds" : 62.5
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4051.2089999999998,
+      "updateMicroseconds" : 62.042000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4033.5839999999998,
+      "updateMicroseconds" : 65.334000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4087.5419999999999,
+      "updateMicroseconds" : 61.042000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 5221.2079999999996,
+      "updateMicroseconds" : 60.832999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4862.2079999999996,
+      "updateMicroseconds" : 83.375
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4542.0829999999996,
+      "updateMicroseconds" : 71
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4584.8329999999996,
+      "updateMicroseconds" : 72.5
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4341.5829999999996,
+      "updateMicroseconds" : 66.832999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4466.2079999999996,
+      "updateMicroseconds" : 67.082999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4383.2079999999996,
+      "updateMicroseconds" : 66.540999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4375.625,
+      "updateMicroseconds" : 66.5
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4745.5829999999996,
+      "updateMicroseconds" : 67.707999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4522.6670000000004,
+      "updateMicroseconds" : 67.417000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4701.5420000000004,
+      "updateMicroseconds" : 67
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4360.7089999999998,
+      "updateMicroseconds" : 67.417000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4267.3329999999996,
+      "updateMicroseconds" : 63.290999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4203.4170000000004,
+      "updateMicroseconds" : 63.584000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4086.125,
+      "updateMicroseconds" : 64.125
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4204.1670000000004,
+      "updateMicroseconds" : 62.167000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4419.2079999999996,
+      "updateMicroseconds" : 63.832999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 5196.25,
+      "updateMicroseconds" : 72.375
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4967.125,
+      "updateMicroseconds" : 70.417000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4645.9170000000004,
+      "updateMicroseconds" : 70.625
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4747.3329999999996,
+      "updateMicroseconds" : 116.042
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4385.9589999999998,
+      "updateMicroseconds" : 68.084000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4986.8329999999996,
+      "updateMicroseconds" : 66.082999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4574.2920000000004,
+      "updateMicroseconds" : 72.334000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4222,
+      "updateMicroseconds" : 64.167000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4185.7079999999996,
+      "updateMicroseconds" : 62.665999999999997
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4160.2079999999996,
+      "updateMicroseconds" : 62.625
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4122.625,
+      "updateMicroseconds" : 63.167000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4059.875,
+      "updateMicroseconds" : 61.875
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4047.5,
+      "updateMicroseconds" : 61.875
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4064.1660000000002,
+      "updateMicroseconds" : 61.125
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4093.5839999999998,
+      "updateMicroseconds" : 61.959000000000003
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4076.4580000000001,
+      "updateMicroseconds" : 61.582999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4181,
+      "updateMicroseconds" : 62.042000000000002
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4124.7079999999996,
+      "updateMicroseconds" : 62.375
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4054.75,
+      "updateMicroseconds" : 61.875
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4072.4169999999999,
+      "updateMicroseconds" : 61.082999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4063.4580000000001,
+      "updateMicroseconds" : 61.207999999999998
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4089.125,
+      "updateMicroseconds" : 61.375
+    },
+    {
+      "operation" : "update_then_open_history",
+      "phase" : "measured",
+      "totalMicroseconds" : 4117.125,
+      "updateMicroseconds" : 62.082999999999998
+    }
+  ],
+  "sourceRevision" : "e566f0af-plus-deferred-history",
+  "success" : true
+}

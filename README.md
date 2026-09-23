@@ -47,18 +47,43 @@ Code, keys and keystrokes are sealed on your machine. The relay forwards bytes i
 
 A native app, not Electron. Close it and your agents keep working.
 
-| Action | Median | p95 |
-|---|---:|---:|
-| ⌘N new harness | 13.5 ms | 14.6 ms |
-| ⌘O open anything | 15.7 ms | 18.4 ms |
-| ⌘P every command | 14.7 ms | 15.2 ms |
-| ⌘F find in a terminal | 12.5 ms | 18.3 ms |
-| Focus a pane | 11.4 ms | 17.2 ms |
-| Zoom a pane | 14.8 ms | 17.2 ms |
-| Next tab | 17.8 ms | 24.2 ms |
+We measure the workflows developers repeat, including their slow tails. Release
+build on an M2 Max; 120 observations per action, with one retained terminal:
 
-Key dispatch to finished frame. Release build, M2 Max, 16 live terminals. A window in the background
-runs zero timers. [How we measure](https://github.com/autonomous-ai/openharness/blob/codex/perf-integration-checkpoint/docs/performance/2026-09-22-desktop-latency.md).
+| Developer action | Idle median | Idle p95 | p95 during output |
+|---|---:|---:|---:|
+| Type → terminal echo | 11.6 ms | 17.5 ms | 50.9 ms |
+| ⌘N input-ready new harness | 11.0 ms | 18.8 ms | 14.2 ms |
+| ⌘O open anything | 10.9 ms | 16.0 ms | 14.3 ms |
+| Filter the session picker | 7.6 ms | 11.5 ms | 13.2 ms |
+| Select a session → first input echo | 16.3 ms | 19.7 ms | 20.7 ms |
+| ⌘T new tab | 9.9 ms | 14.6 ms | 15.4 ms |
+| Find → completed search results | 8.8 ms | 12.2 ms | 13.5 ms |
+| Scroll one viewport | 23.6 ms | 38.4 ms | 62.2 ms |
+
+Framework input to completed Flutter raster, with verified focus and results.
+Output is an eight-row ANSI redraw at 20 Hz. These use synthetic sessions;
+physical keyboard, network and display-presentation time are excluded.
+
+Real terminal round trips are measured separately, through disposable PTYs on
+actual machines. Each row includes 600 echoes per workload across three runs:
+
+| Connection | Idle median | Idle p95 | p95 during output |
+|---|---:|---:|---:|
+| Local Mac · loopback | 1.1 ms | 7.2 ms | 11.1 ms |
+| Office iMac · reported P2P | 13.9 ms | 77.3 ms | 57.4 ms |
+| Home iMac · relay | 376.2 ms | 501.1 ms | 500.0 ms |
+
+The route matters. These round trips exclude UI rendering; adding independent
+p95 values would not produce an end-to-end p95.
+
+The one-terminal desktop fixture used **213 MiB** median physical memory and
+**0.08% of one CPU core** while foreground-idle. Hidden, it used **217 MiB** and
+**0.08%**, with about **12 interrupt wakeups/s**. These are 30-second process
+samples, excluding daemons and agents; they do not establish zero background
+work in a connected app.
+
+[Full results, workload definitions, limits and raw observations](docs/performance/2026-09-23-core-experiences.md).
 
 ### Built the way developers work
 
