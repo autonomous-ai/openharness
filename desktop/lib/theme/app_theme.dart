@@ -35,6 +35,11 @@ abstract final class AppColors {
   static Color get hover => grid.AppPalette.cardBgHover;
   static Color get selected => grid.AppSurface.selectedFill;
 
+  /// The row under the pointer. Deliberately WEAKER than [selected]: a menu that
+  /// paints both the same makes two rows look chosen at once, and the one the
+  /// pointer happens to rest on is not the one the agent is on.
+  static Color get rowHover => grid.AppSurface.hoverFill;
+
   /// A hairline between blocks, and the stronger one that has to hold a shape.
   static Color get border => grid.AppPalette.divider;
   static Color get borderStrong => grid.AppPalette.guide;

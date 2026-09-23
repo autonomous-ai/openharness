@@ -747,6 +747,10 @@ class _SwarmScreenState extends State<SwarmScreen>
   void _syncModels() {
     final payload = {
       'subscriptions': _modelsMenu?.rows ?? [],
+      // Which subscription the menu marks as the one in use. The pane in focus decides, because
+      // "which account am I spending" is a question about the agent being looked at; a pane that
+      // has been moved onto a Local model is on no subscription, and then nothing is marked.
+      'currentEngine': _currentSubscriptionEngine(),
       // Back-compat: the own grid's models, as the native menu understood them before sections.
       'local': [
         for (final s in _localSections)
@@ -769,6 +773,17 @@ class _SwarmScreenState extends State<SwarmScreen>
     if (encoded == _modelsState) return;
     _modelsState = encoded;
     unawaited(_channel.invokeMethod<void>('modelsState', payload));
+  }
+
+  /// The focused pane's engine while that pane runs on its own login, else null.
+  String? _currentSubscriptionEngine() {
+    final pane = app.focusedPane;
+    if (pane == null) return null;
+    final agent = app.machineStates[pane.machineId]?.agents
+        .where((a) => a.id == pane.agentId)
+        .firstOrNull;
+    if (agent == null || agent.gridModel != null) return null;
+    return agent.engine?.trim().toLowerCase();
   }
 
   /// What the picker's sections answer for the native Models menu.
