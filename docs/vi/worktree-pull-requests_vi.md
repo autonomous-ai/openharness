@@ -1,7 +1,7 @@
 # PR bên cạnh branch
 
 Header terminal đủ rộng có link riêng `PR #123 · Draft / Open / Merged / Closed`, giữ nguyên màu
-branch. Link vẫn click được khi hover hiện các nút điều khiển. Header hẹp dùng nhãn gọn `#123 · Draft`, ưu tiên chỗ cho trạng thái PR trước tên branch.
+branch. Nhãn PR và thông tin branch cùng ẩn khi hover để chỉ hiện các nút điều khiển. Header hẹp dùng nhãn gọn `#123 · Draft`, ưu tiên chỗ cho trạng thái PR trước tên branch.
 Chỉ header rất nhỏ (dưới 360 logical pixel ở cỡ chữ bình thường) mới ẩn nhãn.
 Click mở GitHub; không merge, checkout hay xoá worktree.
 

@@ -18,10 +18,9 @@ void main() {
       body: PullRequestBadge(identity: id, read: read, open: open),
     ),
   );
-  testWidgets('PR remains clickable when hovering reveals header controls', (
+  testWidgets('PR and branch hide together while hovering reveals controls', (
     tester,
   ) async {
-    var opened = false;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -40,10 +39,6 @@ void main() {
                     'state': 'Open',
                     'url': 'https://github.com/acme/repo/pull/12',
                   },
-                  open: (_) async {
-                    opened = true;
-                    return true;
-                  },
                 ),
               ),
             ),
@@ -56,8 +51,22 @@ void main() {
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(find.text('PR #12 · Open')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('PR #12 · Open'));
-    expect(opened, isTrue);
+    final details = find.byKey(const ValueKey('pane-header-details'));
+    expect(tester.widget<AnimatedOpacity>(details).opacity, 0);
+    expect(
+      find.descendant(of: details, matching: find.text('branch-name')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: details, matching: find.text('PR #12 · Open')),
+      findsOneWidget,
+    );
+    expect(find.text('PR #12 · Open').hitTestable(), findsNothing);
+    expect(find.byTooltip('Zoom Pane').hitTestable(), findsOneWidget);
+    await mouse.moveTo(const Offset(700, 500));
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedOpacity>(details).opacity, 1);
+    expect(find.text('PR #12 · Open').hitTestable(), findsOneWidget);
     await mouse.removePointer();
     await tester.pumpWidget(const SizedBox());
   });

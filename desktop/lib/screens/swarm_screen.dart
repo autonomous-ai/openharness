@@ -4,6 +4,7 @@ import 'dart:io' show Platform;
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -127,6 +128,10 @@ TextStyle get _boxCaption =>
 class _SwarmScreenState extends State<SwarmScreen>
     with SingleTickerProviderStateMixin {
   static const _channel = MethodChannel('harness/swarm_tabs');
+
+  /// The tab the middle button went down on, so an up that slid onto another
+  /// tab closes nothing. Null between presses.
+  String? _middleDownTab;
   late final bool _native =
       widget.nativeTabs ?? (Platform.isMacOS && !kUnderTest);
   late final SwarmProjectStore _projects =
@@ -3351,102 +3356,121 @@ class _SwarmScreenState extends State<SwarmScreen>
                       return ReorderableDragStartListener(
                         key: ValueKey(swarm.id),
                         index: index,
-                        child: GestureDetector(
-                          onDoubleTap: () => _rename(swarm.id),
-                          child: _TabActionsReveal(
-                            builder: (showClose) => Container(
-                              width: _tabExtent - 2,
-                              margin: const EdgeInsets.only(top: 4, right: 2),
-                              decoration: ShapeDecoration(
-                                color: app.activeSwarmId == swarm.id
-                                    ? grid.AppPalette.swarmField
-                                    : Colors.transparent,
-                                shape: const TerminalTabBorder(),
-                              ),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: TextButton(
-                                      onPressed: () =>
-                                          app.selectSwarm(swarm.id),
-                                      style: TextButton.styleFrom(
-                                        shape: const RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.all(
-                                            Radius.circular(
-                                              kTerminalCornerRadius,
+                        child: Listener(
+                          // Middle-click closes the tab, as it does in every
+                          // browser. On the UP, and only inside the tab it went
+                          // down on: a press that slid off changed its mind.
+                          onPointerDown: (event) {
+                            _middleDownTab = event.buttons == kTertiaryButton
+                                ? swarm.id
+                                : null;
+                          },
+                          onPointerUp: (event) {
+                            final armed = _middleDownTab;
+                            _middleDownTab = null;
+                            if (armed == swarm.id) {
+                              unawaited(app.closeSwarm(swarm.id));
+                            }
+                          },
+                          child: GestureDetector(
+                            onDoubleTap: () => _rename(swarm.id),
+                            child: _TabActionsReveal(
+                              builder: (showClose) => Container(
+                                width: _tabExtent - 2,
+                                margin: const EdgeInsets.only(top: 4, right: 2),
+                                decoration: ShapeDecoration(
+                                  color: app.activeSwarmId == swarm.id
+                                      ? grid.AppPalette.swarmField
+                                      : Colors.transparent,
+                                  shape: const TerminalTabBorder(),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: TextButton(
+                                        onPressed: () =>
+                                            app.selectSwarm(swarm.id),
+                                        style: TextButton.styleFrom(
+                                          shape: const RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.all(
+                                              Radius.circular(
+                                                kTerminalCornerRadius,
+                                              ),
                                             ),
                                           ),
+                                          animationDuration: Duration.zero,
+                                          foregroundColor:
+                                              app.activeSwarmId == swarm.id
+                                              ? Colors.white
+                                              : Colors.white70,
                                         ),
-                                        animationDuration: Duration.zero,
-                                        foregroundColor:
-                                            app.activeSwarmId == swarm.id
-                                            ? Colors.white
-                                            : Colors.white70,
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          if (swarm.isStore)
-                                            StoreMark(
-                                              key: ValueKey(
-                                                'tab-store:${swarm.id}',
-                                              ),
-                                            )
-                                          else if (_tabAgents(swarm).length ==
-                                              1)
-                                            EngineMark(
-                                              key: ValueKey(
-                                                'tab-engine:${swarm.id}',
-                                              ),
-                                              engine: _tabEngine(swarm),
-                                              size: 16,
-                                            )
-                                          else if (_tabAgents(swarm).length > 1)
-                                            SwarmIcon(
-                                              key: ValueKey(
-                                                'tab-group:${swarm.id}',
-                                              ),
-                                              size: 16,
-                                              color: Colors.white70,
-                                            )
-                                          else
-                                            const Icon(Icons.add, size: 16),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                            child: Text(
-                                              swarm.name,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              // Like the native tabs.
-                                              style: grid.AppType.monoLabel(
-                                                color: Colors.white,
-                                                fontWeight: FontWeight.w400,
+                                        child: Row(
+                                          children: [
+                                            if (swarm.isStore)
+                                              StoreMark(
+                                                key: ValueKey(
+                                                  'tab-store:${swarm.id}',
+                                                ),
+                                              )
+                                            else if (_tabAgents(swarm).length ==
+                                                1)
+                                              EngineMark(
+                                                key: ValueKey(
+                                                  'tab-engine:${swarm.id}',
+                                                ),
+                                                engine: _tabEngine(swarm),
+                                                size: 16,
+                                              )
+                                            else if (_tabAgents(swarm).length >
+                                                1)
+                                              SwarmIcon(
+                                                key: ValueKey(
+                                                  'tab-group:${swarm.id}',
+                                                ),
+                                                size: 16,
+                                                color: Colors.white70,
+                                              )
+                                            else
+                                              const Icon(Icons.add, size: 16),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                swarm.name,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                // Like the native tabs.
+                                                style: grid.AppType.monoLabel(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.w400,
+                                                ),
                                               ),
                                             ),
-                                          ),
-                                        ],
+                                          ],
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                  Opacity(
-                                    key: ValueKey('tab-close:${swarm.id}'),
-                                    opacity: showClose ? 1 : 0,
-                                    alwaysIncludeSemantics: true,
-                                    child: IconButton(
-                                      onPressed: () => app.closeSwarm(swarm.id),
-                                      icon: Icon(
-                                        Icons.close,
-                                        size: 13,
-                                        semanticLabel: 'Close ${swarm.name}',
+                                    Opacity(
+                                      key: ValueKey('tab-close:${swarm.id}'),
+                                      opacity: showClose ? 1 : 0,
+                                      alwaysIncludeSemantics: true,
+                                      child: IconButton(
+                                        onPressed: () =>
+                                            app.closeSwarm(swarm.id),
+                                        icon: Icon(
+                                          Icons.close,
+                                          size: 13,
+                                          semanticLabel: 'Close ${swarm.name}',
+                                        ),
+                                        constraints:
+                                            const BoxConstraints.tightFor(
+                                              width: 30,
+                                              height: 30,
+                                            ),
+                                        padding: EdgeInsets.zero,
                                       ),
-                                      constraints:
-                                          const BoxConstraints.tightFor(
-                                            width: 30,
-                                            height: 30,
-                                          ),
-                                      padding: EdgeInsets.zero,
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
                           ),
