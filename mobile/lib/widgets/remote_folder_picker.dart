@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
@@ -25,6 +27,14 @@ Future<String?> showRemoteFolderPicker(
     initialPath: initialPath,
   ),
 );
+
+/// What a thumb gets: the path field and the two buttons under it, one height.
+///
+/// 44 rather than the 48 Material puts under a touch target, because this is a
+/// sheet of rows with a field at the top of it, not a toolbar: at 50 the button
+/// read as the heaviest thing on the screen and the sheet as a form built
+/// around it. The whole row of controls still clears iOS's own 44 floor.
+const double _touchControlHeight = 44;
 
 class _RemoteFolderPickerDialog extends StatefulWidget {
   const _RemoteFolderPickerDialog({
@@ -78,6 +88,20 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
   void initState() {
     super.initState();
     _load(widget.initialPath);
+    // ⚠️ **The SECOND way this field took the keyboard, and the one that
+    // survived turning `autofocus` off.** A dialog's first frame has no focus
+    // to give, so this asked for it a frame later — which on a phone is a
+    // keyboard over the folder list a moment after it is read, and it went on
+    // happening with `autofocus: false` because it is not the same mechanism.
+    // Both are gated on the same fact now; see the field's `autofocus` for
+    // what the fact is.
+    //
+    // `defaultTargetPlatform`, not `Theme.of(context).platform`, because there
+    // is no context to read a theme from here.
+    if (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS) {
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _locationFocus.requestFocus();
     });
@@ -85,6 +109,15 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
 
   @override
   void dispose() {
+    // ⚠️ **Here, not only on Cancel, because Cancel is not the only way out.**
+    // The barrier behind this dialog dismisses it too, and so does Back — both
+    // take the sheet away and neither passes through a button of ours, so the
+    // keyboard was left standing over a screen with no field in it. Dispose is
+    // the one place every exit meets.
+    //
+    // Told to the platform rather than dropped as focus: see [_hideKeyboard]
+    // for why the two are not the same thing.
+    unawaited(SystemChannels.textInput.invokeMethod<void>('TextInput.hide'));
     _location.dispose();
     _locationFocus.dispose();
     _foldersFocus.dispose();
@@ -194,6 +227,22 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
     _scroll.jumpTo(target.clamp(0.0, position.maxScrollExtent));
   }
 
+  /// Puts the software keyboard away.
+  ///
+  /// ⚠️ **Dropping focus is not enough, and the screenshot of it failing is why
+  /// this exists.** `unfocus()` alone left the field drawn unfocused — its label
+  /// grey — with the keyboard still standing over the folder list: the dialog's
+  /// focus scope takes the focus back, the engine is never told the input
+  /// connection is finished, and iOS keeps the keyboard for whatever it thinks
+  /// is still editing. Telling the platform outright is what actually closes
+  /// it; the unfocus stays so the field also STOPS looking like it is being
+  /// typed into.
+  void _hideKeyboard() {
+    _locationFocus.unfocus();
+    FocusManager.instance.primaryFocus?.unfocus();
+    unawaited(SystemChannels.textInput.invokeMethod<void>('TextInput.hide'));
+  }
+
   KeyEventResult _folderKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
@@ -264,14 +313,28 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
         ?.machine
         .displayName;
     final mac = Theme.of(context).platform == TargetPlatform.macOS;
+    // A platform with a software keyboard: the one where raising it costs the
+    // list this sheet exists to show. See the field's `autofocus`.
+    final touch =
+        Theme.of(context).platform == TargetPlatform.android ||
+        Theme.of(context).platform == TargetPlatform.iOS;
+    // ⚠️ **On a phone the buttons take the FIELD's height, by forcing both to
+    // one number.** They are the two things a thumb aims at in this sheet, and
+    // the buttons were sized for a mouse — a desktop control height, a third
+    // shorter than the box above them. Matching by eye would drift the moment
+    // either side's padding changed; [_touchControlHeight] is given to the
+    // field's decoration and to the buttons alike, so they are equal by
+    // construction. A desktop keeps its compact controls.
     final actionStyle = ButtonStyle(
       minimumSize: WidgetStatePropertyAll(
         Size(
           0,
-          math.max(
-            grid.AppControl.heightScaled,
-            scale.scale(grid.AppControl.fontSize) * 1.25 + 16,
-          ),
+          touch
+              ? _touchControlHeight
+              : math.max(
+                  grid.AppControl.heightScaled,
+                  scale.scale(grid.AppControl.fontSize) * 1.25 + 16,
+                ),
         ),
       ),
     );
@@ -342,9 +405,28 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                     key: const Key('remote-folder-path'),
                     controller: _location,
                     focusNode: _locationFocus,
-                    autofocus: true,
+                    // ⚠️ **Not on a phone, and that is not a style choice.**
+                    // This field is the way in for somebody who knows the path
+                    // already; everybody else came to BROWSE, and the list they
+                    // came for is what the keyboard covers. On a desktop the
+                    // field costs nothing — there is no keyboard to raise and
+                    // the list is still there — so the focus stays where it
+                    // was useful.
+                    autofocus: !touch,
+                    // Tapping the sheet anywhere but the field puts the
+                    // keyboard away, rather than leaving it up over the folders
+                    // with nothing typing into it.
+                    onTapOutside: (_) => _hideKeyboard(),
                     style: grid.kFieldTextStyle,
                     decoration: InputDecoration(
+                      // See [actionStyle] — the buttons below take this same
+                      // height.
+                      constraints: touch
+                          ? const BoxConstraints.tightFor(
+                              height: _touchControlHeight,
+                            )
+                          : null,
+                      isDense: touch,
                       labelText: 'Folder path',
                       hintText: 'Enter a full folder path…',
                       suffixIcon: IconButton(
@@ -520,7 +602,13 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
           actions: [
             TextButton(
               style: actionStyle,
-              onPressed: () => Navigator.of(context).pop(),
+              // The keyboard goes with the sheet. Popped while the field still
+              // holds focus, it stayed up over whatever the sheet was covering
+              // — and the screen behind had no field for it to be typing into.
+              onPressed: () {
+                _hideKeyboard();
+                Navigator.of(context).pop();
+              },
               child: const Text('Cancel'),
             ),
             Tooltip(
