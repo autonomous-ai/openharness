@@ -33,7 +33,8 @@ class AgentSwipeList {
 
   /// Where an agent sits in the snapshot, or null if it is not in it.
   ///
-  /// Used once, to find the page to open on: the tapped row may be a "Waiting for you" row, an
+  /// Used to find the page to open on, and the agent on screen in a list retaken under a live pager
+  /// (`AgentSwipeHost`'s `didUpdateWidget`): the tapped row may be a "Waiting for you" row, an
   /// agent with no terminal may have been dropped by the constructor above, and neither the list's
   /// index nor the row's position can be assumed to survive either.
   int? indexOf(String machineId, String agentId) {

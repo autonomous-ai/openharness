@@ -22,7 +22,9 @@ import 'status_pill.dart';
 /// rides the mark's bottom-right corner the way presence sits on an avatar in a
 /// messenger: green while live, a spinner while attaching, the warning or error
 /// colour when the stream is taken over or drops. The label is still there for
-/// a screen reader and as the long-press tooltip — see [StatusDot].
+/// a screen reader and as the long-press tooltip — see [StatusDot]. While the
+/// terminal is on its way back, the rule under the row sweeps as well — see
+/// [TerminalHeaderRule].
 ///
 /// ⚠️ **Search and New agent are not here.** They float over the terminal's
 /// bottom-right corner with the mic — see `terminal_action_column.dart` — so
@@ -88,9 +90,7 @@ class TerminalHeader extends StatelessWidget {
               ring: AppPalette.windowBg,
             ),
             const SizedBox(width: 11),
-            Expanded(
-              child: _Identity(agent: agent),
-            ),
+            Expanded(child: _Identity(agent: agent)),
             ...trailing,
           ],
         ),
@@ -139,12 +139,194 @@ class BadgedEngineMark extends StatelessWidget {
           Positioned(
             right: -4,
             bottom: -4,
-            child: StatusDot(summary: status, ring: ring),
+            child: StatusDot(
+              summary: status,
+              ring: ring,
+              // ⚠️ **The accent as a mark, not as a fill.** `accent` is the
+              // fill under white text, and as a 1.6pt ring on the dark ground
+              // it all but vanished — the one sign on the row that the
+              // terminal was on its way back went unseen. `accentOnSurface`
+              // is the palette's accent for a mark on a surface.
+              spinnerColor: AppPalette.accentOnSurface,
+            ),
           ),
         ],
       ),
     );
   }
+}
+
+/// The hairline under the header, which carries a sweep while the terminal is
+/// on its way back — attaching, resyncing, reconnecting.
+///
+/// ```
+/// [mark◌]  agent-3                                       ⋯
+///          autonomous-harness  ⑂ main
+/// ──────────────━━━━━━━━────────────────────────────────  → left to right
+/// ```
+///
+/// ⚠️ **The spinner on the mark cannot carry a wait on its own.** It is 10pt in
+/// the corner of a 28pt mark, and a reconnect after the phone comes back from
+/// the background runs for seconds: at that size it read as a status rather
+/// than as progress, and the page looked stuck. The sweep crosses the whole
+/// width, so the wait is seen wherever the eye is.
+///
+/// ⚠️ **Painted, not laid out.** The rule takes one pixel of layout whatever it
+/// draws — [TerminalHeader.height] counts it as one — and the two-pixel glint
+/// hangs half a pixel over each side of it. A taller rule would move everything
+/// under the header each time a reconnect began and ended.
+///
+/// Still, not blank, when it cannot animate: with animations turned off the
+/// whole rule is drawn in the glint's colour, so the state still shows. A page
+/// parked beside the one on screen needs nothing — its ticker is muted, and the
+/// glint picks up where it stopped when the page comes back.
+class TerminalHeaderRule extends StatefulWidget {
+  const TerminalHeaderRule({super.key, required this.busy});
+
+  /// The terminal is on its way back: attaching, resyncing or reconnecting.
+  final bool busy;
+
+  @override
+  State<TerminalHeaderRule> createState() => _TerminalHeaderRuleState();
+}
+
+class _TerminalHeaderRuleState extends State<TerminalHeaderRule>
+    with SingleTickerProviderStateMixin {
+  /// One pass, left edge to right edge: quick enough to read as work going on,
+  /// slow enough not to flicker at the edge of the eye.
+  static const _period = Duration(milliseconds: 1150);
+
+  late final AnimationController _sweep = AnimationController(
+    vsync: this,
+    duration: _period,
+  );
+
+  /// Eased in and out on every pass, so the glint gathers at the left, crosses,
+  /// and trails off at the right rather than scrolling past at one speed.
+  late final Animation<double> _travel = CurvedAnimation(
+    parent: _sweep,
+    curve: Curves.fastOutSlowIn,
+  );
+
+  /// False when the person has turned animations off.
+  bool _canAnimate = true;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _canAnimate = !MediaQuery.disableAnimationsOf(context);
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(TerminalHeaderRule oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.busy != widget.busy) _sync();
+  }
+
+  /// Runs the sweep exactly while there is a wait to show and it may move.
+  void _sync() {
+    final run = widget.busy && _canAnimate;
+    if (run == _sweep.isAnimating) return;
+    if (run) {
+      _sweep.repeat();
+    } else {
+      _sweep.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _sweep.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Divider(height: 1, color: AppGlass.hair),
+        if (widget.busy)
+          Positioned(
+            left: 0,
+            right: 0,
+            top: -0.5,
+            height: 2,
+            // ⚠️ A boundary of its own: the glint repaints every frame, and
+            // without one each frame would repaint the header with it — the
+            // row, the names, the mark — for a two-pixel line.
+            child: RepaintBoundary(
+              child: CustomPaint(
+                painter: _GlintPainter(
+                  travel: _travel,
+                  color: AppPalette.accentOnSurface,
+                  still: !_canAnimate,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Paints [TerminalHeaderRule]'s glint: a short band of [color] that fades out
+/// at both ends, carried across the rule by [travel].
+class _GlintPainter extends CustomPainter {
+  _GlintPainter({
+    required this.travel,
+    required this.color,
+    required this.still,
+  }) : super(repaint: travel);
+
+  /// 0 with the glint wholly off the left edge, 1 with it wholly off the right.
+  final Animation<double> travel;
+
+  final Color color;
+
+  /// Animations are off: the whole rule in [color], not a glint frozen
+  /// somewhere along it.
+  final bool still;
+
+  /// The glint's length, as a fraction of the rule.
+  static const _length = 0.34;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final full = Offset.zero & size;
+    if (still) {
+      canvas.drawRect(full, Paint()..color = color.withValues(alpha: 0.5));
+      return;
+    }
+    final length = size.width * _length;
+    // Enters from past the left edge and leaves past the right, so each pass
+    // arrives and goes rather than appearing at one edge and vanishing at the
+    // other.
+    final left = -length + (size.width + length) * travel.value;
+    final glint = Rect.fromLTWH(left, 0, length, size.height);
+    canvas.save();
+    canvas.clipRect(full);
+    canvas.drawRect(
+      glint,
+      Paint()
+        ..shader = LinearGradient(
+          colors: [
+            color.withValues(alpha: 0),
+            color,
+            color.withValues(alpha: 0),
+          ],
+        ).createShader(glint),
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_GlintPainter old) =>
+      old.color != color ||
+      old.still != still ||
+      !identical(old.travel, travel);
 }
 
 /// The two lines: *agent*, then *folder ⑂ branch*.

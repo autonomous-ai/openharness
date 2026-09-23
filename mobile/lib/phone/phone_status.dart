@@ -112,13 +112,49 @@ PhoneSummary phoneAgentSummary(MachineState machine, Agent agent) {
   );
 }
 
+/// Whether the streams [machine] lost are on their way back without anybody asking: its socket is
+/// dialling, or waiting out a backoff to dial again, or it is up and still fetching what the
+/// reattach waits on — once that lands, `_attachPendingPanes` reopens every stream the drop left
+/// dead.
+///
+/// For the terminal header, which reads a dead stream as "Reconnecting…" rather than as a dead end
+/// while this holds — see [phoneSessionSummary]. A phone loses its socket every time it goes to the
+/// background, so this is the ordinary way back into a terminal, and a Reconnect button over it
+/// only ever meant "wait": the press is declined while the socket is down.
+///
+/// ⚠️ **`disconnected` is not on its way back.** It is a socket this app closed on purpose — signed
+/// out, refused by the relay, shut — and nothing redials it; `connecting` and `reconnecting` are the
+/// two with a dial behind them (`WsConn._scheduleReconnect`). An offline machine and one that needs
+/// its password are out for the same reason: no dial fixes either.
+bool phoneMachineRedialling(MachineState machine) {
+  if (machine.nodeOnline == false || machine.needsLink) return false;
+  return switch (machine.connectionStatus) {
+    ConnectionStatus.connecting || ConnectionStatus.reconnecting => true,
+    // ⚠️ **Up is not back yet.** The reattach waits for the agent list and the terminal
+    // capabilities — `_attachPendingPanes` runs when the later of the two answers — and a refresh
+    // over a list already held reports `agentsRefreshing` rather than `loading`. Counting only the
+    // socket put "Disconnected" and its button back on screen for the stretch between the socket
+    // answering and the stream reopening.
+    ConnectionStatus.connected =>
+      machine.agentLoadStatus == AgentLoadStatus.loading ||
+          machine.agentsRefreshing ||
+          machine.terminalCapabilityLoadInFlight != null,
+    ConnectionStatus.disconnected => false,
+  };
+}
+
 /// The terminal's own state, for the header over it. No session yet reads as attaching: the
 /// page opens before the pane has one.
 /// [takerName]: who took the terminal, when known ([phoneTakerName]) — the
 /// dot's tooltip then says "Taken over by Mac mini" rather than just that it was.
+/// [reconnecting]: a dead stream is already on its way back — its machine is redialling
+/// ([phoneMachineRedialling]), or the person has just pressed Reconnect. Disconnected and Closed
+/// then read as "Reconnecting…", busy like Attaching: there is nothing to press, and the header
+/// draws the wait rather than a dead end.
 PhoneSummary phoneSessionSummary(
   TerminalSession? session, {
   String? takerName,
+  bool reconnecting = false,
 }) {
   // ⚠️ Checked BEFORE the status, because a watcher's status is `controlling` — it holds a live
   // stream and renders every byte; what it does not hold is the terminal. "Live" would promise a
@@ -140,6 +176,9 @@ PhoneSummary phoneSessionSummary(
       label: takerName == null ? 'Taken over' : 'Taken over by $takerName',
       tone: PhoneTone.attention,
     ),
+    TerminalSessionStatus.error || TerminalSessionStatus.closed
+        when reconnecting =>
+      (label: 'Reconnecting…', tone: PhoneTone.busy),
     TerminalSessionStatus.error => (label: 'Disconnected', tone: PhoneTone.bad),
     TerminalSessionStatus.closed => (label: 'Closed', tone: PhoneTone.quiet),
   };
@@ -173,7 +212,14 @@ String? phoneTakeoverNotice(TerminalSession? session, String? takerName) =>
 /// The desktop puts the same two words on the same two states, in the tile
 /// header it draws (`widgets/terminal_panel.dart`); a phone hides that header
 /// and draws its own, which is how the way out went missing here.
-PhoneSummary? phoneReclaimAction(TerminalSession? session) {
+///
+/// [reconnecting]: as for [phoneSessionSummary] — a dead stream already on its
+/// way back offers no Reconnect, for the reason above: while the socket is down
+/// the press is declined, so the button would only ever mean "wait".
+PhoneSummary? phoneReclaimAction(
+  TerminalSession? session, {
+  bool reconnecting = false,
+}) {
   // A watcher is the ordinary way onto an agent another app is driving: output is already on
   // screen, and this is the button that asks for the keyboard. See [TerminalSession.watching].
   if (session != null && session.watching) {
@@ -184,6 +230,8 @@ PhoneSummary? phoneReclaimAction(TerminalSession? session) {
       label: 'Take control',
       tone: PhoneTone.attention,
     ),
+    TerminalSessionStatus.error ||
+    TerminalSessionStatus.closed when reconnecting => null,
     TerminalSessionStatus.error ||
     TerminalSessionStatus.closed => (label: 'Reconnect', tone: PhoneTone.bad),
     _ => null,

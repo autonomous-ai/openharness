@@ -72,6 +72,7 @@ class StatusDot extends StatelessWidget {
     required this.summary,
     this.ring,
     this.size = defaultSize,
+    this.spinnerColor,
   });
 
   /// The box every screen but the terminal's foot row draws it at.
@@ -89,6 +90,10 @@ class StatusDot extends StatelessWidget {
   /// reads as notched into it rather than stuck on top.
   final Color? ring;
 
+  /// The spinner's colour in place of the busy tone's, for a spinner drawn over a mark rather than
+  /// beside its words — see `BadgedEngineMark`. Null keeps the tone's.
+  final Color? spinnerColor;
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
@@ -99,7 +104,7 @@ class StatusDot extends StatelessWidget {
       child: summary.tone == PhoneTone.busy
           ? CircularProgressIndicator(
               strokeWidth: 1.6 * size / defaultSize,
-              color: color,
+              color: spinnerColor ?? color,
             )
           : Center(
               child: DecoratedBox(
