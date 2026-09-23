@@ -12,18 +12,17 @@ import 'voice_mic_fab.dart';
 import 'voice_status_pill.dart';
 
 /// The terminal's floating controls, stacked in its bottom-right corner:
-/// the mic, then Search, then New agent.
+/// the mic, then Search.
 ///
 /// ```
 ///   ( Listening…  × )  (🎤)
 ///                      (🔍)
-///                      (＋)
 /// ```
 ///
 /// ⚠️ **The mic is on top, and that is what "moved up" means.** It used to sit
-/// alone in the corner, over the agent's own status line; Search and New agent
-/// now take the corner under it, and the mic rides above them. The three share
-/// one column so they read as one set of controls rather than three strays.
+/// alone in the corner, over the agent's own status line; Search now takes the
+/// corner under it, and the mic rides above. The two share one column so they
+/// read as one set of controls rather than two strays.
 ///
 /// ⚠️ **The gaps are set by the mic's hit area, not by the look.** The mic's
 /// target spills [VoiceMicButton.touchOverhang] past its slot on every side and
@@ -36,7 +35,6 @@ class TerminalActionColumn extends StatelessWidget {
     required this.voice,
     required this.session,
     required this.onSearch,
-    required this.onNewAgent,
   });
 
   final VoiceInputController voice;
@@ -47,14 +45,6 @@ class TerminalActionColumn extends StatelessWidget {
 
   final VoidCallback onSearch;
 
-  /// Null when the machine cannot host a new agent right now — offline, still
-  /// asking for its password, or not loaded yet after a restart.
-  ///
-  /// ⚠️ **Drawn dimmed, never left out.** All three buttons are always there:
-  /// a `+` that came and went with the machine's state made the column jump,
-  /// and read as a missing button rather than one not ready yet.
-  final VoidCallback? onNewAgent;
-
   /// The column's width: the mic's slot, which the smaller buttons centre under.
   static const double width = VoiceMicButton.extent;
 
@@ -62,7 +52,7 @@ class TerminalActionColumn extends StatelessWidget {
   static const double inset = VoiceMicFab.inset;
 
   /// How far the column sits above the terminal's bottom edge — higher than
-  /// [inset], so the `＋` clears the agent's own status line under it.
+  /// [inset], so Search clears the agent's own status line under it.
   static const double bottomInset = 172;
 
   /// The DRAWN gap between one circle and the next, the same all the way down.
@@ -77,14 +67,11 @@ class TerminalActionColumn extends StatelessWidget {
   static const double _underMic =
       _gap - (VoiceMicButton.extent - VoiceMicCore.diameter) / 2;
 
-  /// Between Search and New agent: circles in slots of their own size.
-  static const double _between = _gap;
-
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final session = this.session;
-    // One backdrop read for the three buttons' blurs — see [FloatingGlass].
+    // One backdrop read for the buttons' blurs — see [FloatingGlass].
     return BackdropGroup(child: _column(context, session));
   }
 
@@ -124,15 +111,6 @@ class TerminalActionColumn extends StatelessWidget {
             icon: LucideIcons.search300,
             label: 'Search harnesses and machines',
             onTap: onSearch,
-          ),
-        ),
-        const SizedBox(height: _between),
-        _centred(
-          TerminalRoundAction(
-            key: const ValueKey('terminal-new-agent'),
-            icon: LucideIcons.plus300,
-            label: 'New Harness',
-            onTap: onNewAgent,
           ),
         ),
       ],
@@ -196,7 +174,7 @@ class TerminalRoundAction extends StatelessWidget {
               child: SizedBox.square(
                 dimension: touchExtent,
                 child: AnimatedOpacity(
-                  // The mic's dimmed opacity, so the three read alike.
+                  // The mic's dimmed opacity, so they read alike.
                   duration: const Duration(milliseconds: 160),
                   opacity: live ? 1 : 0.4,
                   child: Center(

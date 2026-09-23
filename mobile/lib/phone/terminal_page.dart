@@ -29,7 +29,6 @@ import 'package:harness_mobile/widgets/terminal_panel.dart';
 import 'agent_model_sections.dart';
 import 'agent_model_sheet.dart';
 import 'agents_list_page.dart';
-import 'agents_page.dart' show openNewAgent;
 import 'delete_agent.dart';
 import 'held_height.dart';
 import 'machines_tab.dart';
@@ -632,19 +631,10 @@ class _TerminalPageState extends State<TerminalPage>
     super.dispose();
   }
 
-  /// Opens the machine's new-agent form.
-  ///
-  /// Awaited: the form may be backed out of rather than completed, and this page
-  /// gets no rebuild when it lands back on top.
-  Future<void> _newAgent() async {
-    await openNewAgent(context, widget.notifier, widget.machineId);
-    if (mounted) setState(() {});
-  }
-
   /// Opens the account-wide agent list.
   ///
-  /// Awaited for the same reason [_newAgent] is: the list is backed out of as often as it is tapped
-  /// through, and this page gets no rebuild when it lands back on top.
+  /// Awaited: the list is backed out of as often as it is tapped through, and
+  /// this page gets no rebuild when it lands back on top.
   Future<void> _openAgentList() async {
     await Navigator.of(context)
         .push(phoneRoute((_) => AgentsListPage(notifier: widget.notifier)));
@@ -1129,12 +1119,6 @@ class _TerminalPageState extends State<TerminalPage>
       takerName: takerName,
       reconnecting: reconnecting,
     );
-    // Creating needs the machine to list its folders and name its engines,
-    // so one that is offline or still wants its password cannot host a new
-    // agent — the same gate the Agents tab puts on its fab.
-    final canCreate =
-        machine != null &&
-        phoneMachineStatusOf(machine) == PhoneMachineStatus.ready;
     // Read this page's own buffer for a dialog, and raise the keyboard when one
     // appears. Must run on every build: the session arrives a frame or two
     // after the page, and the engine with the agent.
@@ -1347,7 +1331,7 @@ class _TerminalPageState extends State<TerminalPage>
                                   Positioned.fill(
                                     child: _Attaching(key: _skeletonKey),
                                   ),
-                                // The mic, Search and New agent, floating in the
+                                // The mic and Search, floating in the
                                 // terminal's bottom-right corner — see
                                 // [TerminalActionColumn].
                                 //
@@ -1364,9 +1348,6 @@ class _TerminalPageState extends State<TerminalPage>
                                       voice: widget.voice,
                                       session: session,
                                       onSearch: _openSearch,
-                                      onNewAgent: canCreate
-                                          ? () => unawaited(_newAgent())
-                                          : null,
                                     ),
                                   ),
                               ],
