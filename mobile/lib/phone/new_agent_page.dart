@@ -598,7 +598,11 @@ class _NewAgentPageState extends State<NewAgentPage> {
               const PhoneHeader(title: 'New Harness'),
               Expanded(
                 child: ListView(
-                  padding: const EdgeInsets.only(bottom: 16),
+                  // ⚠️ **A side inset, where this list had none.** The cards
+                  // ran edge to edge while every other list on the phone sits
+                  // 16 in ([phoneListPadding]), so a form of three rows read as
+                  // three bands across the screen rather than as cards on it.
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                   children: [
                     const SettingsCaption('MACHINE'),
                     SettingsGroup(
@@ -896,12 +900,34 @@ class _NewAgentPageState extends State<NewAgentPage> {
                   ),
                 ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                 child: SizedBox(
                   width: double.infinity,
+                  // ⚠️ **The rows' width and the rows' corner, but not their
+                  // height.** It sat narrower than the cards, shorter, and
+                  // rounder — three small differences that together read as
+                  // something from another screen, so the inset (16, the
+                  // list's) and the radius ([AppCard.radius]) are theirs. The
+                  // height is not: a solid accent bar as tall as a row is the
+                  // heaviest thing on a page whose other three items are
+                  // outlines, and it read as the page being built around the
+                  // button. 44 is what the folder sheet gives the controls a
+                  // thumb aims at, so every button in this flow is one height.
+                  height: 44,
                   child: FilledButton(
+                    style: FilledButton.styleFrom(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppCard.radius),
+                      ),
+                    ),
                     onPressed: ready ? () => unawaited(_create()) : null,
-                    child: Text(_creating ? 'Starting…' : 'Create Harness'),
+                    child: Text(
+                      _creating ? 'Starting…' : 'Create Harness',
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ),
               ),
