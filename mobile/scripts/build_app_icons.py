@@ -25,7 +25,9 @@ THREE RULES THE SLOTS DO NOT SHARE, each a platform's and not a taste:
     by `login_screen` and `bootstrapping_screen` with no `ClipRRect` — its
     corners have to be in the file.
 
-  * **The mark is inset, the background is not.** See [TILE].
+  * **The mark is drawn as the designer drew it.** The source carries its own
+    margin inside its 400x400 tile, so the tile maps onto the canvas edge to
+    edge; only the tile's rounding is dropped (see `read_source`).
 """
 
 from __future__ import annotations
@@ -48,22 +50,6 @@ IOS_SET = MOBILE / "ios/Runner/Assets.xcassets/AppIcon.appiconset"
 ANDROID_RES = MOBILE / "android/app/src/main/res"
 ANDROID_DENSITIES = ["mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"]
 IN_APP_LOGO = MOBILE / "assets" / "app_icon.png"
-
-# How much of the canvas the artwork's own 400x400 tile is given, the rest
-# being background the gradient runs on through.
-#
-# ⚠️ **Measured off the icon this replaces, not chosen.** The mark in the
-# shipping 1024 icon spans 0.906 of the canvas and centres at y=493; the tile at
-# this fraction reproduces both to a pixel, so the new art lands exactly where
-# the old art sat and the change is the drawing alone.
-#
-# ⚠️ **It is also the clearance the masks need.** The source is drawn to its own
-# edges — full-bleed at 1024 the circle's top sits ON row 0, and the guide
-# square's bottom corners clear the iOS corner arc by 2.7px. Neither is a cut,
-# and both are close enough that the real squircle (which is not this circular
-# -cornered approximation) is a coin toss. At this fraction the mark keeps 48px
-# of room at 1024. See [CLEARANCE], which is what actually holds the line.
-TILE = 0.938
 
 # How far inside the mask the art has to stay, as a fraction of the canvas —
 # not merely inside it. Every icon here passes "nothing is cut" even drawn to
@@ -90,21 +76,22 @@ def read_source() -> tuple[str, str, str]:
     the canvas, and two gradients over different spans would band where they met.
     """
     svg = SOURCE.read_text()
-    body = re.search(r"<g clip-path=[^>]*>(.*?)</g>", svg, re.S)
+    body = re.search(r"<svg[^>]*>(.*?)<defs>", svg, re.S)
     stops = re.findall(r'<stop[^>]*stop-color="(#[0-9A-Fa-f]{6})"', svg)
     if body is None or len(stops) != 2:
         sys.exit(f"{SOURCE} is not the shape this script knows how to read")
-    mark = re.sub(r"<rect width=\"400\" height=\"400\"[^>]*/>\s*", "", body.group(1))
+    # Figma exports the art bare or wrapped in a clip-path group; either way the
+    # wrapper and the tile go, the drawing stays.
+    mark = re.sub(r"</?g\b[^>]*>\s*", "", body.group(1))
+    mark = re.sub(r"<rect width=\"400\" height=\"400\"[^>]*/>\s*", "", mark)
     if "<circle" not in mark or "<path" not in mark:
         sys.exit(f"{SOURCE}: no mark left after dropping the tile")
     return mark.strip(), stops[0], stops[1]
 
 
 def master_svg(size: int) -> str:
-    """The icon as a square: gradient edge to edge, the mark inset by [TILE]."""
+    """The icon as a square: gradient edge to edge, the mark scaled with it."""
     mark, top, bottom = read_source()
-    scale = TILE * size / 400
-    offset = (1 - TILE) / 2 * size
     return (
         f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}" '
         'fill="none" xmlns="http://www.w3.org/2000/svg">\n'
@@ -116,7 +103,7 @@ def master_svg(size: int) -> str:
         "</linearGradient>\n"
         "</defs>\n"
         f'<rect width="{size}" height="{size}" fill="url(#tile)"/>\n'
-        f'<g transform="translate({offset:.4f} {offset:.4f}) scale({scale:.6f})">\n'
+        f'<g transform="scale({size / 400:.6f})">\n'
         f"{mark}\n"
         "</g>\n"
         "</svg>\n"
