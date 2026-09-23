@@ -144,9 +144,11 @@ flutter run -d macos
 
 ## Beyond code
 
+### Follow your curiosity. Build across disciplines.
+
 > “World-class entrepreneurs are polymaths.” — [Peter Thiel](https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s)
 
-**Coding agents can build far more than software.** Give one a harness and it works with the real
+Coding agents can build far more than software. Give one a harness and it works with the real
 tools of a craft. You steer in a live viewer. Every clip below is a real session.
 
 ### Beyond code: Design
