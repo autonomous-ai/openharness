@@ -21,7 +21,9 @@ export type RouteSnapshot = {
 // Never retain SDP, addresses, ports, keys, or ICE credentials in an artifact.
 export function candidateSummary(sdp: string | undefined): Candidate | null {
   const parts = sdp?.trim().split(/\s+/) ?? []
-  const type = parts[parts.indexOf('typ') + 1]
+  const typeIndex = parts.indexOf('typ')
+  if (typeIndex < 6) return null
+  const type = parts[typeIndex + 1]
   const protocol = parts[2]?.toLowerCase()
   if (!['host', 'srflx', 'prflx', 'relay'].includes(type) || !['udp', 'tcp'].includes(protocol)) return null
   return { type, protocol }

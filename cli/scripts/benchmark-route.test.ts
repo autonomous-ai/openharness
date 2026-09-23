@@ -6,6 +6,7 @@ test('candidate evidence keeps type/protocol but removes addresses and ports', (
   assert.deepEqual(candidateSummary('candidate:1 1 UDP 123 192.0.2.1 12345 typ srflx raddr 10.0.0.1 rport 23456'), { type: 'srflx', protocol: 'udp' })
   assert.equal(candidateSummary('not a candidate'), null)
   assert.equal(candidateSummary('candidate:1 1 UDP 123 192.0.2.1 12345'), null)
+  assert.equal(candidateSummary('relay 1 UDP 123 192.0.2.1 12345'), null)
 })
 
 const direct = { local: { type: 'host', protocol: 'udp' }, remote: { type: 'srflx', protocol: 'udp' } }

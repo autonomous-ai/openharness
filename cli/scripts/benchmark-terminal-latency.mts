@@ -369,7 +369,7 @@ try {
       if (deleted.deleted !== true) throw new Error('daemon did not confirm probe deletion')
       result.cleanup.deleted = true
     } catch (error) {
-      result.cleanup = { deleted: false, agentId, error: String(error) }
+      result.cleanup = { ...result.cleanup, deleted: false, agentId, error: String(error) }
       result.success = false; process.exitCode = 1
     }
   }

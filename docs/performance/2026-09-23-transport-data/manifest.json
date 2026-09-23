@@ -1,10 +1,7 @@
 {
   "schema": 1,
-  "complete": false,
-  "missingTrials": [
-    "home-turn-3.json",
-    "home-relay-3.json"
-  ],
+  "complete": true,
+  "missingTrials": [],
   "note": "Console logs remain private. Only listed fields were removed; timings and route evidence are unchanged.",
   "artifacts": [
     {
@@ -117,6 +114,18 @@
       "redactions": [
         "failureDiagnostics.outputTail"
       ]
+    },
+    {
+      "file": "home-turn-3.json",
+      "sha256": "53d0b84eb3f0f67a8b500ce0fb209dbd466c3cdb0bc62ebec0a03f0ac46e96c8",
+      "sourceSha256": "53d0b84eb3f0f67a8b500ce0fb209dbd466c3cdb0bc62ebec0a03f0ac46e96c8",
+      "redactions": []
+    },
+    {
+      "file": "home-relay-3.json",
+      "sha256": "1c0d1906870e1e65e7251f231c4bbd2ab1b3d86efe63d1a03f214150a6ef1b88",
+      "sourceSha256": "1c0d1906870e1e65e7251f231c4bbd2ab1b3d86efe63d1a03f214150a6ef1b88",
+      "redactions": []
     }
   ]
 }

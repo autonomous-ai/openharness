@@ -267,6 +267,11 @@ occurs without this optimization.
 
 ## Real local and remote terminal latency
 
+The subsequent [same-target route comparison](2026-09-23-transport-routes.md)
+adds nominated ICE-pair evidence, all three requested paths on each remote,
+and connection-attempt outcomes. It uses a separate source transport client;
+the installed-daemon measurements below remain their original baseline.
+
 Each row pools 600 measured echoes from three runs. Times are milliseconds.
 
 | Target / reported route | Workload | Median | p95 | p99 | Maximum |

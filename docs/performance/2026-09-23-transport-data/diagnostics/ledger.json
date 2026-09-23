@@ -96,5 +96,19 @@
         "[p2p] connected \u00b7 machine=[machine] via=turn setup=2764ms"
       ]
     }
+  ],
+  "supplementalArtifacts": [
+    {
+      "file": "environment.json",
+      "sha256": "5daa248beeb9bf59b430aaa4b0ff797b875448e0ef7d57cd4fa85a84572aab2b"
+    },
+    {
+      "file": "cleanup-audit.json",
+      "sha256": "302f0caf2de3653d70c730f6000743ece002130e8d723858dc8180fc34107511"
+    },
+    {
+      "file": "failed-negotiations.json",
+      "sha256": "4f570e094c649d3c4199f2438648436aef2e775d4584240e5834d4e054046881"
+    }
   ]
 }
