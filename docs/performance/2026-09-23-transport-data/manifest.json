@@ -2,12 +2,6 @@
   "schema": 1,
   "complete": false,
   "missingTrials": [
-    "home-relay-2.json",
-    "home-p2p-2.json",
-    "home-turn-2.json",
-    "office-turn-2.json",
-    "office-relay-2.json",
-    "office-p2p-2.json",
     "office-relay-3.json",
     "office-p2p-3.json",
     "office-turn-3.json",
@@ -61,6 +55,44 @@
       "redactions": [
         "failureDiagnostics.outputTail"
       ]
+    },
+    {
+      "file": "home-relay-2.json",
+      "sha256": "e533f104a228e2fd26fd8eb22065c04bfb0a5d1c2144eee63401187a4d13b036",
+      "sourceSha256": "e533f104a228e2fd26fd8eb22065c04bfb0a5d1c2144eee63401187a4d13b036",
+      "redactions": []
+    },
+    {
+      "file": "home-p2p-2.json",
+      "sha256": "5176967a0b9e9cc274b24e5888c63fbd89bce7aa1b5992267cda7998056124e3",
+      "sourceSha256": "93f5755e2062717b46bc38dea14ad03bd80154ce881dda4b18cf263c05c3ffd5",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ]
+    },
+    {
+      "file": "home-turn-2.json",
+      "sha256": "25ba7e04f14b8a25898669ade4327e6377e10957cbda28d3b708122a4dc81718",
+      "sourceSha256": "25ba7e04f14b8a25898669ade4327e6377e10957cbda28d3b708122a4dc81718",
+      "redactions": []
+    },
+    {
+      "file": "office-turn-2.json",
+      "sha256": "35976499d7f678731a913a11304a285d3505e223b99b8e4f1f7e04acc29a84fa",
+      "sourceSha256": "35976499d7f678731a913a11304a285d3505e223b99b8e4f1f7e04acc29a84fa",
+      "redactions": []
+    },
+    {
+      "file": "office-relay-2.json",
+      "sha256": "9194f7ed8586ecfc2e31012173e92907bef5e150486156b3fca9586ec9c766b1",
+      "sourceSha256": "9194f7ed8586ecfc2e31012173e92907bef5e150486156b3fca9586ec9c766b1",
+      "redactions": []
+    },
+    {
+      "file": "office-p2p-2.json",
+      "sha256": "878766a2647ba7e5990dffb6c95295ad739e2407fecf2e014523a8bda28db369",
+      "sourceSha256": "878766a2647ba7e5990dffb6c95295ad739e2407fecf2e014523a8bda28db369",
+      "redactions": []
     }
   ]
 }
