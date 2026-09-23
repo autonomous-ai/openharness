@@ -549,7 +549,7 @@ void main() {
         find.byKey(const ValueKey('harness-start-search')),
         findsOneWidget,
       );
-      expect(find.text('Models'), findsNothing);
+      expect(find.byKey(const ValueKey('swarm-models-button')), findsOneWidget);
       expect(find.text('Machines'), findsNothing);
       await chord(tester, LogicalKeyboardKey.keyO);
       await tester.pump();

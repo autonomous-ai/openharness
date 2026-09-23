@@ -123,7 +123,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
+    guard ["select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -618,23 +618,10 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       }
     }
     modelsMenu.addItem(.separator())
-    let run = NSMenuItem(title: "Manage Local Models in Grid…", action: nil, keyEquivalent: "")
-    run.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + "runLocalModel")
-    if machines.filter({ !$0.shared }).count > 1 {
-      let pick = NSMenu(title: run.title)
-      for machine in machines where !machine.shared {
-        let item = NSMenuItem(title: machine.local ? "\(machine.name) (this computer)" : machine.name,
-          action: #selector(runLocalModelAction(_:)), keyEquivalent: "")
-        item.target = self
-        item.representedObject = machine.id
-        pick.addItem(item)
-      }
-      run.submenu = pick
-    } else {
-      run.target = self
-      run.action = #selector(menuAction(_:))
-      run.representedObject = "runLocalModel"
-    }
+    let run = NSMenuItem(title: "Open Models…", action: #selector(menuAction(_:)), keyEquivalent: "")
+    run.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + "models")
+    run.target = self
+    run.representedObject = "models"
     modelsMenu.addItem(run)
   }
 
@@ -1222,7 +1209,7 @@ private final class SwarmHistoryIcons {
   /// lib/store/store_mark.dart). Any other path draws the engine's initial,
   /// which is how the store tab once read "S".
   static func opens(_ asset: String) -> Bool {
-    !asset.contains("..") && (asset == "assets/app_icon.png" || asset == "assets/harnesses.png" || asset == "assets/store/polymath.png"
+    !asset.contains("..") && (asset == "assets/app_icon.png" || asset == "assets/harnesses.png" || asset == "assets/models.png" || asset == "assets/store/polymath.png"
       || asset.hasPrefix("assets/engine-icons/") && asset.hasSuffix(".png"))
   }
 
@@ -1493,6 +1480,7 @@ private final class SwarmTabStrip: NSView {
   private let document = NSView()
   fileprivate let newButton = SwarmIconButton()
   fileprivate let storeButton = SwarmStoreButton(title: "Harness Store", target: nil, action: nil)
+  fileprivate let modelsButton = SwarmIconButton()
   fileprivate let sessionsButton = SwarmSessionsButton()
   private var tabs: [SwarmTabButton] = []
   private let icons = SwarmHistoryIcons()
@@ -1557,7 +1545,12 @@ private final class SwarmTabStrip: NSView {
     storeButton.toolTip = "Harness Store ⌘S"
     storeButton.setAccessibilityLabel("Harness Store")
     addSubview(storeButton)
-    setAccessibilityChildren([scroll, newButton, sessionsButton, storeButton])
+    button(modelsButton, "brain", "AI Models", #selector(openModels))
+    modelsButton.image = icons.image(engine: "models", asset: "assets/models.png", pointSize: 20)
+    modelsButton.symbolConfiguration = nil
+    modelsButton.isEnabled = false
+    modelsButton.toolTip = "AI Models"
+    setAccessibilityChildren([scroll, newButton, sessionsButton, modelsButton, storeButton])
     registerForDraggedTypes([swarmPasteboardType])
   }
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -1569,6 +1562,7 @@ private final class SwarmTabStrip: NSView {
     newButton.contentTintColor = palette.accent
     sessionsButton.contentTintColor = palette.accent
     storeButton.palette = palette
+    modelsButton.contentTintColor = palette.accent
     for tab in tabs { tab.palette = palette }
     needsDisplay = true
   }
@@ -1638,6 +1632,10 @@ private final class SwarmTabStrip: NSView {
     document.setAccessibilityChildren(tabs)
     newButton.isEnabled = actionsEnabled
     storeButton.isEnabled = actionsEnabled
+    modelsButton.isEnabled = actionsEnabled
+    let modelReady = state["localModelReady"] as? Bool == true
+    modelsButton.toolTip = modelReady ? "AI Models · Your local model is running" : "AI Models"
+    modelsButton.setAccessibilityValue(state["modelsOpen"] as? Bool == true ? "Expanded" : "Collapsed")
     sessionsButton.isEnabled = actionsEnabled
     sessionsButton.running = state["runningSessions"] as? Int ?? 0
     sessionsButton.expanded = state["sessionsOpen"] as? Bool == true
@@ -1683,12 +1681,13 @@ private final class SwarmTabStrip: NSView {
     let spacious = bounds.width >= 480
     let trailing: CGFloat = spacious ? 12 : 8
     let storeWidth = storeButton.preferredWidth
+    let modelsWidth: CGFloat = 28
     newButton.isHidden = false
     // A reserve after the "+" that tabs never grow into — Chrome's gap. It is
     // where a full strip can still be dragged and double-clicked to zoom
     // (owner, 2026-09-15); tabs shrink and then scroll instead of taking it.
     let grip: CGFloat = spacious ? 84 : 44
-    let available = max(32, bounds.width - leading - trailing - (newButton.isHidden ? 0 : 36) - grip - storeWidth - 44)
+    let available = max(32, bounds.width - leading - trailing - (newButton.isHidden ? 0 : 36) - grip - storeWidth - modelsWidth - 52)
     // As in Chrome, tabs keep shrinking until they are only their mark, so thirty tabs still sit in
     // one strip with nothing hidden; only past that does the strip scroll (the wheel scrolls it).
     let width = min(220, max(min(SwarmTabButton.minimumWidth, available), available / CGFloat(max(1, tabs.count))))
@@ -1704,7 +1703,8 @@ private final class SwarmTabStrip: NSView {
     let buttonY = (bounds.height - 28) / 2
     newButton.frame = NSRect(x: leading + occupied + 4, y: buttonY, width: 28, height: 28)
     storeButton.frame = NSRect(x: bounds.width - trailing - storeWidth, y: buttonY, width: storeWidth, height: 28)
-    sessionsButton.frame = NSRect(x: storeButton.frame.minX - 36, y: buttonY, width: 28, height: 28)
+    modelsButton.frame = NSRect(x: storeButton.frame.minX - modelsWidth - 8, y: buttonY, width: modelsWidth, height: 28)
+    sessionsButton.frame = NSRect(x: modelsButton.frame.minX - 36, y: buttonY, width: 28, height: 28)
     let geometryChanged = scroll.frame.size != previousScrollSize || document.frame.size != previousDocumentSize
     if let active, revealActiveAfterLayout || (activeWasVisible && (geometryChanged || tabOrderChanged)) {
       document.scrollToVisible(active.frame)
@@ -1747,6 +1747,9 @@ private final class SwarmTabStrip: NSView {
   }
   @objc private func openSessions() {
     if actionsEnabled { emit?("sessions", nil) }
+  }
+  @objc private func openModels() {
+    if actionsEnabled { emit?("models", nil) }
   }
 
   private func draggedTab(_ sender: NSDraggingInfo) -> SwarmTabButton? {

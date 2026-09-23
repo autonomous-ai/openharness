@@ -61,12 +61,7 @@ class PaneHeaderActions extends StatelessWidget {
   /// Supplemental branch context, hidden with details when controls appear.
   final Widget? trailing;
 
-  /// Where this agent runs, shown with the controls rather than beside the name.
-  ///
-  /// It belongs here for the same reason the icons do: a header this narrow has room for the agent's
-  /// NAME or for what you can do to it, not both, and what you can do to it is worth reading only
-  /// when you are reaching for it. Parked on the left of the cluster, so the four icons a person
-  /// aims at by muscle memory keep the right edge they have always had.
+  /// The current model stays visible beside the pane's contextual controls.
   final Widget? modelPicker;
 
   @override
@@ -118,10 +113,6 @@ class PaneHeaderActions extends StatelessWidget {
             if (!compact && onShare != null) ...[
               action('Share harness', Icons.person_add_alt_1_outlined, onShare),
               const SizedBox(width: 2),
-            ],
-            if (modelPicker != null) ...[
-              modelPicker!,
-              const SizedBox(width: 4),
             ],
             if (compact)
               _CompactPaneActions(
@@ -201,33 +192,43 @@ class PaneHeaderActions extends StatelessWidget {
         ),
       ),
     );
-    if (details == null) return controls;
-    return Stack(
-      alignment: Alignment.centerRight,
+    final actionArea = details == null
+        ? controls
+        : Stack(
+            alignment: Alignment.centerRight,
+            children: [
+              IgnorePointer(
+                ignoring: visible,
+                child: AnimatedOpacity(
+                  key: const ValueKey('pane-header-details'),
+                  opacity: visible ? 0 : 1,
+                  duration: MediaQuery.disableAnimationsOf(context)
+                      ? Duration.zero
+                      : grid.AppMotion.hover,
+                  child: ExcludeSemantics(
+                    excluding: visible,
+                    child: trailing == null
+                        ? details!
+                        : Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Flexible(child: details!),
+                              trailing!,
+                            ],
+                          ),
+                  ),
+                ),
+              ),
+              controls,
+            ],
+          );
+    if (modelPicker == null) return actionArea;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        IgnorePointer(
-          ignoring: visible,
-          child: AnimatedOpacity(
-            key: const ValueKey('pane-header-details'),
-            opacity: visible ? 0 : 1,
-            duration: MediaQuery.disableAnimationsOf(context)
-                ? Duration.zero
-                : grid.AppMotion.hover,
-            child: ExcludeSemantics(
-              excluding: visible,
-              child: trailing == null
-                  ? details!
-                  : Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Flexible(child: details!),
-                        trailing!,
-                      ],
-                    ),
-            ),
-          ),
-        ),
-        controls,
+        modelPicker!,
+        const SizedBox(width: 4),
+        Flexible(child: actionArea),
       ],
     );
   }

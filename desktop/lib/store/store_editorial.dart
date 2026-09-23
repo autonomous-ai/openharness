@@ -67,9 +67,9 @@ const storeStories = <String, StoreStory>{
   'autonomous/autonomous-grid': StoreStory(
     benefit: 'Your machines. Your models. One conversation.',
     headline: 'Meet your\npersonal AI fleet.',
-    description: 'Deploy open-weight models by talking to Grid.\nWatch your machines, models, and performance live.',
+    description: 'Deploy open-weight models by talking to Model Manager.\nWatch your machines, models, and performance live.',
     asset: 'assets/store/grid-fleet.png',
-    caption: 'Grid Viewer · Illustrative telemetry',
+    caption: 'Model Manager · Illustrative telemetry',
     prompts: [
       'Discover my machines and deploy an open-weight model that fits.',
       'Find the best placement for a coding model and a fast chat model across my fleet.',

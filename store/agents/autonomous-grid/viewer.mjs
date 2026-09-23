@@ -49,7 +49,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 8000, collect =
         try { await selectGrid(grid); json(res, 200, { ok: true, grid }); } catch (err) { json(res, 409, { error: err.message }); }
         return;
       }
-      if (!['GET', 'HEAD'].includes(req.method)) { res.setHeader('allow', 'GET, HEAD, POST'); json(res, 405, { error: 'This viewer is read-only. Talk to the Grid agent to make changes.' }); return; }
+      if (!['GET', 'HEAD'].includes(req.method)) { res.setHeader('allow', 'GET, HEAD, POST'); json(res, 405, { error: 'This viewer is read-only. Talk to the Model Manager to make changes.' }); return; }
       if (url.pathname === '/health') { json(res, 200, { ok: true }); return; }
       if (url.pathname === '/api/snapshot') { json(res, 200, snapshot); wake(); return; }
       if (url.pathname === '/events') {

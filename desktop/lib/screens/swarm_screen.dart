@@ -14,6 +14,8 @@ import '../core/harness_file_store.dart';
 import '../core/project_folder.dart';
 import '../core/test_run.dart';
 import '../logging/debug_surface.dart';
+import '../models/models_panel.dart';
+import '../models/model_mark.dart';
 import '../settings/settings_screen.dart';
 import '../settings/settings_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -138,10 +140,13 @@ class _SwarmScreenState extends State<SwarmScreen>
       widget.projectStore ??
       SwarmProjectStore(storage: kUnderTest ? null : HarnessFileStore.shared);
   StreamSubscription<SpokenTaskRequest>? _spokenTasks;
+  StreamSubscription<void>? _modelsRequests;
   final _shellFocus = FocusNode(debugLabel: 'Swarm shell');
   final _sessionsButton = GlobalKey();
   OverlayEntry? _sessionsOverlay;
   VoidCallback? _unregisterSessions;
+  OverlayEntry? _modelsOverlay;
+  VoidCallback? _unregisterModels;
   late final _minimize = PaneMinimizeController(vsync: this);
   bool _closingPane = false;
   OverlayEntry? _minimizeOverlay;
@@ -247,10 +252,18 @@ class _SwarmScreenState extends State<SwarmScreen>
     unawaited(_projects.load());
     unawaited(_navigation.load());
     _spokenTasks = app.spokenTasks.listen(_openSpokenTask);
+    _modelsMenu =
+        widget.modelsMenu ?? ModelsMenuController(remote: app.readRemoteUsage);
+    app.modelManager.addListener(_modelManagerChanged);
+    _modelsRequests = app.modelsRequests.listen((_) {
+      if (mounted && _modelsOverlay == null) _toggleModels();
+    });
+    if (!kUnderTest) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) app.modelManager.start();
+      });
+    }
     if (_native) {
-      _modelsMenu =
-          widget.modelsMenu ??
-          ModelsMenuController(remote: app.readRemoteUsage);
       _modelsMenu!.addListener(_syncModels);
       // Same trigger as the subscription rows: the daemon memoises its answer, so opening the menu
       // repeatedly costs nothing after the first.
@@ -276,12 +289,16 @@ class _SwarmScreenState extends State<SwarmScreen>
     if (_routeIsCurrent == current) return;
     _routeIsCurrent = current;
     if (!current &&
-        (_search != null || _commandBarOpen || _sessionsOverlay != null)) {
+        (_search != null ||
+            _commandBarOpen ||
+            _sessionsOverlay != null ||
+            _modelsOverlay != null)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && !_routeIsCurrent) {
           _closeSearch(restoreFocus: false);
           _closeCommandBar(restoreFocus: false);
           _closeSessions(restoreFocus: false);
+          _closeModels(restoreFocus: false);
         }
       });
     }
@@ -290,6 +307,12 @@ class _SwarmScreenState extends State<SwarmScreen>
 
   @override
   void dispose() {
+    app.modelManager.removeListener(_modelManagerChanged);
+    app.modelManager.setPanelVisible(false);
+    _modelsRequests?.cancel();
+    _unregisterModels?.call();
+    _modelsOverlay?.remove();
+    _modelsOverlay?.dispose();
     _unregisterSessions?.call();
     _sessionsOverlay?.remove();
     _sessionsOverlay?.dispose();
@@ -323,9 +346,9 @@ class _SwarmScreenState extends State<SwarmScreen>
     _commandFocus.dispose();
     if (_hasCommandBar) _commandBar.dispose();
     unawaited(_spokenTasks?.cancel());
+    _modelsMenu?.removeListener(_syncModels);
+    if (widget.modelsMenu == null) _modelsMenu?.dispose();
     if (_native) {
-      _modelsMenu?.removeListener(_syncModels);
-      if (widget.modelsMenu == null) _modelsMenu?.dispose();
       unawaited(
         _channel.invokeMethod<void>('modelsState', {'subscriptions': []}),
       );
@@ -386,6 +409,7 @@ class _SwarmScreenState extends State<SwarmScreen>
 
   void _runShortcut(String id) {
     if (_sessionsOverlay != null) _closeSessions();
+    if (_modelsOverlay != null) _closeModels();
     if (id != 'navigation.command_bar') _closeCommandBar();
     if (id == 'agent.new' && _search != null) {
       final target = _search!.targetId;
@@ -625,6 +649,8 @@ class _SwarmScreenState extends State<SwarmScreen>
       // key it does not know.
       'unread': _unread,
       'sessionsOpen': _sessionsOverlay != null,
+      'modelsOpen': _modelsOverlay != null,
+      'localModelReady': app.modelManager.readyModel != null,
       'runningSessions': harnessSessions(app)
           .where((row) => row.running)
           .length,
@@ -908,6 +934,11 @@ class _SwarmScreenState extends State<SwarmScreen>
       await WidgetsBinding.instance.endOfFrame;
       return;
     }
+    if (call.method == 'models') {
+      _toggleModels();
+      await WidgetsBinding.instance.endOfFrame;
+      return;
+    }
     if (call.method == 'modelsOpened') {
       await _modelsMenu?.refresh();
       return;
@@ -1027,20 +1058,7 @@ class _SwarmScreenState extends State<SwarmScreen>
       case 'restartAgent':
         unawaited(_restartAgent());
       case 'runLocalModel':
-        // Native commands arrive above the Actions subtree. Use the same
-        // product entry directly; a dialog guard would block the dock.
-        Future<void> open() => app.runLocalModel(
-          context,
-          machineId: args['machineId'] is String
-              ? args['machineId'] as String
-              : null,
-          onOpenHarness: newHarnessOpensInBox ? _openProduct : null,
-        );
-        if (newHarnessOpensInBox) {
-          await open();
-        } else {
-          await _dialog(open);
-        }
+        _toggleModels();
       case 'splitRight':
         unawaited(_splitAgent(PaneResizeAxis.x));
       case 'splitDown':
@@ -1982,6 +2000,112 @@ class _SwarmScreenState extends State<SwarmScreen>
     _closeCommandBar(restoreFocus: false);
     dismissTransientMenus();
     app.openStore();
+  }
+
+  void _modelManagerChanged() {
+    if (_native && mounted) _syncNative();
+  }
+
+  Future<void> _openModelManager() async {
+    final openingPanel = _modelsOverlay;
+    if (openingPanel == null) dismissTransientMenus();
+    await app.modelManager.open();
+    if (app.modelManager.error == null &&
+        identical(_modelsOverlay, openingPanel)) {
+      _closeModels(restoreFocus: false);
+    }
+    if (app.modelManager.error case final error? when mounted) {
+      if (_modelsOverlay == null) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error)));
+      }
+    }
+  }
+
+  void _toggleModels() {
+    if (_modelsOverlay != null) {
+      _closeModels();
+      return;
+    }
+    if (_newHarness?.requestDismiss() == false) return;
+    _closeNewHarness(restoreFocus: false);
+    _closeSearch(restoreFocus: false);
+    _closeCommandBar(restoreFocus: false);
+    dismissTransientMenus();
+    _preparePaneFocus();
+    app.modelManager.setPanelVisible(true);
+    unawaited(app.modelManager.dismissIntroduction());
+    unawaited(app.modelManager.refresh());
+    unawaited(_modelsMenu!.refresh());
+    _modelsOverlay = OverlayEntry(
+      builder: (context) => LayoutBuilder(
+        builder: (context, constraints) => Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _closeModels,
+                child: const SizedBox.expand(),
+              ),
+            ),
+            Positioned(
+              top: (_native ? 0.0 : _tabBarHeight) + 8,
+              right: 10,
+              width: (constraints.maxWidth - 20).clamp(0, 640),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight:
+                      (constraints.maxHeight -
+                              (_native ? 0 : _tabBarHeight) -
+                              20)
+                          .clamp(0, 620),
+                ),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: .35),
+                        blurRadius: 36,
+                        offset: const Offset(0, 12),
+                      ),
+                    ],
+                  ),
+                  child: ModelsPanel(
+                    controller: app.modelManager,
+                    subscriptions: _modelsMenu!,
+                    onClose: _closeModels,
+                    onManage: () => unawaited(_openModelManager()),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    Overlay.of(context).insert(_modelsOverlay!);
+    _unregisterModels = registerTransientMenu(_closeModels);
+    if (_native) _syncNative();
+    setState(() {});
+  }
+
+  void _closeModels({bool restoreFocus = true}) {
+    if (_modelsOverlay == null) return;
+    _unregisterModels?.call();
+    _unregisterModels = null;
+    _modelsOverlay?.remove();
+    _modelsOverlay?.dispose();
+    _modelsOverlay = null;
+    app.modelManager.setPanelVisible(false);
+    if (!mounted) return;
+    if (_native) _syncNative();
+    setState(() {});
+    if (restoreFocus) {
+      _shellFocus.requestFocus();
+      final pane = app.focusedPane;
+      if (pane != null) app.focusPane(pane.id, reveal: true);
+    }
   }
 
   void _toggleSessions({SessionFilter? filter}) {
@@ -3265,6 +3389,11 @@ class _SwarmScreenState extends State<SwarmScreen>
                           // Last in the stack, so a banner is never painted
                           // under a pane, a tab or the palette. It takes
                           // pointers only on the banners themselves.
+                          if (!_commandBarOpen && _newHarness == null)
+                            LocalModelInvitation(
+                              controller: app.modelManager,
+                              onOpen: _toggleModels,
+                            ),
                           AgentAlertBanners(notifier: app),
                         ],
                       ),
@@ -3332,6 +3461,8 @@ class _SwarmScreenState extends State<SwarmScreen>
 
   Widget _tabStrip() => LayoutBuilder(
     builder: (context, constraints) {
+      final compactTools =
+          constraints.maxWidth < 650 * grid.appTextScaleOf(context);
       return Container(
         height: _tabBarHeight,
         color: grid.AppPalette.swarmTabBar,
@@ -3518,6 +3649,14 @@ class _SwarmScreenState extends State<SwarmScreen>
               ),
             ),
             const SizedBox(width: 6),
+            IconButton(
+              key: const ValueKey('swarm-models-button'),
+              tooltip: 'AI Models',
+              onPressed: _toggleModels,
+              isSelected: _modelsOverlay != null,
+              icon: const ModelMark(size: 20, semanticLabel: 'AI Models'),
+            ),
+            const SizedBox(width: 6),
             Tooltip(
               message: 'Harness Store ${_keymap.hint('app.store') ?? ''}'
                   .trim(),
@@ -3544,7 +3683,9 @@ class _SwarmScreenState extends State<SwarmScreen>
                   ),
                 ),
                 icon: const StoreMark(),
-                label: const Text('Harness Store'),
+                label: compactTools
+                    ? const SizedBox.shrink()
+                    : const Text('Harness Store'),
               ),
             ),
             const SizedBox(width: 6),

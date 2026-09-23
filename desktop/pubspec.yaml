@@ -118,6 +118,8 @@ flutter:
     - assets/app_icon.png
     # Original stacked-terminal logo, retained for Harness Monitor.
     - assets/harnesses.png
+    - assets/models.png
+    - assets/model-icons/
     - assets/harness_device.png
     - assets/harness_device_studio.png
     - assets/harness_store_card.png
