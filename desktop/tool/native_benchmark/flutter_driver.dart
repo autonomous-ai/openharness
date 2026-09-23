@@ -92,6 +92,18 @@ Map<String, num> _distribution(List<int> values) {
   };
 }
 
+// Shared by the core-experience fixture; the original benchmark cadence and
+// operations remain unchanged for comparisons with its published results.
+void benchmarkKey(
+  (LogicalKeyboardKey, PhysicalKeyboardKey) key, {
+  bool command = true,
+  bool shift = false,
+}) => _key(key, command: command, shift: shift);
+Future<int> benchmarkFrame() => _frame();
+Element? benchmarkFind(bool Function(Widget) matches) => _find(matches);
+Map<String, num> benchmarkDistribution(List<int> values) =>
+    _distribution(values);
+
 Future<void> runFlutterDispatchBenchmark(
   AppNotifier app,
   String output,

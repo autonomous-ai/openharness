@@ -3,6 +3,67 @@
 Start with the [September 22 wrap-up and resume notes](../../../docs/performance/2026-09-22-wrap-up.md)
 for the ready PRs, measured improvements, rejected experiments and remaining priorities.
 
+## Core experiences and process resources
+
+```sh
+python3 tool/native_benchmark/prepare.py --flutter /path/to/flutter \
+  --core-workflows --terminals 16 --samples 120 --hold
+```
+
+Open the printed isolated app through normal application controls. Use three
+samples for calibration first, then 120 for reporting. `run-config.json` in the
+printed temporary root selects `terminals`, `samples`, `hold`, and a fresh JSON
+`output` filename. After quitting the fixture, edit that file and reopen the same
+bundle to repeat without changing its compiled production code. Existing results
+are never overwritten. `active-run.json` identifies the latest invocation. The core mode
+supports 1, 16, or 48 retained terminals, with up to four visible and 1,000
+initial scrollback rows each. It visits every retained tab before measuring,
+then repeats at idle and while every terminal receives an eight-row ANSI redraw
+at 20 Hz. Actual bytes, duration, and skipped output bursts are retained.
+
+It validates eleven common actions: text commit with a synthetic terminal echo;
+Cmd+N; Cmd+O; picker query; picker selection followed by immediate input; Cmd+T;
+tab change followed by input; pane focus followed by input; zoom; Find through a
+completed index scan; and a page-sized scroll. Inapplicable navigation actions
+are skipped with one terminal. Five warmups precede each series. Every input
+commit must arrive exactly once in the focused terminal. Picker queries and Find
+must produce the expected real results before their frame is accepted.
+
+These are **framework dispatch to completed Flutter raster** measurements.
+Text uses the attached `TextInputClient`; shortcuts use the normal framework
+keyboard/focus dispatcher. Text echo passes through the production terminal
+binary decoder and parser with zero simulated network delay. Navigation-plus-
+input measurements include the navigation frame and the following verified echo
+frame; they are not interchangeable with a shortcut's first-frame time. Scrolling
+uses the terminal's scroll position controller and excludes native wheel-event
+delivery. AppKit keyboard delivery, actual networking, model inference, GPU
+presentation, and native titlebar paint completion remain outside this boundary.
+
+The native host records loss of foreground focus; those runs fail rather than
+mixing foreground and background timings. `.progress` identifies the current
+invocation and last completed operation. Preserve failed runs for diagnosis and
+use the result's fresh timestamps rather than accepting an old result file.
+`--hold` leaves the idle fixture open after the workload for resource sampling:
+
+```sh
+xcrun swiftc tool/native_benchmark/process_usage.swift -o /private/tmp/harness-process-usage
+/private/tmp/harness-process-usage PID 30 foreground-idle /private/tmp/usage-foreground.json
+```
+
+Use the PID in the completed result's metadata. Hide the fixture through the app's
+normal controls and repeat with a new label/file for background idle. This sampler
+reads `proc_pid_rusage` once per second: CPU deltas (100% means one core), physical
+memory footprint, resident memory, interrupt/package-idle wakeups, and disk I/O.
+It does not control windows. Its totals cover that process, excluding daemon,
+agent processes, and GPU energy. The fixture has no real network connections, so
+its background cost cannot establish that the connected product has zero timers
+or zero wakeups. Record other app activity and host contention; these are real
+workstation measurements, not results from an otherwise isolated machine.
+
+For actual loopback/direct/TURN/relay terminal round trips, use the separate
+[real terminal probe](../../../cli/scripts/benchmark-terminal-latency.md). Never
+add independently measured p95 values and label the sum end-to-end latency.
+
 ## Framework-dispatch comparison and manual feature checks
 
 The fixture supports three separate modes:

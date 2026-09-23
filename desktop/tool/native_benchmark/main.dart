@@ -24,6 +24,7 @@ import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/terminal/terminal_session.dart';
 
 import 'flutter_driver.dart';
+import 'core_driver.dart';
 
 const _host = MethodChannel('harness/isolated_benchmark');
 final _timings = <int, ui.FrameTiming>{};
@@ -37,6 +38,8 @@ int _skippedBursts = 0;
 int _inputBytes = 0;
 final _interactive = Platform.environment['HARNESS_BENCH_MANUAL'] == '1';
 final _flutterDriven = Platform.environment['HARNESS_BENCH_FLUTTER'] == '1';
+final _coreDriven = Platform.environment['HARNESS_BENCH_CORE'] == '1';
+final _coreInputs = <(String, String)>[];
 
 class _Sample {
   _Sample(
@@ -146,8 +149,14 @@ Future<AppNotifier> _fixture(int count, Directory stateDirectory) async {
       send: (_, _) async => true,
       sendBinary: (packet) async {
         if (packet.kind != TerminalBinaryKind.input) return true;
-        if (_interactive || _flutterDriven) {
+        if (_interactive || _flutterDriven || _coreDriven) {
+          if (_coreDriven && !identical(app.focusedPane?.session, session)) {
+            throw StateError('Input reached an unfocused terminal');
+          }
           await _output(session, packet.bytes);
+          if (_coreDriven) {
+            _coreInputs.add((session.agentId, utf8.decode(packet.bytes)));
+          }
           return true;
         }
         final sample = _pending;
@@ -277,13 +286,42 @@ Future<void> _run() async {
       !env.containsKey('FLUTTER_TEST')) {
     throw StateError('Use the isolated native benchmark runner');
   }
-  final output = env['HARNESS_BENCH_OUTPUT'];
+  var output = env['HARNESS_BENCH_OUTPUT'];
   if (output == null || !output.startsWith('/private/tmp/')) {
     throw StateError('A private temporary output path is required');
   }
-  final count = int.parse(env['HARNESS_BENCH_TERMINALS'] ?? '16');
-  final observations = int.parse(env['HARNESS_BENCH_SAMPLES'] ?? '120');
-  if (![16, 48].contains(count) || observations < 1 || observations > 500) {
+  var count = int.parse(env['HARNESS_BENCH_TERMINALS'] ?? '16');
+  var observations = int.parse(env['HARNESS_BENCH_SAMPLES'] ?? '120');
+  var hold = env['HARNESS_BENCH_HOLD'] == '1';
+  if (_coreDriven) {
+    final root = File(output).parent;
+    final config = File('${root.path}/run-config.json');
+    if (config.existsSync()) {
+      final values =
+          jsonDecode(await config.readAsString()) as Map<String, dynamic>;
+      count = values['terminals'] as int;
+      observations = values['samples'] as int;
+      hold = values['hold'] as bool;
+      final name = values['output'] as String;
+      if (!RegExp(r'^[a-zA-Z0-9_-]+\.json$').hasMatch(name)) {
+        throw StateError('Core output must be a simple JSON filename');
+      }
+      output = '${root.path}/$name';
+    }
+    if (File(output).existsSync()) {
+      throw StateError('Use a fresh core output filename');
+    }
+    await File('${root.path}/active-run.json').writeAsString(
+      jsonEncode({
+        'output': output,
+        'terminals': count,
+        'samples': observations,
+        'pid': pid,
+        'startedAt': DateTime.now().toUtc().toIso8601String(),
+      }),
+    );
+  }
+  if (![1, 16, 48].contains(count) || observations < 1 || observations > 500) {
     throw StateError('Invalid fixture size');
   }
   final binding = WidgetsFlutterBinding.ensureInitialized();
@@ -298,6 +336,8 @@ Future<void> _run() async {
   if (metadata?['bundle'] != 'ai.autonomous.harness.benchmark') {
     throw StateError('Wrong native host');
   }
+  metadata!['pid'] = pid;
+  metadata['sourceRevision'] = env['HARNESS_BENCH_REVISION'] ?? 'unspecified';
   final app = await _fixture(
     count,
     Directory(
@@ -324,9 +364,75 @@ Future<void> _run() async {
   await _frame();
   if (_interactive) return;
   await Future<void>.delayed(const Duration(seconds: 1));
+  if (_coreDriven) {
+    final packet = utf8.encode(
+      '\x1b7\x1b[1;1H${List.filled(8, '${List.filled(110, 'o').join()}\x1b[K\r\n').join()}\x1b8',
+    );
+    Future<void> setOutput(bool active) async {
+      _outputTimer?.cancel();
+      _outputTimer = null;
+      while (_burstPending) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      if (!active) return;
+      _outputTimer = Timer.periodic(const Duration(milliseconds: 50), (
+        _,
+      ) async {
+        if (_burstPending) {
+          _skippedBursts++;
+          return;
+        }
+        _burstPending = true;
+        try {
+          final sessions = app.allPanes
+              .map((p) => p.session)
+              .whereType<TerminalSession>()
+              .toList();
+          await Future.wait([
+            for (final session in sessions) _output(session, packet),
+          ]);
+          _outputBytes += packet.length * sessions.length;
+        } finally {
+          _burstPending = false;
+        }
+      });
+    }
+
+    try {
+      await runCoreBenchmark(
+        app,
+        output,
+        metadata,
+        _timings,
+        samples: observations,
+        inputs: _coreInputs,
+        setOutput: setOutput,
+        outputCounters: () => {
+          'outputBytes': _outputBytes,
+          'skippedBursts': _skippedBursts,
+        },
+      );
+    } catch (error) {
+      stderr.writeln('Core benchmark failed: $error');
+      await File('$output.failure').writeAsString(
+        jsonEncode({
+          'success': false,
+          'at': DateTime.now().toUtc().toIso8601String(),
+          'error': '$error',
+          'metadata': metadata,
+        }),
+      );
+    } finally {
+      await setOutput(false);
+      if (!hold) {
+        await _host.invokeMethod<void>('finish');
+      }
+    }
+    return;
+  }
   if (_flutterDriven) {
     try {
-      await runFlutterDispatchBenchmark(app, output, metadata!, _timings);
+      await runFlutterDispatchBenchmark(app, output, metadata, _timings);
     } catch (error, stack) {
       await File(output).writeAsString(
         jsonEncode({'success': false, 'error': '$error', 'stack': '$stack'}),
@@ -339,7 +445,7 @@ Future<void> _run() async {
   final random = Random(77);
   final phases = <Map<String, Object?>>[];
   try {
-    metadata!['initialResponder'] = await _host.invokeMethod<String>('begin');
+    metadata['initialResponder'] = await _host.invokeMethod<String>('begin');
     for (final op in ['typing', 'focus', 'tab']) {
       await _sample(app, op, 'cold_interaction', 'idle');
     }
