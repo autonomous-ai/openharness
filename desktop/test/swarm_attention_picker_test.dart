@@ -138,6 +138,7 @@ void main() {
       final panes = [...app.panes];
       final machine = app.machineStates['m']!;
       for (var i = 0; i < 25; i++) {
+        app.rememberOpenedHarness('m', 'a$i');
         machine.blockedAgents['a$i'] = waitingQuestion(
           'a$i',
           prompt: 'Question $i?',
@@ -209,6 +210,7 @@ void main() {
     (tester) async {
       final app = createApp();
       final machine = app.machineStates['m']!;
+      app.rememberOpenedHarness('m', 'missing');
       machine.blockedAgents['missing'] = waitingQuestion('missing');
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyI, shift: true);

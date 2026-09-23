@@ -93,21 +93,25 @@ List<HarnessSession> harnessSessions(AppNotifier app) {
     for (final pane in app.allPanes)
       if (pane.agentId != null) (pane.machineId, pane.agentId),
   };
+  bool known(String machine, String agent) =>
+      open.contains((machine, agent)) || app.hasOpenedHarness(machine, agent);
   return [
     for (final machine in app.machineStates.values)
       for (final agent in machine.agents)
-        HarnessSession(
-          machine: machine,
-          agent: agent,
-          open: open.contains((machine.machine.machineId, agent.id)),
-          working: machine.processingAgentIds.contains(agent.id),
-          question: machine.blockedAgents[agent.id],
-        ),
+        if (known(machine.machine.machineId, agent.id))
+          HarnessSession(
+            machine: machine,
+            agent: agent,
+            open: open.contains((machine.machine.machineId, agent.id)),
+            working: machine.processingAgentIds.contains(agent.id),
+            question: machine.blockedAgents[agent.id],
+          ),
     // Keep a real pending question visible while its roster entry is missing.
     // It must never become an invented terminal or a target for Pause.
     for (final machine in app.machineStates.values)
       for (final question in machine.blockedAgents.values)
-        if (!machine.agents.any((agent) => agent.id == question.agentId))
+        if (known(machine.machine.machineId, question.agentId) &&
+            !machine.agents.any((agent) => agent.id == question.agentId))
           HarnessSession(
             machine: machine,
             agent: Agent(id: question.agentId, name: 'Unavailable harness'),

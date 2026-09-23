@@ -20,6 +20,12 @@ function session(grid: RegisteredSession['grid'], codexHome: RegisteredSession['
 const assignment = { baseUrl: 'https://grid.autonomous.ai/grid-abc/relay', model: 'DeepSeek-V4-Flash-0731' }
 
 describe('agentFrame', () => {
+  it('carries only the owning machine’s cached token snapshot, including a measured zero', async () => {
+    const context = { selectedModel: null, terminalAvailable: true }
+    const usage = { totalTokens: 0, updatedAt: '2026-09-22T16:00:00Z' }
+    expect((await agentFrame(session(null), { ...context, tokenUsage: usage })).tokenUsage).toEqual(usage)
+    expect((await agentFrame(session(null), context)).tokenUsage).toBeNull()
+  })
   // The regression this file exists for: `agent_synced` was built by a SECOND, hand-maintained copy
   // of this shape that never grew a `grid` field. The desktop rebuilds its Agent from every push, so
   // each sync reset an agent's grid to null and the "N agents are on an older target" banner came
@@ -116,15 +122,20 @@ describe('agentFrame updatedAt', () => {
     expect((await agentFrame(row, context)).updatedAt).toBe('2026-09-17T07:00:00.000Z')
   })
 
-  it("prefers the transcript's mtime", async () => {
+  it('uses actual conversation activity even when an idle transcript was rewritten hours later', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'agent-frame-'))
     try {
       const transcriptPath = join(dir, 'session.jsonl')
-      await writeFile(transcriptPath, '{}\n')
-      const written = new Date('2026-09-18T01:02:03.000Z')
-      await utimes(transcriptPath, written, written)
+      const activity = '2026-09-18T01:02:03.000Z'
+      await writeFile(transcriptPath, [
+        JSON.stringify({ type: 'assistant', timestamp: activity, message: { content: [] } }),
+        JSON.stringify({ type: 'ai-title', timestamp: '2026-09-18T10:00:00.000Z', title: 'Playtest' }),
+        '',
+      ].join('\n'))
+      const rewritten = new Date('2026-09-18T10:02:03.000Z')
+      await utimes(transcriptPath, rewritten, rewritten)
       const row = { ...session(null), transcriptPath, updatedAt: Date.now(), lastHookAt: lastHook }
-      expect((await agentFrame(row, context)).updatedAt).toBe(written.toISOString())
+      expect((await agentFrame(row, context)).updatedAt).toBe(activity)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -216,6 +216,7 @@ import {
 import { probeGatewayRuntime } from './lib/gatewayRuntime.js'
 import { probeGridAssignment, sameGridAssignment } from './lib/gridAssignment.js'
 import { agentFrame, type AgentFrame } from './lib/agentFrame.js'
+import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { SessionInputController } from './lib/sessionInput.js'
 import { adaptSlashCommand } from './lib/goalCommand.js'
 import { RuntimeProfileManager, parseRuntimeProfile } from './lib/runtimeProfile.js'
@@ -1193,6 +1194,7 @@ let dshFrameContextRef: ((s: RegisteredSession) => AgentDshContext | null) | nul
 
 function projectFrame(s: RegisteredSession, selectedModel: string | null): Promise<AgentFrame> {
   return agentFrame(s, {
+    tokenUsage: agentTokenUsage.get(s),
     selectedModel,
     terminalAvailable: registry.terminalAvailable(s.agentId),
     dsh: dshFrameContextRef?.(s) ?? null,
@@ -1572,6 +1574,19 @@ async function runForeground(session: AuthSession): Promise<void> {
     const name = projectDisplayName(s)
     backendRef?.send({ type: 'agent_renamed', payload: { agentId: s.agentId, name, engine: s.engine } })
     if (opts.device !== false) backendRef?.sendCommander({ type: 'agent_renamed', payload: { agentId: s.agentId, name, engine: s.engine } })
+  }
+  agentTokenUsage.onChanged = (target) => {
+    const current = registry.resolve(target.agentId)
+    if (current?.sessionId === target.sessionId && current.engine === target.engine) {
+      if (registry.terminalAvailable(current.agentId)) syncSession(current, { device: false })
+      return
+    }
+    try {
+      const saved = stoppedAgents.get(target.agentId)
+      if (saved?.sessionId === target.sessionId && saved.engine === target.engine) {
+        void backendRef?.publishStoppedAgent(saved).catch(() => {})
+      }
+    } catch { /* A concurrently removed archive has nothing to update. */ }
   }
   // New process observations, session bindings, runtime-profile changes, reconnects and periodic
   // reconciliation refresh web and device from the same authoritative snapshot. Device agent_synced is
@@ -2554,6 +2569,8 @@ async function runForeground(session: AuthSession): Promise<void> {
 
   emitSessionEvents = (sessionId: string, events: ReturnType<CursorNormalizer['ingest']>, opts?: { resumed?: boolean; replay?: boolean }): void => {
     if (!events.length || !registry.bySession(sessionId)?.active) return
+    const usageSession = registry.bySession(sessionId)
+    if (usageSession?.engine === 'opencode') agentTokenUsage.changed(usageSession)
     for (const event of events) {
       const agentId = agentIdFor(sessionId)
       const frame = correlateAgentEvent(event, sessionId, agentId)
@@ -3892,6 +3909,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     if (!registry.has(evt.sessionId)) return null // scope to terminal-registered sessions
     const session = registry.bySession(evt.sessionId)
     if (!session || session.engine !== evt.engine) return null
+    agentTokenUsage.changed(session)
     runtimeProfiles.ingest(session, evt.text)
     let events
     if (session.engine === 'codex') {
