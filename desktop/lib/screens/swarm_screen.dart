@@ -78,6 +78,7 @@ import '../widgets/workspace_quick_start.dart';
 import '../widgets/workspace_start_guide.dart';
 import '../widgets/workspace_welcome.dart';
 import '../shortcuts/keyboard_practice.dart';
+import '../widgets/agent_alert_banners.dart';
 
 class SwarmScreen extends StatefulWidget {
   const SwarmScreen({
@@ -3212,6 +3213,10 @@ class _SwarmScreenState extends State<SwarmScreen>
                             ),
                           if (_hasCommandBar && _commandBarOpen)
                             _commandPalette(),
+                          // Last in the stack, so a banner is never painted
+                          // under a pane, a tab or the palette. It takes
+                          // pointers only on the banners themselves.
+                          AgentAlertBanners(notifier: app),
                         ],
                       ),
                     ),

@@ -67,6 +67,7 @@ import 'session_preview.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
 import '../orchestrator/orchestrator_controller.dart';
+import '../notify/agent_alerts.dart';
 import '../notify/alert_sounds.dart';
 
 enum AppStatus {
@@ -427,6 +428,10 @@ class AppNotifier extends ChangeNotifier {
   final AuthSession session;
   /// The noise this window makes when an agent finishes or gets stuck.
   final AlertSounds alerts;
+
+  /// And what it puts on screen for the same two moments. Its own notifier, so
+  /// a banner appearing does not rebuild the workspace.
+  final AgentAlerts agentAlerts;
 
   AppConfig config;
   late ApiClient api;
@@ -1541,7 +1546,9 @@ class AppNotifier extends ChangeNotifier {
     PaneLayoutStore? paneLayoutStore,
     this.turnActivityTimeout = const Duration(seconds: 12),
     AlertSounds? alerts,
+    AgentAlerts? agentAlerts,
   }) : alerts = alerts ?? AlertSounds(store: alertSoundStore),
+       agentAlerts = agentAlerts ?? AgentAlerts(),
        _paneLayout = paneLayoutStore,
        // Remembers "a dial has been seen here" on the same terms the pane
        // layout is remembered: with a layout store there is a state file, and
@@ -5831,6 +5838,46 @@ class AppNotifier extends ChangeNotifier {
     _dismissedViewers.remove(_viewerKey(machineId, agentId));
     _syncViewerPane(machine, agent);
     notifyListeners();
+  }
+
+  /// Put one agent's news on screen, named the way the window names it.
+  void _raiseAlert(MachineState machine, String agentId, AlertKind kind) {
+    final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+    agentAlerts.post(
+      AgentAlert(
+        machineId: machine.machine.machineId,
+        agentId: agentId,
+        // The agent's own name, and its id only when it has none — a banner
+        // naming a uuid tells nobody which pane to look at.
+        title: (agent?.name.trim().isNotEmpty ?? false)
+            ? agent!.name.trim()
+            : agentId,
+        kind: kind,
+        at: DateTime.now(),
+      ),
+    );
+  }
+
+  /// What clicking a banner does: show that agent, wherever it is.
+  ///
+  /// Reveal first — an agent already on screen just needs focus, and opening a
+  /// second view of it would take the terminal away from the one that has it.
+  /// Only an agent with no view at all is placed, on the current Swarm, in the
+  /// same order [placeFork] uses for the same reason.
+  Future<void> revealAgentFromAlert(String machineId, String agentId) async {
+    agentAlerts.dismiss(
+      AgentAlert(
+        machineId: machineId,
+        agentId: agentId,
+        title: '',
+        kind: AlertKind.done,
+        at: DateTime.now(),
+      ),
+    );
+    if (revealAgentView(machineId, agentId)) return;
+    if (activeSwarm.panes.length >= maxPanes) newSwarm();
+    await addAgentToSwarm(machineId, agentId, swarmId: activeSwarmId);
+    revealAgentView(machineId, agentId);
   }
 
   String? _eventAgentId(
@@ -10127,7 +10174,10 @@ class AppNotifier extends ChangeNotifier {
             // Only a NEW question earns a sound. The daemon re-announces every open one after a
             // reconnect and when attaching to a turn that was already mid-dialog, and a window
             // that beeped at those would sound an alarm every time the network hiccuped.
-            if (!repeat) alerts.play(AlertKind.needsYou);
+            if (!repeat) {
+              alerts.play(AlertKind.needsYou);
+              _raiseAlert(machine, agentId, AlertKind.needsYou);
+            }
           }
         }
         break;
@@ -10180,9 +10230,10 @@ class AppNotifier extends ChangeNotifier {
       case 'turn_ended':
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
-          // The work someone was waiting on is on screen. Played whether or not the pane is in
+          // The work someone was waiting on is on screen. Raised whether or not the pane is in
           // front: the whole point is the agent that finished while you were looking elsewhere.
           alerts.play(AlertKind.done);
+          _raiseAlert(machine, agentId, AlertKind.done);
           _cancelTurnActivity(machine.machine.machineId, agentId);
         } else {
           final sessionId = _eventSessionId(event, payload);
@@ -10253,6 +10304,8 @@ class AppNotifier extends ChangeNotifier {
     terminalThemeStore.removeListener(_announceTerminalThemeEverywhere);
     _localGitProjects.dispose();
     sessionPreviews.dispose();
+    // Its sweep timer would otherwise outlive the window it was drawing into.
+    agentAlerts.dispose();
     _disposed = true;
     _sharingDiscoveryTimer?.cancel();
     _stopMachineRecovery();
