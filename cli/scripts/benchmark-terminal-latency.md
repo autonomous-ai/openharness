@@ -122,3 +122,18 @@ state migration, and an expired login fails rather than refreshing or clearing
 the account. The active desktop's transport pool and sessions are never changed.
 Cleanup removes the one created terminal, closes the isolated pool and listener,
 and deletes the scratch directory before ending the process.
+
+For a serial, repeatable matrix with rotated route order and alternating target
+order, use a fresh directory:
+
+```sh
+python3 scripts/benchmark-route-series.py \
+  --target office=OFFICE_MACHINE_ID --target home=HOME_MACHINE_ID \
+  --samples 200 --control-samples 30 --repetitions 3 \
+  --output-dir /private/tmp/harness-route-series
+```
+
+The runner requires committed transport probe files, saves a public-label-only
+trial plan, and preserves every result and private log. It stops on missing
+artifacts or a known cleanup failure. A failed route trial is retained and the
+other routes continue; successful timings must never hide unavailable routes.
