@@ -609,26 +609,41 @@ class _SessionRow extends StatelessWidget {
         ? 'Last activity unavailable'
         : 'Last active ${harnessActivityAge(row.lastActiveAt, now)} ago';
     Widget detail(IconData icon, String text, Color color, {String? tooltip}) =>
-        Flexible(
-          child: Tooltip(
-            message: tooltip ?? text,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, size: 11, color: color),
-                const SizedBox(width: 5),
-                Flexible(
-                  child: Text(
-                    text,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppType.monoMeta(color: color, height: 1.3),
-                  ),
+        Tooltip(
+          message: tooltip ?? text,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 11, color: color),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text(
+                  text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppType.monoMeta(color: color, height: 1.3),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         );
+    final details = [
+      detail(
+        LucideIcons.monitor,
+        row.machine.machine.displayName,
+        AppPalette.textSecondary,
+      ),
+      if (row.project case final project?) ...[
+        detail(
+          LucideIcons.folder,
+          project.label,
+          const Color(0xff79bbaf),
+          tooltip: project.cwd,
+        ),
+        if (project.shownBranch case final branch?)
+          detail(LucideIcons.gitBranch, branch, const Color(0xff8dbb79)),
+      ],
+    ];
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: DecoratedBox(
@@ -736,33 +751,39 @@ class _SessionRow extends StatelessWidget {
                                       ],
                                     ),
                                     const SizedBox(height: 6),
-                                    Row(
-                                      children: [
-                                        detail(
-                                          LucideIcons.monitor,
-                                          row.machine.machine.displayName,
-                                          AppPalette.textSecondary,
-                                        ),
-                                        if (row.project
-                                            case final project?) ...[
-                                          const SizedBox(width: 12),
-                                          detail(
-                                            LucideIcons.folder,
-                                            project.label,
-                                            const Color(0xff79bbaf),
-                                            tooltip: project.cwd,
-                                          ),
-                                          if (project.shownBranch
-                                              case final branch?) ...[
-                                            const SizedBox(width: 12),
-                                            detail(
-                                              LucideIcons.gitBranch,
-                                              branch,
-                                              const Color(0xff8dbb79),
-                                            ),
+                                    LayoutBuilder(
+                                      builder: (context, constraints) {
+                                        // Cap leading labels without reserving
+                                        // columns: the branch gets all space
+                                        // left over by short machine/project names.
+                                        final leadingWidth = math.max(
+                                          0.0,
+                                          (constraints.maxWidth -
+                                                  12 * (details.length - 1)) /
+                                              details.length,
+                                        );
+                                        return Row(
+                                          children: [
+                                            for (
+                                              var i = 0;
+                                              i < details.length;
+                                              i++
+                                            ) ...[
+                                              if (i > 0)
+                                                const SizedBox(width: 12),
+                                              if (i == details.length - 1)
+                                                Expanded(child: details[i])
+                                              else
+                                                ConstrainedBox(
+                                                  constraints: BoxConstraints(
+                                                    maxWidth: leadingWidth,
+                                                  ),
+                                                  child: details[i],
+                                                ),
+                                            ],
                                           ],
-                                        ],
-                                      ],
+                                        );
+                                      },
                                     ),
                                     if (row.agent.hasMonitorStats) ...[
                                       const SizedBox(height: 6),
