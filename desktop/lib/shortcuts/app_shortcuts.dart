@@ -66,6 +66,11 @@ enum ShortcutAction {
   /// profile and permission mode — with a fresh conversation: fork minus the
   /// context. No dialog, like [newTerminal].
   cloneAgent,
+
+  /// Start the focused pane's harness again in place, resuming its
+  /// conversation where the engine can — the pane, its folder and its settings
+  /// all stay. Asks first, unlike [cloneAgent]: the running process ends.
+  restartAgent,
   routeTask,
   orchestrate,
   reload,
@@ -395,6 +400,18 @@ const kSwarmShortcuts = [
       shift: true,
     ),
     label: 'New Terminal',
+    group: ShortcutGroup.actions,
+  ),
+  // ⌘⇧E, not ⌘⇧R: R is Rename Tab, and ⌘R is Split Right. E for "engine
+  // again" — the pane stays, the process starts over.
+  AppShortcut(
+    action: ShortcutAction.restartAgent,
+    activator: SingleActivator(
+      LogicalKeyboardKey.keyE,
+      meta: true,
+      shift: true,
+    ),
+    label: 'Restart Harness',
     group: ShortcutGroup.actions,
   ),
   // ⌘⇧N was Create Agent until ⌘N became New Harness (01989f5a); reclaimed

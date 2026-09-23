@@ -63,6 +63,7 @@ void main() {
       ('cmd+r', 'pane.split_right'),
       ('cmd+d', 'pane.split_down'),
       ('cmd+shift+n', 'agent.clone'),
+      ('cmd+shift+e', 'agent.restart'),
       ('cmd+h', 'pane.focus_left'),
       ('cmd+j', 'pane.focus_below'),
       ('cmd+k', 'pane.focus_above'),

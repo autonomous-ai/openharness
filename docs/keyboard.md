@@ -15,6 +15,7 @@ The defaults, in the workspace:
 | ⌘W · ⇧⌘R | Close tab · rename tab |
 | ⇧⌘T | New terminal in the current project |
 | ⇧⌘N | Clone Harness — another harness like the focused pane's (same machine, project, harness, Codex profile, permission mode, named agent) with a fresh conversation. No dialog; fork minus the context |
+| ⇧⌘E | Restart Harness — the focused pane's harness starts again in place, resuming its conversation where the engine can. Asks first; the pane, its folder and its settings stay. (Not ⇧⌘R: that renames the tab) |
 | ⌘1 … ⌘9 | Select tab by position |
 | ⇧⌘] · ⇧⌘[ · ⌃Tab · ⌃⇧Tab | Next · previous tab |
 | ⌘] · ⌘[ · ⌘Y | Forward · back through visited agents · full history |

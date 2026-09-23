@@ -914,6 +914,7 @@ class _SwarmScreenState extends State<SwarmScreen>
       'newAgent' => 'agent.new',
       'newTerminal' => 'terminal.new',
       'cloneAgent' => 'agent.clone',
+      'restartAgent' => 'agent.restart',
       _ => null,
     };
     if (nativeCommand != null) {
@@ -1018,6 +1019,8 @@ class _SwarmScreenState extends State<SwarmScreen>
         unawaited(_newTerminal());
       case 'cloneAgent':
         unawaited(_cloneAgent());
+      case 'restartAgent':
+        unawaited(_restartAgent());
       case 'runLocalModel':
         // Native commands arrive above the Actions subtree. Use the same
         // product entry directly; a dialog guard would block the dock.
@@ -1156,6 +1159,7 @@ class _SwarmScreenState extends State<SwarmScreen>
           'newAgent',
           'newTerminal',
           'cloneAgent',
+          'restartAgent',
           'runLocalModel',
           'manageMachines',
           'machineList',
@@ -1254,11 +1258,18 @@ class _SwarmScreenState extends State<SwarmScreen>
       keymap: _keymap,
     );
   });
+
+  /// ⌘⇧E — the focused pane's harness starts again where it is. Same routing
+  /// as [_cloneAgent]: gated everywhere but the native menu's fallback path,
+  /// which answers rather than doing nothing.
   Future<void> _restartAgent() => _dialog(() async {
     final pane = app.focusedPane;
-    if (pane == null ||
-        _focusedAgent == null ||
-        app.stateOf(pane.machineId)?.machine.isShared != false) {
+    if (pane == null || _focusedAgent == null) {
+      _showPaneActionHint('Focus a harness pane to restart it.');
+      return;
+    }
+    if (app.stateOf(pane.machineId)?.machine.isShared != false) {
+      _showPaneActionHint('Shared harnesses are view-only.');
       return;
     }
     await restartHarness(
@@ -1776,9 +1787,9 @@ class _SwarmScreenState extends State<SwarmScreen>
 
   /// ⌘⇧N — another agent of the focused pane's kind, fresh conversation.
   /// No dialog, like ⌘⇧T: the answer to every question a dialog would ask is
-  /// already on the source agent's frame (`AppNotifier.cloneAgent`). The
-  /// chord is gated by `_canExecuteCommand`; the File menu is not, so a click
-  /// with nothing to clone from says so instead of doing nothing.
+  /// already on the source agent's frame (`AppNotifier.cloneAgent`). Reached
+  /// with nothing focused only by the native menu's fallback path (no keymap
+  /// region owns the focus); `_runShortcut` gates every other route.
   Future<void> _cloneAgent() async {
     final pane = app.focusedPane;
     final agent = _focusedAgent;
@@ -1794,10 +1805,16 @@ class _SwarmScreenState extends State<SwarmScreen>
         swarmId: app.activeSwarmId,
       );
     }
-    if (error != null && mounted) {
-      ScaffoldMessenger.maybeOf(context)
-          ?.showSnackBar(SnackBar(content: Text(error)));
-    }
+    if (error != null) _showPaneActionHint(error);
+  }
+
+  /// Why a pane action did nothing, for the one route that is not gated by
+  /// `_canExecuteCommand`: a native menu item clicked while no keymap region
+  /// owns the focus reaches its handler directly.
+  void _showPaneActionHint(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// ⌘⇧T: a shell in a new tile, no dialog — the way a terminal app opens a
@@ -2603,6 +2620,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     ShortcutAction.newAgent: _newAgent,
     ShortcutAction.newTerminal: _newTerminal,
     ShortcutAction.cloneAgent: _cloneAgent,
+    ShortcutAction.restartAgent: _restartAgent,
     ShortcutAction.routeTask: () =>
         _dialog(() => showTaskPalette(context, app)),
     ShortcutAction.orchestrate: () =>
@@ -2647,7 +2665,8 @@ class _SwarmScreenState extends State<SwarmScreen>
     'agent.rename': () => _editAgent(),
     'agent.stop': () => _editAgent(stop: true),
     'agent.fork': _forkAgent,
-    'agent.restart': _restartAgent,
+    // `agent.restart` and `agent.clone` come from `_actionHandlers` above:
+    // both carry a ShortcutAction, so the loop already binds them.
     'machine.link': () =>
         _dialog(() => showSwarmLinkDialog(context, app, keymap: _keymap)),
     'machines.manage': _manageMachines,

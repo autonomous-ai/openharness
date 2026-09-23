@@ -328,6 +328,9 @@ final harnessCommands = <HarnessCommand>[
     'agent.restart',
     'Restart Harness',
     ShortcutGroup.actions,
+    action: ShortcutAction.restartAgent,
+    nativeAction: 'restartAgent',
+    keywords: ['again', 'relaunch', 'resume'],
   ),
   const HarnessCommand(
     'terminal.new',
