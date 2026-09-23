@@ -87,6 +87,7 @@ import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from
 import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
+import { awaitsResumeHook } from './lib/resumeCapability.js'
 import { createRetainExitedSession } from './lib/retainExitedSession.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
@@ -3114,7 +3115,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (observed.dsh && !current.dsh) registry.setDsh(current.agentId, observed.dsh)
       const withDsh = registry.byAgent(current.agentId)
       if (withDsh?.dsh) attachDsh(withDsh)
-      if (wasLaunching && !current.resumeOnly) registry.setLaunch(current.agentId, { state: 'ready' })
+      // A strict-resume row waits for the hook that proves the engine reopened THAT conversation —
+      // but only where such a hook is coming. For every other engine this live process, in this
+      // row's own pane, IS the proof (`resumeCapability.ts`), and refusing to say so left an
+      // opencode harness restored after a reboot reading "Starting" while it was working. The Open
+      // path already marks those ready itself (`resumeAgentService.ts`); this is the same rule on
+      // the door restore comes through.
+      const waitingForResumeHook = !!current.resumeOnly && awaitsResumeHook(current.engine, current.sessionId)
+      if (wasLaunching && !waitingForResumeHook) registry.setLaunch(current.agentId, { state: 'ready' })
       await bindObservedAgent(observed)
       if (wasDormant || wasLaunching || adopted) {
         const active = registry.byAgent(current.agentId)

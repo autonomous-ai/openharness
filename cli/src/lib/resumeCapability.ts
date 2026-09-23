@@ -57,3 +57,23 @@ export function resumesConversation(engine: AgentEngine, sessionId: string | nul
 export function confirmsResumeByHook(engine: AgentEngine): boolean {
   return engine === 'claude' || engine === 'codex'
 }
+
+/**
+ * Whether a resumed row must WAIT for that hook before anything may call it started.
+ *
+ * Both halves have to hold: a conversation was actually requested (so there is something for a hook
+ * to confirm), and this engine hooks at launch. Where either fails, the engine process alive in the
+ * row's own pane is the proof, and whoever observes it says so.
+ *
+ * The one place this is read from is worth naming, because getting it wrong is invisible until a
+ * person is looking at it: a strict-resume row that nobody marks ready stays `launch: starting`,
+ * which every surface renders as "Starting" for ever. Measured 2026-09-23 — an opencode harness
+ * opened from the catalog, then brought back by the post-reboot restore, sat at "Starting" while its
+ * engine was up and typeable, because restore marks every row `starting` and hands the flip to
+ * discovery, and discovery refused it for being resume-only. opencode's plugin posts on
+ * `session.created`, which relaunching with `--session <id>` never emits, so the hook it was waiting
+ * for was never coming.
+ */
+export function awaitsResumeHook(engine: AgentEngine, sessionId: string | null | undefined): boolean {
+  return resumesConversation(engine, sessionId) && confirmsResumeByHook(engine)
+}
