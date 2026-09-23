@@ -29,7 +29,19 @@ import '../widgets/login_relay_diagram.dart';
 /// app at all, so it outlives the widget it was written on.)
 class LoginScreen extends StatelessWidget {
   final AppNotifier notifier;
-  const LoginScreen({super.key, required this.notifier});
+
+  /// Closes this screen, when there is something behind it to go back to.
+  ///
+  /// Null is the WALL: the viewer's sign-in, and any window with nothing of its
+  /// own to show — there is nowhere to close to, and an X that led nowhere would
+  /// be the only control on the screen that does nothing. Non-null is the sheet
+  /// a guest desktop window raises over its desk (`showSignInSheet`), and the X
+  /// belongs on the CARD, where a person looks for the close of the thing in
+  /// front of them — not in the corner of the screen behind it (owner,
+  /// 2026-09-23).
+  final VoidCallback? onClose;
+
+  const LoginScreen({super.key, required this.notifier, this.onClose});
 
   /// Matches `EnvironmentSetupScreen` (560) and `LinkMachineScreen` (460) —
   /// wide enough for the diagram to breathe, still centred at the 880×560
@@ -84,39 +96,62 @@ class LoginScreen extends StatelessWidget {
                       boxShadow: grid.AppCard.shadow,
                     ),
                     padding: EdgeInsets.all(compact ? 20 : 24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
+                    child: Stack(
+                      clipBehavior: Clip.none,
                       children: [
-                        const _AppMark(),
-                        SizedBox(height: gap),
-                        Text(
-                          'Your agents, wherever they run',
-                          textAlign: TextAlign.center,
-                          style: grid.AppType.title(),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'At home, at the office, in the cloud — every machine you '
-                          'sign in to becomes part of one desk, here.',
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                        SizedBox(height: gap),
-                        if (showFleet) ...[
-                          const LoginFleetMap(),
-                          SizedBox(height: gap),
-                        ],
-                        _Action(notifier: notifier, waiting: waiting),
-                        if (notifier.lastError != null &&
-                            !notifier.sessionExpired) ...[
-                          const SizedBox(height: 16),
-                          _ErrorTile(
-                            message: notifier.lastError!,
-                            onRetry: notifier.login,
+                        if (onClose != null)
+                          // Into the card's own padding, so the glyph sits in
+                          // the CORNER rather than level with the app mark —
+                          // which read as a misplaced control (owner,
+                          // 2026-09-23). Negative offsets need Clip.none above.
+                          Positioned(
+                            top: compact ? -12 : -16,
+                            right: compact ? -12 : -16,
+                            child: IconButton(
+                              key: const Key('login-close-button'),
+                              tooltip: 'Close',
+                              iconSize: 18,
+                              visualDensity: VisualDensity.compact,
+                              color: grid.AppPalette.textSecondary,
+                              icon: const Icon(Icons.close),
+                              onPressed: onClose,
+                            ),
                           ),
-                        ],
-                        SizedBox(height: gap),
-                        const _Seal(),
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const _AppMark(),
+                            SizedBox(height: gap),
+                            Text(
+                              'Your agents, wherever they run',
+                              textAlign: TextAlign.center,
+                              style: grid.AppType.title(),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'At home, at the office, in the cloud — every machine you '
+                              'sign in to becomes part of one desk, here.',
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                            SizedBox(height: gap),
+                            if (showFleet) ...[
+                              const LoginFleetMap(),
+                              SizedBox(height: gap),
+                            ],
+                            _Action(notifier: notifier, waiting: waiting),
+                            if (notifier.lastError != null &&
+                                !notifier.sessionExpired) ...[
+                              const SizedBox(height: 16),
+                              _ErrorTile(
+                                message: notifier.lastError!,
+                                onRetry: notifier.login,
+                              ),
+                            ],
+                            SizedBox(height: gap),
+                            const _Seal(),
+                          ],
+                        ),
                       ],
                     ),
                   ),
@@ -447,5 +482,107 @@ class _AppMark extends StatelessWidget {
         filterQuality: FilterQuality.medium,
       ),
     );
+  }
+}
+
+/// The sign-in screen, raised OVER the desk rather than instead of it.
+///
+/// A desktop window opens on this computer without an account, and what an
+/// account adds — the other machines, the shared desk, voice on the dial — is
+/// asked for at the moment the person reaches for it. This is [LoginScreen]
+/// ITSELF on a route above the desk, not a smaller copy: a second layout was a
+/// second sign-in to keep in step, and it read as the screen having been
+/// redesigned. [reason] is accepted for the call sites that have one to give.
+///
+/// Closes itself the moment the account arrives — [AppNotifier.signedIn] flips
+/// — or when the person cancels, whichever comes first. Returns whether the
+/// sign-in completed, so a caller that opened it on the way to something (Link
+/// Machine, say) knows whether to carry on.
+Future<bool> showSignInSheet(
+  BuildContext context,
+  AppNotifier notifier, {
+  String? reason,
+}) async {
+  if (notifier.signedIn) return true;
+  final completed = await Navigator.of(context).push<bool>(
+    PageRouteBuilder<bool>(
+      opaque: true,
+      barrierDismissible: false,
+      transitionDuration: Duration.zero,
+      reverseTransitionDuration: Duration.zero,
+      pageBuilder: (_, _, _) =>
+          _SignInSheet(notifier: notifier, reason: reason),
+    ),
+  );
+  return completed ?? notifier.signedIn;
+}
+
+class _SignInSheet extends StatefulWidget {
+  const _SignInSheet({required this.notifier, this.reason});
+
+  final AppNotifier notifier;
+  final String? reason;
+
+  @override
+  State<_SignInSheet> createState() => _SignInSheetState();
+}
+
+class _SignInSheetState extends State<_SignInSheet> {
+  AppNotifier get notifier => widget.notifier;
+  bool _popped = false;
+
+  @override
+  void initState() {
+    super.initState();
+    notifier.addListener(_onChange);
+  }
+
+  @override
+  void dispose() {
+    notifier.removeListener(_onChange);
+    super.dispose();
+  }
+
+  /// The account arriving is what closes this — not the sign-in call returning.
+  /// A restart of the daemon onto the account and the desk being re-seated both
+  /// happen after the browser lands, and holding the sheet over them is what
+  /// keeps the person from clicking into a grid that is being rebuilt.
+  void _onChange() {
+    if (_popped || !mounted || !notifier.signedIn) return;
+    _popped = true;
+    // ⚠️ AFTER the frame. The account arrives in the middle of a rebuild — the
+    // notification that carries it comes from work started during one — and
+    // popping there is `setState() called during build`, which is what left the
+    // sheet standing over a desk that was already signed in (owner,
+    // 2026-09-23). One frame later the tree is settled and the route leaves
+    // cleanly.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // ⚠️ THE SCREEN ITSELF, not a smaller copy of it. A sheet with its own
+    // layout was a second sign-in to keep in step with this one — two cards,
+    // two button states, two sets of words — and it read as the login screen
+    // having been redesigned (owner, 2026-09-23). What changes here is only
+    // WHERE it appears: over the desk, with a way back out.
+    // ⚠️ Esc is bound OUT HERE, around the screen, so the screen's own Esc — which
+    // cancels a sign-in that is in flight — wins while there is one to cancel.
+    // The X itself is the SCREEN's, on its card: see LoginScreen.onClose.
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape, includeRepeats: false):
+            _dismiss,
+      },
+      child: LoginScreen(notifier: notifier, onClose: _dismiss),
+    );
+  }
+
+  void _dismiss() {
+    if (notifier.canCancelLogin) notifier.cancelLogin();
+    Navigator.of(context).pop(false);
   }
 }

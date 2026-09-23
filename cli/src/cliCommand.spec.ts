@@ -99,13 +99,36 @@ async function daemonStatusServer(machineId: string): Promise<number> {
 }
 
 describe('CLI login/start command contract', () => {
-  it('does not start or open SSO when start has no saved session', () => {
-    const result = run('start')
-
-    expect(result.status).toBe(1)
-    expect(result.stderr).toContain('Not signed in. Run: harness login')
-    expect(result.stdout).not.toContain('Sign in to Harness in your browser')
-  })
+  it('starts without a saved session, serving this computer only, and never opens SSO', async () => {
+    // An account buys the OTHER machines; everything on this computer — discovery, terminals, hooks,
+    // the cabled dial — is served by the daemon over the loopback and needs none. Refusing to start
+    // without one put a browser sign-in in front of every local thing the product does on day one.
+    //
+    // Run in its own process group and killed as one: a dev-mode start becomes the daemon itself, and
+    // tsx wraps it in a child of its own.
+    const root = freshRoot()
+    const child = spawn(process.execPath, [TSX, CLI_SOURCE, 'start'], {
+      cwd: CLI_ROOT,
+      detached: true,
+      env: envFor(root, { PORT: String(20_000 + Math.floor(Math.random() * 20_000)), DISABLE_HOOK_INSTALL: '1' }),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    children.push(child)
+    let said = ''
+    child.stdout?.on('data', (chunk: Buffer) => { said += chunk.toString() })
+    child.stderr?.on('data', (chunk: Buffer) => { said += chunk.toString() })
+    const deadline = Date.now() + 25_000
+    while (Date.now() < deadline && !/serving this computer only|Not signed in|Sign in to Harness/.test(said)) {
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    try {
+      expect(said).toContain('not signed in — serving this computer only')
+      expect(said).not.toContain('Sign in to Harness in your browser')
+      expect(said).not.toContain('dialing')   // no backend leg is attempted without a session
+    } finally {
+      try { process.kill(-child.pid!, 'SIGKILL') } catch { /* already gone */ }
+    }
+  }, 40_000)
 
   it('rejects the removed join command with the two-step migration', () => {
     const result = run('join')
