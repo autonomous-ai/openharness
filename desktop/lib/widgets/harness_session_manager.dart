@@ -258,10 +258,10 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                   child: Row(
                     children: [
                       Expanded(
-                        child: Text('Harnesses', style: AppType.heading()),
+                        child: Text('Harness Monitor', style: AppType.heading()),
                       ),
                       IconButton(
-                        tooltip: 'Close harnesses',
+                        tooltip: 'Close Harness Monitor',
                         onPressed: widget.onClose,
                         icon: const Icon(LucideIcons.x, size: 16),
                       ),

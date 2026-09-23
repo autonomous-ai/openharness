@@ -232,7 +232,7 @@ void main() {
       app.dismissError();
       await tester.pump();
       expect(find.text('No harnesses need your input'), findsOneWidget);
-      await tester.tap(find.byTooltip('Close harnesses'));
+      await tester.tap(find.byTooltip('Close Harness Monitor'));
       await tester.pump();
       expect(app.panes, isEmpty);
       await tester.pumpWidget(const SizedBox());
