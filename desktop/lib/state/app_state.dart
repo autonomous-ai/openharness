@@ -7,7 +7,8 @@ import 'package:dio/dio.dart';
 import 'dart:ui' show Color;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/widgets.dart' show BuildContext, StringCharacters;
+import 'package:flutter/widgets.dart'
+    show AppLifecycleState, BuildContext, StringCharacters, WidgetsBinding;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../analytics/analytics.dart';
@@ -1052,6 +1053,7 @@ class AppNotifier extends ChangeNotifier {
     if (owner.focusedPaneId != pane.id) {
       owner.previousPaneId = owner.focusedPaneId;
       owner.focusedPaneId = pane.id;
+      _seeFocusedAgent();
     }
     if (owner.zoomedPaneId != null) owner.zoomedPaneId = pane.id;
     _activeSwarmId = owner.id;
@@ -1869,6 +1871,11 @@ class AppNotifier extends ChangeNotifier {
     if (moved) _previousPaneId = focusedPaneId;
     focusedPaneId = paneId;
     selectedMachineId = focusedPane?.machineId;
+    // Switching TO a harness is how its news gets read. Not only the routes
+    // that go through a banner or the Harnesses list: clicking the tile, the
+    // rail, ⌘-number, the dial — all of them arrive here, and all of them mean
+    // the same thing to somebody who was told this one wanted them.
+    _seeFocusedAgent();
     _noteNavigation();
     if (reveal) _paneFocusRequest++;
     if (zoomedPaneId != null) zoomedPaneId = paneId;
@@ -6069,11 +6076,61 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Put one agent's news on screen, named the way the window names it.
+  /// The agent the person is looking at RIGHT NOW, or null.
+  ///
+  /// Both halves matter. The pane has to be the focused one, and the window has
+  /// to be the front one — a pane keeps its focus while the app sits behind a
+  /// browser, and treating that as "being watched" would swallow exactly the
+  /// news this feature exists for.
+  ///
+  /// A seam, because the alternative is not testable: reaching it through real
+  /// panes means `focusPane`, which announces the focus to the machine, which
+  /// dials it — and a test without a live connection hangs rather than fails.
+  late ({String machineId, String agentId})? Function() watchedAgent =
+      _watchedFromFocus;
+
+  /// The real answer, reachable from a test without going through `focusPane`.
+  @visibleForTesting
+  ({String machineId, String agentId})? watchedAgentFromFocusForTest() =>
+      _watchedFromFocus();
+
+  ({String machineId, String agentId})? _watchedFromFocus() {
+    if (lifecycle() != AppLifecycleState.resumed) return null;
+    final pane = focusedPane;
+    final agentId = pane?.agentId;
+    if (pane == null || agentId == null) return null;
+    return (machineId: pane.machineId, agentId: agentId);
+  }
+
+  bool _isBeingWatched(String machineId, String agentId) {
+    final watched = watchedAgent();
+    return watched != null &&
+        watched.machineId == machineId &&
+        watched.agentId == agentId;
+  }
+
+  /// Clear whatever the person is currently looking at. Every route into a
+  /// harness ends here, so none of them has to remember to.
+  @visibleForTesting
+  void seeWatchedAgent() {
+    final watched = watchedAgent();
+    if (watched != null) agentUnread.clear(watched.machineId, watched.agentId);
+  }
+
+  /// Where the app is. Injected so a test can say so without a real lifecycle.
+  AppLifecycleState? Function() lifecycle =
+      () => WidgetsBinding.instance.lifecycleState;
+
   void _raiseAlert(MachineState machine, String agentId, AlertKind kind) {
+    // Nothing at all for the agent on screen in front of you. A sound, a banner
+    // and a count are three ways of saying "look over here", and all three are
+    // noise about the pane you are already in.
+    if (_isBeingWatched(machine.machine.machineId, agentId)) return;
     final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
     // Before the banner and outside its switch: the mark is what the window can
     // still say when somebody has turned the interrupting halves off.
     agentUnread.mark(machine.machine.machineId, agentId, kind);
+    alerts.play(kind);
     agentAlerts.post(
       AgentAlert(
         machineId: machine.machine.machineId,
@@ -6117,6 +6174,12 @@ class AppNotifier extends ChangeNotifier {
   /// been seen.
   void markAgentSeen(String machineId, String agentId) =>
       agentUnread.clear(machineId, agentId);
+
+  /// Whatever tile is now in front of the person has been seen.
+  ///
+  /// Reads the focused pane rather than taking an id, so every route into a
+  /// harness clears it without each one having to remember to.
+  void _seeFocusedAgent() => seeWatchedAgent();
 
   String? _eventAgentId(
     MachineState machine,
@@ -10446,10 +10509,7 @@ class AppNotifier extends ChangeNotifier {
             // Only a NEW question earns a sound. The daemon re-announces every open one after a
             // reconnect and when attaching to a turn that was already mid-dialog, and a window
             // that beeped at those would sound an alarm every time the network hiccuped.
-            if (!repeat) {
-              alerts.play(AlertKind.needsYou);
-              _raiseAlert(machine, agentId, AlertKind.needsYou);
-            }
+            if (!repeat) _raiseAlert(machine, agentId, AlertKind.needsYou);
           }
         }
         break;
@@ -10502,9 +10562,6 @@ class AppNotifier extends ChangeNotifier {
       case 'turn_ended':
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
-          // The work someone was waiting on is on screen. Raised whether or not the pane is in
-          // front: the whole point is the agent that finished while you were looking elsewhere.
-          alerts.play(AlertKind.done);
           _raiseAlert(machine, agentId, AlertKind.done);
           _cancelTurnActivity(machine.machine.machineId, agentId);
         } else {
