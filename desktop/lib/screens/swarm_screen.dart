@@ -566,11 +566,6 @@ class _SwarmScreenState extends State<SwarmScreen>
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
       'activeId': app.activeSwarmId,
       'palette': grid.AppTheme.palette.value.nativeColors,
-      // The tabs wear the terminal's face at the chrome size, not its size:
-      // ⌘+ and ⌘− zoom the terminal alone.
-      'fontFamily': grid.AppType.monoFamily,
-      'fontSize': grid.AppType.chromeSize,
-      'fontFallbacks': grid.AppType.monoFallback,
       'canReopen': app.canReopenLastClosed,
       'canFind': _canFindTerminal,
       'canClosePane': app.focusedPane != null,

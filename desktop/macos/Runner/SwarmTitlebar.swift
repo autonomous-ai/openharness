@@ -2,38 +2,6 @@ import Cocoa
 import FlutterMacOS
 import ImageIO
 
-/// The title bar's tabs and Store action wear the terminal's face at the chrome size Flutter
-/// sends (`AppType.chromeSize`), never the terminal's own size: ⌘+ and ⌘− zoom the terminal alone.
-/// Menus are not chrome — they use the system menu font, like every other Mac app's.
-enum HarnessTypography {
-  private static var families = [".AppleSystemUIFontMonospaced"]
-  private(set) static var size: CGFloat = 12
-
-  @discardableResult
-  static func update(_ state: [String: Any]) -> Bool {
-    let previousFamilies = families
-    let previousSize = size
-    if let family = state["fontFamily"] as? String {
-      families = [family] + (state["fontFallbacks"] as? [String] ?? [])
-    }
-    if let value = state["fontSize"] as? NSNumber, value.doubleValue.isFinite, value.doubleValue >= 9, value.doubleValue <= 22 {
-      size = CGFloat(value.doubleValue)
-    }
-    return families != previousFamilies || size != previousSize
-  }
-
-  /// The tab label's face. [size] defaults to the chrome size; the ⌘1 badge asks one point less.
-  static func font(weight: NSFont.Weight = .regular, size: CGFloat? = nil) -> NSFont {
-    let size = size ?? self.size
-    let base = families.first == ".AppleSystemUIFontMonospaced"
-      ? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
-      : families.compactMap { NSFont(name: $0, size: size) }.first
-        ?? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
-    return weight == .bold || weight == .semibold
-      ? NSFontManager.shared.convert(base, toHaveTrait: .boldFontMask) : base
-  }
-}
-
 /// Real AppKit controls in the title bar, beside the system traffic lights.
 /// https://developer.apple.com/documentation/appkit/nstitlebaraccessoryviewcontroller/layoutattribute
 final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
@@ -76,9 +44,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       switch call.method {
       case "configure":
         let state = call.arguments as? [String: Any] ?? [:]
-        HarnessTypography.update(state)
         self.configure(palette: state["palette"] as? [String: Any])
-        self.strip.updateTypography()
         result(true)
       case "update":
         let state = call.arguments as? [String: Any] ?? [:]
@@ -1417,7 +1383,7 @@ private final class SwarmStoreButton: SwarmIconButton {
   var palette = SwarmNativePalette() { didSet { needsDisplay = true } }
   var preferredWidth: CGFloat {
     ceil((title as NSString).size(withAttributes: [
-      .font: font ?? HarnessTypography.font(weight: .medium),
+      .font: font ?? SwarmTabStrip.uiFont(weight: .medium),
     ]).width) + 48
   }
 
@@ -1436,7 +1402,7 @@ private final class SwarmStoreButton: SwarmIconButton {
       from: .zero, operation: .sourceOver, fraction: isEnabled ? 1 : 0.45,
       respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
     let attributes: [NSAttributedString.Key: Any] = [
-      .font: font ?? HarnessTypography.font(weight: .medium),
+      .font: font ?? SwarmTabStrip.uiFont(weight: .medium),
       .foregroundColor: palette.accent.withAlphaComponent(isEnabled ? 1 : 0.45),
     ]
     let text = title as NSString
@@ -1509,6 +1475,16 @@ private final class SwarmStripScrollView: NSScrollView {
 }
 
 private final class SwarmTabStrip: NSView {
+  /// The title bar's own face: the system one, at the system size.
+  ///
+  /// The tabs wore the terminal's face until 2026-09-23. It reads as a terminal
+  /// costume on furniture that is not the terminal — no other Mac window names
+  /// its tabs in mono — and the workspace's own chrome, a pane header and the
+  /// command box, carries that face where it belongs (owner).
+  static func uiFont(weight: NSFont.Weight = .regular) -> NSFont {
+    NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: weight)
+  }
+
   private(set) var palette = SwarmNativePalette()
   var emit: ((String, Any?) -> Void)?
   private let scroll = SwarmStripScrollView()
@@ -1572,7 +1548,7 @@ private final class SwarmTabStrip: NSView {
     storeButton.isBordered = false
     storeButton.palette = palette
     storeButton.image = icons.image(engine: "store", asset: "assets/store/polymath.png")
-    storeButton.font = HarnessTypography.font(weight: .medium)
+    storeButton.font = SwarmTabStrip.uiFont(weight: .medium)
     storeButton.target = self
     storeButton.action = #selector(openStore)
     storeButton.isEnabled = false
@@ -1613,20 +1589,10 @@ private final class SwarmTabStrip: NSView {
     }
   }
 
-  func updateTypography() {
-    storeButton.font = HarnessTypography.font(weight: .medium)
-    for tab in tabs {
-      tab.labelFont = HarnessTypography.font()
-    }
-    needsLayout = true
-  }
-
   func update(_ state: [String: Any]) {
     // Workspace teardown clears its controls without changing appearance.
     if let palette = state["palette"] as? [String: Any] { updatePalette(palette) }
     actionsEnabled = state["enabled"] as? Bool == true
-    HarnessTypography.update(state)
-    storeButton.font = HarnessTypography.font(weight: .medium)
     let rows = state["tabs"] as? [[String: Any]] ?? []
     let nextActiveId = state["activeId"] as? String ?? ""
     revealActiveAfterLayout = revealActiveAfterLayout || nextActiveId != activeId
@@ -1640,7 +1606,6 @@ private final class SwarmTabStrip: NSView {
       guard let id = row["id"] as? String else { return nil }
       let tab = previous[id] ?? SwarmTabButton(id: id)
       tab.palette = palette
-      tab.labelFont = HarnessTypography.font()
       tab.name = row["name"] as? String ?? "New Tab"
       let count = row["agentCount"] as? Int ?? 0
       // The Harness Store tab holds no agents; without its own mark it would wear New Tab's plus.
@@ -1814,12 +1779,16 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     get { iconView.image }
     set { iconView.image = newValue }
   }
-  var labelFont = HarnessTypography.font() {
+  /// A tab is named in the system face, like every other Mac window's tabs —
+  /// Safari's, Ghostty's, Finder's. The terminal's face belongs to the terminal
+  /// and to the chrome drawn around it inside the window (owner, 2026-09-23).
+  var labelFont = SwarmTabStrip.uiFont() {
     didSet { if oldValue != labelFont { invalidateLabel() } }
   }
-  /// The ⌘1 badge: the tab's face one point under its label, so the name leads.
+  /// The ⌘1 badge: monospaced digits, so 1 and 9 take the same room and the
+  /// badges down a strip of tabs line up.
   private var badgeFont: NSFont {
-    HarnessTypography.font(size: max(9, labelFont.pointSize - 1))
+    NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
   }
   private var cachedLabel: NSAttributedString?
   var actionsEnabled = true {
