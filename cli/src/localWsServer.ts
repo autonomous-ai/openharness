@@ -53,6 +53,7 @@ export interface LocalWsServerOptions {
    *  the window, so the two screens stay one desk. */
   /** Explicit app focus, including clear/disconnect, for voice routing independent of the dial. */
   onAppFocusState?: (machineId: string, agentId: string | null, connId: string, expectedRevision?: string) => unknown
+  onDevicePrepareOpened?: (operationId: string, agentId: string) => void
   onAppFocus?: (machineId: string, agentId: string) => void
   /** Every agent the window currently has a tile for, across all its machines. */
   onAppPanes?: (agentIds: string[]) => void
@@ -351,6 +352,15 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         // to the close at the bottom.
         const parsed = isBinary ? null : jsonFrame(raw)
 
+        // Local desktop acknowledgement only; never forward this through a remote relay.
+        if (parsed?.type === 'device_prepare_opened') {
+          const p = parsed.payload as Record<string, unknown> | undefined
+          if (!relay && boundMachineId === options.machineId && typeof p?.operationId === 'string'
+            && /^[a-f0-9]{64}$/.test(p.operationId) && typeof p.agentId === 'string' && p.agentId.length > 0 && p.agentId.length <= 200) {
+            options.onDevicePrepareOpened?.(p.operationId, p.agentId)
+          }
+          return
+        }
         // THE APP MOVED — tell whoever wants to follow it, before the frame is dispatched either way.
         // Sniffed here rather than in the backend socket because that path never sees a RELAYED machine's
         // frames: those are forwarded upstream a few lines below and would be invisible, which is exactly

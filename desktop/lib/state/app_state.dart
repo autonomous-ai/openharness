@@ -7979,6 +7979,64 @@ class AppNotifier extends ChangeNotifier {
     });
   }
 
+  final _preparationOpens = <String, Future<bool>>{};
+  final _revealedPreparations = <String>{};
+
+  /// Reveal a prepared agent before its engine is ready, so login/trust stays
+  /// interactive. This only opens UI; task delivery belongs to the device.
+  Future<bool> revealPreparedAgent(
+    String machineId,
+    String agentId,
+    String operationId,
+  ) async {
+    final key = '$_authRevision/$machineId/$operationId';
+    if (_revealedPreparations.contains(key)) return true;
+    final agentKey = '$_authRevision/$machineId/$agentId';
+    final pending = _preparationOpens[agentKey];
+    if (pending != null) {
+      final opened = await pending;
+      if (opened) _revealedPreparations.add(key);
+      return opened;
+    }
+    final opening = _openPreparedAgent(machineId, agentId);
+    _preparationOpens[agentKey] = opening;
+    try {
+      final opened = await opening;
+      if (opened) _revealedPreparations.add(key);
+      return opened;
+    } finally {
+      _preparationOpens.remove(agentKey);
+    }
+  }
+
+  Future<bool> _openPreparedAgent(String machineId, String agentId) async {
+    final revision = _authRevision;
+    final machine = machineStates[machineId];
+    if (_disposed || machine == null || !await _awaitAgent(machine, agentId)) {
+      return false;
+    }
+    if (_disposed || revision != _authRevision || !identical(machineStates[machineId], machine)) {
+      return false;
+    }
+    await openAgentFromDial(machineId, agentId);
+    if (_disposed || revision != _authRevision || !identical(machineStates[machineId], machine) ||
+        !allPanes.any(
+          (p) => p.machineId == machineId && p.agentId == agentId,
+        )) {
+      return false;
+    }
+    // Reuse the generic package viewer path, including a late viewerUrl/error.
+    final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+    if (agent != null) {
+      _dismissedViewers.remove(_viewerKey(machineId, agentId));
+      _syncViewerPane(machine, agent);
+      activeSwarm.zoomedPaneId = null;
+      _persistLayout();
+      notifyListeners();
+    }
+    return true;
+  }
+
   /// Enable-time fallback: preserve the user's current choice and acknowledge it.
   /// Selection records focus before waiting for terminal attachment, so a later
   /// user click is never overwritten by completion of an asynchronous open.
@@ -9726,6 +9784,33 @@ class AppNotifier extends ChangeNotifier {
         final deskRevision = payload['revision'];
         if (deskRevision is! int || deskRevision > _desk.revision) {
           unawaited(_deskFetch());
+        }
+        break;
+      case 'device_prepare_open':
+        final operationId = payload['operationId'];
+        final prepareAgentId = payload['agentId'];
+        final prepareMachineId = payload['machineId'];
+        if (operationId is String &&
+            RegExp(r'^[a-f0-9]{64}$').hasMatch(operationId) &&
+            prepareAgentId is String &&
+            prepareAgentId.isNotEmpty &&
+            prepareMachineId == machineId) {
+          unawaited(() async {
+            try {
+              if (await revealPreparedAgent(
+                machineId,
+                prepareAgentId,
+                operationId,
+              )) {
+                await _pool?[machineId]?.sendTerminalFrame(
+                  'device_prepare_opened',
+                  {'operationId': operationId, 'agentId': prepareAgentId},
+                );
+              }
+            } catch (error) {
+              appLog.warn('device', 'Could not reveal prepared agent: $error');
+            }
+          }());
         }
         break;
       case 'dial_open':
