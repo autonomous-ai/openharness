@@ -336,7 +336,10 @@ describe('claudeContinuation', () => {
         JSON.stringify({ type: 'continued-in', sessionId: 'old-session', continuedInSessionId: newId }),
       ].join('\n') + '\n',
     )
-    writeFileSync(join(dir, `${newId}.jsonl`), `${JSON.stringify({ type: 'session', cwd: CWD, id: newId })}\n`)
+    writeFileSync(join(dir, `${newId}.jsonl`), [
+      JSON.stringify({ type: 'session', cwd: CWD, id: newId }),
+      JSON.stringify({ type: 'user', sessionId: newId, message: { role: 'user', content: 'carry on' } }),
+    ].join('\n') + '\n')
 
     await expect(claudeContinuation(oldPath)).resolves.toEqual({
       sessionId: newId,
@@ -369,12 +372,60 @@ describe('claudeContinuation', () => {
     const lines = Array.from({ length: 50 }, () => filler)
     lines.push(JSON.stringify({ type: 'continued-in', continuedInSessionId: newId }))
     writeFileSync(oldPath, lines.join('\n') + '\n')
-    writeFileSync(join(dir, `${newId}.jsonl`), `${JSON.stringify({ type: 'session', cwd: CWD, id: newId })}\n`)
+    writeFileSync(join(dir, `${newId}.jsonl`), [
+      JSON.stringify({ type: 'session', cwd: CWD, id: newId }),
+      JSON.stringify({ type: 'assistant', sessionId: newId, message: { role: 'assistant', content: 'hello' } }),
+    ].join('\n') + '\n')
 
     await expect(claudeContinuation(oldPath)).resolves.toEqual({
       sessionId: newId,
       transcriptPath: join(dir, `${newId}.jsonl`),
     })
+  })
+
+  it('does not follow the marker to a background session nobody has spoken in', async () => {
+    // `claude` writes the same marker when it moves a session to the BACKGROUND, and that file holds
+    // two bookkeeping lines forever while the conversation goes on in the original. Following it left
+    // the agent on an empty session, and Open then asked `--resume` for an id the CLI refuses because
+    // it is running in the background (#262 follow-up, measured on a real transcript).
+    const dir = tempRoot()
+    const oldPath = join(dir, 'old-session.jsonl')
+    const newId = '47a2bb52-5511-40ba-a9fb-8390572bc3de'
+    writeFileSync(oldPath, [
+      JSON.stringify({ type: 'user', sessionId: 'old-session', message: { role: 'user', content: 'hi' } }),
+      JSON.stringify({ type: 'continued-in', sessionId: 'old-session', continuedInSessionId: newId }),
+    ].join('\n') + '\n')
+    const background = join(dir, `${newId}.jsonl`)
+    writeFileSync(background, [
+      JSON.stringify({ type: 'ai-title', sessionId: newId, title: 'Merge PR' }),
+      JSON.stringify({ type: 'agent-name', sessionId: newId, name: 'harness Merge PR' }),
+    ].join('\n') + '\n')
+
+    await expect(claudeContinuation(oldPath)).resolves.toBeNull()
+
+    // The pass after its first turn lands binds it, so a real continuation is only ever deferred.
+    writeFileSync(background, [
+      JSON.stringify({ type: 'ai-title', sessionId: newId, title: 'Merge PR' }),
+      JSON.stringify({ type: 'user', sessionId: newId, message: { role: 'user', content: 'carry on' } }),
+    ].join('\n') + '\n')
+    await expect(claudeContinuation(oldPath)).resolves.toEqual({ sessionId: newId, transcriptPath: background })
+  })
+
+  it('follows a continuation whose first turn is past the bounded read', async () => {
+    // A rollover can open on a `file-history-snapshot` big enough to push the first turn out of the
+    // head this check reads. What it rules out is two short lines, so size alone answers for a file
+    // larger than the bound — the bound must never be the thing that refuses a real conversation.
+    const dir = tempRoot()
+    const oldPath = join(dir, 'old-session.jsonl')
+    const newId = 'c1d2e3f4-5511-40ba-a9fb-8390572bc3de'
+    writeFileSync(oldPath, `${JSON.stringify({ type: 'continued-in', continuedInSessionId: newId })}\n`)
+    const nextPath = join(dir, `${newId}.jsonl`)
+    writeFileSync(nextPath, [
+      JSON.stringify({ type: 'file-history-snapshot', sessionId: newId, blob: 'x'.repeat(300 * 1024) }),
+      JSON.stringify({ type: 'user', sessionId: newId, message: { role: 'user', content: 'carry on' } }),
+    ].join('\n') + '\n')
+
+    await expect(claudeContinuation(oldPath)).resolves.toEqual({ sessionId: newId, transcriptPath: nextPath })
   })
 
   it('returns null for a missing file', async () => {

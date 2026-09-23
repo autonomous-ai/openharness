@@ -87,6 +87,7 @@ import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from
 import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
+import { createRetainExitedSession } from './lib/retainExitedSession.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { sweepWorktrees } from './lib/worktreeSweep.js'
@@ -2768,19 +2769,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   }
 
-  /** Retain the conversation's identity; a surviving shell gets its own live identity. */
-  const retainExitedSession = (entry: RegisteredSession, paneAlive: boolean): void => {
-    stoppedAgents.save(entry)
-    const saved = stoppedAgents.get(entry.agentId)!
-    invalidateTerminalControl(entry.agentId)
-    input.forget(entry.agentId)
-    detachDsh(entry.agentId)
-    const terminal = paneAlive ? registry.releaseEngine(entry.agentId, true) : null
-    if (!paneAlive) registry.removeAgent(entry.agentId)
-    syncRecapPool()
-    void backend.publishStoppedAgent(saved).catch(error => console.warn('[resume] could not announce saved harness', error))
-    if (terminal) announceSession(terminal, { device: false })
-  }
+  const retainExitedSession = createRetainExitedSession({
+    stoppedAgents,
+    registry,
+    send: frame => backend.send(frame),
+    publishStoppedAgent: saved => backend.publishStoppedAgent(saved),
+    // A terminal is never the dial's business, and `syncSession` forces that for it anyway.
+    announceSession: session => announceSession(session, { device: false }),
+    invalidateTerminalControl,
+    forgetInput: agentId => input.forget(agentId),
+    detachDsh,
+    syncRecapPool,
+    warn: (message, error) => console.warn(message, error),
+  })
 
   type RegisteredMeta = {
     isNew: boolean
