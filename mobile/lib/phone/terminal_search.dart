@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:harness_mobile/core/last_opened_agent.dart' show AgentRef;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/app_dialog.dart'
-    show kDialogVeilBlur;
+    show kDialogVeilBlur, kSheetVeilOpacity;
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'agent_index.dart';
@@ -118,8 +118,10 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   /// offered as chips once it is focused — see [_SearchHead].
   static const String _hint = 'Search harnesses';
 
-  /// How dark the page goes behind the sheet — a step past the `black54`
-  /// every other sheet here draws, with the page blurred under it as well.
+  /// How dark the page goes behind the sheet — a step past Material's
+  /// `black54`, with the page blurred under it as well. The phone sheets stand
+  /// on the same veil ([kSheetVeilOpacity]), so every sheet over a terminal
+  /// dims it alike.
   ///
   /// ⚠️ **Blurred, because what is behind this sheet is a live terminal.**
   /// Dimmed text is still text: at any tint that leaves the page reading as
@@ -128,7 +130,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   /// choose from. The blur takes the letterforms away, at the strength the
   /// app's dialogs use for the same job ([kDialogVeilBlur]); the tint only has
   /// to set the depth, which is why it can stay this far short of theirs.
-  static const double _scrim = 0.64;
+  static const double _scrim = kSheetVeilOpacity;
 
   /// A fling down faster than this closes the sheet however little it moved —
   /// [BottomSheet]'s own figure, so this sheet lets go like the others do.
