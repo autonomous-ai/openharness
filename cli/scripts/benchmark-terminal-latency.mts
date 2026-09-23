@@ -10,6 +10,7 @@ import { deflateSync, inflateSync } from 'node:zlib'
 import { performance } from 'node:perf_hooks'
 import { parseArgs } from 'node:util'
 import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind } from '../src/lib/terminalBinary.ts'
+import { createBenchmarkRoute, verifyExchange, type BenchmarkRoute } from './benchmark-route.js'
 
 const { values } = parseArgs({ options: {
   machine: { type: 'string' }, label: { type: 'string', default: 'target' },
@@ -18,11 +19,16 @@ const { values } = parseArgs({ options: {
   local: { type: 'boolean', default: false },
   'control-samples': { type: 'string', default: '30' },
   revision: { type: 'string' },
+  route: { type: 'string' },
 } })
 if (!values.machine || !values.output) throw new Error('--machine and --output are required')
 const sampleCount = Number(values.samples)
 const controlCount = Number(values['control-samples'])
-const port = Number(values.port)
+const daemonPort = Number(values.port)
+let port = daemonPort
+const requestedRoute = values.route as BenchmarkRoute | undefined
+if (requestedRoute && !['p2p', 'turn', 'relay'].includes(requestedRoute)) throw new Error('route must be p2p, turn, or relay')
+if (requestedRoute && values.local) throw new Error('--route requires a remote machine')
 if (!Number.isInteger(sampleCount) || sampleCount < 1 || sampleCount > 2000) throw new Error('samples must be 1–2000')
 if (!Number.isInteger(controlCount) || controlCount < 1 || controlCount > 500) throw new Error('control-samples must be 1–500')
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid port')
@@ -36,7 +42,7 @@ const prefix = `~HB${nonce}:`
 const rows: Record<string, unknown>[] = []
 const controls: Record<string, unknown>[] = []
 const result: Record<string, any> = {
-  schema: 3, success: false, startedAt: new Date().toISOString(), label: values.label,
+  schema: requestedRoute ? 4 : 3, success: false, startedAt: new Date().toISOString(), label: values.label,
   sourceRevision: values.revision ?? 'unspecified',
   boundary: 'client binary input send to matching PTY probe response received; excludes UI rendering and OS keyboard input',
   client: { platform: platform(), arch: arch(), node: process.version },
@@ -44,6 +50,7 @@ const result: Record<string, any> = {
   controlSamples: controlCount, controlObservations: controls,
   observations: rows, stagesMs: {}, cleanup: { created: false, deleted: false },
   linkModes: [],
+  ...(requestedRoute ? { requestedRoute, routeVerification: 'nominated ICE pair, stream membership, and both binary wire directions for each echo' } : {}),
 }
 
 class Peer {
@@ -238,6 +245,11 @@ finally:
  done.set()
  termios.tcsetattr(fd,termios.TCSADRAIN,saved)
 `
+const routeAdapter = requestedRoute ? await createBenchmarkRoute(values.machine, requestedRoute) : undefined
+if (routeAdapter) {
+  port = routeAdapter.port
+  result.client.transportImplementation = 'isolated production RemoteRelayPool from source; loopback client and relay share one Node process'
+}
 let peer = new Peer()
 let agentId: string | undefined
 let echoSeq = 0
@@ -245,11 +257,12 @@ const interrupted = () => peer.fail(new Error('benchmark interrupted; attempting
 process.once('SIGINT', interrupted)
 process.once('SIGTERM', interrupted)
 try {
-  const status = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(5000) }).then((r) => r.json()) as { version?: string }
-  result.client.daemonVersion = status.version ?? 'unknown'
+  const status = await fetch(`http://127.0.0.1:${daemonPort}/api/status`, { signal: AbortSignal.timeout(5000) }).then((r) => r.json()) as { version?: string }
+  result.client[routeAdapter ? 'installedDaemonVersionNotOnMeasuredPath' : 'daemonVersion'] = status.version ?? 'unknown'
   const connectionBegan = now()
   result.stagesMs.select = await peer.select()
-  await peer.rpc('terminal_capabilities', {})
+  const capabilities = await peer.rpc('terminal_capabilities', {})
+  result.targetProtocolVersion = capabilities.protocolVersion ?? null
   result.stagesMs.readyForRequests = now() - connectionBegan
   const began = now()
   const created = await peer.rpc('agent_create', { engine: 'terminal', name: `Performance probe ${nonce.slice(0, 8)}`, cwd: '/tmp', bypassPermission: false })
@@ -261,6 +274,19 @@ try {
   const command = `python3 -u -c 'import base64,zlib;exec(zlib.decompress(base64.b64decode("${deflateSync(Buffer.from(probe)).toString('base64')}")))'`
   result.stagesMs.startProbe = await peer.exchange(Buffer.from(command), prefix + 'READY:', 15000, true)
   result.target = peer.output.match(new RegExp(`${prefix}READY:([^~]+)~`))?.[1] ?? 'unknown'
+  if (routeAdapter) {
+    const began = now()
+    while (routeAdapter.snapshot(peer.stream).route !== requestedRoute && now() - began < 35000) await sleep(100)
+    result.stagesMs.waitForRequestedRoute = now() - began
+    result.routeAtStart = routeAdapter.snapshot(peer.stream)
+    result.negotiation = routeAdapter.negotiation()
+    // Public service host names only. No TURN credentials or candidate addresses.
+    result.turnHosts = [...new Set(routeAdapter.turnHosts())]
+    if (result.routeAtStart.route !== requestedRoute) throw new Error(`Requested ${requestedRoute} unavailable; actual route ${result.routeAtStart.route}`)
+    if (requestedRoute === 'turn' && (!result.turnHosts.length || result.turnHosts.some((host: string) => !/(^|\.)cloudflare\.com$/.test(host)))) {
+      throw new Error('Selected TURN pair cannot be attributed to Cloudflare configuration')
+    }
+  }
   // Permit normal direct-path negotiation; record actual modes on every observation.
   await sleep(2000)
   // Use the application's normal streamless capability request. Adding a
@@ -289,9 +315,26 @@ try {
       const byte = 97 + echoSeq % 26
       const modeBefore = peer.mode
       const keyframesBefore = peer.keyframes
-      const elapsed = await peer.exchange(Buffer.from([byte]), `${prefix}ECHO:${echoSeq}:${byte}~`)
-      rows.push({ load, phase: sample < 0 ? 'warmup' : 'measured', sequence: echoSeq++, elapsedMs: elapsed,
-        modeBefore, modeAfter: peer.mode, keyframesDuring: peer.keyframes - keyframesBefore })
+      const routeBefore = routeAdapter?.snapshot(peer.stream)
+      const began = now()
+      let rowRecorded = false
+      try {
+        const elapsed = await peer.exchange(Buffer.from([byte]), `${prefix}ECHO:${echoSeq}:${byte}~`)
+        const routeAfter = routeAdapter?.snapshot(peer.stream)
+        const routeVerified = !requestedRoute || verifyExchange(requestedRoute, routeBefore!, routeAfter!)
+        rows.push({ load, phase: sample < 0 ? 'warmup' : 'measured', sequence: echoSeq++, elapsedMs: elapsed,
+          success: routeVerified, modeBefore, modeAfter: peer.mode, keyframesDuring: peer.keyframes - keyframesBefore,
+          ...(routeAdapter ? { routeBefore, routeAfter, routeVerified } : {}) })
+        rowRecorded = true
+        if (!routeVerified) throw new Error('Route changed or binary wire verification failed; run is excluded')
+      } catch (error) {
+        if (!rowRecorded) {
+          rows.push({ load, phase: sample < 0 ? 'warmup' : 'measured', sequence: echoSeq,
+            success: false, elapsedMs: now() - began, error: String(error), modeBefore, modeAfter: peer.mode,
+            ...(routeAdapter ? { routeBefore, routeAfter: routeAdapter.snapshot(peer.stream), routeVerified: false } : {}) })
+        }
+        throw error
+      }
     }
     result[`${load}Achieved`] = { bytes: peer.outputBytes - bytesBefore, durationMs: now() - loadBegan }
     if (load !== 'idle') await peer.exchange(Buffer.from([1]), `${prefix}LOAD:0~`)
@@ -326,16 +369,18 @@ try {
       if (deleted.deleted !== true) throw new Error('daemon did not confirm probe deletion')
       result.cleanup.deleted = true
     } catch (error) {
-      result.cleanup = { deleted: false, agentId, error: String(error) }
+      result.cleanup = { ...result.cleanup, deleted: false, agentId, error: String(error) }
       result.success = false; process.exitCode = 1
     }
   }
   peer.close()
+  if (routeAdapter) await routeAdapter.close()
   result.finishedAt = new Date().toISOString()
   result.summaries = ['idle', 'redraw_20hz'].map((load) => {
-    const values = rows.filter((row) => row.load === load && row.phase === 'measured').map((row) => Number(row.elapsedMs)).sort((a,b) => a-b)
+    const values = rows.filter((row) => row.load === load && row.phase === 'measured' && row.success !== false).map((row) => Number(row.elapsedMs)).sort((a,b) => a-b)
     const at = (p: number) => values.length ? values[Math.ceil(values.length * p) - 1] : null
-    return { load, samples: values.length, p50Ms: at(.5), p95Ms: at(.95), p99Ms: at(.99), maxMs: values.at(-1) ?? null }
+    return { load, samples: values.length, failures: rows.filter((row) => row.load === load && row.phase === 'measured' && row.success === false).length,
+      p50Ms: at(.5), p95Ms: at(.95), p99Ms: at(.99), maxMs: values.at(-1) ?? null }
   })
   result.controlSummaries = ['machine'].map((route) => {
     const values = controls.filter((row) => row.route === route && row.phase === 'measured' && row.success === true).map((row) => Number(row.elapsedMs)).sort((a,b) => a-b)
@@ -345,7 +390,7 @@ try {
   })
   result.summariesByTerminalMode = [...new Set(rows.map((row) => `${row.load}/${row.modeBefore === row.modeAfter ? row.modeAfter : 'changed_during_sample'}`))].map((group) => {
     const [load, mode] = group.split('/')
-    const values = rows.filter((row) => row.phase === 'measured' && row.load === load
+    const values = rows.filter((row) => row.phase === 'measured' && row.success !== false && row.load === load
       && (row.modeBefore === row.modeAfter ? row.modeAfter : 'changed_during_sample') === mode)
       .map((row) => Number(row.elapsedMs)).sort((a,b) => a-b)
     const at = (p: number) => values.length ? values[Math.ceil(values.length * p) - 1] : null
@@ -357,3 +402,6 @@ try {
   console.log(JSON.stringify({ label: values.label, success: result.success, summaries: result.summaries, stagesMs: result.stagesMs,
     controlSummaries: result.controlSummaries, reattach: result.reattach, target: result.target, cleanup: result.cleanup, error: result.error }))
 }
+// werift can retain STUN retry timers after its peer has closed. All protocol
+// cleanup and synchronous artifact writing above finish before this process exits.
+if (routeAdapter) process.exit(process.exitCode ?? 0)

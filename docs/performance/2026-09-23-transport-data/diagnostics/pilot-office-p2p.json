@@ -1,0 +1,112 @@
+{
+  "schema": 4,
+  "success": false,
+  "startedAt": "2026-09-23T11:52:32.646Z",
+  "label": "office",
+  "sourceRevision": "pilot-uncommitted",
+  "boundary": "client binary input send to matching PTY probe response received; excludes UI rendering and OS keyboard input",
+  "client": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v22.23.1",
+    "transportImplementation": "isolated production RemoteRelayPool from source; loopback client and relay share one Node process",
+    "installedDaemonVersionNotOnMeasuredPath": "0.2.99"
+  },
+  "samplesPerWorkload": 5,
+  "warmupsPerWorkload": 10,
+  "controlSamples": 3,
+  "controlObservations": [],
+  "observations": [],
+  "stagesMs": {
+    "select": 1400.308958,
+    "readyForRequests": 1811.3761660000002,
+    "createTerminal": 588.7809579999998,
+    "attach": 834.0376249999999,
+    "startProbe": 594.1365419999997,
+    "waitForRequestedRoute": 35006.04875
+  },
+  "cleanup": {
+    "created": true,
+    "deleted": true
+  },
+  "linkModes": [
+    {
+      "atMs": 3568.340375,
+      "mode": "turn"
+    }
+  ],
+  "requestedRoute": "p2p",
+  "routeVerification": "nominated ICE pair, stream membership, and both binary wire directions for each echo",
+  "targetProtocolVersion": 3,
+  "target": "Darwin:x86_64",
+  "routeAtStart": {
+    "route": "turn",
+    "ready": true,
+    "migrating": false,
+    "pair": {
+      "local": {
+        "type": "host",
+        "protocol": "udp"
+      },
+      "remote": {
+        "type": "relay",
+        "protocol": "udp"
+      }
+    },
+    "sent": {
+      "p2p": 2,
+      "relay": 0
+    },
+    "received": {
+      "p2p": 20,
+      "relay": 0
+    }
+  },
+  "negotiation": "answer=yes ours=host/srflx/relay peer=host/srflx/relay ice=connected",
+  "turnHosts": [
+    "turn.cloudflare.com"
+  ],
+  "error": "Requested p2p unavailable; actual route turn",
+  "failureDiagnostics": {
+    "outputBytes": 2976,
+    "keyframes": 1,
+    "mode": "turn",
+    "inputSeq": 0
+  },
+  "finishedAt": "2026-09-23T11:53:12.250Z",
+  "summaries": [
+    {
+      "load": "idle",
+      "samples": 0,
+      "failures": 0,
+      "p50Ms": null,
+      "p95Ms": null,
+      "p99Ms": null,
+      "maxMs": null
+    },
+    {
+      "load": "redraw_20hz",
+      "samples": 0,
+      "failures": 0,
+      "p50Ms": null,
+      "p95Ms": null,
+      "p99Ms": null,
+      "maxMs": null
+    }
+  ],
+  "controlSummaries": [
+    {
+      "route": "machine",
+      "samples": 0,
+      "failures": 0,
+      "p50Ms": null,
+      "p95Ms": null,
+      "p99Ms": null,
+      "maxMs": null
+    }
+  ],
+  "summariesByTerminalMode": [],
+  "publicationRedactions": [
+    "failureDiagnostics.outputTail"
+  ]
+}
