@@ -14,6 +14,7 @@ import 'sections/tracking_section.dart';
 import 'sections/usage_section.dart';
 import 'settings_nav.dart';
 import 'settings_section.dart';
+import 'sections/notifications_section.dart';
 
 /// Opens Settings over the app.
 ///
@@ -188,6 +189,7 @@ class _SettingsBody extends StatelessWidget {
       SettingsSection.customize => throw StateError(
         'Customization opens over the workspace.',
       ),
+      SettingsSection.notifications => const NotificationsSection(),
       SettingsSection.devices => const DevicesSection(),
       SettingsSection.shortcuts => const ShortcutsSection(),
       SettingsSection.debug => const DebugSection(),

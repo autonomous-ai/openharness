@@ -67,6 +67,7 @@ import 'session_preview.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
 import '../orchestrator/orchestrator_controller.dart';
+import '../notify/alert_sounds.dart';
 
 enum AppStatus {
   bootstrapping,
@@ -424,6 +425,9 @@ class _AgentStop {
 
 class AppNotifier extends ChangeNotifier {
   final AuthSession session;
+  /// The noise this window makes when an agent finishes or gets stuck.
+  final AlertSounds alerts;
+
   AppConfig config;
   late ApiClient api;
 
@@ -1510,7 +1514,9 @@ class AppNotifier extends ChangeNotifier {
     ViewerServices? viewer,
     PaneLayoutStore? paneLayoutStore,
     this.turnActivityTimeout = const Duration(seconds: 12),
-  }) : _paneLayout = paneLayoutStore,
+    AlertSounds? alerts,
+  }) : alerts = alerts ?? AlertSounds(store: alertSoundStore),
+       _paneLayout = paneLayoutStore,
        // Remembers "a dial has been seen here" on the same terms the pane
        // layout is remembered: with a layout store there is a state file, and
        // without one (the tests) nothing is written anywhere.
@@ -7979,6 +7985,64 @@ class AppNotifier extends ChangeNotifier {
     });
   }
 
+  final _preparationOpens = <String, Future<bool>>{};
+  final _revealedPreparations = <String>{};
+
+  /// Reveal a prepared agent before its engine is ready, so login/trust stays
+  /// interactive. This only opens UI; task delivery belongs to the device.
+  Future<bool> revealPreparedAgent(
+    String machineId,
+    String agentId,
+    String operationId,
+  ) async {
+    final key = '$_authRevision/$machineId/$operationId';
+    if (_revealedPreparations.contains(key)) return true;
+    final agentKey = '$_authRevision/$machineId/$agentId';
+    final pending = _preparationOpens[agentKey];
+    if (pending != null) {
+      final opened = await pending;
+      if (opened) _revealedPreparations.add(key);
+      return opened;
+    }
+    final opening = _openPreparedAgent(machineId, agentId);
+    _preparationOpens[agentKey] = opening;
+    try {
+      final opened = await opening;
+      if (opened) _revealedPreparations.add(key);
+      return opened;
+    } finally {
+      _preparationOpens.remove(agentKey);
+    }
+  }
+
+  Future<bool> _openPreparedAgent(String machineId, String agentId) async {
+    final revision = _authRevision;
+    final machine = machineStates[machineId];
+    if (_disposed || machine == null || !await _awaitAgent(machine, agentId)) {
+      return false;
+    }
+    if (_disposed || revision != _authRevision || !identical(machineStates[machineId], machine)) {
+      return false;
+    }
+    await openAgentFromDial(machineId, agentId);
+    if (_disposed || revision != _authRevision || !identical(machineStates[machineId], machine) ||
+        !allPanes.any(
+          (p) => p.machineId == machineId && p.agentId == agentId,
+        )) {
+      return false;
+    }
+    // Reuse the generic package viewer path, including a late viewerUrl/error.
+    final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+    if (agent != null) {
+      _dismissedViewers.remove(_viewerKey(machineId, agentId));
+      _syncViewerPane(machine, agent);
+      activeSwarm.zoomedPaneId = null;
+      _persistLayout();
+      notifyListeners();
+    }
+    return true;
+  }
+
   /// Enable-time fallback: preserve the user's current choice and acknowledge it.
   /// Selection records focus before waiting for terminal attachment, so a later
   /// user click is never overwritten by completion of an asynchronous open.
@@ -8696,6 +8760,114 @@ class AppNotifier extends ChangeNotifier {
       panes.removeAt(at);
       panes.insert(want, pane);
     }
+  }
+
+  /// Move a pane to another tab, terminal and all.
+  ///
+  /// The tile is the SAME [TerminalPane] on the other side — never a fresh one
+  /// — which is what keeps the terminal attached: the session hangs off the
+  /// pane ([TerminalPane.session]), the cell is a `GlobalKey`, and
+  /// `TerminalPanel` is built to survive a change of tab without remounting.
+  /// Closing here and opening there would tear the session down and ask the
+  /// daemon to open it again, losing the viewport and the scrollback.
+  ///
+  /// Refuses rather than half-moves: an unknown pane or tab, the tab it is
+  /// already on, and a destination at [maxPanes] all leave everything as it
+  /// was, the last one with the same message [assignAgentToPane] gives.
+  ///
+  /// A destination already showing this agent takes the move as a plain close
+  /// here — one membership per tab, the rule [assignAgentToPane] keeps.
+  bool movePaneToSwarm(int paneId, String swarmId, {bool follow = true}) {
+    final source = activeSwarm;
+    final pane = source.panes.where((p) => p.id == paneId).firstOrNull;
+    final target = swarms.where((swarm) => swarm.id == swarmId).firstOrNull;
+    if (pane == null || target == null || target.id == source.id) return false;
+    final twin = pane.agentId == null
+        ? null
+        : target.panes
+              .where(
+                (p) =>
+                    p.machineId == pane.machineId && p.agentId == pane.agentId,
+              )
+              .firstOrNull;
+    if (twin == null && target.panes.length >= maxPanes) {
+      _lastError =
+          'That tab holds $maxPanes agents. Close one there to move this in.';
+      _lastErrorRetryable = false;
+      notifyListeners();
+      return false;
+    }
+    source.remove(pane);
+    // The tab left behind re-tiles. `Swarm.remove` keeps the shape by carrying
+    // the manual layout down a tile — right when a pane CLOSES, because the
+    // split was drawn around the tiles that remain. A tile that left for
+    // another tab is not that: what is left here is a different set, and
+    // holding the old proportions leaves it visibly lopsided. A layout chosen
+    // outright in the Layout palette still stands; only the dragged sizes go.
+    source.paneSizes.removeWhere(
+      (key, _) => key.startsWith('${source.panes.length}:'),
+    );
+    source.arranged = null;
+    source.arrangedKey = null;
+    // A harness's viewer lives beside its terminal, so it travels with it —
+    // the same rule `closePane` keeps when the terminal goes.
+    final viewers = <TerminalPane>[];
+    if (!pane.isWeb && pane.agentId != null) {
+      for (final viewer in source.panes.toList()) {
+        if (viewer.isWeb &&
+            viewer.machineId == pane.machineId &&
+            viewer.ownerAgentId == pane.agentId) {
+          source.remove(viewer);
+          viewers.add(viewer);
+        }
+      }
+    }
+    if (twin == null) {
+      final firstAgent = target.panes.every((pane) => pane.agentId == null);
+      target.panes.add(pane);
+      // A tab that had no harness in it takes this one's name, the way it
+      // would for a harness opened into it.
+      if (firstAgent && !target.nameIsCustom && pane.agentId != null) {
+        final agent = machineStates[pane.machineId]?.agents
+            .where((agent) => agent.id == pane.agentId)
+            .firstOrNull;
+        target.titleMachineId = pane.machineId;
+        target.titleAgentId = pane.agentId;
+        target.name = agent == null || agent.displayName == kUntitledPane
+            ? Swarm.defaultName
+            : agent.displayName;
+      }
+      for (final viewer in viewers) {
+        if (target.panes.length >= maxPanes) break;
+        target.panes.add(viewer);
+      }
+      // The destination reflows for a tile it has never held, exactly as it
+      // would for a new one: remembered shapes for the old count cannot decide
+      // where this lands.
+      target.presets.remove(target.panes.length);
+      target.paneSizes.removeWhere(
+        (key, _) => key.startsWith('${target.panes.length}:'),
+      );
+      target.arranged = null;
+      target.arrangedKey = null;
+      if (target.focusedPaneId != pane.id) {
+        target.previousPaneId = target.focusedPaneId;
+        target.focusedPaneId = pane.id;
+      }
+      if (target.zoomedPaneId != null) target.zoomedPaneId = pane.id;
+    }
+    _settlePins();
+    if (follow) {
+      _activeSwarmId = target.id;
+      railFocused = false;
+      _noteNavigation();
+      _paneFocusRequest++;
+    }
+    selectedMachineId = focusedPane?.machineId;
+    _persistLayout();
+    _announceAppFocus();
+    notifyListeners();
+    return true;
   }
 
   Future<void> closePane(int paneId, {bool persist = true}) async {
@@ -9728,6 +9900,33 @@ class AppNotifier extends ChangeNotifier {
           unawaited(_deskFetch());
         }
         break;
+      case 'device_prepare_open':
+        final operationId = payload['operationId'];
+        final prepareAgentId = payload['agentId'];
+        final prepareMachineId = payload['machineId'];
+        if (operationId is String &&
+            RegExp(r'^[a-f0-9]{64}$').hasMatch(operationId) &&
+            prepareAgentId is String &&
+            prepareAgentId.isNotEmpty &&
+            prepareMachineId == machineId) {
+          unawaited(() async {
+            try {
+              if (await revealPreparedAgent(
+                machineId,
+                prepareAgentId,
+                operationId,
+              )) {
+                await _pool?[machineId]?.sendTerminalFrame(
+                  'device_prepare_opened',
+                  {'operationId': operationId, 'agentId': prepareAgentId},
+                );
+              }
+            } catch (error) {
+              appLog.warn('device', 'Could not reveal prepared agent: $error');
+            }
+          }());
+        }
+        break;
       case 'dial_open':
         // A notification was tapped on the dial. Unlike `dial_focus` this asks for a tile of its own —
         // see openAgentFromDial for why a finished turn is not a replacement for what is on screen.
@@ -9875,10 +10074,14 @@ class AppNotifier extends ChangeNotifier {
             // original clock in that case: this is the same wait continuing,
             // and restarting it would make a long block look new.
             final known = machine.blockedAgents[agentId];
-            machine.blockedAgents[agentId] =
-                known != null && known.sameAs(asked)
+            final repeat = known != null && known.sameAs(asked);
+            machine.blockedAgents[agentId] = repeat
                 ? asked.withSince(known.since)
                 : asked;
+            // Only a NEW question earns a sound. The daemon re-announces every open one after a
+            // reconnect and when attaching to a turn that was already mid-dialog, and a window
+            // that beeped at those would sound an alarm every time the network hiccuped.
+            if (!repeat) alerts.play(AlertKind.needsYou);
           }
         }
         break;
@@ -9931,6 +10134,9 @@ class AppNotifier extends ChangeNotifier {
       case 'turn_ended':
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
+          // The work someone was waiting on is on screen. Played whether or not the pane is in
+          // front: the whole point is the agent that finished while you were looking elsewhere.
+          alerts.play(AlertKind.done);
           _cancelTurnActivity(machine.machine.machineId, agentId);
         } else {
           final sessionId = _eventSessionId(event, payload);

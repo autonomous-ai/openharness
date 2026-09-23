@@ -2,13 +2,30 @@
 // bookkeeping around two frames — `commander_question` and its close — which is
 // what decides whether a row can lie: a question that outlives its dialog, a
 // wait clock that resets itself, a stale close wiping a live question.
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/core/local_key_value_store.dart';
+import 'package:harness/notify/alert_sounds.dart';
 import 'package:harness/state/pending_question.dart';
+
+/// A key/value store that lives in memory. Tests must never touch the real one.
+class _Memory implements LocalKeyValueStore {
+  final values = <String, String?>{};
+
+  @override
+  Future<String?> read(String key) async => values[key];
+
+  @override
+  Future<void> write(String key, String value) async => values[key] = value;
+
+  @override
+  Future<void> delete(String key) async => values.remove(key);
+}
 
 const _machine = Machine(
   machineId: 'm1',
@@ -55,6 +72,9 @@ Map<String, dynamic> closed({
 };
 
 void main() {
+  // The alert group installs a mock method-call handler, which needs the binding up.
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('shaping', () {
     test('reads the prompt, its options and its answer key', () {
       final question = PendingQuestion.fromPayload(
@@ -178,6 +198,134 @@ void main() {
         'payload': <String, dynamic>{},
       });
       expect(n.questionFor('m1', 'a1'), isNull);
+    });
+  });
+
+  // ── the sound the window makes ────────────────────────────────────────────────────────────────
+  //
+  // Two moments are worth interrupting someone over: an agent finished, and an agent stopped to
+  // ask. Everything else in this file is about what the window DRAWS; this is about what it plays.
+
+  group('alert sounds', () {
+    late List<String> played;
+    const channel = MethodChannel('harness/swarm_tabs');
+
+    setUp(() {
+      played = [];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            if (call.method == 'playAlert') {
+              played.add((call.arguments as Map)['sound'] as String);
+            }
+            return null;
+          });
+    });
+
+    tearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+
+    /// A clock the test drives, so the rate limiter cannot be mistaken for the thing under test.
+    /// Feeding repeats "instantly" made the re-announcement test pass with the guard REMOVED —
+    /// the gap was swallowing them, not the guard.
+    late DateTime clock;
+
+    /// Never the default storage. `AlertSoundStore()` with no argument writes to the real
+    /// preferences file on this machine, and the "switch off" test below turned the feature off
+    /// for the developer running it — a test that silently changes the app you are building.
+    AlertSoundStore store({bool on = true}) {
+      final made = AlertSoundStore(storage: _Memory());
+      // Switched ON explicitly: silence is the default now, so a wiring test that forgot this
+      // would pass by making no sound for the wrong reason.
+      if (on) made.value = true;
+      return made;
+    }
+
+    AppNotifier wired() {
+      clock = DateTime(2026, 9, 23, 12);
+      final notifier = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        alerts: AlertSounds(
+          store: store(),
+          channel: channel,
+          now: () => clock,
+        ),
+      );
+      notifier.machines = [_machine];
+      notifier.machineStates['m1'] = MachineState(_machine);
+      return notifier;
+    }
+
+    test('an agent that stops to ask is heard', () async {
+      final app = wired();
+      addTearDown(app.dispose);
+      await app.handleMachineEventForTest('m1', asked());
+      await Future<void>.delayed(Duration.zero);
+      expect(played, [AlertKind.needsYou.sound]);
+    });
+
+    test('the daemon re-announcing the SAME question is not heard again', () async {
+      // Every reconnect re-sends every open question, and attaching to a turn that is already
+      // mid-dialog does too. A window that beeped at those would sound an alarm whenever the
+      // network hiccuped — for a question the person has been looking at for ten minutes.
+      final app = wired();
+      addTearDown(app.dispose);
+      await app.handleMachineEventForTest('m1', asked());
+      // Well past the rate limiter, so silence here is the guard's doing and nothing else.
+      clock = clock.add(const Duration(minutes: 5));
+      await app.handleMachineEventForTest('m1', asked());
+      clock = clock.add(const Duration(minutes: 5));
+      await app.handleMachineEventForTest('m1', asked());
+      await Future<void>.delayed(Duration.zero);
+      expect(played, [AlertKind.needsYou.sound]);
+    });
+
+    test('a DIFFERENT question from the same agent is heard', () async {
+      final app = wired();
+      addTearDown(app.dispose);
+      await app.handleMachineEventForTest('m1', asked(requestId: 'q_1'));
+      clock = clock.add(const Duration(minutes: 5));
+      await app.handleMachineEventForTest(
+        'm1',
+        asked(requestId: 'q_2', prompt: 'Overwrite the file?'),
+      );
+      await Future<void>.delayed(Duration.zero);
+      // Two questions, two answers owed, and far enough apart that the gap is not the reason.
+      expect(played, [AlertKind.needsYou.sound, AlertKind.needsYou.sound]);
+    });
+
+    test('a finished turn is heard, with its own sound', () async {
+      final app = wired();
+      addTearDown(app.dispose);
+      await app.handleMachineEventForTest('m1', {
+        'type': 'turn_ended',
+        'agentId': 'a1',
+        'payload': {'agentId': 'a1'},
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(played, [AlertKind.done.sound]);
+    });
+
+    test('nothing is heard while the switch is off', () async {
+      final off = store(on: false);
+      final app = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        alerts: AlertSounds(store: off, channel: channel),
+      );
+      addTearDown(app.dispose);
+      app.machines = [_machine];
+      app.machineStates['m1'] = MachineState(_machine);
+      await app.handleMachineEventForTest('m1', asked());
+      await app.handleMachineEventForTest('m1', {
+        'type': 'turn_ended',
+        'agentId': 'a1',
+        'payload': {'agentId': 'a1'},
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(played, isEmpty);
     });
   });
 }

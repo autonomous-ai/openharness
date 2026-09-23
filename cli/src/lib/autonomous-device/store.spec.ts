@@ -23,7 +23,7 @@ function fixture(installed = true) {
     create: vi.fn(async () => {
       agents.push({ agentId: 'agent1', machineId: 'mac', packageId: pkg.packageId, workspace: '/projects/airplane', engine: 'claude', state: 'idle', runtime: 'ready' })
       return { state: 'created' as const, agentId: 'agent1' }
-    }), agents: () => agents,
+    }), agents: () => agents, reveal: vi.fn(),
   }
   const store = new AutonomousDeviceStore(deps)
   const prepare = (key = 'airplane', extra: Record<string, unknown> = {}) => store.request('lamp', request('agent.prepare', {
@@ -37,6 +37,47 @@ function fixture(installed = true) {
   return { deps, pkg, agents, store, prepare, settled, id, directory }
 }
 describe('device Store durable preparation', () => {
+  it('reveals before readiness, retries delivery, and persists the UI ack across restart', async () => {
+    const f = fixture()
+    f.deps.create.mockImplementationOnce(async () => {
+      f.agents.push({ agentId: 'agent1', machineId: 'mac', packageId: f.pkg.packageId,
+        workspace: '/projects/airplane', engine: 'claude', state: 'active', runtime: 'starting' })
+      return { state: 'created', agentId: 'agent1' }
+    })
+    const id = f.id(await f.prepare())
+    await vi.waitFor(() => expect(f.deps.reveal).toHaveBeenCalledWith(id, 'agent1'))
+    expect(f.store.get('lamp', id)).toMatchObject({ state: 'running', taskDispatched: false })
+    f.store.acknowledgeReveal(id, 'wrong-agent')
+    f.deps.reveal.mockClear()
+    f.store.get('lamp', id)
+    expect(f.deps.reveal).toHaveBeenCalled()
+    f.store.acknowledgeReveal(id, 'agent1')
+    f.deps.reveal.mockClear()
+    await f.prepare()
+    expect(f.deps.reveal).not.toHaveBeenCalled()
+    const restarted = new AutonomousDeviceStore(f.deps)
+    restarted.get('lamp', id)
+    expect(f.deps.reveal).not.toHaveBeenCalled()
+    expect(f.deps.create).toHaveBeenCalledOnce()
+  })
+  it('redelivers an unacknowledged UI intent after restart without another device poll', async () => {
+    const f = fixture()
+    const id = f.id(await f.prepare())
+    await f.settled(id)
+    f.deps.reveal.mockClear()
+    vi.useFakeTimers()
+    const restarted = new AutonomousDeviceStore(f.deps)
+    try {
+      restarted.startUiDelivery()
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(f.deps.reveal).toHaveBeenCalledWith(id, 'agent1')
+      restarted.acknowledgeReveal(id, 'agent1')
+      f.deps.reveal.mockClear()
+      await vi.advanceTimersByTimeAsync(4000)
+      expect(f.deps.reveal).not.toHaveBeenCalled()
+      expect(f.deps.create).toHaveBeenCalledOnce()
+    } finally { restarted.stopUiDelivery(); vi.useRealTimers() }
+  })
   it('discovers metadata without claiming readiness or executing doctors/setup', async () => {
     const f = fixture(false)
     const result = await f.store.request('lamp', request('store.list', { query: 'blender' }))

@@ -13,7 +13,7 @@ import * as engineLaunch from '../engineLaunch.js'
 import { installDsh } from '../../dsh/install.js'
 import { installedDsh, invalidateInstalledDsh } from '../../dsh/installed.js'
 import { materializeWorkspace } from '../../dsh/materialize.js'
-import { createDeviceStore, deviceStorePackages } from './storeRuntime.js'
+import { createDeviceStore, deviceStorePackages, deviceStoreAgents } from './storeRuntime.js'
 import { DeviceStoreResultSchema } from './storeContract.js'
 import { HARNESS_MONOREPO } from '../../dsh/registry.js'
 
@@ -48,6 +48,18 @@ async function setup() {
   return { source, cwd, create, store, request }
 }
 describe('device Store production adapter with real local package scripts', () => {
+  it('accepts confirmed launch readiness before the first native conversation exists', () => {
+    const session = { agentId: 'fresh', sessionId: '', active: true, engine: 'claude', cwd: root,
+      dsh: null, launch: { state: 'ready' } } as RegisteredSession
+    state.agents = [session]
+    expect(deviceStoreAgents('mac')[0].runtime).toBe('ready')
+    session.launch = { state: 'starting' }
+    expect(deviceStoreAgents('mac')[0].runtime).toBe('starting')
+    session.launch = { state: 'failed', error: 'ENGINE_FAILED' }
+    expect(deviceStoreAgents('mac')[0].runtime).toBe('unavailable')
+    session.launch = undefined
+    expect(deviceStoreAgents('mac')[0].runtime).toBe('starting')
+  })
   it('uses actual installed inventory, doctor and materialization with safe creation arguments', async () => {
     const f = await setup()
     const reply = await f.store.request('lamp', f.request)

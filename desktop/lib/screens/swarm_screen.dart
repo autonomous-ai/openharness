@@ -39,6 +39,7 @@ import '../state/swarm.dart';
 import '../state/terminal_pane.dart';
 import '../widgets/transient_menus.dart';
 import '../widgets/layout_palette.dart';
+import '../widgets/move_pane_palette.dart';
 import '../widgets/engine_identity.dart';
 import '../store/store_mark.dart';
 import '../store/store_screen.dart';
@@ -1010,6 +1011,10 @@ class _SwarmScreenState extends State<SwarmScreen>
         unawaited(_splitAgent(PaneResizeAxis.x));
       case 'splitDown':
         unawaited(_splitAgent(PaneResizeAxis.y));
+      case 'movePaneToTab':
+        if (app.focusedPaneId != null) {
+          _dialog(() => showMovePanePalette(context, app));
+        }
       case 'zoomPane':
         app.toggleZoomPane();
       case 'pinPane':
@@ -2579,6 +2584,10 @@ class _SwarmScreenState extends State<SwarmScreen>
     ShortcutAction.reload: app.retryMachines,
     ShortcutAction.showLayout: () =>
         _dialog(() => showLayoutPalette(context, app)),
+    ShortcutAction.movePaneToTab: () {
+      if (app.focusedPaneId == null) return;
+      _dialog(() => showMovePanePalette(context, app));
+    },
     ShortcutAction.pinPane: () {
       if (app.focusedPaneId != null) {
         app.togglePinPane(app.focusedPaneId!);

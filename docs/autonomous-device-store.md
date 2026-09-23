@@ -89,7 +89,9 @@ Installation done elsewhere may only be reflected when its installed index chang
 `runtime` is `starting`, `ready`, or `unavailable`. `workspace` is a canonical absolute directory where
 available. `agents.list` also gains optional `packageId`, `workspace`, and `runtime` fields. An absent/
 null package identity is unknown, never inferred from recap. Runtime ready requires a live terminal,
-engine process and bound native conversation (plain terminal tiles are a special case). Authentication
+engine process confirmed by the existing launch watcher (`launch.state=ready`), or a bound native
+conversation for discovered agents. A native session ID is NOT required for a freshly launched agent:
+some engines create it only after the first task. Plain terminal tiles are a special case. Authentication
 is not independently verified. Caller decides whether a candidate belongs to the user's intended
 project; explicit use of that agent goes straight to existing `turn.send` without prepare.
 
@@ -162,7 +164,7 @@ Poll about every 2 seconds, back off on rate limiting. There is **no new progres
 |---|---|
 | `accepted` | Intent persisted; nothing should be inferred about install/create yet |
 | `running` | Work or engine startup in progress; keep polling the same operation |
-| `ready` | Package preparation completed and the returned agent's runtime/conversation is available; task has NOT been sent |
+| `ready` | Package preparation completed and the returned agent's terminal and engine launch are available; task has NOT been sent |
 | `failed` | Definite failure such as package not found; inspect error before a deliberate new attempt |
 | `needs_user_action` | Show `error.message` and `guidance`; may mean dependency/login/workspace repair or uncertain side effects; never blindly create again |
 
@@ -173,7 +175,7 @@ present before ready or alongside an action-needed error: open that agent, do no
 No task is dispatched in any state; `taskDispatched` is always false.
 
 Ready is a **preparation** result, not an airplane, tool output, login certification, or model success.
-`engineAuthentication:"unknown"` is explicit. If launch/binding is absent for ten minutes, polling
+`engineAuthentication:"unknown"` is explicit. If engine launch is absent for ten minutes, polling
 reports `ENGINE_ACTION_REQUIRED`; a known launch failure reports it sooner. Complete engine prompts
 in the returned agent and poll again: the same operation can become ready, without creating again.
 If an agent disappears/changes workspace, a previously ready operation can require action again.
@@ -274,3 +276,29 @@ npx tsx scripts/device-store-contract.ts
 npx tsx scripts/device-store-contract.ts --check
 npx vitest run src/lib/autonomous-device --maxWorkers=1
 ```
+
+## Desktop reveal after preparation (additive behavior)
+
+As soon as creation yields an `agentId`, before waiting for readiness, the CLI durably requests
+that one local Desktop reveal it. Desktop reuses the existing agent tab or opens one, then uses its
+normal package viewer synchronization (including a viewer URL/error arriving later). Engine login
+and trust prompts remain interactive in that terminal; opening UI neither answers them nor bypasses
+permissions. This is generic for all Store packages.
+
+The internal loopback event is `device_prepare_open` with
+`{operationId,machineId,agentId}`; Desktop acknowledges `device_prepare_opened` with
+`{operationId,agentId}` only after a terminal pane exists. These are NOT device operations or new
+LAN capabilities. The CLI retries every two seconds until acknowledgement, persists that acknowledgement
+in the preparation journal, and restores pending delivery after daemon restart. Concurrent opens are
+joined by machine/agent; repeated operation IDs do not open another tab or repeatedly steal focus.
+A lost acknowledgement may reveal an existing tab again after Desktop restart, but never creates a
+second terminal for that agent. Closing an acknowledged tab does not automatically reopen it.
+
+A compatible Desktop must be running and signed in; while absent, old, or reconnecting, UI delivery
+stays pending. This does not launch/install the Desktop application. Readiness and UI acknowledgement
+are independent: neither proves engine authentication or task success. OS must keep handling login/
+trust requirements honestly. Request/response JSON schemas and capability names are unchanged.
+
+**OS handoff update:** `ready` now accepts confirmed engine launch without waiting for a native
+session ID. Do not send a bootstrap prompt to obtain that ID. Continue sending the user's task only
+once via `turn.send`, with its separate task idempotency key. No UI event dispatches a task.
