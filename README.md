@@ -2,12 +2,12 @@
   <img src="desktop/assets/app_icon.png" width="88" alt="">
 </p>
 
-<h1 align="center">OpenHarness</h1>
+<h1 align="center">Harness like a boss.</h1>
 
 <p align="center">
-  <b>The harness for coding agents and beyond.</b><br>
-  All your agents. All your machines. One window.<br>
-  Start with code. Then take them beyond code: CAD, circuits, robots, games and music.
+  <b>The ultimate harness for coding agents and beyond.</b><br>
+  Claude Code at the office. Codex on the Mac mini at home. Hermes on your cloud server. One command center.<br>
+  Start with code. Then follow your curiosity and build across disciplines: CAD, circuits, robots, games and music.
 </p>
 
 <p align="center">
