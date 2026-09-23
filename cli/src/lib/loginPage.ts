@@ -1,5 +1,15 @@
-/** The page shown in the browser when `harness login`'s loopback SSO callback succeeds. */
-export function renderLoginSuccessHtml(): string {
+/**
+ * The page shown in the browser when `harness login`'s loopback SSO callback succeeds.
+ *
+ * [entryPoint] is who asked for the sign-in — `cli` for a person in a terminal, `desktop` for the app
+ * running the same command on their behalf. It decides ONE sentence: "return to the terminal" is a
+ * direction to a window that is not open when the app asked, and a person reading it looks for
+ * something that is not there (owner, 2026-09-23).
+ */
+export function renderLoginSuccessHtml(entryPoint = 'cli'): string {
+  const back = entryPoint === 'desktop'
+    ? 'You can close this window — Harness is signed in.'
+    : 'You can close this window and return to the terminal.'
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -54,7 +64,7 @@ export function renderLoginSuccessHtml(): string {
       </svg>
     </div>
     <h1>Harness login complete</h1>
-    <p>You can close this window and return to the terminal.</p>
+    <p>${back}</p>
   </div>
 </body>
 </html>`

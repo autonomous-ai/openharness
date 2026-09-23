@@ -67,8 +67,46 @@ class AlertSoundStore extends ValueNotifier<bool> {
   }
 }
 
-/// The one store the app reads, loaded at start-up beside the other preferences.
+/// Whether a banner appears in the window when an agent finishes or gets stuck.
+///
+/// OFF by default, like the sound. Both are interruptions, and an app that
+/// interrupts without being asked is a bad guest whichever sense it reaches
+/// for. One switch each in Settings ▸ Notifications.
+class ScreenAlertStore extends ValueNotifier<bool> {
+  ScreenAlertStore({LocalKeyValueStore? storage})
+    : _storage = storage ?? HarnessFileStore.shared,
+      super(false);
+
+  static const _key = 'app_screen_alerts';
+
+  final LocalKeyValueStore _storage;
+  Future<void>? _save;
+
+  /// Only the exact string `on` switches it on — a truncated or hand-edited
+  /// file lands on the default, so a damaged store cannot start interrupting
+  /// somebody who never asked. The same rule [AlertSoundStore] follows.
+  Future<void> load() async {
+    try {
+      value = (await _storage.read(_key)) == 'on';
+    } catch (_) {
+      value = false;
+    }
+  }
+
+  Future<void> set(bool on) {
+    if (value == on) return _save ?? Future.value();
+    value = on;
+    final pending = (_save ?? Future.value()).then(
+      (_) => _storage.write(_key, on ? 'on' : 'off'),
+    );
+    _save = pending;
+    return pending;
+  }
+}
+
+/// The stores the app reads, loaded at start-up beside the other preferences.
 final alertSoundStore = AlertSoundStore();
+final screenAlertStore = ScreenAlertStore();
 
 /// Plays the alerts.
 ///

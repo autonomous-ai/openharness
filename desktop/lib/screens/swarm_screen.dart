@@ -78,6 +78,7 @@ import '../widgets/workspace_quick_start.dart';
 import '../widgets/workspace_start_guide.dart';
 import '../widgets/workspace_welcome.dart';
 import '../shortcuts/keyboard_practice.dart';
+import '../widgets/agent_alert_banners.dart';
 
 class SwarmScreen extends StatefulWidget {
   const SwarmScreen({
@@ -226,6 +227,9 @@ class _SwarmScreenState extends State<SwarmScreen>
     _recordNavigation();
     app.addListener(_recordNavigation);
     app.addListener(_observeLearning);
+    // Its own notifier, so marking one agent does not rebuild the workspace —
+    // which means the badge has to ask for its own redraw.
+    app.agentUnread.addListener(_unreadChanged);
     unawaited(
       _learning.load().then((_) {
         if (mounted) _observeLearning();
@@ -294,6 +298,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     terminalFontStore.removeListener(_fontChanged);
     app.removeListener(_recordNavigation);
     app.removeListener(_observeLearning);
+    app.agentUnread.removeListener(_unreadChanged);
     if (widget.learning == null) _learning.dispose();
     FocusManager.instance.removeListener(_restoreEmptyFocus);
     FocusManager.instance.removeListener(_syncKeyContext);
@@ -499,6 +504,25 @@ class _SwarmScreenState extends State<SwarmScreen>
   int get _attention =>
       harnessSessions(app).where((row) => row.needsInput).length;
 
+  /// Agents carrying news nobody has looked at.
+  ///
+  /// This is what the icon's badge counts now, and it is a wider question than
+  /// [_attention]: a harness that FINISHED is also something to go and see, and
+  /// the badge that only counted blocked ones said nothing at all about the
+  /// work that was actually done while you were away. The panel behind the icon
+  /// still separates the two — its "Needs input" tab is exactly [_attention].
+  int get _unread => app.agentUnread.count;
+
+  void _unreadChanged() {
+    if (!mounted) return;
+    setState(() {});
+    // The native titlebar draws its own badge, and its state is pushed from
+    // `_syncNative` — which is subscribed to the APP, not to this notifier. A
+    // mark that only called setState redrew a tab strip the native window does
+    // not use, and the badge a person can actually see never moved.
+    if (_native) _syncNative();
+  }
+
   void _restoreEmptyFocus() {
     if (!mounted ||
         app.panes.isNotEmpty ||
@@ -565,11 +589,6 @@ class _SwarmScreenState extends State<SwarmScreen>
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
       'activeId': app.activeSwarmId,
       'palette': grid.AppTheme.palette.value.nativeColors,
-      // The tabs wear the terminal's face at the chrome size, not its size:
-      // ⌘+ and ⌘− zoom the terminal alone.
-      'fontFamily': grid.AppType.monoFamily,
-      'fontSize': grid.AppType.chromeSize,
-      'fontFallbacks': grid.AppType.monoFallback,
       'canReopen': app.canReopenLastClosed,
       'canFind': _canFindTerminal,
       'canClosePane': app.focusedPane != null,
@@ -593,6 +612,13 @@ class _SwarmScreenState extends State<SwarmScreen>
           },
       ],
       'attention': _attention,
+      // The badge the NATIVE titlebar draws. It is a wider question than
+      // `attention`, which counts only harnesses that are blocked: a harness
+      // that FINISHED is also something to go and see. Sent beside the old key
+      // rather than replacing it, because the native side still words its
+      // accessibility value from "needs input" and an older Runner ignores a
+      // key it does not know.
+      'unread': _unread,
       'sessionsOpen': _sessionsOverlay != null,
       'runningSessions': harnessSessions(app)
           .where((row) => row.running)
@@ -888,6 +914,7 @@ class _SwarmScreenState extends State<SwarmScreen>
       'newAgent' => 'agent.new',
       'newTerminal' => 'terminal.new',
       'cloneAgent' => 'agent.clone',
+      'restartAgent' => 'agent.restart',
       _ => null,
     };
     if (nativeCommand != null) {
@@ -992,6 +1019,8 @@ class _SwarmScreenState extends State<SwarmScreen>
         unawaited(_newTerminal());
       case 'cloneAgent':
         unawaited(_cloneAgent());
+      case 'restartAgent':
+        unawaited(_restartAgent());
       case 'runLocalModel':
         // Native commands arrive above the Actions subtree. Use the same
         // product entry directly; a dialog guard would block the dock.
@@ -1130,6 +1159,7 @@ class _SwarmScreenState extends State<SwarmScreen>
           'newAgent',
           'newTerminal',
           'cloneAgent',
+          'restartAgent',
           'runLocalModel',
           'manageMachines',
           'machineList',
@@ -1228,11 +1258,18 @@ class _SwarmScreenState extends State<SwarmScreen>
       keymap: _keymap,
     );
   });
+
+  /// ⌘⇧E — the focused pane's harness starts again where it is. Same routing
+  /// as [_cloneAgent]: gated everywhere but the native menu's fallback path,
+  /// which answers rather than doing nothing.
   Future<void> _restartAgent() => _dialog(() async {
     final pane = app.focusedPane;
-    if (pane == null ||
-        _focusedAgent == null ||
-        app.stateOf(pane.machineId)?.machine.isShared != false) {
+    if (pane == null || _focusedAgent == null) {
+      _showPaneActionHint('Focus a harness pane to restart it.');
+      return;
+    }
+    if (app.stateOf(pane.machineId)?.machine.isShared != false) {
+      _showPaneActionHint('Shared harnesses are view-only.');
       return;
     }
     await restartHarness(
@@ -1750,9 +1787,9 @@ class _SwarmScreenState extends State<SwarmScreen>
 
   /// ⌘⇧N — another agent of the focused pane's kind, fresh conversation.
   /// No dialog, like ⌘⇧T: the answer to every question a dialog would ask is
-  /// already on the source agent's frame (`AppNotifier.cloneAgent`). The
-  /// chord is gated by `_canExecuteCommand`; the File menu is not, so a click
-  /// with nothing to clone from says so instead of doing nothing.
+  /// already on the source agent's frame (`AppNotifier.cloneAgent`). Reached
+  /// with nothing focused only by the native menu's fallback path (no keymap
+  /// region owns the focus); `_runShortcut` gates every other route.
   Future<void> _cloneAgent() async {
     final pane = app.focusedPane;
     final agent = _focusedAgent;
@@ -1768,10 +1805,16 @@ class _SwarmScreenState extends State<SwarmScreen>
         swarmId: app.activeSwarmId,
       );
     }
-    if (error != null && mounted) {
-      ScaffoldMessenger.maybeOf(context)
-          ?.showSnackBar(SnackBar(content: Text(error)));
-    }
+    if (error != null) _showPaneActionHint(error);
+  }
+
+  /// Why a pane action did nothing, for the one route that is not gated by
+  /// `_canExecuteCommand`: a native menu item clicked while no keymap region
+  /// owns the focus reaches its handler directly.
+  void _showPaneActionHint(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// ⌘⇧T: a shell in a new tile, no dialog — the way a terminal app opens a
@@ -2577,6 +2620,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     ShortcutAction.newAgent: _newAgent,
     ShortcutAction.newTerminal: _newTerminal,
     ShortcutAction.cloneAgent: _cloneAgent,
+    ShortcutAction.restartAgent: _restartAgent,
     ShortcutAction.routeTask: () =>
         _dialog(() => showTaskPalette(context, app)),
     ShortcutAction.orchestrate: () =>
@@ -2621,7 +2665,8 @@ class _SwarmScreenState extends State<SwarmScreen>
     'agent.rename': () => _editAgent(),
     'agent.stop': () => _editAgent(stop: true),
     'agent.fork': _forkAgent,
-    'agent.restart': _restartAgent,
+    // `agent.restart` and `agent.clone` come from `_actionHandlers` above:
+    // both carry a ShortcutAction, so the loop already binds them.
     'machine.link': () =>
         _dialog(() => showSwarmLinkDialog(context, app, keymap: _keymap)),
     'machines.manage': _manageMachines,
@@ -3212,6 +3257,10 @@ class _SwarmScreenState extends State<SwarmScreen>
                             ),
                           if (_hasCommandBar && _commandBarOpen)
                             _commandPalette(),
+                          // Last in the stack, so a banner is never painted
+                          // under a pane, a tab or the palette. It takes
+                          // pointers only on the banners themselves.
+                          AgentAlertBanners(notifier: app),
                         ],
                       ),
                     ),
@@ -3420,15 +3469,16 @@ class _SwarmScreenState extends State<SwarmScreen>
               onPressed: _toggleSessions,
               isSelected: _sessionsOverlay != null,
               icon: Badge(
-                isLabelVisible: _attention > 0,
+                key: const ValueKey('swarm-unread-badge'),
+                isLabelVisible: _unread > 0,
                 backgroundColor: const Color(0xffcf4038),
                 textColor: Colors.white,
                 largeSize: 13,
                 alignment: Alignment.topRight,
                 label: Text(
-                  _attention > 99 ? '99+' : '$_attention',
+                  _unread > 99 ? '99+' : '$_unread',
                   semanticsLabel:
-                      '$_attention ${_attention == 1 ? 'harness needs' : 'harnesses need'} input',
+                      '$_unread ${_unread == 1 ? 'harness has' : 'harnesses have'} news you have not seen',
                   style: const TextStyle(
                     fontSize: 9,
                     fontWeight: FontWeight.w600,

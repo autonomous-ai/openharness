@@ -122,6 +122,84 @@ class PaneLayoutStore {
     }
   }
 
+  /// The id this computer's own machine was last served under, so a launch can
+  /// tell whether the saved tiles still name it.
+  ///
+  /// The desk is keyed by machine id, and this computer's changes with the
+  /// account (see [rekeyMachine]). A sign-in or sign-out inside the app re-keys
+  /// as it happens; one that happened while the app was CLOSED — `harness
+  /// logout` in a terminal, a session that expired overnight — cannot, so the
+  /// next launch compares what it remembers against what the daemon now serves
+  /// and re-keys then. Without this, every tile waits forever for a machine
+  /// that no longer exists under that name.
+  static const _localMachineKey = 'local_machine_id';
+
+  Future<String?> loadLocalMachineId() async {
+    try {
+      final raw = await _storage.read(_localMachineKey);
+      return raw == null || raw.isEmpty ? null : raw;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> saveLocalMachineId(String machineId) async {
+    try {
+      await _storage.write(_localMachineKey, machineId);
+    } catch (_) {
+      // Remembered for this run only; the next launch re-keys from the file.
+    }
+  }
+
+  /// Move every saved tile on machine [from] to machine [to] — and, with
+  /// [dropOthers], leave out every tile on any other machine.
+  ///
+  /// The one case this exists for: THIS computer changes id when the account
+  /// under it does. Signed out the daemon serves it under the computer id,
+  /// signed in under the account's machineId, and a sign-in or sign-out swaps
+  /// the two. The tiles are intent about this computer either way; the id is a
+  /// fact about the daemon. Rewriting the file and restoring from it is how the
+  /// desk follows without inventing a second, live way to re-key a tile.
+  ///
+  /// [dropOthers] is the sign-out: a guest has no machine to attach a remote
+  /// tile to, and a tile waiting forever reads as broken, not as signed out.
+  Future<void> rekeyMachine({
+    required String from,
+    required String to,
+    bool dropOthers = false,
+  }) async {
+    await flushSwarms();
+    final saved = await loadSwarms();
+    if (saved == null) return;
+    var changed = false;
+    final swarms = saved['swarms'];
+    if (swarms is! List) return;
+    for (final raw in swarms) {
+      if (raw is! Map || raw['panes'] is! List) continue;
+      final kept = <Object?>[];
+      for (final item in (raw['panes'] as List)) {
+        if (item is! Map) continue;
+        final machineId = item['machineId'];
+        if (machineId == from) {
+          kept.add({...item, 'machineId': to});
+          changed = changed || from != to;
+        } else if (!dropOthers || machineId == to) {
+          kept.add(item);
+        } else {
+          changed = true;
+        }
+      }
+      raw['panes'] = kept;
+    }
+    if (!changed) return;
+    try {
+      await _storage.write('swarm_layout_v1', jsonEncode(saved));
+    } catch (_) {
+      // The desk comes back under the old ids at the next launch, where the
+      // remembered id (above) gets another chance at it.
+    }
+  }
+
   Future<Map<String, dynamic>?> loadSwarms() async {
     try {
       final value = await _storage.read('swarm_layout_v1');
@@ -138,7 +216,49 @@ class PaneLayoutStore {
     }
   }
 
-  Future<void> saveSwarms(List<Swarm> swarms, String activeId) {
+  /// Migrate only explicit navigation history from earlier builds. Discovery
+  /// alone never earns a place in the monitor.
+  Future<List<(String, String)>> loadMonitorHarnesses(
+    Map<String, dynamic>? layout,
+  ) async {
+    final result = <(String, String)>[];
+    final known = layout?['monitorHarnesses'];
+    if (known is List) {
+      for (final entry in known.take(4096)) {
+        if (entry is List &&
+            entry.length == 2 &&
+            entry[0] is String &&
+            entry[1] is String &&
+            (entry[0] as String).length <= 256 &&
+            (entry[1] as String).length <= 256) {
+          result.add((entry[0] as String, entry[1] as String));
+        }
+      }
+    } else {
+      try {
+        final raw = await storage.read('swarm_recent_v1');
+        final recent = raw == null ? null : jsonDecode(raw);
+        if (recent is List) {
+          for (final id in recent.take(64)) {
+            if (id is! String || !id.startsWith('agent:') || id.length > 520) {
+              continue;
+            }
+            final parts = id.substring(6).split('\u0000');
+            if (parts.length == 2) result.add((parts[0], parts[1]));
+          }
+        }
+      } catch (_) {
+        /* A missing history is an empty history. */
+      }
+    }
+    return result;
+  }
+
+  Future<void> saveSwarms(
+    List<Swarm> swarms,
+    String activeId, {
+    Iterable<(String, String)> monitorHarnesses = const [],
+  }) {
     // Capture each request before yielding, but keep only the latest snapshot
     // while a write is pending. Holding a navigation key must not queue a full
     // state-file rewrite for every intermediate focus or tab selection.
@@ -147,6 +267,9 @@ class PaneLayoutStore {
         'version': 1,
         'activeId': activeId,
         'swarms': swarms.map((s) => s.toJson()).toList(),
+        'monitorHarnesses': [
+          for (final (machine, agent) in monitorHarnesses) [machine, agent],
+        ],
       });
     } catch (_) {
       return Future<void>.value();

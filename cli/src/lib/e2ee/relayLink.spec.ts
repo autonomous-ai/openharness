@@ -159,6 +159,19 @@ describe('remote-password link + relay session crypto (interop with the real E2e
       expect(resumeReply.payload).not.toHaveProperty('agent')
       expect(crypto.unwrapIncoming(resumeReply)?.payload).toEqual(resumed)
 
+      // Pause takes the same route, and is the half that was never covered: a relayed harness is
+      // paused by `agent_delete`, and the relay must see neither the agent id nor the reply's
+      // confirmation. Without this the whole Pause/Resume round trip over a remote machine had one
+      // end tested and the other assumed.
+      const stop = { requestId: 'stop-1', agentId: 'saved-work' }
+      const stopRequest = crypto.wrapOutgoing({ type: 'agent_delete', payload: stop })
+      expect(stopRequest.payload).not.toHaveProperty('agentId')
+      expect(manager.unwrapDown('session-conn', stopRequest)?.payload).toEqual(stop)
+      const stopped = { ...stop, deleted: true }
+      const stopReply = manager.wrapTarget('session-conn', 'agent_delete_result', stopped)!
+      expect(stopReply.payload).not.toHaveProperty('deleted')
+      expect(crypto.unwrapIncoming(stopReply)?.payload).toEqual(stopped)
+
       const lowerDown = crypto.wrapOutgoing({ type: 'terminal_resize', payload: { streamId: 's', cols: 80 } })
       const higherDown = crypto.wrapOutgoing({ type: 'terminal_resize', payload: { streamId: 's', cols: 120 } })
       expect((manager.unwrapDown('session-conn', higherDown)?.payload as Record<string, unknown>).cols).toBe(120)

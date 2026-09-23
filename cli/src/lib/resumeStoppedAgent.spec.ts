@@ -33,11 +33,24 @@ describe('Enter resumes stopped work', () => {
     expect(deps.launch).toHaveBeenCalledExactlyOnceWith(saved, 'original-conversation')
   })
 
-  it.each([{ ...saved, sessionId: '' }, { ...saved, engine: 'devin' as const }])('refuses unavailable resume without opening a fresh conversation', async entry => {
+  it.each([
+    // No id recorded to reopen, and an engine with no resume argv at all: both still come back —
+    // same pane, same folder — as a new conversation, launched without a resume id.
+    { ...saved, sessionId: '' },
+    { ...saved, engine: 'devin' as const },
+  ])('resumes without a conversation rather than refusing the harness', async entry => {
     const deps = fixture()
     deps.saved.mockReturnValue(entry)
-    await expect(resumeStoppedAgent(deps)).resolves.toMatchObject({ ok: false, error: 'RESUME_UNAVAILABLE' })
-    expect(deps.launch).not.toHaveBeenCalled()
+    await expect(resumeStoppedAgent(deps)).resolves.toMatchObject({ ok: true })
+    expect(deps.launch).toHaveBeenCalledExactlyOnceWith(entry, undefined)
+  })
+
+  it('reopens the conversation of an engine that keeps one, whatever its vendor', async () => {
+    const deps = fixture()
+    const entry = { ...saved, engine: 'opencode' as const }
+    deps.saved.mockReturnValue(entry)
+    await expect(resumeStoppedAgent(deps)).resolves.toMatchObject({ ok: true })
+    expect(deps.launch).toHaveBeenCalledExactlyOnceWith(entry, 'original-conversation')
   })
 
   it('does not launch while the old process is still alive or unverified', async () => {
@@ -129,9 +142,9 @@ describe('resume runtime verification', () => {
 
 describe('exact conversation readiness', () => {
   const process = { pid: 42, startMarker: 'new-process', executable: 'codex' }
-  function readiness() {
+  function readiness(engine: RegisteredSession['engine'] = saved.engine) {
     let now = 0
-    let row: RegisteredSession = { ...saved, processIdentity: process, lastHookAt: 0, launch: { state: 'starting' } }
+    let row: RegisteredSession = { ...saved, engine, processIdentity: process, lastHookAt: 0, launch: { state: 'starting' } }
     return {
       current: vi.fn(() => true),
       session: () => row,
@@ -154,6 +167,35 @@ describe('exact conversation readiness', () => {
     await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({ ok: true, session: { sessionId: saved.sessionId } })
     expect(deps.process).toHaveBeenCalledTimes(2)
   })
+  it('accepts a live process for an engine that has no startup hook to send', async () => {
+    // muse never hooks; copilot/pi/amp hook on the first turn. Waiting for one only converts a
+    // working resume into the whole budget of "Starting", then RESUME_UNCONFIRMED.
+    const deps = readiness('muse')
+    const hookless = { ...saved, engine: 'muse' as const }
+    await expect(waitForResumedAgent(hookless, deps)).resolves.toMatchObject({
+      ok: true,
+      resumed: true,
+      session: { sessionId: saved.sessionId },
+    })
+    expect(deps.sleep).not.toHaveBeenCalled()
+  })
+
+  it('still reports a hookless engine whose pane died', async () => {
+    const deps = readiness('muse')
+    deps.pane.mockResolvedValue({ dead: true })
+    await expect(waitForResumedAgent({ ...saved, engine: 'muse' as const }, deps))
+      .resolves.toMatchObject({ ok: false, error: 'RESUME_FAILED' })
+  })
+
+  it('says a resume with no conversation to reopen is a fresh one', async () => {
+    // devin hooks at launch like the rest, so it is confirmed the strict way — but it has no resume
+    // argv, so what came back is a new conversation and `resumed` says so rather than lying.
+    const deps = readiness('devin')
+    deps.set({ lastHookAt: 100, launch: { state: 'ready' } })
+    await expect(waitForResumedAgent({ ...saved, engine: 'devin' as const }, deps))
+      .resolves.toMatchObject({ ok: true, resumed: false })
+  })
+
   it.each([null, { dead: true }, { dead: false, engineExit: 1 }])('reports early exit without a fresh fallback: %s', async pane => {
     const deps = readiness()
     deps.pane.mockResolvedValue(pane)

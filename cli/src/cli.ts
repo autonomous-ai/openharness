@@ -216,6 +216,7 @@ import {
 import { probeGatewayRuntime } from './lib/gatewayRuntime.js'
 import { probeGridAssignment, sameGridAssignment } from './lib/gridAssignment.js'
 import { agentFrame, type AgentFrame } from './lib/agentFrame.js'
+import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { SessionInputController } from './lib/sessionInput.js'
 import { adaptSlashCommand } from './lib/goalCommand.js'
 import { RuntimeProfileManager, parseRuntimeProfile } from './lib/runtimeProfile.js'
@@ -531,7 +532,9 @@ async function resolveComputerMachine(signal?: AbortSignal): Promise<AuthSession
 async function authStatusCommand(json: boolean): Promise<void> {
   const session = readAuthSession()
   if (!session) {
-    if (json) console.log(JSON.stringify({ loggedIn: false }))
+    // The computer id travels even signed out: it is the id this computer's daemon serves itself
+    // under, and the app keys the local machine by it until a sign-in hands out a machineId.
+    if (json) console.log(JSON.stringify({ loggedIn: false, computerId: computerId() }))
     else console.log('\n  ✗ Not signed in. Run: harness login\n')
     return
   }
@@ -717,7 +720,11 @@ async function loginCommand(
   installing?.catch(() => { /* reported where it is awaited */ })
   try {
     return await withSpawnLock('login', async () => {
-      await stopDaemonProcess()
+      // ⚠️ A daemon running WITHOUT a session holds no account to switch away from, and stopping it
+      // here would take every local terminal on this computer down for as long as the person is in
+      // the browser. There is nothing to race either: the lock is held, and the identity swap happens
+      // afterwards, once there is an identity to swap to (`restartDaemonForIdentity`).
+      if (readAuthSession()) await stopDaemonProcess()
       return await browserSignIn(json, emit, () => succeed(false, installing), entryPoint)
     }, {
       onWaiting: (owner) => console.error(`  the daemon is ${describeSpawnLockOwner(owner)} — waiting for it to finish…`),
@@ -790,7 +797,7 @@ async function browserSignIn(
     const manual = !json && process.stdin.isTTY ? promptForCallbackUrl(redirectUri) : null
     let callbackResult: { code: string; state: string }
     try {
-      callbackResult = await awaitLoginCallback({ server: callback, redirectUri, manual: manual?.promise ?? null, timeoutMs: 5 * 60_000 })
+      callbackResult = await awaitLoginCallback({ server: callback, redirectUri, manual: manual?.promise ?? null, timeoutMs: 5 * 60_000, entryPoint })
     } catch (err) {
       const timedOut = (err as Error).message === LOGIN_TIMEOUT_MESSAGE
       if (json) { emit({ type: 'result', status: 'error', code: timedOut ? 'TIMEOUT' : 'CALLBACK_ERROR', message: (err as Error).message }); process.exitCode = 1; return { signedIn: false } }
@@ -986,13 +993,22 @@ function openInBrowser(url: string): void {
   } catch { /* ignore */ }
 }
 
-/** Start the adapter from a saved SSO session. Missing credentials never open a browser implicitly. */
+/**
+ * Start the adapter, with the saved SSO session when there is one. Missing credentials never open a
+ * browser implicitly — and are no longer a refusal.
+ *
+ * ⚠️ **A DAEMON RUNS WITHOUT AN ACCOUNT.** Everything on this computer — discovery, terminals, hooks,
+ * recaps, DSH, the cabled dial — is served by this process over the loopback and never touches the
+ * backend. What an account adds is the OTHER machines (the relay, the link ceremony), the shared desk,
+ * voice on the dial and the profile; those are bought at the moment they are reached for. Refusing to
+ * start without one put a browser sign-in in front of every local thing the product does on day one.
+ *
+ * Signed out, the identity is this computer's durable id (`computerId()`, minted before any account and
+ * the very value the backend binds a machine to at login) — so a later sign-in ADOPTS this machine
+ * rather than replacing it.
+ */
 async function startCommand(foreground: boolean, repair: boolean = false): Promise<void> {
   const session = readAuthSession()
-  if (!session) {
-    console.error('\n  ✗ Not signed in. Run: harness login\n')
-    process.exit(1)
-  }
   // The session file is the ONLY thing `start` needs. It used to pull the newest bundle and resolve
   // this computer's machine against the backend before launching — so a computer that could not reach
   // the backend could not start its daemon at all (a black-holed link hung here forever, and the
@@ -1012,7 +1028,9 @@ async function startCommand(foreground: boolean, repair: boolean = false): Promi
       // there, with `auth status` naming the new machine and the socket serving the old one. Asked
       // of the daemon itself; one that cannot answer (still booting, mid-update) is trusted as before.
       const serving = (await runningDaemonStatus())?.machineId
-      if (!serving || !session.machineId || serving === session.machineId) {
+      // Signed out, the daemon serves this computer under its own id and there is no account to be on
+      // the wrong one of — `wantedDaemonIdentity` is the same answer `restartDaemonForIdentity` uses.
+      if (!serving || serving === wantedDaemonIdentity()) {
         // `--repair` still does its provisioning here: it touches the managed runtimes, never the
         // bundle, and the live daemon picks a grid laid down now up on its next resolve (see
         // repairManagedRuntimes). Without this, a new pin could only be followed by a restart.
@@ -1025,7 +1043,7 @@ async function startCommand(foreground: boolean, repair: boolean = false): Promi
       await stopDaemonProcess()
     }
     await withSpawnLock('start', async () => {
-      await resolveMachineIfUnknown(session)
+      if (session) await resolveMachineIfUnknown(session)
       await launch(foreground, repair)
     }, {
       onWaiting: (owner) => console.log(`  the daemon is ${describeSpawnLockOwner(owner)} — waiting for it to finish…`),
@@ -1037,8 +1055,20 @@ async function startCommand(foreground: boolean, repair: boolean = false): Promi
     })
     return
   }
-  await resolveMachineIfUnknown(session)
+  if (session) await resolveMachineIfUnknown(session)
   await launch(foreground, repair)
+}
+
+/**
+ * The id a daemon started right now would serve under: the account's machine when this computer is
+ * signed in, its own durable computer id when it is not.
+ *
+ * One function because three callers must agree on it — `start` (is the running daemon the right one?),
+ * `restartDaemonForIdentity` (must it be swapped?) and the daemon itself (what does it boot as?). They
+ * disagreeing is how a window ends up asking a daemon for a machine it does not serve.
+ */
+function wantedDaemonIdentity(): string {
+  return readAuthSession()?.machineId || computerId()
 }
 
 /**
@@ -1116,7 +1146,6 @@ async function updateCommand(force: boolean): Promise<void> {
     const running = readPid()
     const wasRunning = !!(running && isAlive(running))
     const relaunch = async (): Promise<void> => {
-      if (!readAuthSession()) { console.log('  (not signed in — run `harness login`, then `harness start`.)'); process.exit(0) }
       await new Promise((r) => setTimeout(r, 1000)) // grace for the backend to release the one-machine claim
       await launch(false) // spawns a fresh daemon on the new bytes, prints status, and exits
     }
@@ -1163,7 +1192,7 @@ async function updateCommand(force: boolean): Promise<void> {
 async function logout(): Promise<void> {
   // Through the lock-taking stop, not an inline kill: a logout that lands mid-handoff would otherwise
   // SIGTERM the OLD daemon, leave the new one coming up, and then delete the session under it.
-  await stopDaemonProcess()
+  const { pid: stoppedPid } = await stopDaemonProcess()
   // Before clearAuthSession: see the note above on serve children. Its exit code is deliberately
   // dropped — this command cannot fail — and its own words have already reached the terminal.
   const gridOut = await passThroughToGridLogout([])
@@ -1172,11 +1201,47 @@ async function logout(): Promise<void> {
   // Same reason as the name above: the cached machine list describes the account that just left, and the
   // local `/api/machines` fallback would otherwise hand it to whoever signs in next on this computer.
   rmSync(machineListCachePath(), { force: true })
-  console.log('Signed out. Run `harness login`, then `harness start`, to reconnect this computer.')
   // Only when there was no `grid` to run at all. A child that ran has already said what it did, and
   // repeating "your grid sign-in is still here" after a successful sign-out would be false.
   if (!gridOut.ran) warnIfGridSignInRemains()
+  // A daemon that was up comes BACK, signed out. Signing out is leaving the account, not stopping the
+  // agents on this computer: the desktop window is still open on them, the dial is still plugged in,
+  // and tmux still holds every session. Leaving the daemon down took all of that off the screen for a
+  // change that concerns the other machines.
+  if (stoppedPid) {
+    console.log('Signed out. Restarting the daemon for this computer only…')
+    await launch(false)   // prints the guest status block and exits
+    return
+  }
+  console.log('Signed out. Run `harness start` to serve this computer; `harness login` to reach your other machines.')
   process.exit(0)
+}
+
+/**
+ * Swap a running daemon onto the identity the session file now names.
+ *
+ * A daemon takes its identity ONCE, at boot (`BackendSocket.machineId` is readonly, and the local
+ * websocket binds every client to it). A sign-in on a computer that was running signed out therefore
+ * leaves a daemon serving itself under the computer id while the session says machineId — and the app,
+ * having just been told the machineId, cannot select it. Restarting is the honest swap: every other
+ * route to the same end (a mutable id, a live re-bind) touches the socket, the E2EE identity and the
+ * local binding at once, and the daemon already survives a restart cleanly for every update.
+ *
+ * No-op when nothing is running (`harness start` boots on the new session by itself) or when the daemon
+ * already wears the right id (a `harness login` on a computer that was signed in all along).
+ */
+async function restartDaemonForIdentity(): Promise<void> {
+  // OUR daemon, by its pid file, before anything is asked over the port: the port is fixed and shared,
+  // and a login run against an isolated data dir (a test, a second HOME) must not reach across to a
+  // daemon that is not its own and restart it.
+  const pid = readPid()
+  if (!pid || !isAlive(pid)) return
+  const daemon = await runningDaemonStatus()
+  if (!daemon) return
+  if (daemon.machineId === wantedDaemonIdentity()) return
+  console.log('  restarting the daemon on this account…')
+  await stopDaemonProcess()
+  await launch(false)   // prints the status block and exits
 }
 
 /** The pane's session environment: the grid's or the profile's, with the DSH's layered on top. */
@@ -1193,6 +1258,7 @@ let dshFrameContextRef: ((s: RegisteredSession) => AgentDshContext | null) | nul
 
 function projectFrame(s: RegisteredSession, selectedModel: string | null): Promise<AgentFrame> {
   return agentFrame(s, {
+    tokenUsage: agentTokenUsage.get(s),
     selectedModel,
     terminalAvailable: registry.terminalAvailable(s.agentId),
     dsh: dshFrameContextRef?.(s) ?? null,
@@ -1213,7 +1279,7 @@ async function statBirthMs(path: string): Promise<number> {
 }
 
 /** The daemon body: hooks + watcher + process discovery + backend socket. */
-async function runForeground(session: AuthSession): Promise<void> {
+async function runForeground(session: AuthSession | null): Promise<void> {
   installTimestampedConsole() // daemon-only: every harness.log line gets a wall-clock timestamp
   const startedAt = Date.now()
   let discoveryReady = false
@@ -1573,6 +1639,19 @@ async function runForeground(session: AuthSession): Promise<void> {
     backendRef?.send({ type: 'agent_renamed', payload: { agentId: s.agentId, name, engine: s.engine } })
     if (opts.device !== false) backendRef?.sendCommander({ type: 'agent_renamed', payload: { agentId: s.agentId, name, engine: s.engine } })
   }
+  agentTokenUsage.onChanged = (target) => {
+    const current = registry.resolve(target.agentId)
+    if (current?.sessionId === target.sessionId && current.engine === target.engine) {
+      if (registry.terminalAvailable(current.agentId)) syncSession(current, { device: false })
+      return
+    }
+    try {
+      const saved = stoppedAgents.get(target.agentId)
+      if (saved?.sessionId === target.sessionId && saved.engine === target.engine) {
+        void backendRef?.publishStoppedAgent(saved).catch(() => {})
+      }
+    } catch { /* A concurrently removed archive has nothing to update. */ }
+  }
   // New process observations, session bindings, runtime-profile changes, reconnects and periodic
   // reconciliation refresh web and device from the same authoritative snapshot. Device agent_synced is
   // idempotent and can upsert a sessionless tile, so re-announcing at bind is both safe and necessary.
@@ -1711,7 +1790,11 @@ async function runForeground(session: AuthSession): Promise<void> {
   let onBackendConnected: () => void = () => {}
 
   const auth = new AuthSessionManager(backendHttpBase())
-  const backend = new BackendSocket(session.machineId ?? session.computerId, auth, (connected) => {
+  // The account's machine id when this computer is signed in; its own durable computer id when it is
+  // not. Both are just "the id this daemon serves under" to everything downstream — the local
+  // websocket binds clients to it, the app selects by it — and the backend binds a machine to the
+  // computer id at login, so a sign-in ADOPTS this machine rather than minting a second one.
+  const backend = new BackendSocket(session?.machineId ?? computerId(), auth, (connected) => {
     if (!connected) return
     const sessions = registry.advertised()
     console.log(`[cli] connected · ${sessions.length} agent(s) registered`)
@@ -2554,6 +2637,8 @@ async function runForeground(session: AuthSession): Promise<void> {
 
   emitSessionEvents = (sessionId: string, events: ReturnType<CursorNormalizer['ingest']>, opts?: { resumed?: boolean; replay?: boolean }): void => {
     if (!events.length || !registry.bySession(sessionId)?.active) return
+    const usageSession = registry.bySession(sessionId)
+    if (usageSession?.engine === 'opencode') agentTokenUsage.changed(usageSession)
     for (const event of events) {
       const agentId = agentIdFor(sessionId)
       const frame = correlateAgentEvent(event, sessionId, agentId)
@@ -3143,7 +3228,7 @@ async function runForeground(session: AuthSession): Promise<void> {
         method,
         headers: {
           authorization: `Bearer ${accessToken}`,
-          'x-autonomous-env': latest?.autonomousEnv ?? session.autonomousEnv,
+          'x-autonomous-env': latest?.autonomousEnv ?? env.AUTONOMOUS_ENV,
           ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -3186,6 +3271,33 @@ async function runForeground(session: AuthSession): Promise<void> {
     return ((result.body as { data?: { machines?: SharedMachineReference[] } }).data?.machines ?? [])
   })
 
+  /**
+   * The machine list a signed-out daemon answers with: this computer, alone.
+   *
+   * Null when there is a session — then the backend's own list is the answer, and this must not shadow
+   * it. `authMode: 'remote'` is what a computer-backed machine is once it has an account, said now so
+   * nothing downstream has to special-case a guest row.
+   */
+  function guestMachinesBody(): Record<string, unknown> | null {
+    if (readAuthSession()) return null
+    const id = computerId()
+    return {
+      success: true,
+      data: {
+        machines: [{
+          machineId: id,
+          computerId: id,
+          name: terminalHintMachineName(),
+          hostname: hostname(),
+          status: 'online',
+          authMode: 'remote',
+        }],
+        stale: false,
+        guest: true,
+      },
+    }
+  }
+
   const machineListCache = new MachineListCache(
     () => proxyBackend('GET', '/api/machines'),
     computerId,
@@ -3207,6 +3319,21 @@ async function runForeground(session: AuthSession): Promise<void> {
    * pane spinning. Stale rows are not wrong rows; the marker below says which they are.
    */
   async function machinesListWithFallback(): Promise<{ status: number; body: Record<string, unknown> }> {
+    // ⚠️ SIGNED OUT, THE LIST IS THIS COMPUTER — never the backend's 401.
+    //
+    // 401 is the one status the desktop app reads as "the session ended": it tears its connections
+    // down and puts a sign-in wall in front of agents that were running fine a moment ago. Nothing
+    // here needs the backend to say what this computer is. The row is the shape the backend would
+    // send, keyed by the durable computer id this daemon is already serving under, so the app
+    // classifies it exactly as it will after a sign-in — local by computerId — with no guest-only
+    // branch for anyone to forget.
+    const guest = guestMachinesBody()
+    if (guest) {
+      // Into the same cache the dial's wheel reads, so the two surfaces cannot disagree about a
+      // machine list one of them was handed directly.
+      machineListCache.adopt(guest)
+      return { status: 200, body: guest }
+    }
     const res = await proxyBackend('GET', '/api/machines')
     if (res.status === 200) {
       // Feed the cache the answer we already have rather than making it fetch the same thing again.
@@ -3540,7 +3667,11 @@ async function runForeground(session: AuthSession): Promise<void> {
     // deliberately does NOT expose chat/transcripts — those live in the cloud web (WEB_URL/commander).
     onStatus: () => ({
       machineId: backend.machineId,
-      computerId: session.computerId,
+      computerId: computerId(),
+      // Whether this daemon booted with an account. Read LIVE, not from the boot session: a login or
+      // logout restarts the daemon, and the window between the file changing and the restart landing
+      // is exactly when the app asks — the answer it needs is the file's.
+      signedIn: readAuthSession() !== null,
       version: VERSION,
       localWs: {
         path: LOCAL_WS_PATH,
@@ -3607,7 +3738,12 @@ async function runForeground(session: AuthSession): Promise<void> {
     onMachineRename: (machineId, name) => proxyBackend('PATCH', `/api/machines/${encodeURIComponent(machineId)}`, { name }),
     onMachineDelete: (machineId) => proxyBackend('DELETE', `/api/machines/${encodeURIComponent(machineId)}`),
     onAuthMe: () => proxyBackend('GET', '/api/auth/me'),
-    onSharedHarnesses: () => proxyBackend('GET', '/api/harness-shares'),
+    // Signed out there is nothing shared WITH this computer and nobody to ask: a share is made on the
+    // account. Answered as an empty list rather than proxied into the backend's 401, which is the one
+    // status the desktop app reads as "your session ended" — and a guest has no session to end.
+    onSharedHarnesses: () => readAuthSession()
+      ? proxyBackend('GET', '/api/harness-shares')
+      : Promise.resolve({ status: 200, body: { success: true, data: { machines: [] } } }),
     // The account's desk — see backend routes/desk.ts. The window edits its tabs through the ops
     // route and hears about everyone else's edits as `desk_changed` (backendSocket.ts).
     onDeskRead: () => proxyBackend('GET', '/api/desk'),
@@ -3851,7 +3987,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     machineId: backend.machineId,
     backend,
     relayPool,
-    autonomousEnv: readAuthSession()?.autonomousEnv ?? session.autonomousEnv,
+    autonomousEnv: readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV,
     // A window from before it introduced itself still gets named on the far side's "took control"
     // banner: the relay knows it is this machine's desktop. Same source as `describeClient` above.
     // Cut to the wire's limit here rather than let the far daemon drop the whole claim over a long name.
@@ -3892,6 +4028,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     if (!registry.has(evt.sessionId)) return null // scope to terminal-registered sessions
     const session = registry.bySession(evt.sessionId)
     if (!session || session.engine !== evt.engine) return null
+    agentTokenUsage.changed(session)
     runtimeProfiles.ingest(session, evt.text)
     let events
     if (session.engine === 'codex') {
@@ -5101,8 +5238,15 @@ async function runForeground(session: AuthSession): Promise<void> {
   }, LOG_CHECK_INTERVAL_MS)
   logTrimTimer.unref?.() // never hold the event loop open for log upkeep
 
-  backend.connect()
-  console.log(`[cli] dialing ${env.BACKEND_WS_URL}/api/adapter-ws · watching registered sessions for ${ENGINES.length} engines`)
+  // Signed out, the backend is not dialed at all. The socket would only meet a missing session and back
+  // off forever, one log line at a time; a sign-in RESTARTS this process with the session in hand
+  // (`restartDaemonForIdentity`), so nothing here has to watch for one arriving.
+  if (session) {
+    backend.connect()
+    console.log(`[cli] dialing ${env.BACKEND_WS_URL}/api/adapter-ws · watching registered sessions for ${ENGINES.length} engines`)
+  } else {
+    console.log(`[cli] not signed in — serving this computer only · watching registered sessions for ${ENGINES.length} engines`)
+  }
 
   // ── self-update: poll GCS for a newer bundle → verify+swap → restart IMMEDIATELY (supervised rollback) ──
   //
@@ -5349,8 +5493,15 @@ async function runForeground(session: AuthSession): Promise<void> {
   // The same cache the local `/api/machines` handler answers from (built up near `proxyBackend`), so the
   // dial's wheel and the desktop's list cannot disagree — and neither can go stale while the other is fresh.
   const machineList = machineListCache
-  void machineList.refresh()
-  const machineListTimer = setInterval(() => void machineList.refresh(), 60_000)
+  // Signed out there is nothing to fetch and a fetch would only earn a 401 that empties the wheel, so
+  // the one row this daemon can speak for is fed in directly — the same body the local handler answers.
+  const refreshMachineList = (): void => {
+    const guest = guestMachinesBody()
+    if (guest) { machineList.adopt(guest); return }
+    void machineList.refresh()
+  }
+  refreshMachineList()
+  const machineListTimer = setInterval(refreshMachineList, 60_000)
   machineListTimer.unref?.()
 
   const machinePeers = new MachinePeerStore()
@@ -5358,7 +5509,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     auth,
     backendWsBase: env.BACKEND_WS_URL,
     computerId: computerId(),
-    autonomousEnv: readAuthSession()?.autonomousEnv ?? session.autonomousEnv,
+    autonomousEnv: readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV,
     // The SAME identity `harness remote-password set` publishes and `harness link connect` proves
     // knowledge against, so one link ceremony covers the desktop app's relay and the dial's lane alike.
     identity: relayIdentityStore.getIdentity(),
@@ -5386,6 +5537,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     machineName: () => { try { return readFileSync(MACHINE_NAME_FILE, 'utf8').trim() || 'This machine' } catch { return 'This machine' } },
     machineId: () => backend.machineId,
     computerId: () => computerId(),
+    signedIn: () => readAuthSession() !== null,
     // The SAME handlers the backend socket drives, called directly rather than reimplemented: the
     // slash-command adaptation, the turn bookkeeping and the question plumbing all live in them.
     sendTurn: (agentId, text) => backend.onMessage?.(agentId, text),
@@ -5625,7 +5777,7 @@ function printInfoBlock(opts: {
   })()
   if (machineName) console.log(row('machine', machineName))
   console.log(row('version', `v${opts.version}`))
-  console.log(row('backend', env.BACKEND_WS_URL))
+  console.log(row('backend', readAuthSession() ? env.BACKEND_WS_URL : 'not signed in · harness login'))
   console.log(row('agents', `${opts.sessions} available`))
   console.log(row('pid', String(opts.pid)))
   console.log(row('logs', tildify(LOG_FILE)))
@@ -5660,10 +5812,9 @@ async function repairManagedRuntimes(foreground: boolean): Promise<string | null
   return repaired
 }
 
-/** Daemonize (or run inline) with the saved SSO session. */
+/** Daemonize (or run inline), with the saved SSO session when there is one — see startCommand. */
 async function launch(foreground: boolean, repair: boolean = false): Promise<void> {
   const session = readAuthSession()
-  if (!session) throw new Error('Not signed in. Run `harness login`.')
   // The installer already provisioned the managed Node runtime and pointed the launcher at it, so a
   // normal start just reads what's there (cheap: no network, no download). `--repair` re-runs that
   // provisioning explicitly, for the rare machine whose launcher predates the managed runtime.
@@ -5698,7 +5849,7 @@ async function launch(foreground: boolean, repair: boolean = false): Promise<voi
 }
 
 /** The part of `launch` that runs under the spawn lock: check, spawn, wait for bind, wait for connect. */
-async function spawnDaemon(session: AuthSession, runtimeNode: string | null): Promise<void> {
+async function spawnDaemon(session: AuthSession | null, runtimeNode: string | null): Promise<void> {
   const running = readPid()
   if (running && isAlive(running)) {
     console.log(`machine already running (pid ${running}) — it auto-reconnects.`)
@@ -5742,12 +5893,19 @@ async function spawnDaemon(session: AuthSession, runtimeNode: string | null): Pr
   // status` says whether the link is up; the desktop app reads the same fact off `/api/status`.
   const daemonStatus = await runningDaemonStatus()
   printInfoBlock({
-    status: '● started · connecting to the backend in the background',
+    // Signed out there is no backend leg to be connecting on, and saying there is would be a promise
+    // about a handshake that is never attempted. The daemon is up and serving this computer.
+    status: session
+      ? '● started · connecting to the backend in the background'
+      : '● started · this computer only (not signed in)',
     pid: child.pid ?? 0,
-    machineId: session.machineId,
+    machineId: session?.machineId,
     sessions: daemonStatus?.sessions ?? 0,
     version: daemonStatus?.version ?? VERSION,
   })
+  if (!session) {
+    console.log('  Agents, terminals and the cabled dial work here. `harness login` adds your other machines.')
+  }
   process.exit(0)
 }
 
@@ -6393,21 +6551,24 @@ async function status(): Promise<void> {
   const pid = readPid()
   const alive = pid != null && isAlive(pid)
   const session = readAuthSession()
-  if (!session) { console.log('machine: not signed in. Run: harness login'); process.exit(0) }
   const daemonStatus = alive ? await runningDaemonStatus() : null
   if (!alive) registry.load()
   printInfoBlock({
     // The backend link is the daemon's own business, so `status` is where it is read — `start` no
     // longer waits to see it, and a daemon with no backend is still serving every local agent.
+    // Signed out is a WAY OF RUNNING, not a reason to say nothing: the daemon serves this computer,
+    // and `machine: not signed in` in place of the whole block hid a running daemon and its agents.
     status: !alive
       ? '○ stopped'
-      : daemonStatus == null
-        ? '● running · not answering yet'
-        : daemonStatus.connected
-          ? '● running · backend connected'
-          : '● running · backend offline — retrying in the background',
+      : !session
+        ? '● running · this computer only (not signed in)'
+        : daemonStatus == null
+          ? '● running · not answering yet'
+          : daemonStatus.connected
+            ? '● running · backend connected'
+            : '● running · backend offline — retrying in the background',
     pid: pid ?? 0,
-    machineId: session.machineId,
+    machineId: session?.machineId,
     sessions: daemonStatus?.sessions ?? 0,
     // A stopped daemon answers nothing, so this falls back to the local build — which is what will run.
     version: daemonStatus?.version ?? VERSION,
@@ -6483,7 +6644,11 @@ switch (cmd) {
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login':
-    loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), { entryPoint: entryPointFlag() }).catch(onError)
+    // The result line goes out FIRST (loginCommand prints it), then the daemon is swapped onto the
+    // account: the desktop app reads that line and does not wait for a restart it observes anyway.
+    loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), { entryPoint: entryPointFlag() })
+      .then((outcome) => outcome.signedIn ? restartDaemonForIdentity() : undefined)
+      .catch(onError)
     break
   case 'auth':
     if (args[0] !== 'status') { console.error('Unknown command: auth ' + (args[0] ?? '')); usage(1) }
@@ -6498,12 +6663,9 @@ switch (cmd) {
   case 'join':
     console.error('`harness join` has been removed. Run `harness login`, then `harness start`.')
     process.exit(1)
-  case '__run': { // internal: detached daemon child reads the durable SSO session
-    const session = readAuthSession()
-    if (!session) onError(new Error('no SSO session for __run'))
-    else runForeground(session).catch(onError)
+  case '__run': // internal: the detached daemon child reads the durable SSO session — or runs without one
+    runForeground(readAuthSession()).catch(onError)
     break
-  }
   case 'autonomous-device':
     runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, env.PORT).then(code => { process.exitCode = code }).catch(onError)
     break

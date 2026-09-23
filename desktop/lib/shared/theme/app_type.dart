@@ -49,9 +49,6 @@ abstract final class AppType {
   static const double monoLabelSize = 12;
   static const double monoMetaSize = 11;
 
-  /// The size the native title bar's tabs are drawn at; see `SwarmTitlebar.swift`.
-  static const double chromeSize = monoLabelSize;
-
   /// The system UI face.
   ///
   /// `Ubuntu Sans` (25.04 and later) and `Ubuntu` lead on Linux because they

@@ -6,6 +6,7 @@ import 'package:harness/shared/theme/app_type.dart';
 
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_select_field.dart';
+import '../screens/login_screen.dart';
 import '../state/app_state.dart';
 import '../shortcuts/app_keymap.dart';
 import '../state/swarm_catalog.dart';
@@ -203,8 +204,24 @@ class _ProjectDialogState extends State<_ProjectDialog> {
 /// Link another machine. The dialog itself lives in
 /// `link_another_machine_dialog.dart`; this name is what every caller — the
 /// Machines menu, ⌘ commands, the machines manager — has always used.
+///
+/// The one thing on this desk that cannot work without an account: machines are
+/// listed, paired and relayed THROUGH it, so a guest is asked to sign in first —
+/// over the desk, and only here, where reaching for another machine is exactly
+/// what they just did. Declining leaves them where they were.
 Future<void> showSwarmLinkDialog(
   BuildContext context,
   AppNotifier notifier, {
   AppKeymap? keymap,
-}) => showLinkAnotherMachineDialog(context, notifier, keymap: keymap);
+}) async {
+  if (notifier.isGuest) {
+    final signedIn = await showSignInSheet(
+      context,
+      notifier,
+      reason: 'Your machines live on your account. Sign in to link another one '
+          'to this computer.',
+    );
+    if (!signedIn || !context.mounted) return;
+  }
+  return showLinkAnotherMachineDialog(context, notifier, keymap: keymap);
+}

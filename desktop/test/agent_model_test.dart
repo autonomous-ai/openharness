@@ -1,7 +1,110 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/state/app_state.dart';
 
 void main() {
+  test(
+    'cached output stats survive renames and participate in roster equality',
+    () {
+      final raw = <String, dynamic>{
+        'id': 'a',
+        'name': 'Work',
+        'outputStats': {
+          'linesAdded': 124,
+          'linesRemoved': 38,
+          'pullRequestsCreated': 2,
+          'updatedAt': '2026-09-23T00:00:00Z',
+        },
+      };
+      final agent = Agent.fromJson(raw);
+      expect(agent.outputStats?.linesAdded, 124);
+      expect(agent.copyWith(name: 'Renamed').outputStats, agent.outputStats);
+      expect(agent.hasMonitorStats, isTrue);
+      expect(AppNotifier.agentsEqual([agent], [Agent.fromJson(raw)]), isTrue);
+      expect(
+        AppNotifier.agentsEqual(
+          [agent],
+          [
+            Agent.fromJson({
+              ...raw,
+              'outputStats': {
+                'linesAdded': 125,
+                'linesRemoved': 38,
+                'pullRequestsCreated': 2,
+              },
+            }),
+          ],
+        ),
+        isFalse,
+      );
+      for (final invalid in [-1, 1.5, '12', 9007199254740992]) {
+        final parsed = Agent.fromJson({
+          'id': 'a',
+          'outputStats': {
+            'linesAdded': invalid,
+            'linesRemoved': 38,
+            'pullRequestsCreated': invalid,
+          },
+        });
+        expect(parsed.outputStats, isNull);
+        expect(parsed.hasMonitorStats, isFalse);
+      }
+    },
+  );
+  test('cached token usage survives rename/pause and participates in roster updates', () {
+    final agent = Agent.fromJson({
+      'id': 'remote-harness',
+      'tokenUsage': {
+        'totalTokens': 1234567,
+        'updatedAt': '2026-09-22T16:00:00Z',
+      },
+    });
+    expect(agent.tokensUsed, 1234567);
+    expect(agent.tokensUpdatedAt, DateTime.utc(2026, 9, 22, 16));
+    expect(
+      agent.copyWith(name: 'Renamed', status: 'stopped').tokensUsed,
+      1234567,
+    );
+    expect(
+      AppNotifier.agentsEqual(
+        [agent],
+        [
+          Agent.fromJson({
+            'id': agent.id,
+            'tokenUsage': {
+              'totalTokens': 2345678,
+              'updatedAt': '2026-09-22T16:00:00Z',
+            },
+          }),
+        ],
+      ),
+      isFalse,
+    );
+    for (final value in [
+      null,
+      -1,
+      1.5,
+      '12',
+      double.infinity,
+      9007199254740992,
+    ]) {
+      expect(
+        Agent.fromJson({
+          'id': 'legacy',
+          'tokenUsage': {'totalTokens': value},
+        }).tokensUsed,
+        isNull,
+      );
+    }
+    expect(Agent.fromJson({'id': 'legacy'}).tokensUsed, isNull);
+    expect(
+      Agent.fromJson({
+        'id': 'new',
+        'tokenUsage': {'totalTokens': 0},
+      }).tokensUsed,
+      0,
+    );
+  });
   _dshTests();
   _cloneTests();
   test('uses explicit terminal availability from a new CLI', () {
@@ -269,5 +372,53 @@ void _cloneTests() {
       isFalse,
     );
     expect(Agent.fromJson({'id': 'agent-1', 'name': 'a'}).canClone, isFalse);
+  });
+
+  group('what a pause can promise', () {
+    Agent parse(Map<String, dynamic> extra) => Agent.fromJson({
+      'id': 'a0',
+      'name': 'Row',
+      'engine': 'opencode',
+      ...extra,
+    });
+
+    test('reads the daemon\'s mode, and only a word it knows', () {
+      expect(parse({'resumeMode': 'conversation'}).resumeMode, 'conversation');
+      expect(parse({'resumeMode': 'fresh'}).resumeMode, 'fresh');
+      expect(parse({'resumeMode': 'shell'}).resumeMode, 'shell');
+      // A fourth word this build has no wording for, or an older daemon.
+      expect(parse({'resumeMode': 'someday'}).resumeMode, isNull);
+      expect(parse({}).resumeMode, isNull);
+    });
+
+    test('offers pause for any engine the daemon reports on', () {
+      expect(parse({'resumeMode': 'conversation'}).canPauseAndResume, isTrue);
+      expect(parse({'resumeMode': 'fresh'}).canPauseAndResume, isTrue);
+      // No word: the old rule, so an older CLI is never offered a pause it refuses.
+      expect(parse({}).canPauseAndResume, isFalse);
+      expect(parse({'engine': 'terminal'}).canPauseAndResume, isTrue);
+      expect(
+        parse({'engine': 'claude', 'sessionId': 'abc'}).canPauseAndResume,
+        isTrue,
+      );
+    });
+
+    test('says when coming back means a new conversation', () {
+      expect(
+        parse({'resumeMode': 'fresh', 'sessionId': 'abc'})
+            .resumesFreshConversation,
+        isTrue,
+      );
+      expect(
+        parse({'resumeMode': 'conversation'}).resumesFreshConversation,
+        isTrue,
+        reason: 'nothing recorded to reopen',
+      );
+      expect(
+        parse({'resumeMode': 'conversation', 'sessionId': 'abc'})
+            .resumesFreshConversation,
+        isFalse,
+      );
+    });
   });
 }

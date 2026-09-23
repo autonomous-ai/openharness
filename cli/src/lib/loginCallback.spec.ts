@@ -65,6 +65,31 @@ describe('awaitLoginCallback', () => {
     expect(server.listenerCount('request')).toBe(0)
   })
 
+  it('sends a person back to whichever surface asked for the sign-in', async () => {
+    // "return to the terminal" is a direction to a window the DESKTOP app never
+    // opened — a person reads it and goes looking for something that is not
+    // there (owner, 2026-09-23). The page is the last thing a sign-in says, and
+    // it is the only place the caller can be named.
+    const fromApp = await listening()
+    const appPending = awaitLoginCallback({
+      server: fromApp.server, redirectUri: fromApp.redirectUri,
+      manual: null, timeoutMs: 60_000, entryPoint: 'desktop',
+    })
+    const appPage = await (await fetch(`${fromApp.redirectUri}?code=c&state=s`)).text()
+    await appPending
+    expect(appPage).toContain('Harness is signed in')
+    expect(appPage).not.toContain('terminal')
+
+    const fromCli = await listening()
+    const cliPending = awaitLoginCallback({
+      server: fromCli.server, redirectUri: fromCli.redirectUri,
+      manual: null, timeoutMs: 60_000,
+    })
+    const cliPage = await (await fetch(`${fromCli.redirectUri}?code=c&state=s`)).text()
+    await cliPending
+    expect(cliPage).toContain('return to the terminal')
+  })
+
   it('rejects on an error redirect, with a 400 for the browser', async () => {
     const { server, redirectUri } = await listening()
     // The rejection lands before the browser's response is read, so the expectation is attached first.

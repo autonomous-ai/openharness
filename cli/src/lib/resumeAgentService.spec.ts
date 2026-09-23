@@ -17,7 +17,11 @@ import { installedDsh } from '../dsh/installed.js'
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn() }))
 vi.mock('./tmuxAgentDiscovery.js', () => ({ listTmuxPanes: vi.fn() }))
 vi.mock('./tmux.js', () => ({ checkSessionRuntime: vi.fn(), clearPaneRemainOnExit: vi.fn(), resolvePaneEngineProcess: vi.fn(), tmuxPaneState: vi.fn() }))
-vi.mock('./engineLaunch.js', () => ({ buildEngineLaunchArgv: vi.fn(() => ['fixture-engine']) }))
+// `resumeCapability` reads the real flag table through this module; only the argv builder is faked.
+vi.mock('./engineLaunch.js', async importOriginal => ({
+  ...(await importOriginal<typeof import('./engineLaunch.js')>()),
+  buildEngineLaunchArgv: vi.fn(() => ['fixture-engine']),
+}))
 vi.mock('./engineBin.js', () => ({ enginePathOverride: vi.fn(() => undefined) }))
 vi.mock('./engineInstall.js', () => ({ engineInstallRecipe: () => ({ command: 'fixture-install' }) }))
 vi.mock('../dsh/installed.js', () => ({ installedDsh: vi.fn() }))
@@ -90,6 +94,21 @@ describe('production resume handler', () => {
     expect(JSON.stringify(disk)).toContain(saved.sessionId)
     expect(JSON.stringify(disk)).toContain('resumeOnly')
   })
+  it('resumes a database-backed engine on its id alone, with no transcript to demand', async () => {
+    // opencode/kilo/hermes/devin keep the conversation in SQLite; requiring a transcript file here
+    // refused a resume that works, and refused it AFTER the harness had been paused.
+    rewrite({ engine: 'opencode', transcriptPath: '' })
+    expect(await start()).toMatchObject({ ok: true, resumed: true, session: { launch: { state: 'ready' } } })
+    expect(buildEngineLaunchArgv).toHaveBeenCalledWith('opencode', expect.objectContaining({ resumeSessionId: saved.sessionId }))
+  })
+
+  it('marks an engine with no startup hook ready off its own process', async () => {
+    // muse never hooks, so nothing else would ever leave this row `starting` — it would read as
+    // "Starting" for ever and keep discovery out of the pane.
+    rewrite({ engine: 'muse' })
+    expect(await start()).toMatchObject({ ok: true, session: { launch: { state: 'ready' } } })
+  })
+
   it('opens a retained terminal as a new shell without a vendor resume argument', async () => {
     rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' })
     expect(await start()).toMatchObject({ ok: true, resumed: true, session: { engine: 'terminal', launch: { state: 'ready' } } })

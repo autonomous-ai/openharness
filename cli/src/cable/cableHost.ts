@@ -37,6 +37,9 @@ export interface CableHostWiring {
   machineId: () => string
   /** A stable id for this computer, used to name the local row when there is no machineId yet. */
   computerId: () => string
+  /** Whether this computer holds an account. False → the dial serves THIS computer alone: the cloud
+   *  lane (the other machines, and voice) is what an account buys, and it is not dialled without one. */
+  signedIn?: () => boolean
   /** Deliver text into an agent. The SAME path the web and the WiFi device use — see cli.ts. */
   sendTurn: (agentId: string, text: string) => void
   stopTurn: (agentId: string) => void
@@ -209,6 +212,13 @@ export class DaemonCableHost implements CableHost {
   onDialAttached(): void {
     if (!this.fleet) return
     const fleet = this.fleet
+    // Signed out there is no lane to open: the socket is authenticated, so dialling it would fail once
+    // per plug-in and log a failure for something nobody asked for. The dial still works — it is on the
+    // cable, and everything it shows on this computer is served in-process.
+    if (this.wiring.signedIn?.() === false) {
+      this.wiring.log('cable: dial on the wire — this computer only (not signed in)')
+      return
+    }
     this.wiring.log('cable: dial on the wire — opening the cloud lane')
     void (async () => {
       // The socket first, and unconditionally: it is what makes the machine wheel's dots live, and it is
@@ -894,7 +904,9 @@ export class DaemonCableHost implements CableHost {
    */
   async transcribe(pcm: Buffer, sampleRate: number, lang: string): Promise<string> {
     const session = readAuthSession()
-    if (!session) throw new Error('Voice needs a signed-in harness — run `harness login`')
+    // The text reaches the dial's glass as a toast, so it is addressed to the person holding it, not to
+    // a terminal: signing in happens on the computer, and that is the one thing they need to know.
+    if (!session) throw new Error('Sign in on your computer to use voice')
 
     const auth = new AuthSessionManager(this.backendHttpBase())
     const url = `${this.backendHttpBase()}${env.CABLE_STT_PATH}?lang=${encodeURIComponent(lang)}`
