@@ -1080,7 +1080,7 @@ private final class SwarmHistoryIcons {
   /// lib/store/store_mark.dart). Any other path draws the engine's initial,
   /// which is how the store tab once read "S".
   static func opens(_ asset: String) -> Bool {
-    !asset.contains("..") && (asset == "assets/app_icon.png" || asset == "assets/harnesses.png" || asset == "assets/machines.svg" || asset == "assets/models.png" || asset == "assets/store/polymath.png"
+    !asset.contains("..") && (asset == "assets/app_icon.png" || asset == "assets/harnesses.png" || asset == "assets/machines.svg" || asset == "assets/models.svg" || asset == "assets/harnesses.svg" || asset == "assets/models.png" || asset == "assets/store/polymath.png"
       || asset.hasPrefix("assets/engine-icons/") && asset.hasSuffix(".png"))
   }
 
@@ -1105,10 +1105,11 @@ private final class SwarmHistoryIcons {
     if let image = cache.object(forKey: key) { return image }
     let size = NSSize(width: pointSize, height: pointSize)
     let image: NSImage
-    if asset == "assets/machines.svg", let url = assetURL("assets/machines.svg"),
+    if let asset, SwarmHistoryIcons.opens(asset), asset.hasSuffix(".svg"), let url = assetURL(asset),
        let vector = NSImage(contentsOf: url) {
       // Preserve the SVG representation so AppKit redraws sharply at any scale.
       vector.size = size
+      vector.isTemplate = true
       image = vector
     } else if let asset, SwarmHistoryIcons.opens(asset),
        let url = assetURL(asset),
@@ -1234,6 +1235,10 @@ private class SwarmIconButton: NSButton {
     return true
   }
   override func draw(_ dirtyRect: NSRect) {
+    if state == .on && isEnabled {
+      NSColor.white.withAlphaComponent(0.08).setFill()
+      NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 7, yRadius: 7).fill()
+    }
     if showsHoverFill && isEnabled && (hovered || hasKeyboardFocus || isHighlighted) {
       NSColor.white.withAlphaComponent(isHighlighted ? 0.10 : 0.05).setFill()
       NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 7, yRadius: 7).fill()
@@ -1276,10 +1281,14 @@ private final class SwarmStoreButton: SwarmIconButton {
   }
 }
 
-private final class SwarmSessionsButton: SwarmIconButton {
-  var running = 0 { didSet { needsDisplay = true } }
-  var attention = 0 { didSet { needsDisplay = true } }
-  var expanded = false { didSet { needsDisplay = true } }
+private class SwarmNoticeButton: SwarmIconButton {
+  var attention = 0 { didSet { contentTintColor = iconTint; needsDisplay = true } }
+  var expanded = false { didSet { contentTintColor = iconTint; needsDisplay = true } }
+
+  var iconTint: NSColor {
+    let bright = isEnabled && (expanded || state == .on || hovered || hasKeyboardFocus || isHighlighted)
+    return NSColor(white: attention > 0 ? 0.96 : bright ? 0.84 : 0.60, alpha: 1)
+  }
 
   var attentionLabel: String? {
     attention > 0 ? (attention > 99 ? "99+" : String(attention)) : nil
@@ -1292,6 +1301,7 @@ private final class SwarmSessionsButton: SwarmIconButton {
   }
 
   override func draw(_ dirtyRect: NSRect) {
+    if contentTintColor != iconTint { contentTintColor = iconTint }
     if expanded {
       NSColor.white.withAlphaComponent(0.08).setFill()
       NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 7, yRadius: 7).fill()
@@ -1311,6 +1321,11 @@ private final class SwarmSessionsButton: SwarmIconButton {
         withAttributes: attributes)
     }
   }
+
+}
+
+private final class SwarmSessionsButton: SwarmNoticeButton {
+  var running = 0 { didSet { needsDisplay = true } }
 
   func receiveSession() {
     guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
@@ -1355,9 +1370,9 @@ private final class SwarmTabStrip: NSView {
   private let scroll = SwarmStripScrollView()
   private let document = NSView()
   fileprivate let newButton = SwarmIconButton()
-  fileprivate let machinesButton = SwarmIconButton()
+  fileprivate let machinesButton = SwarmNoticeButton()
   fileprivate let storeButton = SwarmStoreButton(title: "Harness Store", target: nil, action: nil)
-  fileprivate let modelsButton = SwarmIconButton()
+  fileprivate let modelsButton = SwarmNoticeButton()
   fileprivate let sessionsButton = SwarmSessionsButton()
   private var tabs: [SwarmTabButton] = []
   private let icons = SwarmHistoryIcons()
@@ -1397,7 +1412,7 @@ private final class SwarmTabStrip: NSView {
       button.isBordered = false
       button.title = ""
       button.imagePosition = .imageOnly
-      button.contentTintColor = palette.accent
+      button.contentTintColor = (button as? SwarmNoticeButton)?.iconTint ?? palette.accent
       button.target = self
       button.action = action
       button.setAccessibilityLabel(label)
@@ -1407,15 +1422,15 @@ private final class SwarmTabStrip: NSView {
     newButton.setAccessibilityLabel("New Tab")
     newButton.isEnabled = false
     button(machinesButton, "desktopcomputer", "Machines", #selector(openMachines))
-    machinesButton.image = icons.image(engine: "machines", asset: "assets/machines.svg", pointSize: 24)
+    machinesButton.image = icons.image(engine: "machines", asset: "assets/machines.svg", pointSize: 22)
     machinesButton.symbolConfiguration = nil
     machinesButton.isEnabled = false
     machinesButton.toolTip = "Machines ⌘M"
-    button(sessionsButton, "terminal", "Harness Monitor", #selector(openSessions))
-    sessionsButton.image = icons.image(engine: "harnesses", asset: "assets/harnesses.png", pointSize: 24)
+    button(sessionsButton, "terminal", "Harnesses", #selector(openSessions))
+    sessionsButton.image = icons.image(engine: "harnesses", asset: "assets/harnesses.svg", pointSize: 22)
     sessionsButton.symbolConfiguration = nil
     sessionsButton.isEnabled = false
-    sessionsButton.toolTip = "Harness Monitor"
+    sessionsButton.toolTip = "Harnesses"
     newButton.toolTip = "New Tab ⌘T"
     storeButton.isBordered = false
     storeButton.palette = palette
@@ -1427,11 +1442,11 @@ private final class SwarmTabStrip: NSView {
     storeButton.toolTip = "Harness Store ⌘S"
     storeButton.setAccessibilityLabel("Harness Store")
     addSubview(storeButton)
-    button(modelsButton, "brain", "AI Models", #selector(openModels))
-    modelsButton.image = icons.image(engine: "models", asset: "assets/models.png", pointSize: 20)
+    button(modelsButton, "brain", "Models", #selector(openModels))
+    modelsButton.image = icons.image(engine: "models", asset: "assets/models.svg", pointSize: 22)
     modelsButton.symbolConfiguration = nil
     modelsButton.isEnabled = false
-    modelsButton.toolTip = "AI Models"
+    modelsButton.toolTip = "Models"
     setAccessibilityChildren([scroll, newButton, machinesButton, modelsButton, sessionsButton, storeButton])
     registerForDraggedTypes([swarmPasteboardType])
   }
@@ -1442,10 +1457,7 @@ private final class SwarmTabStrip: NSView {
     guard nextPalette != palette else { return }
     palette = nextPalette
     newButton.contentTintColor = palette.accent
-    sessionsButton.contentTintColor = palette.accent
-    machinesButton.contentTintColor = palette.accent
     storeButton.palette = palette
-    modelsButton.contentTintColor = palette.accent
     for tab in tabs { tab.palette = palette }
     needsDisplay = true
   }
@@ -1516,16 +1528,23 @@ private final class SwarmTabStrip: NSView {
     newButton.isEnabled = actionsEnabled
     machinesButton.isEnabled = actionsEnabled
     machinesButton.state = state["machinesOpen"] as? Bool == true ? .on : .off
+    machinesButton.attention = max(0, state["machineNotices"] as? Int ?? 0)
+    let machineExpanded = machinesButton.state == .on ? "Expanded" : "Collapsed"
+    machinesButton.setAccessibilityValue(machinesButton.attention > 0
+      ? "\(machineExpanded), \(machinesButton.attention) new \(machinesButton.attention == 1 ? "computer" : "computers") ready to connect" : machineExpanded)
     storeButton.isEnabled = actionsEnabled
     modelsButton.isEnabled = actionsEnabled
-    let modelReady = state["localModelReady"] as? Bool == true
-    modelsButton.toolTip = modelReady ? "AI Models · Your local model is running" : "AI Models"
-    modelsButton.setAccessibilityValue(state["modelsOpen"] as? Bool == true ? "Expanded" : "Collapsed")
+    modelsButton.state = state["modelsOpen"] as? Bool == true ? .on : .off
+    modelsButton.attention = max(0, state["modelNotices"] as? Int ?? 0)
+    modelsButton.toolTip = "Models"
+    let modelExpanded = modelsButton.state == .on ? "Expanded" : "Collapsed"
+    modelsButton.setAccessibilityValue(modelsButton.attention > 0
+      ? "\(modelExpanded), \(modelsButton.attention) \(modelsButton.attention == 1 ? "model" : "models") ready to use" : modelExpanded)
     sessionsButton.isEnabled = actionsEnabled
     sessionsButton.running = state["runningSessions"] as? Int ?? 0
     sessionsButton.expanded = state["sessionsOpen"] as? Bool == true
     let expandedState = sessionsButton.expanded ? "Expanded" : "Collapsed"
-    sessionsButton.toolTip = sessionsButton.running > 0 ? "Harness Monitor · \(sessionsButton.running) running" : "Harness Monitor"
+    sessionsButton.toolTip = sessionsButton.running > 0 ? "Harnesses · \(sessionsButton.running) running" : "Harnesses"
     let attention = state["attention"] as? Int ?? 0
     // What the badge COUNTS is `unread` — harnesses carrying news nobody has looked at, which
     // includes the ones that simply finished. `attention` is the narrower "blocked, waiting on a
@@ -1538,8 +1557,8 @@ private final class SwarmTabStrip: NSView {
     sessionsButton.setAccessibilityValue(unread > 0 ? "\(expandedState), \(unreadState)" : expandedState)
     if unread > 0 {
       sessionsButton.toolTip = attention > 0
-        ? "Harness Monitor · \(unreadState) · \(attentionState)"
-        : "Harness Monitor · \(unreadState)"
+        ? "Harnesses · \(unreadState) · \(attentionState)"
+        : "Harnesses · \(unreadState)"
     }
     needsLayout = true
     layoutSubtreeIfNeeded()
@@ -1572,7 +1591,7 @@ private final class SwarmTabStrip: NSView {
     // where a full strip can still be dragged and double-clicked to zoom
     // (owner, 2026-09-15); tabs shrink and then scroll instead of taking it.
     let grip: CGFloat = spacious ? 84 : 44
-    // Reserve three adjacent controls: Machines, AI Models, Harness Monitor.
+    // Reserve three adjacent controls: Machines, Models, Harnesses.
     let available = max(32, bounds.width - leading - trailing - (newButton.isHidden ? 0 : 36) - grip - storeWidth - modelsWidth - 88)
     // As in Chrome, tabs keep shrinking until they are only their mark, so thirty tabs still sit in
     // one strip with nothing hidden; only past that does the strip scroll (the wheel scrolls it).

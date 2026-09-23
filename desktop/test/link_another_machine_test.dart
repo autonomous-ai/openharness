@@ -308,8 +308,8 @@ void main() {
           expect(find.text('Machines'), findsOneWidget);
           await key(tester, LogicalKeyboardKey.f4);
           await tester.pumpAndSettle();
-          expect(find.text('Machines'), findsNothing);
-          expect(find.text('Machines Manager'), findsOneWidget);
+          expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
+          expect(find.text('Machines'), findsOneWidget);
           await tester.pumpWidget(const SizedBox());
           return;
         }

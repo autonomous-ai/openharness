@@ -470,7 +470,7 @@ void main() {
           expect(find.text('Qwen3.8-27B'), findsOneWidget);
           expect(find.text('gemma-4-12B'), findsNothing);
         }
-        await tester.tap(find.text('Model Manager'));
+        await tester.tap(find.text('Manage models'));
         expect(manages, 1);
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pump();
@@ -558,8 +558,8 @@ void main() {
     expect(panel.top, greaterThan(tester.getRect(button).bottom));
     expect(panel.width, 640);
     expect(
-      tester.getRect(find.byTooltip('Harness Monitor')).right,
-      lessThan(tester.getRect(button).left),
+      tester.getRect(button).right,
+      lessThan(tester.getRect(find.byTooltip('Harnesses')).left),
     );
     expect(find.byType(Dialog), findsNothing);
     expect(find.text('Run AI on this computer'), findsNothing);

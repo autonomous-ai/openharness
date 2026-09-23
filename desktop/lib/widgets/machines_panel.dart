@@ -42,7 +42,7 @@ Future<String?> showMachinesPanel(
 ).closed;
 
 /// An anchored toolbar surface, on the same overlay and with the same bounds
-/// as Harness Monitor. It never pushes a route or dims the workspace.
+/// as Harnesses. It never pushes a route or dims the workspace.
 MachinesPanelHandle openMachinesPanel(
   BuildContext context,
   AppNotifier notifier, {
@@ -69,6 +69,7 @@ MachinesPanelHandle openMachinesPanel(
           child: Stack(
             children: [
               Positioned.fill(
+                top: toolbarHeight,
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () => handle.close(),

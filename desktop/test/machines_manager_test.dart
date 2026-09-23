@@ -6,6 +6,7 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/models/models_panel.dart';
+import 'package:harness/models/local_model.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/new_harness.dart';
@@ -17,6 +18,7 @@ import 'keymap_runtime_test.dart' show native;
 import 'keymap_host_test.dart' show key;
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
+import 'support/model_manager.dart';
 
 class _MachineApi extends ApiClient {
   _MachineApi() : super(config: AppConfig.dev, session: AuthSession());
@@ -35,7 +37,149 @@ class _MachineApi extends ApiClient {
 }
 
 void main() {
-  testWidgets('native Machines, Models, and Harness Monitor share one panel', (
+  testWidgets('machine and model badges acknowledge independently', (
+    tester,
+  ) async {
+    final app = ModelManagerTestApp(ModelManagerConnection());
+    app.stateOf('m')!.nodeOnline = true;
+    app.stateOf('other')!
+      ..nodeOnline = true
+      ..needsLink = true;
+    app.machineStates['offline'] =
+        MachineState(
+            const Machine(
+              machineId: 'offline',
+              name: 'Offline',
+              authMode: MachineAuthMode.remote,
+            ),
+          )
+          ..nodeOnline = false
+          ..needsLink = true;
+    app.machineStates['shared'] =
+        MachineState(
+            const Machine(
+              machineId: 'shared',
+              name: 'Shared',
+              authMode: MachineAuthMode.remote,
+              isShared: true,
+            ),
+          )
+          ..nodeOnline = true
+          ..needsLink = true;
+    final ready = <String, dynamic>{
+      'id': 'ready',
+      'name': 'Ready model',
+      'state': 'running',
+      'operation': <String, dynamic>{
+        'id': 'download-1',
+        'modelId': 'ready',
+        'action': 'start',
+        'stage': 'verifying',
+        'phase': 'done',
+      },
+    };
+    app.localInventory = {
+      'models': [ready],
+    };
+    app.modelManager
+      ..localModels = [LocalModel.fromJson(ready)]
+      ..loaded = true;
+    await mount(tester, app);
+    await tester.pumpAndSettle();
+    Badge badge(String name) =>
+        tester.widget<Badge>(find.byKey(ValueKey('swarm-$name-badge')));
+    expect(badge('machines').isLabelVisible, isTrue);
+    expect((badge('machines').label as Text).data, '1');
+    expect(badge('models').isLabelVisible, isTrue);
+    await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
+    await tester.pumpAndSettle();
+    expect(badge('machines').isLabelVisible, isFalse);
+    expect(badge('models').isLabelVisible, isTrue);
+    await tester.tap(find.byKey(const ValueKey('swarm-models-button')));
+    await tester.pumpAndSettle();
+    expect(badge('models').isLabelVisible, isFalse);
+    expect(find.text('Models'), findsOneWidget);
+    await key(tester, LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    app.localInventory = {
+      'models': [
+        ready,
+        {'id': 'release', 'name': 'New release'},
+      ],
+    };
+    await app.modelManager.refresh();
+    await tester.pumpAndSettle();
+    expect(badge('models').isLabelVisible, isFalse);
+    await tester.tap(find.byKey(const ValueKey('swarm-models-button')));
+    await tester.pumpAndSettle();
+    expect(find.text('New'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
+
+  for (final nativeTabs in [false, true]) {
+    testWidgets(
+      'toolbar panels switch in one click without stacking (native=$nativeTabs)',
+      (tester) async {
+        final app = createApp();
+        app.stateOf('m')!.nodeOnline = true;
+        final input = <TerminalBinaryFrame>[];
+        app.adoptSessionForTest(terminal('a0', input));
+        await mount(tester, app, nativeTabs: nativeTabs);
+        final buttons = {
+          'machineList': find.byKey(const ValueKey('swarm-machines-button')),
+          'models': find.byKey(const ValueKey('swarm-models-button')),
+          'sessions': find.byTooltip('Harnesses'),
+        };
+        final panels = {
+          'machineList': find.byKey(const ValueKey('machines-panel')),
+          'models': find.byType(ModelsPanel),
+          'sessions': find.byKey(const ValueKey('session-manager')),
+        };
+        Future<void> open(String command) async {
+          if (nativeTabs) {
+            final action = native(tester, command);
+            await tester.pumpAndSettle();
+            await action;
+          } else {
+            await tester.tap(buttons[command]!);
+            await tester.pumpAndSettle();
+          }
+        }
+
+        for (final from in panels.keys) {
+          for (final to in panels.keys) {
+            await open(from);
+            await open(to);
+            for (final entry in panels.entries) {
+              expect(
+                entry.value,
+                from != to && entry.key == to ? findsOneWidget : findsNothing,
+                reason: '$from → $to should leave only the chosen panel open',
+              );
+            }
+            if (from != to) {
+              await key(tester, LogicalKeyboardKey.escape);
+              await tester.pumpAndSettle();
+            }
+            expect(tester.takeException(), isNull);
+            expect(
+              input.map((frame) => frame.bytes.toList()).toList(),
+              isEmpty,
+              reason: '$from → $to must not send panel keys to the terminal',
+            );
+          }
+        }
+        tester.testTextInput.enterText('x');
+        await tester.idle();
+        expect(String.fromCharCodes(input.single.bytes), 'x');
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      },
+    );
+  }
+
+  testWidgets('native Machines, Models, and Harnesses share one panel', (
     tester,
   ) async {
     const channel = MethodChannel('harness/swarm_tabs');
@@ -112,7 +256,7 @@ void main() {
       );
       expect(
         tester.getCenter(models).dx,
-        lessThan(tester.getCenter(find.byTooltip('Harness Monitor')).dx),
+        lessThan(tester.getCenter(find.byTooltip('Harnesses')).dx),
       );
       await tester.tap(machines);
       await tester.pumpAndSettle();

@@ -109,6 +109,8 @@ flutter:
   uses-material-design: true
   assets:
     - assets/machines.svg
+    - assets/models.svg
+    - assets/harnesses.svg
     - assets/engine-icons/
     - assets/store/
     - assets/store/projects/

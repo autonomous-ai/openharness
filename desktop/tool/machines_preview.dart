@@ -16,6 +16,7 @@ import 'package:harness/core/desktop_window.dart';
 import 'package:harness/core/machine_resources.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/test_run.dart';
+import 'package:harness/models/local_model.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
@@ -70,6 +71,80 @@ class _App extends AppNotifier {
     }
     signedIn = Platform.environment['MACHINES_PREVIEW_GUEST'] != '1';
     machines = machineStates.values.map((m) => m.machine).toList();
+    _publishModels();
+  }
+
+  final _models = <Map<String, dynamic>>[
+    {
+      'id': 'qwen3.5',
+      'name': 'Qwen 3.5',
+      'state': 'available',
+      'canStart': true,
+      'sizeBytes': 5000000000,
+    },
+  ];
+  int _modelJob = 0;
+
+  void _publishModels() {
+    modelManager
+      ..localModels = _models.map(LocalModel.fromJson).toList()
+      ..loaded = true
+      ..inventoryAvailable = true;
+    notifyListeners();
+  }
+
+  void finishModelDownload() {
+    unawaited(controlLocalModel('m', 'qwen3.5', start: true));
+  }
+
+  void discoverModel() {
+    if (_models.any((m) => m['id'] == 'gemma')) return;
+    _models.add({
+      'id': 'gemma',
+      'name': 'Gemma',
+      'state': 'available',
+      'canStart': true,
+    });
+    _publishModels();
+  }
+
+  @override
+  Future<GridModels> gridModels(String machineId) async =>
+      const GridModels(gridName: 'Review', models: []);
+
+  @override
+  Future<Map<String, dynamic>> localModels(
+    String machineId, {
+    bool refresh = false,
+  }) async => {
+    'models': _models,
+    'memoryBytes': 32 * 1024 * 1024 * 1024,
+    'hardware': 'Apple M2',
+    'busy': false,
+  };
+
+  @override
+  Future<Map<String, dynamic>> controlLocalModel(
+    String machineId,
+    String modelId, {
+    required bool start,
+  }) async {
+    final model = _models.firstWhere((m) => m['id'] == modelId);
+    final operation = <String, dynamic>{
+      'id': 'review-${++_modelJob}',
+      'modelId': modelId,
+      'action': start ? 'start' : 'stop',
+      'stage': start ? 'verifying' : 'stopping',
+      'phase': 'done',
+    };
+    model.addAll({
+      'state': start ? 'running' : 'downloaded',
+      'canStart': !start,
+      'canStop': start,
+      'operation': operation,
+    });
+    _publishModels();
+    return {'operation': operation};
   }
 
   void discover() {
@@ -141,7 +216,11 @@ Future<void> main() async {
       debugShowCheckedModeBanner: false,
       theme: grid.buildAppTheme(brightness: Brightness.dark),
       home: CallbackShortcuts(
-        bindings: {const SingleActivator(LogicalKeyboardKey.f6): app.discover},
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.f6): app.discover,
+          const SingleActivator(LogicalKeyboardKey.f7): app.finishModelDownload,
+          const SingleActivator(LogicalKeyboardKey.f8): app.discoverModel,
+        },
         child: SwarmScreen(notifier: app, nativeTabs: true),
       ),
     ),

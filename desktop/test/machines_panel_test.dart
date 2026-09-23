@@ -18,7 +18,7 @@ import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/shortcuts/keymap_host.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/machines_panel.dart';
-import 'package:harness/widgets/machines_icon.dart';
+import 'package:harness/widgets/toolbar_icon.dart';
 import 'package:harness/widgets/workspace_welcome.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
@@ -215,7 +215,7 @@ void main() {
         Platform.environment['HARNESS_MACHINES_CAPTURE_DIR'] != null) {
       await tester.runAsync(
         () => precacheImage(
-          const AssetImage('assets/harnesses.png'),
+          const AssetImage('assets/store/polymath.png'),
           tester.element(find.byType(SwarmScreen)),
         ),
       );
@@ -369,7 +369,7 @@ void main() {
       expect(panel, findsNothing);
       expect(tester.widget<IconButton>(icon).isSelected, isFalse);
       await mount(tester, workspace: true, brightness: Brightness.light);
-      expect(find.byType(MachinesIcon), findsOneWidget);
+      expect(find.byType(ToolbarIcon), findsNWidgets(3));
       expect(panel, findsOneWidget);
       await tap(tester, find.byTooltip('Close Machines'));
       expect(icon.hitTestable(), findsOneWidget);
