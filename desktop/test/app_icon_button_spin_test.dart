@@ -22,9 +22,15 @@ void main() {
     WidgetTester tester, {
     required bool spinning,
     required VoidCallback onPressed,
+    bool reduceMotion = false,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(disableAnimations: reduceMotion),
+          child: child!,
+        ),
         home: Scaffold(
           body: Center(
             child: AppIconButton(
@@ -70,6 +76,7 @@ void main() {
   testWidgets('the same button takes the press once it stops', (tester) async {
     var presses = 0;
     await pumpButton(tester, spinning: false, onPressed: () => presses++);
+    expect(tester.binding.transientCallbackCount, 0);
 
     await tester.tap(find.byType(AppIconButton));
     await tester.pump();
@@ -100,12 +107,14 @@ void main() {
     expect(tester.widget<Icon>(find.byType(Icon)).color, AppPalette.textFaint);
   });
 
-  testWidgets('the glyph comes to rest upright, not mid-turn', (tester) async {
+  testWidgets('the glyph stops upright immediately when the work finishes', (
+    tester,
+  ) async {
     await pumpButton(tester, spinning: true, onPressed: () {});
     await tester.pump(const Duration(milliseconds: 300));
 
     await pumpButton(tester, spinning: false, onPressed: () {});
-    await tester.pumpAndSettle();
+    expect(tester.binding.transientCallbackCount, 0);
 
     // Not 0.4 or wherever the reply landed: a mark frozen at an angle reads as
     // a failure state.
@@ -113,5 +122,20 @@ void main() {
       tester.widget<RotationTransition>(rotation).turns.value % 1,
       moreOrLessEquals(0, epsilon: 0.001),
     );
+  });
+
+  testWidgets('Reduce Motion keeps busy feedback without a ticker', (
+    tester,
+  ) async {
+    var presses = 0;
+    await pumpButton(
+      tester,
+      spinning: true,
+      reduceMotion: true,
+      onPressed: () => presses++,
+    );
+    expect(tester.binding.transientCallbackCount, 0);
+    await tester.tap(find.byType(AppIconButton));
+    expect(presses, 0);
   });
 }

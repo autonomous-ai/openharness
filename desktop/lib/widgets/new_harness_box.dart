@@ -1015,6 +1015,7 @@ class _NewHarnessBoxState extends State<NewHarnessBox> {
             ? label
             : '$fieldLabel, $label',
         excludeSemantics: true,
+        onTap: disabled ? null : onTap,
         child: BoxRowHighlight(
           terminal: true,
           highlighted: highlighted,

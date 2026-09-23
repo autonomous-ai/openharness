@@ -19,7 +19,6 @@ class EnvironmentPreflightScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final ready = readiness.isReady;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
 
     return Scaffold(
       backgroundColor: grid.AppPalette.panelBg,
@@ -45,9 +44,7 @@ class EnvironmentPreflightScreen extends StatelessWidget {
                     liveRegion: true,
                     label: 'Harness setup status',
                     child: AnimatedSwitcher(
-                      duration: reduceMotion
-                          ? Duration.zero
-                          : const Duration(milliseconds: 180),
+                      duration: Duration.zero,
                       child: ready
                           ? const _ReadyContent(
                               key: ValueKey('environment-ready'),

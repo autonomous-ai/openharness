@@ -108,38 +108,38 @@ class _AppIconButtonState extends State<AppIconButton>
   /// revolution still looks like it moved.
   static const Duration _spinPeriod = Duration(milliseconds: 900);
 
-  late final AnimationController _spin = AnimationController(
-    vsync: this,
-    duration: _spinPeriod,
-  );
+  AnimationController? _spin;
+
+  void _syncSpin() {
+    if (widget.spinning && !MediaQuery.disableAnimationsOf(context)) {
+      final spin = _spin ??= AnimationController(
+        vsync: this,
+        duration: _spinPeriod,
+      );
+      if (!spin.isAnimating) spin.repeat();
+    } else {
+      _spin?.stop();
+      _spin?.value = 0;
+    }
+  }
 
   @override
-  void initState() {
-    super.initState();
-    if (widget.spinning) _spin.repeat();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncSpin();
   }
 
   @override
   void didUpdateWidget(AppIconButton oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.spinning == oldWidget.spinning) return;
-    if (widget.spinning) {
-      _spin.repeat();
-    } else {
-      // Let the current revolution land instead of stopping the glyph at
-      // whatever angle the reply happened to arrive at. A mark frozen at 200°
-      // reads as a failure state; one that comes to rest upright reads as done.
-      _spin
-          .animateTo(1, duration: _spinPeriod * (1 - _spin.value))
-          .whenComplete(() {
-            if (mounted && !widget.spinning) _spin.value = 0;
-          });
-    }
+    // Completion is immediately visible; do not keep spinning after the I/O.
+    _syncSpin();
   }
 
   @override
   void dispose() {
-    _spin.dispose();
+    _spin?.dispose();
     super.dispose();
   }
 
@@ -196,14 +196,16 @@ class _AppIconButtonState extends State<AppIconButton>
                   : Colors.transparent,
               borderRadius: BorderRadius.circular(AppIconButton._radius),
             ),
-            child: RotationTransition(
-              turns: _spin,
-              child: Icon(
-                widget.icon,
-                size: widget.size,
-                color: pressable
-                    ? (emphasized ? active : resting)
-                    : AppPalette.textFaint,
+            child: RepaintBoundary(
+              child: RotationTransition(
+                turns: _spin ?? const AlwaysStoppedAnimation(0),
+                child: Icon(
+                  widget.icon,
+                  size: widget.size,
+                  color: pressable
+                      ? (emphasized ? active : resting)
+                      : AppPalette.textFaint,
+                ),
               ),
             ),
           ),

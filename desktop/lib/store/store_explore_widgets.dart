@@ -257,7 +257,7 @@ class _StoreExploreCardState extends State<StoreExploreCard> {
     return AnimatedContainer(
       duration: MediaQuery.disableAnimationsOf(context)
           ? Duration.zero
-          : const Duration(milliseconds: 150),
+          : grid.AppMotion.hover,
       decoration: BoxDecoration(
         borderRadius: radius,
         border: Border.all(
