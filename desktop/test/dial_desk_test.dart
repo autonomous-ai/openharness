@@ -64,6 +64,59 @@ Future<AppNotifier> _withTiles(List<String> agentIds) async {
 }
 
 void main() {
+  test(
+    'preparation retries share one tab and attach its package viewer',
+    () async {
+      final app = _notifier();
+      final machine = _machine(app, 'm1', ['a1']);
+      machine.agents = [
+        Agent.fromJson({
+          'id': 'a1',
+          'name': 'a1',
+          'engine': 'claude',
+          'viewerUrl': 'http://127.0.0.1:12345',
+          'terminal': {
+            'runtimes': [
+              {'backend': 'tmux', 'paneId': '%1'},
+            ],
+          },
+        }),
+      ];
+      try {
+        final results = await Future.wait([
+          app.revealPreparedAgent('m1', 'a1', 'operation1'),
+          app.revealPreparedAgent('m1', 'a1', 'operation1'),
+          app.revealPreparedAgent('m1', 'a1', 'operation2'),
+        ]);
+        expect(results, everyElement(isTrue));
+        expect(app.allPanes.where((p) => p.agentId == 'a1'), hasLength(1));
+        expect(
+          app.allPanes.where((p) => p.isWeb && p.ownerAgentId == 'a1'),
+          hasLength(1),
+        );
+        final tabs = app.swarms.length;
+        await app.revealPreparedAgent('m1', 'a1', 'operation1');
+        expect(app.swarms, hasLength(tabs));
+      } finally {
+        app.dispose();
+      }
+    },
+  );
+  test(
+    'preparation reveals an existing agent tab without duplicating it',
+    () async {
+      final app = await _withTiles(['a1']);
+      try {
+        final tabs = app.swarms.length;
+        expect(await app.revealPreparedAgent('m1', 'a1', 'operation'), isTrue);
+        expect(app.swarms, hasLength(tabs));
+        expect(app.allPanes.where((p) => p.agentId == 'a1'), hasLength(1));
+      } finally {
+        app.dispose();
+      }
+    },
+  );
+
   test('the roster the daemon builds its ring from is in tile order', () {
     // The section in the rail, the tile order on screen and the dial's carousel
     // are one list. This is the end of it the window owns: what it reports is

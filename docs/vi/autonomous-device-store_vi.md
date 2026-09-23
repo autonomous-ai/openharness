@@ -75,8 +75,9 @@ hay task cụ thể đều sẵn sàng. Install từ luồng khác được ph�
 Agent candidate có `{agentId,machineId,packageId,engine,workspace,state,runtime,error?}`.
 `runtime` là `starting / ready / unavailable`; workspace là đường dẫn tuyệt đối canonical nếu biết.
 `agents.list` cũng thêm các field tùy chọn `packageId,workspace,runtime`. Package null/absent nghĩa là
-không biết, không được suy từ recap. Runtime ready cần terminal sống, engine process và native
-conversation đã bind (terminal thường là ngoại lệ). Xác thực engine chưa được kiểm chứng độc lập.
+không biết, không được suy từ recap. Runtime ready cần terminal sống và engine process được launch watcher xác nhận (`launch.state=ready`),
+hoặc native conversation đã bind đối với agent được discovery. Agent mới không bắt buộc có native
+session ID: một số engine chỉ tạo ID sau task đầu tiên. Terminal thường là ngoại lệ. Xác thực engine chưa được kiểm chứng độc lập.
 
 ## 2. Chuẩn bị agent, không giao task
 
@@ -134,7 +135,7 @@ serverInstanceId hiện có vẫn áp dụng cho task/turn.
 |---|---|
 | `accepted` | Đã lưu ý định, chưa kết luận install/create xảy ra |
 | `running` | Tiếp tục poll operation hiện tại |
-| `ready` | Đã chuẩn bị package và agent runtime/conversation; **chưa giao task** |
+| `ready` | Đã chuẩn bị package và terminal và engine launch; **chưa giao task** |
 | `failed` | Lỗi xác định như không có package; kiểm tra trước khi tạo ý định mới |
 | `needs_user_action` | Hiển thị error.message + guidance; có thể cần dependency/login/workspace hoặc kết quả thực thi chưa rõ |
 
@@ -143,7 +144,7 @@ Có thể bỏ qua hoặc lặp các phase khi package đã cài/shared dependen
 ready hoặc đang cần thao tác: mở agent đó để xử lý, không tạo thêm.
 
 Ready chỉ xác nhận bước chuẩn bị. Không chứng minh đã dựng máy bay, đã đăng nhập hay model thành công.
-Nếu engine/conversation chưa bind sau 10 phút, polling trả `ENGINE_ACTION_REQUIRED`; lỗi launch đã
+Nếu engine chưa launch thành công sau 10 phút, polling trả `ENGINE_ACTION_REQUIRED`; lỗi launch đã
 biết báo sớm hơn. Hoàn tất prompt engine rồi poll lại có thể đưa cùng operation về ready. Agent biến
 mất/đổi workspace khiến operation previously-ready trở thành cần thao tác.
 
@@ -228,3 +229,27 @@ cd cli
 npx tsx scripts/device-store-contract.ts --check
 npx vitest run src/lib/autonomous-device --maxWorkers=1
 ```
+
+## Tự mở Desktop sau khi chuẩn bị agent
+
+Ngay khi có `agentId`, trước readiness, CLI lưu yêu cầu mở/reveal agent trên một Desktop local.
+Desktop tái sử dụng tab đã có hoặc mở một tab, rồi dùng cơ chế viewer chung của package, kể cả khi
+viewer URL/lỗi đến sau. Terminal cho phép người dùng xử lý login/trust; mở UI không tự trả lời,
+không bypass quyền và không gửi task. Áp dụng mọi Store package.
+
+Event loopback nội bộ `device_prepare_open` mang `{operationId,machineId,agentId}`. Desktop xác nhận
+bằng `device_prepare_opened` với `{operationId,agentId}` khi đã có terminal pane. Đây không phải
+operation device hay capability LAN mới. CLI retry mỗi hai giây đến khi nhận xác nhận, lưu xác nhận
+vào journal và khôi phục yêu cầu còn chờ sau daemon restart. Các lần mở đồng thời được gộp theo
+machine/agent; cùng operation không tạo tab trùng hoặc liên tục giành focus. Nếu mất xác nhận rồi
+Desktop restart, có thể reveal lại tab cũ nhưng không tạo terminal thứ hai. Tab đã xác nhận rồi
+được người dùng đóng sẽ không tự mở lại.
+
+Desktop tương thích phải đang chạy và đăng nhập. Nếu app chưa mở, quá cũ hoặc đang reconnect,
+yêu cầu UI tiếp tục chờ; cơ chế này không cài hay khởi chạy ứng dụng Desktop. Readiness độc lập với
+xác nhận mở UI; cả hai không chứng minh engine đã login hoặc task thành công. JSON schemas và tên
+capability/operation phía OS không đổi.
+
+**Cập nhật bàn giao OS:** `ready` chấp nhận engine launch đã xác nhận mà không chờ native session ID.
+Không gửi prompt mồi để lấy ID. OS vẫn gửi task thật đúng một lần qua `turn.send`, với idempotency key
+riêng. Event mở UI không giao task.

@@ -1,0 +1,4153 @@
+{
+  "schema": 3,
+  "success": true,
+  "startedAt": "2026-09-23T02:24:57.704Z",
+  "label": "office-imac",
+  "sourceRevision": "c1deb5e6",
+  "boundary": "client binary input send to matching PTY probe response received; excludes UI rendering and OS keyboard input",
+  "client": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v22.23.1",
+    "daemonVersion": "0.2.89"
+  },
+  "samplesPerWorkload": 200,
+  "warmupsPerWorkload": 10,
+  "controlSamples": 30,
+  "controlObservations": [
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "warmup",
+      "elapsedMs": 417.7746669999997,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "warmup",
+      "elapsedMs": 401.15399999999954,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "warmup",
+      "elapsedMs": 393.56995800000004,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 400.28612499999963,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 403.2838750000001,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 396.136125,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 396.2990410000002,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 392.4560419999998,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 398.6526249999997,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 400.07595800000036,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 394.50575000000026,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 396.8892500000002,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 396.0947500000002,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 394.45004100000006,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 393.9991250000003,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 396.83195799999885,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 402.4264579999999,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 394.04429100000016,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 395.6816250000011,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 395.6376249999994,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 395.23108299999876,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 395.1534580000007,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 398.41654200000085,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 390.2154999999984,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 406.3543329999993,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 399.7221660000014,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 395.83804099999907,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 416.5686249999999,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 427.0478750000002,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 394.48254199999974,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 395.31566700000076,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 395.2586670000019,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 397.807499999999,
+      "terminalModeBefore": "p2p",
+      "terminalModeAfter": "p2p"
+    }
+  ],
+  "observations": [
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 0,
+      "elapsedMs": 17.913708000000042,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 1,
+      "elapsedMs": 9.410832999998092,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 2,
+      "elapsedMs": 16.865208000002895,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 3,
+      "elapsedMs": 13.421375000001717,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 4,
+      "elapsedMs": 31.149375000000873,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 5,
+      "elapsedMs": 12.398541999998997,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 6,
+      "elapsedMs": 11.904749999997875,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 7,
+      "elapsedMs": 13.548249999999825,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 8,
+      "elapsedMs": 16.124791999998706,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 9,
+      "elapsedMs": 13.041917000002286,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 10,
+      "elapsedMs": 16.136875000000146,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 11,
+      "elapsedMs": 13.273208999999042,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 12,
+      "elapsedMs": 18.202375000000757,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 13,
+      "elapsedMs": 18.381249999998545,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 14,
+      "elapsedMs": 17.853667000003043,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 15,
+      "elapsedMs": 19.461333999999624,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 16,
+      "elapsedMs": 10.86920900000041,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 17,
+      "elapsedMs": 12.556958000001032,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 18,
+      "elapsedMs": 10.926165999997465,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 19,
+      "elapsedMs": 12.747624999999971,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 20,
+      "elapsedMs": 11.200417000000016,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 21,
+      "elapsedMs": 12.841166999998677,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 22,
+      "elapsedMs": 18.93500000000131,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 23,
+      "elapsedMs": 12.879540999998426,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 24,
+      "elapsedMs": 10.319875000001048,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 25,
+      "elapsedMs": 12.237750000000233,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 26,
+      "elapsedMs": 16.045040999997582,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 27,
+      "elapsedMs": 20.39600000000064,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 28,
+      "elapsedMs": 13.547624999999243,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 29,
+      "elapsedMs": 15.213500000001659,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 30,
+      "elapsedMs": 13.29412500000035,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 31,
+      "elapsedMs": 21.569707999999082,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 32,
+      "elapsedMs": 9.23933400000169,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 33,
+      "elapsedMs": 12.451915999998164,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 34,
+      "elapsedMs": 15.878124999999272,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 35,
+      "elapsedMs": 14.778666999998677,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 36,
+      "elapsedMs": 25.245875000000524,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 37,
+      "elapsedMs": 12.634792000000743,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 38,
+      "elapsedMs": 12.735790999999153,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 39,
+      "elapsedMs": 12.410541999997804,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 40,
+      "elapsedMs": 9.12225000000035,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 41,
+      "elapsedMs": 86.2223750000012,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 42,
+      "elapsedMs": 11.440291999999317,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 43,
+      "elapsedMs": 9.998749999998836,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 44,
+      "elapsedMs": 11.705042000001413,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 45,
+      "elapsedMs": 10.808124999999563,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 46,
+      "elapsedMs": 13.606958000000304,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 47,
+      "elapsedMs": 13.34191600000122,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 48,
+      "elapsedMs": 17.555458999999246,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 49,
+      "elapsedMs": 29.190542000000278,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 50,
+      "elapsedMs": 75.99512499999764,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 51,
+      "elapsedMs": 8.659166000001278,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 52,
+      "elapsedMs": 131.18004199999996,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 53,
+      "elapsedMs": 56.75729200000205,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 54,
+      "elapsedMs": 36.15433299999859,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 55,
+      "elapsedMs": 10.93800000000192,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 56,
+      "elapsedMs": 95.17683400000169,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 57,
+      "elapsedMs": 97.14766700000109,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 58,
+      "elapsedMs": 78.77462500000183,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 59,
+      "elapsedMs": 9.635999999998603,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 60,
+      "elapsedMs": 107.29624999999942,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 61,
+      "elapsedMs": 12.37629200000083,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 62,
+      "elapsedMs": 182.19041699999798,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 63,
+      "elapsedMs": 83.27229199999783,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 64,
+      "elapsedMs": 13.776041999997688,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 65,
+      "elapsedMs": 121.69283300000097,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 66,
+      "elapsedMs": 144.93833299999824,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 67,
+      "elapsedMs": 14.667542000002868,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 68,
+      "elapsedMs": 126.46016700000109,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 69,
+      "elapsedMs": 115.6408330000013,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 70,
+      "elapsedMs": 14.863792000000103,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 71,
+      "elapsedMs": 40.35966600000029,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 72,
+      "elapsedMs": 137.5622919999987,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 73,
+      "elapsedMs": 144.42254200000025,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 74,
+      "elapsedMs": 12.950874999998632,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 75,
+      "elapsedMs": 140.32516599999872,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 76,
+      "elapsedMs": 117.83541700000205,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 77,
+      "elapsedMs": 9.870582999999897,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 78,
+      "elapsedMs": 16.290750000000116,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 79,
+      "elapsedMs": 13.172292000002926,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 80,
+      "elapsedMs": 22.85883399999875,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 81,
+      "elapsedMs": 26.665082999999868,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 82,
+      "elapsedMs": 34.39374999999927,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 83,
+      "elapsedMs": 14.18304199999693,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 84,
+      "elapsedMs": 15.691166000000521,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 85,
+      "elapsedMs": 13.693083000001934,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 86,
+      "elapsedMs": 12.386500000000524,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 87,
+      "elapsedMs": 13.345375000000786,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 88,
+      "elapsedMs": 15.67658400000073,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 89,
+      "elapsedMs": 12.318375000002561,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 90,
+      "elapsedMs": 12.888624999999593,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 91,
+      "elapsedMs": 12.51458300000013,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 92,
+      "elapsedMs": 12.897458999999799,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 93,
+      "elapsedMs": 13.9284579999985,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 94,
+      "elapsedMs": 13.27966699999888,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 95,
+      "elapsedMs": 17.565374999998312,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 96,
+      "elapsedMs": 12.839749999999185,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 97,
+      "elapsedMs": 12.086584000000585,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 98,
+      "elapsedMs": 15.683499999999185,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 99,
+      "elapsedMs": 14.825124999999389,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 100,
+      "elapsedMs": 13.629917000002024,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 101,
+      "elapsedMs": 13.789749999999913,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 102,
+      "elapsedMs": 10.978583000000071,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 103,
+      "elapsedMs": 13.493957999999111,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 104,
+      "elapsedMs": 16.45391699999891,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 105,
+      "elapsedMs": 14.271208999998635,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 106,
+      "elapsedMs": 24.70683299999655,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 107,
+      "elapsedMs": 12.833040999998047,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 108,
+      "elapsedMs": 33.35204100000192,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 109,
+      "elapsedMs": 11.060583999998926,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 110,
+      "elapsedMs": 11.950709000000643,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 111,
+      "elapsedMs": 11.813292000002548,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 112,
+      "elapsedMs": 10.873165999997582,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 113,
+      "elapsedMs": 13.626416999999492,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 114,
+      "elapsedMs": 17.092874999998457,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 115,
+      "elapsedMs": 13.419042000001355,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 116,
+      "elapsedMs": 21.363334000001487,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 117,
+      "elapsedMs": 11.173124999997526,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 118,
+      "elapsedMs": 32.77975000000151,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 119,
+      "elapsedMs": 44.55083300000115,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 120,
+      "elapsedMs": 14.408290999999736,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 121,
+      "elapsedMs": 13.53479199999856,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 122,
+      "elapsedMs": 11.064542000000074,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 123,
+      "elapsedMs": 13.570167000001675,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 124,
+      "elapsedMs": 29.005083000000013,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 125,
+      "elapsedMs": 22.725374999998166,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 126,
+      "elapsedMs": 19.670916999999463,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 127,
+      "elapsedMs": 12.703374999997322,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 128,
+      "elapsedMs": 11.099624999998923,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 129,
+      "elapsedMs": 13.809709000001021,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 130,
+      "elapsedMs": 14.07508400000006,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 131,
+      "elapsedMs": 14.453166999999667,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 132,
+      "elapsedMs": 15.331833000000188,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 133,
+      "elapsedMs": 19.99870799999917,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 134,
+      "elapsedMs": 14.570167000001675,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 135,
+      "elapsedMs": 26.318500000001222,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 136,
+      "elapsedMs": 11.540291999997862,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 137,
+      "elapsedMs": 10.588041999999405,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 138,
+      "elapsedMs": 10.730541000000812,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 139,
+      "elapsedMs": 23.956750000001193,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 140,
+      "elapsedMs": 14.343833000002633,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 141,
+      "elapsedMs": 11.319958000000042,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 142,
+      "elapsedMs": 13.968417000000045,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 143,
+      "elapsedMs": 13.51683299999786,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 144,
+      "elapsedMs": 10.206291999998939,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 145,
+      "elapsedMs": 13.47899999999936,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 146,
+      "elapsedMs": 17.165125000003172,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 147,
+      "elapsedMs": 14.692666999999346,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 148,
+      "elapsedMs": 15.567999999999302,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 149,
+      "elapsedMs": 18.267416999999114,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 150,
+      "elapsedMs": 18.883958999998868,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 151,
+      "elapsedMs": 15.08429199999955,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 152,
+      "elapsedMs": 8.976540999999997,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 153,
+      "elapsedMs": 12.03520799999751,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 154,
+      "elapsedMs": 10.695749999998952,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 155,
+      "elapsedMs": 144.18116699999882,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 156,
+      "elapsedMs": 13.031332999998995,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 157,
+      "elapsedMs": 17.23795799999789,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 158,
+      "elapsedMs": 13.637541000000056,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 159,
+      "elapsedMs": 18.161624999997002,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 160,
+      "elapsedMs": 19.059457999999722,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 161,
+      "elapsedMs": 14.808375000000524,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 162,
+      "elapsedMs": 20.237750000000233,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 163,
+      "elapsedMs": 31.49187499999971,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 164,
+      "elapsedMs": 26.181875000002037,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 165,
+      "elapsedMs": 11.541625000001659,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 166,
+      "elapsedMs": 13.417624999998225,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 167,
+      "elapsedMs": 30.874541000001045,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 168,
+      "elapsedMs": 17.06300000000192,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 169,
+      "elapsedMs": 11.826084000000264,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 170,
+      "elapsedMs": 12.592583000001468,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 171,
+      "elapsedMs": 15.409625000000233,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 172,
+      "elapsedMs": 20.220832999999402,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 173,
+      "elapsedMs": 20.634624999998778,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 174,
+      "elapsedMs": 16.222499999999854,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 175,
+      "elapsedMs": 16.61120899999878,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 176,
+      "elapsedMs": 10.28991600000154,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 177,
+      "elapsedMs": 27.742459000000963,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 178,
+      "elapsedMs": 14.014333999999508,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 179,
+      "elapsedMs": 11.933625000001484,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 180,
+      "elapsedMs": 16.657499999997526,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 181,
+      "elapsedMs": 14.66320800000176,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 182,
+      "elapsedMs": 20.830458000000363,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 183,
+      "elapsedMs": 29.752417000003334,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 184,
+      "elapsedMs": 14.664042000000336,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 185,
+      "elapsedMs": 12.799208000000363,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 186,
+      "elapsedMs": 13.86816700000054,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 187,
+      "elapsedMs": 11.31762499999968,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 188,
+      "elapsedMs": 29.04120800000237,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 189,
+      "elapsedMs": 12.750667000000249,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 190,
+      "elapsedMs": 16.92450000000099,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 191,
+      "elapsedMs": 12.3503329999985,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 192,
+      "elapsedMs": 13.42595799999981,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 193,
+      "elapsedMs": 22.91845900000044,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 194,
+      "elapsedMs": 26.7198329999992,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 195,
+      "elapsedMs": 18.219499999999243,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 196,
+      "elapsedMs": 20.16374999999971,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 197,
+      "elapsedMs": 14.112332999997307,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 198,
+      "elapsedMs": 12.828874999999243,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 199,
+      "elapsedMs": 12.504499999999098,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 200,
+      "elapsedMs": 27.07037499999933,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 201,
+      "elapsedMs": 20.362499999999272,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 202,
+      "elapsedMs": 14.851332999998704,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 203,
+      "elapsedMs": 13.29175000000032,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 204,
+      "elapsedMs": 31.52729199999885,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 205,
+      "elapsedMs": 19.11229199999798,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 206,
+      "elapsedMs": 42.14145799999824,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 207,
+      "elapsedMs": 13.693458999998256,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 208,
+      "elapsedMs": 14.48620899999878,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 209,
+      "elapsedMs": 12.537707999999839,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 210,
+      "elapsedMs": 17.347290999998222,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 211,
+      "elapsedMs": 14.201250000001892,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 212,
+      "elapsedMs": 25.85204199999862,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 213,
+      "elapsedMs": 15.350875000000087,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 214,
+      "elapsedMs": 25.732499999998254,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 215,
+      "elapsedMs": 12.086707999998907,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 216,
+      "elapsedMs": 15.706249999999272,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 217,
+      "elapsedMs": 17.08270899999843,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 218,
+      "elapsedMs": 26.602875000000495,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 219,
+      "elapsedMs": 18.30604200000016,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 220,
+      "elapsedMs": 14.883375000001251,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 221,
+      "elapsedMs": 19.5145420000008,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 222,
+      "elapsedMs": 12.500874999997905,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 223,
+      "elapsedMs": 17.98412499999904,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 224,
+      "elapsedMs": 21.99254099999962,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 225,
+      "elapsedMs": 19.287124999998923,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 226,
+      "elapsedMs": 76.35199999999895,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 227,
+      "elapsedMs": 17.992874999999913,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 228,
+      "elapsedMs": 13.36120800000208,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 229,
+      "elapsedMs": 13.778708999998344,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 230,
+      "elapsedMs": 10.135874999999942,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 231,
+      "elapsedMs": 23.059250000002066,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 232,
+      "elapsedMs": 20.321334000000206,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 233,
+      "elapsedMs": 9.520667000000685,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 234,
+      "elapsedMs": 12.285292000000481,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 235,
+      "elapsedMs": 17.18000000000029,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 236,
+      "elapsedMs": 13.983499999998457,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 237,
+      "elapsedMs": 11.52299999999741,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 238,
+      "elapsedMs": 12.80108299999847,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 239,
+      "elapsedMs": 17.771042000000307,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 240,
+      "elapsedMs": 11.88550000000032,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 241,
+      "elapsedMs": 12.475665999998455,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 242,
+      "elapsedMs": 23.761207999999897,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 243,
+      "elapsedMs": 10.083042000002024,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 244,
+      "elapsedMs": 10.200250000001688,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 245,
+      "elapsedMs": 9.49224999999933,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 246,
+      "elapsedMs": 14.150374999997439,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 247,
+      "elapsedMs": 19.470625000001746,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 248,
+      "elapsedMs": 9.195415999998659,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 249,
+      "elapsedMs": 8.58075000000099,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 250,
+      "elapsedMs": 14.725041999998211,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 251,
+      "elapsedMs": 16.53083300000071,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 252,
+      "elapsedMs": 25.45445800000016,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 253,
+      "elapsedMs": 14.92674999999872,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 254,
+      "elapsedMs": 18.101832999996986,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 255,
+      "elapsedMs": 11.83741700000246,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 256,
+      "elapsedMs": 16.21795800000109,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 257,
+      "elapsedMs": 17.27983399999721,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 258,
+      "elapsedMs": 11.726749999997992,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 259,
+      "elapsedMs": 10.665541000002122,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 260,
+      "elapsedMs": 20.54925000000003,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 261,
+      "elapsedMs": 11.535375000003114,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 262,
+      "elapsedMs": 12.740791000000172,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 263,
+      "elapsedMs": 93.30595799999719,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 264,
+      "elapsedMs": 10.285958000000392,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 265,
+      "elapsedMs": 22.432458999999653,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 266,
+      "elapsedMs": 16.618875000000116,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 267,
+      "elapsedMs": 17.557832999998936,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 268,
+      "elapsedMs": 11.14983299999949,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 269,
+      "elapsedMs": 10.86724999999933,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 270,
+      "elapsedMs": 22.375457999998616,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 271,
+      "elapsedMs": 13.360290999997233,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 272,
+      "elapsedMs": 14.493915999999444,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 273,
+      "elapsedMs": 11.939875000000029,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 274,
+      "elapsedMs": 19.66058400000111,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 275,
+      "elapsedMs": 13.498959000000468,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 276,
+      "elapsedMs": 11.752416999999696,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 277,
+      "elapsedMs": 23.175459000001865,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 278,
+      "elapsedMs": 22.42974999999933,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 279,
+      "elapsedMs": 13.90704199999891,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 280,
+      "elapsedMs": 24.093457999999373,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 281,
+      "elapsedMs": 17.100792000001093,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 282,
+      "elapsedMs": 24.78441699999894,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 283,
+      "elapsedMs": 21.539832999998907,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 284,
+      "elapsedMs": 9.830834000000323,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 285,
+      "elapsedMs": 13.932624999997643,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 286,
+      "elapsedMs": 17.0712910000002,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 287,
+      "elapsedMs": 9.18462499999805,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 288,
+      "elapsedMs": 17.167624999998225,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 289,
+      "elapsedMs": 11.82983299999978,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 290,
+      "elapsedMs": 23.488249999998516,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 291,
+      "elapsedMs": 13.430625000000873,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 292,
+      "elapsedMs": 10.085291999999754,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 293,
+      "elapsedMs": 24.315708000001905,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 294,
+      "elapsedMs": 18.347125000000233,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 295,
+      "elapsedMs": 13.16070899999977,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 296,
+      "elapsedMs": 12.03729100000055,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 297,
+      "elapsedMs": 15.317250000000058,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 298,
+      "elapsedMs": 9.85070899999846,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 299,
+      "elapsedMs": 12.657375000002503,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 300,
+      "elapsedMs": 13.90229200000249,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 301,
+      "elapsedMs": 29.28962500000125,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 302,
+      "elapsedMs": 16.098540999999386,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 303,
+      "elapsedMs": 19.907749999998487,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 304,
+      "elapsedMs": 15.194959000000381,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 305,
+      "elapsedMs": 13.93333299999722,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 306,
+      "elapsedMs": 9.507041000000754,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 307,
+      "elapsedMs": 10.669417000000976,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 308,
+      "elapsedMs": 32.566084000001865,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 309,
+      "elapsedMs": 10.507499999999709,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 310,
+      "elapsedMs": 15.394499999998516,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 311,
+      "elapsedMs": 19.50695799999812,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 312,
+      "elapsedMs": 9.151332999994338,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 313,
+      "elapsedMs": 23.74383300000045,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 314,
+      "elapsedMs": 16.34195799999725,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 315,
+      "elapsedMs": 15.5411249999961,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 316,
+      "elapsedMs": 12.880083000003651,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 317,
+      "elapsedMs": 20.468999999997322,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 318,
+      "elapsedMs": 13.741000000001804,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 319,
+      "elapsedMs": 10.393917000001238,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 320,
+      "elapsedMs": 10.408792000001995,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 321,
+      "elapsedMs": 10.511500000000524,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 322,
+      "elapsedMs": 11.649624999998196,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 323,
+      "elapsedMs": 14.555791999999201,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 324,
+      "elapsedMs": 16.197541000001365,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 325,
+      "elapsedMs": 16.303333000003477,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 326,
+      "elapsedMs": 13.46200000000681,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 327,
+      "elapsedMs": 9.504625000001397,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 328,
+      "elapsedMs": 21.622000000003027,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 329,
+      "elapsedMs": 12.094042000004265,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 330,
+      "elapsedMs": 12.229749999998603,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 331,
+      "elapsedMs": 25.08887500000128,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 332,
+      "elapsedMs": 9.267667000000074,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 333,
+      "elapsedMs": 8.549417000001995,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 334,
+      "elapsedMs": 12.880541999998968,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 335,
+      "elapsedMs": 15.48937499999738,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 336,
+      "elapsedMs": 32.056958999994094,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 337,
+      "elapsedMs": 12.095874999999069,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 338,
+      "elapsedMs": 18.054000000003725,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 339,
+      "elapsedMs": 14.812250000002678,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 340,
+      "elapsedMs": 12.039124999995693,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 341,
+      "elapsedMs": 15.020375000000058,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 342,
+      "elapsedMs": 32.98820800000249,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 343,
+      "elapsedMs": 69.15050000000338,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 344,
+      "elapsedMs": 20.5904589999991,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 345,
+      "elapsedMs": 14.621666999999434,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 346,
+      "elapsedMs": 11.986417000000074,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 347,
+      "elapsedMs": 22.145375000000058,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 348,
+      "elapsedMs": 34.67904100000305,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 349,
+      "elapsedMs": 26.285040999995545,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 350,
+      "elapsedMs": 17.45429200000217,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 351,
+      "elapsedMs": 24.699416999996174,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 352,
+      "elapsedMs": 20.01270900000236,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 353,
+      "elapsedMs": 10.319125000001804,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 354,
+      "elapsedMs": 11.491916999999376,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 355,
+      "elapsedMs": 16.614000000001397,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 356,
+      "elapsedMs": 11.819040999995195,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 357,
+      "elapsedMs": 24.670041000004858,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 358,
+      "elapsedMs": 22.436125000000175,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 359,
+      "elapsedMs": 10.99854200000118,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 360,
+      "elapsedMs": 12.792625000001863,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 361,
+      "elapsedMs": 21.977375000002212,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 362,
+      "elapsedMs": 19.546792000001005,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 363,
+      "elapsedMs": 15.404541000003519,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 364,
+      "elapsedMs": 40.01408300000185,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 365,
+      "elapsedMs": 12.549083999998402,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 366,
+      "elapsedMs": 12.888250000003609,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 367,
+      "elapsedMs": 12.18525000000227,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 368,
+      "elapsedMs": 14.946917000001122,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 369,
+      "elapsedMs": 12.02295900000172,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 370,
+      "elapsedMs": 18.918792000004032,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 371,
+      "elapsedMs": 23.56999999999971,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 372,
+      "elapsedMs": 15.326958000005106,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 373,
+      "elapsedMs": 11.042333999997936,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 374,
+      "elapsedMs": 10.97412500000064,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 375,
+      "elapsedMs": 13.260000000002037,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 376,
+      "elapsedMs": 90.48495800000092,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 377,
+      "elapsedMs": 10.213041000002704,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 378,
+      "elapsedMs": 11.907167000004847,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 379,
+      "elapsedMs": 10.358541000001424,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 380,
+      "elapsedMs": 11.546458999997412,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 381,
+      "elapsedMs": 11.208958000002895,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 382,
+      "elapsedMs": 24.16437500000029,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 383,
+      "elapsedMs": 17.85175000000163,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 384,
+      "elapsedMs": 10.340833000002021,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 385,
+      "elapsedMs": 32.033957999999984,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 386,
+      "elapsedMs": 21.74445900000137,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 387,
+      "elapsedMs": 10.633249999998952,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 388,
+      "elapsedMs": 11.765583000000333,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 389,
+      "elapsedMs": 14.356708999999682,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 390,
+      "elapsedMs": 23.166125000003376,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 391,
+      "elapsedMs": 20.775832999999693,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 392,
+      "elapsedMs": 15.593417000003683,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 393,
+      "elapsedMs": 17.225624999999127,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 394,
+      "elapsedMs": 13.34562499999447,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 395,
+      "elapsedMs": 25.608708000007027,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 396,
+      "elapsedMs": 15.062207999995735,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 397,
+      "elapsedMs": 16.36250000000291,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 398,
+      "elapsedMs": 13.133541000002879,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 399,
+      "elapsedMs": 26.235416999996232,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 400,
+      "elapsedMs": 23.317792000001646,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 401,
+      "elapsedMs": 74.7870830000029,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 402,
+      "elapsedMs": 22.141374999999243,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 403,
+      "elapsedMs": 9.928749999999127,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 404,
+      "elapsedMs": 15.731583000000683,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 405,
+      "elapsedMs": 18.991916999999376,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 406,
+      "elapsedMs": 21.312041999997746,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 407,
+      "elapsedMs": 21.138291999996,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 408,
+      "elapsedMs": 18.639791000001424,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 409,
+      "elapsedMs": 13.346624999998312,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 410,
+      "elapsedMs": 18.639875000000757,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 411,
+      "elapsedMs": 21.991666000001715,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 412,
+      "elapsedMs": 25.517375000003085,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 413,
+      "elapsedMs": 23.845958999998402,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 414,
+      "elapsedMs": 13.296458999997412,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 415,
+      "elapsedMs": 10.156374999998661,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 416,
+      "elapsedMs": 20.825333999993745,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 417,
+      "elapsedMs": 12.738417000000481,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 418,
+      "elapsedMs": 13.044291999998677,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 419,
+      "elapsedMs": 14.504291000004741,
+      "modeBefore": "p2p",
+      "modeAfter": "p2p",
+      "keyframesDuring": 0
+    }
+  ],
+  "stagesMs": {
+    "select": 4.221374999999995,
+    "readyForRequests": 451.213084,
+    "createTerminal": 570.528583,
+    "attach": 84.95004100000006,
+    "startProbe": 917.9915830000002
+  },
+  "cleanup": {
+    "created": true,
+    "deleted": true
+  },
+  "linkModes": [
+    {
+      "atMs": 1246.824167,
+      "mode": "p2p"
+    },
+    {
+      "atMs": 37676.58,
+      "mode": "p2p"
+    }
+  ],
+  "target": "Darwin:x86_64",
+  "idleAchieved": {
+    "bytes": 10574,
+    "durationMs": 10829.120041000002
+  },
+  "redraw_20hzAchieved": {
+    "bytes": 725135,
+    "durationMs": 9274.580875
+  },
+  "reattach": {
+    "totalMs": 54.23775000000023,
+    "firstEchoMs": 18.256124999999884,
+    "sameProbeSequence": 420,
+    "mode": "p2p",
+    "boundary": "new local client socket, existing daemon route and same running PTY; not a network outage"
+  },
+  "failedControlRequests": 0,
+  "finishedAt": "2026-09-23T02:25:35.819Z",
+  "summaries": [
+    {
+      "load": "idle",
+      "samples": 200,
+      "p50Ms": 14.48620899999878,
+      "p95Ms": 115.6408330000013,
+      "p99Ms": 144.42254200000025,
+      "maxMs": 182.19041699999798
+    },
+    {
+      "load": "redraw_20hz",
+      "samples": 200,
+      "p50Ms": 14.946917000001122,
+      "p95Ms": 32.033957999999984,
+      "p99Ms": 76.35199999999895,
+      "maxMs": 93.30595799999719
+    }
+  ],
+  "controlSummaries": [
+    {
+      "route": "machine",
+      "samples": 30,
+      "failures": 0,
+      "p50Ms": 396.0947500000002,
+      "p95Ms": 416.5686249999999,
+      "p99Ms": 427.0478750000002,
+      "maxMs": 427.0478750000002
+    }
+  ],
+  "summariesByTerminalMode": [
+    {
+      "load": "idle",
+      "mode": "p2p",
+      "samples": 200,
+      "p50Ms": 14.48620899999878,
+      "p95Ms": 115.6408330000013,
+      "p99Ms": 144.42254200000025,
+      "maxMs": 182.19041699999798
+    },
+    {
+      "load": "redraw_20hz",
+      "mode": "p2p",
+      "samples": 200,
+      "p50Ms": 14.946917000001122,
+      "p95Ms": 32.033957999999984,
+      "p99Ms": 76.35199999999895,
+      "maxMs": 93.30595799999719
+    }
+  ]
+}

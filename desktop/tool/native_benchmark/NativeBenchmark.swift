@@ -3,6 +3,8 @@
 // Runner sources and the user's V2 bundle never contain this channel.
 private enum NativeBenchmark {
   private static var channel: FlutterMethodChannel?
+  private static var focusLosses = 0
+  private static var focusObserver: NSObjectProtocol?
 
   static func install(window: NSWindow, messenger: FlutterBinaryMessenger) {
     guard Bundle.main.bundleIdentifier == "ai.autonomous.harness.benchmark",
@@ -46,6 +48,18 @@ private enum NativeBenchmark {
         // Once, after the synthetic UI is mounted. Never reset native or Dart
         // focus between observations: navigation must perform its own handoff.
         result(String(describing: type(of: window.firstResponder!)))
+      case "captureState":
+        if focusObserver == nil {
+          focusObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: window, queue: .main
+          ) { _ in focusLosses += 1 }
+        }
+        result([
+          "key": window.isKeyWindow,
+          "active": NSApp.isActive,
+          "visible": window.isVisible,
+          "focusLosses": focusLosses,
+        ])
       case "key":
         guard window.isKeyWindow, NSApp.isActive,
               let args = call.arguments as? [String: Any],

@@ -1701,6 +1701,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     }
   }
   let autonomousDeviceDirect: AutonomousDeviceDirect | undefined
+  let deviceStoreRef: ReturnType<typeof createDeviceStore> | undefined
   let autonomousDeviceService: AutonomousDeviceService | undefined
   let appVoiceFocus: { machineId: string; agentId: string; connId: string } | undefined
   let backendRef: BackendSocket | undefined
@@ -3652,6 +3653,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     shareRelay,
     // The window and the dial are one desk: opening an agent in the app brings the dial to it, switching
     // the dial's machine first when the app moved to another one.
+    onDevicePrepareOpened: (operationId, agentId) => deviceStoreRef?.acknowledgeReveal(operationId, agentId),
     onAppFocusState: (machineId, agentId, connId, expectedRevision) => {
       // A delayed automatic selection cannot replace a newer explicit user choice.
       if (expectedRevision && autonomousDeviceService?.focusSnapshot().focusRevision !== expectedRevision) return false
@@ -5443,7 +5445,12 @@ async function runForeground(session: AuthSession): Promise<void> {
   const cable = new CableSession(cableHost, new DialLog(env.HARNESS_LOGS_DIR))
   cableRef = cable
 
-  const deviceStore = createDeviceStore({ dataDir: env.ADAPTER_DATA_DIR, machineId: backend.machineId, create: input => backend.onCreateAgent!(input) })
+  const deviceStore = createDeviceStore({ dataDir: env.ADAPTER_DATA_DIR, machineId: backend.machineId,
+    create: input => backend.onCreateAgent!(input),
+    reveal: (operationId, agentId) => { backend.sendFirstLocal({ type: 'device_prepare_open', payload: { operationId, machineId: backend.machineId, agentId } }) },
+  })
+  deviceStoreRef = deviceStore
+  deviceStore.startUiDelivery()
   autonomousDeviceService = new AutonomousDeviceService({
     store: deviceStore,
     machineId: backend.machineId,

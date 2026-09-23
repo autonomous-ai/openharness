@@ -48,6 +48,8 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   private var canFind = false
   private var canClosePane = false
   private let historyMenu = NSMenu(title: "History")
+  private var historyMenuNeedsRebuild = false
+  private var historyMenuIsOpen = false
   private var canGoBack = false
   private var canGoForward = false
   private var history: [SwarmHistoryEntry] = []
@@ -114,6 +116,15 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
           sections: state["sections"] as? [[String: Any]] ?? []
         )
         result(nil)
+      case "playAlert":
+        // A named macOS system sound. Every Mac has these, so no audio asset ships with the app,
+        // nothing has to be decoded, and the alert plays at whatever volume the person has set for
+        // alerts rather than at one this app decided. An unknown name is silence, not a crash.
+        let args = call.arguments as? [String: Any] ?? [:]
+        if let name = args["sound"] as? String, let sound = NSSound(named: name) {
+          sound.play()
+        }
+        result(nil)
       case "keymapState":
         guard let payload = call.arguments as? [String: Any],
               let map = HarnessNativeKeymap(payload) else {
@@ -146,7 +157,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "addAgent", "newAgent", "newTerminal", "cloneAgent", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
+    guard ["select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "addAgent", "newAgent", "newTerminal", "cloneAgent", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -248,8 +259,15 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // AppKit owns height; only width is configurable for a right accessory.
     let trafficLightEdge = window.standardWindowButton(.zoomButton).map {
       $0.convert($0.bounds, to: nil).maxX
-    } ?? 76
-    let leading = max(88, trafficLightEdge + 16)
+    } ?? 69
+    // 10 after the buttons, which is where a Mac app puts its first control:
+    // the cluster ends at 69 on macOS 26, Safari's sidebar button and Chrome's
+    // first tab both start around 79. This was `max(88, edge + 16)` while the
+    // notifications bell still sat in front of the tabs; with the bell gone
+    // that left the first tab at 88, a good ten points adrift of every other
+    // window on the screen. The floor stays for a window with no buttons to
+    // measure — the `?? 69` above is the same fallback read from the other end.
+    let leading = max(76, trafficLightEdge + 10)
     strip.setFrameSize(NSSize(width: max(200, window.frame.width - leading), height: strip.frame.height))
     strip.needsLayout = true
   }
@@ -286,7 +304,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         "cloneAgent": "plus.square.on.square",
         "renameActive": "pencil", "closeActive": "xmark",
         "splitRight": "rectangle.split.2x1", "splitDown": "rectangle.split.1x2",
-        "zoomPane": "viewfinder", "closePane": "xmark",
+        "zoomPane": "viewfinder", "movePaneToTab": "arrow.right.square", "closePane": "xmark",
         "commands": "command", "notifications": "bell",
       ]
       if let symbol = symbols[action] {
@@ -316,6 +334,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     add(file, "Split Right", "r", "splitRight")
     add(file, "Split Down", "d", "splitDown")
     add(file, "Zoom Pane", "", "zoomPane")
+    add(file, "Move Pane to Tab", "m", "movePaneToTab", [.command, .shift])
     add(file, "Close Pane", "w", "closePane", [.command, .shift])
     install(file, at: 1)
 
@@ -342,6 +361,10 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   func menuWillOpen(_ menu: NSMenu) {
+    if menu === historyMenu {
+      historyMenuIsOpen = true
+      if historyMenuNeedsRebuild { rebuildHistoryMenu() }
+    }
     syncMenuKeys()
     if menu === historyMenu {
       for item in menu.items {
@@ -355,6 +378,10 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // The native menu opens from its cache. Network/credential reads happen
     // asynchronously in Dart and never hold up AppKit's menu tracking.
     channel.invokeMethod("modelsOpened", arguments: nil)
+  }
+
+  func menuDidClose(_ menu: NSMenu) {
+    if menu === historyMenu { historyMenuIsOpen = false }
   }
 
   private func updateMachines(_ rows: [[String: Any]]) {
@@ -649,10 +676,14 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     guard entries != history || closedEntries != closedHistory else { return }
     history = entries
     closedHistory = closedEntries
-    rebuildHistoryMenu()
+    // Navigation updates the models immediately for action validation. Keep the
+    // installed shortcut items, but defer hidden row construction and sizing.
+    historyMenuNeedsRebuild = true
+    if historyMenuIsOpen { rebuildHistoryMenu() }
   }
 
   private func rebuildHistoryMenu() {
+    historyMenuNeedsRebuild = false
     historyMenu.removeAllItems()
     historyMenu.minimumWidth = 0
     let visited = Array(history.prefix(15))
@@ -770,7 +801,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     return actionsEnabled && (action != "reopen" || canReopen) &&
       (action != "historyBack" || canGoBack) && (action != "historyForward" || canGoForward) &&
       (action != "closePane" || canClosePane) &&
-      (!["findTerminal", "findNext", "findPrevious", "splitRight", "splitDown", "zoomPane", "pinPane"].contains(action) || canFind)
+      (!["findTerminal", "findNext", "findPrevious", "splitRight", "splitDown", "zoomPane", "pinPane", "movePaneToTab"].contains(action) || canFind)
   }
 
   @objc private func menuAction(_ sender: NSMenuItem) {
@@ -958,6 +989,18 @@ private final class SwarmSubscriptionView: NSView {
     return metered ? min(576, base + meterWidth + 12) : base
   }
 
+  /// The orange a nearly-spent account is written in, legible in both appearances.
+  ///
+  /// `.systemOrange` is tuned to be *seen*, not to be *read*: on the light menu
+  /// it measures 1.86:1 against the panel, where text wants 4.5:1. It is only
+  /// right on the dark one, where it reaches 6.44:1. The light side takes the
+  /// same hue carried down to #A85400 (4.52:1). Measured with tool/contrast.py.
+  static let lowInk = NSColor(name: "harnessLowInk") { appearance in
+    appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+      ? .systemOrange
+      : NSColor(srgbRed: 168 / 255, green: 84 / 255, blue: 0, alpha: 1)
+  }
+
   /// What the trailing figures need to share a column — the widest of them.
   static func balanceColumn(_ entries: [SwarmSubscriptionEntry]) -> CGFloat {
     entries.map { textWidth($0.balance) }.max() ?? 0
@@ -969,8 +1012,8 @@ private final class SwarmSubscriptionView: NSView {
       status: entry.balance, icon: nil, width: width,
       accessibility: entry.accessibilityLabel + (current ? ", current" : ""),
       tint: nil, meter: entry.remaining.map { $0 / 100 },
-      meterTint: entry.isLow ? .systemOrange : .controlAccentColor,
-      balanceTint: entry.isLow ? .systemOrange : .secondaryLabelColor,
+      meterTint: entry.isLow ? Self.lowInk : .controlAccentColor,
+      balanceTint: entry.isLow ? Self.lowInk : .secondaryLabelColor,
       showsTick: current, balanceColumn: balanceColumn)
   }
 

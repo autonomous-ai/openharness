@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, fsyncSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fsyncSync, openSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from '../agentCreationReceipt.js'
@@ -23,9 +23,11 @@ export interface DeviceStoreDependencies {
   workspace(request: PrepareRequest['workspace'], label: string): Promise<string>
   create(packageId: string, cwd: string): Promise<AgentCreationOutcome>
   agents(): StoreAgent[]
+  reveal?: (operationId: string, agentId: string) => void
   now?: () => number
 }
 const JournalSchema = z.strictObject({
+  uiRevealed: z.boolean().optional(),
   version: z.literal(1), owner: z.string(), fingerprint: z.string(), operation: DeviceOperationSchema,
 })
 type Journal = z.infer<typeof JournalSchema>
@@ -44,10 +46,54 @@ export class AutonomousDeviceStore {
   private readonly checks = new Map<string, { state: 'passed' | 'failed' | 'unknown'; checkedAt: number; version: string | null; lines: string[] }>()
   private readonly revoked = new Set<string>()
   private readonly workspaces = new Map<string, string>()
+  private uiTimer?: ReturnType<typeof setInterval>
+  private readonly pendingUi = new Set<string>()
   private readonly now: () => number
   constructor(private readonly deps: DeviceStoreDependencies) {
     this.receipts = new AgentCreationReceipts(join(deps.directory, 'creations'))
     this.now = deps.now ?? Date.now
+  }
+  /** Durable UI delivery, independent of readiness and task delivery. Only local Desktop can ack. */
+  startUiDelivery(): void {
+    if (!this.deps.reveal || this.uiTimer) return
+    try {
+      for (const name of readdirSync(this.deps.directory)) {
+        if (!/^[a-f0-9]{64}\.json$/.test(name)) continue
+        try {
+          const row = this.read(name.slice(0, -5))
+          if (row?.operation.agentId && !row.uiRevealed) this.pendingUi.add(row.operation.operationId)
+        } catch { /* A corrupt record must not block other UI intents. */ }
+      }
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    this.uiTimer = setInterval(() => this.deliverUi(), 2000)
+    this.uiTimer.unref()
+  }
+  stopUiDelivery(): void { clearInterval(this.uiTimer); this.uiTimer = undefined }
+  acknowledgeReveal(operationId: string, agentId: string): void {
+    if (!this.pendingUi.has(operationId)) return
+    const row = this.read(operationId)
+    if (!row || row.operation.agentId !== agentId || this.revoked.has(operationId)) return
+    const next = { ...row, uiRevealed: true }
+    this.save(next)
+    row.uiRevealed = true
+    this.pendingUi.delete(operationId)
+  }
+  private queueReveal(row: Journal): void {
+    if (!this.deps.reveal || !row.operation.agentId || row.uiRevealed || this.revoked.has(row.operation.operationId)) return
+    this.pendingUi.add(row.operation.operationId)
+    this.deliverUi()
+  }
+  private deliverUi(): void {
+    for (const id of this.pendingUi) {
+      try {
+        const row = this.read(id)
+        if (!row || row.uiRevealed || this.revoked.has(id)) { this.pendingUi.delete(id); continue }
+        const agent = this.deps.agents().find(a => a.agentId === row.operation.agentId)
+        if (agent && agent.packageId === row.operation.packageId && agent.workspace === row.operation.workspace) {
+          this.deps.reveal?.(id, agent.agentId)
+        }
+      } catch { /* A disconnected UI must never fail preparation or replay creation. */ }
+    }
   }
   private file(id: string) { return join(this.deps.directory, `${id}.json`) }
   private save(row: Journal, exclusive = false): void {
@@ -209,13 +255,14 @@ export class AutonomousDeviceStore {
       return this.deps.create(req.packageId, cwd)
     })
     if (result.state === 'created') {
-      this.change(row, { phase: 'launch', agentId: result.agentId, guidance: 'Waiting for the native engine conversation. Open this agent in Harness if login or trust prompts need attention.' })
+      this.change(row, { phase: 'launch', agentId: result.agentId, guidance: 'Waiting for the engine process. Harness Desktop will reveal this agent for any login or trust prompts.' })
     } else if (result.state === 'failed') {
       this.action(row, result.error, result.detail ?? result.error, 'Open Harness on this machine to resolve the engine/workspace error.'); return
     } else {
       this.action(row, 'CREATION_UNCONFIRMED', 'Agent creation may have executed; it will not be repeated', 'Inspect existing agents on this machine before starting anything else.'); return
     }
     this.authorized(row)
+    this.queueReveal(row)
     this.refreshRuntime(row)
   }
   private refreshRuntime(row: Journal): void {
@@ -228,7 +275,7 @@ export class AutonomousDeviceStore {
     if (agent.runtime === 'ready') {
       if (row.operation.state !== 'ready') this.change(row, { state: 'ready', phase: 'complete', error: null, guidance: null })
     } else if (agent.runtime === 'starting' && row.operation.state === 'ready') {
-      this.change(row, { state: 'running', phase: 'launch', guidance: 'The engine is starting again; wait for its native conversation before sending a task.' })
+      this.change(row, { state: 'running', phase: 'launch', guidance: 'The engine is starting again; wait for its launch readiness before sending a task.' })
     } else if (agent.runtime === 'unavailable' || this.now() - row.operation.updatedAt > 10 * 60_000) {
       this.action(row, 'ENGINE_ACTION_REQUIRED', agent.error ?? 'Engine launch is not ready; login, trust or installation may require interaction.', 'Open the returned agent in Harness and complete its engine prompts. Do not create another agent automatically.')
     }
@@ -245,6 +292,7 @@ export class AutonomousDeviceStore {
         this.action(row, 'RECOVERY_REQUIRED', 'Daemon restarted during preparation; no install or creation will be replayed.', 'Inspect Harness and the workspace on this machine. Retry this same key to read its status; only deliberately use a new key after reconciling any side effects.')
       }
     }
+    this.queueReveal(row)
     this.refreshRuntime(row)
     return structuredClone(row.operation)
   }
