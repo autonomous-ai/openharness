@@ -67,6 +67,7 @@ import 'session_preview.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
 import '../orchestrator/orchestrator_controller.dart';
+import '../notify/alert_sounds.dart';
 
 enum AppStatus {
   bootstrapping,
@@ -424,6 +425,9 @@ class _AgentStop {
 
 class AppNotifier extends ChangeNotifier {
   final AuthSession session;
+  /// The noise this window makes when an agent finishes or gets stuck.
+  final AlertSounds alerts;
+
   AppConfig config;
   late ApiClient api;
 
@@ -1510,7 +1514,9 @@ class AppNotifier extends ChangeNotifier {
     ViewerServices? viewer,
     PaneLayoutStore? paneLayoutStore,
     this.turnActivityTimeout = const Duration(seconds: 12),
-  }) : _paneLayout = paneLayoutStore,
+    AlertSounds? alerts,
+  }) : alerts = alerts ?? AlertSounds(store: alertSoundStore),
+       _paneLayout = paneLayoutStore,
        // Remembers "a dial has been seen here" on the same terms the pane
        // layout is remembered: with a layout store there is a state file, and
        // without one (the tests) nothing is written anywhere.
@@ -9960,10 +9966,14 @@ class AppNotifier extends ChangeNotifier {
             // original clock in that case: this is the same wait continuing,
             // and restarting it would make a long block look new.
             final known = machine.blockedAgents[agentId];
-            machine.blockedAgents[agentId] =
-                known != null && known.sameAs(asked)
+            final repeat = known != null && known.sameAs(asked);
+            machine.blockedAgents[agentId] = repeat
                 ? asked.withSince(known.since)
                 : asked;
+            // Only a NEW question earns a sound. The daemon re-announces every open one after a
+            // reconnect and when attaching to a turn that was already mid-dialog, and a window
+            // that beeped at those would sound an alarm every time the network hiccuped.
+            if (!repeat) alerts.play(AlertKind.needsYou);
           }
         }
         break;
@@ -10016,6 +10026,9 @@ class AppNotifier extends ChangeNotifier {
       case 'turn_ended':
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
+          // The work someone was waiting on is on screen. Played whether or not the pane is in
+          // front: the whole point is the agent that finished while you were looking elsewhere.
+          alerts.play(AlertKind.done);
           _cancelTurnActivity(machine.machine.machineId, agentId);
         } else {
           final sessionId = _eventSessionId(event, payload);

@@ -13,6 +13,7 @@ enum SettingsSection {
   account(LucideIcons.user300, 'Account'),
   usage(LucideIcons.chartNoAxesColumn300, 'Usage'),
   customize(LucideIcons.palette300, 'Customize'),
+  notifications(LucideIcons.bell300, 'Notifications'),
   devices(LucideIcons.zap300, 'Autonomous robots'),
   shortcuts(LucideIcons.keyboard300, 'Keyboard shortcuts'),
   debug(LucideIcons.bug300, 'Debug'),
@@ -85,6 +86,11 @@ const _kSettingsGroups = [
   SettingsGroup('Preferences', [
     SettingsSection.usage,
     SettingsSection.customize,
+    // Beside Customize because it is the same kind of decision — how this Mac behaves while you
+    // work — and NOT inside it, which is where the alert switch started. Customize is about how
+    // the app looks; a sound is not a look, and somebody turning one off does not think to look
+    // under Appearance for it.
+    SettingsSection.notifications,
     SettingsSection.devices,
     SettingsSection.account,
   ]),
