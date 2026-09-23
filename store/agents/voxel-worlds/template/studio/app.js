@@ -4,27 +4,27 @@ import {TransformControls} from 'three/addons/controls/TransformControls.js';
 import {validateProject,clone,escapeHTML as esc,compileWorld,meshWorld,rotatedSize,paintCells,cellAt,moveVisitor,fitsVisitor,navigationReport} from './project.mjs';
 import {exportGLB,exportVOX,importVOX,addImportedAsset} from './formats.mjs';
 import {zipFiles} from './archive.mjs';
+import {EditSession} from './edit-session.mjs';
 
 const originalHTML='<!doctype html>'+document.documentElement.outerHTML;
 const $=id=>document.getElementById(id),data=JSON.parse($('world-data').textContent),readonly=data.mode==='walk';
-let project=validateProject(data.project),revision=project.revision,selected=project.objects.find(o=>!o.locked&&!o.hidden)?.id??project.objects[0].id,material=project.materials[0].id;
-let world,meshes=[],tool='select',walking=false,visitor,pitch=0,dirty=false,connected=false,saving=false,sourcePending=null,pollEpoch=0,cycle=0;
-const past=[],future=[],keys=new Set(),draftKey='tidelands:'+project.id,viewport=$('viewport');
+let project=validateProject(data.project),selected=project.objects.find(o=>!o.locked&&!o.hidden)?.id??project.objects[0].id,material=project.materials[0].id;
+let world,meshes=[],tool='select',walking=false,visitor,pitch=0,connected=false,saving=false,sourcePending=null,pollEpoch=0,cycle=0;
+const session=new EditSession(project),{past,future}=session,keys=new Set(),viewport=$('viewport');
 const report=message=>{$('status').textContent=message;};
 function failure(error){renderUI();report(error.message);const dialog=document.querySelector('dialog[open]');if(dialog){let notice=dialog.querySelector('[data-error]');if(!notice){notice=document.createElement('p');notice.dataset.error='';notice.setAttribute('role','alert');notice.style.color='#a24b2f';dialog.append(notice);}notice.textContent=error.message;}}
 const guard=fn=>(...args)=>{try{const result=fn(...args);if(result?.catch)result.catch(failure);}catch(error){failure(error);}};
 const download=(name,body,type='application/octet-stream')=>{const url=URL.createObjectURL(body instanceof Blob?body:new Blob([body],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);};
 const stamp=()=>new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
-const state=()=>{$('save-state').textContent=dirty?'Unsaved changes':connected?'Saved in workspace':'Editable offline project';$('save-source').hidden=!connected||readonly;$('save-source').disabled=!dirty||saving||Boolean(sourcePending);$('undo').disabled=!past.length;$('redo').disabled=!future.length;};
-function saveDraft(){try{localStorage.setItem(draftKey,JSON.stringify({revision,project,at:Date.now()}));}catch{report('Browser draft storage is full. Save your project to keep these changes.');}}
+const state=()=>{$('save-state').textContent=session.dirty?'Unsaved changes':connected?'Saved in workspace':'Editable offline project';$('save-source').hidden=!connected||readonly;$('save-source').disabled=!session.dirty||saving||Boolean(sourcePending);$('undo').disabled=!past.length;$('redo').disabled=!future.length;};
+function saveDraft(){try{session.persistDraft(localStorage);}catch{report('Browser draft storage is unavailable. Download your project to keep these changes.');}}
 function mutate(fn,message='World updated'){
   if(readonly)return;const next=clone(project);fn(next);const valid=validateProject(next);
   // Mesh before committing, so an over-budget scene cannot replace a working draft.
   const compiled=compileWorld(valid),geometry=meshWorld(valid,compiled);
-  past.push(JSON.stringify(project));while(past.length>40||past.reduce((n,s)=>n+s.length,0)>16000000)past.shift();future.length=0;
-  project=valid;world=compiled;dirty=true;renderWorld(geometry);renderUI();saveDraft();report(message);
+  session.edit(valid);project=session.project;world=compiled;renderWorld(geometry);renderUI();report(message);saveDraft();
 }
-function history(from,to){if(!from.length)return;to.push(JSON.stringify(project));project=validateProject(JSON.parse(from.pop()));dirty=true;rebuild();saveDraft();report('Edit history restored');}
+function history(from,to){if(!session.restoreHistory(from,to))return;project=session.project;rebuild();report('Edit history restored');saveDraft();}
 const scene=new THREE.Scene(),camera=new THREE.PerspectiveCamera(43,1,.1,2000),renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.18;viewport.append(renderer.domElement);
 const ambient=new THREE.HemisphereLight('#f1f1d9','#66716e',2.2),sun=new THREE.DirectionalLight('#ffedd1',3.1);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);sun.shadow.normalBias=.05;sun.shadow.bias=-.0001;scene.add(ambient,sun,sun.target);
@@ -123,22 +123,33 @@ $('export-glb').onclick=guard(()=>download(project.id+'.glb',exportGLB(project),
 $('export-kit').onclick=guard(async()=>{report('Preparing your editable world kit…');await new Promise(r=>setTimeout(r,30));const files=[[project.id+'.tidelands.json',JSON.stringify(project,null,2)],[project.id+'.glb',exportGLB(project)],[project.id+'.vox',exportVOX(project)],['studio.html',portable()],['walkthrough.html',portable('walk')],['README.md',readme()],['walking-check.json',JSON.stringify(navigationReport(project),null,2)]];download(project.id+'-world-kit.zip',zipFiles(files));report('World kit exported: source, GLB, VOX, editable studio and walkthrough');});
 $('snapshot').onclick=()=>{renderer.render(scene,camera);renderer.domElement.toBlob(blob=>{if(blob)download(project.id+'-'+stamp()+'.png',blob);});};
 $('check-routes').onclick=guard(()=>{const result=navigationReport(project);report(result.issues.length?result.issues.join(' '):`${result.reachableStandingCells.toLocaleString()} connected standing positions; all ${result.stops.length} destinations reached by the geometry check. Walk the result to verify it.`);download(project.id+'-walking-check.json',JSON.stringify(result,null,2),'application/json');});
-function openProject(next,message){const valid=validateProject(next);meshWorld(valid);project=valid;selected=project.objects.find(o=>!o.locked)?.id??project.objects[0].id;past.length=0;future.length=0;dirty=true;rebuild();if(walking)setWalking(false);frame();saveDraft();report(message);}
+function openProject(next,message){const valid=validateProject(next);meshWorld(valid);session.openDraft(valid);project=session.project;selected=project.objects.find(o=>!o.locked)?.id??project.objects[0].id;rebuild();if(walking)setWalking(false);frame();report(message);saveDraft();}
 $('open-project').onclick=guard(async()=>{$('native-open').hidden=!connected;$('open-dialog').showModal();if(connected){const response=await fetch('/api/files'),data=await response.json();$('recent-projects').replaceChildren();for(const file of data.files??[]){const button=document.createElement('button');button.className='wide';button.textContent=file.name;button.title=file.folder;button.onclick=guard(()=>openPath(file.path));$('recent-projects').append(button);}if(!data.files?.length)$('recent-projects').textContent='No saved worlds in Downloads, Desktop or Documents yet.';}});
 $('choose-project').onclick=()=>$('project-file').click();$('close-open').onclick=()=>$('open-dialog').close();
 async function openPath(path){const response=await fetch('/api/open',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({path})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not open the project.');openProject(data.project,'Project opened as a draft. Save to keep it in this workspace.');$('open-dialog').close();}
 $('open-path').onclick=guard(()=>openPath($('project-path').value));
 $('project-file').onchange=guard(async event=>{const f=event.target.files[0];event.target.value='';if(!f)return;if(f.size>12000000)throw new Error('Choose a project smaller than 12 MB.');openProject(JSON.parse(await f.text()),'Project opened as a draft. Save to keep it in this workspace.');$('open-dialog').close();});
 $('import-vox').onclick=()=>$('vox-file').click();$('vox-file').onchange=guard(async event=>{const f=event.target.files[0];event.target.value='';if(!f)return;if(f.size>24000000)throw new Error('Choose a VOX file smaller than 24 MB.');const asset=importVOX(await f.arrayBuffer()),origin=[0,Math.floor(project.spawn.position[1]),0],result=addImportedAsset(project,asset,{name:f.name.replace(/\.vox$/i,''),origin});mutate(p=>Object.assign(p,result.project),'Supplied voxel asset imported');setSelected(result.id);});
-function sourceNotice(next,message){sourcePending=next;$('source-notice').hidden=false;$('source-notice').querySelector('span').textContent=message;state();}
+function sourceNotice(next,message){sourcePending=next;session.observeSource(next);$('source-notice').hidden=false;$('source-notice').querySelector('span').textContent=message;state();saveDraft();}
 $('draft-keep').onclick=()=>download(project.id+'-draft-'+stamp()+'.tidelands.json',JSON.stringify(project,null,2),'application/json');
-$('source-load').onclick=guard(()=>{if(!sourcePending)return;download(project.id+'-before-restore-'+stamp()+'.tidelands.json',JSON.stringify(project,null,2),'application/json');const next=sourcePending;sourcePending=null;openProject(next,'Prior draft downloaded; source version restored');revision=next.revision;dirty=false;$('source-notice').hidden=true;state();});
-$('save-source').onclick=guard(async()=>{if(!connected||sourcePending)return;saving=true;pollEpoch++;state();try{const response=await fetch('/api/project',{method:'PUT',headers:{'content-type':'application/json','if-match':revision},body:JSON.stringify(project)}),result=await response.json();if(response.status===409){sourceNotice(result.project,'The source changed while you were editing. Download your draft before choosing the source.');return;}if(!response.ok)throw new Error(result.error||'Save failed');project=validateProject(result.project);revision=project.revision;dirty=false;try{localStorage.removeItem(draftKey);}catch{}report('Saved to workspace; the previous source is retained in history.');}finally{saving=false;state();}});
-async function poll(){if(location.protocol==='file:'||readonly||saving)return;const epoch=++pollEpoch;try{const response=await fetch('/api/project');if(!response.ok)return;const result=await response.json();if(epoch!==pollEpoch||saving||!result.project)return;connected=true;const next=validateProject(result.project);if(next.revision!==revision){if(dirty)sourceNotice(next,'Your agent changed the source. Keep your draft before switching versions.');else{project=next;revision=next.revision;rebuild();report('Agent changes loaded from the source project');}}state();}catch{}}
+function acceptSource(next,message){const valid=validateProject(next);meshWorld(valid);session.acceptSource(valid);project=session.project;if(!selectedObject())selected=project.objects.find(o=>!o.locked&&!o.hidden)?.id??project.objects[0].id;rebuild();report(message);saveDraft();}
+$('source-load').onclick=guard(()=>{if(!sourcePending)return;download(project.id+'-before-restore-'+stamp()+'.tidelands.json',JSON.stringify(project,null,2),'application/json');acceptSource(sourcePending,'Prior draft downloaded; source version restored');sourcePending=null;if(walking)setWalking(false);frame();$('source-notice').hidden=true;state();});
+$('save-source').onclick=guard(async()=>{
+  if(!connected||sourcePending||saving||!session.dirty)return;
+  const request=session.beginSave();saving=true;pollEpoch++;state();
+  try{
+    const response=await fetch('/api/project',{method:'PUT',headers:{'content-type':'application/json','if-match':request.revision},body:request.body}),result=await response.json();
+    if(response.status===409){sourceNotice(validateProject(result.project),'The source changed while you were editing. Download your draft before choosing the source.');return;}
+    if(!response.ok)throw new Error(result.error||'Save failed');
+    const keptEdits=session.finishSave(request,validateProject(result.project));project=session.project;
+    report(keptEdits?'Saved the submitted version; your newer edits are still unsaved.':'Saved to workspace; the previous source is retained in history.');saveDraft();
+  }finally{saving=false;state();}
+});
+async function poll(){if(location.protocol==='file:'||readonly||saving)return;const epoch=++pollEpoch;try{const response=await fetch('/api/project');if(!response.ok)return;const result=await response.json();if(epoch!==pollEpoch||saving||!result.project)return;connected=true;const next=validateProject(result.project);if(next.revision!==session.revision){if(session.dirty)sourceNotice(next,'Your agent changed the source. Keep your draft before switching versions.');else acceptSource(next,'Agent changes loaded from the source project');}state();}catch{}}
 document.body.classList.toggle('readonly',readonly);rebuild();frame();resize();setTool('select');requestAnimationFrame(animate);
 if(readonly){guard(()=>setWalking(true))();$('save-state').textContent='Offline walkthrough';}else{
-  try{const draft=JSON.parse(localStorage.getItem(draftKey)||'null');if(draft?.project&&JSON.stringify(draft.project)!==JSON.stringify(project)){const source=project;openProject(draft.project,'Recovered your browser draft');sourceNotice(source,'A previous browser draft was recovered. You can keep it or return to the saved source.');}}catch{}
+  try{const draft=JSON.parse(localStorage.getItem(session.draftKey)||'null');if(draft?.project&&JSON.stringify(draft.project)!==JSON.stringify(project)){const source=project;openProject(draft.project,'Recovered your browser draft');sourceNotice(source,'A previous browser draft was recovered. You can keep it or return to the saved source.');}}catch{}
   poll();setInterval(poll,3000);
 }
 // The same live state used by the controls is exposed for finite browser acceptance checks.
-window.tidelands={get project(){return clone(project);},get world(){return world;},get visitor(){return clone(visitor);},get selected(){return selected;},screenPoint(point){const q=new THREE.Vector3(...point).project(camera),r=renderer.domElement.getBoundingClientRect();return {x:r.x+(q.x+1)/2*r.width,y:r.y+(1-q.y)/2*r.height};},get connected(){return connected;},get dirty(){return dirty;},setSelected,exportGLB:()=>exportGLB(project),exportVOX:()=>exportVOX(project),portable,navigationReport:()=>navigationReport(project)};
+window.tidelands={get project(){return clone(project);},get world(){return world;},get visitor(){return clone(visitor);},get selected(){return selected;},screenPoint(point){const q=new THREE.Vector3(...point).project(camera),r=renderer.domElement.getBoundingClientRect();return {x:r.x+(q.x+1)/2*r.width,y:r.y+(1-q.y)/2*r.height};},get connected(){return connected;},get dirty(){return session.dirty;},setSelected,exportGLB:()=>exportGLB(project),exportVOX:()=>exportVOX(project),portable,navigationReport:()=>navigationReport(project)};
