@@ -326,13 +326,25 @@ class DesktopUpdater {
   /// single AppImage file), so the sha256 check already covers everything there is: it is made
   /// executable and staged as-is, with nothing to unpack or recheck.
   /// Returns null (and cleans up anything partially written) on any verification failure.
-  Future<StagedUpdate?> downloadAndStage(UpdateInfo info) async {
+  /// [onProgress] reports the DOWNLOAD only — bytes received out of
+  /// [UpdateInfo.size]. The manifest's size is the denominator rather than the
+  /// response's, because a CDN that omits `Content-Length` leaves Dio reporting
+  /// `-1` and the manifest is the authority the hash is checked against anyway.
+  /// Verifying and unpacking afterwards have no counter, so a caller showing a
+  /// percentage stops at 100 and keeps saying "installing" until this returns.
+  Future<StagedUpdate?> downloadAndStage(
+    UpdateInfo info, {
+    void Function(int received, int total)? onProgress,
+  }) async {
     if (!_enabled) return null;
     Directory? stagingDir;
     try {
       final response = await _dio.get<List<int>>(
         info.url,
         options: Options(responseType: ResponseType.bytes),
+        onReceiveProgress: onProgress == null
+            ? null
+            : (received, _) => onProgress(received, info.size),
       );
       final bytes = response.data;
       if (bytes == null || bytes.length != info.size) {

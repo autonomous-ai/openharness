@@ -81,9 +81,17 @@ class _Installer extends DesktopUpdater {
   final staged = Completer<StagedUpdate?>();
   UpdateInfo? requested;
 
+  /// The progress hook the real updater calls per chunk; tests drive it by
+  /// hand to check what the UI makes of a number arriving mid-download.
+  void Function(int received, int total)? progress;
+
   @override
-  Future<StagedUpdate?> downloadAndStage(UpdateInfo info) {
+  Future<StagedUpdate?> downloadAndStage(
+    UpdateInfo info, {
+    void Function(int received, int total)? onProgress,
+  }) {
     requested = info;
+    progress = onProgress;
     return staged.future;
   }
 }
