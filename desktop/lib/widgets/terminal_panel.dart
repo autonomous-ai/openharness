@@ -1926,12 +1926,22 @@ class _TerminalHeader extends StatelessWidget {
             builder: (context, constraints) {
               final scale = grid.appTextScaleOf(context);
               final narrow = constraints.maxWidth < 560 * math.max(1, scale);
+              // Keep PR state visible before spending space on branch prose.
+              // A compact badge also fits beside the compact action menu.
+              final showPr =
+                  agent != null &&
+                  project?.shownBranch != null &&
+                  constraints.maxWidth >= 360 * math.max(1, scale);
+              final badgeWidth = showPr ? (narrow ? 150.0 : 180.0) : 0.0;
               final rightWidth = narrow
                   ? math.max(
-                      showModelPicker ? 60.0 : 28.0,
+                      (showModelPicker ? 100.0 : 28.0) + badgeWidth,
                       constraints.maxWidth * .36,
                     )
-                  : math.max(actionsWidth, constraints.maxWidth * .55);
+                  : math.max(
+                      actionsWidth + badgeWidth,
+                      constraints.maxWidth * .55,
+                    );
               return Row(
                 children: [
                   if (agent != null)
@@ -2064,14 +2074,11 @@ class _TerminalHeader extends StatelessWidget {
                   ConstrainedBox(
                     constraints: BoxConstraints(maxWidth: rightWidth),
                     child: PaneHeaderActions(
-                      trailing:
-                          !narrow &&
-                              rightWidth >= actionsWidth + 180 &&
-                              agent != null &&
-                              project?.shownBranch != null
+                      trailing: showPr
                           ? ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 180),
+                              constraints: BoxConstraints(maxWidth: badgeWidth),
                               child: PullRequestBadge(
+                                compact: narrow,
                                 identity: (
                                   session.machineId,
                                   agent.id,

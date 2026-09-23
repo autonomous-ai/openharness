@@ -12,8 +12,10 @@ class PullRequestBadge extends StatefulWidget {
     required this.identity,
     required this.read,
     this.open,
+    this.compact = false,
   });
   final Object identity;
+  final bool compact;
   final Future<Map<String, dynamic>> Function() read;
   final Future<bool> Function(Uri)? open;
   @override
@@ -82,13 +84,13 @@ class _PullRequestBadgeState extends State<PullRequestBadge> {
         uri!.userInfo.isEmpty &&
         uri.path.endsWith('/pull/$number');
     final label = found
-        ? 'PR #$number · $state'
+        ? '${widget.compact ? '' : 'PR '}#$number · $state'
         : result == null
         ? 'PR …'
         : 'PR unavailable';
     return Tooltip(
       message: found
-          ? 'Open pull request on GitHub'
+          ? 'PR #$number · $state — Open on GitHub'
           : result == null
           ? 'Checking pull request status'
           : 'Could not check GitHub. Check gh installation, sign-in and repository access on the agent’s machine. This does not mean there is no PR.',
