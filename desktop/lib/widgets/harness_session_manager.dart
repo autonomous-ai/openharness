@@ -269,7 +269,10 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                   child: Row(
                     children: [
                       Expanded(
-                        child: Text('Harness Monitor', style: AppType.heading()),
+                        child: Text(
+                          'Harness Monitor',
+                          style: AppType.heading(),
+                        ),
                       ),
                       IconButton(
                         tooltip: 'Close Harness Monitor',
@@ -793,12 +796,13 @@ class _SessionRow extends StatelessWidget {
                       ),
                     ),
                   Tooltip(
+                    // Every harness pauses; what differs is how much comes
+                    // back, and the button says which before it is pressed —
+                    // a shell loses what was running in it, and an engine with
+                    // no way to reopen its conversation returns to a new one.
                     message: busy
                         ? pendingLabel
-                        : row.controlUnavailable ??
-                              (row.agent.isStopped
-                                  ? 'Resume harness'
-                                  : 'Pause harness'),
+                        : row.controlUnavailable ?? _toggleLabel(row),
                     child: SizedBox(
                       width: 40,
                       height: 40,
@@ -938,4 +942,21 @@ class _MonitorStats extends StatelessWidget {
       ],
     );
   }
+}
+
+/// What the Pause/Resume button promises for this row. Three answers, because
+/// three things can come back: the same shell, the same conversation, or the
+/// harness with a new one (`resumeMode` on the agent frame).
+String _toggleLabel(HarnessSession row) {
+  if (isTerminalEngine(row.agent.engine)) {
+    return row.agent.isStopped
+        ? 'Open a fresh shell here'
+        : 'Pause terminal — ends this shell and anything running in it';
+  }
+  if (row.agent.resumesFreshConversation) {
+    return row.agent.isStopped
+        ? 'Resume as a new conversation'
+        : 'Pause harness — it comes back as a new conversation';
+  }
+  return row.agent.isStopped ? 'Resume harness' : 'Pause harness';
 }

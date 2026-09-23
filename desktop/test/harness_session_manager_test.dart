@@ -73,6 +73,22 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  /// A row past the fold is not built, and a fixture with a few harnesses in it
+  /// reaches that fold — the rows carry their token and edit figures now.
+  Future<Finder> reveal(WidgetTester tester, Finder target) async {
+    if (target.evaluate().isEmpty) {
+      await tester.scrollUntilVisible(
+        target,
+        120,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
+    }
+    await tester.ensureVisible(target);
+    await tester.pumpAndSettle();
+    return target;
+  }
+
   PendingQuestion question(String id, {String request = 'question'}) =>
       PendingQuestion(
         machineId: 'm',
@@ -512,8 +528,128 @@ void main() {
   );
 
   testWidgets(
-    'unsupported engines stay openable without a misleading pause control',
+    'a terminal pauses and comes back as a fresh shell in the same tile',
     (tester) async {
+      // A shell holds no conversation, so the saved-conversation rule the
+      // engines live under has nothing to protect here — the daemon has always
+      // relaunched one (`resumeStoppedAgent.ts` exempts it).
+      app
+          .stateOf('m')!
+          .agents
+          .add(
+            const Agent(
+              id: 'shell',
+              name: 'Untitled Pane',
+              engine: 'terminal',
+              terminalAvailable: true,
+              project: _project,
+            ),
+          );
+      app.rememberOpenedHarness('m', 'shell');
+      await open(tester);
+      await reveal(tester, toggle('shell'));
+      expect(tester.widget<IconButton>(toggle('shell')).onPressed, isNotNull);
+      expect(
+        find.byTooltip(
+          'Pause terminal — ends this shell and anything running in it',
+        ),
+        findsOneWidget,
+      );
+
+      connection.inventory = Completer<Map<String, dynamic>>();
+      await tester.tap(toggle('shell'));
+      await tester.pump();
+      expect(connection.stops, ['shell']);
+      connection.stopReplies.single.complete({'deleted': true});
+      await tester.pump();
+      connection.inventory!.complete({
+        'agents': [
+          {
+            'id': 'shell',
+            'name': 'Untitled Pane',
+            'engine': 'terminal',
+            'status': 'stopped',
+            'terminal': {'available': false},
+          },
+        ],
+      });
+      await tester.pumpAndSettle();
+      expect(app.stateOf('m')!.agents.single.isStopped, isTrue);
+      // Paused, not "Resume unavailable": it can come back.
+      expect(harnessSessions(app).single.status, 'Paused');
+      expect(find.text('Paused 1'), findsOneWidget);
+      expect(
+        tester.widget<IconButton>(toggle('shell')).onPressed,
+        isNotNull,
+        reason: 'the paused shell offers resume',
+      );
+      expect(find.byTooltip('Open a fresh shell here'), findsOneWidget);
+
+      await tester.tap(toggle('shell'));
+      await tester.pump();
+      expect(connection.types, ['agent_resume']);
+      connection.restartReplies.single.complete(
+        restartReceipt(
+          connection.requests.single['creationId'] as String,
+          agentId: 'shell',
+          name: 'Untitled Pane',
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(app.stateOf('m')!.agents.single.isStopped, isFalse);
+    },
+  );
+
+  testWidgets('every engine the daemon reports is pausable, in its own words', (
+    tester,
+  ) async {
+    // The daemon says per engine how much a resume brings back (`resumeMode`).
+    // An engine that reopens its conversation and one that cannot both pause;
+    // only the sentence differs.
+    app.stateOf('m')!.agents.addAll(const [
+      Agent(
+        id: 'keeps',
+        name: 'Keeps its conversation',
+        engine: 'opencode',
+        sessionId: 'history',
+        resumeMode: 'conversation',
+        terminalAvailable: true,
+      ),
+      Agent(
+        id: 'fresh',
+        name: 'No resume flag',
+        engine: 'devin',
+        sessionId: 'history',
+        resumeMode: 'fresh',
+        terminalAvailable: true,
+      ),
+    ]);
+    // The Monitor lists the harnesses this app has opened.
+    app.rememberOpenedHarness('m', 'keeps');
+    app.rememberOpenedHarness('m', 'fresh');
+    await open(tester);
+    await reveal(tester, toggle('keeps'));
+    expect(tester.widget<IconButton>(toggle('keeps')).onPressed, isNotNull);
+    expect(
+      find.ancestor(
+        of: toggle('keeps'),
+        matching: find.byTooltip('Pause harness'),
+      ),
+      findsOneWidget,
+    );
+    await reveal(tester, toggle('fresh'));
+    expect(tester.widget<IconButton>(toggle('fresh')).onPressed, isNotNull);
+    expect(
+      find.byTooltip('Pause harness — it comes back as a new conversation'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+    'an engine a pre-resumeMode daemon cannot pause keeps its explanation',
+    (tester) async {
+      // No `resumeMode` on the frame: an older CLI, whose resume would refuse
+      // anything but claude/codex. Offering the button would only fail.
       app
           .stateOf('m')!
           .agents
@@ -528,13 +664,14 @@ void main() {
           );
       app.rememberOpenedHarness('m', 'unsupported');
       await open(tester);
+      await reveal(tester, toggle('unsupported'));
       expect(
         tester.widget<IconButton>(toggle('unsupported')).onPressed,
         isNull,
       );
       expect(
         find.byTooltip(
-          'Pause and resume are not available for this engine yet.',
+          'Update the harness CLI on this machine to pause and resume this engine.',
         ),
         findsOneWidget,
       );

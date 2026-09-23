@@ -6997,7 +6997,7 @@ class AppNotifier extends ChangeNotifier {
     if (_agentPauses[key] case final pending?) return pending;
     final machine = stateOf(machineId);
     final agent = machine?.agents.where((a) => a.id == agentId).firstOrNull;
-    if (machine == null || agent == null || !agent.canResumeConversation) {
+    if (machine == null || agent == null || !agent.canPauseAndResume) {
       return Future.value(
         'This harness has no supported saved conversation to resume.',
       );
@@ -7005,29 +7005,35 @@ class AppNotifier extends ChangeNotifier {
     if (agent.isStopped) return Future.value(null);
     final revision = _authRevision;
     late final Future<String?> pause;
-    pause = (() async {
-      final error = await deleteAgent(machineId, agentId);
-      if (!_machineWorkCurrent(machine, revision)) return error;
-      final current = machine.agents.where((a) => a.id == agentId).firstOrNull;
-      if (error == null && current == null) {
-        _upsertAgent(
-          machine,
-          agent.copyWith(status: 'stopped', terminalAvailable: false),
-        );
-        notifyListeners();
-      }
-      await reloadMachineData(machineId);
-      if (!_machineWorkCurrent(machine, revision)) return error;
-      final observed = machine.agents.where((a) => a.id == agentId).firstOrNull;
-      // A lost reply is resolved by authoritative inventory, never by resending Stop.
-      if (observed?.isStopped == true && observed?.sessionId == agent.sessionId) {
-        return null;
-      }
-      return error;
-    })().whenComplete(() {
-      if (identical(_agentPauses[key], pause)) _agentPauses.remove(key);
-      if (_authWorkCurrent(revision)) notifyListeners();
-    });
+    pause =
+        (() async {
+          final error = await deleteAgent(machineId, agentId);
+          if (!_machineWorkCurrent(machine, revision)) return error;
+          final current = machine.agents
+              .where((a) => a.id == agentId)
+              .firstOrNull;
+          if (error == null && current == null) {
+            _upsertAgent(
+              machine,
+              agent.copyWith(status: 'stopped', terminalAvailable: false),
+            );
+            notifyListeners();
+          }
+          await reloadMachineData(machineId);
+          if (!_machineWorkCurrent(machine, revision)) return error;
+          final observed = machine.agents
+              .where((a) => a.id == agentId)
+              .firstOrNull;
+          // A lost reply is resolved by authoritative inventory, never by resending Stop.
+          if (observed?.isStopped == true &&
+              observed?.sessionId == agent.sessionId) {
+            return null;
+          }
+          return error;
+        })().whenComplete(() {
+          if (identical(_agentPauses[key], pause)) _agentPauses.remove(key);
+          if (_authWorkCurrent(revision)) notifyListeners();
+        });
     _agentPauses[key] = pause;
     return pause;
   }
@@ -7187,9 +7193,11 @@ class AppNotifier extends ChangeNotifier {
   /// Attach to a running harness or resume its saved conversation immediately.
   Future<RestartAgentResult> resumeAgent(String machineId, String agentId) {
     if (pendingAgentPause(machineId, agentId) != null) {
-      return Future.value(const RestartAgentResult(
-        error: 'The harness is still pausing. Try again in a moment.',
-      ));
+      return Future.value(
+        const RestartAgentResult(
+          error: 'The harness is still pausing. Try again in a moment.',
+        ),
+      );
     }
     final agent = stateOf(machineId)?.agents
         .where((agent) => agent.id == agentId)
@@ -7358,9 +7366,18 @@ class AppNotifier extends ChangeNotifier {
       if (raw is! Map || raw['id'] != agentId) return unknown;
       try {
         var updated = Agent.fromJson(Map<String, dynamic>.from(raw));
+        // A resume that says it opened a NEW conversation is only a surprise
+        // where an old one was promised. An engine with no resume argv, or a
+        // harness paused before anything recorded a conversation, comes back as
+        // a new one BECAUSE that is what it was asked for — and the button said
+        // so beforehand — so the receipt is honoured rather than read as a
+        // failure that leaves the row stuck.
+        final fresh =
+            attempt.agent!.resumesFreshConversation ||
+            updated.resumesFreshConversation;
         if (resuming &&
-            (result['resumed'] == false ||
-                updated.sessionId != attempt.agent!.sessionId ||
+            ((result['resumed'] == false && !fresh) ||
+                (updated.sessionId != attempt.agent!.sessionId && !fresh) ||
                 updated.launchState == 'starting' ||
                 updated.launchState == 'failed')) {
           return unknown;
@@ -7412,6 +7429,9 @@ class AppNotifier extends ChangeNotifier {
                 ? 'Update the harness CLI on this machine to open saved harnesses.'
                 : 'Update the harness CLI on this machine to restart an agent.',
           'AGENT_BUSY' => 'Another operation is changing this agent. Wait for it to finish, then retry.',
+          'RESUME_UNAVAILABLE' => 'The saved conversation is unavailable. The harness can still be started fresh.',
+          'RESUME_SESSION_MISMATCH' => 'The harness came back on a different conversation. The saved one is still kept.',
+          'RESUME_FAILED' => 'The harness did not come back. Its output and conversation are kept.',
           _ =>
             resuming
                 ? 'Could not open this harness: $code'
@@ -8108,11 +8128,15 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || machine == null || !await _awaitAgent(machine, agentId)) {
       return false;
     }
-    if (_disposed || revision != _authRevision || !identical(machineStates[machineId], machine)) {
+    if (_disposed ||
+        revision != _authRevision ||
+        !identical(machineStates[machineId], machine)) {
       return false;
     }
     await openAgentFromDial(machineId, agentId);
-    if (_disposed || revision != _authRevision || !identical(machineStates[machineId], machine) ||
+    if (_disposed ||
+        revision != _authRevision ||
+        !identical(machineStates[machineId], machine) ||
         !allPanes.any(
           (p) => p.machineId == machineId && p.agentId == agentId,
         )) {

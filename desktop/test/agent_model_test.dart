@@ -373,4 +373,52 @@ void _cloneTests() {
     );
     expect(Agent.fromJson({'id': 'agent-1', 'name': 'a'}).canClone, isFalse);
   });
+
+  group('what a pause can promise', () {
+    Agent parse(Map<String, dynamic> extra) => Agent.fromJson({
+      'id': 'a0',
+      'name': 'Row',
+      'engine': 'opencode',
+      ...extra,
+    });
+
+    test('reads the daemon\'s mode, and only a word it knows', () {
+      expect(parse({'resumeMode': 'conversation'}).resumeMode, 'conversation');
+      expect(parse({'resumeMode': 'fresh'}).resumeMode, 'fresh');
+      expect(parse({'resumeMode': 'shell'}).resumeMode, 'shell');
+      // A fourth word this build has no wording for, or an older daemon.
+      expect(parse({'resumeMode': 'someday'}).resumeMode, isNull);
+      expect(parse({}).resumeMode, isNull);
+    });
+
+    test('offers pause for any engine the daemon reports on', () {
+      expect(parse({'resumeMode': 'conversation'}).canPauseAndResume, isTrue);
+      expect(parse({'resumeMode': 'fresh'}).canPauseAndResume, isTrue);
+      // No word: the old rule, so an older CLI is never offered a pause it refuses.
+      expect(parse({}).canPauseAndResume, isFalse);
+      expect(parse({'engine': 'terminal'}).canPauseAndResume, isTrue);
+      expect(
+        parse({'engine': 'claude', 'sessionId': 'abc'}).canPauseAndResume,
+        isTrue,
+      );
+    });
+
+    test('says when coming back means a new conversation', () {
+      expect(
+        parse({'resumeMode': 'fresh', 'sessionId': 'abc'})
+            .resumesFreshConversation,
+        isTrue,
+      );
+      expect(
+        parse({'resumeMode': 'conversation'}).resumesFreshConversation,
+        isTrue,
+        reason: 'nothing recorded to reopen',
+      );
+      expect(
+        parse({'resumeMode': 'conversation', 'sessionId': 'abc'})
+            .resumesFreshConversation,
+        isFalse,
+      );
+    });
+  });
 }

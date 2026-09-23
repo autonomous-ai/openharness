@@ -1,9 +1,9 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import { captureResumeIdentity } from './captureResumeIdentity.js'
-import { validTranscriptPath, type RegisteredSession } from './registry.js'
+import { engineKeepsTranscriptFile, validTranscriptPath, type RegisteredSession } from './registry.js'
 import { claudeProcessSession, findLiveSession, findResumedTranscript } from './sessionRepair.js'
 import { processRows, resumeSessionId } from './tmux.js'
-vi.mock('./registry.js', () => ({ validTranscriptPath: vi.fn(() => true) }))
+vi.mock('./registry.js', () => ({ validTranscriptPath: vi.fn(() => true), engineKeepsTranscriptFile: vi.fn(() => true) }))
 vi.mock('./sessionRepair.js', () => ({ claudeProcessSession: vi.fn(), findLiveSession: vi.fn(), findResumedTranscript: vi.fn() }))
 vi.mock('./tmux.js', () => ({ processRows: vi.fn(), resumeSessionId: vi.fn() }))
 let row: RegisteredSession
@@ -13,15 +13,32 @@ beforeEach(() => {
     processIdentity: { pid: 77, executable: '/bin/claude', startMarker: 'Mon Sep 21 01:00:00 2026' } } as RegisteredSession
   vi.mocked(processRows).mockResolvedValue([{ ...row.processIdentity!, args: 'claude', parentPid: 1 }])
   vi.mocked(validTranscriptPath).mockReturnValue(true)
+  vi.mocked(engineKeepsTranscriptFile).mockReturnValue(true)
   vi.mocked(resumeSessionId).mockReturnValue(null)
   vi.mocked(claudeProcessSession).mockResolvedValue(null)
   vi.mocked(findLiveSession).mockResolvedValue(null)
   vi.mocked(findResumedTranscript).mockResolvedValue(null)
 })
-it('leaves unsupported engines and complete bindings unchanged', async () => {
+it('leaves a shell and a complete binding unchanged', async () => {
   row.engine = 'terminal'; expect(await captureResumeIdentity(row)).toBe(row)
   row.engine = 'codex'; row.sessionId = 'known'; row.transcriptPath = '/history'
   expect(await captureResumeIdentity(row)).toBe(row); expect(processRows).not.toHaveBeenCalled()
+})
+
+it('takes a database-backed engine on its recorded id, with no transcript to check', async () => {
+  // opencode/kilo/hermes/devin keep the conversation in SQLite: there is no file, and demanding one
+  // is what used to leave their resume with nothing to reopen.
+  vi.mocked(engineKeepsTranscriptFile).mockReturnValue(false)
+  Object.assign(row, { engine: 'opencode', sessionId: 'known' })
+  expect(await captureResumeIdentity(row)).toBe(row)
+  expect(findResumedTranscript).not.toHaveBeenCalled()
+})
+
+it('captures a database-backed engine id read off the live process', async () => {
+  vi.mocked(engineKeepsTranscriptFile).mockReturnValue(false)
+  row.engine = 'opencode'
+  vi.mocked(findLiveSession).mockResolvedValue({ sessionId: 'live' })
+  expect(await captureResumeIdentity(row)).toMatchObject({ sessionId: 'live', source: 'stop-repair' })
 })
 it.each([null, '/stale'])('repairs a known id with missing or invalid path %s', async transcriptPath => {
   Object.assign(row, { sessionId: 'known', transcriptPath, codexHome: '/profile' })

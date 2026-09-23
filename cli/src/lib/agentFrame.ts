@@ -26,6 +26,7 @@ import type { GridAssignment } from './gridAssignment.js'
 import type { GridWebSearchStatus } from './gridLaunch.js'
 import { projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './registry.js'
 import { engineCanFork } from './forkAgent.js'
+import { resumeMode, type ResumeMode } from './resumeCapability.js'
 import type { DshVerdict } from '../dsh/verdict.js'
 
 /**
@@ -83,6 +84,14 @@ export type AgentFrame = {
   /** Whether `agent_fork` can do anything for this engine (lib/forkAgent.ts) — natively, or by a
    *  handoff. A client hides the Fork action on a false rather than offering a button that refuses. */
   forkable: boolean
+  /**
+   * How much a Pause of this harness can promise to bring back (lib/resumeCapability.ts):
+   * `'shell'` (a terminal — a fresh shell in the same tile), `'conversation'` (this engine reopens
+   * the one it was in) or `'fresh'` (it comes back, as a new conversation). Every value is
+   * pausable; a client words the button from this rather than keeping its own copy of the engine
+   * table, which is how the two drifted before.
+   */
+  resumeMode: ResumeMode
   /**
    * The launch choices a client needs to open ANOTHER agent like this one — the desktop's Clone
    * (`agent_create` with the same `permissionMode`, `bypassPermission` and `agent`). Read off the
@@ -182,6 +191,7 @@ export async function agentFrame(
     verdict: dsh?.verdict ?? null,
     forkedFrom: s.forkedFrom ? { agentId: s.forkedFrom.agentId, name: s.forkedFrom.name } : null,
     forkable: engineCanFork(s.engine),
+    resumeMode: resumeMode(s.engine),
     permissionMode: s.permissionMode ?? null,
     bypassPermission: s.bypassPermission ?? null,
     namedAgent: s.agent ?? null,

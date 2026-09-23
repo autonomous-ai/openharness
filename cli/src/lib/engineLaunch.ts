@@ -321,6 +321,12 @@ export const LAUNCH_FORK_FLAG: Readonly<Partial<Record<AgentEngine, { lead: stri
   codex: { lead: ['fork'] },
 }
 
+/** Whether a relaunch can reopen this engine's previous conversation — see [LAUNCH_RESUME_FLAG].
+ *  `lib/resumeCapability.ts` turns this into what Pause/Resume may promise a person. */
+export function supportsLaunchResume(engine: AgentEngine): boolean {
+  return LAUNCH_RESUME_FLAG[engine] !== undefined
+}
+
 export function supportsNativeFork(engine: AgentEngine): boolean {
   return LAUNCH_FORK_FLAG[engine] !== undefined
 }

@@ -48,12 +48,12 @@ class HarnessSession {
       (online &&
           (agent.terminalAvailable ||
               (agent.isStopped &&
-                  agent.canResumeConversation &&
+                  agent.canPauseAndResume &&
                   !machine.machine.isShared)));
   bool get canControl =>
       online &&
       !machine.machine.isShared &&
-      agent.canResumeConversation &&
+      agent.canPauseAndResume &&
       (agent.isStopped || agent.terminalAvailable) &&
       agent.launchState != 'starting';
   String get status => !online
@@ -61,7 +61,7 @@ class HarnessSession {
       : machine.machine.isShared
       ? 'View only'
       : agent.isStopped
-      ? (agent.canResumeConversation ? 'Paused' : 'Resume unavailable')
+      ? (agent.canPauseAndResume ? 'Paused' : 'Resume unavailable')
       : agent.launchState == 'failed'
       ? 'Start failed'
       : agent.launchState == 'starting'
@@ -77,10 +77,12 @@ class HarnessSession {
       ? 'Reconnect ${machine.machine.displayName} to control this harness.'
       : machine.machine.isShared
       ? 'Shared harnesses are view-only.'
-      : !agent.canResumeConversation
+      // Only reachable against a daemon too old to report what its engines can
+      // resume; a current one offers Pause for every harness it runs.
+      : !agent.canPauseAndResume
       ? (agent.engine == 'claude' || agent.engine == 'codex'
             ? 'Waiting for a saved conversation before enabling pause and resume.'
-            : 'Pause and resume are not available for this engine yet.')
+            : 'Update the harness CLI on this machine to pause and resume this engine.')
       : !canControl
       ? agent.launchDetail ??
             agent.terminalUnavailableReason ??
