@@ -21,9 +21,10 @@ import 'voice_mic_mode.dart';
 ///    the take away, and the face turns to a `×` to say so. No long-press:
 ///    that gesture is what records.
 ///
-/// ⚠️ **The swell is painted, never laid out.** The breathing ring scales past
-/// the button's box with [Clip.none] rather than growing it, so nothing around
-/// the button moves while it breathes.
+/// ⚠️ **It is the right end of the voice capsule, and draws nothing past its
+/// circle.** What it is doing — the waveform, the words, the `×` — is in the
+/// capsule body behind it (`voice_status_pill.dart`), so the button's own box
+/// never grows and nothing around it moves.
 class VoiceMicButton extends StatefulWidget {
   const VoiceMicButton({
     super.key,
@@ -115,6 +116,9 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
   /// first one's take.
   int? _holdPointer;
 
+  /// A finger is on the live mic, and the circle sinks a little under it.
+  bool _pressed = false;
+
   bool get _live => widget.onPressed != null;
 
   /// What to draw: the face given, unless a hold has been dragged off the
@@ -123,25 +127,34 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
       ? VoiceMicFace.cancelling
       : widget.face;
 
-  bool get _lit => switch (_face) {
-    VoiceMicFace.starting ||
-    VoiceMicFace.listening ||
-    VoiceMicFace.cancelling ||
-    VoiceMicFace.retry => true,
-    VoiceMicFace.talk || VoiceMicFace.busy || VoiceMicFace.off => false,
-  };
+  /// Transcribing or sending: nothing to press, but not dead either.
+  ///
+  /// ⚠️ Kept apart from [_live] for the drawing only. Neither face has an
+  /// `onPressed`, and it is still what decides whether the button takes a
+  /// press — but dimming a button that is visibly working reads as "broken",
+  /// and its arc is the one thing saying the words are on their way.
+  bool get _working =>
+      _face == VoiceMicFace.busy || _face == VoiceMicFace.sending;
+
+  bool get _dead => !_live && !_working;
 
   String get _semanticLabel => switch (_face) {
-    VoiceMicFace.talk =>
+    VoiceMicFace.talk || VoiceMicFace.sent =>
       micHoldsToTalk ? 'Hold to talk to the harness' : 'Talk to the harness',
     VoiceMicFace.starting => 'Cancel',
     VoiceMicFace.listening =>
       micHoldsToTalk ? 'Release to send' : 'Done talking',
     VoiceMicFace.cancelling => 'Release to cancel',
-    VoiceMicFace.busy => 'Working',
+    VoiceMicFace.busy || VoiceMicFace.sending => 'Working',
     VoiceMicFace.retry => 'Send again',
     VoiceMicFace.off => 'Voice input is off',
   };
+
+  void _setPressed(bool value) {
+    if (value == _pressed) return;
+    _pressed = value;
+    if (mounted) setState(() {});
+  }
 
   /// Whether [point], in the hit area's own coordinates, still counts as on the
   /// button.
@@ -162,6 +175,7 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
     if (!_live || _holdPointer != null) return;
     _holdPointer = event.pointer;
     _setSlipped(false);
+    _setPressed(true);
     HapticFeedback.lightImpact();
     widget.onHoldStart?.call();
   }
@@ -181,6 +195,7 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
     _holdPointer = null;
     final cancelled = _slippedOff;
     _setSlipped(false);
+    _setPressed(false);
     widget.onHoldFinish?.call(cancelled: cancelled);
   }
 
@@ -190,6 +205,7 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
     if (event.pointer != _holdPointer) return;
     _holdPointer = null;
     _setSlipped(false);
+    _setPressed(false);
     widget.onHoldFinish?.call(cancelled: true);
   }
 
@@ -238,6 +254,10 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
   @override
   void didUpdateWidget(VoiceMicButton old) {
     super.didUpdateWidget(old);
+    // Gone dead under a finger — the terminal stopped taking input mid-press.
+    // The tap callbacks are dropped with it, so no tap-up will ever come to
+    // raise the circle again.
+    if (widget.onPressed == null && _holdPointer == null) _pressed = false;
     if (!micHoldsToTalk) return;
     if (old.face != VoiceMicFace.listening &&
         widget.face == VoiceMicFace.listening) {
@@ -258,10 +278,6 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
       // [OverflowBox] is what allows a child bigger than its parent without the
       // parent growing — so the row, and the terminal above it, keep their
       // heights while the finger gets a target half again as wide.
-      //
-      // `Clip.none` on the stack matters for the same reason: the ring already
-      // paints past the core, and clipping to the slot would cut both it and
-      // the overflowing hit area back to nothing.
       child: SizedBox.square(
         dimension: VoiceMicButton.extent,
         child: OverflowBox(
@@ -272,17 +288,17 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
               dimension: VoiceMicButton.touchExtent,
               child: AnimatedOpacity(
                 duration: const Duration(milliseconds: 160),
-                opacity: _live ? 1 : 0.4,
-                child: Stack(
-                  alignment: Alignment.center,
-                  clipBehavior: Clip.none,
-                  children: [
-                    // ⚠️ Not while cancelling: the ring means "listening, carry
-                    // on talking", and leaving it breathing under a `×` would
-                    // say both things at once.
-                    if (_face == VoiceMicFace.listening) const VoiceMicRing(),
-                    VoiceMicCore(face: _face, lit: _lit),
-                  ],
+                opacity: _dead ? 0.4 : 1,
+                child: Center(
+                  // Sinks under the finger. Not while a hold is slid off: the
+                  // thumb is no longer on it, and the `×` it now wears is the
+                  // thing to read.
+                  child: AnimatedScale(
+                    duration: const Duration(milliseconds: 140),
+                    curve: Curves.easeOut,
+                    scale: _pressed && !_slippedOff ? 0.92 : 1,
+                    child: VoiceMicCore(face: _face, dead: _dead),
+                  ),
                 ),
               ),
             ),
@@ -308,6 +324,9 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
       return GestureDetector(
         key: const ValueKey('voice-mic'),
         behavior: HitTestBehavior.opaque,
+        onTapDown: _live ? (_) => _setPressed(true) : null,
+        onTapUp: _live ? (_) => _setPressed(false) : null,
+        onTapCancel: _live ? () => _setPressed(false) : null,
         onTap: _live
             ? () {
                 HapticFeedback.lightImpact();

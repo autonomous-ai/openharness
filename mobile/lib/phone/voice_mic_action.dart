@@ -47,7 +47,7 @@ VoiceMicAction voiceMicAction(
 VoiceMicAction _tapAction(VoiceInputController voice, TerminalSession session) {
   final canSend = session.acceptsInput;
   void send() => unawaited(voice.submit(session.sendComposerText));
-  if (voice.isSending) return _face(VoiceMicFace.busy);
+  if (voice.isSending) return _face(VoiceMicFace.sending);
   return switch (voice.status) {
     VoiceInputStatus.transcribing => _face(VoiceMicFace.busy),
     VoiceInputStatus.starting => _face(
@@ -95,7 +95,7 @@ VoiceMicAction _holdAction(
   VoiceInputController voice,
   TerminalSession session,
 ) {
-  if (voice.isSending) return _face(VoiceMicFace.busy);
+  if (voice.isSending) return _face(VoiceMicFace.sending);
   if (voice.status == VoiceInputStatus.transcribing) {
     return _face(VoiceMicFace.busy);
   }

@@ -1,4 +1,31 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
+
+/// How loud a buffer of 16-bit little-endian PCM sounds, from 0 (silence) to 1
+/// (near full scale) — what the waveform beside the mic draws.
+///
+/// RMS rather than [pcm16Peak]: one click would otherwise read as a shout. And
+/// on a decibel scale, because that is how loudness is heard — linear RMS puts
+/// ordinary speech in the bottom tenth of the range and the bars barely move.
+/// A quiet room sits near −60 dBFS and a voice at the phone near −30 to −20,
+/// so [_quietDb]…[_loudDb] is spread over 0…1.
+double pcm16Level(Uint8List pcm) {
+  final count = pcm.length ~/ 2;
+  if (count == 0) return 0;
+  final data = ByteData.sublistView(pcm);
+  var sum = 0.0;
+  for (var offset = 0; offset + 1 < pcm.length; offset += 2) {
+    final sample = data.getInt16(offset, Endian.little);
+    sum += sample * sample;
+  }
+  final rms = math.sqrt(sum / count);
+  if (rms < 1) return 0;
+  final db = 20 * math.log(rms / 32768) / math.ln10;
+  return ((db - _quietDb) / (_loudDb - _quietDb)).clamp(0.0, 1.0);
+}
+
+const double _quietDb = -55;
+const double _loudDb = -10;
 
 /// The loudest sample in 16-bit little-endian PCM, as a magnitude.
 int pcm16Peak(Uint8List pcm) {

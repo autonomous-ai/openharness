@@ -116,6 +116,26 @@ class VoiceInputController extends ChangeNotifier {
   String get transcript => _heard;
   String? get notice => _notice;
 
+  /// How loud the microphone is right now, 0…1 — what the waveform beside the
+  /// mic draws while a take is recorded. Silence from a recorder that has no
+  /// meter (see [VoiceLevelMeter]).
+  ValueListenable<double> get level => switch (_recorder) {
+    final VoiceLevelMeter meter => meter.level,
+    _ => _silence,
+  };
+
+  static final ValueListenable<double> _silence = ValueNotifier(0);
+
+  /// How long the take being recorded has run; zero before the first one.
+  ///
+  /// ⚠️ Kept here rather than by the widget that shows it: this controller is
+  /// shared by every page of the pager, and a page swiped to mid-take has to
+  /// show the take's time, not the time since that page appeared.
+  Duration get takeLength => _takeClock?.elapsed ?? Duration.zero;
+
+  /// Runs from the moment a take starts recording until it ends.
+  Stopwatch? _takeClock;
+
   /// Nothing being recorded, heard or sent — the mic at rest. A refused
   /// microphone is at rest too: nothing is in flight.
   bool get isIdle =>
@@ -160,6 +180,7 @@ class VoiceInputController extends ChangeNotifier {
       return;
     }
     _takeLimit = Timer(maxTake, () => unawaited(stopListening()));
+    _takeClock = Stopwatch()..start();
     _setStatus(VoiceInputStatus.listening);
   }
 
@@ -296,6 +317,7 @@ class VoiceInputController extends ChangeNotifier {
   Future<_Take> _transcribeTake() async {
     final take = _take;
     _takeLimit?.cancel();
+    _takeClock?.stop();
     _setStatus(VoiceInputStatus.transcribing);
     try {
       final recording = await _recorder.stop();
@@ -352,6 +374,7 @@ class VoiceInputController extends ChangeNotifier {
   void _abandonTake() {
     _take++;
     _takeLimit?.cancel();
+    _takeClock?.stop();
     if (_status == VoiceInputStatus.starting ||
         _status == VoiceInputStatus.listening) {
       unawaited(_recorder.cancel());

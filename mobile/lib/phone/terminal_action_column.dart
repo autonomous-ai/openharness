@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show OverflowBoxFit;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -15,8 +16,8 @@ import 'voice_status_pill.dart';
 /// the mic, then Search.
 ///
 /// ```
-///   ( Listening…  × )  (🎤)
-///                      (🔍)
+///   ( ×  ●  ▂▃▅▇▅▃▂  0:07  (↑) )
+///                           (🔍)
 /// ```
 ///
 /// ⚠️ **The mic is on top, and that is what "moved up" means.** It used to sit
@@ -24,12 +25,18 @@ import 'voice_status_pill.dart';
 /// corner under it, and the mic rides above. The two share one column so they
 /// read as one set of controls rather than two strays.
 ///
+/// ⚠️ **The mic and what it is doing are one capsule.** The status body is
+/// stacked UNDER the mic and reaches out to its left, with the mic's circle
+/// closing its right end — see `voice_status_pill.dart`. The mic never moves:
+/// the body grows away from it, and the row keeps the mic's height however
+/// many lines a notice wraps to.
+///
 /// ⚠️ **The gaps are set by the mic's hit area, not by the look.** The mic's
 /// target spills [VoiceMicButton.touchOverhang] past its slot on every side and
 /// is generous on purpose — a button under it that sat any closer would lose
 /// the top of its own target to the mic, and a tap aimed at Search would start
 /// a recording.
-class TerminalActionColumn extends StatelessWidget {
+class TerminalActionColumn extends StatefulWidget {
   const TerminalActionColumn({
     super.key,
     required this.voice,
@@ -67,12 +74,46 @@ class TerminalActionColumn extends StatelessWidget {
   static const double _underMic =
       _gap - (VoiceMicButton.extent - VoiceMicCore.diameter) / 2;
 
+  /// How far the capsule's right end sits in from the mic's slot: the slack
+  /// between the slot and the circle, so the circle closes the capsule exactly.
+  static const double _capsuleInset =
+      (VoiceMicButton.extent - VoiceMicCore.diameter) / 2;
+
+  /// The capsule's widest, however wide the phone: a notice is easier to read
+  /// in two lines of a sensible length than in one line across a tablet.
+  static const double _capsuleMaxWidth = 360;
+
+  /// What the capsule leaves clear at the terminal's left edge.
+  static const double _capsuleLeftMargin = 16;
+
+  @override
+  State<TerminalActionColumn> createState() => _TerminalActionColumnState();
+}
+
+class _TerminalActionColumnState extends State<TerminalActionColumn> {
+  /// Whether a hold has been dragged off the mic — [VoiceMicMode.holdToTalk]
+  /// only. The mic reports it; the capsule body is what says so, where the
+  /// thumb is not covering it.
+  final ValueNotifier<bool> _slipped = ValueNotifier(false);
+
+  @override
+  void dispose() {
+    _slipped.dispose();
+    super.dispose();
+  }
+
+  /// ⚠️ Guarded by [mounted]: the mic reports its last slip from a microtask
+  /// scheduled in its own `dispose`, which can land after this column is gone
+  /// as well.
+  void _onSlipChanged(bool value) {
+    if (mounted) _slipped.value = value;
+  }
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final session = this.session;
     // One backdrop read for the buttons' blurs — see [FloatingGlass].
-    return BackdropGroup(child: _column(context, session));
+    return BackdropGroup(child: _column(context, widget.session));
   }
 
   Widget _column(BuildContext context, TerminalSession? session) {
@@ -81,44 +122,76 @@ class TerminalActionColumn extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         if (session != null)
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Left of the mic, on its centreline: the words the mic has
-              // nowhere to put, and the `×` that calls it off.
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth:
-                      (MediaQuery.sizeOf(context).width -
-                              width -
-                              inset * 2 -
-                              24)
-                          .clamp(0, double.infinity),
-                ),
-                child: VoiceStatusPill(voice: voice),
-              ),
-              const SizedBox(width: 6),
-              VoiceMicFab(voice: voice, session: session),
-            ],
-          )
+          _capsule(context, session)
         else
           // Still attaching: the mic in its place, dimmed and dead.
           const VoiceMicButton(face: VoiceMicFace.talk, onPressed: null),
-        const SizedBox(height: _underMic),
+        const SizedBox(height: TerminalActionColumn._underMic),
         _centred(
           TerminalRoundAction(
             key: const ValueKey('terminal-search'),
             icon: LucideIcons.search300,
             label: 'Search harnesses and machines',
-            onTap: onSearch,
+            onTap: widget.onSearch,
           ),
         ),
       ],
     );
   }
 
+  /// The mic, with the capsule body under it reaching out to the left.
+  ///
+  /// ⚠️ **Held at the mic's height.** A notice that wraps makes the body
+  /// taller than the mic's slot, and a row that grew with it would lift the mic
+  /// — the one control the thumb is on — every time a sentence ran long. The
+  /// body overflows the row evenly above and below instead.
+  Widget _capsule(BuildContext context, TerminalSession session) {
+    final maxWidth =
+        (MediaQuery.sizeOf(context).width -
+                TerminalActionColumn.inset -
+                TerminalActionColumn._capsuleInset -
+                TerminalActionColumn._capsuleLeftMargin)
+            .clamp(
+              VoiceMicCore.diameter,
+              TerminalActionColumn._capsuleMaxWidth,
+            );
+    return SizedBox(
+      height: VoiceMicButton.extent,
+      child: Stack(
+        alignment: Alignment.centerRight,
+        clipBehavior: Clip.none,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(
+              right: TerminalActionColumn._capsuleInset,
+            ),
+            child: OverflowBox(
+              fit: OverflowBoxFit.deferToChild,
+              maxHeight: double.infinity,
+              alignment: Alignment.centerRight,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: maxWidth),
+                child: VoiceStatusPill(
+                  voice: widget.voice,
+                  slipped: _slipped,
+                  micClearance: VoiceMicCore.diameter,
+                ),
+              ),
+            ),
+          ),
+          // Last, so it paints over the body's end and takes the taps there.
+          VoiceMicFab(
+            voice: widget.voice,
+            session: session,
+            onSlipChanged: _onSlipChanged,
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _centred(Widget child) => SizedBox(
-    width: width,
+    width: TerminalActionColumn.width,
     child: Center(child: child),
   );
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:record/record.dart';
 
 import 'voice_wav.dart';
@@ -32,12 +33,24 @@ abstract interface class VoiceRecorder {
   Future<void> dispose();
 }
 
+/// A [VoiceRecorder] that can also say how loud the microphone is right now.
+///
+/// ⚠️ **Its own interface rather than a member of [VoiceRecorder].** The level
+/// only feeds the waveform beside the mic; a recorder with nothing to measure —
+/// a test's fake — should not have to invent one, and
+/// `VoiceInputController.level` reads silence from it instead.
+abstract interface class VoiceLevelMeter {
+  /// The loudness of the latest buffer the microphone delivered, 0…1 — see
+  /// `pcm16Level`. Back to 0 whenever no take is being recorded.
+  ValueListenable<double> get level;
+}
+
 /// [VoiceRecorder] over the phone's microphone.
 ///
 /// Streams raw PCM and wraps it here, rather than recording a file: a file
 /// needs somewhere to live and something to delete it, and a phrase of speech
 /// is a few hundred kilobytes that are about to be uploaded anyway.
-class MicVoiceRecorder implements VoiceRecorder {
+class MicVoiceRecorder implements VoiceRecorder, VoiceLevelMeter {
   /// What the backend's transcription is tuned on — the dial sends 8–16 kHz
   /// mono — and a minute of it is under 2 MB to upload.
   static const _requested = RecordConfig(
@@ -75,6 +88,16 @@ class MicVoiceRecorder implements VoiceRecorder {
   /// that never closes must not hold the mic for seconds with a finished take
   /// already in hand.
   static const _drainLimit = Duration(seconds: 2);
+
+  /// ⚠️ **Never disposed, on purpose.** The waveform listens to it from the
+  /// widget tree, and this recorder is torn down from the controller's own
+  /// `dispose` — which can run before the widgets listening here have let go.
+  /// A notifier holds no platform resource; dropping it with the recorder is
+  /// enough.
+  final ValueNotifier<double> _level = ValueNotifier(0);
+
+  @override
+  ValueListenable<double> get level => _level;
 
   @override
   Future<bool> allowed() => _recorder.hasPermission();
@@ -119,7 +142,13 @@ class MicVoiceRecorder implements VoiceRecorder {
       if (!drained.isCompleted) drained.complete();
     }
 
-    _subscription = stream.listen(_pcm.add, onDone: finish, onError: finish);
+    _subscription = stream.listen(_onBuffer, onDone: finish, onError: finish);
+  }
+
+  /// Keeps the buffer for the take, and reports how loud it was.
+  void _onBuffer(Uint8List buffer) {
+    _pcm.add(buffer);
+    _level.value = pcm16Level(buffer);
   }
 
   @override
@@ -150,6 +179,7 @@ class MicVoiceRecorder implements VoiceRecorder {
     await _subscription?.cancel();
     _subscription = null;
     _drained = null;
+    _level.value = 0;
     final pcm = _pcm.takeBytes();
     if (pcm.isEmpty) return null;
     final samples = pcm.length ~/ (2 * _channels);
@@ -210,5 +240,6 @@ class MicVoiceRecorder implements VoiceRecorder {
     _subscription = null;
     _drained = null;
     _pcm.clear();
+    _level.value = 0;
   }
 }
