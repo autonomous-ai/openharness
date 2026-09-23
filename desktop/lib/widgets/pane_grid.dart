@@ -252,8 +252,6 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
   late int _focusRequest;
   Size? _viewportSize;
   bool _focusRevealPending = false;
-  PaneMinimizeController? _minimize;
-  int? _minimizingPane;
 
   Object get _inputDestination => (
     widget.notifier.activeSwarmId,
@@ -271,24 +269,6 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
     _focusRequest = widget.notifier.paneFocusRequest;
     widget.notifier.addListener(_onAppChanged);
     terminalFontStore.addListener(_onFontChanged);
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final controller = PaneMinimizeScope.maybeOf(context)?.controller;
-    if (identical(controller, _minimize)) return;
-    _minimize?.removeListener(_onMinimizeChanged);
-    _minimize = controller;
-    _minimizingPane = controller?.paneId;
-    controller?.addListener(_onMinimizeChanged);
-  }
-
-  void _onMinimizeChanged() {
-    // Reorder only at departure/arrival; the live subtree animates each frame.
-    if (_minimizingPane != _minimize?.paneId) {
-      setState(() => _minimizingPane = _minimize?.paneId);
-    }
   }
 
   @override
@@ -423,7 +403,6 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
 
   @override
   void dispose() {
-    _minimize?.removeListener(_onMinimizeChanged);
     widget.notifier.removeListener(_onAppChanged);
     terminalFontStore.removeListener(_onFontChanged);
     _resizeFocus.dispose();
@@ -525,9 +504,6 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
             visible[i].id: layout.rectangles[i],
         };
         final retainedIds = app.allPanes.map((pane) => pane.id).toSet();
-        final paintOrder = app.allPanes.toList();
-        final departing = paintOrder.indexWhere((pane) => pane.id == _minimizingPane);
-        if (departing >= 0) paintOrder.add(paintOrder.removeAt(departing));
         _inputLayers.removeWhere((id, _) => !retainedIds.contains(id));
         final scrollBehavior = ScrollConfiguration.of(context);
         // Both scroll views stay mounted when content fits. Stable ancestry
@@ -563,9 +539,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                             Positioned.fill(
                               child: widget.empty ?? _EmptyGrid(notifier: app),
                             ),
-                          // Keyed layers retain terminal state while the departing
-                          // pane flies above its neighbours toward the manager.
-                          for (final pane in paintOrder)
+                          for (final pane in app.allPanes)
                             if (rectangles.containsKey(pane.id) ||
                                 pane.lastViewSize != null)
                               Positioned.fromRect(

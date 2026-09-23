@@ -681,7 +681,6 @@ void main() {
       final pane = app.focusedPane!;
       final sibling = app.adoptSessionForTest(terminal('sibling', []));
       await mount(tester, app);
-      final originalElement = tester.element(find.byKey(pane.cellKey));
       final scope = tester.widget<PaneMinimizeScope>(
         find.byType(PaneMinimizeScope),
       );
@@ -698,27 +697,15 @@ void main() {
       final closing = scope.close(pane);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 160));
-      expect(app.panes, contains(pane));
+      expect(app.panes, [sibling]);
+      expect(find.byKey(pane.cellKey), findsNothing);
       expect(scope.controller.animation.value, greaterThan(0));
       expect(
         scope.controller.snapshot,
         isNotNull,
         reason: "The native snapshot drives the curved motion",
       );
-      expect(tester.element(find.byKey(pane.cellKey)), same(originalElement));
-      final canvas = tester.widget<Stack>(
-        find
-            .ancestor(
-              of: find.byKey(pane.cellKey),
-              matching: find.byType(Stack),
-            )
-            .first,
-      );
-      expect(
-        canvas.children.where((child) => child.key is ValueKey<int>).last.key,
-        ValueKey(pane.id),
-        reason: 'The shrinking pane paints above its neighbours',
-      );
+      expect(find.byType(PaneMinimizeSnapshot), findsOneWidget);
       await frame('neck');
       await tester.pump(const Duration(milliseconds: 140));
       await frame('travel');

@@ -137,6 +137,7 @@ class _SwarmScreenState extends State<SwarmScreen>
   VoidCallback? _unregisterSessions;
   late final _minimize = PaneMinimizeController(vsync: this);
   bool _closingPane = false;
+  OverlayEntry? _minimizeOverlay;
   final _startSearchFocus = FocusNode(debugLabel: 'Start page search');
   final _commandFocus = FocusNode(debugLabel: 'Ask Harness');
   bool _commandBarOpen = false;
@@ -282,6 +283,9 @@ class _SwarmScreenState extends State<SwarmScreen>
     _unregisterSessions?.call();
     _sessionsOverlay?.remove();
     _sessionsOverlay?.dispose();
+    _minimizeOverlay?.remove();
+    _minimizeOverlay?.dispose();
+    _minimizeOverlay = null;
     _minimize.dispose();
     _keymap.removeListener(_keymapChanged);
     _defaultKeymap.dispose();
@@ -1079,7 +1083,7 @@ class _SwarmScreenState extends State<SwarmScreen>
           }
         }
       case 'closePane':
-        if (app.focusedPane case final pane?) await _closePane(pane);
+        if (app.focusedPane case final pane?) unawaited(_closePane(pane));
       case 'findTerminal':
         app.focusedPane?.session?.find(TerminalFindAction.open);
       case 'findNext':
@@ -2015,25 +2019,36 @@ class _SwarmScreenState extends State<SwarmScreen>
   }
 
   Future<void> _closePane(TerminalPane pane) async {
-    if (_closingPane) return;
-    if (pane.isWeb ||
+    if (_closingPane ||
+        pane.isWeb ||
         pane.agentId == null ||
-        MediaQuery.disableAnimationsOf(context)) {
+        MediaQuery.disableAnimationsOf(context) ||
+        !_minimize.capture(pane)) {
       await app.closePane(pane.id);
       return;
     }
     _closingPane = true;
     final tab = app.activeSwarmId;
+    final overlay = Overlay.of(context);
+    final box = overlay.context.findRenderObject() as RenderBox;
+    final origin = box.localToGlobal(Offset.zero);
+    _minimizeOverlay = OverlayEntry(
+      builder: (_) => Positioned.fromRect(
+        rect: _minimize.source.shift(-origin),
+        child: PaneMinimizeSnapshot(controller: _minimize),
+      ),
+    );
+    overlay.insert(_minimizeOverlay!);
+    // Close logically before the first await: the next keystroke belongs to
+    // the remaining pane, even while the captured pixels are still moving.
+    final closed = app.closePane(pane.id);
     try {
       Offset? target;
       if (_native) {
         final anchor = await _channel.invokeMapMethod<String, dynamic>(
           'sessionsAnchor',
         );
-        if (anchor?['reduceMotion'] == true) {
-          if (mounted && app.activeSwarmId == tab) await app.closePane(pane.id);
-          return;
-        }
+        if (anchor?['reduceMotion'] == true) return;
         if (anchor?['x'] is num && anchor?['y'] is num) {
           target = Offset(
             (anchor!['x'] as num).toDouble(),
@@ -2047,19 +2062,21 @@ class _SwarmScreenState extends State<SwarmScreen>
         }
       }
       if (!mounted || app.activeSwarmId != tab) return;
-      if (target != null) await _minimize.animate(pane, target);
-      if (!mounted || app.activeSwarmId != tab) return;
-      await app.closePane(pane.id);
-      if (_native && mounted) {
+      if (target != null) await _minimize.animate(target);
+      if (_native && mounted && app.activeSwarmId == tab) {
         unawaited(_channel.invokeMethod<void>('sessionMinimized'));
       }
     } on TickerCanceled {
       // Disposing the window cancels motion, never the agent process.
     } on MissingPluginException {
-      if (mounted && app.activeSwarmId == tab) await app.closePane(pane.id);
+      // The pane is already closed; only the optional animation is skipped.
     } finally {
       _closingPane = false;
+      _minimizeOverlay?.remove();
+      _minimizeOverlay?.dispose();
+      _minimizeOverlay = null;
       if (mounted) _minimize.reset();
+      await closed;
     }
   }
 

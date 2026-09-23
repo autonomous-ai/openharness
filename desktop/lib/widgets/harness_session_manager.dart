@@ -44,6 +44,8 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
   Timer? _clock;
   SessionSort _sort = SessionSort.recent;
   String? _selected;
+  int _selectedIndex = 0;
+  final _rowKeys = <String, GlobalKey>{};
   String? _opening;
 
   @override
@@ -167,7 +169,15 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
     final showingQuestions = _filter == SessionFilter.needsInput;
     final selected =
         rows.where((row) => row.id == _selected).firstOrNull ??
-        rows.firstOrNull;
+        (rows.isEmpty
+            ? null
+            : rows[_selected == null
+                  ? 0
+                  : _selectedIndex.clamp(0, rows.length - 1)]);
+    if (_selected != null && selected != null) {
+      _selected = selected.id;
+      _selectedIndex = rows.indexOf(selected);
+    }
     final scale = MediaQuery.textScalerOf(context);
     final rowHeight =
         math.max(
@@ -209,19 +219,29 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                     rows.length - 1,
                   );
             setState(() => _selected = rows[next].id);
-            if (_scroll.hasClients) {
-              final top = next * rowHeight;
-              final bottom = top + rowHeight;
-              final position = _scroll.position;
-              if (top < position.pixels ||
-                  bottom > position.pixels + position.viewportDimension) {
-                _scroll.jumpTo(
-                  (top < position.pixels
-                          ? top
-                          : bottom - position.viewportDimension)
-                      .clamp(0, position.maxScrollExtent),
-                );
-              }
+            void reveal() {
+              final context = _rowKeys[rows[next].id]?.currentContext;
+              if (!mounted || context == null) return;
+              Scrollable.ensureVisible(
+                context,
+                alignmentPolicy: key == LogicalKeyboardKey.arrowDown
+                    ? ScrollPositionAlignmentPolicy.keepVisibleAtEnd
+                    : ScrollPositionAlignmentPolicy.keepVisibleAtStart,
+              );
+            }
+
+            if (_rowKeys[rows[next].id]?.currentContext != null) {
+              reveal();
+            } else if (_scroll.hasClients) {
+              // Materialize a distant row, then use its real bounds. Question
+              // text, errors, row padding and enlarged type all affect height.
+              _scroll.jumpTo(
+                (6 + next * (rowHeight + 2)).clamp(
+                  0,
+                  _scroll.position.maxScrollExtent,
+                ),
+              );
+              WidgetsBinding.instance.addPostFrameCallback((_) => reveal());
             }
             return KeyEventResult.handled;
           },
@@ -481,12 +501,16 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                                   pendingResume ||
                                   _opening == row.id;
                               return _SessionRow(
-                                key: ValueKey('session:${row.id}'),
+                                key: _rowKeys.putIfAbsent(
+                                  row.id,
+                                  () => GlobalKey(),
+                                ),
                                 row: row,
                                 height: rowHeight,
                                 now: now,
                                 showQuestion: showingQuestions,
-                                selected: _selected == row.id,
+                                selected:
+                                    _selected != null && selected?.id == row.id,
                                 busy: busy,
                                 pendingLabel: _opening == row.id
                                     ? 'Opening…'
@@ -592,6 +616,7 @@ class _SessionRow extends StatelessWidget {
                   Expanded(
                     child: Semantics(
                       key: ValueKey('session-open:${row.id}'),
+                      selected: selected,
                       container: true,
                       button: true,
                       enabled: canOpen,

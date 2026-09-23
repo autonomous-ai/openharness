@@ -7,8 +7,8 @@ import 'package:flutter/rendering.dart';
 
 import '../state/terminal_pane.dart';
 
-/// A single GPU snapshot bends into the manager. The live terminal remains
-/// mounted at its original size: minimizing never resizes or stops its process.
+/// A GPU snapshot bends into the manager after the pane releases input.
+/// Capturing never resizes the terminal or stops its process.
 class PaneMinimizeController extends ChangeNotifier {
   PaneMinimizeController({required TickerProvider vsync}) {
     animation = AnimationController(
@@ -23,11 +23,11 @@ class PaneMinimizeController extends ChangeNotifier {
   Rect source = Rect.zero;
   Offset target = Offset.zero;
 
-  Future<void> animate(TerminalPane pane, Offset destination) async {
+  bool capture(TerminalPane pane) {
     final box = pane.cellKey.currentContext?.findRenderObject();
-    if (box is! RenderBox || !box.hasSize || box.size.isEmpty) return;
+    if (box is! RenderBox || !box.hasSize || box.size.isEmpty) return false;
     source = box.localToGlobal(Offset.zero) & box.size;
-    target = destination;
+    target = source.center;
     final boundary = _boundaries[pane.id]?.currentContext?.findRenderObject();
     if (boundary is RenderRepaintBoundary) {
       try {
@@ -39,11 +39,16 @@ class PaneMinimizeController extends ChangeNotifier {
         );
         snapshot = boundary.toImageSync(pixelRatio: ratio);
       } catch (_) {
-        // An unpainted/offscreen pane can still close with the live fallback.
+        // An unpainted/offscreen pane closes immediately without a snapshot.
       }
     }
+    if (snapshot == null) return false;
     paneId = pane.id;
-    notifyListeners();
+    return true;
+  }
+
+  Future<void> animate(Offset destination) async {
+    target = destination;
     await animation.forward(from: 0).orCancel;
   }
 
@@ -182,47 +187,19 @@ class _PaneMinimizeSurfaceState extends State<PaneMinimizeSurface> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final controller = _controller;
-    if (controller == null) return widget.child;
-    return AnimatedBuilder(
-      animation: controller,
-      child: RepaintBoundary(key: _boundary, child: widget.child),
-      builder: (context, child) {
-        final closing = controller.paneId == widget.paneId;
-        final t = closing ? controller.animation.value : 0.0;
-        final travel = Curves.easeInOutCubic.transform(t);
-        final rect = controller.source;
-        final movement =
-            (controller.target - const Offset(11, 11) - rect.topLeft) * travel;
-        final transform = Matrix4.identity()
-          ..translateByDouble(movement.dx, movement.dy, 0, 1)
-          ..scaleByDouble(
-            closing ? 1 - (1 - 22 / rect.width) * travel : 1,
-            closing ? 1 - (1 - 22 / rect.height) * travel : 1,
-            1,
-            1,
-          );
-        final hasSnapshot = closing && controller.snapshot != null;
-        return IgnorePointer(
-          ignoring: closing,
-          child: CustomPaint(
-            foregroundPainter: hasSnapshot ? _GeniePainter(controller) : null,
-            child: Transform(
-              transform: hasSnapshot ? Matrix4.identity() : transform,
-              child: Opacity(
-                opacity: hasSnapshot
-                    ? 0
-                    : 1 -
-                          Curves.easeIn.transform(
-                            ((t - .86) / .14).clamp(0, 1),
-                          ),
-                child: child,
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
+  Widget build(BuildContext context) =>
+      RepaintBoundary(key: _boundary, child: widget.child);
+}
+
+/// The departing pixels have no focus, semantics, or pointer target.
+class PaneMinimizeSnapshot extends StatelessWidget {
+  const PaneMinimizeSnapshot({super.key, required this.controller});
+  final PaneMinimizeController controller;
+
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+    child: ExcludeSemantics(
+      child: CustomPaint(painter: _GeniePainter(controller)),
+    ),
+  );
 }
