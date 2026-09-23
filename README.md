@@ -5,8 +5,9 @@
 <h1 align="center">OpenHarness</h1>
 
 <p align="center">
-  <b>The terminal for coding agents.</b><br>
-  Every agent. Every machine. One fast, keyboard-first window.
+  <b>The harness for coding agents and beyond.</b><br>
+  All your agents. All your machines. One window.<br>
+  Start with code. Then take them beyond code: CAD, circuits, robots, games and music.
 </p>
 
 <p align="center">
