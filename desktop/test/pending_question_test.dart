@@ -308,6 +308,35 @@ void main() {
       expect(played, [AlertKind.done.sound]);
     });
 
+    test('a finished turn also raises a banner, named after the agent', () async {
+      final app = wired();
+      addTearDown(app.dispose);
+      app.machineStates['m1']!.agents = [
+        const Agent(id: 'a1', name: 'Respond to greeting', engine: 'codex'),
+      ];
+      await app.handleMachineEventForTest('m1', {
+        'type': 'turn_ended',
+        'agentId': 'a1',
+        'payload': {'agentId': 'a1'},
+      });
+      final raised = app.agentAlerts.alerts;
+      expect(raised, hasLength(1));
+      // The agent's own NAME. A banner naming a uuid tells nobody which pane to look at.
+      expect(raised.single.title, 'Respond to greeting');
+      expect(raised.single.kind, AlertKind.done);
+      expect(raised.single.agentId, 'a1');
+    });
+
+    test('a question raises a banner too, and a re-announced one does not', () async {
+      final app = wired();
+      addTearDown(app.dispose);
+      await app.handleMachineEventForTest('m1', asked());
+      clock = clock.add(const Duration(minutes: 5));
+      await app.handleMachineEventForTest('m1', asked());
+      expect(app.agentAlerts.alerts, hasLength(1));
+      expect(app.agentAlerts.alerts.single.kind, AlertKind.needsYou);
+    });
+
     test('nothing is heard while the switch is off', () async {
       final off = store(on: false);
       final app = AppNotifier(
