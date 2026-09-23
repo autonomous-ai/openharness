@@ -36,12 +36,12 @@ const prefix = `~HB${nonce}:`
 const rows: Record<string, unknown>[] = []
 const controls: Record<string, unknown>[] = []
 const result: Record<string, any> = {
-  schema: 2, success: false, startedAt: new Date().toISOString(), label: values.label,
+  schema: 3, success: false, startedAt: new Date().toISOString(), label: values.label,
   sourceRevision: values.revision ?? 'unspecified',
   boundary: 'client binary input send to matching PTY probe response received; excludes UI rendering and OS keyboard input',
   client: { platform: platform(), arch: arch(), node: process.version },
   samplesPerWorkload: sampleCount, warmupsPerWorkload: 10,
-  controlSamplesPerRoute: controlCount, controlObservations: controls,
+  controlSamples: controlCount, controlObservations: controls,
   observations: rows, stagesMs: {}, cleanup: { created: false, deleted: false },
   linkModes: [],
 }
@@ -263,16 +263,20 @@ try {
   result.target = peer.output.match(new RegExp(`${prefix}READY:([^~]+)~`))?.[1] ?? 'unknown'
   // Permit normal direct-path negotiation; record actual modes on every observation.
   await sleep(2000)
-  // Measure control separately: streamless RPCs may use the cloud while a known
-  // terminal stream uses P2P. Neither is an ICMP ping or pure network latency.
+  // Use the application's normal streamless capability request. Adding a
+  // synthetic streamId can change routing or race migration on older daemons;
+  // it must not perturb the typing baseline. This RPC is not a network ping.
   for (let sample = -3; sample < controlCount; sample++) {
-    const routes = sample % 2 === 0 ? ['machine', 'terminal_stream'] : ['terminal_stream', 'machine']
-    for (const route of routes) {
-      const modeBefore = peer.mode
-      const began = now()
-      await peer.rpc('terminal_capabilities', route === 'terminal_stream' ? { streamId: peer.stream } : {})
-      controls.push({ route, phase: sample < 0 ? 'warmup' : 'measured', elapsedMs: now() - began,
+    const modeBefore = peer.mode
+    const began = now()
+    try {
+      await peer.rpc('terminal_capabilities', {})
+      controls.push({ route: 'machine', success: true, phase: sample < 0 ? 'warmup' : 'measured', elapsedMs: now() - began,
         terminalModeBefore: modeBefore, terminalModeAfter: peer.mode })
+    } catch (error) {
+      controls.push({ route: 'machine', success: false, phase: sample < 0 ? 'warmup' : 'measured', elapsedMs: now() - began,
+        error: String(error), terminalModeBefore: modeBefore, terminalModeAfter: peer.mode })
+      if (peer.fatal) throw error
     }
   }
   for (const load of ['idle', 'redraw_20hz']) {
@@ -301,7 +305,9 @@ try {
   const echoMs = await peer.exchange(Buffer.from([byte]), `${prefix}ECHO:${echoSeq}:${byte}~`)
   result.reattach = { totalMs: now() - restoreBegan, firstEchoMs: echoMs, sameProbeSequence: echoSeq,
     mode: peer.mode, boundary: 'new local client socket, existing daemon route and same running PTY; not a network outage' }
-  result.success = true
+  result.failedControlRequests = controls.filter((row) => row.success === false).length
+  result.success = result.failedControlRequests === 0
+  if (!result.success) { result.error = 'one or more control requests failed; typing observations retained'; process.exitCode = 1 }
 } catch (error) {
   result.error = error instanceof Error ? error.message : String(error)
   result.failureDiagnostics = { outputBytes: peer.outputBytes, keyframes: peer.keyframes,
@@ -331,10 +337,11 @@ try {
     const at = (p: number) => values.length ? values[Math.ceil(values.length * p) - 1] : null
     return { load, samples: values.length, p50Ms: at(.5), p95Ms: at(.95), p99Ms: at(.99), maxMs: values.at(-1) ?? null }
   })
-  result.controlSummaries = ['machine', 'terminal_stream'].map((route) => {
-    const values = controls.filter((row) => row.route === route && row.phase === 'measured').map((row) => Number(row.elapsedMs)).sort((a,b) => a-b)
+  result.controlSummaries = ['machine'].map((route) => {
+    const values = controls.filter((row) => row.route === route && row.phase === 'measured' && row.success === true).map((row) => Number(row.elapsedMs)).sort((a,b) => a-b)
     const at = (p: number) => values.length ? values[Math.ceil(values.length * p) - 1] : null
-    return { route, samples: values.length, p50Ms: at(.5), p95Ms: at(.95), p99Ms: at(.99), maxMs: values.at(-1) ?? null }
+    return { route, samples: values.length, failures: controls.filter((row) => row.route === route && row.phase === 'measured' && row.success === false).length,
+      p50Ms: at(.5), p95Ms: at(.95), p99Ms: at(.99), maxMs: values.at(-1) ?? null }
   })
   result.summariesByTerminalMode = [...new Set(rows.map((row) => `${row.load}/${row.modeBefore === row.modeAfter ? row.modeAfter : 'changed_during_sample'}`))].map((group) => {
     const [load, mode] = group.split('/')

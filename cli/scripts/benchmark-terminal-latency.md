@@ -33,12 +33,15 @@ Each workload has ten warmups, followed by the requested number of observations:
   compression. Actual received bytes and duration are recorded. A deterministic
   8–42 ms think time precedes each input and is outside its measured interval.
 
-Control requests run in a separate phase, alternating streamless machine
-`terminal_capabilities` requests and requests carrying the terminal's stream ID.
+Control requests run in a separate phase, using the application's normal
+streamless machine `terminal_capabilities` request.
 These are application RPCs, **not network pings**. Requests and replies can take
 different routes; the terminal's reported link mode alone does not prove that
 both directions of a control RPC use that route. Do not subtract independent
 percentiles to invent a server-processing or network-only number.
+Failed control requests are retained and counted separately from successful
+latencies; the run fails overall even when its later typing checks complete.
+The baseline never adds experimental stream-routing hints to a control request.
 
 Creation, attach, probe readiness, and reconnect are retained as individual
 observations. The reconnect closes this script's local client socket, opens a
