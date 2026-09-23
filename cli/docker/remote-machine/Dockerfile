@@ -24,11 +24,16 @@
 # Runs as the unprivileged `node` user (uid 1000, already in the base image) rather than root, because
 # Claude Code refuses `--dangerously-skip-permissions` when it is root — and that flag is reachable
 # from the app's New agent dialog, so a root container would quietly take a testable option away.
-FROM node:22-bookworm-slim
+#
+# ⚠️ **Debian 13 (trixie), not 12 (bookworm), because of the grid.** The managed `grid` the CLI
+# downloads for linux-arm64 is linked against glibc 2.38; bookworm ships 2.36, so on this box grid
+# never ran at all — `GLIBC_2.38 not found`, a `.unrunnable` marker, and "no grid after 5 attempts" in
+# the daemon's log — and nothing grid-backed could be tested here. trixie ships 2.41.
+FROM node:22-trixie-slim
 
 # A UTF-8 locale, because the base image has none.
 #
-# `node:22-bookworm-slim` sets no LANG, which leaves `LC_CTYPE=POSIX` — and a program that decides
+# `node:22-trixie-slim` sets no LANG, which leaves `LC_CTYPE=POSIX` — and a program that decides
 # what it may draw from the locale rather than from the terminal takes its ASCII path there. tmux
 # negotiates UTF-8 with the client either way (`client_utf8=1` on this box), so the damage is not the
 # box-drawing a terminal shows; it is every engine, and every tool an agent runs inside one, that
