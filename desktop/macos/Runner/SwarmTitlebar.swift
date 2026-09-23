@@ -1422,12 +1422,12 @@ private final class SwarmTabStrip: NSView {
     newButton.setAccessibilityLabel("New Tab")
     newButton.isEnabled = false
     button(machinesButton, "desktopcomputer", "Machines", #selector(openMachines))
-    machinesButton.image = icons.image(engine: "machines", asset: "assets/machines.svg", pointSize: 22)
+    machinesButton.image = icons.image(engine: "machines", asset: "assets/machines.svg", pointSize: 20)
     machinesButton.symbolConfiguration = nil
     machinesButton.isEnabled = false
     machinesButton.toolTip = "Machines ⌘M"
     button(sessionsButton, "terminal", "Harnesses", #selector(openSessions))
-    sessionsButton.image = icons.image(engine: "harnesses", asset: "assets/harnesses.svg", pointSize: 22)
+    sessionsButton.image = icons.image(engine: "harnesses", asset: "assets/harnesses.svg", pointSize: 20)
     sessionsButton.symbolConfiguration = nil
     sessionsButton.isEnabled = false
     sessionsButton.toolTip = "Harnesses"
@@ -1443,7 +1443,7 @@ private final class SwarmTabStrip: NSView {
     storeButton.setAccessibilityLabel("Harness Store")
     addSubview(storeButton)
     button(modelsButton, "brain", "Models", #selector(openModels))
-    modelsButton.image = icons.image(engine: "models", asset: "assets/models.svg", pointSize: 22)
+    modelsButton.image = icons.image(engine: "models", asset: "assets/models.svg", pointSize: 20)
     modelsButton.symbolConfiguration = nil
     modelsButton.isEnabled = false
     modelsButton.toolTip = "Models"

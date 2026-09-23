@@ -10,8 +10,8 @@ class ToolbarIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) => SvgPicture.asset(
     'assets/${name.toLowerCase()}.svg',
-    width: 22,
-    height: 22,
+    width: 20,
+    height: 20,
     colorFilter: ColorFilter.mode(
       IconTheme.of(context).color ?? const Color(0xff999999),
       BlendMode.srcIn,

@@ -1180,13 +1180,13 @@ do {
   }
   try checkTitlebar(assetReads == 4, "Native history loads each bundled mark only once")
   for name in ["machines", "models", "harnesses"] {
-    let icon = icons.image(engine: name, asset: "assets/\(name).svg", pointSize: 22)
-    try checkTitlebar(icon.size == NSSize(width: 22, height: 22) && icon.isTemplate,
+    let icon = icons.image(engine: name, asset: "assets/\(name).svg", pointSize: 20)
+    try checkTitlebar(icon.size == NSSize(width: 20, height: 20) && icon.isTemplate,
       "\(name) uses a monochrome toolbar SVG")
     try checkTitlebar(!icon.representations.isEmpty &&
       icon.representations.allSatisfy { !($0 is NSBitmapImageRep) },
       "The native \(name) icon retains a vector representation")
-    try checkTitlebar(icons.image(engine: name, asset: "assets/\(name).svg", pointSize: 22) === icon,
+    try checkTitlebar(icons.image(engine: name, asset: "assets/\(name).svg", pointSize: 20) === icon,
       "\(name) reuses its loaded SVG")
   }
   let unknown = icons.image(engine: "custom", asset: nil)
