@@ -1672,7 +1672,7 @@ class _SwarmScreenState extends State<SwarmScreen>
                         // with — that, and the light shadow, are what carry
                         // the separation a different fill used to.
                         child: ColoredBox(
-                          color: Colors.black.withValues(alpha: .72),
+                          color: Colors.black.withValues(alpha: .94),
                         ),
                       ),
                     ),

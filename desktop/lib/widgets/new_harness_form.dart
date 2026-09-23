@@ -419,28 +419,19 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     grid.AppTheme.palette.value,
     terminalThemeStore.value,
   ).background;
-  Color get _popupEdge => const Color(0xFFD8DEE9);
-
-  /// A LIGHT shadow, which is upside down for a BIOS and right for us: BIOS
-  /// threw black across a pale screen, and the equivalent on a dark screen —
-  /// the one thing that cannot be mistaken for more background — is grey.
-  static const _shade = Color(0xFF8A9099);
 
   /// Two strengths of highlight, because two columns are marked at once and
   /// only one of them has the keys. Full inverse video is where the arrows
   /// are; the dim bar is "this is the current value" on the side that is
   /// merely showing. A mode you have to remember is a mode you get wrong.
   static const _activeFill = Color(0xFFE5E9F0);
+
+  /// The key guide is reference, not content: it should be legible when
+  /// looked for and quiet when not. Dimmer than the faint used for detail.
+  Color get _legendInk => Colors.white.withValues(alpha: .38);
+
   Color get _idleFill => Colors.white.withValues(alpha: .16);
   Color get _selectionInk => _popupFill;
-
-  /// The shadow is cast in CHARACTER CELLS, not pixels: a text-mode BIOS had
-  /// no other unit, and a cell is about twice as tall as it is wide, so the
-  /// offset is asymmetric. A square shadow is the tell that it came from CSS.
-  Offset get _shadowOffset {
-    final cell = grid.AppType.monoSize;
-    return Offset(cell, cell);
-  }
 
   /// One face, one size, everywhere on this screen — and it is the
   /// TERMINAL's size, the one ⌘+ and ⌘− set, not the UI's fixed 13pt. A box
@@ -464,38 +455,32 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         clipBehavior: Clip.none,
         alignment: Alignment.topCenter,
         children: [
-          DecoratedBox(
-            decoration: BoxDecoration(
-              boxShadow: [BoxShadow(color: _shade, offset: _shadowOffset)],
-            ),
-            child: Material(
-              // Text with no Material ancestor is drawn by Flutter with
-              // yellow double underlines, which is a debug marker, not style.
-              elevation: 0,
-              color: _popupFill,
-              surfaceTintColor: Colors.transparent,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.zero,
-                side: BorderSide(color: _popupEdge),
-              ),
-              child: DefaultTextStyle.merge(
-                style: _ink(),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const SizedBox(height: 16),
-                    Expanded(
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Expanded(flex: 56, child: _items()),
-                          VerticalDivider(width: 1, thickness: 1, color: _rule),
-                          Expanded(flex: 44, child: _sidePane()),
-                        ],
-                      ),
+          Material(
+            // No shadow and no border: the dark screen behind is what sets
+            // this apart, and an edge drawn round a panel that is already
+            // the only lit thing is a line doing no work. Text with no
+            // Material ancestor is drawn by Flutter with yellow double
+            // underlines, which is a debug marker, not a style.
+            elevation: 0,
+            color: _popupFill,
+            surfaceTintColor: Colors.transparent,
+            child: DefaultTextStyle.merge(
+              style: _ink(),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(flex: 56, child: _items()),
+                        VerticalDivider(width: 1, thickness: 1, color: _rule),
+                        Expanded(flex: 44, child: _sidePane()),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -687,9 +672,9 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
               children: [
                 SizedBox(
                   width: 44 * _scale,
-                  child: Text(key, style: _ink(kBoxFaint)),
+                  child: Text(key, style: _ink(_legendInk)),
                 ),
-                Text(verb, style: _ink(kBoxFaint)),
+                Text(verb, style: _ink(_legendInk)),
               ],
             ),
         ],
