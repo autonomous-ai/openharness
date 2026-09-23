@@ -225,10 +225,14 @@ try:
  while True:
   b=os.read(fd,1)
   if b==b'\\x04' or not b: break
-  if b==b'\\x02': busy.set()
-  elif b==b'\\x01': busy.clear()
+  if b==b'\\x02':
+   busy.set()
+   emit('\\r\\n'+prefix+'LOAD:1~')
+  elif b==b'\\x01':
+   busy.clear()
+   emit('\\r\\n'+prefix+'LOAD:0~')
   else:
-   emit(prefix+'ECHO:'+str(n)+':'+str(b[0])+'~')
+   emit('\\r\\n'+prefix+'ECHO:'+str(n)+':'+str(b[0])+'~')
    n+=1
 finally:
  done.set()
@@ -272,7 +276,7 @@ try {
     }
   }
   for (const load of ['idle', 'redraw_20hz']) {
-    if (load !== 'idle') { peer.input(Buffer.from([2])); await sleep(150) }
+    if (load !== 'idle') { await peer.exchange(Buffer.from([2]), `${prefix}LOAD:1~`); await sleep(150) }
     const bytesBefore = peer.outputBytes
     const loadBegan = now()
     for (let sample = -10; sample < sampleCount; sample++) {
@@ -286,7 +290,7 @@ try {
         modeBefore, modeAfter: peer.mode, keyframesDuring: peer.keyframes - keyframesBefore })
     }
     result[`${load}Achieved`] = { bytes: peer.outputBytes - bytesBefore, durationMs: now() - loadBegan }
-    if (load !== 'idle') peer.input(Buffer.from([1]))
+    if (load !== 'idle') await peer.exchange(Buffer.from([1]), `${prefix}LOAD:0~`)
   }
   const restoreBegan = now()
   peer.close()
