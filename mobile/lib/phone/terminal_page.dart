@@ -175,10 +175,20 @@ typedef _PageFacts = ({
   AgentLoadStatus? agentLoadStatus,
   bool machinePresent,
   PhoneMachineStatus? machineStatus,
+  bool redialling,
   bool imagePaste,
   String? machineName,
   bool deskTabs,
 });
+
+/// What a page has asked for back — see [_TerminalPageState._reclaiming].
+enum _Reclaim {
+  /// The keyboard, off another app that holds the terminal or is driving it.
+  control,
+
+  /// A dead stream, reopened.
+  reconnect,
+}
 
 class _TerminalPageState extends State<TerminalPage>
     with WidgetsBindingObserver, TickerProviderStateMixin {
@@ -391,11 +401,32 @@ class _TerminalPageState extends State<TerminalPage>
   /// compares the next tick against.
   _PageFacts? _facts;
 
-  /// Set while THIS page has asked for the terminal back, so the banner can stay up through the
-  /// `opening` that answers it saying so — rather than blinking out and back as the status moves.
+  /// What THIS page has asked for back and not yet heard about: the keyboard off another app, or a
+  /// dead stream reopened. Null while it has asked for nothing.
+  ///
+  /// A take holds the banner up through the `opening` that answers it, so the banner can say so —
+  /// rather than blinking out and back as the status moves. A reconnect raises no banner: the
+  /// header draws it as the wait it is, the way it draws Attaching — see [phoneSessionSummary]'s
+  /// `reconnecting`.
+  ///
+  /// ⚠️ **Two kinds, because they read differently.** Both are the same call, and this used to be
+  /// one flag: pressing Reconnect raised a banner saying "Taking control…" over a stream nobody
+  /// else held.
+  ///
   /// Taken back by [_onNotifier] once that open lands, and by [_takeControl] itself for a request
   /// the notifier declined without ever changing a status.
-  bool _takingControl = false;
+  _Reclaim? _reclaiming;
+
+  /// The skeleton's one identity across the two places the body draws it.
+  ///
+  /// ⚠️ **Two places, one skeleton.** It stands in for the panel while there is no session, and
+  /// lies OVER the panel once there is one whose first keyframe has not landed. The session arrives
+  /// a moment after the page — the attach is made after the first frame — so every launch crossed
+  /// from one place to the other: the first skeleton was unmounted, a second mounted in its place,
+  /// and the sweep started again from the top edge a beat after the page appeared. Under one
+  /// [GlobalKey] Flutter moves the same skeleton across, and its sweep carries on. The two places
+  /// are never built in the same frame: one wants no session, the other a session.
+  final GlobalKey _skeletonKey = GlobalKey(debugLabel: 'terminal skeleton');
 
   /// Reads this page's own terminal buffer for an open question dialog.
   ///
@@ -520,6 +551,14 @@ class _TerminalPageState extends State<TerminalPage>
       agentLoadStatus: machine?.agentLoadStatus,
       machinePresent: machine != null,
       machineStatus: machine == null ? null : phoneMachineStatusOf(machine),
+      // Only while the stream is dead — the one state it changes how the
+      // header reads. A live page has no reason to rebuild each time the agent
+      // list refreshes underneath it.
+      redialling:
+          machine != null &&
+          (session?.status == TerminalSessionStatus.error ||
+              session?.status == TerminalSessionStatus.closed) &&
+          phoneMachineRedialling(machine),
       imagePaste: machine?.terminalImagePasteAvailable ?? false,
       machineName: machine?.machine.displayName,
       // ⚠️ Read here, and not in `build` alone, because this page is rebuilt
@@ -550,10 +589,10 @@ class _TerminalPageState extends State<TerminalPage>
     // the bail would keep the band saying "Taking control…" over a page that had already been
     // told no. See [_takeControl].
     final settled =
-        _takingControl &&
+        _reclaiming != null &&
         facts.status != TerminalSessionStatus.opening &&
         facts.status != null;
-    if (settled) _takingControl = false;
+    if (settled) _reclaiming = null;
     if (facts == _facts) {
       if (settled) setState(() {});
       return;
@@ -1070,7 +1109,16 @@ class _TerminalPageState extends State<TerminalPage>
         machine.agentLoadStatus == AgentLoadStatus.loaded;
     // Captured while the agent is still listed, for the sentence above.
     if (agent != null) _cachedAgentName = agent.name;
-    final reclaim = phoneReclaimAction(session);
+    // A dead stream already on its way back: its machine is redialling, or this page has just
+    // asked for it. The header draws that as the wait it is — spinner on the mark, sweep along the
+    // rule — rather than as Disconnected beside a button. See [phoneSessionSummary].
+    //
+    // Never for an agent that is gone: nothing will reopen its stream, however the socket is doing.
+    final reconnecting =
+        !agentGone &&
+        (_reclaiming == _Reclaim.reconnect ||
+            (machine != null && phoneMachineRedialling(machine)));
+    final reclaim = phoneReclaimAction(session, reconnecting: reconnecting);
     // Read-only either way — the terminal was never this pane's (a watcher) or was taken from it.
     // `_AgentGone` owns the page when the agent itself is missing, so this stays out of its way.
     final blocked =
@@ -1082,6 +1130,11 @@ class _TerminalPageState extends State<TerminalPage>
       (id) => widget.notifier.stateOf(id)?.machine.displayName,
     );
     final takeoverNotice = phoneTakeoverNotice(session, takerName);
+    final headerStatus = phoneSessionSummary(
+      session,
+      takerName: takerName,
+      reconnecting: reconnecting,
+    );
     // Creating needs the machine to list its folders and name its engines,
     // so one that is offline or still wants its password cannot host a new
     // agent — the same gate the Agents tab puts on its fab.
@@ -1191,7 +1244,7 @@ class _TerminalPageState extends State<TerminalPage>
                                         onPickAnother: _pickAnotherAgent,
                                       )
                                     : pane == null || session == null
-                                    ? const _Attaching()
+                                    ? _Attaching(key: _skeletonKey)
                                     : TerminalPanel(
                                         key: ValueKey(pane.id),
                                         notifier: widget.notifier,
@@ -1289,7 +1342,9 @@ class _TerminalPageState extends State<TerminalPage>
                             // difference. The header says who has it and offers
                             // "Take control"; the body is the terminal.
                             if (session != null && !session.hasRenderedFrame)
-                              const Positioned.fill(child: _Attaching()),
+                              Positioned.fill(
+                                child: _Attaching(key: _skeletonKey),
+                              ),
                             // The mic, Search and New agent, floating in the
                             // terminal's bottom-right corner — see
                             // [TerminalActionColumn].
@@ -1378,10 +1433,7 @@ class _TerminalPageState extends State<TerminalPage>
                         children: [
                           TerminalHeader(
                             agent: agent,
-                            status: phoneSessionSummary(
-                              session,
-                              takerName: takerName,
-                            ),
+                            status: headerStatus,
                             trailing: [
                               // Read-only is a state to get OUT of, so its way
                               // out is a labelled button in the header rather
@@ -1399,10 +1451,12 @@ class _TerminalPageState extends State<TerminalPage>
                               //
                               // Kept for the states the band does not cover:
                               // "Reconnect", for a stream that died with nobody
-                              // else involved. See [_ControlBanner].
+                              // else involved. See [_ControlBanner]. Gone while
+                              // that stream is already coming back — see
+                              // `reconnecting` above.
                               if (reclaim != null &&
                                   !blocked &&
-                                  !_takingControl)
+                                  _reclaiming == null)
                                 _ReclaimButton(
                                   action: reclaim,
                                   // The same call the band's button makes — see
@@ -1461,11 +1515,20 @@ class _TerminalPageState extends State<TerminalPage>
                                 ),
                             ],
                           ),
-                          Divider(height: 1, color: AppGlass.hair),
+                          // The hairline, carrying a sweep while the header
+                          // reads as a wait — Attaching, Resyncing,
+                          // Reconnecting. See [TerminalHeaderRule].
+                          TerminalHeaderRule(
+                            busy: headerStatus.tone == PhoneTone.busy,
+                          ),
                           // ⚠️ Inside the header's own slide, not under it: the two are one bar as far
                           // as a scroll is concerned, and a band left behind while the header left
                           // would sit on the output with nothing above it.
-                          if (blocked || _takingControl)
+                          //
+                          // Up for a take in flight, not for a reconnect: that one is the header's
+                          // own wait, and a band over it said "Taking control…" of a stream nobody
+                          // else held. See [_reclaiming].
+                          if (blocked || _reclaiming == _Reclaim.control)
                             _ControlBanner(
                               watching: session?.watching ?? false,
                               busy: !blocked,
@@ -1689,23 +1752,37 @@ class _TerminalPageState extends State<TerminalPage>
     ),
   ];
 
-  /// Asks for the terminal this pane is only watching — the band's button, and the header's.
+  /// Asks for the terminal this pane is only watching, or reopens the stream it lost — the band's
+  /// button, and the header's.
   ///
-  /// [_takingControl] holds the band up through the `opening` this starts, so it reads as one
-  /// action answering rather than a band that vanished and came back. `selectAgent` declines
-  /// quietly when the pane cannot be attached at all (its machine went offline meanwhile, the
-  /// agent was withdrawn), and that leaves the status where it was — so the flag is taken back
-  /// here too, rather than left armed over a page nothing is going to answer for.
+  /// Which of the two it is comes from the stream as it stands, not from the button: somebody else
+  /// holding or driving it makes this a take, and a dead one a reconnect. [_reclaiming] carries
+  /// that through the `opening` this starts, so a take reads as one action answering rather than
+  /// a band that vanished and came back, and a reconnect reads as the header's wait from the
+  /// moment it is pressed. `selectAgent` declines quietly when the pane cannot be attached at all
+  /// (its machine went offline meanwhile, the agent was withdrawn), and that leaves the status
+  /// where it was — so the flag is taken back here too, rather than left armed over a page
+  /// nothing is going to answer for.
   Future<void> _takeControl() async {
     final notifier = widget.notifier;
-    if (!_takingControl) setState(() => _takingControl = true);
+    final before = notifier
+        .paneOfAgent(widget.machineId, widget.agentId)
+        ?.session;
+    final kind =
+        before != null &&
+            (before.watching ||
+                before.status == TerminalSessionStatus.takenOver)
+        ? _Reclaim.control
+        : _Reclaim.reconnect;
+    if (_reclaiming != kind) setState(() => _reclaiming = kind);
     await notifier.selectAgent(widget.machineId, widget.agentId);
     if (!mounted) return;
     final session = notifier
         .paneOfAgent(widget.machineId, widget.agentId)
         ?.session;
-    if (_takingControl && session?.status != TerminalSessionStatus.opening) {
-      setState(() => _takingControl = false);
+    if (_reclaiming != null &&
+        session?.status != TerminalSessionStatus.opening) {
+      setState(() => _reclaiming = null);
     }
   }
 
@@ -1979,14 +2056,14 @@ class _ControlBanner extends StatelessWidget {
 /// ⚠️ **It draws the transcript's STRUCTURE, not a stack of grey bars.** The
 /// first version was a column of plain lines and read as a loading page for some
 /// other app — nothing about it suggested a terminal. What actually arrives has
-/// a strong, repeating shape: a prompt banner on its own lighter ground, a
-/// bulleted answer indented under it, a dim meta line closing the turn. Standing
+/// a strong, repeating shape: a prompt led by its `›`, a bulleted answer
+/// indented under it, a dim meta line closing the turn. Standing
 /// in for THAT is what makes the wait read as "your session is coming back"
 /// rather than "something is loading", and it is the same rule
 /// `PhoneListSkeleton` follows for a list of cards — the same cards, empty, at a
 /// real row's height.
 class _Attaching extends StatefulWidget {
-  const _Attaching();
+  const _Attaching({super.key});
 
   @override
   State<_Attaching> createState() => _AttachingState();
@@ -2142,28 +2219,22 @@ class _AttachingState extends State<_Attaching> with TickerProviderStateMixin {
     // gets bars that are darker than its ground rather than lighter.
     final light =
         ThemeData.estimateBrightnessForColor(ground) == Brightness.light;
-    final rest = Color.alphaBlend(
-      (light ? Colors.black : Colors.white).withValues(alpha: 0.10),
-      ground,
-    );
-    final peak = Color.alphaBlend(
-      (light ? Colors.black : Colors.white).withValues(alpha: 0.17),
-      ground,
-    );
-    // The prompt's banner sits on its own ground, a step above the terminal's —
-    // the band an agent paints behind the line it is answering, and the one
-    // element that makes this block read as a transcript rather than as a list
-    // of lines.
+    final ink = light ? Colors.black : Colors.white;
+    final rest = Color.alphaBlend(ink.withValues(alpha: 0.10), ground);
+    final peak = Color.alphaBlend(ink.withValues(alpha: 0.17), ground);
+    // The prompt — the line the person typed — a step brighter than the answer
+    // under it, and breathing with it.
     //
-    // 0.08, not the 0.05 this started at: the banner has to be legible as a BAND
-    // at arm's length on a phone, and at 0.05 over `#181818` it was a shade
-    // nobody would notice. Still well under the bars themselves (0.10–0.17), so
-    // it reads as the ground behind them rather than as another bar.
-    final banner = Color.lerp(
-      ground,
-      light ? Colors.black : Colors.white,
-      0.08,
-    )!;
+    // ⚠️ **This is what marks the prompt now, in place of a band.** The prompt
+    // used to sit on its own full-width ground: a square-cornered band with a
+    // rounded bar inside it — one shape nested in another, and the only square
+    // corners in a block of rounded bars. It read as a table row with a
+    // placeholder in it rather than as a line of a transcript. What sets the
+    // prompt apart on the real screen is its `›` and its weight, so that is what
+    // is drawn: the chevron in the gutter, and a bar a step brighter than the
+    // answer's. Its rest is the answer's peak, so the two never meet mid-breath.
+    final promptRest = Color.alphaBlend(ink.withValues(alpha: 0.17), ground);
+    final promptPeak = Color.alphaBlend(ink.withValues(alpha: 0.25), ground);
     final bar = (fontSize * 0.62).clamp(5.0, 12.0).toDouble();
     return SkeletonBlock(
       semanticsLabel: 'Attaching to the harness',
@@ -2183,7 +2254,8 @@ class _AttachingState extends State<_Attaching> with TickerProviderStateMixin {
             ground: ground,
             rest: rest,
             peak: peak,
-            banner: banner,
+            promptRest: promptRest,
+            promptPeak: promptPeak,
           ),
           child: const SizedBox.expand(),
         ),
@@ -2194,12 +2266,12 @@ class _AttachingState extends State<_Attaching> with TickerProviderStateMixin {
   /// What one turn occupies, so the painter can work out how many fit.
   ///
   /// ⚠️ **Must stay in step with [_SkeletonPainter._turn]**, which is why the
-  /// terms are written in the same order as the rows it draws: banner, gap,
+  /// terms are written in the same order as the rows it draws: prompt, gap,
   /// answer lines, gap and meta line, trailing gap. A drift here does not break
   /// the picture — the block is clipped either way — it just means a turn too
   /// few (a band of empty ground at the top) or one too many (wasted paint).
   static double _turnHeight(_SkeletonTurn turn, {required double lineHeight}) =>
-      lineHeight + // the prompt banner
+      lineHeight + // the prompt
       lineHeight * 0.35 + // the gap under it
       lineHeight * turn.answer.length +
       (turn.meta == null ? 0 : lineHeight * 0.35 + lineHeight) +
@@ -2221,7 +2293,8 @@ class _SkeletonPainter extends CustomPainter {
     required this.ground,
     required this.rest,
     required this.peak,
-    required this.banner,
+    required this.promptRest,
+    required this.promptPeak,
   }) : super(repaint: Listenable.merge([breath, reveal]));
 
   /// 0 at rest, 1 at the peak of the breath.
@@ -2239,7 +2312,11 @@ class _SkeletonPainter extends CustomPainter {
   final Color ground;
   final Color rest;
   final Color peak;
-  final Color banner;
+
+  /// The prompt's bar at rest and at the peak of the breath — a step above
+  /// [rest] and [peak]. See the note where they are mixed.
+  final Color promptRest;
+  final Color promptPeak;
 
   /// ⚠️ The terminal view's OWN padding (`TerminalPanel` passes
   /// `EdgeInsets.all(10)` to the xterm view), so a bar starts on the column the
@@ -2296,6 +2373,7 @@ class _SkeletonPainter extends CustomPainter {
     // gap after it. See `last` in [_turn].
     total -= lineHeight * 0.9;
     final fill = Color.lerp(rest, peak, breath.value)!;
+    final prompt = Color.lerp(promptRest, promptPeak, breath.value)!;
     canvas.save();
     canvas.clipRect(full);
     var top = inner.bottom - total;
@@ -2313,7 +2391,7 @@ class _SkeletonPainter extends CustomPainter {
         inner: inner,
         top: top,
         fill: Color.lerp(ground, fill, opacity)!,
-        banner: Color.lerp(ground, banner, opacity)!,
+        prompt: Color.lerp(ground, prompt, opacity)!,
         last: i == turns.length - 1,
       );
     }
@@ -2321,8 +2399,8 @@ class _SkeletonPainter extends CustomPainter {
     canvas.restore();
   }
 
-  /// One turn: the prompt banner, the bulleted answer under it, the meta line —
-  /// drawn from [top] down, answering with where the next turn starts.
+  /// One turn: the prompt, the bulleted answer under it, the meta line — drawn
+  /// from [top] down, answering with where the next turn starts.
   ///
   /// Every row is exactly one terminal line box tall, so the whole block
   /// occupies a whole number of rows and the keyframe replaces it without the
@@ -2336,22 +2414,26 @@ class _SkeletonPainter extends CustomPainter {
     required Rect inner,
     required double top,
     required Color fill,
-    required Color banner,
+    required Color prompt,
     required bool last,
   }) {
     final x = inner.left;
     final width = inner.width;
     final paint = Paint()..color = fill;
+    // Where every row's text starts — after the prompt's `›` and the answer's
+    // bullet alike, so the block keeps the one left edge the transcript has.
+    final indent = bar * 1.25;
     var y = top;
-    // The prompt, on its own full-width ground — the one element that makes
-    // this read as a transcript rather than as a list of lines.
-    canvas.drawRect(
-      Rect.fromLTWH(x, y, width, lineHeight),
-      Paint()..color = banner,
+    // The prompt: its `›` in the gutter, then the line, a step brighter than
+    // the answer — the two things that set it apart on the real screen.
+    _chevron(canvas, x, y, prompt);
+    _bar(
+      canvas,
+      x + indent,
+      y,
+      turn.prompt * (width - indent),
+      Paint()..color = prompt,
     );
-    // The `›` gutter the real prompt keeps.
-    final gutter = bar * 0.9;
-    _bar(canvas, x + gutter, y, turn.prompt * (width - gutter), paint);
     y += lineHeight + lineHeight * 0.35;
     // The answer: a bullet on the first row, the rest indented under it.
     for (var i = 0; i < turn.answer.length; i++) {
@@ -2362,24 +2444,52 @@ class _SkeletonPainter extends CustomPainter {
           dot / 2,
           paint,
         );
-        final indent = dot + bar * 0.7;
-        _bar(canvas, x + indent, y, turn.answer[i] * (width - indent), paint);
-      } else {
-        final indent = bar * 1.25;
-        _bar(canvas, x + indent, y, turn.answer[i] * (width - indent), paint);
       }
+      _bar(canvas, x + indent, y, turn.answer[i] * (width - indent), paint);
       y += lineHeight;
     }
     final meta = turn.meta;
     if (meta != null) {
       y += lineHeight * 0.35;
       // The `✳ Crunched for 3s · done 10:36` line that closes a turn: always
-      // shorter, and thinner than a line of body text.
-      _bar(canvas, x, y, meta * width, paint, height: bar * 0.7);
+      // shorter, thinner than a line of body text, and quieter than it — the
+      // third step down from the prompt.
+      _bar(
+        canvas,
+        x,
+        y,
+        meta * width,
+        Paint()..color = Color.lerp(ground, fill, 0.7)!,
+        height: bar * 0.7,
+      );
       y += lineHeight;
     }
     if (!last) y += lineHeight * 0.9;
     return y;
+  }
+
+  /// The prompt's `›`, in the gutter the real one keeps: as tall as a bar and
+  /// centred on the row like the bullet under it, so the two marks line up.
+  void _chevron(Canvas canvas, double left, double top, Color color) {
+    final height = bar * 0.84;
+    final start = left + bar * 0.08;
+    final middle = top + lineHeight / 2;
+    final stroke = bar * 0.22;
+    canvas.drawPath(
+      Path()
+        ..moveTo(start, middle - height / 2)
+        ..lineTo(start + height * 0.5, middle)
+        ..lineTo(start, middle + height / 2),
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        // Floored at a pixel and a bit: at the smallest terminal fonts the bar
+        // is 5pt, and a stroke in proportion to it would be a hairline beside
+        // bars and a bullet that are not.
+        ..strokeWidth = stroke < 1.2 ? 1.2 : stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
   }
 
   /// A bar of text, centred in the line box that starts at [top].
@@ -2400,7 +2510,10 @@ class _SkeletonPainter extends CustomPainter {
           width,
           thickness,
         ),
-        const Radius.circular(3),
+        // Round-ended, the same family as the bullet and the chevron's caps:
+        // with a fixed 3pt corner a large terminal font drew square-shouldered
+        // slabs beside a round dot.
+        Radius.circular(thickness / 2),
       ),
       paint,
     );
@@ -2463,7 +2576,8 @@ class _SkeletonPainter extends CustomPainter {
       old.ground != ground ||
       old.rest != rest ||
       old.peak != peak ||
-      old.banner != banner ||
+      old.promptRest != promptRest ||
+      old.promptPeak != promptPeak ||
       !identical(old.breath, breath) ||
       !identical(old.reveal, reveal);
 }
@@ -2476,7 +2590,7 @@ class _SkeletonTurn {
     required this.meta,
   });
 
-  /// Width of the prompt text inside its banner, as a fraction of the pane.
+  /// Width of the prompt's text, as a fraction of the row after its `›`.
   final double prompt;
 
   /// The answer's lines, longest first — a paragraph wraps full-width and its

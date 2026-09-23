@@ -110,7 +110,9 @@ class _AgentHomeState extends State<AgentHome> {
   ///
   /// So the snapshot is taken when a pager opens, and replaced only when a new one does — which is
   /// exactly the rule every pushed pager already followed by being built once from a list the person
-  /// had just been looking at.
+  /// had just been looking at — or when the tab's SET of agents changes. The pager then lines the new
+  /// list up with the page already on screen rather than reading it by the old index (see
+  /// `AgentSwipeHost`'s `didUpdateWidget`), which is what keeps the two in step through a swap.
   AgentSwipeList? _neighbours;
 
   /// The agent [_neighbours] was taken for. A different one means a different pager, and therefore a
@@ -603,7 +605,18 @@ class _AgentHomeState extends State<AgentHome> {
       // it belongs to. An account with no tabs gets one group over everything,
       // which is the phone exactly as it was.
       final groups = deskGroups(widget.notifier, entries);
-      var group = activeDeskGroup(widget.notifier, groups, chosen);
+      // The agent ON SCREEN while the pager is staying up — it may have been swiped to from the one
+      // the pager opened on — and the tab the phone is in is that agent's. The agent held onto may be
+      // in a different tab than the one the target named: a tab closed on another computer moves
+      // what is on screen into another group, or into "Other".
+      final showing = _showing;
+      final onScreen = _neighboursFor == chosen && showing != null
+          ? _entryFor(entries, showing)
+          : null;
+      final here = onScreen == null
+          ? chosen
+          : (machineId: onScreen.machineId, agentId: onScreen.agent.id);
+      final group = activeDeskGroup(widget.notifier, groups, here);
       // ⚠️ **The swipe list is a snapshot, so it is retaken when the SET of agents changes.** It is
       // taken as the pager opens, and on launch that is as soon as one machine answers — a second
       // machine's agents arriving a moment later never reached it, and a pager built around one
@@ -614,7 +627,7 @@ class _AgentHomeState extends State<AgentHome> {
       // retakes it too — an agent added to this tab in a window is one swipe
       // away here a moment later, and one closed there stops being reachable.
       //
-      // Rebuilt around the agent ON SCREEN, not the one the pager opened on — the person stays
+      // Retaken around the agent ON SCREEN, not the one the pager opened on — the person stays
       // where they are, now with every agent of the tab beside them.
       final snapshot = _neighbours;
       if (snapshot != null &&
@@ -633,18 +646,22 @@ class _AgentHomeState extends State<AgentHome> {
           // a frame and the terminal would stay where it was.
           _neighboursFor == chosen &&
           !_sameAgents(snapshot, group.entries)) {
-        final showing = _showing;
-        final onScreen = showing == null ? null : _entryFor(entries, showing);
-        if (onScreen != null) {
-          chosen = (machineId: onScreen.machineId, agentId: onScreen.agent.id);
-          // The agent held onto may be in a different tab than the one the
-          // target named — a tab closed on another computer moves what is on
-          // screen into another group, or into "Other".
-          group = activeDeskGroup(widget.notifier, groups, chosen);
+        final retaken = AgentSwipeList(group.entries);
+        // ⚠️ **Handed to the pager already up, not a new pager.** A new list used to mean a new
+        // key: the pager and every page in it disposed and built again, the terminal on screen
+        // included. On a cold start that happened on EVERY launch — the pager opens on last run's
+        // agents before the desk has answered, and the tabs arriving a second or two later cut its
+        // list down to one tab's — so the header and the skeleton loaded, then jerked and loaded
+        // again. The pager takes the list in place, keeping the page on screen (see
+        // `AgentSwipeHost`'s `didUpdateWidget`); a new pager is built only for a list it cannot.
+        if (onScreen != null && _pagerTakesInPlace(snapshot, retaken, here)) {
+          _neighbours = retaken;
+        } else {
+          chosen = here;
+          _neighboursFor = null;
+          _neighbours = null;
+          _pagerGeneration++;
         }
-        _neighboursFor = null;
-        _neighbours = null;
-        _pagerGeneration++;
       }
       // What the phone is in, recorded for the paths that cannot derive it: an
       // agent created here joins this tab (`PhoneDesk.adopt`).
@@ -722,6 +739,22 @@ class _AgentHomeState extends State<AgentHome> {
     final now = keys(entries);
     return before.length == now.length && before.containsAll(now);
   }
+
+  /// Whether the pager already up can take [retaken] in place — keep the page on screen, [here], and
+  /// change only the agents beside it — rather than be rebuilt.
+  ///
+  /// It can while the agent on screen is still in the list and the list pages the same way: a pager
+  /// that does not wrap (one agent) numbers its pages differently, so a change of shape needs a
+  /// pager of its own. The pager applies the same test and leaves alone a list that fails it — see
+  /// `AgentSwipeHost`'s `didUpdateWidget`.
+  static bool _pagerTakesInPlace(
+    AgentSwipeList snapshot,
+    AgentSwipeList retaken,
+    ({String machineId, String agentId}) here,
+  ) =>
+      snapshot.wraps &&
+      retaken.wraps &&
+      retaken.indexOf(here.machineId, here.agentId) != null;
 
   /// Bumped whenever the pager is thrown away and rebuilt, and part of its key.
   int _pagerGeneration = 0;

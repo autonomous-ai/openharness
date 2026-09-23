@@ -9,6 +9,7 @@ import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart'
     show TerminalSessionStatus;
 
+import 'agent_index.dart' show AgentEntry;
 import 'agent_pane_prune.dart';
 import 'phone_search_catalog.dart' show phoneAgentId;
 import 'agent_swipe_list.dart';
@@ -44,6 +45,10 @@ class AgentSwipeHost extends StatefulWidget {
   final String agentId;
 
   /// Null for a page opened without neighbours, which is then simply the page.
+  ///
+  /// May be replaced under a live pager — the tab's agents changed — and is then taken in without
+  /// leaving the page on screen. See [_AgentSwipeHostState.didUpdateWidget] for which lists can be,
+  /// and [AgentHome] for the pager it builds instead when one cannot.
   final AgentSwipeList? neighbours;
 
   /// Told which agent a swipe has arrived at, for a host that has to keep up with the pager.
@@ -63,6 +68,24 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
   static const _origin = 1000;
 
   PageController? _controller;
+
+  /// The agents the pages are drawn from: [AgentSwipeHost.neighbours] as this pager opened on it, or
+  /// as it was last taken in by [didUpdateWidget].
+  AgentSwipeList? _neighbours;
+
+  /// Added to a page number before it is read as a place in [_neighbours] — see [_entryAt].
+  ///
+  /// Zero for as long as the list this pager opened on is the list it draws. When [didUpdateWidget]
+  /// takes in another, the page on screen keeps its NUMBER — the number is its key, and the key is
+  /// what keeps its terminal, header and skeleton mounted — and this is what makes that same number
+  /// name the same agent in the new list.
+  int _shift = 0;
+
+  /// The entry page [page] draws.
+  AgentEntry _entryAt(AgentSwipeList neighbours, int page) {
+    final count = neighbours.entries.length;
+    return neighbours.entries[((page + _shift) % count + count) % count];
+  }
 
   /// The page being looked at, which is what decides [TerminalPage.isActive].
   ///
@@ -194,10 +217,11 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
     widget.notifier.lastOpenedAgent.remember(_current);
     _rememberVisit(_current);
     final neighbours = widget.neighbours;
+    _neighbours = neighbours;
     if (neighbours == null || neighbours.isEmpty) return;
-    // The snapshot is fixed for as long as this pager lives, so the opening page is the only index
-    // that ever has to be looked up — from there the controller and the list stay in step, and
-    // [_page] and [_current] both follow from `onPageChanged` alone.
+    // The opening page is the only index looked up from scratch — from there the controller and the
+    // list stay in step, and [_page] and [_current] both follow from `onPageChanged` alone. A list
+    // taken in later is lined up with the page already on screen instead: see [didUpdateWidget].
     final start = neighbours.indexOf(widget.machineId, widget.agentId) ?? 0;
     // Opening in the MIDDLE of the endless run, not at its start, is what lets the first swipe go
     // either way: page 0 has nothing to its left, and the last agent has to be reachable by swiping
@@ -216,6 +240,37 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
     // The opening page's neighbours too, not only a swiped-to page's: the first swipe out of a
     // freshly opened pager is the one most people make. The page itself is attached by whoever
     // opened the pager (see [AgentHome]'s `_attachOnly`), and this waits for it to render first.
+    _armPrefetch();
+  }
+
+  /// Takes in a new neighbour list without leaving the page on screen.
+  ///
+  /// ⚠️ **In place, and that is the whole point.** The list is retaken whenever the tab's agents
+  /// change — and on a cold start that is EVERY launch: the pager opens on last run's agents in half
+  /// a second, and the tabs arrive from the desk a second or two later, cutting the list down to one
+  /// tab's. That used to take a new pager: a new key, every page disposed and built again, and the
+  /// terminal being looked at — header, skeleton sweep, the lot — thrown away and redrawn under the
+  /// person. Here the page on screen keeps its number, so its key, so its state; only the pages
+  /// beside it change agents, and those are keyed by agent (see [build]) so each is built fresh
+  /// rather than handed another agent's state.
+  ///
+  /// Only a list that still holds the agent on screen, and that wraps as this one does: on a pager
+  /// that does not wrap a page number IS a place in the list, so a change of shape needs a pager of
+  /// its own, and [AgentHome] builds one for it. Anything else is left alone rather than half-applied.
+  @override
+  void didUpdateWidget(AgentSwipeHost oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final next = widget.neighbours;
+    final held = _neighbours;
+    if (next == null || held == null || identical(next, held)) return;
+    final at = next.indexOf(_current.machineId, _current.agentId);
+    if (at == null || !next.wraps || !held.wraps) return;
+    final count = next.entries.length;
+    _neighbours = next;
+    _shift = ((at - _page) % count + count) % count;
+    // The pages either side are other agents now: theirs are attached, and the ones they replaced
+    // let go on the pruner's beat, as after a swipe.
+    _pruner?.keep(_keepSet());
     _armPrefetch();
   }
 
@@ -279,7 +334,7 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
 
   @override
   Widget build(BuildContext context) {
-    final neighbours = widget.neighbours;
+    final neighbours = _neighbours;
     final controller = _controller;
     if (neighbours == null || controller == null || neighbours.isEmpty) {
       return TerminalPage(
@@ -334,7 +389,7 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
         itemCount: neighbours.wraps ? null : neighbours.entries.length,
         onPageChanged: _onPageChanged,
         itemBuilder: (context, i) {
-          final entry = neighbours.entries[i % neighbours.entries.length];
+          final entry = _entryAt(neighbours, i);
           // ⚠️ Tickers off for every page but the one on screen. Four pages are mounted beside it
           // now (see `scrollCacheExtent` above), and each has things that tick — the cursor blink,
           // the skeleton's sweep and pulse — which would otherwise run at frame rate for screens
@@ -350,6 +405,11 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
             key: ValueKey(i),
             enabled: i == _page,
             child: TerminalPage(
+              // ⚠️ Keyed by AGENT as well, one level under the page's own key. A page keeps its
+              // number for as long as the pager lives, but the agent at a number can change when a
+              // new list is taken in (see [didUpdateWidget]) — and an unkeyed page would carry the
+              // old agent's state (its attach, its chrome, its skeleton) into the new one's.
+              key: ValueKey('${entry.machineId}/${entry.agent.id}'),
               notifier: widget.notifier,
               machineId: entry.machineId,
               agentId: entry.agent.id,
@@ -364,10 +424,10 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
   }
 
   void _onPageChanged(int index) {
-    final neighbours = widget.neighbours;
+    final neighbours = _neighbours;
     if (neighbours == null || neighbours.isEmpty) return;
     // The page number runs off in both directions once the pager wraps; the agent it names does not.
-    final entry = neighbours.entries[index % neighbours.entries.length];
+    final entry = _entryAt(neighbours, index);
     final arrived = (machineId: entry.machineId, agentId: entry.agent.id);
     // Recorded BEFORE the attach, so a pane always has an owner to close it — see [_attached]. An
     // agent added here that never finishes attaching costs nothing: [_detachAll] looks for its pane
@@ -432,16 +492,14 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
   /// `[N−2, N+2]`. An agent under several of those pages — a short list, wrapped — is named once,
   /// in the nearest ring, and [_current] not at all; a ring can therefore be short, or empty.
   List<List<AgentRef>> _rings() {
-    final neighbours = widget.neighbours;
+    final neighbours = _neighbours;
     if (neighbours == null || neighbours.isEmpty) return const [];
-    final entries = neighbours.entries;
-    final count = entries.length;
     final seen = <AgentRef>{_current};
     final rings = <List<AgentRef>>[];
     for (var distance = 1; distance <= _reach; distance++) {
       final ring = <AgentRef>[];
       for (final step in [-distance, distance]) {
-        final entry = entries[((_page + step) % count + count) % count];
+        final entry = _entryAt(neighbours, _page + step);
         final agent = (machineId: entry.machineId, agentId: entry.agent.id);
         if (seen.add(agent)) ring.add(agent);
       }
