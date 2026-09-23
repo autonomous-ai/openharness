@@ -1203,7 +1203,7 @@ private struct SwarmHistoryEntry: Equatable {
 }
 
 /// Reuse the same bundled engine artwork as pane headers. Each menu mark is
-/// decoded once to at most 32 pixels, rather than retaining a full-size bitmap
+/// decoded once at twice its display size, rather than retaining a full-size bitmap
 /// or reopening assets on every history/focus update.
 private final class SwarmHistoryIcons {
   /// The Flutter assets this opens: engine and harness artwork, and the app
@@ -1211,7 +1211,7 @@ private final class SwarmHistoryIcons {
   /// lib/store/store_mark.dart). Any other path draws the engine's initial,
   /// which is how the store tab once read "S".
   static func opens(_ asset: String) -> Bool {
-    !asset.contains("..") && (asset == "assets/app_icon.png" || asset == "assets/store/polymath.png"
+    !asset.contains("..") && (asset == "assets/app_icon.png" || asset == "assets/harnesses.png" || asset == "assets/store/polymath.png"
       || asset.hasPrefix("assets/engine-icons/") && asset.hasSuffix(".png"))
   }
 
@@ -1230,11 +1230,11 @@ private final class SwarmHistoryIcons {
     cache.countLimit = 32
   }
 
-  func image(engine: String?, asset: String?) -> NSImage {
+  func image(engine: String?, asset: String?, pointSize: CGFloat = 16) -> NSImage {
     let id = engine?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-    let key = "\(id):\(asset ?? "")" as NSString
+    let key = "\(id):\(asset ?? ""):\(pointSize)" as NSString
     if let image = cache.object(forKey: key) { return image }
-    let size = NSSize(width: 16, height: 16)
+    let size = NSSize(width: pointSize, height: pointSize)
     let image: NSImage
     if let asset, SwarmHistoryIcons.opens(asset),
        let url = assetURL(asset),
@@ -1242,15 +1242,15 @@ private final class SwarmHistoryIcons {
        let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
          kCGImageSourceCreateThumbnailFromImageAlways: true,
          kCGImageSourceCreateThumbnailWithTransform: true,
-         kCGImageSourceThumbnailMaxPixelSize: 32,
+         kCGImageSourceThumbnailMaxPixelSize: Int(ceil(pointSize * 2)),
          kCGImageSourceShouldCacheImmediately: true,
        ] as CFDictionary) {
       let bitmap = NSImage(cgImage: thumbnail, size: .zero)
-      let scale = 16 / CGFloat(max(thumbnail.width, thumbnail.height))
+      let scale = pointSize / CGFloat(max(thumbnail.width, thumbnail.height))
       let width = CGFloat(thumbnail.width) * scale
       let height = CGFloat(thumbnail.height) * scale
       image = NSImage(size: size, flipped: false) { _ in
-        bitmap.draw(in: NSRect(x: (16 - width) / 2, y: (16 - height) / 2, width: width, height: height))
+        bitmap.draw(in: NSRect(x: (pointSize - width) / 2, y: (pointSize - height) / 2, width: width, height: height))
         return true
       }
     } else if id == "store", let appIcon = NSApp.applicationIconImage {
@@ -1264,13 +1264,13 @@ private final class SwarmHistoryIcons {
       image = NSImage(size: size, flipped: false) { _ in
         NSColor(srgbRed: 204.0 / 255, green: 124.0 / 255, blue: 94.0 / 255, alpha: 1).setStroke()
         let path = NSBezierPath()
-        path.lineWidth = 16 * 0.098
+        path.lineWidth = pointSize * 0.098
         path.lineCapStyle = .round
         for i in 0..<4 {
           let angle = CGFloat(i) * .pi / 4
-          let dx = 16 * 0.39 * cos(angle), dy = 16 * 0.39 * sin(angle)
-          path.move(to: NSPoint(x: 8 - dx, y: 8 - dy))
-          path.line(to: NSPoint(x: 8 + dx, y: 8 + dy))
+          let dx = pointSize * 0.39 * cos(angle), dy = pointSize * 0.39 * sin(angle)
+          path.move(to: NSPoint(x: pointSize / 2 - dx, y: pointSize / 2 - dy))
+          path.line(to: NSPoint(x: pointSize / 2 + dx, y: pointSize / 2 + dy))
         }
         path.stroke()
         return true
@@ -1282,12 +1282,12 @@ private final class SwarmHistoryIcons {
         let name = id.split(separator: "/").last.map(String.init) ?? id
         let initial = String(name.first ?? "A").uppercased() as NSString
         let attributes: [NSAttributedString.Key: Any] = [
-          // Raster artwork for a fixed 16px fallback icon, not a UI text label.
-          .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold),
+          // Raster artwork for a fallback icon, not a UI text label.
+          .font: NSFont.monospacedSystemFont(ofSize: pointSize * 11 / 16, weight: .bold),
           .foregroundColor: NSColor.black,
         ]
         let bounds = initial.size(withAttributes: attributes)
-        initial.draw(at: NSPoint(x: (16 - bounds.width) / 2, y: (16 - bounds.height) / 2), withAttributes: attributes)
+        initial.draw(at: NSPoint(x: (pointSize - bounds.width) / 2, y: (pointSize - bounds.height) / 2), withAttributes: attributes)
         return true
       }
       image.isTemplate = true
@@ -1520,9 +1520,11 @@ private final class SwarmTabStrip: NSView {
     button(newButton, "plus", "New Tab", #selector(newSwarm))
     newButton.setAccessibilityLabel("New Tab")
     newButton.isEnabled = false
-    button(sessionsButton, "terminal", "Harnesses", #selector(openSessions))
+    button(sessionsButton, "terminal", "Harness Monitor", #selector(openSessions))
+    sessionsButton.image = icons.image(engine: "harnesses", asset: "assets/harnesses.png", pointSize: 24)
+    sessionsButton.symbolConfiguration = nil
     sessionsButton.isEnabled = false
-    sessionsButton.toolTip = "Harnesses"
+    sessionsButton.toolTip = "Harness Monitor"
     newButton.toolTip = "New Tab ⌘T"
     storeButton.isBordered = false
     storeButton.palette = palette
@@ -1630,12 +1632,12 @@ private final class SwarmTabStrip: NSView {
     sessionsButton.running = state["runningSessions"] as? Int ?? 0
     sessionsButton.expanded = state["sessionsOpen"] as? Bool == true
     let expandedState = sessionsButton.expanded ? "Expanded" : "Collapsed"
-    sessionsButton.toolTip = sessionsButton.running > 0 ? "Harnesses · \(sessionsButton.running) running" : "Harnesses"
+    sessionsButton.toolTip = sessionsButton.running > 0 ? "Harness Monitor · \(sessionsButton.running) running" : "Harness Monitor"
     let attention = state["attention"] as? Int ?? 0
     sessionsButton.attention = attention
     let attentionState = "\(attention) \(attention == 1 ? "needs" : "need") input"
     sessionsButton.setAccessibilityValue(attention > 0 ? "\(expandedState), \(attentionState)" : expandedState)
-    if attention > 0 { sessionsButton.toolTip = "Harnesses · \(attentionState)" }
+    if attention > 0 { sessionsButton.toolTip = "Harness Monitor · \(attentionState)" }
     needsLayout = true
     layoutSubtreeIfNeeded()
     if ids != previousOrder {

@@ -116,6 +116,8 @@ flutter:
     # loaded from the bundle: Flutter can't read an .icns, and About should show
     # the mark the Dock shows, not a stand-in drawn in Dart.
     - assets/app_icon.png
+    # Original stacked-terminal logo, retained for Harness Monitor.
+    - assets/harnesses.png
     - assets/harness_device.png
     - assets/harness_device_studio.png
     - assets/harness_store_card.png

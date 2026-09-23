@@ -269,7 +269,7 @@ private extension SwarmTabStrip {
       "The Store action has a visible and accessible name")
     try checkTitlebar(newButton.frame.maxX < sessionsButton.frame.minX && sessionsButton.frame.maxX < storeButton.frame.minX && storeButton.frame.maxX <= bounds.width,
       "Harnesses sits to the left of the Store without overlapping its hit target")
-    try checkTitlebar(sessionsButton.accessibilityLabel() == "Harnesses", "Harnesses has an accessible name")
+    try checkTitlebar(sessionsButton.accessibilityLabel() == "Harness Monitor", "Harnesses has an accessible name")
     try checkTitlebar(!subviews.contains(where: { $0 is NSTextField }), "The titlebar has no competing text editor")
     events.removeAll()
     newButton.performClick(nil)

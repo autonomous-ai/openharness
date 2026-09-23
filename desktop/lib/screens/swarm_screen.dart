@@ -3407,7 +3407,7 @@ class _SwarmScreenState extends State<SwarmScreen>
             ),
             IconButton(
               key: _sessionsButton,
-              tooltip: 'Harnesses',
+              tooltip: 'Harness Monitor',
               onPressed: _toggleSessions,
               isSelected: _sessionsOverlay != null,
               icon: Badge(
@@ -3425,10 +3425,12 @@ class _SwarmScreenState extends State<SwarmScreen>
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                child: const Icon(
-                  Icons.terminal_rounded,
-                  size: 20,
-                  semanticLabel: 'Harnesses',
+                child: Image.asset(
+                  'assets/harnesses.png',
+                  width: 24,
+                  height: 24,
+                  filterQuality: FilterQuality.high,
+                  semanticLabel: 'Harness Monitor',
                 ),
               ),
             ),
