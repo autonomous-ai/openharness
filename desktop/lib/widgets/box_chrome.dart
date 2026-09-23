@@ -188,6 +188,7 @@ class BoxRowHighlight extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
+      animationDuration: Duration.zero,
       color: highlighted
           ? Colors.white.withValues(alpha: .10)
           : Colors.transparent,
