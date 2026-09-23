@@ -18,6 +18,8 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../theme/app_theme.dart' show AppFont;
+
 /// How far the app blurs what sits behind a dialog.
 ///
 /// ⚠️ Bounded on purpose. A terminal is high-contrast text on a dark ground,
@@ -40,6 +42,44 @@ const Color kDialogVeilTint = Color(0xE6000000);
 /// every `showPhoneSheet` sheet, so the sheets over a terminal all stand on the
 /// same veil.
 const double kSheetVeilOpacity = 0.64;
+
+/// The corner of a dialog's controls — its field and the buttons under it —
+/// so the two read as one set.
+const double kDialogControlRadius = 12;
+
+/// A dialog's action button at a thumb's size: 46 tall, 16pt, on
+/// [kDialogControlRadius].
+///
+/// One pair of measures for every dialog laid out as a card with its actions
+/// side by side along the bottom — the rename dialog, the phone's
+/// confirmations — so none of them sizes its own.
+///
+/// Built on the app's filled button, so everything this leaves unsaid — the
+/// shrink-wrapped tap target, the hover overlay — is still the theme's.
+ButtonStyle appDialogButtonStyle({
+  required Color background,
+  required Color foreground,
+  Color? disabledBackground,
+  Color? disabledForeground,
+}) => FilledButton.styleFrom(
+  backgroundColor: background,
+  foregroundColor: foreground,
+  disabledBackgroundColor: disabledBackground,
+  disabledForegroundColor: disabledForeground,
+  minimumSize: const Size.fromHeight(46),
+  padding: const EdgeInsets.symmetric(horizontal: 12),
+  shape: RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(kDialogControlRadius),
+  ),
+  // `ButtonStyle.textStyle` does not inherit the family from the text theme —
+  // see `_buttonTextStyle` in the theme — so it is named here too.
+  textStyle: TextStyle(
+    fontFamily: AppFont.sans,
+    fontFamilyFallback: AppFont.sansFallback,
+    fontSize: 16,
+    fontWeight: AppFont.semibold,
+  ),
+);
 
 /// The app's dialog barrier: a blur, then a tint, then whatever opened.
 ///

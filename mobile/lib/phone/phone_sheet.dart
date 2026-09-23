@@ -5,7 +5,12 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/app_dialog.dart'
-    show kDialogVeilBlur, kSheetVeilOpacity;
+    show
+        appDialogButtonStyle,
+        kDialogControlRadius,
+        kDialogVeilBlur,
+        kSheetVeilOpacity,
+        showAppDialog;
 
 import 'settings_row.dart';
 
@@ -448,39 +453,170 @@ class _SheetRow extends StatelessWidget {
   }
 }
 
-/// A yes/no question before something that cannot be undone — deleting an agent, unlinking a
-/// machine. Returns true only if the destructive button was the one pressed.
+/// A yes/no question before something that cannot be undone — stopping a harness, unlinking a
+/// machine. Returns true only if the destructive button was the one pressed; Cancel, a tap on the
+/// veil and Escape all answer no.
+///
+/// Laid out as the rename dialog is (`widgets/rename_agent_dialog.dart`) and on the same veil —
+/// [showAppDialog]'s blur under its tint — so the app's dialogs read as one set: a heading row with
+/// a mark, the sentence, then Cancel and the act side by side at a thumb's size.
+///
+/// [icon] is the mark, on a red tile: pass the icon of the row that asked, so the question visibly
+/// continues the tap that opened it. [detail], when given, goes under the title — where the thing
+/// lives, so two of the same name on two machines cannot be confused at the one step that ends one.
 Future<bool> confirmPhoneAction(
   BuildContext context, {
   required String title,
   required String message,
   required String confirmLabel,
+  IconData icon = LucideIcons.triangleAlert300,
+  String? detail,
 }) async {
-  final confirmed = await showDialog<bool>(
+  final confirmed = await showAppDialog<bool>(
     context: context,
-    useRootNavigator: true,
-    builder: (dialogContext) => AlertDialog(
-      backgroundColor: AppPalette.panelBg,
-      title: Text(
-        title,
-        style: TextStyle(color: AppPalette.textPrimary, fontSize: 18),
-      ),
-      content: Text(
-        message,
-        style: TextStyle(color: AppPalette.textSecondary, fontSize: 14),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(dialogContext).pop(false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          style: FilledButton.styleFrom(backgroundColor: AppPalette.dangerFill),
-          onPressed: () => Navigator.of(dialogContext).pop(true),
-          child: Text(confirmLabel),
-        ),
-      ],
+    builder: (_) => _ConfirmDialog(
+      title: title,
+      message: message,
+      confirmLabel: confirmLabel,
+      icon: icon,
+      detail: detail,
     ),
   );
   return confirmed ?? false;
+}
+
+/// [confirmPhoneAction]'s card.
+class _ConfirmDialog extends StatelessWidget {
+  const _ConfirmDialog({
+    required this.title,
+    required this.message,
+    required this.confirmLabel,
+    required this.icon,
+    required this.detail,
+  });
+
+  final String title;
+  final String message;
+  final String confirmLabel;
+  final IconData icon;
+  final String? detail;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    // The red tuned as ink on a dark surface, for the mark. [AppPalette.dangerFill] is darkened to
+    // carry white lettering, so it stays on the button — the one place that has any.
+    final danger = Theme.of(context).colorScheme.error;
+    final detail = this.detail;
+    return Dialog(
+      // 16 from a phone's edges, as the rename dialog: the sentence gets the width, up to the 360
+      // the card stops at on anything wider.
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      child: Semantics(
+        scopesRoute: true,
+        namesRoute: true,
+        explicitChildNodes: true,
+        label: title,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: danger.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(
+                          kDialogControlRadius,
+                        ),
+                        border: Border.all(
+                          color: danger.withValues(alpha: 0.24),
+                        ),
+                      ),
+                      child: Icon(icon, size: 20, color: danger),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Never cut short: the name in it is what the question is about.
+                          Text(
+                            title,
+                            style: TextStyle(
+                              color: AppPalette.textPrimary,
+                              fontSize: 17,
+                              fontWeight: AppFont.semibold,
+                              height: 1.3,
+                            ),
+                          ),
+                          if (detail != null && detail.isNotEmpty) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              detail,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: AppPalette.textSecondary,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  message,
+                  style: TextStyle(
+                    color: AppPalette.textSecondary,
+                    fontSize: 15,
+                    height: 1.45,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                Row(
+                  children: [
+                    // A neutral well, not accent text, for the reason the rename dialog's Cancel
+                    // is one: blue lettering on this card is 3.0:1, and a way out does not need
+                    // the accent to be found.
+                    Expanded(
+                      child: FilledButton(
+                        style: appDialogButtonStyle(
+                          background: AppSurface.recess,
+                          foreground: AppPalette.textPrimary,
+                        ),
+                        onPressed: () => Navigator.of(context).pop(false),
+                        child: const Text('Cancel'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton(
+                        style: appDialogButtonStyle(
+                          background: AppPalette.dangerFill,
+                          foreground: Colors.white,
+                        ),
+                        onPressed: () => Navigator.of(context).pop(true),
+                        child: Text(confirmLabel),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

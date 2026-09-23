@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
 
@@ -28,9 +29,19 @@ Future<void> confirmDeleteAgent(
   String agentId,
   String agentName,
 ) async {
+  // Where it runs, under the title — "machine · folder", the line the rename dialog carries — read
+  // off the notifier as it stands now. An agent already gone from the list names the machine alone.
+  final machine = notifier.stateOf(machineId);
+  final agent = machine?.agents.where((a) => a.id == agentId).firstOrNull;
   final confirmed = await confirmPhoneAction(
     context,
+    // The Stop row's own icon — see [confirmPhoneAction].
+    icon: LucideIcons.trash2300,
     title: 'Stop $agentName?',
+    detail: [
+      ?machine?.machine.displayName,
+      ?agent?.project?.folder,
+    ].where((part) => part.isNotEmpty).join(' · '),
     // ⚠️ **The desktop's own sentence, word for word**, because it is the same
     // `agent_delete` on the wire (`AppNotifier.deleteAgent`, and desktop's
     // `widgets/delete_agent_dialog.dart`) — and the two used to describe it

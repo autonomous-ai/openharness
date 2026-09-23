@@ -39,8 +39,9 @@ Future<void> showAgentRenameDialog(
   ),
 );
 
-/// The field's corner. Its focus ring stands 4 outside it, on the same curve.
-const double _fieldRadius = 12;
+/// The field's corner — the buttons' too. Its focus ring stands 4 outside it,
+/// on the same curve.
+const double _fieldRadius = kDialogControlRadius;
 
 /// ⚠️ A widget that OWNS its controller, not a `StatefulBuilder` over one made
 /// beside `showDialog`.
@@ -370,7 +371,7 @@ class _RenameAgentDialogState extends State<_RenameAgentDialog> {
       children: [
         Expanded(
           child: FilledButton(
-            style: _buttonStyle(
+            style: appDialogButtonStyle(
               background: grid.AppSurface.recess,
               foreground: grid.AppPalette.textPrimary,
             ),
@@ -381,7 +382,7 @@ class _RenameAgentDialogState extends State<_RenameAgentDialog> {
         const SizedBox(width: 10),
         Expanded(
           child: FilledButton(
-            style: _buttonStyle(
+            style: appDialogButtonStyle(
               background: accent,
               foreground: Colors.white,
               // Kept at full colour while it spins: the press was taken, and a
@@ -413,35 +414,6 @@ class _RenameAgentDialogState extends State<_RenameAgentDialog> {
     );
   }
 }
-
-/// A dialog button at a thumb's size: 46 tall, 16pt, on the field's corner.
-///
-/// Built on the app's filled button, so everything this leaves unsaid — the
-/// shrink-wrapped tap target, the hover overlay — is still the theme's.
-ButtonStyle _buttonStyle({
-  required Color background,
-  required Color foreground,
-  Color? disabledBackground,
-  Color? disabledForeground,
-}) => FilledButton.styleFrom(
-  backgroundColor: background,
-  foregroundColor: foreground,
-  disabledBackgroundColor: disabledBackground,
-  disabledForegroundColor: disabledForeground,
-  minimumSize: const Size.fromHeight(46),
-  padding: const EdgeInsets.symmetric(horizontal: 12),
-  shape: RoundedRectangleBorder(
-    borderRadius: BorderRadius.circular(_fieldRadius),
-  ),
-  // `ButtonStyle.textStyle` does not inherit the family from the text theme —
-  // see `_buttonTextStyle` in the theme — so it is named here too.
-  textStyle: TextStyle(
-    fontFamily: grid.AppFont.sans,
-    fontFamilyFallback: grid.AppFont.sansFallback,
-    fontSize: 16,
-    fontWeight: grid.AppFont.semibold,
-  ),
-);
 
 /// Where an agent runs, for the line under the title: the agent (for its
 /// engine's mark) and "machine · folder" — the two names every other place
