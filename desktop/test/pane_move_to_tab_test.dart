@@ -3,7 +3,10 @@
 // other side. These pin that, and the bookkeeping the destination inherits.
 import 'package:flutter_test/flutter_test.dart';
 
+import 'dart:ui';
+
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/pane_preset.dart';
 import 'package:harness/state/terminal_pane.dart';
 
@@ -96,8 +99,7 @@ void main() {
   test('a destination already holding the agent takes it as a close', () {
     final (app, source, target) = twoTabs();
     addTearDown(app.dispose);
-    app
-        .swarms
+    app.swarms
         .firstWhere((swarm) => swarm.id == target)
         .panes
         .add(TerminalPane(id: 7, machineId: 'm', agentId: 'a0'));
@@ -105,11 +107,9 @@ void main() {
     expect(app.movePaneToSwarm(0, target), isTrue);
 
     expect(agentsOf(app, source), ['a1']);
-    expect(
-      agentsOf(app, target),
-      ['a0'],
-      reason: 'one membership per tab, never the agent twice',
-    );
+    expect(agentsOf(app, target), [
+      'a0',
+    ], reason: 'one membership per tab, never the agent twice');
   });
 
   test('a full destination refuses, and says where to make room', () {
@@ -145,6 +145,41 @@ void main() {
     expect(agentsOf(app, source), ['a1']);
     final landed = app.swarms.firstWhere((swarm) => swarm.id == target).panes;
     expect(landed.map((pane) => pane.id), [0, 5]);
+  });
+
+  test('the tab left behind re-tiles instead of keeping a lopsided split', () {
+    // Panes opened with Split Right/Down save a manual layout, so a tab that
+    // never had a divider dragged still has one. Carrying it down a tile — what
+    // a close does — leaves the rest at proportions drawn for a tile that is no
+    // longer there.
+    final (app, source, target) = twoTabs(count: 3);
+    addTearDown(app.dispose);
+    app.activeSwarm.savePaneSizes(
+      '3:manual',
+      PaneArrangement(const [
+        Rect.fromLTRB(0, 0, .7, 1),
+        Rect.fromLTRB(.7, 0, 1, .5),
+        Rect.fromLTRB(.7, .5, 1, 1),
+      ]),
+    );
+
+    app.movePaneToSwarm(1, target, follow: false);
+
+    final left = app.swarms.firstWhere((swarm) => swarm.id == source);
+    expect(left.panes.length, 2);
+    expect(left.paneSizes['2:manual'], isNull);
+    expect(left.arranged, isNull);
+  });
+
+  test('a layout chosen outright still stands after a move', () {
+    final (app, source, target) = twoTabs(count: 3);
+    addTearDown(app.dispose);
+    app.setPreset(2, PanePreset.rows);
+
+    app.movePaneToSwarm(1, target, follow: false);
+
+    final left = app.swarms.firstWhere((swarm) => swarm.id == source);
+    expect(left.presets[2], PanePreset.rows);
   });
 
   test('the destination forgets a shape it remembered for this count', () {

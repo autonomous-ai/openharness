@@ -8798,6 +8798,17 @@ class AppNotifier extends ChangeNotifier {
       return false;
     }
     source.remove(pane);
+    // The tab left behind re-tiles. `Swarm.remove` keeps the shape by carrying
+    // the manual layout down a tile — right when a pane CLOSES, because the
+    // split was drawn around the tiles that remain. A tile that left for
+    // another tab is not that: what is left here is a different set, and
+    // holding the old proportions leaves it visibly lopsided. A layout chosen
+    // outright in the Layout palette still stands; only the dragged sizes go.
+    source.paneSizes.removeWhere(
+      (key, _) => key.startsWith('${source.panes.length}:'),
+    );
+    source.arranged = null;
+    source.arrangedKey = null;
     // A harness's viewer lives beside its terminal, so it travels with it —
     // the same rule `closePane` keeps when the terminal goes.
     final viewers = <TerminalPane>[];
