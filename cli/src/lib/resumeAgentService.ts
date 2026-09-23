@@ -1,9 +1,10 @@
 /** Exact-resume lifecycle shared by the daemon and its isolated acceptance tests. */
 import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'
-import { registry as liveRegistry, validTranscriptPath, type RegisteredSession } from './registry.js'
+import { engineKeepsTranscriptFile, registry as liveRegistry, validTranscriptPath, type RegisteredSession } from './registry.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed } from './resumeStoppedAgent.js'
+import { confirmsResumeByHook, resumesConversation } from './resumeCapability.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
 import { checkSessionRuntime, clearPaneRemainOnExit, resolvePaneEngineProcess, tmuxPaneState } from './tmux.js'
 import { listTmuxPanes } from './tmuxAgentDiscovery.js'
@@ -60,7 +61,16 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       await clearPaneRemainOnExit(saved.tmuxPane)
       if (!ownsRoute()) return resumeChanged
       stoppedAgents.finishResume(saved.agentId)
-      announceSession(result.session)
+      // A resume confirmed by its process rather than by a startup hook has nothing else coming to
+      // mark the row ready, and a row left `starting` reads as "Starting" for ever and keeps
+      // discovery out of it (see cli.ts's resumeOnly guard). Same condition as the proof itself in
+      // `waitForResumedAgent`: only a resume that ASKED for a conversation, on an engine that hooks
+      // at launch, is marked ready by `register` instead.
+      const byHook = resumesConversation(saved.engine, saved.sessionId) && confirmsResumeByHook(saved.engine)
+      const ready = byHook
+        ? result.session
+        : registry.setLaunch(saved.agentId, { state: 'ready' }) ?? result.session
+      announceSession(ready)
     } else if (result.error !== 'AGENT_CHANGED') {
       const row = registry.byAgent(saved.agentId)!
       const failed = registry.setLaunch(row.agentId, { state: 'failed', error: result.error, detail: result.detail })
@@ -114,7 +124,11 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       if (!saved.cwd) return { ok: false, error: 'CWD_NOT_FOUND', detail: 'The saved project folder is no longer available.' }
       const missing = workspaceMissing(saved.cwd)
       if (missing) return missing
-      if (resumeSessionId && (!saved.transcriptPath || !validTranscriptPath(saved.engine, saved.transcriptPath, saved.codexHome ?? undefined))) {
+      // Only for an engine whose conversation IS a file. opencode, kilo, hermes and devin keep
+      // theirs in a database, so they have no transcript to point at and demanding one here refused
+      // a resume that works — after the harness had already been paused.
+      if (resumeSessionId && engineKeepsTranscriptFile(saved.engine)
+        && (!saved.transcriptPath || !validTranscriptPath(saved.engine, saved.transcriptPath, saved.codexHome ?? undefined))) {
         return { ok: false, error: 'RESUME_UNAVAILABLE', detail: 'The saved conversation file is unavailable. Start a new conversation separately.' }
       }
       // Match the registry's globally unique conversation index, including aliases/profiles.

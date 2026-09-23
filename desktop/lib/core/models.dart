@@ -331,6 +331,12 @@ class Agent {
   /// decides (see [canFork]).
   final bool? forkable;
 
+  /// How much a Pause of this harness can promise to bring back, as the daemon
+  /// reports it (`lib/resumeCapability.ts`): `shell`, `conversation` or
+  /// `fresh`. Null from a daemon that predates the field — see
+  /// [canPauseAndResume] for what this build assumes then.
+  final String? resumeMode;
+
   /// The permission mode this agent was launched in (`plan`, `readOnly`, …),
   /// as the daemon recorded it; null from a daemon that predates the field, a
   /// row from before the choice existed, or an agent Harness did not launch.
@@ -376,6 +382,7 @@ class Agent {
     this.verdict,
     this.forkedFrom,
     this.forkable,
+    this.resumeMode,
     this.permissionMode,
     this.bypassPermission,
     this.namedAgent,
@@ -387,6 +394,31 @@ class Agent {
   bool get canResumeConversation =>
       (engine == 'claude' || engine == 'codex') &&
       sessionId?.isNotEmpty == true;
+
+  /// Whether Harness Monitor may pause this harness and bring it back.
+  ///
+  /// Every engine can, and the daemon says so per engine through [resumeMode]
+  /// — a client that kept its own allow-list is how the two drifted, with
+  /// engines the daemon would happily resume greyed out here for a year.
+  /// What DIFFERS per engine is how much comes back, which
+  /// [resumesFreshConversation] answers and the button's wording says.
+  ///
+  /// The fallback is for a daemon that predates the field: the old rule, so an
+  /// older machine is never offered a Pause its CLI will refuse. `'terminal'`
+  /// is `kTerminalEngine` (`widgets/engine_identity.dart`), spelled out for the
+  /// same reason `'claude'`/`'codex'` are above: this is the model layer and
+  /// does not reach into the widgets.
+  bool get canPauseAndResume =>
+      resumeMode != null || engine == 'terminal' || canResumeConversation;
+
+  /// Whether resuming this harness opens a NEW conversation rather than the one
+  /// it was paused in — either because the engine has no resume argv (`fresh`),
+  /// or because nothing recorded a conversation to reopen. The button says so
+  /// before it is pressed, and a resume that reports it is a success, not a
+  /// failure.
+  bool get resumesFreshConversation =>
+      resumeMode == 'fresh' ||
+      (resumeMode == 'conversation' && (sessionId?.isEmpty ?? true));
 
   /// Explicit names win. An automatic CLI label gives way to its session title.
   String get displayName => _automaticHarnessName.hasMatch(name)
@@ -484,6 +516,7 @@ class Agent {
       verdict: AgentVerdict.fromJson(j['verdict']),
       forkedFrom: ForkedFrom.fromJson(j['forkedFrom']),
       forkable: j['forkable'] is bool ? j['forkable'] as bool : null,
+      resumeMode: _safeResumeMode(j['resumeMode']),
       permissionMode: _safePermissionMode(j['permissionMode']),
       bypassPermission: j['bypassPermission'] is bool
           ? j['bypassPermission'] as bool
@@ -524,6 +557,7 @@ class Agent {
         verdict: verdict,
         forkedFrom: forkedFrom,
         forkable: forkable,
+        resumeMode: resumeMode,
         permissionMode: permissionMode,
         bypassPermission: bypassPermission,
         namedAgent: namedAgent,
@@ -533,6 +567,14 @@ class Agent {
   /// one word. Not checked against this build's own list — the daemon that
   /// launched the agent is the authority, and it is the one that will read the
   /// id back on a clone.
+  /// One of the daemon's three resume modes, or null for anything else — an
+  /// older daemon that does not send it, or a newer one that grew a fourth
+  /// this build has no wording for.
+  static String? _safeResumeMode(Object? raw) =>
+      raw is String && const {'shell', 'conversation', 'fresh'}.contains(raw)
+      ? raw
+      : null;
+
   static String? _safePermissionMode(Object? raw) =>
       raw is String && RegExp(r'^[A-Za-z]{1,32}$').hasMatch(raw) ? raw : null;
 
