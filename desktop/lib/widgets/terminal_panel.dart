@@ -2081,13 +2081,13 @@ class _TerminalHeader extends StatelessWidget {
                                 compact: narrow,
                                 identity: (
                                   session.machineId,
-                                  agent!.id,
+                                  agent.id,
                                   project?.cwd,
                                   project?.shownBranch,
                                 ),
                                 read: () => notifier.readAgentPullRequest(
                                   session.machineId,
-                                  agent!.id,
+                                  agent.id,
                                 ),
                               ),
                             )
