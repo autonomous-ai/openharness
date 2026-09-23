@@ -507,7 +507,14 @@ class SwarmSearchController extends ChangeNotifier {
         for (final row in rows)
           if (!row.isCreate) row,
       ];
-      rows = resultsFromBottom || placement != null || query.trim().isEmpty
+      // Navigating (⌘O) always leads with New Harness: the list below it is
+      // ordered by what was used lately, so the one thing that is never a
+      // result needs a fixed home rather than a place in that order.
+      rows =
+          resultsFromBottom ||
+              navigating ||
+              placement != null ||
+              query.trim().isEmpty
           ? [?create, ...found]
           : [...found, ?create];
     }

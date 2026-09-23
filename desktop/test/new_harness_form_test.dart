@@ -187,16 +187,32 @@ void main() {
     expect(box.worktree, was);
   });
 
-  testWidgets('minus and plus change values like a Phoenix BIOS', (
+  testWidgets('a hyphen is typed, never swallowed as a value key', (
     tester,
   ) async {
     final box = await mount(tester);
+    final engine = box.engine;
+    await type(tester, 'harness-app');
+    expect(
+      box.query,
+      'harness-app',
+      reason: 'Folder and branch names are full of hyphens.',
+    );
     await press(tester, LogicalKeyboardKey.arrowDown);
-    final first = box.engine;
-    await press(tester, LogicalKeyboardKey.equal);
-    expect(box.engine, isNot(first));
-    await press(tester, LogicalKeyboardKey.minus);
-    expect(box.engine, first);
+    expect(box.engine, engine, reason: 'and it changed no value on the way.');
+  });
+
+  testWidgets('a path prompt asks for a path, not a search', (tester) async {
+    final box = await mount(tester);
+    await press(tester, LogicalKeyboardKey.enter);
+    for (var step = 0; step < 40; step++) {
+      if (box.selected?.id == NewHarnessController.existingProjectId) break;
+      await press(tester, LogicalKeyboardKey.arrowDown);
+    }
+    await press(tester, LogicalKeyboardKey.enter);
+    expect(box.field, NewHarnessField.project);
+    expect(find.textContaining('Search'), findsNothing);
+    expect(find.textContaining('path'), findsOneWidget);
   });
 
   testWidgets('typing filters, and one match still shows its list', (

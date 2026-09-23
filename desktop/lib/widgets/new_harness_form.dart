@@ -27,8 +27,10 @@ import 'box_chrome.dart';
 /// ← and → change values here, which is Award's model rather than Phoenix's.
 /// Phoenix spends them on switching between Main/Advanced/Boot tabs and pays
 /// for values with -/+; with one screen there are no tabs to switch to, so
-/// the arrows go where they are useful. -/+ still work, for the hands that
-/// learned them.
+/// the arrows go where they are useful. Phoenix's -/+ are deliberately NOT
+/// bound: folder and branch names are full of hyphens, and a screen that
+/// swallows one to nudge a value is broken for the thing people type most.
+/// PgUp/PgDn keep the convention for hands that learned it.
 ///
 /// A row is never removed for being unavailable. A folder that is not a git
 /// repository still has a Branch row, greyed, saying so; a row that vanishes
@@ -330,12 +332,9 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       case LogicalKeyboardKey.arrowUp:
         _picking ? _stepMatch(-1) : _moveRow(-1);
       case LogicalKeyboardKey.arrowRight:
-      case LogicalKeyboardKey.equal:
-      case LogicalKeyboardKey.add:
       case LogicalKeyboardKey.pageDown:
         _stepValue(1);
       case LogicalKeyboardKey.arrowLeft:
-      case LogicalKeyboardKey.minus:
       case LogicalKeyboardKey.pageUp:
         _stepValue(-1);
       case LogicalKeyboardKey.enter:
@@ -583,6 +582,13 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   /// A prompt people can see, because "type to search" printed in a key
   /// guide is a sentence nobody reads. fzf's `>` rather than a labelled box:
   /// there is no second place for the caret to be, so it needs no border.
+  /// What the prompt is actually for. A path prompt is not a search — it
+  /// wants a folder typed at it — so it borrows the controller's own words
+  /// rather than calling everything "Search".
+  String get _promptHint => _prompts.contains(box.field)
+      ? box.hint
+      : 'Search ${_label(_row).toLowerCase()}';
+
   Widget _searchBar() {
     final typed = box.query;
     return Row(
@@ -608,9 +614,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         if (typed.isEmpty)
           Flexible(
             child: Text(
-              _picking
-                  ? ' Search ${_label(_row).toLowerCase()}'
-                  : 'Search ${_label(_row).toLowerCase()}',
+              _picking ? ' $_promptHint' : _promptHint,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: _ink(kBoxFaint),

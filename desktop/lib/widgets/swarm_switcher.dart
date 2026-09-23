@@ -859,9 +859,10 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                 terminal: widget.terminal,
               )
             : null;
-        final content = preview == null
-            ? results
-            : sideBySide
+        // Side by side, the two columns keep their share whether or not
+        // there is anything to preview: a list that widened every time the
+        // preview went away made the rows move under the reader's eye.
+        final content = sideBySide
             ? Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -875,9 +876,11 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                     )
                   else
                     const SizedBox(width: 8),
-                  Expanded(flex: 4, child: preview),
+                  Expanded(flex: 4, child: preview ?? const SizedBox()),
                 ],
               )
+            : preview == null
+            ? results
             : search.resultsFromBottom
             ? Column(
                 children: [
