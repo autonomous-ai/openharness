@@ -1049,6 +1049,43 @@ class NewHarnessController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// ← and → change the focused field's value where it stands, as a BIOS
+  /// settings screen does, rather than opening a list to choose from. Unlike
+  /// [accept] the line keeps its field, so the next arrow steps again, and
+  /// the rows the box adds for itself — Browse, New project, Permissions —
+  /// are skipped: they are doors, not values.
+  /// The values a field can be stepped through, in a stable order. The
+  /// displayed list is NOT that order: it re-ranks so the chosen row floats
+  /// to the front, which makes stepping by index walk in circles — right
+  /// always took the second row and left always wrapped to the last.
+  List<NewHarnessOption> stepValues() => [
+    for (final option in options)
+      if (!option.synthetic && option.enabled) option,
+  ];
+
+  /// Take [option] as this field's value without moving off the field.
+  /// Synthetic rows are allowed here even though [stepValues] leaves them
+  /// out: "Create branch x" is a real answer to the Branch row, it is only
+  /// not one the arrows should cycle onto.
+  void applyOption(NewHarnessOption option) {
+    if (locked || !option.enabled) return;
+    _steered = true;
+    _apply(option);
+    _refresh();
+  }
+
+  /// Take what the field is highlighting as its value, where it stands.
+  /// Typing narrows a field and lands on a row; this is what makes that row
+  /// the answer, so the value on screen is always the one Return acts on.
+  void takeSelection() {
+    final option = selected;
+    if (locked || option == null || option.synthetic || !option.enabled) {
+      return;
+    }
+    _apply(option);
+    _refresh();
+  }
+
   NewHarnessOption? get selected =>
       cursor < 0 || cursor >= options.length ? null : options[cursor];
 

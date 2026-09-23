@@ -55,6 +55,7 @@ import '../widgets/machines_manager.dart';
 import '../widgets/new_agent_dialog.dart';
 import '../widgets/box_chrome.dart';
 import '../widgets/new_harness_box.dart';
+import '../widgets/new_harness_form.dart';
 import '../widgets/open_harness_intent.dart';
 import '../widgets/pane_grid.dart';
 import '../widgets/pane_minimize.dart';
@@ -1593,7 +1594,23 @@ class _SwarmScreenState extends State<SwarmScreen>
       split: split,
       placement: placement,
     );
-    final content = NewHarnessBox(
+    final content = NewHarnessForm(
+      controller: box,
+      onCreated: () {
+        _closeNewHarness(restoreFocus: false, keepDraft: false);
+        unawaited(_focusCreatedPane());
+      },
+      onClose: () {
+        final target = box.swarmId ?? app.activeSwarmId;
+        _closeNewHarness();
+        app.cancelSwarmDraft(target);
+      },
+      onBrowse: () => unawaited(_browseForNewHarness(box)),
+    );
+    // The dock this replaces, kept mounted-but-unused until the form is
+    // signed off; deleting it takes 21 test files with it.
+    // ignore: unused_local_variable
+    final legacy = NewHarnessBox(
       docked: true,
       controller: box,
       onClose: () {
@@ -1650,13 +1667,41 @@ class _SwarmScreenState extends State<SwarmScreen>
                             app.cancelSwarmDraft(target);
                           }
                         },
+                        // The popup is the terminal's own colour, so the
+                        // screen behind it is dimmed rather than competed
+                        // with — that, and the light shadow, are what carry
+                        // the separation a different fill used to.
+                        child: ColoredBox(
+                          color: Colors.black.withValues(alpha: .72),
+                        ),
                       ),
                     ),
                   ),
-                  CommandDock(
-                    topClearance: _native ? 0 : _tabBarHeight,
-                    expanded: box.field == NewHarnessField.projectMenu,
-                    child: content,
+                  // A BIOS popup is a compact centred box, sized to what it
+                  // asks: it holds the eye with a heavy double rule, not by
+                  // taking the screen.
+                  Positioned.fill(
+                    top: _native ? 0 : _tabBarHeight,
+                    child: Align(
+                      alignment: const Alignment(0, -0.12),
+                      // Fixed, not fitted: the box held one size whatever it
+                      // was showing, and a frame that grew and shrank as the
+                      // help pane became a list made the screen restless.
+                      // clipBehavior: the shadow is cast OUTSIDE the box, so
+                      // a scrolling viewport that clips to its child erases
+                      // it — which is why it looked as though no shadow was
+                      // being drawn at all.
+                      child: SingleChildScrollView(
+                        clipBehavior: Clip.none,
+                        child: SizedBox(
+                          // The popup is measured in the terminal's own font,
+                          // so it grows with ⌘+ instead of shrinking beside it.
+                          width: 820 * terminalTextScaleOf(context),
+                          height: 450 * terminalTextScaleOf(context),
+                          child: content,
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               );

@@ -178,6 +178,41 @@ void main() {
     expect(box.branchRef, 'refs/heads/main');
   });
 
+  test('the form filters a field and takes what it landed on', () async {
+    final connection = _Connection();
+    final app = createApp(connectionForTest: (_) => connection);
+    final box = NewHarnessController(
+      app,
+      machineId: 'm',
+      engine: 'codex',
+      folder: '/repo',
+    );
+    addTearDown(app.dispose);
+    addTearDown(box.dispose);
+    await settle();
+    box.focusField(NewHarnessField.branch);
+    await settle();
+    expect(box.branchLabel, 'main');
+    // Typing narrows the row, and the row takes what it narrowed to: on the
+    // form there is no list to press Return in, so nothing else would.
+    box.setQuery('feat');
+    box.takeSelection();
+    await settle();
+    expect(box.branchLabel, 'feature');
+    expect(box.matchCount, lessThan(box.total));
+
+    // And the arrows step from the value the field HAS, through a stable
+    // order — the displayed list re-ranks the chosen row to the front, which
+    // is why stepping through THAT walked in circles.
+    box.setQuery('');
+    final wheel = box.stepValues();
+    final at = wheel.indexWhere(box.isCurrent);
+    expect(at, isNonNegative, reason: 'The taken branch must be on the wheel.');
+    box.applyOption(wheel[(at + 1) % wheel.length]);
+    await settle();
+    expect(box.branchLabel, isNot('feature'));
+  });
+
   test('one Start waits for Git detection and lost replies reuse the original receipt', () async {
     final connection = _Connection()..loseReply = true;
     final ready = connection.pending['/repo'] = Completer();

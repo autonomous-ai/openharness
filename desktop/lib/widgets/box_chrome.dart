@@ -78,29 +78,34 @@ class CommandDock extends StatelessWidget {
               double.infinity,
             );
         final scale = grid.appTextScaleOf(context);
-        // A shallow dock at ordinary sizes, with room for readable defaults and
-        // key hints when accessibility text or a narrow window needs more rows.
+        // A panel in the middle of the workspace, the way a terminal's own
+        // finder sits over what it is searching — not a drawer along an edge.
+        // Wide enough for a path and a branch beside their labels, and no
+        // wider: a line the eye crosses is a line nobody reads.
         final minimum = constraints.maxWidth < 800 * scale ? 320.0 : 280.0;
         final maxHeight =
             (expanded
-                    ? 520.0 * scale
-                    : (available * .4).clamp(minimum * scale, 400.0 * scale))
+                    ? 560.0 * scale
+                    : (available * .5).clamp(minimum * scale, 440.0 * scale))
                 .clamp(0.0, available);
+        final room = (constraints.maxWidth - 2 * kWorkspaceInset).clamp(
+          0.0,
+          double.infinity,
+        );
+        final maxWidth = room.clamp(0.0, 820.0 * scale);
         return Align(
-          alignment: Alignment.bottomCenter,
+          // Above the middle, where the eye already is, as fzf and a command
+          // palette sit.
+          alignment: const Alignment(0, -0.15),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(
-              kWorkspaceInset,
-              0,
-              kWorkspaceInset,
-              kWorkspaceInset,
+            padding: const EdgeInsets.symmetric(
+              horizontal: kWorkspaceInset,
+              vertical: kWorkspaceInset,
             ),
             child: ConstrainedBox(
               constraints: BoxConstraints(
-                minWidth: (constraints.maxWidth - 2 * kWorkspaceInset).clamp(
-                  0.0,
-                  double.infinity,
-                ),
+                minWidth: maxWidth.clamp(0.0, 620.0 * scale),
+                maxWidth: maxWidth,
                 maxHeight: maxHeight,
               ),
               child: FocusScope(child: child),
