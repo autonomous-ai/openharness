@@ -51,6 +51,8 @@ void main() {
   setUp(() {
     connection = RestartConnection();
     app = createApp(connectionForTest: (_) => connection);
+    app.rememberOpenedHarness('m', 'a0');
+    app.rememberOpenedHarness('m', 'saved');
     app.machineStates['m']!
       ..machine = const Machine(
         machineId: 'm',
@@ -69,6 +71,22 @@ void main() {
     await mount(tester, app);
     await tester.tap(find.byTooltip('Harness Monitor'));
     await tester.pumpAndSettle();
+  }
+
+  /// A row past the fold is not built, and a fixture with a few harnesses in it
+  /// reaches that fold — the rows carry their token and edit figures now.
+  Future<Finder> reveal(WidgetTester tester, Finder target) async {
+    if (target.evaluate().isEmpty) {
+      await tester.scrollUntilVisible(
+        target,
+        120,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
+    }
+    await tester.ensureVisible(target);
+    await tester.pumpAndSettle();
+    return target;
   }
 
   PendingQuestion question(String id, {String request = 'question'}) =>
@@ -119,6 +137,9 @@ void main() {
   );
 
   test('recent follows real activity before navigation recency', () {
+    for (final id in ['older', 'newer', 'unknown']) {
+      app.rememberOpenedHarness('m', id);
+    }
     app.machineStates['m']!.agents = [
       Agent.fromJson({'id': 'older', 'updatedAt': '2026-09-21T10:00:00Z'}),
       Agent.fromJson({'id': 'newer', 'updatedAt': '2026-09-22T10:00:00Z'}),
@@ -133,7 +154,51 @@ void main() {
     );
   });
 
+  testWidgets(
+    'displays remote cached tokens beneath context and leaves missing usage empty',
+    (tester) async {
+      app.machineStates['m']!.agents = [
+        Agent.fromJson({
+          'id': 'a0',
+          'name': 'Measured harness',
+          'engine': 'claude',
+          'sessionId': 'conversation',
+          'terminal': {'available': true},
+          'tokenUsage': {
+            'totalTokens': 1234567,
+            'updatedAt': '2026-09-22T16:00:00Z',
+          },
+          'outputStats': {
+            'linesAdded': 124,
+            'linesRemoved': 38,
+            'pullRequestsCreated': 2,
+            'updatedAt': '2026-09-22T16:00:00Z',
+          },
+        }),
+        _paused,
+      ];
+      await open(tester);
+      expect(find.text('1.2M tokens'), findsOneWidget);
+      expect(find.text('+124 −38'), findsOneWidget);
+      expect(find.text('2 PRs'), findsOneWidget);
+      expect(find.text('0 tokens'), findsNothing);
+      expect(
+        find.byKey(
+          ValueKey('session-tokens:${agentDestinationId('m', 'saved')}'),
+        ),
+        findsNothing,
+      );
+      expect(
+        tester.getTopLeft(find.text('1.2M tokens')).dy,
+        greaterThan(tester.getTopLeft(find.text('iMac — Office').first).dy),
+      );
+      expect(connection.requests, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   test('attention filters live questions, retains missing agents, excludes paused history', () {
+    app.rememberOpenedHarness('m', 'missing');
     app.machineStates['m']!.blockedAgents.addAll({
       'a0': question('a0'),
       'saved': question('saved'),
@@ -463,8 +528,128 @@ void main() {
   );
 
   testWidgets(
-    'unsupported engines stay openable without a misleading pause control',
+    'a terminal pauses and comes back as a fresh shell in the same tile',
     (tester) async {
+      // A shell holds no conversation, so the saved-conversation rule the
+      // engines live under has nothing to protect here — the daemon has always
+      // relaunched one (`resumeStoppedAgent.ts` exempts it).
+      app
+          .stateOf('m')!
+          .agents
+          .add(
+            const Agent(
+              id: 'shell',
+              name: 'Untitled Pane',
+              engine: 'terminal',
+              terminalAvailable: true,
+              project: _project,
+            ),
+          );
+      app.rememberOpenedHarness('m', 'shell');
+      await open(tester);
+      await reveal(tester, toggle('shell'));
+      expect(tester.widget<IconButton>(toggle('shell')).onPressed, isNotNull);
+      expect(
+        find.byTooltip(
+          'Pause terminal — ends this shell and anything running in it',
+        ),
+        findsOneWidget,
+      );
+
+      connection.inventory = Completer<Map<String, dynamic>>();
+      await tester.tap(toggle('shell'));
+      await tester.pump();
+      expect(connection.stops, ['shell']);
+      connection.stopReplies.single.complete({'deleted': true});
+      await tester.pump();
+      connection.inventory!.complete({
+        'agents': [
+          {
+            'id': 'shell',
+            'name': 'Untitled Pane',
+            'engine': 'terminal',
+            'status': 'stopped',
+            'terminal': {'available': false},
+          },
+        ],
+      });
+      await tester.pumpAndSettle();
+      expect(app.stateOf('m')!.agents.single.isStopped, isTrue);
+      // Paused, not "Resume unavailable": it can come back.
+      expect(harnessSessions(app).single.status, 'Paused');
+      expect(find.text('Paused 1'), findsOneWidget);
+      expect(
+        tester.widget<IconButton>(toggle('shell')).onPressed,
+        isNotNull,
+        reason: 'the paused shell offers resume',
+      );
+      expect(find.byTooltip('Open a fresh shell here'), findsOneWidget);
+
+      await tester.tap(toggle('shell'));
+      await tester.pump();
+      expect(connection.types, ['agent_resume']);
+      connection.restartReplies.single.complete(
+        restartReceipt(
+          connection.requests.single['creationId'] as String,
+          agentId: 'shell',
+          name: 'Untitled Pane',
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(app.stateOf('m')!.agents.single.isStopped, isFalse);
+    },
+  );
+
+  testWidgets('every engine the daemon reports is pausable, in its own words', (
+    tester,
+  ) async {
+    // The daemon says per engine how much a resume brings back (`resumeMode`).
+    // An engine that reopens its conversation and one that cannot both pause;
+    // only the sentence differs.
+    app.stateOf('m')!.agents.addAll(const [
+      Agent(
+        id: 'keeps',
+        name: 'Keeps its conversation',
+        engine: 'opencode',
+        sessionId: 'history',
+        resumeMode: 'conversation',
+        terminalAvailable: true,
+      ),
+      Agent(
+        id: 'fresh',
+        name: 'No resume flag',
+        engine: 'devin',
+        sessionId: 'history',
+        resumeMode: 'fresh',
+        terminalAvailable: true,
+      ),
+    ]);
+    // The Monitor lists the harnesses this app has opened.
+    app.rememberOpenedHarness('m', 'keeps');
+    app.rememberOpenedHarness('m', 'fresh');
+    await open(tester);
+    await reveal(tester, toggle('keeps'));
+    expect(tester.widget<IconButton>(toggle('keeps')).onPressed, isNotNull);
+    expect(
+      find.ancestor(
+        of: toggle('keeps'),
+        matching: find.byTooltip('Pause harness'),
+      ),
+      findsOneWidget,
+    );
+    await reveal(tester, toggle('fresh'));
+    expect(tester.widget<IconButton>(toggle('fresh')).onPressed, isNotNull);
+    expect(
+      find.byTooltip('Pause harness — it comes back as a new conversation'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+    'an engine a pre-resumeMode daemon cannot pause keeps its explanation',
+    (tester) async {
+      // No `resumeMode` on the frame: an older CLI, whose resume would refuse
+      // anything but claude/codex. Offering the button would only fail.
       app
           .stateOf('m')!
           .agents
@@ -477,14 +662,16 @@ void main() {
               terminalAvailable: true,
             ),
           );
+      app.rememberOpenedHarness('m', 'unsupported');
       await open(tester);
+      await reveal(tester, toggle('unsupported'));
       expect(
         tester.widget<IconButton>(toggle('unsupported')).onPressed,
         isNull,
       );
       expect(
         find.byTooltip(
-          'Pause and resume are not available for this engine yet.',
+          'Update the harness CLI on this machine to pause and resume this engine.',
         ),
         findsOneWidget,
       );
@@ -762,6 +949,12 @@ void main() {
     app.notifyListeners();
     await tester.pumpAndSettle();
     expect(updates.last['attention'], 1);
+    app.machineStates['m']!.blockedAgents['hidden-worker'] = question(
+      'hidden-worker',
+    );
+    app.notifyListeners();
+    await tester.pumpAndSettle();
+    expect(updates.last['attention'], 1);
     app.machineStates['m']!.blockedAgents.clear();
     app.notifyListeners();
     await tester.pumpAndSettle();
@@ -771,6 +964,25 @@ void main() {
   testWidgets('session manager fits the minimum Mac window and scaled text', (
     tester,
   ) async {
+    app.machineStates['m']!.agents = [
+      Agent.fromJson({
+        'id': 'a0',
+        'name': 'A long harness name that must leave room for the activity timestamp',
+        'engine': 'claude',
+        'sessionId': 'conversation',
+        'terminal': {'available': true},
+        'updatedAt': DateTime.now()
+            .subtract(const Duration(minutes: 8))
+            .toIso8601String(),
+        'tokenUsage': {'totalTokens': 1234567},
+        'outputStats': {
+          'linesAdded': 124,
+          'linesRemoved': 38,
+          'pullRequestsCreated': 2,
+        },
+      }),
+      _paused,
+    ];
     await open(tester);
     tester.view.physicalSize = const Size(880, 560);
     await tester.pumpAndSettle();
@@ -825,6 +1037,9 @@ void main() {
           ),
         ),
       ]);
+      for (final agent in app.machineStates['m']!.agents) {
+        app.rememberOpenedHarness('m', agent.id);
+      }
       final now = DateTime.now();
       final ages = {
         'a0': 5,
@@ -850,6 +1065,23 @@ void main() {
             'updatedAt': now
                 .subtract(Duration(minutes: ages[agent.id]!))
                 .toIso8601String(),
+            if (agent.id == 'a0' || agent.id == 'review')
+              'outputStats': {
+                'linesAdded': agent.id == 'a0' ? 124 : 832,
+                'linesRemoved': agent.id == 'a0' ? 38 : 156,
+                'pullRequestsCreated': agent.id == 'a0' ? 1 : 2,
+                'updatedAt': now.toIso8601String(),
+              },
+            if (agent.id != 'docs')
+              'tokenUsage': {
+                'totalTokens': switch (agent.id) {
+                  'a0' => 48750,
+                  'review' => 1234567,
+                  'api' => 32410,
+                  _ => 215400,
+                },
+                'updatedAt': now.toIso8601String(),
+              },
           }),
       ];
       app.machineStates['m']!.blockedAgents['api'] = question('api');

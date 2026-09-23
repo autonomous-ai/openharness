@@ -15,6 +15,7 @@
 
 import { DSH_ID_RE } from '../dsh/manifest.js'
 import { AGENT_NAME_RE } from './engineLaunch.js'
+import { resumesConversation } from './resumeCapability.js'
 import { namingTitle } from './sessionTitle.js'
 import { claudeProjectMatches, claudeTranscriptCwd, isClaudeProjectTranscript } from './claudeProject.js'
 import { automaticAgentName, engineLabel, isAutomaticName } from './agentNames.js'
@@ -614,33 +615,49 @@ function isWithin(root: string, file: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !rel.startsWith(`/`) && !rel.startsWith(`\\`))
 }
 
+/**
+ * Where each engine's conversation file lives, or **null for an engine that keeps no file at all**.
+ *
+ * The null entries are not gaps: opencode, kilo, hermes and devin keep their conversations in a
+ * SQLite database (`sessionRepair.ts`'s `dbEngineSession` reads an id out and has no path to
+ * return), and a terminal has no conversation. Written as a table rather than the nested ternary it
+ * replaces so "this engine has no transcript" is a fact a caller can ASK for — Pause and Resume both
+ * need it, and both used to demand a file every engine was assumed to have.
+ */
+const TRANSCRIPT_ROOT: Readonly<Record<AgentEngine, ((codexHome?: string) => string) | null>> = {
+  // Amp's root is OURS, not Amp's: the transcript is written by the adapter's own plugin because Amp
+  // keeps no conversation on disk (see installAmpPlugin).
+  amp: () => env.AMP_SESSIONS_DIR,
+  muse: () => join(env.MUSE_HOME, 'sessions'),
+  // The specific agent's own CODEX_HOME profile, when it has one — see RegisteredSession.codexHome.
+  codex: codexHome => join(codexHome || env.CODEX_HOME, 'sessions'),
+  grok: () => join(env.GROK_HOME, 'sessions'),
+  agy: () => join(env.AGY_HOME, 'brain'),
+  copilot: () => join(env.COPILOT_HOME, 'session-state'),
+  cursor: () => join(env.CURSOR_HOME, 'projects'),
+  pi: () => join(env.PI_HOME, 'agent', 'sessions'),
+  commandcode: () => join(env.COMMANDCODE_HOME, 'projects'),
+  claude: () => env.CLAUDE_PROJECTS_DIR,
+  opencode: null,
+  kilo: null,
+  hermes: null,
+  devin: null,
+  terminal: null,
+}
+
+/** Whether this engine's conversation is a FILE the daemon can point a resume at. False for the
+ *  database-backed engines and the shell — for them a recorded session id is the whole record, and
+ *  demanding a transcript would refuse a resume that works. */
+export function engineKeepsTranscriptFile(engine: AgentEngine): boolean {
+  return TRANSCRIPT_ROOT[engine] !== null
+}
+
 export function validTranscriptPath(engine: AgentEngine, filePath: string, codexHome?: string): boolean {
+  const rootFor = TRANSCRIPT_ROOT[engine]
+  if (!rootFor) return false
   try {
     const actual = realpathSync(filePath)
-    const root = realpathSync(
-      // Amp's root is OURS, not Amp's: the transcript is written by the adapter's own plugin because Amp
-      // keeps no conversation on disk (see installAmpPlugin).
-      engine === 'amp'
-        ? env.AMP_SESSIONS_DIR
-        : engine === 'muse'
-        ? join(env.MUSE_HOME, 'sessions')
-        : engine === 'codex'
-        // The specific agent's own CODEX_HOME profile, when it has one — see RegisteredSession.codexHome.
-        ? join(codexHome || env.CODEX_HOME, 'sessions')
-        : engine === 'grok'
-        ? join(env.GROK_HOME, 'sessions')
-        : engine === 'agy'
-        ? join(env.AGY_HOME, 'brain')
-        : engine === 'copilot'
-        ? join(env.COPILOT_HOME, 'session-state')
-        : engine === 'cursor'
-          ? join(env.CURSOR_HOME, 'projects')
-          : engine === 'pi'
-            ? join(env.PI_HOME, 'agent', 'sessions')
-            : engine === 'commandcode'
-              ? join(env.COMMANDCODE_HOME, 'projects')
-              : env.CLAUDE_PROJECTS_DIR,
-    )
+    const root = realpathSync(rootFor(codexHome))
     const st = statSync(actual)
     if (!st.isFile() || !isWithin(root, actual)) return false
     if (engine === 'cursor') {
@@ -1311,8 +1328,11 @@ class Registry {
     const now = Date.now()
     const existing = this.agents.get(agentId)
     if (existing?.resumeOnly && existing.launch && existing.launch.state !== 'ready') {
-      // A native startup hook, carrying the verified process, must confirm this exact history.
-      if (sessionId !== existing.sessionId) {
+      // A native startup hook, carrying the verified process, must confirm this exact history —
+      // but only where an exact history was asked for. A resume that opened a NEW conversation (an
+      // engine with no resume argv, or a row with no id to reopen) reports a different id BECAUSE
+      // it did what it was told; failing it there would refuse the resume the caller requested.
+      if (sessionId !== existing.sessionId && resumesConversation(engine, existing.sessionId)) {
         this.setLaunch(agentId, { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'The agent reported a different conversation. The requested conversation is still saved.' })
         return null
       }

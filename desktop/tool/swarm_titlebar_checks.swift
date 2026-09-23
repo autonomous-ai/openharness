@@ -120,26 +120,23 @@ private extension SwarmTabStrip {
   }
 
   func checkSharedTypography() throws {
-    defer { HarnessTypography.update(["fontFamily": ".AppleSystemUIFontMonospaced", "fontSize": 12]) }
     let menuFont = NSFont.menuFont(ofSize: 0)
-    for size in [CGFloat(12), 14] {
-      update(["tabs": [["id": "font-tab", "name": "Typography"]], "activeId": "font-tab",
-        "enabled": true, "fontFamily": "Menlo", "fontSize": size])
-      let tab = tabs[0]
-      try checkTitlebar(tab.labelFont.pointSize == size && tab.labelFont.familyName == "Menlo",
-        "Native tab uses the terminal face at the chrome size Flutter sends")
-      try checkTitlebar(storeButton.font?.pointSize == size && storeButton.font?.familyName == "Menlo",
-        "Native store action uses the terminal face at the chrome size")
-      try checkTitlebar(tab.menu?.font.familyName == menuFont.familyName && tab.menu?.font.pointSize == menuFont.pointSize,
-        "Native tab menu keeps the system menu font")
-      let history = SwarmHistoryEntry(["id": "font", "title": "Project", "machineName": "Machine"])!
-      let font = history.menuTitle().attribute(.font, at: 0, effectiveRange: nil) as! NSFont
-      try checkTitlebar(font == menuFont, "Native history keeps the system menu font")
-      let item = NSMenuItem()
-      let row = SwarmHistoryMenuRow(item: item, entry: history, width: 400)
-      try checkTitlebar(row.machineFrame.minY >= 0 && row.machineFrame.maxY <= row.bounds.height,
-        "Native history text fits its row")
-    }
+    let system = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+    update(["tabs": [["id": "font-tab", "name": "Typography"]], "activeId": "font-tab", "enabled": true])
+    let tab = tabs[0]
+    try checkTitlebar(tab.labelFont.pointSize == system.pointSize && tab.labelFont.familyName == system.familyName,
+      "A tab is named in the system face, like every other Mac window's tabs")
+    try checkTitlebar(storeButton.font?.pointSize == system.pointSize && storeButton.font?.familyName == system.familyName,
+      "The Store action beside the tabs takes the same face")
+    try checkTitlebar(tab.menu?.font.familyName == menuFont.familyName && tab.menu?.font.pointSize == menuFont.pointSize,
+      "Native tab menu keeps the system menu font")
+    let history = SwarmHistoryEntry(["id": "font", "title": "Project", "machineName": "Machine"])!
+    let font = history.menuTitle().attribute(.font, at: 0, effectiveRange: nil) as! NSFont
+    try checkTitlebar(font == menuFont, "Native history keeps the system menu font")
+    let item = NSMenuItem()
+    let row = SwarmHistoryMenuRow(item: item, entry: history, width: 400)
+    try checkTitlebar(row.machineFrame.minY >= 0 && row.machineFrame.maxY <= row.bounds.height,
+      "Native history text fits its row")
   }
 
   func checkStartupPalette(_ expected: SwarmNativePalette) throws {
@@ -162,7 +159,11 @@ private extension SwarmTabStrip {
       try checkTitlebar(button.frame.minY >= 6 && bounds.height - button.frame.maxY >= 6 && button.frame.width - labelWidth >= 32,
         "\(button.title) has vertical breathing room and readable horizontal padding")
     }
-    try checkTitlebar(stripFrame.minX >= zoomFrame.maxX + 12, "Tab row leaves room beside native traffic lights")
+    // 10, which is where a Mac app starts its first control after the buttons: Safari's sidebar
+    // toggle and Chrome's first tab both sit about there. It was 12 while the notifications bell
+    // still led the strip.
+    try checkTitlebar(stripFrame.minX >= zoomFrame.maxX + 10 && stripFrame.minX <= zoomFrame.maxX + 12,
+      "Tab row starts a Mac-standard gap after the native traffic lights")
     try checkTitlebar(abs(newFrame.midY - closeFrame.midY) <= 1, "Tab controls align vertically with native traffic lights")
     try checkTitlebar(abs(stripFrame.minY - window.contentLayoutRect.maxY) <= 1, "Tab row meets content without a second toolbar row")
     try checkActiveVisible()
@@ -922,39 +923,33 @@ private extension SwarmTitlebar {
       ["title": "OpenAI", "status": "Not signed in", "engine": "codex",
        "details": ["Sign in to Codex to see usage"]],
     ]
-    updateModels(modelRows)
+    updateModels(modelRows, current: nil)
     let models = main.item(withTitle: "Models")!.submenu!
     try checkTitlebar(models.items.filter { !$0.isSeparatorItem }.map(\.title) == [
-      "Subscription", "Anthropic, aabbcc, 12% remaining", "OpenAI, Not signed in",
-      "Local", "Want to manage local models?", "Open Grid"
+      "Subscriptions", "Anthropic, aabbcc, 12% remaining", "OpenAI, Not signed in",
+      "On this Mac", "Manage Local Models in Grid…"
     ], "Models carries the two sections with something behind them, ending on the row that starts a model")
-    try checkTitlebar(models.items.filter(\.isSeparatorItem).count == 1,
-      "One native separator, between the sections — the run row is a Local row, not a section")
+    try checkTitlebar(models.items.filter(\.isSeparatorItem).count == 2,
+      "Two native separators: after the subscriptions, and before the row that manages models")
     for gone in ["API", "OpenRouter", "fal.ai", "Add Model"] {
       try checkTitlebar(models.item(withTitle: gone) == nil,
         "\(gone) is gone — it named nothing this app can reach or do")
     }
-    // The caption and button distinguish the manager action from the Local data rows.
-    // It remains enabled with nothing served and dispatches through the same guarded
-    // handler as Link Machine… so a modal still swallows it.
-    let managerCaption = models.items[models.items.count - 2]
+    // The manager action closes the menu. It stays enabled with nothing served and dispatches
+    // through the same guarded handler as Link Machine…, so a modal still swallows it.
     let runLocal = models.items.last!
-    try checkTitlebar(runLocal.title == "Open Grid",
+    try checkTitlebar(runLocal.title == "Manage Local Models in Grid…",
       "the last item in Models is the row that runs a local model")
-    try checkTitlebar(managerCaption.title == "Want to manage local models?" &&
-      managerCaption.view is SwarmMenuCaptionView && !managerCaption.isEnabled &&
-      runLocal.view is SwarmMenuButtonView,
-      "the manager is a button under an inert caption, not another served model")
     try checkTitlebar(runLocal.isEnabled && runLocal.submenu == nil,
-      "Open Grid is enabled even when nothing is served, and opens no submenu")
+      "the manager row is enabled even when nothing is served, and opens no submenu")
     try checkTitlebar(runLocal.target === self && runLocal.action == #selector(menuAction(_:))
       && runLocal.representedObject as? String == "runLocalModel",
-      "Open Grid dispatches runLocalModel through the guarded channel handler")
+      "the manager row dispatches runLocalModel through the guarded channel handler")
     try checkTitlebar(runLocal.identifier?.rawValue == HarnessKeymapMenu.actionPrefix + "runLocalModel",
-      "Open Grid is identified for the keymap like every other Harness command")
-    try checkTitlebar(validateMenuItem(runLocal), "Open Grid validates with the workspace live")
+      "the manager row is identified for the keymap like every other Harness command")
+    try checkTitlebar(validateMenuItem(runLocal), "the manager row validates with the workspace live")
     actionsEnabled = false
-    try checkTitlebar(!validateMenuItem(runLocal), "Open Grid cannot run behind a modal")
+    try checkTitlebar(!validateMenuItem(runLocal), "the manager row cannot run behind a modal")
     actionsEnabled = true
     try checkTitlebar(!runLocal.title.contains("Mac"),
       "The model manager action does not assume one vendor's computer")
@@ -966,7 +961,7 @@ private extension SwarmTitlebar {
     let picked = main.item(withTitle: "Models")!.submenu!.items.last!
     // AppKit gives a submenu's parent its own `submenuAction:`; what matters is that it is no longer
     // the guarded channel handler — nothing is dispatched until a machine is chosen.
-    try checkTitlebar(picked.title == "Open Grid" && picked.submenu != nil
+    try checkTitlebar(picked.title == "Manage Local Models in Grid…" && picked.submenu != nil
       && picked.action != #selector(menuAction(_:)) && picked.representedObject == nil,
       "with two machines the manager row opens a submenu instead of dispatching itself")
     try checkTitlebar(picked.identifier?.rawValue == HarnessKeymapMenu.actionPrefix + "runLocalModel",
@@ -995,7 +990,7 @@ private extension SwarmTitlebar {
 
     // The Local section is DATA, not two hardcoded names. A menu naming a model nobody serves is
     // worse than one admitting it has none, which is what the empty case above asserts.
-    updateModels(modelRows, local: [
+    updateModels(modelRows, current: nil, local: [
       ["id": "Qwen3.6-35B-A3B-UD-Q5_K_XL", "node": "macbook-m1max"],
       ["id": "DeepSeek-V4-Flash", "node": ""],
     ])
@@ -1004,10 +999,10 @@ private extension SwarmTitlebar {
       "a served model names the machine answering it")
     try checkTitlebar(served.item(withTitle: "DeepSeek-V4-Flash") != nil,
       "a model with no node named is listed on its own")
-    try checkTitlebar(served.items.last?.title == "Open Grid"
-      && !served.items[served.items.count - 2].isSeparatorItem
-      && served.items.filter(\.isSeparatorItem).count == 1,
-      "the manager keeps its caption after the Local data rows once models are served")
+    try checkTitlebar(served.items.last?.title == "Manage Local Models in Grid…"
+      && served.items[served.items.count - 2].isSeparatorItem
+      && served.items.filter(\.isSeparatorItem).count == 2,
+      "the manager row sits under its own rule, after the Local data rows")
 
     // A local row is built by the same view as a subscription row, which is what makes the two
     // sections read as one menu. A plain disabled NSMenuItem greys its whole title, so a served
@@ -1019,24 +1014,31 @@ private extension SwarmTitlebar {
       "the model id takes the left column and its node the trailing one, as usage does above")
     try checkTitlebar(localRows.last?.balance.stringValue.isEmpty == true,
       "a model with no node leaves the trailing column empty rather than inventing one")
-    try checkTitlebar(localRows.allSatisfy { $0.iconImage != nil && $0.iconTint == .labelColor },
-      "a local model carries a tinted mark, so its row is not a gap where the brand icons sit")
+    // The mark went when the Models menu was reworked: a local row now carries the id and its
+    // node alone, and the icon column stays empty rather than inventing a brand for it.
+    try checkTitlebar(localRows.allSatisfy { $0.iconImage == nil },
+      "a local model is named without a brand mark")
     let subscriptionWidth = served.items.compactMap { $0.view as? SwarmSubscriptionView }.first!.bounds.width
     try checkTitlebar(localRows.allSatisfy { $0.bounds.width == subscriptionWidth },
       "both sections share one width, so the trailing column does not step at the section break")
     try checkTitlebar(localRows.allSatisfy { $0.identity.frame.minX == served.items.compactMap({ $0.view as? SwarmSubscriptionView }).first!.identity.frame.minX },
       "local and subscription titles start in the same column")
-    updateModels(modelRows)
+    updateModels(modelRows, current: nil)
     try checkTitlebar(models.item(withTitle: "No models being served") == nil,
       "an empty Local says nothing — the run row is the answer, not a sentence")
     let subscription = models.items.first(where: { $0.view is SwarmSubscriptionView })!
     let row = subscription.view as! SwarmSubscriptionView
     try checkTitlebar(subscription.submenu == nil && subscription.action == nil && !subscription.isEnabled,
       "Subscription balances have no arrow or fake action")
-    try checkTitlebar(row.identity.stringValue == "Anthropic  aabbcc" && row.balance.stringValue == "12% remaining",
+    // The account is elided on the way in — "···aabbcc" — so the row says which account without
+    // printing an id nobody reads in full.
+    try checkTitlebar(row.identity.stringValue == "Anthropic  ···aabbcc" && row.balance.stringValue == "12% remaining",
       "Provider and account are on the left; usage is a separate right column")
-    try checkTitlebar(row.identity.frame.maxX + 24 <= row.balance.frame.minX && row.balance.frame.maxX == row.bounds.width - 18,
-      "Account and balance have a clear gap and a consistent trailing inset")
+    // The meter sits between the two columns on a metered row, and the tick keeps its own column
+    // on the right whether or not this row wears one — so the balance ends short of the rim.
+    try checkTitlebar(row.identity.frame.maxX + 12 <= row.balance.frame.minX
+      && row.balance.frame.maxX == row.bounds.width - 34,
+      "Account and balance have a clear gap, and the balance clears the reserved tick column")
     try checkTitlebar(row.identity.frame.midY == row.balance.frame.midY,
       "Both columns share a vertical center")
     try checkTitlebar(row.accessibilityLabel() == subscription.title,
@@ -1051,10 +1053,10 @@ private extension SwarmTitlebar {
     }
     try checkTitlebar(secondRow.balance.frame.maxX == row.balance.frame.maxX,
       "Different balances align on their right edges")
-    updateModels(modelRows)
+    updateModels(modelRows, current: nil)
     try checkTitlebar(models.items.contains(where: { $0 === subscription }),
       "Unchanged subscription data reuses native menu items")
-    updateModels([])
+    updateModels([], current: nil)
     try checkTitlebar(models.items.allSatisfy { !$0.title.contains("12%") && $0.submenu == nil },
       "Signing out clears cached native account readings")
     let findItems = find.submenu?.items ?? []

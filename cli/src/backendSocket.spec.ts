@@ -1,3 +1,4 @@
+import * as gitPullRequest from './lib/gitPullRequest.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'fs'
 import { homedir } from 'os'
@@ -541,6 +542,33 @@ describe('BackendSocket outbound queue', () => {
       type: 'git_project_info_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-preview' } },
     } }))
     expect(JSON.stringify(parseSent(ws))).not.toContain('private-branch')
+    await socket.stop()
+  })
+
+  it('returns PR status only to the requesting encrypted connection', async () => {
+    const preview = { status: 'found' as const, number: 12, state: 'Merged' as const, url: 'https://github.com/private/repo/pull/12' }
+    vi.spyOn(registry, 'resolve').mockReturnValue({ cwd: '/remote/workspace' } as RegisteredSession)
+    const read = vi.spyOn(gitPullRequest, 'readGitPullRequest').mockResolvedValue(preview)
+    const socket = new BackendSocket('token')
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'git_pull_request', payload: {
+      requestId: 'preview-1', agentId: 'agent1',
+    } })
+    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
+    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+      type: 'git_pull_request_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-preview' } },
+    })
+    ws.message({ t: 'down', connId: 'viewer-a', frame: {
+      type: 'git_pull_request', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-request' } },
+    } })
+    await vi.waitFor(() => expect(wrap).toHaveBeenCalledWith('viewer-a', 'git_pull_request_result', 'preview-1', preview))
+    expect(read).toHaveBeenCalledWith('/remote/workspace')
+    expect(parseSent(ws)).toContainEqual(expect.objectContaining({ targetConnId: 'viewer-a', frame: {
+      type: 'git_pull_request_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-preview' } },
+    } }))
+    expect(JSON.stringify(parseSent(ws))).not.toContain('github.com/private')
     await socket.stop()
   })
 
