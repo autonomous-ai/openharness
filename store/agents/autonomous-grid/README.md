@@ -1,6 +1,6 @@
 # Grid, as a Harness agent
 
-Manage open-weight models across your machines by talking to Grid. The agent uses the existing
+Manage open-weight models across your machines by talking to Model Manager. The agent uses the existing
 [Grid CLI](https://github.com/autonomous-ai/autonomous-grid), with a live fleet viewer beside it:
 gold connections, machine and engine details, model placement, memory, GPU temperature, power,
 utilization, decode estimates, recent telemetry, and operation progress. Topology and rack views

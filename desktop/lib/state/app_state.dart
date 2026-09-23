@@ -12,6 +12,7 @@ import 'package:flutter/widgets.dart'
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../analytics/analytics.dart';
+import '../models/model_manager_controller.dart';
 import '../api/api_client.dart';
 import '../viewer/sign_in_browser.dart';
 import '../viewer/viewer_services.dart';
@@ -177,6 +178,7 @@ class AgentForkAttempt {
 /// One deliberate creation, retained by the form if its reply is lost. Reusing
 /// it checks the original request; opening New agent starts a fresh intent.
 class AgentCreationAttempt {
+  AgentCreationAttempt({this.background = false});
   String _id = _newCreationId();
   String? _machineId, _targetId;
   Map<String, dynamic>? _choices;
@@ -184,6 +186,11 @@ class AgentCreationAttempt {
   HarnessPlacement? _placement;
   Future<String?>? _inFlight;
   bool _awaitingConfirmation = false, _finished = false;
+
+  /// Prepare a session without adding a pane or changing the selected tab.
+  final bool background;
+  String? _agentId;
+  String? get agentId => _agentId;
   String? _outcome;
   String? _preparedFolder;
   ProjectFolderRequest? _projectFolder;
@@ -427,6 +434,7 @@ class _AgentStop {
 
 class AppNotifier extends ChangeNotifier {
   final AuthSession session;
+
   /// The noise this window makes when an agent finishes or gets stuck.
   final AlertSounds alerts;
 
@@ -489,6 +497,9 @@ class AppNotifier extends ChangeNotifier {
 
   /// Words from the dial, for whoever can put a palette on screen.
   Stream<SpokenTaskRequest> get spokenTasks => _spokenTasks.stream;
+  final StreamController<void> _modelsRequests =
+      StreamController<void>.broadcast();
+  Stream<void> get modelsRequests => _modelsRequests.stream;
   final LocalManualFixture? localManualFixture;
   final Duration turnActivityTimeout;
   final LocalCliDiscovery? localCliDiscovery;
@@ -3086,7 +3097,9 @@ class AppNotifier extends ChangeNotifier {
       stillSignedIn: () async => (await cliLogin.checkStatus()).loggedIn,
       // Only the first time: the supervisor asks once per spawn attempt, and a guest window is
       // already a guest — repeating it would put the banner back on every retry.
-      onSignedOut: () { if (signedIn) _signedOutAtRuntime(_signedOutMessage); },
+      onSignedOut: () {
+        if (signedIn) _signedOutAtRuntime(_signedOutMessage);
+      },
       onSnapshot: _updateLocalProjectSnapshot,
       onBackendOnline: _noteBackendOnline,
       onReady: (endpoint) {
@@ -5013,68 +5026,43 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// The Store harness every "Open Grid" door opens: Grid, the agent that
-  /// manages the models on a machine or a fleet, with its live viewer.
+  /// Model Manager keeps the original package ID for installed workspaces.
   static const gridHarness = 'autonomous/autonomous-grid';
+  ModelManagerController? _modelManager;
+  ModelManagerController get modelManager =>
+      _modelManager ??= ModelManagerController(this);
 
-  /// The one action behind every "Open Grid" entry — the pane picker's button
-  /// and the Models menu — and it is exactly what the Store's Open button
-  /// does: a draft tab of its own, then New Agent with Grid already chosen on
-  /// [machineId]. Not a dialog of this feature's own: a second way to open a
-  /// harness would be a second definition of what opening one means.
-  ///
-  /// Grid not installed on that machine → the Store, open on Grid's page,
-  /// whose Install is the way in. Nothing here reports progress: the tab
-  /// appearing is the confirmation.
-  ///
-  /// Takes the caller's [context] because New Agent needs one and this
-  /// notifier holds none — the same shape as every other dialog a door opens.
-  ///
-  /// [machineId] is the computer Grid opens on — the pane's own machine from a
-  /// pane's picker, the one chosen from the Models menu's list. Absent (a menu
-  /// with one machine, or none named), it is this computer's own when the app
-  /// has one, else whatever the person is looking at. Never guessed past a
-  /// named machine: a picker on a remote pane that opened on this computer was
-  /// the bug this argument exists to end.
+  Future<Map<String, dynamic>> localModels(
+    String machineId, {
+    bool refresh = false,
+  }) => _conn(machineId).request(
+    'grid_fleet_models_list',
+    payload: {'refresh': refresh},
+    timeout: const Duration(seconds: 90),
+  );
+
+  Future<Map<String, dynamic>> controlLocalModel(
+    String machineId,
+    String modelId, {
+    required bool start,
+  }) => _conn(machineId).request(
+    start ? 'grid_fleet_model_start' : 'grid_fleet_model_stop',
+    payload: {'modelId': modelId},
+    timeout: const Duration(seconds: 12),
+  );
+
+  /// The session picker opens the same local Models overview as the toolbar.
   Future<void> runLocalModel(
     BuildContext context, {
     String? machineId,
     Future<void> Function(String harnessId, String machineId)? onOpenHarness,
   }) async {
-    final machine = machineId != null
-        ? machineStates[machineId]
-        : _localModelMachine();
-    if (machine == null) {
-      _lastError = machineId != null
-          ? 'That machine is no longer linked.'
-          : 'Connect a machine before opening Grid.';
-      _lastErrorRetryable = false;
-      notifyListeners();
-      return;
-    }
-    machineId = machine.machine.machineId;
-    // Whether Grid is installed THERE, from the machine's own list — a stored
-    // answer is fine here, since an install this app started is pushed into
-    // it as it lands.
-    await probeDsh(machineId);
-    if (machine.dsh[gridHarness]?.installed != true) {
-      openStore(harness: gridHarness);
-      return;
-    }
-    if (!context.mounted) return;
-    if (onOpenHarness != null) {
-      await onOpenHarness(gridHarness, machineId);
-      return;
-    }
-    await openStoreAgent(context, this, gridHarness, machineId);
+    _modelsRequests.add(null);
   }
 
-  /// The Store harness the Machines menu opens: Machine Monitor, the fleet
-  /// itself, managed by talking to it, with the live map of every machine
-  /// beside the terminal.
   static const machinesHarness = 'autonomous/machine-monitor';
 
-  /// Open Machine Monitor, the same way [runLocalModel] opens Grid.
+  /// Open Machine Monitor on this computer.
   ///
   /// It belongs on THIS computer and nowhere else: everything it reads — the
   /// machine list, each machine's roster — it reads through the local daemon,
@@ -6544,11 +6532,19 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// PR lookup runs on the agent's machine using that machine's GitHub access.
-  Future<Map<String, dynamic>> readAgentPullRequest(String machineId, String agentId) async {
+  Future<Map<String, dynamic>> readAgentPullRequest(
+    String machineId,
+    String agentId,
+  ) async {
     try {
-      return await _conn(machineId).request('git_pull_request',
-        payload: {'agentId': agentId}, timeout: const Duration(seconds: 30));
-    } catch (_) { return {'status': 'unavailable'}; }
+      return await _conn(machineId).request(
+        'git_pull_request',
+        payload: {'agentId': agentId},
+        timeout: const Duration(seconds: 30),
+      );
+    } catch (_) {
+      return {'status': 'unavailable'};
+    }
   }
 
   /// Reads source material only on the machine that owns the selected path.
@@ -6695,7 +6691,8 @@ class AppNotifier extends ChangeNotifier {
       // start page the user is already on IS that tab. A split was asked for
       // by name and wins; so does a tab other than the current one. The
       // current tab is what the dialog passes when nothing was chosen.
-      if (dsh != null &&
+      if (!creation.background &&
+          dsh != null &&
           placement == null &&
           split == null &&
           (swarmId == null || swarmId == activeSwarmId)) {
@@ -6820,11 +6817,9 @@ class AppNotifier extends ChangeNotifier {
     // A status check must remain possible even if the destination closed or a
     // capability probe changed while the first create was already in flight.
     if (!creation.awaitingConfirmation) {
-      final placementError = _creationPlacementError(
-        targetId,
-        split,
-        placement: placement,
-      );
+      final placementError = creation.background
+          ? null
+          : _creationPlacementError(targetId, split, placement: placement);
       if (placementError != null) return placementError;
       if (choices['codexHome'] != null) {
         if (choices['engine'] != 'codex') {
@@ -6880,11 +6875,9 @@ class AppNotifier extends ChangeNotifier {
       }
       // Preparation may be slow. Revalidate before starting a process, using
       // the original machine and split rather than the current selection.
-      final placementError = _creationPlacementError(
-        targetId,
-        split,
-        placement: placement,
-      );
+      final placementError = creation.background
+          ? null
+          : _creationPlacementError(targetId, split, placement: placement);
       if (placementError != null) return creation._complete(placementError);
       if (_disposed ||
           machineStates[machineId] != machine ||
@@ -7045,6 +7038,7 @@ class AppNotifier extends ChangeNotifier {
     }
     creation._complete(null);
     if (_disposed || machineStates[machineId] != machine) return null;
+    creation._agentId = agent.id;
     _upsertAgent(machine, agent);
     // Apply each creation receipt once, even if its transport result is replayed.
     // A Git start remembers its repository, never the worktree it made.
@@ -7058,6 +7052,7 @@ class AppNotifier extends ChangeNotifier {
     }
     harnessStats.onAgentSpawned();
     notifyListeners();
+    if (creation.background) return null;
     if (_creationPlacementError(targetId, split, placement: placement) !=
         null) {
       _lastError =
@@ -10674,6 +10669,7 @@ class AppNotifier extends ChangeNotifier {
 
   @override
   void dispose() {
+    _modelManager?.dispose();
     for (final project in _orchestratorProjects.values) {
       project.dispose();
     }
@@ -10705,6 +10701,7 @@ class AppNotifier extends ChangeNotifier {
       swarm.panes.clear();
     }
     unawaited(_spokenTasks.close());
+    unawaited(_modelsRequests.close());
     super.dispose();
   }
 }

@@ -6,8 +6,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/widgets/agent_picker.dart';
-import 'package:harness/shared/widgets/app_choice_picker.dart';
-import 'package:harness/store/store_screen.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/screens/swarm_screen.dart';
@@ -24,6 +22,10 @@ import 'package:harness/widgets/new_harness_box.dart';
 
 import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
+import 'support/model_manager.dart';
+
+import 'package:harness/models/models_panel.dart';
+
 import 'keymap_host_test.dart' show key;
 
 /// Stands in for the machine behind the Open Grid door: the probes New Agent
@@ -350,7 +352,7 @@ void main() {
   /// `runLocalModel` command, with or without a machine.
   Future<void> openGridDoor(
     WidgetTester tester,
-    _GridApp app, {
+    AppNotifier app, {
     String? machineId,
     String command = 'runLocalModel',
   }) async {
@@ -383,12 +385,17 @@ void main() {
       ),
       (_) => reply.complete(),
     );
-    await tester.pumpAndSettle();
+    if (command == 'runLocalModel') {
+      for (var i = 0; i < 15; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(reply.isCompleted, isTrue);
+    } else {
+      await tester.pumpAndSettle();
+    }
   }
 
   for (final (command, harness, stem, machineId) in [
-    ('runLocalModel', AppNotifier.gridHarness, 'grid', null),
-    ('runLocalModel', AppNotifier.gridHarness, 'grid', 'other'),
     ('manageMachines', AppNotifier.machinesHarness, 'machine-monitor', null),
   ]) {
     testWidgets('native $command opens the product dock on $machineId', (
@@ -441,62 +448,37 @@ void main() {
     });
   }
 
-  testWidgets('native runLocalModel opens New Agent with Grid chosen', (
-    tester,
-  ) async {
-    // The Models menu's command arrives as a bare method call, the way Link
-    // Machine… does. Grid is installed here, so the door is the Store's Open
-    // button in another place: a draft tab, New Agent, Grid already chosen.
-    final app = _gridApp(grid: {'m': true});
-    await openGridDoor(tester, app);
-
-    // The dialog is open (its title also names the tab and the start card).
-    expect(find.byType(AgentPicker), findsOneWidget);
-    final picker = tester.widget<AgentPicker>(find.byType(AgentPicker));
-    expect(picker.value, AppNotifier.gridHarness);
-    expect(app.activeSwarm.isStore, isFalse);
-    expect(app.panes, isEmpty);
-
-    await tester.pumpWidget(const SizedBox());
-    app.dispose();
-  });
-
-  testWidgets('native runLocalModel with a machineId opens on THAT machine', (
-    tester,
-  ) async {
-    // With two machines linked the native menu lists them and names the chosen
-    // one: New Harness opens with that machine selected, so Grid manages the
-    // models of the computer it runs on.
-    final app = _gridApp(grid: {'m': true, 'other': true}, secondMachine: true);
-    await openGridDoor(tester, app, machineId: 'other');
-
-    expect(find.byType(AgentPicker), findsOneWidget);
-    expect(
-      tester.widget<AgentPicker>(find.byType(AgentPicker)).value,
-      AppNotifier.gridHarness,
+  for (final remote in [false, true]) {
+    testWidgets(
+      'native local models opens the overview (remote argument: $remote)',
+      (tester) async {
+        final connection = ModelManagerConnection();
+        final app = ModelManagerTestApp(connection);
+        await openGridDoor(tester, app, machineId: remote ? 'other' : null);
+        expect(find.byType(AgentPicker), findsNothing);
+        expect(find.byType(NewHarnessBox), findsNothing);
+        expect(app.activeSwarm.isStore, isFalse);
+        expect(app.allPanes, isEmpty);
+        expect(find.byType(ModelsPanel), findsOneWidget);
+        expect(app.sent, isEmpty);
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      },
     );
-    final machines = tester.widget<AppChoicePicker<String>>(
-      find.byKey(const Key('new-agent-machine-field')),
-    );
-    expect(machines.value, 'other');
+  }
 
-    await tester.pumpWidget(const SizedBox());
-    app.dispose();
-  });
-
-  testWidgets("without Grid installed, the door is the Store on Grid's page", (
+  testWidgets('native Models opens the overview without creating a session', (
     tester,
   ) async {
-    // No harness to open yet: the Store's page for Grid has Install, and that
-    // is the way in. No New Harness, no pane.
-    final app = _gridApp(grid: {'m': false});
-    await openGridDoor(tester, app);
-
-    expect(find.byType(AgentPicker), findsNothing);
-    expect(app.activeSwarm.isStore, isTrue);
-    expect(find.byType(StoreTab), findsOneWidget);
-    expect(app.panes, isEmpty);
-
+    final connection = ModelManagerConnection();
+    final app = ModelManagerTestApp(connection);
+    await openGridDoor(tester, app, command: 'models');
+    expect(find.byType(ModelsPanel), findsOneWidget);
+    expect(find.text('Search models…'), findsOneWidget);
+    expect(connection.creations, isEmpty);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byType(ModelsPanel), findsNothing);
     await tester.pumpWidget(const SizedBox());
     app.dispose();
   });

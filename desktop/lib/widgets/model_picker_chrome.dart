@@ -70,19 +70,23 @@ class ModelAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (fill, ink) = _tintFor(label);
+    final light = Theme.of(context).brightness == Brightness.light;
+    final foreground = light ? Color.lerp(fill, Colors.black, .25)! : ink;
     return Container(
       width: kModelAvatarSize,
       height: kModelAvatarSize,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: child != null ? AppColors.surface : fill.withValues(alpha: 0.30),
+        color: child != null
+            ? AppColors.surface
+            : fill.withValues(alpha: light ? .12 : .30),
         borderRadius: BorderRadius.circular(9),
       ),
       child:
           child ??
           Text(
             initialOf(label),
-            style: AppType.body(color: ink)
+            style: AppType.body(color: foreground)
                 .copyWith(fontWeight: FontWeight.w600, fontSize: 13),
           ),
     );

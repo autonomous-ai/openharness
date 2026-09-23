@@ -41,6 +41,13 @@ function envFor(root: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv 
     ADAPTER_CLI_DIR: join(root, 'cli'),
     ADAPTER_COMPUTER_ID_FILE: join(root, 'computer-id'),
     ADAPTER_UPDATE_DISABLE: 'true',
+    // HOME does not isolate tmux's /tmp socket. Never discover or attach to the
+    // developer's real panes during a CLI startup test.
+    TERMINAL_BACKENDS: 'tmux',
+    TMUX: '',
+    TMUX_TMPDIR: root,
+    DISABLE_GRID_INSTALL: 'true',
+    DISABLE_HOOK_INSTALL: 'true',
     // Nothing listens on port 1. A `start` asks the daemon on PORT which account it serves and would
     // otherwise ask this machine's REAL daemon — and the backend is where a start that decided to
     // (re)start goes next, which must never be the production one.
@@ -110,7 +117,7 @@ describe('CLI login/start command contract', () => {
     const child = spawn(process.execPath, [TSX, CLI_SOURCE, 'start'], {
       cwd: CLI_ROOT,
       detached: true,
-      env: envFor(root, { PORT: String(20_000 + Math.floor(Math.random() * 20_000)), DISABLE_HOOK_INSTALL: '1' }),
+      env: envFor(root, { PORT: String(20_000 + Math.floor(Math.random() * 20_000)) }),
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     children.push(child)

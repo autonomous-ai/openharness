@@ -74,7 +74,7 @@ export function invocation(machine, args, env = process.env, thinking) {
   return { file: 'ssh', args: [...argv, machine.host, remote], env: childEnv };
 }
 
-export function execute(machine, args, { timeoutMs = 15_000, inherit = false, env = process.env, signal, thinking } = {}) {
+export function execute(machine, args, { timeoutMs = 15_000, inherit = false, env = process.env, signal, thinking, onOutput } = {}) {
   if (thinking !== undefined && typeof thinking !== 'boolean') throw new Error('Thinking must be a boolean.');
   if (machine.transport === 'harness') {
     if (!Array.isArray(args) || args.some(a => typeof a !== 'string' || a.includes('\0'))) throw new Error('Grid arguments must be strings without NUL bytes.');
@@ -95,13 +95,17 @@ export function execute(machine, args, { timeoutMs = 15_000, inherit = false, en
       killTimer = setTimeout(() => { child.kill('SIGKILL'); finish({ ok: false, code: 124, error: message }); }, 1500);
     };
     const abort = () => stop('Grid command was interrupted; verify the engine state before retrying.');
-    try { child = spawn(call.file, call.args, { env: call.env, stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'] }); }
+    try { child = spawn(call.file, call.args, { env: call.env, stdio: inherit && !onOutput ? 'inherit' : ['ignore', 'pipe', 'pipe'] }); }
     catch (error) { finish({ ok: false, code: 127, error: error.message }); return; }
     let stopping = false;
     const capture = which => chunk => {
       if (stopping) return;
       if (stdout.length + stderr.length + chunk.length > 4 * 1024 * 1024) { stopping = true; stop('Grid output exceeded 4 MiB.'); return; }
       if (which === 'out') stdout += chunk; else stderr += chunk;
+      if (onOutput) {
+        onOutput(chunk);
+        if (inherit) (which === 'out' ? process.stdout : process.stderr).write(chunk);
+      }
     };
     child.stdout?.setEncoding('utf8').on('data', capture('out'));
     child.stderr?.setEncoding('utf8').on('data', capture('err'));
@@ -204,18 +208,54 @@ export async function operations(workspace) {
   });
 }
 
+// Only the public status receipt goes through the app's existing project-file
+// reader. Internal state and endpoint credentials stay hidden under .harness.
+export async function publishSetup(workspace, record) {
+  const file = join(stateDir(workspace), 'setup.json');
+  const current = await readJson(file, null).catch(() => null);
+  if (current?.id !== record.id && current?.startedAt > record.startedAt) return;
+  if (record.stage === 'checking' && current?.stage !== 'checking' &&
+      ['running', 'done'].includes(current?.phase)) return;
+  const updatedAt = now();
+  await atomicJson(file, { spec: 1, ...record, updatedAt });
+  const { id, stage, phase, model, grid, progressPercent } = record;
+  await atomicJson(join(workspace, 'model-setup.json'), {
+    spec: 1, id, stage, phase, model, grid, progressPercent, updatedAt,
+  });
+}
+
 export async function runTracked(workspace, machine, mode, args, options = {}) {
   const command = args.find(a => !a.startsWith('-')) || 'overview';
   const op = { id: randomUUID(), machine: machine.id, command: `grid ${text(command, 40)}`, phase: 'running', startedAt: now(), endedAt: null, exitCode: null, pid: process.pid };
   const file = join(stateDir(workspace), 'operations', `${op.id}.json`);
-  await atomicJson(file, op);
+  const stage = command === 'pull' ? 'downloading' : command === 'join' || (command === 'engine' && args.includes('install')) ? 'starting' : ['device-info', 'catalog', 'ctx'].includes(command) ? 'checking' : null;
+  let pending = Promise.resolve(), lastProgress = 0, outputTail = '';
+  const publish = () => {
+    const snapshot = { ...op };
+    pending = pending.then(async () => {
+      await atomicJson(file, snapshot);
+      if (stage) await publishSetup(workspace, { ...snapshot, stage });
+    });
+    return pending;
+  };
+  await publish();
+  const heartbeat = setInterval(() => { void publish().catch(() => {}); }, 5000);
+  heartbeat.unref();
   try {
-    const result = await execute(machine, [`--${mode}`, ...args], { inherit: true, timeoutMs: 30 * 60_000, ...options });
+    const result = await execute(machine, [`--${mode}`, ...args], { inherit: true, timeoutMs: 30 * 60_000, ...options,
+      ...(stage === 'downloading' && machine.transport !== 'harness' ? { onOutput(chunk) {
+        outputTail = (outputTail + chunk).slice(-1024);
+        const match = [...outputTail.matchAll(/(?:^|[\s(])([0-9]+(?:\.[0-9]+)?)%/g)].at(-1);
+        if (match) op.progressPercent = Math.min(100, Number(match[1]));
+        if (match && Date.now() - lastProgress > 500) { lastProgress = Date.now(); void publish().catch(() => {}); }
+      } } : {}),
+    });
     Object.assign(op, { phase: result.ok ? 'done' : result.code === 124 ? 'interrupted' : 'failed', endedAt: now(), exitCode: result.code });
-    await atomicJson(file, op);
+    await publish();
     return result;
   } catch (error) {
-    await atomicJson(file, { ...op, phase: 'failed', endedAt: now(), exitCode: 1 });
+    Object.assign(op, { phase: 'failed', endedAt: now(), exitCode: 1 });
+    await publish();
     throw error;
-  }
+  } finally { clearInterval(heartbeat); }
 }
