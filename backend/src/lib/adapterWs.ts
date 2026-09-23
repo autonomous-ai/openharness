@@ -15,7 +15,7 @@
 import type { IncomingMessage } from 'http'
 import type { Duplex } from 'stream'
 import { WebSocket, type RawData } from 'ws'
-import { createWss, WS_LIMITS } from './wsServer.js'
+import { createWss, upgradeStatusText, WS_LIMITS } from './wsServer.js'
 import { prisma } from './prisma.js'
 import {
   publishUp, claimMachineOwner, releaseMachineOwner, publishDeviceE2eePair,
@@ -187,11 +187,10 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
     wss.handleUpgrade(req, socket, head, (ws) => void attachAdapter(ws, machineId, machine.userId, machine.name, label, computerId, clientVersion, countryCode))
   })().catch((err) => {
     if (err instanceof AppError) {
-      // 403 is the revoked-machine answer from `resolveOrCreateForComputer`; the CLI keys off the
-      // numeric status, but sending it under the wrong reason phrase would mislead anyone reading a
-      // packet capture or a proxy log.
-      const text = err.statusCode === 403 ? 'Forbidden' : err.statusCode === 409 ? 'Conflict' : 'Service Unavailable'
-      try { socket.write(`HTTP/1.1 ${err.statusCode} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`) } catch { /* ignore */ }
+      // 403 is the revoked-machine answer from `resolveOrCreateForComputer`, 429 its new-id rate limit
+      // (the CLI retries it with backoff and keeps its token); the CLI keys off the numeric status, but
+      // sending it under the wrong reason phrase would mislead anyone reading a capture or a proxy log.
+      try { socket.write(`HTTP/1.1 ${err.statusCode} ${upgradeStatusText(err.statusCode)}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`) } catch { /* ignore */ }
       socket.destroy()
       return
     }

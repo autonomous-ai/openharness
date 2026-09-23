@@ -1,7 +1,7 @@
 import type { IncomingMessage } from 'http'
 import type { Duplex } from 'stream'
 import { WebSocket, type RawData } from 'ws'
-import { createWss, WS_LIMITS } from './wsServer.js'
+import { createWss, upgradeStatusText, WS_LIMITS } from './wsServer.js'
 import { randomUUID } from 'crypto'
 import { attachHubClient, trackSocketLiveness, DEVICE_IDLE_DEADLINE_MS, type HubClient } from './hub.js'
 import {
@@ -362,7 +362,7 @@ export function handleDeviceUpgrade(req: IncomingMessage, socket: Duplex, head: 
         countryCode: countryCodeFromHeaders(req.headers),
       }))
   })().catch((err) => {
-    if (err instanceof AppError) { denyWith(err.statusCode, 'Service Unavailable'); return }
+    if (err instanceof AppError) { denyWith(err.statusCode, upgradeStatusText(err.statusCode)); return }
     logger.warn('device-ws upgrade failed', { error: errMsg(err) })
     denyWith(503, 'Service Unavailable')
   })
@@ -880,21 +880,24 @@ function relay(device: WebSocket, opts: RelayOpts): void {
     if (machineListUnsub) { machineListUnsub(); machineListUnsub = null }
     if (presenceDeviceId) {
       const id = presenceDeviceId
-      // Conditional clear: only publish offline if the key is really gone (a superseding reconnect
-      // keeps its own key → we stay silent). lastSeenAt = the moment the device actually went away.
+      // A SUPERSEDED socket says nothing at all. The device reconnected before this one was reaped
+      // (up to ~100s later, on the hub heartbeat), so it is online on the newer socket: announcing it
+      // offline would be a lie, and stamping either `lastSeenAt` would date the row to the moment
+      // this corpse was collected rather than to anything the device did. adapterWs.ts applies the
+      // same rule to a superseded adapter. `seenAt` is taken here, at the close, not after the Redis
+      // round trip, so what lands is when the device went away — the thing a session is measured by.
       const seenAt = new Date()
-      fireAndForget(clearDevicePresence(id, connToken).then((gone) => {
-        if (!gone) return
-        // Only a socket that REALLY owned this device writes the goodbye. `gone` is false when a
-        // superseding reconnect already holds the presence key: the device is online on the newer
-        // socket, and letting this dying one stamp `lastSeenAt` would date the row to the moment the
-        // OLD connection was reaped (up to ~100s after the handover) — the same reason the offline
-        // publish above is conditional, and the same rule adapterWs.ts applies to a superseded
-        // adapter. `seenAt` rather than "now": the moment of the close, not of the Redis round trip.
+      fireAndForget(clearDevicePresence(id, connToken).then((outcome) => {
+        if (outcome === 'superseded') return
+        // 'unknown' (Redis unreachable) still writes these two: we watched this socket until now, so
+        // the timestamp is honest, and a goodbye lost to an outage cannot be recovered later.
         touchDevicePresence(id, 'close', seenAt)
-        return publishDeviceStatus(userId, { deviceId: id, online: false, lastSeenAt: seenAt.toISOString() })
+        void prisma.deviceBinding.update({ where: { deviceId: id }, data: { lastSeenAt: seenAt } })
+          .catch(() => { /* best effort */ })
+        // The offline PUSH is different: it is only justified by a clear we actually observed. On
+        // 'unknown' the device may well be online, and watchDevices re-reads liveness on its own.
+        if (outcome === 'cleared') return publishDeviceStatus(userId, { deviceId: id, online: false, lastSeenAt: seenAt.toISOString() })
       }), 'device offline publish', { userId, deviceId: id })
-      void prisma.deviceBinding.update({ where: { deviceId: id }, data: { lastSeenAt: seenAt } }).catch(() => { /* best effort */ })
     }
     for (const [, unsub] of statusSubs) unsub()
     statusSubs.clear()
