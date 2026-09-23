@@ -11,6 +11,7 @@ import '../state/app_state.dart';
 import '../state/harness_sessions.dart';
 import '../state/swarm_navigation.dart';
 import 'engine_identity.dart';
+import '../notify/alert_sounds.dart';
 
 /// A compact, live inventory. Action receipts belong to AppNotifier, so
 /// dismissing this surface never cancels a pause or launches a second resume.
@@ -54,6 +55,9 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
     _filter = widget.initialFilter;
     _clock = Timer.periodic(const Duration(minutes: 1), (_) => _changed());
     widget.app.addListener(_changed);
+    // Its own notifier — marking one agent must not rebuild the workspace — so
+    // this list asks for its own redraw while it is open.
+    widget.app.agentUnread.addListener(_changed);
   }
 
   void _changed() {
@@ -63,6 +67,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
   @override
   void dispose() {
     widget.app.removeListener(_changed);
+    widget.app.agentUnread.removeListener(_changed);
     _clock?.cancel();
     _search.dispose();
     _searchFocus.dispose();
@@ -120,6 +125,10 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
   }
 
   Future<void> _open(HarnessSession row, {bool answering = false}) async {
+    // Going to the harness is what makes its news read. Done here rather than
+    // after the open succeeds: the person has decided to look, and a mark that
+    // outlived the click would read as the click not having worked.
+    widget.app.markAgentSeen(row.machine.machine.machineId, row.agent.id);
     if (answering) {
       final current = widget.app.questionFor(row.machineId, row.agent.id);
       if (current == null || row.question?.sameAs(current) != true) return;
@@ -509,6 +518,10 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                                 height: rowHeight,
                                 now: now,
                                 showQuestion: showingQuestions,
+                                unread: widget.app.agentUnread.kindFor(
+                                  row.machine.machine.machineId,
+                                  row.agent.id,
+                                ),
                                 selected:
                                     _selected != null && selected?.id == row.id,
                                 busy: busy,
@@ -545,6 +558,7 @@ class _SessionRow extends StatelessWidget {
     required this.height,
     required this.now,
     required this.showQuestion,
+    required this.unread,
     required this.selected,
     required this.busy,
     required this.pendingLabel,
@@ -558,6 +572,11 @@ class _SessionRow extends StatelessWidget {
   final DateTime now;
   final bool selected, busy, showQuestion;
   final String pendingLabel;
+
+  /// News nobody has looked at yet, or null. Drawn beside the name, so the mark
+  /// sits with the thing it is about rather than in a column of its own.
+  final AlertKind? unread;
+
   final VoidCallback onOpen, onToggle, onAnswer;
   final String? error;
 
@@ -731,7 +750,7 @@ class _SessionRow extends StatelessWidget {
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                             style: AppType.monoMeta(
-                                              color: const Color(0xffd9ad70),
+                                              color: _UnreadMark.waitingTint,
                                               height: 1.3,
                                             ),
                                           ),
@@ -758,6 +777,24 @@ class _SessionRow extends StatelessWidget {
                         size: 17,
                         semanticLabel:
                             'Needs input for ${row.agent.displayName}',
+                      ),
+                    )
+                  // The SAME SLOT, never both: a row is either waiting on a
+                  // person or it is not, and the amber question already says
+                  // the first case. This says the other one — work that is done
+                  // and has not been looked at — in the one place the eye is
+                  // already checking for a row's state.
+                  else if (unread == AlertKind.done)
+                    IconButton(
+                      key: ValueKey('session-unread-done:${row.id}'),
+                      tooltip: 'Finished',
+                      onPressed: canOpen ? onOpen : null,
+                      color: _UnreadMark.doneTint,
+                      icon: Icon(
+                        LucideIcons.circleCheckBig,
+                        size: 17,
+                        semanticLabel:
+                            'Finished, not yet seen: ${row.agent.displayName}',
                       ),
                     ),
                   Tooltip(
@@ -824,4 +861,23 @@ class _SessionRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The two tints an unread harness is drawn in.
+///
+/// Named here rather than written at each use, so this and the "needs input"
+/// button beside it cannot drift into two different yellows.
+///
+/// There is no widget any more. A left-hand pip was tried and removed: the row
+/// already had a place for its state — the amber question button on the right —
+/// so a second marker beside the name said the same thing twice for a question,
+/// while putting "finished" somewhere the eye was not looking. Both live in
+/// that one slot now, and never both at once.
+abstract final class _UnreadMark {
+  /// Waiting on a person. The amber the question button has always used.
+  static const waitingTint = Color(0xffd9ad70);
+
+  /// Finished. Green because it is the one colour nobody reads as "act now",
+  /// which is exactly the difference being drawn.
+  static const doneTint = Color(0xff6fbf8b);
 }

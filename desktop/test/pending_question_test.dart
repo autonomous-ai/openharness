@@ -345,6 +345,50 @@ void main() {
       expect(app.agentAlerts.alerts.single.kind, AlertKind.needsYou);
     });
 
+    test('both moments mark the harness unread, whatever the switches say', () async {
+      // The mark is not an interruption — it sits still until somebody goes looking — so it is
+      // deliberately outside the banner and sound switches. Somebody who turned the noisy halves
+      // off still wants the window to say which agent moved while they were away.
+      final app = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        alerts: AlertSounds(store: store(on: false), channel: channel),
+        agentAlerts: AgentAlerts(
+          store: ScreenAlertStore(storage: _Memory()),
+        ),
+      );
+      addTearDown(app.dispose);
+      app.machines = [_machine];
+      app.machineStates['m1'] = MachineState(_machine);
+
+      await app.handleMachineEventForTest('m1', {
+        'type': 'turn_ended',
+        'agentId': 'a1',
+        'payload': {'agentId': 'a1'},
+      });
+      expect(app.agentUnread.kindFor('m1', 'a1'), AlertKind.done);
+      expect(app.agentAlerts.alerts, isEmpty, reason: 'banners were off');
+
+      await app.handleMachineEventForTest('m1', asked());
+      expect(app.agentUnread.kindFor('m1', 'a1'), AlertKind.needsYou);
+
+      // And going to it is what makes it read.
+      app.markAgentSeen('m1', 'a1');
+      expect(app.agentUnread.count, 0);
+    });
+
+    test('a deleted harness stops being counted', () async {
+      final app = wired();
+      addTearDown(app.dispose);
+      await app.handleMachineEventForTest('m1', asked());
+      expect(app.agentUnread.count, 1);
+      await app.handleMachineEventForTest('m1', {
+        'type': 'agent_deleted',
+        'payload': {'agentId': 'a1'},
+      });
+      expect(app.agentUnread.count, 0);
+    });
+
     test('nothing is heard while the switch is off', () async {
       final off = store(on: false);
       final app = AppNotifier(

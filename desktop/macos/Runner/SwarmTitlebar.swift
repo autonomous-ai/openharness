@@ -1641,10 +1641,20 @@ private final class SwarmTabStrip: NSView {
     let expandedState = sessionsButton.expanded ? "Expanded" : "Collapsed"
     sessionsButton.toolTip = sessionsButton.running > 0 ? "Harnesses · \(sessionsButton.running) running" : "Harnesses"
     let attention = state["attention"] as? Int ?? 0
-    sessionsButton.attention = attention
+    // What the badge COUNTS is `unread` — harnesses carrying news nobody has looked at, which
+    // includes the ones that simply finished. `attention` is the narrower "blocked, waiting on a
+    // person" figure and still words the sentence below, because that is the half worth saying
+    // out loud. An older Flutter sends no `unread`, and then the badge is what it always was.
+    let unread = state["unread"] as? Int ?? attention
+    sessionsButton.attention = unread
     let attentionState = "\(attention) \(attention == 1 ? "needs" : "need") input"
-    sessionsButton.setAccessibilityValue(attention > 0 ? "\(expandedState), \(attentionState)" : expandedState)
-    if attention > 0 { sessionsButton.toolTip = "Harnesses · \(attentionState)" }
+    let unreadState = "\(unread) \(unread == 1 ? "harness has" : "harnesses have") news you have not seen"
+    sessionsButton.setAccessibilityValue(unread > 0 ? "\(expandedState), \(unreadState)" : expandedState)
+    if unread > 0 {
+      sessionsButton.toolTip = attention > 0
+        ? "Harnesses · \(unreadState) · \(attentionState)"
+        : "Harnesses · \(unreadState)"
+    }
     needsLayout = true
     layoutSubtreeIfNeeded()
     if ids != previousOrder {
