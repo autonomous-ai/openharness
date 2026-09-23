@@ -257,8 +257,15 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // AppKit owns height; only width is configurable for a right accessory.
     let trafficLightEdge = window.standardWindowButton(.zoomButton).map {
       $0.convert($0.bounds, to: nil).maxX
-    } ?? 76
-    let leading = max(88, trafficLightEdge + 16)
+    } ?? 69
+    // 10 after the buttons, which is where a Mac app puts its first control:
+    // the cluster ends at 69 on macOS 26, Safari's sidebar button and Chrome's
+    // first tab both start around 79. This was `max(88, edge + 16)` while the
+    // notifications bell still sat in front of the tabs; with the bell gone
+    // that left the first tab at 88, a good ten points adrift of every other
+    // window on the screen. The floor stays for a window with no buttons to
+    // measure — the `?? 69` above is the same fallback read from the other end.
+    let leading = max(76, trafficLightEdge + 10)
     strip.setFrameSize(NSSize(width: max(200, window.frame.width - leading), height: strip.frame.height))
     strip.needsLayout = true
   }
