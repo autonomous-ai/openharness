@@ -47,81 +47,16 @@ Code, keys and keystrokes are sealed on your machine. The relay forwards bytes i
 
 A native app, not Electron. Close it and your agents keep working.
 
-We measure the workflows developers repeat, including their slow tails. Release
-build on an M2 Max; 120 observations per action, with 16 retained terminals and
-four visible:
+Idle measurements on an M2 Max:
 
-| Developer action | Idle median | Idle p95 | p95 during output |
-|---|---:|---:|---:|
-| Type → terminal echo | 11.2 ms | 18.5 ms | 74.2 ms |
-| ⌘N input-ready new harness | 10.6 ms | 15.0 ms | 14.4 ms |
-| ⌘O open anything | 12.3 ms | 16.1 ms | 16.9 ms |
-| Filter the session picker | 10.0 ms | 13.6 ms | 14.9 ms |
-| Select a session → first input echo | 26.1 ms | 31.1 ms | 35.9 ms |
-| ⌘T new tab | 13.2 ms | 18.1 ms | 18.0 ms |
-| Next tab → first input echo | 27.2 ms | 34.2 ms | 42.6 ms |
-| Focus pane → first input echo | 23.9 ms | 30.6 ms | 37.3 ms |
-| Zoom a pane | 55.3 ms | 100.9 ms | 326.0 ms |
-| Type Find query → results | 10.1 ms | 13.1 ms | 14.0 ms |
-| Scroll one viewport | 40.9 ms | 83.2 ms | 139.6 ms |
+- **⌘N, ⌘O, ⌘T UI:** 11–13 ms median, 15–18 ms p95.
+- **Local terminal echo:** 1.1 ms median, 7.2 ms p95, excluding UI rendering.
+- **Desktop resources:** ~0.1% of one CPU core and 304 MiB, including terminal rendering and scrollback; agent CLIs and the daemon are excluded.
 
-Framework input to completed Flutter raster, with verified focus and results.
-Output is an eight-row ANSI redraw at 20 Hz. These use synthetic sessions;
-physical keyboard, network and display-presentation time are excluded.
-Output-heavy typing, zoom and scrolling remain the main latency targets.
-
-Real terminal round trips are measured separately, through disposable PTYs on
-actual machines. The local installed-daemon baseline is **1.1 ms median / 7.2 ms
-p95**, or 11.1 ms p95 during output (600 echoes per workload).
-
-For remote machines, we compare all three routes on the **same target** and verify
-the nominated ICE pair and both binary wire directions. The original comparison
-used three attempts per route and 200 echoes per workload per successful trial.
-Home direct P2P includes six additional attempts from two later reruns:
-
-| Target / route | Idle median | Idle p95 | p95 during output | Trials completed |
-|---|---:|---:|---:|---:|
-| Office iMac · Direct P2P | 14.6 ms | 135.0 ms | 37.7 ms | 1/3 |
-| Office iMac · Cloudflare TURN | 109.8 ms | 163.8 ms | 175.9 ms | 3/3 |
-| Office iMac · Harness relay | 401.4 ms | 504.7 ms | 512.0 ms | 3/3 |
-| Home iMac · Direct P2P | Not established | — | — | 0/9 |
-| Home iMac · Cloudflare TURN | 108.5 ms | 167.8 ms | 180.2 ms | 3/3 |
-| Home iMac · Harness relay | 384.7 ms | 503.3 ms | 501.1 ms | 3/3 |
-
-Direct P2P was fast when it connected, but its availability varied. Home's six
-fresh retries on September 23 also timed out during direct negotiation; all
-reached their terminals through the fallback relay. The missing P2P latency is
-an unavailable connection, not an untested route.
-[Home reruns, negotiation evidence and raw results](docs/performance/2026-09-23-home-p2p-rerun.md).
-Across the three series, all 11 unavailable direct-only attempts reached working
-terminals through the fallback relay. All 5,200 measured echoes and 390 measured
-control requests completed, and all 24 test terminals were deleted.
-
-Remote trials use an isolated production transport client. These round trips
-exclude UI rendering; adding independent p95 values would not produce an
-end-to-end p95. Setup and warm reattachment are measured separately.
-[Route methodology, failures, tails and raw observations](docs/performance/2026-09-23-transport-routes.md).
-
-Desktop app resource use with 1,000 seeded lines per retained terminal:
-
-| Retained terminals | App foreground / hidden CPU | App foreground / hidden footprint |
-|---|---:|---:|
-| 1 | 0.08% / 0.08% | 213 / 217 MiB |
-| 16 | 0.09% / 0.10% | 304 / 306 MiB |
-| 48 | 0.10% / 0.08% | 559 / 559 MiB |
-
-Thirty-second process snapshots; 100% CPU means one core. Memory is median
-physical footprint of the **desktop app alone**, including its terminal renderer
-and scrollback. The 213 MiB one-terminal result contains no Claude Code, Codex,
-shell, tmux, or Harness daemon process memory. Those need separate process
-measurements; their usage was not measured in this fixture. Hidden fixtures still
-recorded 12–14 interrupt wakeups/s; these measurements do not establish zero background
-work in a connected app.
-
-With 16 full 10,000-line buffers and ongoing output, the fixture used about
-957 / 960 MiB and 1.28% / 1.79% of one core in foreground / hidden samples.
-
-[Full results, workload definitions, limits and raw observations](docs/performance/2026-09-23-core-experiences.md).
+Desktop results use a Release fixture with 16 terminals and 1,000 scrollback lines each.
+See the [workflow and resource benchmarks](docs/performance/2026-09-23-core-experiences.md)
+and [remote P2P, TURN and relay results](docs/performance/2026-09-23-transport-routes.md)
+for workloads, slow tails, connection failures and raw data.
 
 ### Built the way developers work
 
