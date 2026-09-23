@@ -77,7 +77,7 @@ def main():
             raise RuntimeError(f'{stem}: no artifact (exit {code}); inspect private log')
         result = json.loads(output.read_text())
         cleanup = result.get('cleanup', {})
-        if cleanup.get('created') and not cleanup.get('deleted'):
+        if (cleanup.get('created') or cleanup.get('agentId') or cleanup.get('error')) and not cleanup.get('deleted'):
             raise RuntimeError(f'{stem}: cleanup failed; stop before creating another terminal')
         if code not in (0, 1):
             raise RuntimeError(f'{stem}: unexpected exit {code}; inspect artifact')

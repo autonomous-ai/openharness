@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "complete": false,
+  "missingTrials": [
+    "home-relay-1.json",
+    "home-p2p-1.json",
+    "home-relay-2.json",
+    "home-p2p-2.json",
+    "home-turn-2.json",
+    "office-turn-2.json",
+    "office-relay-2.json",
+    "office-p2p-2.json",
+    "office-relay-3.json",
+    "office-p2p-3.json",
+    "office-turn-3.json",
+    "home-p2p-3.json",
+    "home-turn-3.json",
+    "home-relay-3.json"
+  ],
+  "note": "Console logs remain private. Only listed fields were removed; timings and route evidence are unchanged.",
+  "artifacts": [
+    {
+      "file": "plan.json",
+      "sha256": "3e68efc55132b023fe156c31c9c877a57473e750ade0e2246d24fb60ceffb55f",
+      "redactions": []
+    },
+    {
+      "file": "office-p2p-1.json",
+      "sha256": "3c230195a73a796830a4db9b4c1bf8bf12ebf12207c7d150089fc00ae0a66039",
+      "sourceSha256": "19275bf10e8973ba85282c83667d452262be2a1940de3aa97b14a79fcce276cd",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ]
+    },
+    {
+      "file": "office-turn-1.json",
+      "sha256": "e650cffe83137b420ce8df2a9a9f35085bc6d91812eb26d9c794a0a44d453795",
+      "sourceSha256": "e650cffe83137b420ce8df2a9a9f35085bc6d91812eb26d9c794a0a44d453795",
+      "redactions": []
+    },
+    {
+      "file": "office-relay-1.json",
+      "sha256": "2396f8c0b2af4d08388332b7987ec63a82a0ebbdfa7ffc87ee88fa2f179114be",
+      "sourceSha256": "2396f8c0b2af4d08388332b7987ec63a82a0ebbdfa7ffc87ee88fa2f179114be",
+      "redactions": []
+    },
+    {
+      "file": "home-turn-1.json",
+      "sha256": "327e1543fdc60cd78ef2c17e1609f756db0f0b7a4e87dd878cbd0e353aec56a8",
+      "sourceSha256": "327e1543fdc60cd78ef2c17e1609f756db0f0b7a4e87dd878cbd0e353aec56a8",
+      "redactions": []
+    }
+  ]
+}
