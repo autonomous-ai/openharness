@@ -1,6 +1,7 @@
 import 'swarm_search_field.dart';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter/services.dart';
 
@@ -797,6 +798,14 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                                 horizontal: 8,
                               ),
                               controller: _scroll,
+                              // The dock only shows a few rows. Building the
+                              // default 250 px beyond each edge can do more
+                              // work than the visible results on Cmd+O. Keep
+                              // one extra row for Tab focus traversal; arrows
+                              // and paging reveal targets by their fixed size.
+                              scrollCacheExtent: ScrollCacheExtent.pixels(
+                                _rowHeight,
+                              ),
                               reverse: search.resultsFromBottom,
                               itemCount:
                                   search.rows.length - (pinCreate ? 1 : 0),
