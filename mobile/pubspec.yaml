@@ -68,6 +68,12 @@ dependencies:
   # recognizer was tried first and misheard Vietnamese badly.
   record: ^7.1.1
 
+  # An agent finishing while the phone is in a pocket: the OS notification the
+  # dial's "wake the panel and open the drawer" becomes on a phone
+  # (`lib/notify/system_notices.dart`). Local only — it fires from the machine socket,
+  # so it reaches a phone whose app is still alive, not one iOS has suspended.
+  flutter_local_notifications: ^22.2.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

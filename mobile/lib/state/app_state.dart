@@ -34,6 +34,9 @@ import '../core/project_history.dart';
 import '../core/retry.dart';
 import '../logging/app_log.dart';
 import '../logging/startup_trace.dart';
+import '../notify/done_announcer.dart';
+import '../notify/done_notice.dart';
+import '../notify/system_notices.dart';
 import '../settings/config_store.dart';
 import '../stats/harness_stats.dart';
 import '../terminal/terminal_session.dart';
@@ -406,6 +409,10 @@ class AppNotifier extends ChangeNotifier {
       timeout: const Duration(seconds: 6),
     ),
   );
+
+  /// What a finished turn is worth — a tap, an unread mark, a system notice —
+  /// decided by the dial's rule (`notify/done_notice.dart`).
+  final DoneAnnouncer doneNotices;
 
   SessionPreviewKey previewKey(String machineId, Agent agent) =>
       (machineId: machineId, agentId: agent.id, sessionId: agent.sessionId);
@@ -1096,7 +1103,12 @@ class AppNotifier extends ChangeNotifier {
   /// no pointer behind it: the dial's scroll and focus frames, and which agent
   /// the rail draws as current.
   int? get focusedPaneId => activeSwarm.focusedPaneId;
-  set focusedPaneId(int? value) => activeSwarm.focusedPaneId = value;
+  set focusedPaneId(int? value) {
+    activeSwarm.focusedPaneId = value;
+    // Every route onto an agent ends here, so none of them has to remember
+    // that going to an agent is what reads its news.
+    _seeWatchedAgent();
+  }
 
   int _paneFocusRequest = 0;
 
@@ -1257,8 +1269,18 @@ class AppNotifier extends ChangeNotifier {
     PeerLinkClient? peerLinks,
     ViewerServices? viewer,
     PaneLayoutStore? paneLayoutStore,
+    SystemNotices? systemNotices,
     this.turnActivityTimeout = const Duration(seconds: 12),
   }) : _paneLayout = paneLayoutStore,
+       // On the same terms as the stores below: no layout store means a test,
+       // which must never reach the OS notification centre.
+       doneNotices = DoneAnnouncer(
+         system:
+             systemNotices ??
+             (paneLayoutStore == null
+                 ? SilentSystemNotices()
+                 : LocalSystemNotices()),
+       ),
        // Remembers "a dial has been seen here" on the same terms the pane
        // layout is remembered: with a layout store there is a state file, and
        // without one (the tests) nothing is written anywhere.
@@ -2815,6 +2837,7 @@ class AppNotifier extends ChangeNotifier {
     // ever read after a sign-in that this clears the way for.
     unawaited(_machineCache?.clear());
     sessionPreviews.clear();
+    doneNotices.unread.clearAll();
     expandedMachines.clear();
     selectedMachineId = null;
     status = AppStatus.unauthenticated;
@@ -4344,6 +4367,11 @@ class AppNotifier extends ChangeNotifier {
         .where((agent) => agent.id != agentId)
         .toList();
     sessionPreviews.removeAgent(machine.machine.machineId, agentId);
+    // An agent that no longer exists cannot be gone to.
+    doneNotices.unread.clear((
+      machineId: machine.machine.machineId,
+      agentId: agentId,
+    ));
     machine.sessionAgentIds.removeWhere((_, id) => id == agentId);
     machine.agentActivityAt.remove(agentId);
     _cancelTurnActivity(machine.machine.machineId, agentId);
@@ -6981,6 +7009,7 @@ class AppNotifier extends ChangeNotifier {
           // The answer just landed — the moment a recency sort should follow.
           machine.agentActivityAt[agentId] = DateTime.now();
           _cancelTurnActivity(machine.machine.machineId, agentId);
+          _announceTurnEnd(machine, agentId, event, payload);
         } else {
           final sessionId = _eventSessionId(event, payload);
           if (sessionId != null) {
@@ -7040,6 +7069,44 @@ class AppNotifier extends ChangeNotifier {
     Map<String, dynamic> event,
   ) => _handleEvent(machineId, event);
 
+  /// The agent on screen, when the app is in front of anybody.
+  AgentRef? get _watchedAgent {
+    if (!doneNotices.inFront) return null;
+    final pane = focusedPane;
+    final agentId = pane?.agentId;
+    if (pane == null || agentId == null) return null;
+    return (machineId: pane.machineId, agentId: agentId);
+  }
+
+  void _seeWatchedAgent() {
+    final watched = _watchedAgent;
+    if (watched != null) doneNotices.unread.clear(watched);
+  }
+
+  /// One agent's turn ended: tell the person as the dial would — see
+  /// `notify/done_notice.dart` for when that is a tap, a mark or a notice.
+  void _announceTurnEnd(
+    MachineState machine,
+    String agentId,
+    Map<String, dynamic> event,
+    Map<String, dynamic> payload,
+  ) {
+    final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+    if (agent == null) return;
+    final ref = (machineId: machine.machine.machineId, agentId: agentId);
+    doneNotices.turnEnded(
+      (ref: ref, name: agent.displayName, machine: machine.machine.displayName),
+      turnEndFrom(
+        event,
+        payload,
+        reply: sessionPreviews
+            .read(previewKey(ref.machineId, agent))
+            ?.turnReply,
+      ),
+      watching: () => _watchedAgent == ref,
+    );
+  }
+
   /// The app is back in front of somebody: every machine socket the phone lost while it was away
   /// dials again now instead of waiting out a backoff nobody is watching.
   ///
@@ -7052,6 +7119,9 @@ class AppNotifier extends ChangeNotifier {
   /// and connections somebody closed on purpose, so a tab switch that cost nothing costs nothing.
   void handleAppResumed() {
     _pool?.reconnectAll();
+    // Back in front of the agent that was on screen: whatever it finished
+    // while the phone was in a pocket has now been seen.
+    _seeWatchedAgent();
     // ⚠️ **The desk is re-read here and not only on a push.** A backgrounded
     // phone runs no code, so every `desk_changed` sent while it was away
     // reached a socket nobody was listening on: without this the tabs would be
@@ -7093,6 +7163,7 @@ class AppNotifier extends ChangeNotifier {
     }
     unawaited(_spokenTasks.close());
     sessionPreviews.dispose();
+    doneNotices.dispose();
     _desk.dispose();
     super.dispose();
   }

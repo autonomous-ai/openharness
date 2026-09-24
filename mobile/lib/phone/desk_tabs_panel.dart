@@ -281,7 +281,11 @@ class _DeskTabsPanelState extends State<DeskTabsPanel> {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     return ListenableBuilder(
-      listenable: widget.notifier,
+      // The unread marks have their own notifier — see `notify/agent_unread.dart`.
+      listenable: Listenable.merge([
+        widget.notifier,
+        widget.notifier.doneNotices.unread,
+      ]),
       builder: (context, _) => _panel(context),
     );
   }
@@ -375,6 +379,9 @@ class _DeskTabsPanelState extends State<DeskTabsPanel> {
                     final entry = group.entries[index];
                     return DeskAgentRow(
                       entry: entry,
+                      unread: widget.notifier.doneNotices.unread.contains(
+                        _refOf(entry),
+                      ),
                       onScreen:
                           showing != null &&
                           entry.machineId == showing.machineId &&
@@ -403,9 +410,13 @@ class DeskAgentRow extends StatelessWidget {
     required this.first,
     required this.last,
     required this.onTap,
+    this.unread = false,
   });
 
   final AgentEntry entry;
+
+  /// It finished a turn while you were elsewhere — see [SheetAgentTitle.unread].
+  final bool unread;
 
   /// The agent on screen. It keeps its row — it is the one you came from, and
   /// the list would read as missing an agent without it — and wears the check
@@ -434,6 +445,7 @@ class DeskAgentRow extends StatelessWidget {
       title: SheetAgentTitle(
         entry: entry,
         now: DateTime.now(),
+        unread: unread,
         name: Text(
           agent.displayName,
           maxLines: 1,

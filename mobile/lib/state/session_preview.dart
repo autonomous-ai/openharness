@@ -21,6 +21,13 @@ class SessionPreview {
   final List<String> requests = [];
   final List<String> earlierResponses = [];
   String? currentRequest, liveText, completedText, savedText, activity;
+
+  /// What the turn that just ENDED said — its last reply, or null when it said
+  /// nothing. The phone's stand-in for the dial's summary card: a turn with no
+  /// reply (tools only, a phantom session, an empty prompt) is not news, and
+  /// `notify/done_notice.dart` stays silent for it. Unlike [completedText] it
+  /// never carries over from an earlier turn.
+  String? turnReply;
   String _streamText = '';
   String? _searchText;
   bool turnOpen = false,
@@ -255,6 +262,7 @@ class SessionPreviewStore extends ChangeNotifier {
         entry.currentRequest = previewText(payload['userMessage'], limit: 1600);
         entry._rememberRequest(entry.currentRequest);
         entry.liveText = null;
+        entry.turnReply = null;
         entry._streamText = '';
         entry.activity = null;
       case 'user_message':
@@ -286,6 +294,7 @@ class SessionPreviewStore extends ChangeNotifier {
       case 'turn_ended':
         entry.turnOpen = false;
         entry.interrupted = payload['aborted'] == true;
+        entry.turnReply = entry.liveText;
         if (entry.liveText != null) entry.completedText = entry.liveText;
         entry.liveText = null;
         entry.activity = null;
