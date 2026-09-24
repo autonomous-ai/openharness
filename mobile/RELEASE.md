@@ -82,6 +82,7 @@ icon size in thirty seconds instead of in an email twenty minutes later.
 | `1.0.0 (34)` | 2026-09-23 | TestFlight. The search sheet opens on the desktop Harness Monitor's order (most recently active first) and names agents as the desktop does (`Untitled Pane` for a CLI-made name); rows show age, trouble, machine · folder · branch, and tokens / edits / PRs; New Harness asks the Git questions a window asks |
 | `1.0.0 (35)` | 2026-09-23 | TestFlight. New Harness touch-ups (`bubu/mobile-new-harness-touch`); the confirm dialog sits on the app's dialog veil |
 | `1.0.0 (36)` | 2026-09-23 | TestFlight. The mic becomes a morphing capsule: a live waveform and take timer while listening, and its own face for busy, sending, sent and retry; notices wrap to whole sentences and clear themselves |
+| `1.0.0 (37)` | 2026-09-24 | TestFlight. When the agent left on has been paused, the app opens the most recently active one — the desktop monitor's order — instead of the oldest; the banner over a terminal another app drives names that machine ("MacBookPro2021.local is using this terminal") when its CLI says who holds it |
 
 `pubspec.yaml` is therefore at `1.0.0+30`: the repo always holds the NEXT build number, so a release
 runs clean without anyone having to remember the last one.
