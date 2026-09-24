@@ -937,7 +937,23 @@ void main() {
         await tester.pump();
         expect(app.swarms, contains(original));
         expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);
-        expect(find.text(placement.title), findsNothing);
+        // No chooser titled after the placement. An empty tab is itself
+        // called "New Tab", so its own name in the strip does not count.
+        bool inTab(Element element) {
+          var inside = false;
+          element.visitAncestorElements((ancestor) {
+            final key = ancestor.widget.key;
+            inside = key is ValueKey<String> &&
+                app.swarms.any((swarm) => swarm.id == key.value);
+            return !inside;
+          });
+          return inside;
+        }
+
+        expect(
+          find.text(placement.title).evaluate().where((e) => !inTab(e)),
+          isEmpty,
+        );
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pump();
         expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);

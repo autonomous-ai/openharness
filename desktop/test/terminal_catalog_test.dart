@@ -103,7 +103,8 @@ void main() {
       await key(tester, LogicalKeyboardKey.enter);
       final sharedTab = app.activeSwarm;
       expect(sharedTab, isNot(same(source)));
-      expect(sharedTab.name, 'Fix login redirect');
+      // Named after the harness's project, not the harness itself.
+      expect(sharedTab.name, 'openharness');
       expect(sharedTab.panes.single.session, same(claude));
       expect(source.panes, [firstPane, secondPane]);
       await key(tester, LogicalKeyboardKey.keyW, cmd: true);

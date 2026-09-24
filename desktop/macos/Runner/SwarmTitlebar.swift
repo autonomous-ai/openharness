@@ -1507,16 +1507,6 @@ private final class SwarmTabStrip: NSView {
       let tab = previous[id] ?? SwarmTabButton(id: id)
       tab.palette = palette
       tab.name = row["name"] as? String ?? "New Tab"
-      let count = row["agentCount"] as? Int ?? 0
-      // The Harness Store tab holds no agents; without its own mark it would wear New Tab's plus.
-      let store = row["kind"] as? String == "store"
-      tab.icon = store
-        ? icons.image(engine: "store", asset: row["iconAsset"] as? String)
-        : count == 1
-        ? icons.image(engine: row["engine"] as? String, asset: row["iconAsset"] as? String)
-        : count > 1
-        ? SwarmIdentity.menuIcon
-        : NSImage(systemSymbolName: "plus", accessibilityDescription: "New Tab")
       tab.selected = id == activeId
       tab.actionsEnabled = actionsEnabled
       tab.attention = (row["attention"] as? Int ?? 0) > 0
@@ -1612,7 +1602,13 @@ private final class SwarmTabStrip: NSView {
     // (owner, 2026-09-15); tabs shrink and then scroll instead of taking it.
     let grip: CGFloat = spacious ? 84 : 44
     // Reserve three adjacent controls: Machines, Models, Harnesses.
-    let available = max(32, bounds.width - leading - trailing - (newButton.isHidden ? 0 : 36) - grip - storeWidth - modelsWidth - 88)
+    // Air between Machines, Models, Harnesses and the Store pill. 16, not 8: the
+    // marks are ~17pt wide, and 8 left about one mark's width between them
+    // where the menu bar leaves about one and a half (measured, owner
+    // 2026-09-24) — they read as a clump rather than as three controls.
+    let actionGap: CGFloat = 16
+    let available = max(32, bounds.width - leading - trailing - (newButton.isHidden ? 0 : 36) - grip - storeWidth - modelsWidth
+      - 28 * 2 - actionGap * 3 - 8)
     // As in Chrome, tabs keep shrinking until they are only their mark, so thirty tabs still sit in
     // one strip with nothing hidden; only past that does the strip scroll (the wheel scrolls it).
     let width = min(220, max(min(SwarmTabButton.minimumWidth, available), available / CGFloat(max(1, tabs.count))))
@@ -1628,9 +1624,9 @@ private final class SwarmTabStrip: NSView {
     let buttonY = (bounds.height - 28) / 2
     newButton.frame = NSRect(x: leading + occupied + 4, y: buttonY, width: 28, height: 28)
     storeButton.frame = NSRect(x: bounds.width - trailing - storeWidth, y: buttonY, width: storeWidth, height: 28)
-    sessionsButton.frame = NSRect(x: storeButton.frame.minX - 36, y: buttonY, width: 28, height: 28)
-    modelsButton.frame = NSRect(x: sessionsButton.frame.minX - modelsWidth - 8, y: buttonY, width: modelsWidth, height: 28)
-    machinesButton.frame = NSRect(x: modelsButton.frame.minX - 36, y: buttonY, width: 28, height: 28)
+    sessionsButton.frame = NSRect(x: storeButton.frame.minX - actionGap - 28, y: buttonY, width: 28, height: 28)
+    modelsButton.frame = NSRect(x: sessionsButton.frame.minX - actionGap - modelsWidth, y: buttonY, width: modelsWidth, height: 28)
+    machinesButton.frame = NSRect(x: modelsButton.frame.minX - actionGap - 28, y: buttonY, width: 28, height: 28)
     let geometryChanged = scroll.frame.size != previousScrollSize || document.frame.size != previousDocumentSize
     if let active, revealActiveAfterLayout || (activeWasVisible && (geometryChanged || tabOrderChanged)) {
       document.scrollToVisible(active.frame)
@@ -1720,11 +1716,6 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   private let selectButton = SwarmSelectButton()
   /// Whether the middle button went down on THIS tab — see otherMouseUp.
   private var middleDown = false
-  private let iconView = NSImageView()
-  var icon: NSImage? {
-    get { iconView.image }
-    set { iconView.image = newValue }
-  }
   /// A tab is named in the system face, like every other Mac window's tabs —
   /// Safari's, Ghostty's, Finder's. The terminal's face belongs to the terminal
   /// and to the chrome drawn around it inside the window (owner, 2026-09-23).
@@ -1754,10 +1745,6 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     super.init(frame: .zero)
     setAccessibilityElement(true)
     setAccessibilityRole(.group)
-    iconView.imageScaling = .scaleProportionallyDown
-    iconView.contentTintColor = NSColor(white: 0.85, alpha: 1)
-    iconView.setAccessibilityElement(false)
-    addSubview(iconView)
     selectButton.owner = self
     closeButton.owner = self
     selectButton.title = ""
@@ -1790,9 +1777,6 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   override func layout() {
     super.layout()
     let compact = self.compact
-    iconView.frame = compact
-      ? NSRect(x: ((bounds.width - 16) / 2).rounded(), y: contentCenterY - 8, width: 16, height: 16)
-      : NSRect(x: 22, y: contentCenterY - 8, width: 16, height: 16)
     closeButton.isHidden = compact
     selectButton.frame = NSRect(x: 0, y: 0, width: max(0, compact ? bounds.width : bounds.width - 36), height: bounds.height)
     closeButton.frame = NSRect(x: bounds.width - 36, y: contentCenterY - 12, width: 24, height: 24)
@@ -1828,8 +1812,11 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     if let cachedLabel { return cachedLabel }
     let paragraph = NSMutableParagraphStyle()
     paragraph.lineBreakMode = .byTruncatingTail
+    // One weight for every tab: the selected one is already told apart by its
+    // fill and its brighter ink, and a bold name also changes width, so the
+    // strip re-truncated whenever the selection moved (owner, 2026-09-24).
     let label = NSAttributedString(string: name,
-      attributes: [.font: selected ? NSFontManager.shared.convert(labelFont, toHaveTrait: .boldFontMask) : labelFont,
+      attributes: [.font: labelFont,
         .foregroundColor: selected ? NSColor.white : NSColor(white: 0.76, alpha: 1), .paragraphStyle: paragraph])
     cachedLabel = label
     return label
@@ -1879,13 +1866,25 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       let trailing = shortcut.map { value in
         max(42, ceil(("⌘\(value)" as NSString).size(withAttributes: [.font: badgeFont]).width) + 22)
       } ?? 42
-      label.draw(in: NSRect(x: 46, y: contentCenterY - labelHeight / 2,
-        width: max(0, bounds.width - 46 - trailing), height: labelHeight))
+      // A tab is its name: no mark, not even the engine's or the Store's —
+      // the pane header says what runs there (owner, 2026-09-24).
+      label.draw(in: NSRect(x: 22, y: contentCenterY - labelHeight / 2,
+        width: max(0, bounds.width - 22 - trailing), height: labelHeight))
+    }
+    // Too narrow for the name: its first letter, centred.
+    var initialFrame = NSRect(x: bounds.midX, y: contentCenterY, width: 0, height: 0)
+    if compact, label.length > 0 {
+      let initial = NSAttributedString(string: String(name.prefix(1)),
+        attributes: label.attributes(at: 0, effectiveRange: nil))
+      let size = initial.size()
+      initialFrame = NSRect(x: ((bounds.width - size.width) / 2).rounded(),
+        y: contentCenterY - size.height / 2, width: size.width, height: size.height)
+      initial.draw(at: initialFrame.origin)
     }
     if attention {
       NSColor.systemOrange.setFill()
       let dot = compact
-        ? NSRect(x: iconView.frame.maxX - 1, y: iconView.frame.maxY - 3, width: 5, height: 5)
+        ? NSRect(x: initialFrame.maxX + 1, y: initialFrame.maxY - 6, width: 5, height: 5)
         : NSRect(x: 13, y: contentCenterY - 2, width: 4, height: 4)
       NSBezierPath(ovalIn: dot).fill()
     }

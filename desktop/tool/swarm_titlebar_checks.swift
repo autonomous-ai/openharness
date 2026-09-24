@@ -39,6 +39,9 @@ private extension SwarmSubscriptionView {
 }
 
 private extension SwarmTabButton {
+  // `label` is private to the tab; a same-file extension reads what it draws.
+  var drawnFont: NSFont? { label.attribute(.font, at: 0, effectiveRange: nil) as? NSFont }
+
   func checkDoubleClickIsolation() throws {
     let parent = nextResponder
     let originalEmit = emit
@@ -109,14 +112,14 @@ private extension SwarmTabStrip {
       if let engine { row["engine"] = engine }
       update(["tabs": [row], "activeId": "agent-tab", "enabled": true])
     }
+    func marks() -> Bool { tabs[0].subviews.contains { $0 is NSImageView } }
     show(1, engine: "claude")
     let tab = tabs[0]
-    let engineIcon = tab.icon
-    try checkTitlebar(engineIcon != nil && engineIcon?.isTemplate == false, "A single-agent tab shows its engine mark")
+    try checkTitlebar(!marks(), "A tab of one harness is its name alone, without the engine's mark")
     show(2)
-    try checkTitlebar(tabs[0] === tab && tab.icon === SwarmIdentity.menuIcon, "Adding an agent changes the icon while retaining the tab control")
-    show(1, engine: "claude")
-    try checkTitlebar(tabs[0] === tab && tab.icon === engineIcon, "Closing back to one agent restores the cached engine icon")
+    try checkTitlebar(tabs[0] === tab && !marks(), "A tab of several harnesses is its name alone, and keeps the tab control")
+    show(0)
+    try checkTitlebar(tabs[0] === tab && !marks(), "An empty tab is its name alone")
   }
 
   func checkSharedTypography() throws {
@@ -126,6 +129,12 @@ private extension SwarmTabStrip {
     let tab = tabs[0]
     try checkTitlebar(tab.labelFont.pointSize == system.pointSize && tab.labelFont.familyName == system.familyName,
       "A tab is named in the system face, like every other Mac window's tabs")
+    update(["tabs": [["id": "font-tab", "name": "Typography"], ["id": "other-tab", "name": "Other"]],
+      "activeId": "font-tab", "enabled": true])
+    let selectedFont = tabs[0].drawnFont
+    let restingFont = tabs[1].drawnFont
+    try checkTitlebar(selectedFont != nil && selectedFont == restingFont,
+      "The selected tab keeps the same weight; its fill and ink mark it")
     try checkTitlebar(storeButton.font?.pointSize == system.pointSize && storeButton.font?.familyName == system.familyName,
       "The Store action beside the tabs takes the same face")
     try checkTitlebar(tab.menu?.font.familyName == menuFont.familyName && tab.menu?.font.pointSize == menuFont.pointSize,
