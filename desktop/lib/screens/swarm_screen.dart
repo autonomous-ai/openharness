@@ -80,6 +80,8 @@ import '../widgets/harness_command_bar.dart';
 import '../orchestrator/orchestrator_launcher.dart';
 import '../orchestrator/orchestrator_workspace.dart';
 import '../state/workspace_learning.dart';
+import '../state/workspace_onboarding.dart';
+import '../widgets/onboarding_card.dart';
 import '../widgets/workspace_quick_start.dart';
 import '../widgets/workspace_start_guide.dart';
 import '../widgets/workspace_welcome.dart';
@@ -99,6 +101,7 @@ class SwarmScreen extends StatefulWidget {
     ),
     this.commandResolver,
     this.learning,
+    this.onboarding,
   });
   final AppNotifier notifier;
   final bool? nativeTabs;
@@ -107,6 +110,7 @@ class SwarmScreen extends StatefulWidget {
   final bool commandBarEnabled;
   final CommandResolver? commandResolver;
   final WorkspaceLearning? learning;
+  final WorkspaceOnboarding? onboarding;
   @override
   State<SwarmScreen> createState() => _SwarmScreenState();
 }
@@ -148,6 +152,9 @@ class _SwarmScreenState extends State<SwarmScreen>
   final _sessionsButton = GlobalKey();
   MachinesPanelHandle? _machinesPanel;
   final _toolbarNotices = ToolbarNotices();
+  late final _onboarding =
+      widget.onboarding ??
+      WorkspaceOnboarding(storage: kUnderTest ? null : HarnessFileStore.shared);
   OverlayEntry? _sessionsOverlay;
   VoidCallback? _unregisterSessions;
   OverlayEntry? _modelsOverlay;
@@ -247,6 +254,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     app.agentUnread.addListener(_unreadChanged);
     app.addListener(_syncToolbarNotices);
     _toolbarNotices.addListener(_toolbarNoticesChanged);
+    _onboarding.addListener(_onboardingChanged);
     _syncToolbarNotices();
     unawaited(
       _learning.load().then((_) {
@@ -320,6 +328,8 @@ class _SwarmScreenState extends State<SwarmScreen>
     app.removeListener(_syncToolbarNotices);
     _toolbarNotices.removeListener(_toolbarNoticesChanged);
     _toolbarNotices.dispose();
+    _onboarding.removeListener(_onboardingChanged);
+    if (widget.onboarding == null) _onboarding.dispose();
     _machinesPanel?.close(restoreFocus: false);
     app.modelManager.removeListener(_modelManagerChanged);
     app.modelManager.setPanelVisible(false);
@@ -559,7 +569,69 @@ class _SwarmScreenState extends State<SwarmScreen>
   /// still separates the two — its "Needs input" tab is exactly [_attention].
   int get _unread => app.agentUnread.count;
 
+  void _syncOnboarding() {
+    final profile = app.currentUser;
+    final local = app.localMachineState?.machine.machineId;
+    final used = app.allPanes
+        .where(
+          (pane) =>
+              pane.session?.acceptsInput == true &&
+              pane.session?.engineId != kTerminalEngine &&
+              app.stateOf(pane.machineId)?.machine.isShared == false,
+        )
+        .toList();
+    final localModels = app.modelManager.sections
+        .where((section) => section.own)
+        .expand((section) => section.models)
+        .map((model) => model.id)
+        .toSet();
+    _onboarding.sync(
+      scope: app.isGuest
+          ? 'local:${local ?? 'guest'}'
+          : 'account:${profile?.id ?? profile?.email ?? local}',
+      observed: {
+        if (used.isNotEmpty) OnboardingStep.harnesses,
+        if (used.any(
+          (pane) => app.stateOf(pane.machineId)?.isLocalMachine == false,
+        ))
+          OnboardingStep.machines,
+        if (used.any(
+          (pane) =>
+              app
+                  .stateOf(pane.machineId)
+                  ?.agents
+                  .any(
+                    (agent) =>
+                        agent.id == pane.agentId &&
+                        agent.gridModel != null &&
+                        localModels.contains(agent.gridModel),
+                  ) ==
+              true,
+        ))
+          OnboardingStep.models,
+      },
+      otherComputer:
+          !app.isGuest &&
+          app.machineStates.values.any(
+            (machine) => !machine.isLocalMachine && !machine.machine.isShared,
+          ),
+      modelsAvailable: app.modelManager.localModels.any(
+        (model) => model.canStart || model.running,
+      ),
+    );
+  }
+
+  void _onboardingChanged() {
+    if (!mounted) return;
+    _sessionsOverlay?.markNeedsBuild();
+    _modelsOverlay?.markNeedsBuild();
+    _machinesPanel?.rebuild();
+    if (_native) _syncNative();
+    setState(() {});
+  }
+
   void _syncToolbarNotices() {
+    _syncOnboarding();
     final local = app.localMachineState?.machine.machineId;
     final models = app.modelManager;
     final profile = app.currentUser;
@@ -709,6 +781,10 @@ class _SwarmScreenState extends State<SwarmScreen>
       'machinesOpen': _machinesPanel != null,
       'machineNotices': _toolbarNotices.machineCount,
       'modelNotices': _toolbarNotices.modelCount,
+      'onboarding':
+          _onboarding.next != null && _onboarding.showsDot(_onboarding.next!)
+          ? _onboarding.next!.name
+          : null,
       'modelsOpen': _modelsOverlay != null,
       'localModelReady': app.modelManager.readyModel != null,
       'runningSessions': harnessSessions(app)
@@ -1418,11 +1494,13 @@ class _SwarmScreenState extends State<SwarmScreen>
     _closeCommandBar(restoreFocus: false);
     dismissTransientMenus();
     _preparePaneFocus();
+    _onboarding.acknowledge(OnboardingStep.machines);
     final panel = openMachinesPanel(
       context,
       app,
       keymap: _keymap,
       initialMachineId: initialMachineId,
+      onboarding: _onboarding,
       toolbarHeight: _native ? 0 : _tabBarHeight,
     );
     _machinesPanel = panel;
@@ -2166,6 +2244,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     _closeCommandBar(restoreFocus: false);
     dismissTransientMenus();
     _preparePaneFocus();
+    _onboarding.acknowledge(OnboardingStep.models);
     app.modelManager.setPanelVisible(true);
     unawaited(app.modelManager.dismissIntroduction());
     unawaited(app.modelManager.refresh());
@@ -2207,6 +2286,9 @@ class _SwarmScreenState extends State<SwarmScreen>
                   ),
                   child: ModelsPanel(
                     newModelIds: _toolbarNotices.newModelIds,
+                    showOnboarding: _onboarding.next == OnboardingStep.models,
+                    onDismissOnboarding: () =>
+                        _onboarding.dismiss(OnboardingStep.models),
                     controller: app.modelManager,
                     subscriptions: _modelsMenu!,
                     initialTab: initialTab,
@@ -2259,6 +2341,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     _closeCommandBar(restoreFocus: false);
     dismissTransientMenus();
     _preparePaneFocus();
+    _onboarding.acknowledge(OnboardingStep.harnesses);
     final overlay = Overlay.of(context);
     _sessionsOverlay = OverlayEntry(
       builder: (context) => LayoutBuilder(
@@ -2302,6 +2385,20 @@ class _SwarmScreenState extends State<SwarmScreen>
                     padding: const EdgeInsets.all(1),
                     child: HarnessSessionManager(
                       app: app,
+                      introduction: _onboarding.next == OnboardingStep.harnesses
+                          ? OnboardingCard(
+                              title: 'Run your first harness',
+                              description:
+                                  'Give an agent a task. Watch it get to work.',
+                              action: 'New harness',
+                              onAction: () {
+                                _closeSessions(restoreFocus: false);
+                                _runShortcut('agent.new');
+                              },
+                              onDismiss: () =>
+                                  _onboarding.dismiss(OnboardingStep.harnesses),
+                            )
+                          : null,
                       initialFilter: filter ?? SessionFilter.all,
                       recent: _navigation.recent,
                       onClose: _closeSessions,
@@ -3599,6 +3696,7 @@ class _SwarmScreenState extends State<SwarmScreen>
                           if (!_commandBarOpen && _newHarness == null)
                             LocalModelInvitation(
                               controller: app.modelManager,
+                              showIntroduction: false,
                               onOpen: () =>
                                   _toggleModels(initialTab: ModelsTab.local),
                             ),
@@ -3685,6 +3783,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     required int count,
     required String label,
     required Widget child,
+    OnboardingStep? step,
   }) => Badge(
     key: key,
     isLabelVisible: count > 0,
@@ -3697,7 +3796,31 @@ class _SwarmScreenState extends State<SwarmScreen>
       semanticsLabel: label,
       style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600),
     ),
-    child: child,
+    child: step != null && _onboarding.showsDot(step)
+        ? Stack(
+            clipBehavior: Clip.none,
+            children: [
+              child,
+              Positioned(
+                right: -3,
+                top: count > 0 ? null : -3,
+                bottom: count > 0 ? -3 : null,
+                child: Semantics(
+                  label: 'Suggested next step',
+                  child: Container(
+                    key: ValueKey('onboarding-${step.name}-dot'),
+                    width: 6,
+                    height: 6,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Color(0xff99c2ed),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          )
+        : child,
   );
 
   Widget _tabStrip() => LayoutBuilder(
@@ -3867,6 +3990,7 @@ class _SwarmScreenState extends State<SwarmScreen>
               style: _toolbarIconStyle(_toolbarNotices.machineCount),
               icon: _toolbarBadge(
                 key: const ValueKey('swarm-machines-badge'),
+                step: OnboardingStep.machines,
                 count: _toolbarNotices.machineCount,
                 label:
                     '${_toolbarNotices.machineCount} new ${_toolbarNotices.machineCount == 1 ? 'computer' : 'computers'} ready to connect',
@@ -3881,6 +4005,7 @@ class _SwarmScreenState extends State<SwarmScreen>
               style: _toolbarIconStyle(_toolbarNotices.modelCount),
               icon: _toolbarBadge(
                 key: const ValueKey('swarm-models-badge'),
+                step: OnboardingStep.models,
                 count: _toolbarNotices.modelCount,
                 label:
                     '${_toolbarNotices.modelCount} ${_toolbarNotices.modelCount == 1 ? 'model' : 'models'} ready to use',
@@ -3895,6 +4020,7 @@ class _SwarmScreenState extends State<SwarmScreen>
               style: _toolbarIconStyle(_unread),
               icon: _toolbarBadge(
                 key: const ValueKey('swarm-unread-badge'),
+                step: OnboardingStep.harnesses,
                 count: _unread,
                 label:
                     '$_unread ${_unread == 1 ? 'harness has' : 'harnesses have'} news you have not seen',

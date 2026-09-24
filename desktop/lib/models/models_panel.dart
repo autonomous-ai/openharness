@@ -10,6 +10,7 @@ import '../usage/models_menu_controller.dart';
 import 'local_model.dart';
 import 'model_manager_controller.dart';
 import 'model_mark.dart';
+import '../widgets/onboarding_card.dart';
 
 enum ModelsTab { subscriptions, local, shared }
 
@@ -21,12 +22,16 @@ class ModelsPanel extends StatefulWidget {
     required this.onClose,
     required this.onManage,
     this.newModelIds = const {},
+    this.showOnboarding = false,
+    this.onDismissOnboarding,
     this.initialTab = ModelsTab.subscriptions,
   });
   final ModelManagerController controller;
   final ModelsMenuController subscriptions;
   final VoidCallback onClose, onManage;
   final Set<String> newModelIds;
+  final bool showOnboarding;
+  final VoidCallback? onDismissOnboarding;
   final ModelsTab initialTab;
   @override
   State<ModelsPanel> createState() => _ModelsPanelState();
@@ -34,6 +39,7 @@ class ModelsPanel extends StatefulWidget {
 
 class _ModelsPanelState extends State<ModelsPanel> {
   final _search = TextEditingController();
+  bool _exploring = false;
   final _searchFocus = FocusNode(debugLabel: 'Search models');
   late ModelsTab _selectedTab = widget.initialTab;
   ModelManagerController get controller => widget.controller;
@@ -130,6 +136,18 @@ class _ModelsPanelState extends State<ModelsPanel> {
                     ],
                   ),
                 ),
+                if (widget.showOnboarding && !_exploring)
+                  OnboardingCard(
+                    title: 'Power a harness with local AI',
+                    description: 'Choose a model that runs on your computer. Then select it in a harness’s model picker.',
+                    action: 'Explore local models',
+                    onAction: () => setState(() {
+                      _exploring = true;
+                      _selectedTab = ModelsTab.local;
+                      _search.clear();
+                    }),
+                    onDismiss: widget.onDismissOnboarding ?? () {},
+                  ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: TextField(
@@ -654,7 +672,9 @@ class LocalModelInvitation extends StatelessWidget {
     super.key,
     required this.controller,
     required this.onOpen,
+    this.showIntroduction = true,
   });
+  final bool showIntroduction;
   final ModelManagerController controller;
   final VoidCallback onOpen;
   @override
@@ -662,7 +682,8 @@ class LocalModelInvitation extends StatelessWidget {
     listenable: controller,
     builder: (context, _) {
       final ready = controller.readyModel;
-      if (ready == null && !controller.showIntroduction) {
+      if (ready == null &&
+          (!showIntroduction || !controller.showIntroduction)) {
         return const SizedBox.shrink();
       }
       return Align(

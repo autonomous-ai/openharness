@@ -813,7 +813,25 @@ private extension SwarmTitlebar {
     try checkTitlebar((strip.machinesButton.accessibilityValue() as? String)?.contains("2 new computers") == true &&
       (strip.modelsButton.accessibilityValue() as? String)?.contains("101 models ready") == true,
       "Machine and model notifications are available to assistive technology")
+    for (step, button) in [("harnesses", strip.sessionsButton as SwarmNoticeButton),
+                           ("machines", strip.machinesButton as SwarmNoticeButton),
+                           ("models", strip.modelsButton as SwarmNoticeButton)] {
+      _ = try messenger.receive("update", arguments: [
+        "enabled": true, "onboarding": step, "machineNotices": 2,
+        "modelNotices": 101, "unread": 3,
+      ])
+      try checkTitlebar(button.onboarding &&
+        [strip.machinesButton, strip.modelsButton, strip.sessionsButton].filter { $0.onboarding }.count == 1,
+        "Only the current onboarding step gets a dot")
+      try checkTitlebar((button.accessibilityValue() as? String)?.contains("Suggested next step") == true,
+        "The onboarding dot has an accessible purpose")
+      try checkTitlebar(strip.machinesButton.attentionLabel == "2" &&
+        strip.modelsButton.attentionLabel == "99+" && strip.sessionsButton.attentionLabel == "3",
+        "Onboarding never inflates or replaces notification counts")
+    }
     _ = try messenger.receive("update", arguments: ["enabled": true])
+    try checkTitlebar([strip.machinesButton, strip.modelsButton, strip.sessionsButton].allSatisfy { !$0.onboarding },
+      "Acknowledging onboarding removes the dot")
     try checkTitlebar(strip.machinesButton.attentionLabel == nil && strip.modelsButton.attentionLabel == nil,
       "Acknowledged machine and model news removes the badge")
     try checkTitlebar(strip.machinesButton.iconTint == NSColor(white: 0.60, alpha: 1) &&
