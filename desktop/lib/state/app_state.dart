@@ -67,6 +67,7 @@ import 'pane_preset.dart';
 import 'pane_arrangement.dart';
 import 'pending_question.dart';
 import 'session_preview.dart';
+import '../usage/models_menu_controller.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
 import '../orchestrator/orchestrator_controller.dart';
@@ -5097,6 +5098,14 @@ class AppNotifier extends ChangeNotifier {
   ModelManagerController get modelManager =>
       _modelManager ??= ModelManagerController(this);
 
+  ModelsMenuController? _modelsMenu;
+
+  /// Subscription readings for the whole window: the Models panel, New Harness and every pane's model
+  /// picker read this ONE controller. Each used to own its own, read at a different moment, and the
+  /// picker said "Not signed in" beside a menu showing the same account with 8% left.
+  ModelsMenuController get modelsMenu =>
+      _modelsMenu ??= ModelsMenuController(remote: readRemoteUsage);
+
   Future<Map<String, dynamic>> localModels(
     String machineId, {
     bool refresh = false,
@@ -6238,8 +6247,8 @@ class AppNotifier extends ChangeNotifier {
   /// A seam, because reaching it through real panes means `focusPane`, which
   /// announces the focus to the machine, which dials it — and a test with no
   /// live connection hangs rather than fails.
-  late Iterable<({String machineId, String agentId})> Function()
-  watchedAgents = _visibleOnTab;
+  late Iterable<({String machineId, String agentId})> Function() watchedAgents =
+      _visibleOnTab;
 
   /// The real answer, reachable from a test without going through `focusPane`.
   @visibleForTesting
@@ -10989,6 +10998,7 @@ class AppNotifier extends ChangeNotifier {
   @override
   void dispose() {
     _modelManager?.dispose();
+    _modelsMenu?.dispose();
     for (final project in _orchestratorProjects.values) {
       project.dispose();
     }

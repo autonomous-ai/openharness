@@ -914,7 +914,10 @@ class NewHarnessController extends ChangeNotifier {
     final machine = _machineId;
     _loadingModels = true;
     if (_modelUsage == null) {
-      _modelUsage = ModelsMenuController(remote: app.readRemoteUsage);
+      // The app's shared readings, the same the Models menu and pane pickers show. Owned by the
+      // app, so this form never disposes it.
+      _modelUsage = app.modelsMenu;
+      _ownsModelUsage = false;
       _modelUsage!.addListener(_refresh);
     }
     // Native credential reads stay out of fixture tests, as in the session picker.
