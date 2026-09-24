@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/phone/agent_home.dart';
-import 'package:harness_mobile/phone/agent_tile.dart';
+import 'package:harness_mobile/phone/desk_add_agent_sheet.dart';
 import 'package:harness_mobile/phone/desk_groups.dart';
 import 'package:harness_mobile/phone/desk_tabs_panel.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
@@ -85,12 +85,12 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
   }
 
-  /// An agent's row, wherever it is drawn: a [DeskAgentRow] in the tabs, an
-  /// [AgentTile] in the sheet that adds one to a tab.
+  /// An agent's row, wherever it is drawn: a [DeskAgentRow] in the tabs, or
+  /// its row in the sheet that adds one to a tab ([deskAddAgentRowKey]).
   Finder row(String agent) => find.byWidgetPredicate(
     (widget) =>
         (widget is DeskAgentRow && widget.entry.agent.id == agent) ||
-        (widget is AgentTile && widget.agent.id == agent),
+        widget.key == deskAddAgentRowKey(agent),
   );
 
   testWidgets('the + on the tab row opens a tab holding the agent picked', (

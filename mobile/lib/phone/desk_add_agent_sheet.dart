@@ -256,13 +256,21 @@ class _MachineGroup extends StatelessWidget {
                 ),
                 child: Container(height: 1, color: AppPalette.divider),
               ),
-            _AgentRow(entry: entry, onTap: () => onPick(entry)),
+            _AgentRow(
+              key: deskAddAgentRowKey(entry.agent.id),
+              entry: entry,
+              onTap: () => onPick(entry),
+            ),
           ],
         ],
       ),
     );
   }
 }
+
+/// The key of [agentId]'s row in this sheet — what a test finds it by, since
+/// the row itself is private.
+Key deskAddAgentRowKey(String agentId) => ValueKey('desk-add-agent:$agentId');
 
 /// One agent: its engine, its name, and — on one line — what it is doing, the
 /// folder and the branch. Its machine is the heading above it.
@@ -271,7 +279,7 @@ class _MachineGroup extends StatelessWidget {
 /// `AgentTile` draws one — the tabs panel only offers agents that have one, so
 /// this is the rule kept, not a state the sheet expects to show.
 class _AgentRow extends StatefulWidget {
-  const _AgentRow({required this.entry, required this.onTap});
+  const _AgentRow({super.key, required this.entry, required this.onTap});
 
   final AgentEntry entry;
   final VoidCallback onTap;
