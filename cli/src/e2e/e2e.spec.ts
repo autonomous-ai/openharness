@@ -5,7 +5,7 @@ import { compareVersions, planMatrixRuns } from './trigger.js'
 import { sessionName } from './sessionName.js'
 import { buildMatrixEntry } from './matrix.js'
 import type { AgentEngine } from '../engines/types.js'
-import { SMOKE_CHECKS, SCENARIO, LEGS, firstStuck, plannedLegs } from './smokeChecks.js'
+import { SMOKE_CHECKS, SCENARIO, LEGS, firstStuck, plannedLegs, quotaHit } from './smokeChecks.js'
 import { pickGridModel } from './gridSwitchDriver.js'
 import { prepareWorkspace, readLog, logPath, preAcceptClaudeBypassMode, CALC_SH, CALC_MCP_MJS } from './workspace.js'
 import { execFileSync } from 'node:child_process'
@@ -264,6 +264,43 @@ describe('pane probe (live steps on a tmux pane)', () => {
     await answering.type('%1', 'RECALL_40+2')
     const ok = await runCheck(answering, '%1', recall, { settleMs: 1, pollMs: 1, checkTimeoutMs: 5 })
     expect(ok.status).toBe('ok')
+  })
+
+  it('out of usage is recognised at once, with its reset time, instead of waiting 90s to be called stuck', async () => {
+    // What each tool really prints — codex and claude, from their own binaries.
+    const cases: Array<[string, string | null]> = [
+      ["■ You've hit your usage limit. Upgrade to Pro, or try again at Sep 24th, 2026 6:02 PM.", 'try again at Sep 24th, 2026 6:02 PM'],
+      ["You've hit your session limit \u00b7 resets 6pm", 'resets 6pm'],
+      ["You\u2019ve hit your weekly limit \u00b7 resets Mon 9am", 'resets Mon 9am'],
+      ["You're out of usage credits. /model to switch models.", null],
+    ]
+    for (const [said, resets] of cases) {
+      const pane = fakePane(() => said)
+      const out = await runCheck(pane, '%1', TOOL_STEP, { settleMs: 1, pollMs: 1, checkTimeoutMs: 90_000 })
+      expect(out.status, said).toBe('no-quota')
+      expect(out.resets ?? null, said).toBe(resets)
+      expect(out.elapsedMs!, said).toBeLessThan(10) // one poll, not the 90s budget
+    }
+    // Claude's early warning is not the limit: the step carries on and passes.
+    const logs = fakeLogs()
+    const warned = fakePane(() => { logs.lines.tool.push('t add 40 2 = 42'); return 'Approaching usage limit \u00b7 resets 6pm\nTOOL_42' })
+    expect((await runCheck(warned, '%1', TOOL_STEP, { settleMs: 1, pollMs: 1, readLog: logs.readLog })).status).toBe('ok')
+  })
+
+  it('an old limit message already on screen does not count against a new prompt', async () => {
+    const logs = fakeLogs()
+    const pane = fakePane((p) => { if (p.includes('calc.sh')) { logs.lines.tool.push('t add 40 2 = 42'); return 'TOOL_42' } return null })
+    await pane.type('%1', "You've hit your session limit \u00b7 resets 6pm") // yesterday's, still in the scrollback
+    pane.typed.length = 0
+    expect((await runCheck(pane, '%1', TOOL_STEP, { settleMs: 1, pollMs: 1, readLog: logs.readLog })).status).toBe('ok')
+  })
+
+  it('out of usage ends the leg: nothing more is typed into an account that cannot answer', async () => {
+    const pane = fakePane(() => "You've hit your usage limit. try again at 6:02 PM.")
+    const leg = await probeLeg(pane, '%1', 'subscription', { settleMs: 1, pollMs: 1 })
+    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['tool=no-quota', 'mcp=not-run'])
+    expect(pane.typed).toHaveLength(1)
+    expect(quotaHit([leg])).toEqual({ leg: 'subscription', check: 'tool', resets: 'try again at 6:02 PM' })
   })
 
   it('marks a step stuck when the pane never shows the marker, and stops the leg there', async () => {

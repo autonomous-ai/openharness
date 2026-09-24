@@ -112,7 +112,12 @@ export const SCENARIO: Record<Leg, readonly SmokeCheck[]> = {
 /** Every step of every leg, for callers that want the flat list (the skill, the tests). */
 export const SMOKE_CHECKS: readonly SmokeCheck[] = LEGS.flatMap((leg) => SCENARIO[leg])
 
-export type CheckStatus = 'not-run' | 'ok' | 'stuck'
+/**
+ * `no-quota`: the tool answered with its own "out of usage" message. Not a finding about the
+ * switch, and not a bug anyone should read an analysis of — the account simply could not run the
+ * test. It stops the journey, skips the reviewer, and the pipeline retries once the quota is back.
+ */
+export type CheckStatus = 'not-run' | 'ok' | 'stuck' | 'no-quota'
 
 /** One step's outcome on one leg — the unit the watchdog reads. */
 export interface CheckOutcome {
@@ -127,6 +132,8 @@ export interface CheckOutcome {
   note?: string
   /** Modals that landed DURING this step and were answered (claude's gateway notice) — a finding in itself. */
   dialogs?: string[]
+  /** On `no-quota`: when the tool said it comes back, in its own words ("resets 6pm", "try again at …"). */
+  resets?: string
 }
 
 export interface LegOutcome {
@@ -142,6 +149,16 @@ export function plannedLegs(): LegOutcome[] {
     leg,
     checks: SCENARIO[leg].map((c) => ({ id: c.id, status: 'not-run' as const })),
   }))
+}
+
+/** The (leg, step) where the account ran out of usage, or null. Checked before "what stuck". */
+export function quotaHit(legs: readonly LegOutcome[]): { leg: Leg; check: SmokeCheck['id']; resets: string | null } | null {
+  for (const l of legs) {
+    for (const c of l.checks) {
+      if (c.status === 'no-quota') return { leg: l.leg, check: c.id, resets: c.resets ?? null }
+    }
+  }
+  return null
 }
 
 /** The first (leg, step) that did not pass — "what stuck", or null when the run is clean. */

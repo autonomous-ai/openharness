@@ -78,6 +78,26 @@ export const STARTUP_DIALOGS: ReadonlyArray<{ id: string; match: RegExp; keys: s
 ]
 
 /**
+ * The tool saying its account is out of usage — the same words in both, read out of the binaries
+ * rather than guessed:
+ *
+ *   codex   "You've hit your usage limit. … try again at Sep 24th, 2026 6:02 PM."
+ *   claude  "You've hit your session limit · resets 6pm"   (also weekly / monthly / team budget)
+ *           "You're out of usage credits. /model to switch models."
+ *
+ * Without this, a check on an exhausted account waited out its 90s, came back `stuck`, and the run
+ * went to the reviewer as if it were a bug to diagnose — for a condition the pane had already stated
+ * in plain words. "Approaching usage limit" (claude's early warning) is deliberately not matched.
+ */
+export const QUOTA_EXHAUSTED = /You['\u2019]ve hit your [^\n]{0,40}?(limit|budget)|You['\u2019]re out of usage credits|usage limit reached/i
+
+/** When the tool says the quota comes back, in its own words — or null if it did not say. */
+export function quotaResets(text: string): string | null {
+  const m = text.match(/(resets? (?:at |in |on )?[^\n\u00b7|.]{1,40}|try again (?:at|in) [^\n|]{1,50}?)(?:\.(?:\s|$)|\n|$)/im)
+  return m ? m[1].trim() : null
+}
+
+/**
  * Answer any startup dialog on screen, then wait for the pane to settle again. Returns the ids of
  * the dialogs answered (evidence). Bounded: a dialog that comes back after being answered is left
  * alone after `max` rounds so the check that follows records it as stuck, with the dialog on the tail.
@@ -172,6 +192,13 @@ export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts
     }
     const echo = tail.lastIndexOf(ref)
     const afterEcho = echo >= 0 ? tail.slice(echo + ref.length) : null
+    // Out of usage: said once, right after our prompt. Only text after THIS prompt's echo counts
+    // (or, when the echo scrolled away, only if the screen did not already say it before we typed).
+    const answer = afterEcho ?? (QUOTA_EXHAUSTED.test(before) ? '' : tail)
+    if (QUOTA_EXHAUSTED.test(answer)) {
+      const resets = quotaResets(answer)
+      return { id: check.id, status: 'no-quota', elapsedMs: tmux.now() - start, tail: tail.trimEnd(), ...(resets ? { resets } : {}), ...(dialogs.length ? { dialogs } : {}) }
+    }
     const hits = (tail.match(new RegExp(check.marker, 'g')) ?? []).length
     if ((afterEcho !== null && marker.test(afterEcho)) || (afterEcho === null && hits > baselineHits)) {
       const elapsedMs = tmux.now() - start
@@ -208,7 +235,7 @@ export async function probeLeg(tmux: Tmux, pane: string, leg: Leg, opts: ProbeOp
   for (const [i, check] of steps.entries()) {
     const outcome = await runCheck(tmux, pane, check, opts)
     checks.push(outcome)
-    if (outcome.status === 'stuck') {
+    if (outcome.status === 'stuck' || outcome.status === 'no-quota') {
       for (const rest of steps.slice(i + 1)) checks.push({ id: rest.id, status: 'not-run' })
       break
     }

@@ -32,7 +32,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { GridSwitchDriver, pickGridModel, type GridSwitchTraceStep } from './gridSwitchDriver.js'
 import { probeLeg, realTmux, waitForPaneSettle } from './paneProbe.js'
-import { firstStuck, plannedLegs, type LegOutcome, type LogKind } from './smokeChecks.js'
+import { firstStuck, plannedLegs, quotaHit, type LegOutcome, type LogKind } from './smokeChecks.js'
 import { prepareWorkspace, readLog, removeCodexMcp, preAcceptClaudeBypassMode } from './workspace.js'
 import { sessionName } from './sessionName.js'
 import { TESTCASE } from './matrix.js'
@@ -163,16 +163,20 @@ try {
   const gridName = local ? local.name : (process.env.HARNESS_GRID_NAME ?? (process.env.HARNESS_GRID_MODEL ? undefined : picked?.gridName))
   console.error(`[grid-e2e] grid model: ${gridModel ?? '(none)'}${gridName ? ` on ${gridName}` : ''}${local ? ` (relay under test: ${local.override.baseUrl})` : ''}`)
 
+  // Out of usage ends the journey where it happened: an account that cannot answer on its own login
+  // tells us nothing about a switch, and switching it anyway only spends the grid's time too.
   await checks('subscription')
-
-  if (!gridModel) throw new Error('GRID_UNAVAILABLE: grid_models_list returned no model')
-  const onto = await driver.retargetToGrid(agentId!, gridModel, gridName, local?.override)
-  if (!onto.ok) throw new Error(`${onto.error}: ${onto.detail ?? ''}`)
-  await checks('grid')
-
-  const home = await driver.clearGrid(agentId!)
-  if (!home.ok) throw new Error(`${home.error}: ${home.detail ?? ''}`)
-  await checks('back-home')
+  if (!quotaHit(legs)) {
+    if (!gridModel) throw new Error('GRID_UNAVAILABLE: grid_models_list returned no model')
+    const onto = await driver.retargetToGrid(agentId!, gridModel, gridName, local?.override)
+    if (!onto.ok) throw new Error(`${onto.error}: ${onto.detail ?? ''}`)
+    await checks('grid')
+  }
+  if (!quotaHit(legs)) {
+    const home = await driver.clearGrid(agentId!)
+    if (!home.ok) throw new Error(`${home.error}: ${home.detail ?? ''}`)
+    await checks('back-home')
+  }
 } catch (err) {
   error = (err as Error).message
   console.error(`[grid-e2e] stopped: ${error}`)
@@ -203,7 +207,11 @@ const report = {
       createdByRun: created,
       keptAlive: !created || process.env.E2E_KEEP_AGENT === '1',
       notify: error ? [error] : [],
-      legs,
+      /** Set when the tool said its account is out of usage: { leg, check, resets }. The pipeline
+       *  reads this before anything else — no review, one plain message, and a retry later. */
+      quota: quotaHit(legs),
+      // Every leg, run or not, so a table built from this always has its three rows.
+      legs: [...legs, ...planned.filter((p) => !legs.some((l) => l.leg === p.leg))],
       trace,
     },
   ],
